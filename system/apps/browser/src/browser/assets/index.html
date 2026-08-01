@@ -280,6 +280,31 @@
   // fleet's init overlay (instead of a status pill) on first paint.
   let streamWs = null, streamRetry = 500, lastSentSize = "";
 
+  // ---- Rung 2 client telemetry: buffer per-stripe decode/paint timings and POST them
+  // in small batches OFF the render path (requestIdleCallback), so the server-side lens
+  // can subtract client render from the round trip and show pure network. The tap in the
+  // decoder callback is a bare array push; nothing here touches the ack or the paint.
+  let telemetryBuf = [];
+  function telemetryPush(rec) {
+    if (browserId === null) return;
+    telemetryBuf.push(rec);
+    if (telemetryBuf.length > 512) telemetryBuf.shift();  // bound if a flush stalls
+  }
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+  function flushTelemetry() {
+    if (telemetryBuf.length && browserId !== null) {
+      const batch = telemetryBuf; telemetryBuf = [];
+      try {
+        fetch(new URL("browsers/" + browserId + "/telemetry/client", document.baseURI), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(batch), keepalive: true,
+        }).catch(() => {});
+      } catch (_) {}
+    }
+    setTimeout(() => idle(flushTelemetry), 500);
+  }
+  idle(flushTelemetry);
+
   function connectStream() {
     if (browserId === null) return;
     const url = new URL("browsers/" + browserId + "/stream", document.baseURI);
@@ -299,13 +324,14 @@
 
     function rowFor(yStart) {
       let row = rows[yStart];
-      if (row === undefined) row = rows[yStart] = { decoder: null, needKey: true, seq: 0, pendingAcks: [] };
+      if (row === undefined) row = rows[yStart] = { decoder: null, needKey: true, seq: 0, pendingAcks: [], arriveInfo: {} };
       return row;
     }
     function makeDecoder(yStart) {
       const row = rows[yStart];
       const created = new VideoDecoder({
         output: (frame) => {
+          const tDecoded = performance.now();  // frame is out of the decoder now
           const needW = frame.displayWidth;
           const needH = yStart + frame.displayHeight;
           if (canvas.width < needW || canvas.height < needH) {
@@ -314,13 +340,24 @@
           }
           context.drawImage(frame, 0, yStart);
           frame.close();
+          const tPainted = performance.now();  // painted to the canvas; the ack (below) means "on screen"
           revealOnFirstFrame();
           const frameId = row.pendingAcks.shift();
           if (frameId !== undefined && streamWs.readyState === WebSocket.OPEN) {
-            streamWs.send(`ack,${frameId},${yStart}`);
+            streamWs.send(`ack,${frameId},${yStart}`);  // hot path: ack first, telemetry after
+            // Rung 2 telemetry: record this stripe's client-side journey so the server-side
+            // round trip can have client render subtracted out (a bare push; flushed off-path).
+            const arr = row.arriveInfo[frameId];
+            if (arr !== undefined) {
+              delete row.arriveInfo[frameId];
+              telemetryPush({ fid: frameId, y: yStart, t_arrived: arr.t, t_decoded: tDecoded, t_painted: tPainted, dq: arr.dq });
+            }
           }
         },
-        error: (error) => { row.needKey = true; row.pendingAcks.length = 0; row.decoder = null; },
+        error: (error) => {
+          telemetryPush({ y: yStart, err: true, t_arrived: performance.now() });
+          row.needKey = true; row.pendingAcks.length = 0; row.arriveInfo = {}; row.decoder = null;
+        },
       });
       created.configure({ codec: "avc1.42C028", optimizeForLatency: true, hardwareAcceleration: "prefer-software" });
       return created;
@@ -372,6 +409,9 @@
       row.needKey = false;
       if (row.decoder === null) row.decoder = makeDecoder(yStart);
       row.pendingAcks.push(frameId);
+      // Stamp arrival + decoder backlog now, keyed by frameId, for the output callback to
+      // pair with decode/paint times (Rung 2 client telemetry).
+      row.arriveInfo[frameId] = { t: performance.now(), dq: row.decoder.decodeQueueSize };
       row.decoder.decode(new EncodedVideoChunk({
         type: isKey ? "key" : "delta",
         timestamp: row.seq++ * 16667,

@@ -910,6 +910,25 @@ def telemetry_page() -> Response:
     return Response(_TELEMETRY_HTML.read_text(), mimetype="text/html")
 
 
+def telemetry_client(browser_id: str) -> Response:
+    """Sink for the viewer's own per-stripe decode/paint timings (Rung 2). Watch-only:
+    it just forwards each client record into the same hub so the lens can join them to
+    the server's sent/ack by (fid, y) and subtract client render from the round trip.
+    Never touches the stream; a bad body is dropped, not fatal."""
+    if request.content_length is not None and request.content_length > 512 * 1024:
+        return jsonify({"error": "too large"}), 413
+    records = request.get_json(force=True, silent=True)
+    if isinstance(records, dict):
+        records = [records]
+    if not isinstance(records, list):
+        return jsonify({"error": "expected a JSON list"}), 400
+    for record in records:
+        if isinstance(record, dict):
+            record["type"] = "client"
+            telemetry.hub.emit(browser_id, record)
+    return jsonify({"ok": True})
+
+
 def telemetry_socket(ws: Any, browser_id: str) -> None:
     """Read-only firehose: replay recent history, then stream new telemetry records
     (batched JSON arrays) to the lens. Subscribing/draining never touches the pipe's
@@ -942,6 +961,9 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
     application.add_url_rule("/telemetry", view_func=telemetry_page, methods=["GET"])
+    application.add_url_rule(
+        "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]
+    )
     application.add_url_rule("/health", view_func=health, methods=["GET"])
     application.add_url_rule("/init-status", view_func=init_status, methods=["GET"])
     application.add_url_rule("/key-status", view_func=key_status, methods=["GET"])
