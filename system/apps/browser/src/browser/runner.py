@@ -52,10 +52,10 @@ from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
+from browser import mediastream, telemetry
 from browser.loop_bridge import AsyncLoopBridge, cancel_task
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser import mediastream, telemetry
 from browser.session import (
     BrowserSessionManager,
     BrowserStartupError,
@@ -70,7 +70,6 @@ from browser.wsgi import make_threaded_server
 
 ROOT_PATH = os.environ.get("ROOT_PATH", "")
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
-_TELEMETRY_HTML = Path(__file__).parent / "assets" / "telemetry.html"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # browser-use drives Chromium over cdp-use, whose failures surface as these built-ins.
@@ -908,12 +907,6 @@ def stream_socket(ws: Any, browser_id: str) -> None:
     mediastream.serve_stream(ws, browser_id, display, session)
 
 
-def telemetry_page() -> Response:
-    """The standalone client-side observability lens (all joining/percentiles/drawing
-    happen in the browser; this only serves the static page)."""
-    return Response(_TELEMETRY_HTML.read_text(), mimetype="text/html")
-
-
 def telemetry_client(browser_id: str) -> Response:
     """Sink for the viewer's own per-stripe decode/paint timings (Rung 2). Watch-only:
     it just forwards each client record into the same hub so the lens can join them to
@@ -965,7 +958,6 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
-    application.add_url_rule("/telemetry", view_func=telemetry_page, methods=["GET"])
     application.add_url_rule(
         "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]
     )
@@ -998,7 +990,7 @@ def _register_routes() -> None:
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
     # Pixelflux media socket: H.264 stripes out + credit acks/resize in (the pixel plane).
     sock.route("/browsers/<string:browser_id>/stream")(stream_socket)
-    # Read-only telemetry firehose feeding the standalone lens at /telemetry.
+    # Read-only telemetry firehose feeding the standalone CLI (browser.telemetry_watch).
     sock.route("/browsers/<string:browser_id>/telemetry")(telemetry_socket)
     # Strip permessage-deflate so already-compressed H.264 stripes aren't re-deflated (#22).
     application.before_request(mediastream.strip_websocket_compression)

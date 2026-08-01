@@ -39,7 +39,12 @@ from browser import telemetry
 from browser.audiopipe import AudioPipe, AudioPipeError
 from browser.audiopipe import is_available as is_audio_available
 from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
-from browser.xclipboard import ClipboardError, ClipboardMonitor, read_clipboard, set_clipboard
+from browser.xclipboard import (
+    ClipboardError,
+    ClipboardMonitor,
+    read_clipboard,
+    set_clipboard,
+)
 from browser.xinput import InputRouter
 
 _RECEIVE_POLL_SECONDS = 0.05

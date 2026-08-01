@@ -218,9 +218,6 @@ class _ResourceSampler(threading.Thread):
             except Exception as error:  # noqa: BLE001  (sampling must never crash the daemon)
                 logger.debug("resource sample failed ({})", error)
 
-    def stop(self) -> None:
-        self._stopped.set()
-
     def _emit_sample(self, daemon: Any) -> None:
         per_cpu = psutil.cpu_percent(percpu=True)          # since the last call (~1s)
         overall = sum(per_cpu) / len(per_cpu) if per_cpu else 0.0
