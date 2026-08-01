@@ -2,6 +2,7 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 
@@ -147,7 +148,7 @@ class AgentStateItem(FrozenModel):
             "``agent_discovery``. Drives activity derivation and caption routing."
         ),
     )
-    activity_state: str | None = Field(
+    activity_state: ActivityState | None = Field(
         default=None,
         description=(
             "Per-agent chat activity state value (THINKING / TOOL_RUNNING / "

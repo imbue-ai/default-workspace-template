@@ -98,3 +98,6 @@ Added OpenAI Codex CLI support to the workspace image.
   harness travels beside it, so `creation_type` is always `"chat"` and the frontend union
   collapses to match. `HARNESS_CREATION_TYPES` is deleted, as is `HARNESS_AGENT_TYPES`
   (an identity map from each harness to itself).
+- `AgentStateItem.activity_state` is typed `ActivityState | None` rather than `str | None`.
+  The enum already existed; only the field and the two `.value` unwraps at its assignment
+  sites were bare.
