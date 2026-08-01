@@ -976,7 +976,7 @@ class AgentManager:
                         labels=agent_state.labels,
                         work_dir=agent_state.work_dir,
                         harness=agent_state.harness,
-                        activity_state=cached_state.value,
+                        activity_state=cached_state,
                     )
             self._agents = new_agents
             self._match_by_agent_id = new_matches
@@ -1188,7 +1188,7 @@ class AgentManager:
                 labels=agent_state.labels,
                 work_dir=agent_state.work_dir,
                 harness=agent_state.harness,
-                activity_state=new_state.value,
+                activity_state=new_state,
             )
 
         if broadcast_on_change:
