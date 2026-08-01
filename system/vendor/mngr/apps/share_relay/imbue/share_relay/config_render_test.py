@@ -1,18 +1,20 @@
 import pytest
+from pydantic import AnyHttpUrl
 
 from imbue.imbue_common.model_update import to_update
 from imbue.share_relay.config_render import render_frps_toml
 from imbue.share_relay.config_render import render_nftables_conf
 from imbue.share_relay.config_render import render_port_80_redirect_caddyfile
 from imbue.share_relay.data_types import RelayConfiguration
+from imbue.share_relay.primitives import ContentDomain
 from imbue.share_relay.primitives import RegionCode
 
 
 def _config() -> RelayConfiguration:
     return RelayConfiguration(
         region=RegionCode("us1"),
-        content_domain="imbueminds.com",
-        plugin_auth_url="https://connector.example.com/frps/auth",  # ty: ignore[invalid-argument-type]
+        content_domain=ContentDomain("imbueminds.com"),
+        plugin_auth_url=AnyHttpUrl("https://connector.example.com/frps/auth"),
     )
 
 
@@ -38,6 +40,24 @@ def test_frps_toml_points_the_plugin_at_the_connector() -> None:
     rendered = render_frps_toml(_config())
     assert 'addr = "https://connector.example.com"' in rendered
     assert 'path = "/frps/auth"' in rendered
+    # Without tlsVerify frp skips certificate verification on https plugin
+    # addrs, exposing the shared auth secret to an on-path attacker.
+    assert "tlsVerify = true" in rendered
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    ["https://connector.example.com/frps/auth?secret=abc", "https://connector.example.com/frps/auth#frag"],
+)
+def test_plugin_auth_url_rejects_query_and_fragment(bad_url: str) -> None:
+    # The renderer keeps only origin + path, so a query/fragment (e.g. a secret
+    # passed as ?secret=...) would be silently dropped from the frps config.
+    with pytest.raises(ValueError, match="query string or fragment"):
+        RelayConfiguration(
+            region=RegionCode("us1"),
+            content_domain=ContentDomain("imbueminds.com"),
+            plugin_auth_url=AnyHttpUrl(bad_url),
+        )
 
 
 def test_nftables_conf_caps_rate_and_concurrency_on_the_vhost_port() -> None:

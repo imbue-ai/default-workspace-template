@@ -116,8 +116,10 @@ def _load_context_from_pem(cert_pem: bytes, key_pem: bytes) -> ssl.SSLContext:
     context.set_alpn_protocols(ALPN_PROTOCOLS)
     fd, path = tempfile.mkstemp(suffix=".pem")
     try:
-        os.write(fd, cert_pem + b"\n" + key_pem)
-        os.close(fd)
+        try:
+            os.write(fd, cert_pem + b"\n" + key_pem)
+        finally:
+            os.close(fd)
         context.load_cert_chain(certfile=path)
     finally:
         os.unlink(path)
@@ -174,16 +176,19 @@ class _SNICertMinter(MutableModel):
             minted = self._minted_contexts.get(name)
             if minted is None:
                 if len(self._minted_contexts) >= _MAX_MINTED_CONTEXTS:
-                    # The client will fail hostname verification against the
-                    # static cert; leave a breadcrumb since nothing else would
-                    # explain the failure server-side.
+                    # Evict the oldest minted name (insertion order) rather
+                    # than refusing to mint: the callback runs pre-auth, so a
+                    # misbehaving client could otherwise fill the cache and
+                    # permanently deny TLS to every later legitimate origin.
+                    # An evicted origin simply re-mints on its next handshake.
+                    evicted_name = next(iter(self._minted_contexts))
+                    del self._minted_contexts[evicted_name]
                     logger.warning(
-                        "SNI cert-mint cap ({}) reached; serving the static cert for {} "
-                        "(clients will fail hostname verification)",
+                        "SNI cert-mint cap ({}) reached; evicting the cert for {} to mint one for {}",
                         _MAX_MINTED_CONTEXTS,
+                        evicted_name,
                         name,
                     )
-                    return None
                 minted = self._mint_context_for(name)
                 self._minted_contexts[name] = minted
         ssl_socket.context = minted

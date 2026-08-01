@@ -120,10 +120,11 @@ Running `modal deploy` directly without the wrapper defaults to
 
 ## Authentication
 
-All non-`/auth/*` endpoints require a Bearer token:
+All non-`/auth/*` endpoints require a Bearer token, with the exceptions noted below:
 
 - **User (SuperTokens JWT)**: `Authorization: Bearer <access_token>` — the signed-in user's SuperTokens session. A signed-in user has full authority over their own resources; their user-id prefix (the first 16 hex chars of their SuperTokens user ID) namespaces their leases and buckets.
 - The share-certificate endpoint (`POST /shares/cert`) is instead authenticated by the share's relay token, and the frps plugin callback by its shared secret (see the sharing section of `app.py`).
+- The accounts-broker routes (`GET /share/login`, `POST /share/session`, `GET /share/authorize`) are a browser-facing flow authenticated by the login form and the `imbue_sso_session` cookie; `GET /share/jwks.json` is public (it serves only the broker's verification keys).
 
 The `/auth/*` endpoints are themselves the authentication flow, so they do not require a token.
 

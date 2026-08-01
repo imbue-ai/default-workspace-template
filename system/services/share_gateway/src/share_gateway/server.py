@@ -11,6 +11,8 @@ workspace session cookie.
 import secrets
 import threading
 import time
+from collections.abc import Callable
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -25,6 +27,7 @@ from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
@@ -34,6 +37,11 @@ from share_gateway.session_cookie import strip_session_cookie
 from share_gateway.session_cookie import verify_session_cookie_value
 
 _PENDING_LOGIN_TTL_SECONDS = 600.0
+
+# The workspace shell service; its label origin is the safe post-login landing
+# spot when a visitor's ``next`` cannot be honored (the bare domain no longer
+# routes).
+_SHELL_SERVICE_NAME = "system_interface"
 
 _LOADING_PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3">
@@ -82,6 +90,18 @@ def _is_html_navigation(method: str, accept_header: str, is_websocket_upgrade: b
     return method.upper() == "GET" and not is_websocket_upgrade and "text/html" in accept_header.lower()
 
 
+def forwarded_client_ip(headers: Mapping[str, str]) -> str:
+    """The real client address of the request being verified, or '' when unknown.
+
+    frpc stamps each spliced connection with PROXY protocol, so caddy's
+    X-Forwarded-For on the auth subrequest carries the address the relay saw
+    (the visitor or scanner), not frpc's loopback. The first entry is the
+    client; later entries would be intermediaries appending.
+    """
+    forwarded_for = headers.get("X-Forwarded-For", "")
+    return forwarded_for.split(",")[0].strip() if forwarded_for else ""
+
+
 def _requested_url(host: str, forwarded_uri: str) -> str:
     uri = forwarded_uri if forwarded_uri.startswith("/") else "/"
     return f"https://{host}{uri}"
@@ -94,12 +114,25 @@ def build_gateway_app(
     jwks_cache: JwksCache,
     jti_registry: SingleUseJtiRegistry,
     pending_logins: PendingLoginRegistry,
+    auth_label: str,
+    # Reads the current label -> service-name map (from apps.toml) fresh on each
+    # call, so a service registered while shared is recognized without
+    # rebuilding the app. Grants are keyed by service name, not label.
+    get_label_to_name: Callable[[], Mapping[str, str]],
 ) -> Flask:
     app = Flask(__name__)
     workspace_domain = materials.workspace_domain
+    auth_origin = f"https://{auth_label}.{workspace_domain}"
 
     def _forbidden() -> Response:
         return Response(_FORBIDDEN_PAGE, status=403, mimetype="text/html")
+
+    # Denials are the traffic worth seeing (scanner probes, revoked visitors,
+    # unknown hostnames); allowed requests stay unlogged. The client address
+    # is the real one the relay saw, via frpc's PROXY protocol stamp.
+    def _log_denied(reason: str, host: str) -> None:
+        client_ip = forwarded_client_ip(request.headers) or "unknown-client"
+        log(f"Denied {client_ip} -> {host or '(no host)'}: {reason}")
 
     @app.get("/_auth/healthz")
     def healthz() -> Response:
@@ -114,8 +147,10 @@ def build_gateway_app(
         host = request.headers.get("X-Forwarded-Host", "")
         method = request.headers.get("X-Forwarded-Method", "GET")
         forwarded_uri = request.headers.get("X-Forwarded-Uri", "/")
-        is_ours, service_name = service_for_host(host, workspace_domain)
+        label_to_name = get_label_to_name()
+        is_ours, service_name = service_for_host(host, workspace_domain, label_to_name, auth_label)
         if not is_ours:
+            _log_denied("hostname is not one of this workspace's origins", host)
             return _forbidden()
 
         # Upgrade is hop-by-hop, so caddy passes it explicitly (see the
@@ -123,7 +158,10 @@ def build_gateway_app(
         is_websocket_upgrade = request.headers.get("X-Forwarded-Upgrade", "").lower() == "websocket"
 
         origin_header = request.headers.get("Origin")
-        if not is_request_origin_allowed(method, origin_header, is_websocket_upgrade, workspace_domain):
+        if not is_request_origin_allowed(
+            method, origin_header, is_websocket_upgrade, workspace_domain, label_to_name, auth_label
+        ):
+            _log_denied("request Origin is not allowed", host)
             return _forbidden()
 
         cookie_header = request.headers.get("Cookie", "")
@@ -133,10 +171,14 @@ def build_gateway_app(
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
                 nonce = pending_logins.mint()
+                # The broker delivers its post-login callback to the dedicated
+                # auth origin (the only label serving /_auth/*), then bounces to
+                # ``next`` (the origin the visitor was actually reaching).
                 authorize_query = urlencode(
                     {
                         "machine_domain": workspace_domain,
                         "next": _requested_url(host, forwarded_uri),
+                        "callback_origin": auth_origin,
                         "state": nonce,
                     }
                 )
@@ -144,6 +186,7 @@ def build_gateway_app(
                     status=302,
                     headers={"Location": f"{materials.broker_url}/share/authorize?{authorize_query}"},
                 )
+            _log_denied("no session on a non-HTML request", host)
             return Response("authentication required", status=401, mimetype="text/plain")
 
         # Re-check the grants file on every request so revocation is instant.
@@ -151,8 +194,10 @@ def build_gateway_app(
         try:
             grants = load_grants(grants_path)
         except GrantsError:
+            _log_denied("grants file is missing or malformed (failing closed)", host)
             return _forbidden()
         if not grants.allows(email, service_name):
+            _log_denied("session email is not granted this service", host)
             return _forbidden()
 
         return Response(
@@ -184,11 +229,17 @@ def build_gateway_app(
         if not grants.allows_any(email):
             return _forbidden()
 
-        # Only bounce back to one of this workspace's own origins.
-        redirect_target = f"https://{workspace_domain}/"
+        # Bounce onward to the origin the visitor was reaching, but only if it
+        # is genuinely one of this workspace's own origins. The bare domain no
+        # longer routes, so the safe fallback is the shell (system_interface)
+        # label origin; failing that, the workspace's own shell service simply
+        # is not registered and there is nowhere sensible to land.
+        label_to_name = get_label_to_name()
+        shell_label = next((label for label, name in label_to_name.items() if name == _SHELL_SERVICE_NAME), None)
+        redirect_target = f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
         if next_url.startswith("https://"):
             next_host = next_url.removeprefix("https://").split("/", 1)[0]
-            is_ours, _service = service_for_host(next_host, workspace_domain)
+            is_ours, _service = service_for_host(next_host, workspace_domain, label_to_name, auth_label)
             if is_ours:
                 redirect_target = next_url
 

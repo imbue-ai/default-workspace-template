@@ -44,7 +44,7 @@ from supertokens_python.types import User
 from supertokens_python.types.base import AccountInfoInput
 
 from imbue.remote_service_connector.app import CloudflareApiError
-from imbue.remote_service_connector.app import ForwardingCtx
+from imbue.remote_service_connector.app import CloudflareCtx
 from imbue.remote_service_connector.app import PoolHostCleanupError
 from imbue.remote_service_connector.app import R2BucketNotEmptyError
 from imbue.remote_service_connector.app import R2BucketNotFoundError
@@ -215,16 +215,16 @@ def make_fake_key_store() -> InMemoryKeyStore:
     return InMemoryKeyStore()
 
 
-class FakeForwardingCtx(ForwardingCtx):
-    """ForwardingCtx backed by FakeCloudflareOps for testing."""
+class FakeCloudflareCtx(CloudflareCtx):
+    """CloudflareCtx backed by FakeCloudflareOps for testing."""
 
     fake: FakeCloudflareOps
 
 
-def make_fake_forwarding_ctx() -> FakeForwardingCtx:
-    """Create a FakeForwardingCtx for testing."""
+def make_fake_cloudflare_ctx() -> FakeCloudflareCtx:
+    """Create a FakeCloudflareCtx for testing."""
     fake = FakeCloudflareOps()
-    ctx = FakeForwardingCtx(ops=fake)
+    ctx = FakeCloudflareCtx(ops=fake)
     ctx.fake = fake
     return ctx
 
@@ -1400,6 +1400,17 @@ class FakeCursor:
                     "eab_kid": eab_kid,
                 }
             )
+
+        elif query_lower.startswith("select count(*) from issued_certs"):
+            # The fake rows carry no created_at; every recorded issuance counts
+            # as recent, which is what the rate-limit tests need.
+            host_id, user_label = params
+            count = sum(
+                1
+                for cert_row in self._backend.issued_cert_rows
+                if cert_row["host_id"] == host_id and cert_row["user_id"] == user_label
+            )
+            self._results = [(count,)]
 
         elif query_lower.startswith("select not_after from issued_certs"):
             matching_not_afters = sorted(

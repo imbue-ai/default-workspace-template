@@ -1,3 +1,4 @@
+import re
 from collections.abc import Sequence
 from typing import cast
 
@@ -7,6 +8,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+from imbue.minds.desktop_client.e2e_workspace_runner import _TERMINAL_IFRAME_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import WorkspaceCreateAttemptFailedError
 from imbue.minds.desktop_client.e2e_workspace_runner import _read_failure_message
 from imbue.minds.desktop_client.e2e_workspace_runner import _wait_for_workspace_ready_or_failure
@@ -176,3 +178,23 @@ def test_read_failure_message_returns_trimmed_text() -> None:
 def test_read_failure_message_handles_missing_element() -> None:
     page = _FakeCreatingPage(urls=[_PENDING_URL], is_visible_results=[False], error_message=None)
     assert "not present" in _read_failure_message(cast(Page, page))
+
+
+def _terminal_selector_prefixes() -> list[str]:
+    """The ``src^="..."`` prefix literals the terminal-iframe selector keys on."""
+    return re.findall(r'src\^="([^"]+)"', _TERMINAL_IFRAME_SELECTOR)
+
+
+def test_terminal_iframe_selector_matches_the_labelled_origin() -> None:
+    # The terminal's origin label is ``terminal-<rand>``, so its iframe src is
+    # ``https://terminal-<rand>.host-<hex>.localhost:<port>/``. The selector must
+    # match that (a ``src^=`` is a startswith), and precisely: it must NOT match a
+    # bare ``terminal.`` origin (the old label==name assumption) nor an unrelated
+    # ``terminals`` service whose name merely starts with "terminal".
+    prefixes = _terminal_selector_prefixes()
+    labelled = "https://terminal-x7k9q2w1.host-0123456789abcdef.localhost:8421/"
+    bare = "https://terminal.host-0123456789abcdef.localhost:8421/"
+    unrelated = "https://terminals.host-0123456789abcdef.localhost:8421/"
+    assert any(labelled.startswith(prefix) for prefix in prefixes)
+    assert not any(bare.startswith(prefix) for prefix in prefixes)
+    assert not any(unrelated.startswith(prefix) for prefix in prefixes)

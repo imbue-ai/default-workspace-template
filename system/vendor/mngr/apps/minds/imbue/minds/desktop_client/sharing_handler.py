@@ -34,6 +34,7 @@ from imbue.minds.desktop_client.share_materials_injection import inject_share_ma
 from imbue.minds.desktop_client.share_materials_injection import read_share_grants_from_agent
 from imbue.minds.desktop_client.share_materials_injection import render_grants_toml
 from imbue.minds.desktop_client.state import get_state
+from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_ACTIVE
 from imbue.mngr.primitives import AgentId
 
 # How long the readiness probe waits on a single fetch of the shared hostname
@@ -70,6 +71,10 @@ class SharingError(RuntimeError):
     """Raised on a soft sharing failure; carries a single user-presentable message."""
 
 
+class EmptyGrantsError(SharingError):
+    """Raised when a grants document names no grantee at all: a request-validation failure, not an upstream fault."""
+
+
 def resolve_account_email_for_workspace(
     session_store: MultiAccountSessionStore | None,
     agent_id: AgentId,
@@ -92,15 +97,27 @@ def resolve_account_email_for_workspace(
     return str(account.email)
 
 
-def resolve_agent_for_host(backend_resolver: BackendResolverInterface, host_id: str) -> AgentId:
+def resolve_agent_for_host(
+    backend_resolver: BackendResolverInterface,
+    host_id: str,
+    session_store: MultiAccountSessionStore | None,
+) -> AgentId:
     """Resolve a machine's ``host-<hex>`` coordinate to its (primary) agent id.
 
-    Raises :class:`SharingError` when no known workspace lives on that host.
+    Discovery is authoritative; the workspace record store covers a stopped
+    (and so undiscovered) machine, whose share can still be inspected and
+    revoked. Raises :class:`SharingError` when neither knows the host.
     """
     for agent_id in backend_resolver.list_known_workspace_ids():
         display_info = backend_resolver.get_agent_display_info(agent_id)
         if display_info is not None and str(display_info.host_id) == host_id:
             return agent_id
+    record_store = session_store.record_store if session_store is not None else None
+    if record_store is not None:
+        for records in record_store.list_all_records().values():
+            for record in records:
+                if record.host_id == host_id and record.state == RECORD_STATE_ACTIVE and record.agent_id:
+                    return AgentId(record.agent_id)
     raise SharingError(f"No workspace is known for machine '{host_id}'.")
 
 
@@ -141,15 +158,18 @@ def enable_sharing(
     rewritten (no token rotation, no tunnel restart -- the gateway re-reads
     grants per request). Otherwise the full provisioning flow runs: connector
     share + relay token, then materials injection. Returns the sharing-status
-    document (state ``provisioning`` until the readiness probe goes green).
+    document, which reports ``enabled`` true as soon as the connector share
+    exists; the UI separately polls the readiness endpoint for end-to-end
+    liveness of the shared hostname.
     """
     if not _grants_have_any_grantee(workspace_grants, service_grants):
-        raise SharingError("Sharing requires at least one email or email domain to grant access to.")
+        raise EmptyGrantsError("Sharing requires at least one email or email domain to grant access to.")
     cli: ImbueCloudCli | None = get_state().imbue_cloud_cli
     if cli is None:
         raise SharingError("imbue_cloud CLI is not configured on this app.")
-    agent_id = resolve_agent_for_host(backend_resolver, host_id)
-    account_email = resolve_account_email_for_workspace(get_state().session_store, agent_id)
+    session_store = get_state().session_store
+    agent_id = resolve_agent_for_host(backend_resolver, host_id, session_store)
+    account_email = resolve_account_email_for_workspace(session_store, agent_id)
     return _enable_sharing_with_cli(host_id, agent_id, workspace_grants, service_grants, cli, account_email)
 
 
@@ -225,8 +245,9 @@ def _parse_grant_list(value: object) -> dict[str, list[str]]:
     """Coerce one grants scope read back from the workspace into ``{emails, email_domains}``."""
     if not isinstance(value, dict):
         return {"emails": [], "email_domains": []}
-    emails = value.get("emails", [])
-    email_domains = value.get("email_domains", [])
+    entries: dict[str, object] = {str(key): entry for key, entry in value.items()}
+    emails = entries.get("emails")
+    email_domains = entries.get("email_domains")
     return {
         "emails": [str(email) for email in emails] if isinstance(emails, list) else [],
         "email_domains": [str(domain) for domain in email_domains] if isinstance(email_domains, list) else [],
@@ -269,25 +290,55 @@ def get_sharing(
         "cert_not_after": None,
         "grants": {"workspace": empty_grants, "services": {}},
     }
-    if cli is None:
+    share = get_active_share(host_id, backend_resolver, cli, session_store)
+    if cli is None or share is None:
         return disabled
+
+    # Resolution is repeated here (a cheap local lookup), but discovery is
+    # concurrently updated, so the coordinate can become unresolvable between
+    # the two calls; degrade to the connector-confirmed share with UNKNOWN
+    # grants rather than failing the whole read. The grants must not degrade
+    # to "empty": the pane would render every grantee as revoked, and an
+    # Enable/edit from that state would replace a policy nobody ever saw.
     try:
-        agent_id = resolve_agent_for_host(backend_resolver, host_id)
+        agent_id = resolve_agent_for_host(backend_resolver, host_id, session_store)
+        grants_toml_text = read_share_grants_from_agent(agent_id, cli.mngr_caller)
+    except (SharingError, ShareInjectionError) as exc:
+        logger.debug("Sharing grants read: {}", exc)
+        document = _share_status_document(host_id, share, empty_grants, {})
+        document["grants"] = None
+        return document
+    workspace_grants, service_grants = _parse_grants_toml(grants_toml_text) if grants_toml_text else (empty_grants, {})
+    return _share_status_document(host_id, share, workspace_grants, service_grants)
+
+
+def get_active_share(
+    host_id: str,
+    backend_resolver: BackendResolverInterface,
+    cli: ImbueCloudCli | None,
+    session_store: MultiAccountSessionStore | None,
+) -> ShareCliInfo | None:
+    """The machine's active connector share, or None (unshared, unresolvable, or connector error).
+
+    Reads only the connector-side share status -- no exec into the workspace --
+    so polling callers (the readiness probe) stay cheap on remote hosts.
+    """
+    if cli is None:
+        return None
+    try:
+        agent_id = resolve_agent_for_host(backend_resolver, host_id, session_store)
         account_email = resolve_account_email_for_workspace(session_store, agent_id)
     except SharingError as exc:
         logger.debug("Sharing status: {}", exc)
-        return disabled
+        return None
     try:
         share = cli.get_share_status(account=account_email, host_id=host_id)
     except ImbueCloudCliError as exc:
         logger.warning("Failed to read share status for {}: {}", host_id, exc)
-        return disabled
+        return None
     if share is None or share.state != "active":
-        return disabled
-
-    grants_toml_text = read_share_grants_from_agent(agent_id, cli.mngr_caller)
-    workspace_grants, service_grants = _parse_grants_toml(grants_toml_text) if grants_toml_text else (empty_grants, {})
-    return _share_status_document(host_id, share, workspace_grants, service_grants)
+        return None
+    return share
 
 
 def disable_sharing(
@@ -304,7 +355,7 @@ def disable_sharing(
     """
     if cli is None:
         raise SharingError("imbue_cloud CLI is not configured.")
-    agent_id = resolve_agent_for_host(backend_resolver, host_id)
+    agent_id = resolve_agent_for_host(backend_resolver, host_id, session_store)
     account_email = resolve_account_email_for_workspace(session_store, agent_id)
     clear_share_materials_from_agent(agent_id, cli.mngr_caller)
     try:

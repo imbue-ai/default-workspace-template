@@ -1979,6 +1979,10 @@ def test_sharing_urls_redirect_to_the_options_panels_share_tab(tmp_path: Path) -
     assert service_response.status_code == 302
     assert service_response.headers["Location"] == f"/workspace/{agent_id}/options?tab=share&target=frontend"
 
+    modal_response = client.get(f"/sharing/{agent_id}/frontend/modal")
+    assert modal_response.status_code == 302
+    assert modal_response.headers["Location"] == f"/workspace/{agent_id}/options?tab=share&target=frontend"
+
 
 def test_workspace_settings_page_requires_auth(tmp_path: Path) -> None:
     """The machine settings page requires authentication."""

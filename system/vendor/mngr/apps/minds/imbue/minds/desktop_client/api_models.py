@@ -596,8 +596,13 @@ class MachineSharingResponse(FrozenModel):
     region: str | None = Field(default=None, description="Relay region code")
     last_tunnel_login_at: str | None = Field(default=None, description="Last relay tunnel connect stamp")
     cert_not_after: str | None = Field(default=None, description="Expiry of the share's TLS certificate")
-    grants: SharingGrantsDocument = Field(
-        default=SharingGrantsDocument(), description="The grants document currently in force"
+    grants: SharingGrantsDocument | None = Field(
+        default=SharingGrantsDocument(),
+        description=(
+            "The grants document currently in force; null when the machine is "
+            "shared but the grants read did not land (clients must treat null "
+            "as unknown, never as an empty policy)"
+        ),
     )
 
 

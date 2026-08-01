@@ -1,6 +1,6 @@
 """Installing a relay's software + config onto a provisioned host over SSH.
 
-The instance boots from ``deploy/cloud-init.yaml`` (packages + systemd units);
+The instance boots from ``deploy_assets/cloud-init.yaml`` (packages + systemd units);
 this module does everything version- or config-shaped so a change never needs
 a reimage: the pinned, checksummed frps binary, the standalone healthcheck
 script, the rendered frps/nftables/Caddyfile artifacts, and the unit restarts.
@@ -13,9 +13,7 @@ from typing import Final
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ProcessError
 from imbue.imbue_common.pure import pure
-from imbue.share_relay.config_render import render_frps_toml
-from imbue.share_relay.config_render import render_nftables_conf
-from imbue.share_relay.config_render import render_port_80_redirect_caddyfile
+from imbue.share_relay.config_render import render_all_artifacts
 from imbue.share_relay.data_types import RelayConfiguration
 from imbue.share_relay.errors import ShareRelayError
 
@@ -67,12 +65,16 @@ case "${{frp_arch}}" in
     *) echo "Unsupported architecture for frp: ${{frp_arch}}" >&2; exit 1 ;;
 esac
 if [ ! -x /usr/local/bin/frps ] || ! /usr/local/bin/frps --version | grep -q "^{frp_version}$"; then
-    curl -fsSL "https://github.com/fatedier/frp/releases/download/v{frp_version}/frp_{frp_version}_linux_${{frp_goarch}}.tar.gz" -o /tmp/frp.tar.gz
-    echo "${{frp_sha256}}  /tmp/frp.tar.gz" | sha256sum -c -
-    tar -xzf /tmp/frp.tar.gz -C /tmp "frp_{frp_version}_linux_${{frp_goarch}}/frps"
-    mv -f "/tmp/frp_{frp_version}_linux_${{frp_goarch}}/frps" /usr/local/bin/frps
+    # Download and extract inside a private root-owned dir: fixed /tmp paths
+    # would let a local user pre-plant a symlink (curl -o clobbers what it
+    # points at as root) or swap the binary between the sha256 check and the mv.
+    frp_tmp="$(mktemp -d)"
+    curl -fsSL "https://github.com/fatedier/frp/releases/download/v{frp_version}/frp_{frp_version}_linux_${{frp_goarch}}.tar.gz" -o "${{frp_tmp}}/frp.tar.gz"
+    echo "${{frp_sha256}}  ${{frp_tmp}}/frp.tar.gz" | sha256sum -c -
+    tar -xzf "${{frp_tmp}}/frp.tar.gz" -C "${{frp_tmp}}" "frp_{frp_version}_linux_${{frp_goarch}}/frps"
+    mv -f "${{frp_tmp}}/frp_{frp_version}_linux_${{frp_goarch}}/frps" /usr/local/bin/frps
     chmod 0755 /usr/local/bin/frps
-    rm -rf /tmp/frp.tar.gz "/tmp/frp_{frp_version}_linux_${{frp_goarch}}"
+    rm -rf "${{frp_tmp}}"
 fi
 mkdir -p /etc/frp /etc/caddy
 {move_lines}
@@ -115,21 +117,33 @@ def deploy_relay(
 ) -> None:
     """Render config locally, stage everything onto the host, and sudo-install + (re)start the services."""
     work_dir.mkdir(parents=True, exist_ok=True)
-    healthcheck_script = Path(__file__).parent.parent.parent / "deploy" / "healthcheck_standalone.py"
+    # frps.toml embeds the connector auth secret, and the default work dir is a
+    # fixed path under /tmp, so keep the scratch dir and every staged artifact
+    # owner-only. The chmod also fails loudly if another local user pre-created
+    # the fixed path.
+    work_dir.chmod(0o700)
+    healthcheck_script = Path(__file__).parent / "deploy_assets" / "healthcheck_standalone.py"
     artifacts = {
-        "frps.toml": render_frps_toml(config),
-        "nftables.conf": render_nftables_conf(config),
-        "port80.Caddyfile": render_port_80_redirect_caddyfile(config),
+        **render_all_artifacts(config),
         "healthcheck_standalone.py": healthcheck_script.read_text(),
     }
     for name, content in artifacts.items():
-        (work_dir / name).write_text(content)
+        artifact_path = work_dir / name
+        artifact_path.write_text(content)
+        artifact_path.chmod(0o600)
 
     # Stage into /tmp (the SSH user cannot write /etc directly), then run the
     # install script under sudo to move files into place and restart services.
-    _run_ssh(concurrency_group, host, ssh_user, f"rm -rf {REMOTE_STAGING_DIR} && mkdir -p {REMOTE_STAGING_DIR}")
+    # The staging dir is owner-only for the same secret-bearing reason as the
+    # local work dir, and is removed once the install has copied files into
+    # their root-owned destinations.
+    # No -p on the mkdir: the rm guarantees non-existence, so the mkdir fails
+    # loudly if another local user races the fixed /tmp path back into
+    # existence (a -p would silently adopt their directory).
+    _run_ssh(concurrency_group, host, ssh_user, f"rm -rf {REMOTE_STAGING_DIR} && mkdir -m 700 {REMOTE_STAGING_DIR}")
     for name in artifacts:
         _scp_file(concurrency_group, host, ssh_user, work_dir / name, f"{REMOTE_STAGING_DIR}/{name}")
     _run_ssh(
         concurrency_group, host, ssh_user, f"sudo bash -c {shlex.quote(render_relay_install_script(FRP_VERSION))}"
     )
+    _run_ssh(concurrency_group, host, ssh_user, f"rm -rf {REMOTE_STAGING_DIR}")

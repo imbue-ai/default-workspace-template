@@ -1,6 +1,7 @@
 import base64
 import contextlib
 import hashlib
+import json
 import threading
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -24,6 +25,8 @@ from imbue.remote_service_connector.app import CloudflareApiError
 from imbue.remote_service_connector.app import DESTROYED_WORKSPACE_BACKUP_RETENTION_SECONDS
 from imbue.remote_service_connector.app import InvalidR2BucketNameError
 from imbue.remote_service_connector.app import PostgresSyncStore
+from imbue.remote_service_connector.app import R2BucketNotEmptyError
+from imbue.remote_service_connector.app import R2BucketNotFoundError
 from imbue.remote_service_connector.app import R2BucketOwnershipError
 from imbue.remote_service_connector.app import R2StorageResultTruncatedError
 from imbue.remote_service_connector.app import SyncActiveAgentConflictError
@@ -33,8 +36,13 @@ from imbue.remote_service_connector.app import UserAuth
 from imbue.remote_service_connector.app import _MAX_ENCRYPTED_SECRETS_BYTES
 from imbue.remote_service_connector.app import _MAX_KEY_BUNDLE_FIELD_BYTES
 from imbue.remote_service_connector.app import _authenticate_supertokens
+from imbue.remote_service_connector.app import _build_oauth_providers
 from imbue.remote_service_connector.app import _default_email_getter
+from imbue.remote_service_connector.app import _is_bucket_not_empty_error
 from imbue.remote_service_connector.app import cf_check
+from imbue.remote_service_connector.app import cf_create_bucket
+from imbue.remote_service_connector.app import cf_delete_bucket
+from imbue.remote_service_connector.app import cf_list_buckets
 from imbue.remote_service_connector.app import clear_paid_status_cache
 from imbue.remote_service_connector.app import derive_s3_secret_access_key
 from imbue.remote_service_connector.app import derive_user_id_prefix
@@ -58,8 +66,8 @@ from imbue.remote_service_connector.testing import InMemoryEntitlementsStore
 from imbue.remote_service_connector.testing import InMemoryGrantStore
 from imbue.remote_service_connector.testing import InMemoryKeyStore
 from imbue.remote_service_connector.testing import InMemorySyncStore
+from imbue.remote_service_connector.testing import make_fake_cloudflare_ctx
 from imbue.remote_service_connector.testing import make_fake_entitlements_store
-from imbue.remote_service_connector.testing import make_fake_forwarding_ctx
 from imbue.remote_service_connector.testing import make_fake_grant_store
 from imbue.remote_service_connector.testing import make_fake_key_store
 from imbue.remote_service_connector.testing import make_fake_litellm_backend
@@ -105,7 +113,7 @@ def _make_quota_test_client(
     # ``/keys/create`` embeds the proxy URL in its response (the LiteLLM calls
     # themselves go through the installed fake).
     monkeypatch.setenv("LITELLM_PROXY_URL", "https://fake-litellm.example.com")
-    fake_ctx = make_fake_forwarding_ctx()
+    fake_ctx = make_fake_cloudflare_ctx()
 
     def _stub_supertokens(token: str) -> UserAuth:
         if token != _USER_STUB_TOKEN:
@@ -117,7 +125,7 @@ def _make_quota_test_client(
     # Single-loop patching (matches the Fake*Backend.install_on_app_module
     # pattern) so the monkeypatch ratchet only counts one occurrence.
     quota_fakes: dict[str, object] = {
-        "get_ctx": lambda: fake_ctx,
+        "get_cloudflare_ctx": lambda: fake_ctx,
         "_authenticate_supertokens": _stub_supertokens,
         "get_entitlements_store": lambda: entitlements_store,
         "_get_user_id_from_access_token": lambda token: _USER_STUB_USER_ID,
@@ -170,6 +178,89 @@ def test_cf_check_returns_data_on_success() -> None:
     response = httpx.Response(200, json={"success": True, "result": {"id": "123"}})
     data = cf_check(response)
     assert data["result"]["id"] == "123"
+
+
+def test_is_bucket_not_empty_error_matches_message_and_code() -> None:
+    by_message = CloudflareApiError(400, [{"message": "The bucket you tried to delete is not empty"}])
+    by_code = CloudflareApiError(400, [{"code": 10040, "message": "unrelated wording"}])
+    unrelated = CloudflareApiError(400, [{"code": 7003, "message": "no such bucket"}])
+    assert _is_bucket_not_empty_error(by_message) is True
+    assert _is_bucket_not_empty_error(by_code) is True
+    assert _is_bucket_not_empty_error(unrelated) is False
+
+
+def test_cf_create_bucket_posts_name_and_returns_result() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/accounts/acct-1/r2/buckets"
+        assert json.loads(request.content) == {"name": "bucket-a"}
+        return httpx.Response(200, json={"success": True, "result": {"name": "bucket-a"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(_handler), base_url="https://api.cloudflare.example")
+    assert cf_create_bucket(client, "acct-1", "bucket-a") == {"name": "bucket-a"}
+
+
+def test_cf_list_buckets_follows_pagination_cursors() -> None:
+    # Two pages: the first returns a cursor, the second ends the walk. The
+    # name_contains filter must ride along on every page request.
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["name_contains"] == "minds-"
+        if "cursor" not in request.url.params:
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "result": {"buckets": [{"name": "minds-one"}]},
+                    "result_info": {"cursor": "page-2"},
+                },
+            )
+        assert request.url.params["cursor"] == "page-2"
+        return httpx.Response(200, json={"success": True, "result": {"buckets": [{"name": "minds-two"}]}})
+
+    client = httpx.Client(transport=httpx.MockTransport(_handler), base_url="https://api.cloudflare.example")
+    buckets = cf_list_buckets(client, "acct-1", name_contains="minds-")
+    assert [bucket["name"] for bucket in buckets] == ["minds-one", "minds-two"]
+
+
+def test_cf_delete_bucket_translates_not_found_and_not_empty_errors() -> None:
+    def _make_client(status_code: int, error: dict[str, object]) -> httpx.Client:
+        def _handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(status_code, json={"success": False, "errors": [error]})
+
+        return httpx.Client(transport=httpx.MockTransport(_handler), base_url="https://api.cloudflare.example")
+
+    with pytest.raises(R2BucketNotFoundError):
+        cf_delete_bucket(_make_client(404, {"message": "no such bucket"}), "acct-1", "gone")
+    with pytest.raises(R2BucketNotEmptyError):
+        cf_delete_bucket(_make_client(400, {"code": 10040, "message": "bucket not empty"}), "acct-1", "full")
+    # Anything else keeps the raw Cloudflare error so the caller sees the real cause.
+    with pytest.raises(CloudflareApiError):
+        cf_delete_bucket(_make_client(500, {"message": "internal error"}), "acct-1", "b")
+
+
+def test_build_oauth_providers_includes_only_fully_configured_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-secret")
+    # GitHub has an id but no secret, so it must be left out rather than
+    # registered half-configured.
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "github-id")
+    monkeypatch.delenv("GITHUB_CLIENT_SECRET", raising=False)
+
+    providers = _build_oauth_providers()
+
+    assert [provider.config.third_party_id for provider in providers] == ["google"]
+    assert providers[0].config.clients is not None
+    assert providers[0].config.clients[0].client_id == "google-id"
+
+
+def test_build_oauth_providers_builds_github_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "github-id")
+    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "github-secret")
+
+    providers = _build_oauth_providers()
+
+    assert [provider.config.third_party_id for provider in providers] == ["github"]
 
 
 def test_route_no_auth_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2013,16 +2104,16 @@ def _make_bucket_quota_test_client(
 ) -> tuple[TestClient, FakeCloudflareOps, InMemoryKeyStore, InMemoryEntitlementsStore, InMemoryGrantStore]:
     """Create a TestClient with the R2 fakes installed (Cloudflare ops + key/grant stores + entitlements)."""
     client, entitlements_store, _litellm = _make_quota_test_client(monkeypatch)
-    # Build our own fake ctx so the fake is typed as FakeForwardingCtx (which
-    # exposes ``.fake``); re-patching get_ctx overrides the one the quota
+    # Build our own fake ctx so the fake is typed as FakeCloudflareCtx (which
+    # exposes ``.fake``); re-patching get_cloudflare_ctx overrides the one the quota
     # client installed.
-    fake_ctx = make_fake_forwarding_ctx()
+    fake_ctx = make_fake_cloudflare_ctx()
     store = make_fake_key_store()
     grant_store = make_fake_grant_store()
     # Single-loop patching (same pattern as the Fake*Backend.install_on_app_module
     # helpers) so the monkeypatch ratchet only counts one occurrence.
     bucket_fakes: dict[str, object] = {
-        "get_ctx": lambda: fake_ctx,
+        "get_cloudflare_ctx": lambda: fake_ctx,
         "get_key_store": lambda: store,
         "get_grant_store": lambda: grant_store,
     }
@@ -3707,7 +3798,7 @@ def test_postgres_sync_store_stamps_destroyed_at_and_clears_on_resurrection(
 
 def _make_reap_deps() -> tuple[Any, Any, Any, Any]:
     """(ops, sync_store, key_store, orphan_store) fakes for direct reaper runs."""
-    fake_ctx = make_fake_forwarding_ctx()
+    fake_ctx = make_fake_cloudflare_ctx()
     return fake_ctx.fake, make_fake_sync_store(), make_fake_key_store(), make_fake_orphan_bucket_store()
 
 

@@ -26,12 +26,14 @@
 BEGIN;
 
 ALTER TABLE relay_tokens DROP CONSTRAINT IF EXISTS relay_tokens_host_id_fkey;
+-- Drop the composite FK before the primary key it references: on a re-run the
+-- FK (added below) exists and would otherwise block the shares_pkey drop.
+ALTER TABLE relay_tokens DROP CONSTRAINT IF EXISTS relay_tokens_share_fkey;
 ALTER TABLE shares DROP CONSTRAINT IF EXISTS shares_pkey;
 ALTER TABLE shares ADD PRIMARY KEY (host_id, user_id);
 ALTER TABLE shares ADD COLUMN IF NOT EXISTS last_tunnel_login_at TIMESTAMPTZ;
 
 ALTER TABLE relay_tokens ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL;
-ALTER TABLE relay_tokens DROP CONSTRAINT IF EXISTS relay_tokens_share_fkey;
 ALTER TABLE relay_tokens
     ADD CONSTRAINT relay_tokens_share_fkey
     FOREIGN KEY (host_id, user_id) REFERENCES shares (host_id, user_id) ON DELETE CASCADE;

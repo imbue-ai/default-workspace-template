@@ -87,6 +87,54 @@ def test_resolve_named_service_returns_none_when_unregistered() -> None:
     assert resolver.resolve(TEST_AGENT_ID_1, "nonexistent") is None
 
 
+def test_resolve_by_origin_label_maps_label_back_to_service() -> None:
+    """A ``<label>.host-<hex>`` origin resolves via the label -> name map to the service's URL."""
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    resolver.add_known_agent(TEST_AGENT_ID_1)
+    resolver.update_services(
+        TEST_AGENT_ID_1,
+        {"system_interface": "http://127.0.0.1:9100", "terminal": "http://127.0.0.1:7681"},
+    )
+    resolver.update_service_labels(
+        TEST_AGENT_ID_1,
+        {"system_interface-shell111": "system_interface", "terminal-term1111": "terminal"},
+    )
+    target = resolver.resolve_by_origin_label(TEST_AGENT_ID_1, "terminal-term1111")
+    assert target is not None
+    assert str(target.url).rstrip("/") == "http://127.0.0.1:7681"
+
+
+def test_resolve_by_origin_label_falls_back_to_treating_label_as_name() -> None:
+    """A label with no mapping (label-less/legacy service) routes under its own name."""
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    resolver.add_known_agent(TEST_AGENT_ID_1)
+    resolver.update_services(TEST_AGENT_ID_1, {"terminal": "http://127.0.0.1:7681"})
+    target = resolver.resolve_by_origin_label(TEST_AGENT_ID_1, "terminal")
+    assert target is not None
+    assert str(target.url).rstrip("/") == "http://127.0.0.1:7681"
+
+
+def test_shell_origin_label_returns_the_shell_services_label() -> None:
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    resolver.add_known_agent(TEST_AGENT_ID_1)
+    resolver.update_service_labels(
+        TEST_AGENT_ID_1,
+        {"system_interface-shell111": "system_interface", "terminal-term1111": "terminal"},
+    )
+    assert resolver.shell_origin_label(TEST_AGENT_ID_1) == "system_interface-shell111"
+
+
+def test_shell_origin_label_is_none_before_labels_known_and_in_port_mode() -> None:
+    service_resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    service_resolver.add_known_agent(TEST_AGENT_ID_1)
+    assert service_resolver.shell_origin_label(TEST_AGENT_ID_1) is None
+
+    port_resolver = ForwardResolver(strategy=ForwardPortStrategy(remote_port=PositiveInt(8080)))
+    port_resolver.add_known_agent(TEST_AGENT_ID_1)
+    port_resolver.update_service_labels(TEST_AGENT_ID_1, {"system_interface-shell111": "system_interface"})
+    assert port_resolver.shell_origin_label(TEST_AGENT_ID_1) is None
+
+
 def test_resolve_named_service_works_in_port_strategy_mode() -> None:
     """Manual port mode still resolves named services from the registered map;
     only the bare origin maps to the fixed port."""

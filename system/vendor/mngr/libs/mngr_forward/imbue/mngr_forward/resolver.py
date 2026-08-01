@@ -69,6 +69,11 @@ class ForwardResolver(MutableModel):
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _services_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # Per-agent origin label -> service name. Origins are ``<label>.host-<hex>``
+    # where the label is unguessable (``<name>-<rand>``); grants and the backend
+    # service map stay keyed by name, so an incoming label is mapped back here.
+    # A service with no distinct label routes under its own name (label == name).
+    _label_to_name_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
     _ssh_by_agent: dict[str, RemoteSSHInfo] = PrivateAttr(default_factory=dict)
     _host_by_agent: dict[str, str] = PrivateAttr(default_factory=dict)
     _known_agent_ids: set[str] = PrivateAttr(default_factory=set)
@@ -101,6 +106,7 @@ class ForwardResolver(MutableModel):
                     services_changed = True
                 self._ssh_by_agent.pop(aid_str, None)
                 self._host_by_agent.pop(aid_str, None)
+                self._label_to_name_by_agent.pop(aid_str, None)
             self._known_agent_ids = new_set
             self._initial_discovery_done = True
             if services_changed:
@@ -131,6 +137,7 @@ class ForwardResolver(MutableModel):
             services_changed = self._services_by_agent.pop(aid_str, None) is not None
             self._ssh_by_agent.pop(aid_str, None)
             self._host_by_agent.pop(aid_str, None)
+            self._label_to_name_by_agent.pop(aid_str, None)
             if services_changed:
                 snapshot = self._snapshot_services_locked()
         if snapshot is not None:
@@ -148,6 +155,48 @@ class ForwardResolver(MutableModel):
             self._services_by_agent[str(agent_id)] = dict(services)
             snapshot = self._snapshot_services_locked()
         self._publish_services_snapshot(snapshot)
+
+    def update_service_labels(self, agent_id: AgentId, label_to_name: dict[str, str]) -> None:
+        """Replace the known origin-label -> service-name map for a single agent.
+
+        Not emitted or persisted -- labels are re-derived live from the same
+        service event stream that feeds ``update_services``.
+        """
+        with self._lock:
+            self._label_to_name_by_agent[str(agent_id)] = dict(label_to_name)
+
+    def resolve_by_origin_label(self, agent_id: AgentId, origin_label: str) -> ProxyTarget | None:
+        """Resolve a ``<label>.host-<hex>`` service origin to its backend.
+
+        Maps the (unguessable) origin label back to its service name, then
+        resolves by name. A label with no known mapping falls back to being
+        treated as the name itself, so a service registered without a distinct
+        label (or a plain non-minds agent) still resolves at its own origin.
+        """
+        with self._lock:
+            service_name = self._label_to_name_by_agent.get(str(agent_id), {}).get(origin_label, origin_label)
+        return self.resolve(agent_id, service_name)
+
+    def shell_origin_label(self, agent_id: AgentId) -> str | None:
+        """The origin label of the configured shell service, for the bare-origin redirect.
+
+        Returns None in port-forward mode (no shell service) or before the
+        shell's label has been discovered, in which case the bare origin is
+        served directly rather than redirected.
+        """
+        match self.strategy:
+            case ForwardServiceStrategy(service_name=shell_service_name):
+                with self._lock:
+                    label_to_name = self._label_to_name_by_agent.get(str(agent_id), {})
+                    for label, name in label_to_name.items():
+                        if name == shell_service_name:
+                            return label
+                return None
+            case ForwardPortStrategy():
+                return None
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
+                raise SwitchError(f"Unknown forwarding strategy: {unreachable}")
 
     def seed_services(self, services_by_agent: dict[str, dict[str, str]]) -> None:
         """Seed the per-agent service map from a last-known cache at startup.

@@ -535,7 +535,7 @@ class AgentManager:
     def get_apps_serialized(self) -> list[dict[str, str]]:
         """Return the primary agent's app list serialized for JSON."""
         with self._lock:
-            return [{"name": app.name, "url": app.url} for app in self._apps]
+            return [{"name": app.name, "url": app.url, "label": app.label} for app in self._apps]
 
     def get_service_url(self, service_name: str) -> str | None:
         """Return the local backend URL for a service, or None if it isn't registered."""
@@ -1305,8 +1305,9 @@ class AgentManager:
                 for entry in data.get("apps", []):
                     name = entry.get("name", "")
                     url = entry.get("url", "")
+                    label = entry.get("label", "")
                     if name and url:
-                        apps.append(AppEntry(name=name, url=url))
+                        apps.append(AppEntry(name=name, url=url, label=label))
             except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError) as e:
                 _loguru_logger.opt(exception=e).error("Failed to parse {}", toml_path)
 

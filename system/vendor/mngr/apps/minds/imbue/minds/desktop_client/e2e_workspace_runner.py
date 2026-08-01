@@ -57,7 +57,7 @@ _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[5]
 
 # The contentView page URL contains ``/_chrome`` only for the chrome
 # (sidebar/title-bar) view; the main content view never does. We match the
-# pure-localhost backend pages, not the ``agent-<id>.localhost`` proxy.
+# pure-localhost backend pages, not the ``host-<id>.localhost`` proxy.
 # The capturing group exposes the bare origin (``http://localhost:<port>``)
 # so :func:`_backend_origin_from_page` can reuse the same pattern instead of
 # re-encoding the localhost-origin contract a second time.
@@ -633,7 +633,7 @@ def _wait_for_workspace_ready_or_failure(browser: Browser, creating_page: Page, 
     DIFFERENT WebContentsViews (separate CDP pages):
 
     - **success**: the ready workspace opens on the CONTENT view -- its own page
-      on the ``agent-<id>.localhost`` origin. ``creating.js`` hands the ready
+      on the ``host-<id>.localhost`` origin. ``creating.js`` hands the ready
       workspace's ``/goto`` URL to the ``window.minds`` bridge, which shows it on
       the content surface while the chrome view that drove the form
       (``creating_page``) returns to the ``/_chrome`` wrapper. (Before the split
@@ -974,8 +974,12 @@ def create_workspace_via_electron(
 _FLOW_SHOT_DIR: Final[Path] = Path("/tmp/minds-electron-flow")
 _CHAT_INPUT_SELECTOR: Final[str] = "textarea.message-input-textbox"
 # Terminal panels are cross-origin iframes at the terminal service's own
-# origin (service-per-origin): https://terminal.host-<hex>.localhost:<port>/.
-_TERMINAL_IFRAME_SELECTOR: Final[str] = 'iframe[src^="https://terminal."], iframe[src^="http://terminal."]'
+# origin (service-per-origin): the terminal's origin label is ``terminal-<rand>``
+# (a random per-service suffix), so the origin is
+# https://terminal-<rand>.host-<hex>.localhost:<port>/. Match the ``terminal-``
+# label prefix -- the trailing hyphen keeps it from matching an unrelated
+# service whose name merely starts with "terminal".
+_TERMINAL_IFRAME_SELECTOR: Final[str] = 'iframe[src^="https://terminal-"], iframe[src^="http://terminal-"]'
 # The DEFAULT_WORKSPACE_TEMPLATE bootstrap creates the initial chat agent asynchronously after the
 # dockview first renders (it shows "Waiting for initial chat agent..." until
 # then), so the chat input can take a while to appear on a fresh first boot.

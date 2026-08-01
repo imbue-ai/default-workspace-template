@@ -1,4 +1,4 @@
-{#def agent_id, ws_name, host_id="", account_email="", has_account=True, accounts=[], app_services=[], whole_service="system_interface", selected_target="", panel_scroll=False #}
+{#def agent_id, ws_name, host_id="", account_email="", has_account=True, accounts=[], app_services=[], service_labels={}, whole_service="system_interface", selected_target="", panel_scroll=False #}
 {#
   The "Share machine" pane: pick a share target on the left, manage who can
   reach it on the right.
@@ -13,7 +13,11 @@
 
   ``app_services`` is the workspace's registered services WITHOUT
   ``whole_service`` (that one is always rendered as the Whole machine entry,
-  whether or not it is registered yet). ``selected_target`` is the target to
+  whether or not it is registered yet). ``service_labels`` maps each app
+  service name to its public origin hostname label (``<name>-<rand>``); it is
+  handed to workspace_options.js so a per-app link uses the service's real
+  origin label rather than its name (a service absent from it falls back to its
+  name). ``selected_target`` is the target to
   open on; it defaults to the whole machine. ``host_id`` is the machine
   coordinate the sharing API is keyed by; empty when the workspace has not
   been discovered yet (the pane then reads as not-shared).
@@ -189,7 +193,8 @@
   "hostId": {{ (host_id or '') | tojson }},
   "accountEmail": {{ (account_email or '') | tojson }},
   "wholeService": {{ whole_service | tojson }},
-  "selectedTarget": {{ (selected_target or whole_service) | tojson }}
+  "selectedTarget": {{ (selected_target or whole_service) | tojson }},
+  "serviceLabels": {{ (service_labels or {}) | tojson }}
 }
 </script>
 {% endif %}

@@ -191,6 +191,12 @@ def disassociate_workspace_account(
     if imbue_cloud_cli is not None:
         display_info = backend_resolver.get_agent_display_info(agent_id)
         host_id = str(display_info.host_id) if display_info is not None else ""
+        if not host_id.startswith("host-") and session_store.record_store is not None:
+            # Discovery misses a stopped workspace; its workspace record still
+            # carries the host coordinate, so the share can be revoked anyway.
+            found = session_store.record_store.find_active_record(str(agent_id))
+            if found is not None and found[1].host_id.startswith("host-"):
+                host_id = found[1].host_id
         if host_id.startswith("host-"):
             try:
                 share = imbue_cloud_cli.get_share_status(account=str(account.email), host_id=host_id)

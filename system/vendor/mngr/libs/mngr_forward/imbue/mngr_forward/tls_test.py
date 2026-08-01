@@ -2,10 +2,14 @@
 
 import ipaddress
 import ssl
+from types import SimpleNamespace
+from typing import cast
 
 from cryptography import x509
 
 from imbue.mngr_forward.tls import InMemoryTLSConfig
+from imbue.mngr_forward.tls import _MAX_MINTED_CONTEXTS
+from imbue.mngr_forward.tls import _SNICertMinter
 from imbue.mngr_forward.tls import _is_covered_by_static_sans
 from imbue.mngr_forward.tls import build_server_ssl_context
 from imbue.mngr_forward.tls import generate_self_signed_cert
@@ -116,6 +120,27 @@ def test_sni_minting_covers_arbitrary_depth() -> None:
     assert _served_dns_names(context, hostname) == [hostname]
     # A second handshake for the same name serves the cached cert unchanged.
     assert _served_dns_names(context, hostname) == [hostname]
+
+
+def test_sni_minting_evicts_oldest_when_cap_reached() -> None:
+    """A full mint cache evicts its oldest entry instead of denying new origins.
+
+    The SNI callback runs pre-authentication, so a misbehaving local client
+    could fill the cache; new legitimate origins must still get a minted cert.
+    """
+    _cert_pem, key_pem = generate_self_signed_cert()
+    minter = _SNICertMinter(key_pem=key_pem)
+    placeholder = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    for index in range(_MAX_MINTED_CONTEXTS):
+        minter._minted_contexts[f"x{index}.host-a.localhost"] = placeholder
+    stub_socket = cast(ssl.SSLObject, SimpleNamespace(context=None))
+    hostname = "svc.host-0123456789abcdef0123456789abcdef.localhost"
+    minter(stub_socket, hostname, placeholder)
+    assert stub_socket.context is minter._minted_contexts[hostname]
+    assert stub_socket.context is not placeholder
+    # The oldest entry made room; the cache stays at the cap.
+    assert "x0.host-a.localhost" not in minter._minted_contexts
+    assert len(minter._minted_contexts) == _MAX_MINTED_CONTEXTS
 
 
 def test_is_covered_by_static_sans() -> None:

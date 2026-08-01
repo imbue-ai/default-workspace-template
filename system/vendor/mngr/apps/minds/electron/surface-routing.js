@@ -62,7 +62,7 @@ function parseAccentSourceAgentId(url) {
 }
 
 // The two content surfaces. A URL that identifies a workspace (a
-// `agent-<id>.localhost` subdomain or the `/goto/<id>/` auth-bridge) is
+// `host-<id>.localhost` subdomain or the `/goto/<id>/` auth-bridge) is
 // untrusted foreign agent content and belongs on the CONTENT surface
 // (contentView, caged relay preload). Every other in-app URL is a trusted
 // local/native page (Landing, Create, Settings, the workspace-scoped settings /

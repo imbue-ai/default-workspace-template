@@ -216,6 +216,10 @@ class EnvelopeStreamConsumer(MutableModel):
     # the agents on each host when building the resolver's view.
     _ssh_by_host_id: dict[str, RemoteSSHInfo] = PrivateAttr(default_factory=dict)
     _services_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # Parallel to _services_by_agent: {agent_id_str: {service_name: origin label}}.
+    # Carries each service's public origin hostname label (``<name>-<rand>``) so
+    # the resolver -- and thus the Share tab -- can build per-service share links.
+    _labels_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
     _on_agent_discovered_callbacks: list[OnAgentDiscoveredCallback] = PrivateAttr(default_factory=list)
     _on_agent_destroyed_callbacks: list[OnAgentDestroyedCallback] = PrivateAttr(default_factory=list)
     _on_system_interface_backend_failure_callbacks: list[OnSystemInterfaceBackendFailureCallback] = PrivateAttr(
@@ -570,6 +574,7 @@ class EnvelopeStreamConsumer(MutableModel):
             agent_id = AgentId(agent_id_str)
             with self._lock:
                 self._services_by_agent.pop(agent_id_str, None)
+                self._labels_by_agent.pop(agent_id_str, None)
             self.resolver.update_services(agent_id, {})
             self._fire_destroyed(agent_id)
         for agent_id_str in delta.added_agent_ids:
@@ -639,12 +644,19 @@ class EnvelopeStreamConsumer(MutableModel):
             return
         with self._lock:
             services = self._services_by_agent.setdefault(aid_str, {})
+            labels = self._labels_by_agent.setdefault(aid_str, {})
             if isinstance(record, ServiceDeregisteredRecord):
                 services.pop(str(record.service), None)
+                labels.pop(str(record.service), None)
             else:
                 services[str(record.service)] = record.url
+                if record.label:
+                    labels[str(record.service)] = record.label
+                else:
+                    labels.pop(str(record.service), None)
             services_snapshot = dict(services)
-        self.resolver.update_services(agent_id, services_snapshot)
+            labels_snapshot = dict(labels)
+        self.resolver.update_services(agent_id, services_snapshot, labels_snapshot)
 
     # -- Forward-stream payloads ------------------------------------------
 

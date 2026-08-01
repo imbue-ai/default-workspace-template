@@ -418,7 +418,7 @@ _FALLBACK_GIT_URL: Final[str] = DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
 # Pin to an annotated DEFAULT_WORKSPACE_TEMPLATE tag so a shipped binary clones the exact DEFAULT_WORKSPACE_TEMPLATE
 # snapshot it was verified against. Bump to a newer tag only after
 # re-verifying launch-to-msg CI against (this binary, the new tag).
-FALLBACK_BRANCH: Final[str] = "minds-v0.3.11"
+FALLBACK_BRANCH: Final[str] = "minds-v0.3.10"
 
 # Env var (set by ``just minds-start`` and the e2e workspace runner) that opts a
 # launch into the operator's local-worktree create-form defaults. Gating on an
@@ -2293,12 +2293,33 @@ def _split_share_targets(servers: Sequence[str]) -> tuple[list[str], str]:
 
 
 @pure
+def _share_target_labels(app_services: Sequence[str], service_labels: Mapping[str, str] | None) -> dict[str, str]:
+    """The origin-label map for the rendered share targets, keyed by service name.
+
+    Every share link is a real origin. A per-app link is ``<label>.<machine
+    domain>``; the whole-machine link is the SHELL's own label origin
+    (``<system_interface label>.<machine domain>``), because the bare machine
+    domain does not route on a share (only explicit ``<label>.<machine domain>``
+    origins are claimed on the relay and served). So the map
+    covers the rendered ``app_services`` plus the whole-machine (shell) service,
+    restricted to services that actually carry a label -- a service with none is
+    omitted, and workspace_options.js falls back accordingly.
+    """
+    labels = service_labels or {}
+    target_labels = {service: labels[service] for service in app_services if service in labels}
+    if _WHOLE_MACHINE_SERVICE in labels:
+        target_labels[_WHOLE_MACHINE_SERVICE] = labels[_WHOLE_MACHINE_SERVICE]
+    return target_labels
+
+
+@pure
 def render_workspace_options_page(
     agent_id: str,
     ws_name: str,
     current_account: object | None,
     accounts: Sequence[object],
     servers: Sequence[str],
+    service_labels: Mapping[str, str] | None = None,
     host_id: str = "",
     tab: str = "share",
     selected_target: str = "",
@@ -2325,6 +2346,7 @@ def render_workspace_options_page(
         current_account=current_account,
         accounts=accounts,
         app_services=app_services,
+        service_labels=_share_target_labels(app_services, service_labels),
         whole_service=whole_service,
         selected_target=selected_target or whole_service,
         account_email=account_email,
@@ -2344,6 +2366,7 @@ def render_workspace_options_modal_page(
     current_account: object | None,
     accounts: Sequence[object],
     servers: Sequence[str],
+    service_labels: Mapping[str, str] | None = None,
     host_id: str = "",
     tab: str = "share",
     selected_target: str = "",
@@ -2378,6 +2401,7 @@ def render_workspace_options_modal_page(
         current_account=current_account,
         accounts=accounts,
         app_services=app_services,
+        service_labels=_share_target_labels(app_services, service_labels),
         whole_service=whole_service,
         selected_target=selected_target or whole_service,
         account_email=account_email,

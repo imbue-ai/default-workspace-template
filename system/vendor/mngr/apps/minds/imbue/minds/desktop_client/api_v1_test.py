@@ -1845,6 +1845,25 @@ def test_machine_sharing_status_enabled(tmp_path: Path) -> None:
     assert body["url"] == f"https://{_TEST_HOST_ID}.owner1234.us1.shares.example/"
 
 
+def test_machine_sharing_status_reports_unknown_grants_when_the_read_fails(tmp_path: Path) -> None:
+    # A shared machine whose grants exec never lands must report grants: null
+    # (unknown), not an empty policy: the pane would otherwise render every
+    # grantee as revoked and let an edit replace a policy nobody ever saw.
+    agent_id = AgentId()
+    cli = _fake_sharing_cli(share=_active_share())
+    caller = cli.mngr_caller
+    assert isinstance(caller, RecordingMngrCaller)
+    caller.result = MngrCallResult(returncode=1, stderr="agent offline")
+    client = _sharing_client(tmp_path, agent_id, cli)
+
+    response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing", headers=_auth_header())
+
+    assert response.status_code == 200
+    body = json.loads(response.data)
+    assert body["enabled"] is True
+    assert body["grants"] is None
+
+
 def test_machine_sharing_put_enables_and_injects_materials(tmp_path: Path) -> None:
     agent_id = AgentId()
     cli = _fake_sharing_cli()
@@ -1890,8 +1909,8 @@ def test_machine_sharing_put_on_active_share_updates_grants_without_rotation(tmp
 class _SharePresenceProbeFailingCaller(RecordingMngrCaller):
     """Recording caller whose share-materials presence probe reports absent.
 
-    Every other exec (grants + share.env writes) still succeeds, so the repair
-    path can be observed end to end.
+    Every other mngr call (grants + share.env writes) still succeeds, so the
+    repair path can be observed end to end.
     """
 
     def call(
@@ -1943,7 +1962,7 @@ def test_machine_sharing_put_rejects_empty_grants(tmp_path: Path) -> None:
         json={"workspace": {"emails": [], "email_domains": []}},
     )
 
-    assert response.status_code == 502
+    assert response.status_code == 400
     assert cli.created_shares == []
 
 

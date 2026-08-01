@@ -753,6 +753,39 @@ def test_event_services_envelope_updates_resolver_services(consumer: EnvelopeStr
     assert consumer.resolver.get_backend_url(_AGENT_ID_1, _SERVICE_WEB) is None
 
 
+def test_event_services_envelope_carries_the_origin_label_to_the_resolver(
+    consumer: EnvelopeStreamConsumer,
+) -> None:
+    # The services event now carries a per-service origin ``label``; it must reach
+    # the resolver so the Share tab can build the per-app link from it. A
+    # deregister clears both the url and the label.
+    _dispatch(consumer, _observe_envelope(_provider_snapshot((_make_agent(_AGENT_ID_1),))))
+
+    register_payload = {
+        "timestamp": _TIMESTAMP,
+        "event_id": "evt-" + "0" * 32,
+        "type": "service_registered",
+        "source": "services",
+        "service": "terminal",
+        "url": "http://127.0.0.1:9100",
+        "label": "terminal-x7k9q2w1",
+    }
+    _dispatch(consumer, _event_envelope(_AGENT_ID_1, register_payload))
+    assert consumer.resolver.list_service_labels_for_agent(_AGENT_ID_1) == {
+        ServiceName("terminal"): "terminal-x7k9q2w1"
+    }
+
+    deregister_payload = {
+        "timestamp": _TIMESTAMP,
+        "event_id": "evt-" + "0" * 31 + "1",
+        "type": "service_deregistered",
+        "source": "services",
+        "service": "terminal",
+    }
+    _dispatch(consumer, _event_envelope(_AGENT_ID_1, deregister_payload))
+    assert consumer.resolver.list_service_labels_for_agent(_AGENT_ID_1) == {}
+
+
 def test_event_requests_envelope_dispatches_to_request_callback(consumer: EnvelopeStreamConsumer) -> None:
     fired: list[tuple[str, str]] = []
     consumer.resolver.add_on_request_callback(lambda aid_str, raw: fired.append((aid_str, raw)))

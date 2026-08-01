@@ -72,6 +72,14 @@ class ServiceLogRecord(FrozenModel):
 
     service: ServiceName = Field(description="Name of the service (e.g., 'web')")
     url: str = Field(description="URL where the service is accessible (e.g., 'http://127.0.0.1:9100')")
+    label: str = Field(
+        default="",
+        description=(
+            "The service's public origin hostname label (``<name>-<rand>``, e.g. 'terminal-x7k9q2w1'). "
+            "Empty for legacy rows written before labels existed, in which case callers fall back to the "
+            "service name."
+        ),
+    )
 
 
 class BackendResolverInterface(MutableModel, ABC):
@@ -201,6 +209,18 @@ class BackendResolverInterface(MutableModel, ABC):
     @abstractmethod
     def list_services_for_agent(self, agent_id: AgentId) -> tuple[ServiceName, ...]:
         """Return all known service names for an agent, sorted alphabetically."""
+
+    def list_service_labels_for_agent(self, agent_id: AgentId) -> dict[ServiceName, str]:
+        """Return each known service's public origin label, keyed by service name.
+
+        Maps a service name to its persistent origin ``label`` (``<name>-<rand>``),
+        the hostname component of the service's public origin
+        (``<label>.<machine domain>``). Services with no known label (legacy
+        rows) are omitted; callers fall back to the service name. Used by the
+        Share tab to build each per-service share link. Default implementation
+        returns an empty mapping (resolvers that carry no labels).
+        """
+        return {}
 
     def get_ssh_info(self, agent_id: AgentId) -> RemoteSSHInfo | None:
         """Return SSH connection info for the agent's host, or None for local agents.
@@ -449,7 +469,8 @@ def parse_service_log_record(raw: dict[str, object]) -> ServiceLogRecord | Servi
 
     Extracts the 'service' field and checks the 'type' field.
     For 'service_deregistered' events, returns a ServiceDeregisteredRecord.
-    For all other events, returns a ServiceLogRecord with 'service' and 'url'.
+    For all other events, returns a ServiceLogRecord with 'service', 'url', and
+    an optional 'label' (the service's public origin hostname label).
     Raises ValueError if required fields are missing.
     """
     event_type = raw.get("type", "service_registered")
@@ -464,7 +485,8 @@ def parse_service_log_record(raw: dict[str, object]) -> ServiceLogRecord | Servi
     url = raw.get("url")
     if not url:
         raise ServiceLogParseError(f"Service log record missing required fields (service={service!r}, url={url!r})")
-    return ServiceLogRecord(service=ServiceName(str(service)), url=str(url))
+    label = raw.get("label")
+    return ServiceLogRecord(service=ServiceName(str(service)), url=str(url), label=str(label) if label else "")
 
 
 def parse_service_log_records(text: str) -> list[ServiceLogRecord | ServiceDeregisteredRecord]:
@@ -692,6 +714,10 @@ class MngrCliBackendResolver(BackendResolverInterface):
 
     _agents_result: ParsedAgentsResult = PrivateAttr(default_factory=ParsedAgentsResult)
     _services_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # agent_id_str -> {service_name: origin label}. Parallel to _services_by_agent,
+    # carrying each service's public origin hostname label (``<name>-<rand>``).
+    # A service missing here (a legacy row with no label) falls back to its name.
+    _labels_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
     _initial_discovery_done: bool = PrivateAttr(default=False)
     _provider_by_name: dict[ProviderInstanceName, DiscoveredProvider] = PrivateAttr(default_factory=dict)
     _error_by_provider_name: dict[ProviderInstanceName, DiscoveryError] = PrivateAttr(default_factory=dict)
@@ -1049,10 +1075,18 @@ class MngrCliBackendResolver(BackendResolverInterface):
         with self._lock:
             return self._last_snapshot_at_by_provider.get(provider_name)
 
-    def update_services(self, agent_id: AgentId, services: dict[str, str]) -> None:
-        """Replace the known services for a single agent. Thread-safe."""
+    def update_services(
+        self, agent_id: AgentId, services: dict[str, str], labels: dict[str, str] | None = None
+    ) -> None:
+        """Replace the known services (and their origin labels) for a single agent. Thread-safe.
+
+        ``labels`` maps each service name to its public origin hostname label
+        (``<name>-<rand>``). Services absent from it (legacy rows written before
+        labels existed) have no label, and callers fall back to the service name.
+        """
         with self._lock:
             self._services_by_agent[str(agent_id)] = services
+            self._labels_by_agent[str(agent_id)] = dict(labels or {})
         self._fire_on_change()
 
     def get_backend_url(self, agent_id: AgentId, service_name: ServiceName) -> str | None:
@@ -1064,6 +1098,11 @@ class MngrCliBackendResolver(BackendResolverInterface):
         with self._lock:
             services = self._services_by_agent.get(str(agent_id), {})
             return tuple(ServiceName(name) for name in sorted(services.keys()))
+
+    def list_service_labels_for_agent(self, agent_id: AgentId) -> dict[ServiceName, str]:
+        with self._lock:
+            labels = self._labels_by_agent.get(str(agent_id), {})
+            return {ServiceName(name): label for name, label in labels.items() if label}
 
     def list_known_agent_ids(self) -> tuple[AgentId, ...]:
         with self._lock:

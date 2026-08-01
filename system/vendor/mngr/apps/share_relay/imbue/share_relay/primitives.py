@@ -24,6 +24,24 @@ class RegionCode(NonEmptyStr):
         return instance
 
 
+class ContentDomain(NonEmptyStr):
+    """A content domain apex workspace hostnames live under (e.g. ``imbueminds.com``).
+
+    Rendered into frps/nftables/Caddy config and DNS upserts, so it must be a
+    real DNS name: dot-joined lowercase DNS labels. Catches typos before they
+    reach a relay's rendered config.
+    """
+
+    def __new__(cls, value: str) -> "ContentDomain":
+        instance = super().__new__(cls, value)
+        if any(_DNS_LABEL_RE.match(label) is None for label in str(instance).split(".")):
+            raise InvalidPrimitiveValueError(
+                f"{cls.__name__} must be dot-joined lowercase DNS labels "
+                f"(alphanumeric runs joined by single hyphens); got {value!r}"
+            )
+        return instance
+
+
 class RelayPort(PositiveInt):
     """A TCP port a relay process binds. Must be > 0."""
 
@@ -41,6 +59,7 @@ DEFAULT_VHOST_HTTPS_PORT: Final[RelayPort] = RelayPort(443)
 # this outbound to register its tunnel and multiplex traffic.
 DEFAULT_TUNNEL_CONTROL_PORT: Final[RelayPort] = RelayPort(7000)
 
-# The relay's healthcheck HTTP port (loopback / internal only; fronted by the
-# monitoring probe, never by workspace traffic).
+# The relay's healthcheck HTTP port. Bound on all interfaces so the external
+# monitoring probe can reach it; serves only a liveness answer (never
+# workspace traffic, no secrets).
 DEFAULT_HEALTHCHECK_PORT: Final[RelayPort] = RelayPort(8080)

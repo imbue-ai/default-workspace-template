@@ -20,7 +20,7 @@
   }
 
   // ``mngr forward`` plugin's bare origin (e.g. ``http://localhost:8421``).
-  // Workspace links (``/goto/<agent>/``) target the plugin, not minds.
+  // Workspace links (``/goto/<host-id>/``) target the plugin, not minds.
   var mngrForwardOrigin = (document.body && document.body.dataset.mngrForwardOrigin) || '';
 
   // Which workspace's accent (if any) a same-origin minds content path
@@ -78,7 +78,8 @@
       // Recovery is swappable: its poll loops are minds:page-teardown-guarded
       // and its card CSS lives in the page body, so hub <-> recovery hops (a
       // flapping workspace's most common transition) keep the titlebar intact.
-      || /^\/agents\/agent-[a-f0-9]+\/recovery$/i.test(pathname)
+      // It accepts either workspace coordinate (content URLs are host-keyed).
+      || /^\/agents\/(?:agent|host)-[a-f0-9]+\/recovery$/i.test(pathname)
     );
   }
   function canSwapTo(url) {
@@ -683,10 +684,14 @@
   }
   function openWorkspaceOptions(tab) {
     if (!currentCrumbAgentId) return;
+    // The crumb id is HOST-keyed when derived from a workspace content URL,
+    // but the options panel (Electron validator and the /workspace/... route)
+    // is AGENT-keyed, so translate before handing it over.
+    var agentId = toAgentScopedId(currentCrumbAgentId);
     if (isElectron) {
-      window.minds.openWorkspaceOptions(currentCrumbAgentId, tab, computeWorkspaceOptionsAnchor());
+      window.minds.openWorkspaceOptions(agentId, tab, computeWorkspaceOptionsAnchor());
     } else {
-      navigateContent('/workspace/' + currentCrumbAgentId + '/options?tab=' + tab);
+      navigateContent('/workspace/' + agentId + '/options?tab=' + tab);
     }
   }
   document.getElementById('ws-tab-share').onclick = function () { openWorkspaceOptions('share'); };
@@ -794,7 +799,7 @@
     }
     // In Electron mode the current workspace is authoritative via IPC: main.js
     // tracks the active workspace per bundle (handles both /goto/<id>/ URLs and
-    // post-redirect agent-<id>.localhost subdomains) and pushes it here. Deriving
+    // post-redirect host-<id>.localhost subdomains) and pushes it here. Deriving
     // it from the content URL alone would clobber it to null on every navigation
     // that doesn't match /goto/<id>/, which would prevent the recovery-page
     // redirect from firing for the current agent.
@@ -912,7 +917,10 @@
       // /help, scoped to the workspace when the page supplied a valid agent id.
       if (data.type === 'minds:open-help') {
         var agentId = data.agentId;
-        var scoped = typeof agentId === 'string' && /^agent-[a-f0-9]{1,64}$/i.test(agentId) ? agentId : '';
+        // Accept both workspace coordinates (mirrors the Electron open-help
+        // IPC): the recovery page runs on host-keyed URLs and sends the host
+        // id, which the backend /help route resolves to the agent id itself.
+        var scoped = typeof agentId === 'string' && /^(?:agent|host)-[a-f0-9]{1,64}$/i.test(agentId) ? agentId : '';
         navigateContent('/help' + (scoped ? '?workspace=' + encodeURIComponent(scoped) : ''));
         return;
       }
@@ -956,8 +964,11 @@
         // no withOpenNew (rows carry no action buttons here). Unlike the
         // Electron sidebar (delegated listeners) this view wires the click
         // per-row, so attach it to the built element.
+        // The crumb id is host-keyed (parsed from content URLs) while rows
+        // are agent-keyed; match either coordinate, like the Electron
+        // sidebar does.
         var row = window.mindsSidebarRow.buildRow(w, {
-          isCurrent: w.id === currentCrumbAgentId,
+          isCurrent: w.id === currentCrumbAgentId || w.host_id === currentCrumbAgentId,
         });
         row.addEventListener('click', function () {
           // Rows for workspaces on another device are informational only.

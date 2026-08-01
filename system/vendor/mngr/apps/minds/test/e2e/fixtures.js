@@ -27,7 +27,7 @@ const DEFAULT_APP_PATH = '/Applications/Minds.app/Contents/MacOS/Minds';
 // titlebar-only wrapper shown while agent content floats in the separate content
 // view. So the user-facing local UI is the window whose URL is a backend origin
 // but NOT `/_chrome`; that is what we pick here (the content view, meanwhile,
-// hosts only `agent-<id>.localhost` workspace content, which is not a bare
+// hosts only `host-<id>.localhost` workspace content, which is not a bare
 // localhost origin). `_pick_content_page` in e2e_workspace_runner.py is the
 // Python twin.
 const _BACKEND_ORIGIN_RE = /^http:\/\/localhost:\d+(?:\/|$)/;

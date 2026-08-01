@@ -6,7 +6,6 @@ from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
 import jwt
-import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
@@ -15,6 +14,7 @@ from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.materials import ShareMaterials
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import build_gateway_app
+from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
 
@@ -25,6 +25,19 @@ _BROKER_URL = "https://accounts.example.com"
 _SIGNING_SECRET = "gateway-secret-4471"
 _TEST_KID = "test-kid-1"
 _BROKER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+# Every origin is an unguessable ``<name>-<rand>`` label; grants stay keyed by
+# name, and the gateway maps label -> name via this registry.
+_AUTH_LABEL = "auth-x7k9q2w1"
+_LABELS = {
+    "system_interface-shell111": "system_interface",
+    "web-web111111": "web",
+    "terminal-term1111": "terminal",
+}
+_SHELL_HOST = f"system_interface-shell111.{_DOMAIN}"
+_WEB_HOST = f"web-web111111.{_DOMAIN}"
+_TERMINAL_HOST = f"terminal-term1111.{_DOMAIN}"
+_AUTH_ORIGIN = f"https://{_AUTH_LABEL}.{_DOMAIN}"
 
 _GRANTS = """
 [workspace]
@@ -67,6 +80,8 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS) -> _GatewayHarness
         ),
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=pending_logins,
+        auth_label=_AUTH_LABEL,
+        get_label_to_name=lambda: _LABELS,
     )
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
 
@@ -84,7 +99,7 @@ def _install_session(client: FlaskClient, email: str, extra_cookies: dict[str, s
 
 
 def _verify_headers(
-    host: str = _DOMAIN,
+    host: str = _SHELL_HOST,
     method: str = "GET",
     uri: str = "/some/page",
     accept: str = "text/html,application/xhtml+xml",
@@ -118,17 +133,25 @@ def _mint_handoff(nonce: str, email: str = "bob@example.com", audience: str = _D
     return jwt.encode(payload, _BROKER_KEY, algorithm="RS256", headers={"kid": _TEST_KID})
 
 
-def test_unauthenticated_html_navigation_redirects_to_broker(tmp_path: Path) -> None:
+def test_forwarded_client_ip_takes_the_first_forwarded_entry() -> None:
+    assert forwarded_client_ip({"X-Forwarded-For": "203.0.113.9, 127.0.0.1"}) == "203.0.113.9"
+    assert forwarded_client_ip({"X-Forwarded-For": "2001:db8::7"}) == "2001:db8::7"
+    assert forwarded_client_ip({}) == ""
+
+
+def test_unauthenticated_html_navigation_redirects_to_broker_with_callback_origin(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
 
-    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"web.{_DOMAIN}", uri="/x?y=1"))
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST, uri="/x?y=1"))
 
     assert resp.status_code == 302
     location = resp.headers["Location"]
     assert location.startswith(f"{_BROKER_URL}/share/authorize?")
     query = parse_qs(urlsplit(location).query)
     assert query["machine_domain"] == [_DOMAIN]
-    assert query["next"] == [f"https://web.{_DOMAIN}/x?y=1"]
+    assert query["next"] == [f"https://{_WEB_HOST}/x?y=1"]
+    # The callback must land on the dedicated auth origin, not the service origin.
+    assert query["callback_origin"] == [_AUTH_ORIGIN]
     assert query["state"][0]
 
 
@@ -140,12 +163,21 @@ def test_unauthenticated_non_html_request_gets_401(tmp_path: Path) -> None:
     assert resp.status_code == 401
 
 
+def test_unknown_label_is_forbidden(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"unknown-00000000.{_DOMAIN}"))
+
+    assert resp.status_code == 403
+
+
 def test_workspace_grant_allows_shell_and_services_and_strips_cookie(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     _install_session(harness.client, "bob@example.com", extra_cookies={"other": "1"})
 
     shell = harness.client.get("/_auth/verify", headers=_verify_headers())
-    service = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"terminal.{_DOMAIN}"))
+    service = harness.client.get("/_auth/verify", headers=_verify_headers(host=_TERMINAL_HOST))
 
     assert shell.status_code == 200
     assert shell.headers["X-Share-Filtered-Cookie"] == "other=1"
@@ -156,9 +188,9 @@ def test_per_service_grant_scopes_to_that_service_only(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     _install_session(harness.client, "carol@example.com")
 
-    allowed = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"web.{_DOMAIN}"))
+    allowed = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
     shell = harness.client.get("/_auth/verify", headers=_verify_headers())
-    sibling = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"terminal.{_DOMAIN}"))
+    sibling = harness.client.get("/_auth/verify", headers=_verify_headers(host=_TERMINAL_HOST))
 
     assert allowed.status_code == 200
     assert shell.status_code == 403
@@ -195,7 +227,7 @@ def test_websocket_upgrade_requires_workspace_origin_even_with_session(tmp_path:
     )
     ours = harness.client.get(
         "/_auth/verify",
-        headers=_verify_headers(is_websocket=True, origin=f"https://web.{_DOMAIN}"),
+        headers=_verify_headers(host=_WEB_HOST, is_websocket=True, origin=f"https://{_WEB_HOST}"),
     )
 
     assert no_origin.status_code == 403
@@ -220,12 +252,10 @@ def test_callback_sets_domain_cookie_and_redirects_to_next(tmp_path: Path) -> No
     nonce = harness.pending_logins.mint()
     token = _mint_handoff(nonce)
 
-    resp = harness.client.get(
-        f"/_auth/callback?token={token}&state={nonce}&next=https://web.{_DOMAIN}/panel"
-    )
+    resp = harness.client.get(f"/_auth/callback?token={token}&state={nonce}&next=https://{_WEB_HOST}/panel")
 
     assert resp.status_code == 302
-    assert resp.headers["Location"] == f"https://web.{_DOMAIN}/panel"
+    assert resp.headers["Location"] == f"https://{_WEB_HOST}/panel"
     set_cookie = resp.headers["Set-Cookie"]
     assert SESSION_COOKIE_NAME in set_cookie
     assert f"Domain={_DOMAIN}" in set_cookie
@@ -238,7 +268,7 @@ def test_callback_sets_domain_cookie_and_redirects_to_next(tmp_path: Path) -> No
     assert verified.status_code == 200
 
 
-def test_callback_clamps_foreign_next_to_the_shell(tmp_path: Path) -> None:
+def test_callback_clamps_foreign_next_to_the_shell_label(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     nonce = harness.pending_logins.mint()
     token = _mint_handoff(nonce)
@@ -246,7 +276,9 @@ def test_callback_clamps_foreign_next_to_the_shell(tmp_path: Path) -> None:
     resp = harness.client.get(f"/_auth/callback?token={token}&state={nonce}&next=https://evil.example.com/")
 
     assert resp.status_code == 302
-    assert resp.headers["Location"] == f"https://{_DOMAIN}/"
+    # The bare domain no longer routes, so a foreign next falls back to the
+    # shell (system_interface) label origin.
+    assert resp.headers["Location"] == f"https://{_SHELL_HOST}/"
 
 
 def test_callback_rejects_unknown_state_and_replayed_tokens(tmp_path: Path) -> None:

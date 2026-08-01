@@ -225,9 +225,9 @@
   var unlinkCancelBtn = document.getElementById('unlink-cancel-btn');
   var unlinkConfirmBtn = document.getElementById('unlink-confirm-btn');
   if (disassociateBtn && unlinkDialog && unlinkCancelBtn && unlinkConfirmBtn) {
-    // Unlinking tears down every tunnel for this machine and cannot be undone
-    // by linking again, so it is confirmed first -- the same shape the destroy
-    // control uses.
+    // Unlinking tears down the machine's share (revoking its links) and
+    // cannot be undone by linking again, so it is confirmed first -- the same
+    // shape the destroy control uses.
     disassociateBtn.addEventListener('click', function () {
       unlinkDialog.classList.remove('hidden');
     });

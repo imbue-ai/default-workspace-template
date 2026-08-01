@@ -19,6 +19,7 @@ from cryptography.x509.oid import NameOID
 from fastapi import HTTPException
 from jwt import algorithms as jwt_algorithms_rsa
 from starlette.testclient import TestClient
+from supertokens_python.recipe.emailpassword.interfaces import SignUpOkResult as EPSignUpOkResult
 
 import imbue.remote_service_connector.app as app_mod
 from imbue.remote_service_connector.app import DEFAULT_MAX_SHARED_WORKSPACES_PER_USER
@@ -153,19 +154,36 @@ def test_check_share_quota_allows_below_cap_and_rejects_at_cap() -> None:
         check_share_quota(DEFAULT_MAX_SHARED_WORKSPACES_PER_USER, DEFAULT_MAX_SHARED_WORKSPACES_PER_USER)
 
 
-def test_decide_frps_new_proxy_allows_exact_domain_and_wildcard_case_insensitively() -> None:
+def test_decide_frps_new_proxy_allows_single_labels_under_the_domain_case_insensitively() -> None:
     domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.imbueminds.com"
-    decision = decide_frps_new_proxy(domain, [domain.upper(), f"*.{domain}"])
+    decision = decide_frps_new_proxy(domain, [f"terminal-abcd1234.{domain}".upper(), f"auth-x7k9q2w1.{domain}"])
     assert decision.reject is False
     assert decision.unchange is True
 
 
+def test_decide_frps_new_proxy_rejects_bare_domain_wildcard_and_deeper_labels() -> None:
+    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.imbueminds.com"
+    # The bare domain (CT-visible cert name) and the wildcard must not route.
+    assert decide_frps_new_proxy(domain, [domain]).reject is True
+    assert decide_frps_new_proxy(domain, [f"*.{domain}"]).reject is True
+    # Deeper (two-label) origins are not single labels under the domain.
+    assert decide_frps_new_proxy(domain, [f"a.terminal-abcd1234.{domain}"]).reject is True
+
+
 def test_decide_frps_new_proxy_rejects_foreign_domains_and_empty_claims() -> None:
     domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.imbueminds.com"
-    foreign = f"{_OTHER_HOST_ID}.{_STUB_USER_LABEL}.us1.imbueminds.com"
+    foreign = f"terminal-abcd1234.{_OTHER_HOST_ID}.{_STUB_USER_LABEL}.us1.imbueminds.com"
+    good = f"terminal-abcd1234.{domain}"
     assert decide_frps_new_proxy(domain, [foreign]).reject is True
-    assert decide_frps_new_proxy(domain, [domain, foreign]).reject is True
+    assert decide_frps_new_proxy(domain, [good, foreign]).reject is True
     assert decide_frps_new_proxy(domain, []).reject is True
+
+
+def test_decide_frps_new_proxy_rejects_subdomain_claims() -> None:
+    # The relay never enables subdomain routing; rejecting the claim here keeps
+    # that guarantee independent of the relay's rendered frps config.
+    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.imbueminds.com"
+    assert decide_frps_new_proxy(domain, [f"auth-x7k9q2w1.{domain}"], claimed_subdomain="evil").reject is True
 
 
 def test_parse_relay_endpoint_map_parses_multiple_regions() -> None:
@@ -450,17 +468,24 @@ def test_frps_auth_rejects_token_of_inactive_share(monkeypatch: pytest.MonkeyPat
     assert resp.json()["reject"] is True
 
 
-def test_frps_auth_new_proxy_allows_own_domain_and_wildcard_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_frps_auth_new_proxy_allows_single_labels_under_own_domain_only(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
     created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
     domain = created["workspace_domain"]
 
     allowed = client.post(
-        f"/frps/auth/{_FRPS_SECRET}", json=_new_proxy_op(created["relay_token"], [domain, f"*.{domain}"])
+        f"/frps/auth/{_FRPS_SECRET}",
+        json=_new_proxy_op(created["relay_token"], [f"terminal-abcd1234.{domain}", f"auth-x7k9q2w1.{domain}"]),
     )
     assert allowed.json()["reject"] is False
 
-    foreign_domain = domain.replace(_STUB_HOST_ID, _OTHER_HOST_ID)
+    # The bare domain and the wildcard must not route under the explicit-claim model.
+    bare = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_new_proxy_op(created["relay_token"], [domain]))
+    assert bare.json()["reject"] is True
+    wildcard = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_new_proxy_op(created["relay_token"], [f"*.{domain}"]))
+    assert wildcard.json()["reject"] is True
+
+    foreign_domain = f"terminal-abcd1234.{domain.replace(_STUB_HOST_ID, _OTHER_HOST_ID)}"
     rejected = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_new_proxy_op(created["relay_token"], [foreign_domain]))
     assert rejected.json()["reject"] is True
 
@@ -598,6 +623,33 @@ def test_issue_share_cert_rejects_token_of_inactive_share(monkeypatch: pytest.Mo
     assert resp.status_code == 401
 
 
+def test_issue_share_cert_rate_limits_per_share_per_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sixth issuance inside a day 429s before any ACME or DNS work happens."""
+    client, backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
+    for _ in range(5):
+        backend.issued_cert_rows.append(
+            {
+                "workspace_domain": created["workspace_domain"],
+                "host_id": _STUB_HOST_ID,
+                "user_id": _STUB_USER_LABEL,
+                "ca_name": "test-ca",
+                "cert_chain_pem": "pem",
+                "sans": "[]",
+                "not_after": "2027-01-01T00:00:00+00:00",
+            }
+        )
+
+    resp = client.post(
+        "/shares/cert",
+        json={"csr_pem": _make_share_csr(created["workspace_domain"])},
+        headers={"Authorization": f"Bearer {created['relay_token']}"},
+    )
+
+    assert resp.status_code == 429
+    assert "last 24 hours" in resp.json()["detail"]
+
+
 def test_issue_share_cert_rejects_csr_with_wrong_names(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
     created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
@@ -621,7 +673,9 @@ def test_issue_share_cert_returns_chain_and_records_it(monkeypatch: pytest.Monke
     domain = created["workspace_domain"]
     chain = _make_self_signed_chain([domain, f"*.{domain}"])
 
-    def _stub_issue(csr_pem: str, dns_ops: object, account_store: object, ca_configs: list[object]) -> tuple[str, str]:
+    def _stub_issue(
+        csr_pem: str, dns_ops: object, account_store: object, ca_configs: list[app_mod.AcmeCaConfig]
+    ) -> tuple[str, str]:
         assert ca_configs and ca_configs[0].name == "letsencrypt"
         return chain, "letsencrypt"
 
@@ -685,6 +739,7 @@ def test_build_broker_jwks_matches_signing_key() -> None:
     assert key_entry["kid"]
     assert "=" not in key_entry["n"]
     reconstructed = jwt_algorithms_rsa.RSAAlgorithm.from_jwk(json.dumps(key_entry))
+    assert isinstance(reconstructed, rsa.RSAPublicKey)
     assert reconstructed.public_numbers() == _TEST_BROKER_KEY.public_key().public_numbers()
 
 
@@ -721,12 +776,19 @@ def test_broker_jwks_endpoint_serves_public_key(monkeypatch: pytest.MonkeyPatch)
 def test_broker_authorize_redirects_to_login_without_session(monkeypatch: pytest.MonkeyPatch) -> None:
     client, backend, _st = _make_broker_test_client(monkeypatch)
     domain = _seed_active_share(backend)
+    callback_origin = f"https://auth-x7k9q2w1.{domain}"
 
-    resp = client.get(f"/share/authorize?machine_domain={domain}&next=/panel&state=abc", follow_redirects=False)
+    resp = client.get(
+        f"/share/authorize?machine_domain={domain}&next=https://web-1a2b3c4d.{domain}/panel"
+        f"&callback_origin={callback_origin}&state=abc",
+        follow_redirects=False,
+    )
 
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("/share/login?next=")
+    # The callback origin (and machine domain) must survive the login round-trip.
     assert "machine_domain" in resp.headers["location"]
+    assert "callback_origin" in resp.headers["location"]
 
 
 def test_broker_authorize_requires_machine_domain_and_state(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -736,35 +798,82 @@ def test_broker_authorize_requires_machine_domain_and_state(monkeypatch: pytest.
     assert client.get("/share/authorize?machine_domain=x.example", follow_redirects=False).status_code == 400
 
 
-def test_broker_authorize_404s_without_active_share(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, _backend, _st = _make_broker_test_client(monkeypatch)
-    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
-
-    resp = client.get("/share/authorize?machine_domain=unknown.example.com&next=/&state=abc", follow_redirects=False)
-
-    assert resp.status_code == 404
-
-
-def test_broker_authorize_hands_off_signed_token_to_gateway_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_broker_authorize_rejects_missing_or_foreign_callback_origin(monkeypatch: pytest.MonkeyPatch) -> None:
     client, backend, _st = _make_broker_test_client(monkeypatch)
     domain = _seed_active_share(backend)
     client.cookies.set("imbue_sso_session", _STUB_TOKEN)
 
+    # No callback_origin at all.
+    missing = client.get(f"/share/authorize?machine_domain={domain}&state=abc", follow_redirects=False)
+    assert missing.status_code == 400
+    # A callback_origin on a foreign host would leak a signed token off-domain.
+    foreign = client.get(
+        f"/share/authorize?machine_domain={domain}&callback_origin=https://auth-x.evil.example.com&state=abc",
+        follow_redirects=False,
+    )
+    assert foreign.status_code == 400
+    # The bare domain does not route and is not a valid callback origin.
+    bare = client.get(
+        f"/share/authorize?machine_domain={domain}&callback_origin=https://{domain}&state=abc",
+        follow_redirects=False,
+    )
+    assert bare.status_code == 400
+
+
+def test_broker_authorize_404s_without_active_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend, _st = _make_broker_test_client(monkeypatch)
+    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
+
     resp = client.get(
-        f"/share/authorize?machine_domain={domain}&next=/panel?x=1&state=nonce-9",
+        "/share/authorize?machine_domain=unknown.example.com"
+        "&callback_origin=https://auth-x7k9q2w1.unknown.example.com&state=abc",
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 404
+
+
+def test_broker_authorize_hands_off_signed_token_to_the_auth_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend, _st = _make_broker_test_client(monkeypatch)
+    domain = _seed_active_share(backend)
+    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
+    callback_origin = f"https://auth-x7k9q2w1.{domain}"
+    next_url = f"https://web-1a2b3c4d.{domain}/panel?x=1"
+
+    resp = client.get(
+        f"/share/authorize?machine_domain={domain}&next={next_url}&callback_origin={callback_origin}&state=nonce-9",
         follow_redirects=False,
     )
 
     assert resp.status_code == 302
     location = resp.headers["location"]
-    assert location.startswith(f"https://{domain}/_auth/callback?")
+    # Delivered to the dedicated auth origin, not the bare domain.
+    assert location.startswith(f"{callback_origin}/_auth/callback?")
     query = parse_qs(urlsplit(location).query)
     assert query["state"] == ["nonce-9"]
-    assert query["next"] == ["/panel?x=1"]
+    assert query["next"] == [next_url]
     claims = pyjwt.decode(query["token"][0], _TEST_BROKER_KEY.public_key(), algorithms=["RS256"], audience=domain)
     assert claims["sub"] == _STUB_USER_ID
     assert claims["email"] == _STUB_EMAIL
     assert claims["nonce"] == "nonce-9"
+
+
+def test_broker_authorize_drops_a_foreign_next(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend, _st = _make_broker_test_client(monkeypatch)
+    domain = _seed_active_share(backend)
+    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
+    callback_origin = f"https://auth-x7k9q2w1.{domain}"
+
+    resp = client.get(
+        f"/share/authorize?machine_domain={domain}&next=https://evil.example.com/"
+        f"&callback_origin={callback_origin}&state=nonce-9",
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302
+    query = parse_qs(urlsplit(resp.headers["location"]).query)
+    # A foreign next is dropped (the gateway falls back to a safe landing spot).
+    assert query.get("next", [""]) == [""]
 
 
 def test_broker_authorize_rejects_inactive_share(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -775,7 +884,10 @@ def test_broker_authorize_rejects_inactive_share(monkeypatch: pytest.MonkeyPatch
     share["state"] = "inactive"
     client.cookies.set("imbue_sso_session", _STUB_TOKEN)
 
-    resp = client.get(f"/share/authorize?machine_domain={domain}&next=/&state=abc", follow_redirects=False)
+    resp = client.get(
+        f"/share/authorize?machine_domain={domain}&callback_origin=https://auth-x7k9q2w1.{domain}&state=abc",
+        follow_redirects=False,
+    )
 
     assert resp.status_code == 404
 
@@ -787,11 +899,46 @@ def test_broker_login_page_renders_form(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert resp.status_code == 200
     assert "<form method='post' action='/share/session'>" in resp.text
+    # The shared CSS must be wrapped in a <style> element inside <head>;
+    # unwrapped it gets hoisted into <body> and renders as page text.
+    assert "<style>body{" in resp.text
+    assert "</style></head>" in resp.text
+
+
+def test_broker_session_rejects_cross_site_form_posts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A login POST whose Origin names another site is refused (login CSRF needs no cookie)."""
+    client, _backend, _st_backend = _make_broker_test_client(monkeypatch)
+
+    resp = client.post(
+        "/share/session",
+        data={"email": "alice@example.com", "password": "pw-123456", "mode": "signin"},
+        headers={"Origin": "https://evil.example"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 403
+
+
+def test_broker_session_accepts_a_same_origin_form_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend, st_backend = _make_broker_test_client(monkeypatch)
+    signup = st_backend.sign_up(tenant_id="public", email="carol@example.com", password="pw-123456")
+    assert isinstance(signup, EPSignUpOkResult)
+    st_backend.mark_email_verified(signup.user.id)
+
+    resp = client.post(
+        "/share/session",
+        data={"email": "carol@example.com", "password": "pw-123456", "mode": "signin", "next": "/"},
+        headers={"Origin": "http://testserver"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 303
 
 
 def test_broker_session_sets_cookie_and_redirects_for_verified_user(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend, st_backend = _make_broker_test_client(monkeypatch)
     signup = st_backend.sign_up(tenant_id="public", email="alice@example.com", password="pw-123456")
+    assert isinstance(signup, EPSignUpOkResult)
     st_backend.mark_email_verified(signup.user.id)
 
     resp = client.post(

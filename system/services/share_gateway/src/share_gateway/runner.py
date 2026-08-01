@@ -27,6 +27,8 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
+from share_gateway.log import log as _log
+from share_gateway.caddyfile import build_label_to_name
 from share_gateway.caddyfile import read_registered_apps
 from share_gateway.caddyfile import render_caddyfile
 from share_gateway.certs import CertProvisioningError
@@ -35,6 +37,7 @@ from share_gateway.frpc_config import render_frpc_toml
 from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.materials import ShareMaterials
+from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import read_share_materials
 from share_gateway.server import PendingLoginRegistry
@@ -44,10 +47,6 @@ POLL_INTERVAL_SECONDS = 10
 APPS_TOML_PATH = Path("data/.state/apps.toml")
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
-
-
-def _log(message: str) -> None:
-    print(f"[share-gateway] {message}", file=sys.stderr, flush=True)
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
@@ -117,25 +116,58 @@ def _reload_caddy(caddyfile_text: str) -> bool:
     return True
 
 
+def _reload_frpc() -> bool:
+    """Hot-reload frpc's proxies from its on-disk config via its admin API; False on failure."""
+    try:
+        result = subprocess.run(
+            ["frpc", "reload", "-c", str(materials_module.FRPC_CONFIG_PATH)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _log(f"frpc reload failed: {exc}")
+        return False
+    if result.returncode != 0:
+        _log(f"frpc reload rejected ({result.returncode}): {result.stdout.decode(errors='replace')[:300]}")
+        return False
+    return True
+
+
 class ShareStack:
     """The running pieces of one active share: gateway server, caddy, frpc."""
 
-    def __init__(self, materials: ShareMaterials) -> None:
+    def __init__(self, materials: ShareMaterials, auth_label: str) -> None:
         self.materials = materials
+        self.auth_label = auth_label
         self.gateway_server: BaseWSGIServer | None = None
         self.caddy_process: subprocess.Popen[bytes] | None = None
         self.frpc_process: subprocess.Popen[bytes] | None = None
         self.last_caddyfile_text = ""
+        self.last_frpc_config_text = ""
         self.last_renewal_check = datetime.now(timezone.utc)
 
     def render_current_caddyfile(self) -> str:
         return render_caddyfile(
             workspace_domain=self.materials.workspace_domain,
             apps=read_registered_apps(APPS_TOML_PATH),
+            auth_label=self.auth_label,
             tls_cert_path=materials_module.TLS_CERT_FILE.resolve(),
             tls_key_path=materials_module.TLS_KEY_FILE.resolve(),
             https_port=materials_module.CADDY_HTTPS_PORT,
             gateway_port=materials_module.GATEWAY_PORT,
+        )
+
+    def render_current_frpc_config(self) -> str:
+        return render_frpc_toml(
+            relay_host=self.materials.relay_host,
+            relay_port=self.materials.relay_port,
+            relay_token=self.materials.relay_token,
+            workspace_domain=self.materials.workspace_domain,
+            service_labels=[app.label for app in read_registered_apps(APPS_TOML_PATH)],
+            auth_label=self.auth_label,
+            local_https_port=materials_module.CADDY_HTTPS_PORT,
+            admin_port=materials_module.FRPC_ADMIN_PORT,
         )
 
 
@@ -153,7 +185,8 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
         _log(f"certificate provisioning failed (will retry on next change/poll): {exc}")
         return None
 
-    stack = ShareStack(materials)
+    auth_label = load_or_create_auth_label(materials_module.AUTH_LABEL_FILE)
+    stack = ShareStack(materials, auth_label)
     signing_secret = load_or_create_signing_secret(materials_module.SIGNING_SECRET_FILE)
     app = build_gateway_app(
         materials=materials,
@@ -162,6 +195,8 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
         jwks_cache=JwksCache(f"{materials.broker_url}/share/jwks.json"),
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=PendingLoginRegistry(),
+        auth_label=auth_label,
+        get_label_to_name=lambda: build_label_to_name(read_registered_apps(APPS_TOML_PATH)),
     )
     stack.gateway_server = make_server("127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True)
     threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()
@@ -173,14 +208,8 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
         ["caddy", "run", "--config", str(materials_module.CADDYFILE_PATH), "--adapter", "caddyfile"], "caddy"
     )
 
-    frpc_toml = render_frpc_toml(
-        relay_host=materials.relay_host,
-        relay_port=materials.relay_port,
-        relay_token=materials.relay_token,
-        workspace_domain=materials.workspace_domain,
-        local_https_port=materials_module.CADDY_HTTPS_PORT,
-    )
-    materials_module.FRPC_CONFIG_PATH.write_text(frpc_toml)
+    stack.last_frpc_config_text = stack.render_current_frpc_config()
+    materials_module.FRPC_CONFIG_PATH.write_text(stack.last_frpc_config_text)
     stack.frpc_process = _start_child(["frpc", "-c", str(materials_module.FRPC_CONFIG_PATH)], "frpc")
     _log(f"Share stack up for {materials.workspace_domain}")
     return stack
@@ -213,6 +242,16 @@ def _tick_running_stack(stack: ShareStack) -> ShareStack | None:
         if _reload_caddy(current_caddyfile):
             stack.last_caddyfile_text = current_caddyfile
             _log("Reloaded caddy for a service-registry change")
+
+    # A service registered while shared needs its label claimed on the relay
+    # too; hot-reload frpc (admin API) so the new claim lands without dropping
+    # existing viewers' tunnels.
+    current_frpc_config = stack.render_current_frpc_config()
+    if current_frpc_config != stack.last_frpc_config_text:
+        materials_module.FRPC_CONFIG_PATH.write_text(current_frpc_config)
+        if _reload_frpc():
+            stack.last_frpc_config_text = current_frpc_config
+            _log("Reloaded frpc for a service-registry change")
 
     now = datetime.now(timezone.utc)
     if now - stack.last_renewal_check >= _RENEWAL_CHECK_INTERVAL:

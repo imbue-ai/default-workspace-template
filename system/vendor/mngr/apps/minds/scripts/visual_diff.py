@@ -79,7 +79,6 @@ from imbue.minds.desktop_client.templates import render_login_page
 from imbue.minds.desktop_client.templates import render_login_redirect_page
 from imbue.minds.desktop_client.templates import render_settings_modal_page
 from imbue.minds.desktop_client.templates import render_settings_page as render_app_settings_page
-from imbue.minds.desktop_client.templates import render_sharing_editor
 from imbue.minds.desktop_client.templates import render_sidebar_page
 from imbue.minds.desktop_client.templates import render_welcome_page
 from imbue.minds.desktop_client.templates import render_workspace_options_modal_page
@@ -360,32 +359,6 @@ def _build_scenarios() -> list[Scenario]:
                 account_email=account_a.email,
                 has_account=True,
                 anchor_x=214,
-            ),
-        ),
-        # -- Sharing editor ----------------------------------------------
-        Scenario(
-            name="sharing_no_account",
-            builder=lambda: render_sharing_editor(
-                agent_id=str(agent_a),
-                service_name="frontend",
-                title="Share frontend in alpha",
-                has_account=False,
-                accounts=(account_a,),
-                ws_name="alpha",
-            ),
-        ),
-        Scenario(
-            name="sharing_with_account",
-            builder=lambda: render_sharing_editor(
-                agent_id=str(agent_a),
-                service_name="frontend",
-                title="Share frontend in alpha",
-                mngr_forward_origin="http://localhost:8421",
-                initial_emails=["bob@example.com"],
-                has_account=True,
-                accounts=(account_a,),
-                ws_name="alpha",
-                account_email="alice@example.com",
             ),
         ),
         # -- Chrome (titlebar) -------------------------------------------

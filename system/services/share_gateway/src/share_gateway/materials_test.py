@@ -1,5 +1,7 @@
+import re
 from pathlib import Path
 
+from share_gateway.materials import load_or_create_auth_label
 from share_gateway.materials import load_or_create_signing_secret
 from share_gateway.materials import parse_share_materials
 from share_gateway.materials import read_share_materials
@@ -47,3 +49,19 @@ def test_signing_secret_is_created_once_and_reused(tmp_path: Path) -> None:
     assert first == second
     assert len(first) > 32
     assert (secret_path.stat().st_mode & 0o777) == 0o600
+
+
+def test_auth_label_is_created_once_reused_and_well_formed(tmp_path: Path) -> None:
+    label_path = tmp_path / "share_auth_label"
+    first = load_or_create_auth_label(label_path)
+    second = load_or_create_auth_label(label_path)
+    assert first == second
+    assert re.match(r"^auth-[a-z0-9]{8}$", first)
+    assert (label_path.stat().st_mode & 0o777) == 0o600
+
+
+def test_auth_label_replaces_a_malformed_stored_value(tmp_path: Path) -> None:
+    label_path = tmp_path / "share_auth_label"
+    label_path.write_text("not-a-valid-auth-label")
+    regenerated = load_or_create_auth_label(label_path)
+    assert re.match(r"^auth-[a-z0-9]{8}$", regenerated)

@@ -354,9 +354,11 @@ def run_restart_sequence(
 
     # Workspace origins are keyed by host id; resolve it from discovery. A
     # missing coordinate (discovery lost the host across the restart) means
-    # the probe could never route, so fail the restart rather than spin.
+    # the probe could never route, so fail the restart rather than spin. The
+    # real host-<hex> shape is required: the resolver interface's placeholder
+    # ("localhost") would probe the unroutable vhost localhost.localhost.
     display_info = backend_resolver.get_agent_display_info(workspace_agent_id)
-    if display_info is None or not display_info.host_id:
+    if display_info is None or not str(display_info.host_id).startswith("host-"):
         message = "The workspace's host coordinate is unknown after the restart, so its recovery cannot be confirmed."
         logger.error("Host restart of {} failed: {}", workspace_agent_id, message)
         tracker.mark_restart_failed(workspace_agent_id, message)
