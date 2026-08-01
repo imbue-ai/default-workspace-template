@@ -3432,6 +3432,18 @@ def _options_modal(
     )
 
 
+def test_share_pane_add_button_carries_both_variant_class_sets() -> None:
+    # workspace_options.js swaps the Add button between the quiet secondary
+    # and the prominent primary variant as the add-email input fills/empties;
+    # the class recipes ride on data attributes so the swap never hardcodes
+    # them in JS.
+    html = _options_modal(tab="share")
+    id_idx = html.index("ws-share-add-btn")
+    add_button = html[html.rindex("<button", 0, id_idx) : html.index(">", id_idx) + 1]
+    assert 'data-variant-secondary="' in add_button
+    assert 'data-variant-primary="' in add_button
+
+
 def test_workspace_options_modal_centers_and_drops_the_tabs_without_an_anchor() -> None:
     # Opened from the workspace list there is no titlebar icon-tab strip to hang
     # from, so the panel is an ordinary centered dialog -- and carries no tabs,
@@ -3647,16 +3659,20 @@ def test_workspace_options_share_pane_carries_per_service_origin_labels() -> Non
     assert config["serviceLabels"] == {"mailroom": "mailroom-x7k9q2w1", "newsreader": "newsreader-a1b2c3d4"}
 
 
-def test_workspace_options_share_pane_omits_labels_for_non_app_and_unlabeled_services() -> None:
-    # ``system_interface`` is the whole-machine target (never a per-app one), and
-    # a service with no label is left out so the JS falls back to its name. Only
-    # rendered app services that carry a label appear in the map.
+def test_workspace_options_share_pane_carries_the_shell_label_for_the_whole_machine_link() -> None:
+    # The whole-machine link is the SHELL's (system_interface) label origin --
+    # the bare machine domain does not route on a share -- so the shell's label
+    # is included in the map. An app service with no label (newsreader here) is
+    # still omitted so the JS falls back to its name.
     html = _options_modal(
         tab="share",
         service_labels={"mailroom": "mailroom-x7k9q2w1", "system_interface": "system_interface-zzz"},
     )
     config = _parse_share_config(html)
-    assert config["serviceLabels"] == {"mailroom": "mailroom-x7k9q2w1"}
+    assert config["serviceLabels"] == {
+        "mailroom": "mailroom-x7k9q2w1",
+        "system_interface": "system_interface-zzz",
+    }
 
 
 def test_workspace_options_share_pane_asks_for_an_account_before_offering_targets() -> None:

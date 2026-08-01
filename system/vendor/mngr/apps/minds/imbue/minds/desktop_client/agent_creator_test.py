@@ -74,8 +74,12 @@ from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.git_utils import GIT_MIRROR_PUSH_REFSPECS
+from imbue.mngr_forward.tls import LocalCertificateAuthority
+from imbue.mngr_forward.tls import _build_ca_certificate
+from imbue.mngr_forward.tls import _generate_rsa_key
+from imbue.mngr_forward.tls import _key_to_pem
 from imbue.mngr_forward.tls import build_server_ssl_context
-from imbue.mngr_forward.tls import generate_self_signed_cert
+from imbue.mngr_forward.tls import generate_server_credentials
 from imbue.mngr_latchkey.agent_setup import SECRET_LATCHKEY_ENV_VAR_NAMES
 
 
@@ -1136,9 +1140,11 @@ def _start_scripted_server(not_ready_count: int) -> tuple[HTTPServer, threading.
     # The readiness probe dials the proxy over https (minds always runs it with
     # HTTP/2), so the stand-in server must speak TLS to match -- otherwise the
     # probe's TLS handshake fails against a plain-HTTP socket. Reuse the proxy's
-    # own self-signed cert helpers so the test exercises the real https path.
-    cert_pem, key_pem = generate_self_signed_cert()
-    ssl_context = build_server_ssl_context(cert_pem, key_pem)
+    # own CA-backed cert helpers so the test exercises the real https path.
+    ca_key = _generate_rsa_key()
+    ca = LocalCertificateAuthority(cert_pem=_build_ca_certificate(ca_key), key_pem=_key_to_pem(ca_key))
+    chain_pem, key_pem = generate_server_credentials(ca)
+    ssl_context = build_server_ssl_context(chain_pem, key_pem, ca)
     server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

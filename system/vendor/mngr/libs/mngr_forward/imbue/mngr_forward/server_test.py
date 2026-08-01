@@ -24,6 +24,7 @@ from imbue.mngr_forward.auth import FileAuthStore
 from imbue.mngr_forward.cookie import create_session_cookie
 from imbue.mngr_forward.cookie import create_subdomain_auth_token
 from imbue.mngr_forward.data_types import ForwardServiceStrategy
+from imbue.mngr_forward.embedding import EmbedderOrigin
 from imbue.mngr_forward.envelope import EnvelopeWriter
 from imbue.mngr_forward.primitives import MNGR_FORWARD_SESSION_COOKIE_NAME
 from imbue.mngr_forward.primitives import OneTimeCode
@@ -1604,6 +1605,7 @@ def test_ws_forward_closes_client_leg_when_backend_closes(tmp_path: Path) -> Non
         resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
         agent_id = AgentId()
         resolver.add_known_agent(agent_id)
+        resolver.set_agent_host(agent_id, _TEST_HOST_ID)
         resolver.update_services(agent_id, {"system_interface": f"http://127.0.0.1:{backend_port}"})
         preauth = "preauth-cookie-ws-backend-close"
         app = create_forward_app(
@@ -1617,9 +1619,9 @@ def test_ws_forward_closes_client_leg_when_backend_closes(tmp_path: Path) -> Non
             allow_host_loopback=True,
         )
 
-        with TestClient(app, base_url=f"http://{agent_id}.localhost:18421") as client:
+        with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421") as client:
             with client.websocket_connect(
-                f"ws://{agent_id}.localhost:18421/api/ws",
+                f"ws://{_TEST_HOST_ID}.localhost:18421/api/ws",
                 headers={"cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}"},
             ) as websocket_session:
                 assert websocket_session.receive_text() == "hello-from-backend"
@@ -1643,3 +1645,170 @@ def test_ws_forward_closes_client_leg_when_backend_closes(tmp_path: Path) -> Non
                 )
     finally:
         backend_server.shutdown()
+
+
+# -- Embedding substrate: cookie attributes, /_bridge, frame-ancestors ------
+
+
+def test_http2_authenticate_cookie_is_none_and_partitioned(
+    http2_app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    """On the TLS path the session cookie must be sendable from a cross-site iframe.
+
+    The minds chrome embeds workspace origins cross-site, so anything short of
+    ``SameSite=None; Secure; Partitioned`` means the embedded workspace's
+    requests silently omit the cookie and auth fails.
+    """
+    client, store, _resolver = http2_app_setup
+    code = OneTimeCode("http2-partitioned-1")
+    store.add_one_time_code(code=code)
+    response = client.get(f"/authenticate?one_time_code={code}")
+    set_cookie = response.headers["set-cookie"].lower()
+    assert "samesite=none" in set_cookie
+    assert "secure" in set_cookie
+    assert "partitioned" in set_cookie
+
+
+def test_plain_http_authenticate_cookie_stays_lax(
+    app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    """SameSite=None requires Secure, so the plain-HTTP path keeps Lax (no embedding)."""
+    client, store, _resolver = app_setup
+    code = OneTimeCode("plain-lax-1")
+    store.add_one_time_code(code=code)
+    response = client.get(f"/authenticate?one_time_code={code}")
+    set_cookie = response.headers["set-cookie"].lower()
+    assert "samesite=lax" in set_cookie
+    assert "partitioned" not in set_cookie
+
+
+def test_http2_subdomain_auth_bridge_cookie_is_none_and_partitioned(tmp_path: Path) -> None:
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=SSHTunnelManager(),
+        envelope_writer=EnvelopeWriter(output=io.StringIO()),
+        listen_host="127.0.0.1",
+        listen_port=18421,
+        use_http2=True,
+    )
+    valid_host_id = "host-" + "0" * 31 + "a"
+    token = create_subdomain_auth_token(signing_key=auth_store.get_signing_key(), workspace_host_id=valid_host_id)
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.get(
+            f"/_subdomain_auth?token={token}&next=/",
+            headers={"host": f"{valid_host_id}.localhost:18421"},
+        )
+    set_cookie = response.headers["set-cookie"].lower()
+    assert "samesite=none" in set_cookie
+    assert "partitioned" in set_cookie
+    assert f"domain={valid_host_id}.localhost" in set_cookie
+
+
+def _bridge_app(tmp_path: Path, browser_bridge_token: str | None) -> tuple[TestClient, FileAuthStore]:
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=SSHTunnelManager(),
+        envelope_writer=EnvelopeWriter(output=io.StringIO()),
+        listen_host="127.0.0.1",
+        listen_port=18421,
+        use_http2=True,
+        browser_bridge_token=browser_bridge_token,
+    )
+    return TestClient(app, follow_redirects=False), auth_store
+
+
+def test_browser_bridge_is_404_when_no_token_configured(tmp_path: Path) -> None:
+    client, _store = _bridge_app(tmp_path, browser_bridge_token=None)
+    response = client.get("/_bridge?token=anything&next=/")
+    assert response.status_code == 404
+
+
+def test_browser_bridge_rejects_wrong_token(tmp_path: Path) -> None:
+    client, _store = _bridge_app(tmp_path, browser_bridge_token="right-token")
+    response = client.get("/_bridge?token=wrong-token&next=/")
+    assert response.status_code == 403
+    assert "set-cookie" not in response.headers
+    # A missing token is rejected the same way (never treated as a match).
+    assert client.get("/_bridge").status_code == 403
+
+
+def test_browser_bridge_sets_cookie_and_redirects_to_sanitized_next(tmp_path: Path) -> None:
+    """The bridge is the browser twin of Electron's preauth cookie injection.
+
+    A matching spawn-time token yields the bare-origin session cookie and an
+    onward redirect; an off-origin ``next`` collapses to ``/`` so the bridge
+    cannot be used as an open redirector.
+    """
+    client, _store = _bridge_app(tmp_path, browser_bridge_token="right-token")
+    response = client.get("/_bridge?token=right-token&next=/goto/host-00000000000000000000000000000000/")
+    assert response.status_code == 302
+    assert response.headers["location"] == "/goto/host-00000000000000000000000000000000/"
+    set_cookie = response.headers["set-cookie"].lower()
+    assert MNGR_FORWARD_SESSION_COOKIE_NAME in set_cookie
+    assert "samesite=none" in set_cookie
+    evil = client.get("/_bridge?token=right-token&next=//evil.com/")
+    assert evil.headers["location"] == "/"
+
+
+def test_workspace_responses_carry_default_deny_frame_ancestors(tmp_path: Path) -> None:
+    """Every proxied workspace-origin response gets the appended frame-ancestors CSP.
+
+    The unauthenticated redirect is proxy-generated, but it flows through the
+    same middleware seam as real proxied responses, so asserting on it proves
+    the injection point without a live backend.
+    """
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=SSHTunnelManager(),
+        envelope_writer=EnvelopeWriter(output=io.StringIO()),
+        listen_host="127.0.0.1",
+        listen_port=18421,
+        use_http2=True,
+    )
+    with TestClient(
+        app, base_url=f"https://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False
+    ) as client:
+        response = client.get("/", headers={"accept": "text/html"})
+    policy = response.headers["content-security-policy"]
+    assert policy == (
+        f"frame-ancestors 'self' https://{_TEST_HOST_ID}.localhost:18421 "
+        f"https://*.{_TEST_HOST_ID}.localhost:18421"
+    )
+
+
+def test_workspace_responses_include_configured_embedder_origins(tmp_path: Path) -> None:
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=SSHTunnelManager(),
+        envelope_writer=EnvelopeWriter(output=io.StringIO()),
+        listen_host="127.0.0.1",
+        listen_port=18421,
+        use_http2=True,
+        embedder_origins=(EmbedderOrigin("http://localhost:8420"),),
+    )
+    with TestClient(
+        app, base_url=f"https://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False
+    ) as client:
+        response = client.get("/", headers={"accept": "text/html"})
+    assert response.headers["content-security-policy"].endswith("http://localhost:8420")
+
+
+def test_bare_origin_responses_carry_no_frame_ancestors(
+    app_setup: tuple[TestClient, FileAuthStore, ForwardResolver],
+) -> None:
+    """The policy applies to workspace origins only; the bare login origin is untouched."""
+    client, _store, _resolver = app_setup
+    response = client.get("/")
+    assert "content-security-policy" not in response.headers

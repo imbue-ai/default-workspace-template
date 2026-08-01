@@ -392,9 +392,16 @@ def make_agents_json(*agent_ids: AgentId, labels: dict[str, str] | None = None, 
     return json.dumps({"agents": [_agent(agent_id) for agent_id in agent_ids]})
 
 
-def make_service_log(service: str, url: str) -> str:
-    """Build a single JSONL line matching the services/events.jsonl format."""
-    return json.dumps({"service": service, "url": url}) + "\n"
+def make_service_log(service: str, url: str, label: str = "") -> str:
+    """Build a single JSONL line matching the services/events.jsonl format.
+
+    ``label`` is the service's origin label (``<name>-<rand>``); omit it for the
+    legacy (label-less) shape.
+    """
+    entry: dict[str, str] = {"service": service, "url": url}
+    if label:
+        entry["label"] = label
+    return json.dumps(entry) + "\n"
 
 
 def seed_provider_snapshots(

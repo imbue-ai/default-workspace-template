@@ -8,8 +8,8 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from imbue.minds.desktop_client.e2e_workspace_runner import _TERMINAL_IFRAME_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import WorkspaceCreateAttemptFailedError
+from imbue.minds.desktop_client.e2e_workspace_runner import _TERMINAL_IFRAME_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import _read_failure_message
 from imbue.minds.desktop_client.e2e_workspace_runner import _wait_for_workspace_ready_or_failure
 

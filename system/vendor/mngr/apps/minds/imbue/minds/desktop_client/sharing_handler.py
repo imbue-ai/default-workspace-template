@@ -195,6 +195,22 @@ def _enable_sharing_with_cli(
         # connector-side create and the injection leaves the share "active"
         # with no tunnel, and only the full provisioning path below can repair
         # that (the connector reuses the share row and rotates the token).
+        #
+        # Before replacing the whole document, make sure the current one is
+        # readable: a save built against a policy that could not be read would
+        # silently erase whatever the unreadable file really granted. (Should
+        # never happen -- writes are atomic and serialized -- but the failure
+        # mode is permanent data loss, so it is checked anyway.)
+        try:
+            current_grants_text = read_share_grants_from_agent(agent_id, cli.mngr_caller)
+        except ShareInjectionError as exc:
+            raise SharingError(str(exc)) from exc
+        if current_grants_text is not None and _parse_grants_toml(current_grants_text) is None:
+            raise SharingError(
+                "The machine's current sharing permissions file is unreadable, so this change "
+                "was not saved (saving would erase whoever it currently grants). To reset it, "
+                "disable sharing for this machine and enable it again."
+            )
         try:
             inject_share_grants_into_agent(agent_id, grants_toml, cli.mngr_caller)
         except ShareInjectionError as exc:
@@ -254,13 +270,20 @@ def _parse_grant_list(value: object) -> dict[str, list[str]]:
     }
 
 
-def _parse_grants_toml(grants_toml_text: str) -> tuple[dict[str, list[str]], dict[str, dict[str, list[str]]]]:
-    """Parse a grants document read back from the workspace, tolerating malformation as empty."""
+def _parse_grants_toml(
+    grants_toml_text: str,
+) -> tuple[dict[str, list[str]], dict[str, dict[str, list[str]]]] | None:
+    """Parse a grants document read back from the workspace; None when malformed.
+
+    Malformed must stay distinguishable from empty: a malformed read rendered
+    as "no grants" would show every grantee as revoked, and the next
+    whole-document save would then permanently erase grants nobody ever saw.
+    """
     try:
         raw = tomllib.loads(grants_toml_text)
     except tomllib.TOMLDecodeError as exc:
         logger.warning("Malformed grants document read back from the workspace: {}", exc)
-        return {"emails": [], "email_domains": []}, {}
+        return None
 
     workspace_grants = _parse_grant_list(raw.get("workspace"))
     raw_services = raw.get("services", {})
@@ -308,7 +331,15 @@ def get_sharing(
         document = _share_status_document(host_id, share, empty_grants, {})
         document["grants"] = None
         return document
-    workspace_grants, service_grants = _parse_grants_toml(grants_toml_text) if grants_toml_text else (empty_grants, {})
+    parsed_grants = _parse_grants_toml(grants_toml_text) if grants_toml_text else (empty_grants, {})
+    if parsed_grants is None:
+        # Malformed reads back as UNKNOWN (grants: null), the same as a read
+        # that never landed: the pane then blocks edits instead of rendering
+        # an empty policy that the next save would publish over the real one.
+        document = _share_status_document(host_id, share, empty_grants, {})
+        document["grants"] = None
+        return document
+    workspace_grants, service_grants = parsed_grants
     return _share_status_document(host_id, share, workspace_grants, service_grants)
 
 
@@ -392,19 +423,57 @@ def delete_share_for_host(cli: ImbueCloudCli | None, account_email: str, host_id
         logger.warning("Failed to delete the machine share for {}: {}", host_id, exc)
 
 
-def probe_share_readiness(http_client: httpx.Client, workspace_domain: str) -> bool:
+# The workspace shell service; its label origin is the routable entry point of
+# a whole-machine share (the bare machine domain does not route on a share).
+_SHELL_SERVICE_NAME: Final[str] = "system_interface"
+
+
+def resolve_share_probe_host(
+    backend_resolver: BackendResolverInterface,
+    session_store: MultiAccountSessionStore | None,
+    host_id: str,
+    workspace_domain: str,
+) -> str | None:
+    """The routable origin host to probe for share readiness: the shell's label origin.
+
+    Returns ``<system_interface label>.<workspace_domain>``, or None when the
+    machine or its shell label is not known yet (so the share is not ready to
+    probe). The bare workspace domain is never probeable -- it does not route on
+    a share (only explicit ``<label>.<domain>`` origins are claimed on the relay
+    and served by caddy).
+    """
+    try:
+        agent_id = resolve_agent_for_host(backend_resolver, host_id, session_store)
+    except SharingError as exc:
+        logger.debug("Cannot resolve a share probe host for {} yet: {}", host_id, exc)
+        return None
+    labels = backend_resolver.list_service_labels_for_agent(agent_id)
+    shell_label = next((label for name, label in labels.items() if str(name) == _SHELL_SERVICE_NAME), None)
+    if not shell_label:
+        return None
+    return f"{shell_label}.{workspace_domain}"
+
+
+def probe_share_readiness(http_client: httpx.Client, probe_host: str) -> bool:
     """Report whether the shared hostname is live end to end.
+
+    ``probe_host`` must be a ROUTABLE share origin -- a ``<label>.<machine
+    domain>`` host, typically the shell's ``system_interface`` label origin.
+    The bare machine domain is deliberately not probeable: only explicit
+    ``<label>.<machine domain>`` origins are claimed on the relay and served by
+    caddy, so the bare domain never routes.
 
     Reaching the workspace's gateway means DNS, the relay's SNI splice, the
     tunnel, caddy's TLS termination with a real certificate, and the gateway
     itself all work -- any HTTP response (the broker redirect for an
     unauthenticated visit, a 403, anything) counts as ready. Transport errors
-    (DNS, TLS, connection) mean not-ready-yet. The domain comes from the
-    connector's share record, never from caller input.
+    (DNS, TLS, connection) mean not-ready-yet. The host is derived from the
+    connector's share record + the workspace's own service labels, never from
+    caller input.
     """
     try:
-        http_client.get(f"https://{workspace_domain}/", timeout=SHARE_READINESS_PROBE_TIMEOUT_SECONDS)
+        http_client.get(f"https://{probe_host}/", timeout=SHARE_READINESS_PROBE_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
-        logger.debug("Probed share domain {} but it is not ready yet: {}", workspace_domain, exc)
+        logger.debug("Probed share host {} but it is not ready yet: {}", probe_host, exc)
         return False
     return True

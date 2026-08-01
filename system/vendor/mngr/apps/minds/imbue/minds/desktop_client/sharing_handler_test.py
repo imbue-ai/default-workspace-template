@@ -52,18 +52,26 @@ def test_grants_toml_roundtrips_through_render_and_parse() -> None:
     }
 
     rendered = render_grants_toml(workspace_grants, service_grants)
-    parsed_workspace, parsed_services = _parse_grants_toml(rendered)
+    parsed = _parse_grants_toml(rendered)
 
+    assert parsed is not None
+    parsed_workspace, parsed_services = parsed
     assert parsed_workspace == workspace_grants
     assert parsed_services == service_grants
 
 
-def test_parse_grants_toml_tolerates_malformation_as_empty() -> None:
-    workspace_grants, service_grants = _parse_grants_toml("not toml [[")
-    assert workspace_grants == {"emails": [], "email_domains": []}
-    assert service_grants == {}
+def test_parse_grants_toml_reports_malformation_as_none() -> None:
+    # Malformed must stay distinguishable from empty: rendered as "no grants",
+    # the next whole-document save would erase every real grant.
+    assert _parse_grants_toml("not toml [[") is None
 
-    workspace_grants, service_grants = _parse_grants_toml("workspace = 'not-a-table'")
+
+def test_parse_grants_toml_tolerates_wrong_shapes_as_empty() -> None:
+    # Valid TOML of the wrong shape parses to an empty scope (there is no
+    # hidden grant to protect: the value's meaning is unambiguous, just wrong).
+    parsed = _parse_grants_toml("workspace = 'not-a-table'")
+    assert parsed is not None
+    workspace_grants, service_grants = parsed
     assert workspace_grants == {"emails": [], "email_domains": []}
     assert service_grants == {}
 

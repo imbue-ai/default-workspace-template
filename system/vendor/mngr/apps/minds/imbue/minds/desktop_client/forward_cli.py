@@ -97,6 +97,10 @@ class ForwardSubprocessConfig(FrozenModel):
         default=(),
         description="--reverse REMOTE:LOCAL pairs to set up",
     )
+    embedder_origins: tuple[str, ...] = Field(
+        default=(),
+        description="Origins allowed to embed workspace content, passed to --embedder-origin",
+    )
     mngr_binary: str = Field(default=MNGR_BINARY, description="Path to mngr binary")
     mngr_host_dir: Path = Field(default=_DEFAULT_MNGR_HOST_DIR, description="MNGR_HOST_DIR for the subprocess")
 
@@ -749,11 +753,11 @@ class EnvelopeStreamConsumer(MutableModel):
 def start_mngr_forward(
     config: ForwardSubprocessConfig,
     resolver: MngrCliBackendResolver,
-) -> tuple[EnvelopeStreamConsumer, str]:
+) -> tuple[EnvelopeStreamConsumer, str, str]:
     """Spawn the ``mngr forward`` subprocess and attach an envelope consumer.
 
-    Returns ``(consumer, preauth_cookie_value)``. The reader threads are
-    *not* started yet -- the caller MUST:
+    Returns ``(consumer, preauth_cookie_value, browser_bridge_token)``. The
+    reader threads are *not* started yet -- the caller MUST:
 
     1. register its on_agent_discovered / on_agent_destroyed handlers
        on the consumer;
@@ -761,7 +765,8 @@ def start_mngr_forward(
        envelopes;
     3. hand the preauth cookie to the Electron shell so it can pre-set
        ``mngr_forward_session=<value>`` on ``localhost:<port>`` before the
-       first agent-subdomain navigation.
+       first agent-subdomain navigation. The browser bridge token backs the
+       ``/forward-bridge`` route, browser mode's twin of that injection.
 
     Splitting attach (here) from start (caller) avoids a race where
     envelopes arriving before the caller has registered its callbacks
@@ -769,7 +774,8 @@ def start_mngr_forward(
     dropped.
     """
     preauth_cookie = secrets.token_urlsafe(_PREAUTH_TOKEN_LENGTH)
-    command = _build_forward_command(config, preauth_cookie)
+    browser_bridge_token = secrets.token_urlsafe(_PREAUTH_TOKEN_LENGTH)
+    command = _build_forward_command(config, preauth_cookie, browser_bridge_token)
     env = dict(os.environ)
     env["MNGR_HOST_DIR"] = str(config.mngr_host_dir)
     logger.info("Spawning `mngr forward` subprocess: {}", " ".join(_redact_secrets(command)))
@@ -786,10 +792,14 @@ def start_mngr_forward(
     )
     consumer = EnvelopeStreamConsumer(resolver=resolver)
     consumer.attach(process)
-    return consumer, preauth_cookie
+    return consumer, preauth_cookie, browser_bridge_token
 
 
-def _build_forward_command(config: ForwardSubprocessConfig, preauth_cookie: str) -> list[str]:
+def _build_forward_command(
+    config: ForwardSubprocessConfig,
+    preauth_cookie: str,
+    browser_bridge_token: str,
+) -> list[str]:
     """Build the ``mngr forward`` argv for the subprocess minds spawns."""
     command: list[str] = [
         config.mngr_binary,
@@ -803,17 +813,21 @@ def _build_forward_command(config: ForwardSubprocessConfig, preauth_cookie: str)
         "--observe-via-file",
         "--preauth-cookie",
         preauth_cookie,
+        "--browser-bridge-token",
+        browser_bridge_token,
         "--format",
         "jsonl",
     ]
     # TLS + HTTP/2 so the workspace origin is not capped by Chromium's
     # per-origin HTTP/1.1 connection limit. The Electron shell trusts the
-    # proxy's self-signed cert for its loopback origins.
+    # proxy's CA-signed leaf for its loopback origins programmatically.
     command.append("--use-http2")
     for include in config.agent_include:
         command.extend(["--agent-include", include])
     for spec in config.reverse_specs:
         command.extend(["--reverse", spec])
+    for origin in config.embedder_origins:
+        command.extend(["--embedder-origin", origin])
     return command
 
 
@@ -829,4 +843,4 @@ def _redact_secrets(command: list[str]) -> list[str]:
     return redact_secret_flag_values(command, secret_bearing_flags=_SECRET_BEARING_FLAGS)
 
 
-_SECRET_BEARING_FLAGS: Final[tuple[str, ...]] = ("--preauth-cookie",)
+_SECRET_BEARING_FLAGS: Final[tuple[str, ...]] = ("--preauth-cookie", "--browser-bridge-token")

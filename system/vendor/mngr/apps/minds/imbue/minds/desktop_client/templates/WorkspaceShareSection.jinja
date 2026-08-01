@@ -108,7 +108,14 @@
           <TextInput type="text" name="ws_share_new_email" id="ws-share-new-email"
                      placeholder="Add email, or a domain to admit everyone at it" extra="flex-1"
                      onkeydown="if (event.key === 'Enter') { event.preventDefault(); wsShareAddEmail(); }" />
-          <Button variant="secondary" id="ws-share-add-btn" onclick="wsShareAddEmail()">Add</Button>
+          {# The pane JS swaps the button between these two variant class sets:
+             prominent (primary) while the input holds un-added text -- so Add
+             reads as the obvious next action -- and quiet (secondary) when
+             empty. The class strings ride on data attributes so the variant
+             recipes stay defined in templates.py alone. #}
+          <Button variant="secondary" id="ws-share-add-btn" onclick="wsShareAddEmail()"
+                  :data-variant-secondary="BTN_VARIANTS['secondary']"
+                  :data-variant-primary="BTN_VARIANTS['primary']">Add</Button>
         </div>
       </section>
 
@@ -178,6 +185,13 @@
           <Spinner size="sm" /><span id="ws-share-busy-label">Saving changes...</span>
         </p>
         <p id="ws-share-error" class="hidden mt-2 type-body text-important" role="alert"></p>
+        {# Shown only with a LOAD failure (never with action failures, which
+           are retried by redoing the action): a status read that failed needs
+           its own affordance, because the editor stays locked until a clean
+           read lands and nothing else on screen re-triggers one. #}
+        <div id="ws-share-retry-row" class="hidden mt-2">
+          <Button variant="secondary" id="ws-share-retry-btn" onclick="wsShareRetryLoad()">Try again</Button>
+        </div>
       </div>
     </div>
   </div>
