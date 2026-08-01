@@ -239,16 +239,23 @@ class _ResourceSampler(threading.Thread):
                 chrom_rss += proc.memory_info().rss
             except psutil.Error:
                 self._proc_cache.pop(pid, None)
+        daemon_cpu = daemon.cpu_percent(None)
+        # gVisor doesn't expose accurate host-wide CPU (/proc/stat reads ~0), while
+        # per-process cpu_percent (/proc/<pid>/stat) works. Flag the system reading as
+        # unreliable when it's ~idle despite the browser processes clearly being busy, so
+        # the lens trusts the per-process numbers instead of a false "box is idle".
+        sys_ok = not (overall < 2.0 and (daemon_cpu + chrom_cpu) > 15.0)
         self._hub.emit_all({
             "type": "resource",
             "ncpu": len(per_cpu),
             "sys_cpu": round(overall, 1),
+            "sys_ok": sys_ok,
             "per_cpu": [round(x, 1) for x in per_cpu],
             "load1": round(load1, 2),
             "mem_pct": virtual.percent,
             "mem_avail_mb": round(virtual.available / 1e6),
             "swap_pct": swap.percent,
-            "daemon_cpu": round(daemon.cpu_percent(None), 1),
+            "daemon_cpu": round(daemon_cpu, 1),
             "daemon_rss_mb": round(daemon.memory_info().rss / 1e6),
             "chrome_cpu": round(chrom_cpu, 1),
             "chrome_rss_mb": round(chrom_rss / 1e6),
