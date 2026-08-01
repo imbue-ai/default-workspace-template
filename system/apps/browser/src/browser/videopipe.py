@@ -52,6 +52,8 @@ from typing import Any
 
 from loguru import logger
 
+from browser import telemetry
+
 # pixelflux is a hard dependency of this package, but its native module dlopens
 # system libraries (libva, pixman) that env-converge may still be installing
 # when the service first boots. An unguarded module-level import would take
@@ -277,6 +279,7 @@ class _StripeRow:
     def __init__(self) -> None:
         self.mailbox: bytes | None = None
         self.mailbox_is_idr = False
+        self.mailbox_ts: float = 0.0  # when the current mailbox stripe was captured (telemetry)
         self.window = CreditWindow()
         self.sent_at: dict[int, float] = {}  # frame_id -> send time, for ack RTT
 
@@ -318,6 +321,11 @@ class PixelfluxVideoPipe:
         self._current_crf = _VIDEO_CRF
         self.frames_captured = 0
         self.frames_dropped = 0
+        # Telemetry join epoch: frame_id is u16 and wraps (~18min at 60fps), and a
+        # resize clears the row map and reuses y-offsets -- bump on either so the lens
+        # never mis-joins an old stripe to a new one.
+        self._epoch = 0
+        self._last_frame_id = -1
 
     def start(self) -> None:
         _attempt_pixelflux_import()
@@ -366,12 +374,17 @@ class PixelfluxVideoPipe:
         # Encoder thread: copy out (the native buffer is reused) and mailbox it.
         packet = bytes(frame)
         try:
-            _, y_start, _, is_idr = parse_wire_header(packet)
+            frame_id, y_start, _, is_idr = parse_wire_header(packet)
         except VideoPipeError as error:  # noqa: F841  (handled just below)
             logger.warning("video pipe {} dropped malformed packet ({})", self.browser_id, error)
             return
         with self._condition:
             self.frames_captured += 1
+            # A big backwards jump in the frame counter is a u16 wrap: advance the epoch
+            # so the lens keeps stale-fid joins apart.
+            if 0 <= frame_id < self._last_frame_id - 1000:
+                self._epoch += 1
+            self._last_frame_id = frame_id
             stripe_w = (packet[6] << 8) | packet[7]
             if stripe_w != self._expected_w:
                 # A stripe encoded at the pre-resize width: drop it so the row
@@ -385,15 +398,18 @@ class PixelfluxVideoPipe:
                 # (probe-verified as the dominant stall mechanism). Drop the
                 # delta instead; the pending IDR supersedes it visually anyway.
                 self.frames_dropped += 1
+                telemetry.hub.emit(self.browser_id, {"type": "drop", "epoch": self._epoch, "y": y_start, "reason": "sticky-idr"})
                 return
             if row.mailbox is not None:
                 # Replacing this row's unsent stripe; if either side of the
                 # swap was a delta the row's chain is broken until a keyframe.
                 self.frames_dropped += 1
+                telemetry.hub.emit(self.browser_id, {"type": "drop", "epoch": self._epoch, "y": y_start, "reason": "mailbox-overwrite"})
                 if not row.mailbox_is_idr or not is_idr:
                     row.window.note_dropped_delta()
             row.mailbox = packet
             row.mailbox_is_idr = is_idr
+            row.mailbox_ts = time.monotonic()
             self._condition.notify()
 
     def _on_cursor(self, _msg_type, png_bytes, hot_x, hot_y) -> None:  # noqa: ANN001  (pixelflux callback shape)
@@ -434,7 +450,9 @@ class PixelfluxVideoPipe:
             self._capture.request_idr_frame()
             self._expected_w = width
             self._rows.clear()
+            self._epoch += 1  # row map reset: new y-offsets, keep joins apart
             self._control_message = f"res,{width},{height}"
+            telemetry.hub.emit(self.browser_id, {"type": "resize", "epoch": self._epoch, "w": width, "h": height})
             self._condition.notify()
         return width, height
 
@@ -465,6 +483,7 @@ class PixelfluxVideoPipe:
                 return
             self._fps_ceiling = fps
             self._apply_framerate_locked()
+            telemetry.hub.emit(self.browser_id, {"type": "viz", "epoch": self._epoch, "ceiling": fps})
         logger.debug("video pipe {} fps ceiling -> {}", self.browser_id, fps)
 
     def next_packet(self, timeout: float, has_extra=None) -> bytes | None:  # noqa: ANN001
@@ -493,9 +512,15 @@ class PixelfluxVideoPipe:
                         continue
                     if row.window.admits(row.mailbox_is_idr):
                         packet = row.mailbox
+                        mailbox_ts = row.mailbox_ts
                         row.mailbox = None
                         frame_id, _, _, is_idr = parse_wire_header(packet)
-                        row.sent_at[frame_id] = time.monotonic()
+                        now = time.monotonic()
+                        row.sent_at[frame_id] = now
+                        telemetry.hub.emit(self.browser_id, {
+                            "type": "sent", "epoch": self._epoch, "fid": frame_id, "y": y_start,
+                            "idr": is_idr, "bytes": len(packet), "t_mailboxed": mailbox_ts, "t_sent": now,
+                        })
                         if len(row.sent_at) > 32:
                             row.sent_at.pop(next(iter(row.sent_at)))
                         if is_idr:
@@ -505,6 +530,7 @@ class PixelfluxVideoPipe:
                         return packet
                     if row.window.needs_keyframe and not row.mailbox_is_idr:
                         self.frames_dropped += 1
+                        telemetry.hub.emit(self.browser_id, {"type": "drop", "epoch": self._epoch, "y": y_start, "reason": "needs-keyframe"})
                         row.mailbox = None
                         self._request_idr_locked()
                 remaining = deadline - time.monotonic()
@@ -534,9 +560,13 @@ class PixelfluxVideoPipe:
                 return
             sent = row.sent_at.pop(frame_id, None)
             if sent is not None:
-                rtt = time.monotonic() - sent
+                now = time.monotonic()
+                rtt = now - sent
                 self._rtt_ewma = rtt if self._rtt_ewma is None else (1 - _RTT_EWMA_ALPHA) * self._rtt_ewma + _RTT_EWMA_ALPHA * rtt
                 self._rtt_min = rtt if self._rtt_min is None else min(self._rtt_min, rtt)
+                telemetry.hub.emit(self.browser_id, {
+                    "type": "ack", "epoch": self._epoch, "fid": frame_id, "y": y_start, "t_ack": now, "rtt": rtt,
+                })
             row.window.ack(frame_id)
             self._active_rows_since_retune.add(y_start)  # this row delivered this interval
             if row.window.needs_keyframe:
@@ -569,6 +599,14 @@ class PixelfluxVideoPipe:
             self._apply_framerate_locked()  # clamped by the visibility throttle ceiling
             logger.debug("video pipe {} capture rate retuned to {:.0f}fps ({} drops)", self.browser_id, wanted, dropped)
         self._adapt_window_and_quality_locked()
+        limit = next(iter(self._rows.values())).window.limit if self._rows else _CREDIT_LIMIT
+        telemetry.hub.emit(self.browser_id, {
+            "type": "rate", "epoch": self._epoch,
+            "applied_fps": self._applied_fps, "aimd_fps": self._current_fps, "ceiling": self._fps_ceiling,
+            "crf": self._current_crf, "limit": limit, "dropped": dropped, "delivered_fps": delivered_fps,
+            "rtt_ewma": self._rtt_ewma, "rtt_min": self._rtt_min,
+            "reason": "aimd-drop" if dropped > 0 else "aimd-climb",
+        })
 
     def _adapt_window_and_quality_locked(self) -> None:
         """RTT-driven adaptation, piggybacked on the once-a-second retune.
@@ -611,6 +649,7 @@ class PixelfluxVideoPipe:
         self._last_idr_request = now
         if self._capture is not None:
             self._capture.request_idr_frame()
+            telemetry.hub.emit(self.browser_id, {"type": "idr", "epoch": self._epoch})
 
     def stop(self) -> None:
         with self._condition:
