@@ -27,6 +27,9 @@ from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.harness_type import parse_harness
 
 logger = _loguru_logger
 
@@ -51,9 +54,9 @@ class AgentInfo(FrozenModel):
     claude_config_dir: Path = Field(description="Path to the Claude config directory for this agent")
     labels: dict[str, str] = Field(default_factory=dict, description="Agent labels")
     work_dir: str | None = Field(default=None, description="Agent working directory path")
-    harness: str = Field(
-        default="claude",
-        description="The agent's harness/type from mngr's AgentDetails.type ('claude', 'codex', ...).",
+    harness: HarnessType = Field(
+        default=DEFAULT_HARNESS,
+        description="The agent's harness, narrowed from mngr's AgentDetails.type. Resolved here and nowhere else.",
     )
 
 
@@ -162,7 +165,7 @@ def discover_agents(
                 claude_config_dir=claude_config_dir,
                 labels=dict(agent_details.labels),
                 work_dir=str(agent_details.work_dir),
-                harness=str(agent_details.type),
+                harness=parse_harness(str(agent_details.type)),
             )
         )
 

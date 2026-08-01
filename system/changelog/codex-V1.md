@@ -86,3 +86,15 @@ Added OpenAI Codex CLI support to the workspace image.
   and model settings, because those exist only for claude; an empty slot in the codex
   package is the honest statement of that, rather than a branch in shared code. The
   activity ABC and its two implementations are now three files instead of one.
+
+- The harness is a `HarnessType` enum rather than a bare string. mngr's `AgentDetails.type`
+  is an open string that names non-harness agent types too (`main`, `wait`), so
+  `harnesses/harness_type.py` holds the closed set plus the one `parse_harness` boundary
+  that narrows it. Every field, registry key and parameter downstream is the enum, so
+  `get_harness_spec` is total and its silent string fallback is gone -- an unknown harness
+  is now resolved once, at discovery, instead of being re-checked at each lookup.
+- `creation_type` no longer names a harness. It was `claude -> "chat"`, `codex -> "codex"`,
+  which mixed a role with a harness; both `+` menu entries create the `chat` role and the
+  harness travels beside it, so `creation_type` is always `"chat"` and the frontend union
+  collapses to match. `HARNESS_CREATION_TYPES` is deleted, as is `HARNESS_AGENT_TYPES`
+  (an identity map from each harness to itself).

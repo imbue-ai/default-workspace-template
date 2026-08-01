@@ -2,6 +2,8 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
+from imbue.system_interface.harnesses.harness_type import HarnessType
 
 
 class AgentCreationError(ValueError):
@@ -138,13 +140,11 @@ class AgentStateItem(FrozenModel):
     state: str = Field(description="The agent's lifecycle state")
     labels: dict[str, str] = Field(description="Agent labels (e.g., user_created, chat_parent_id)")
     work_dir: str | None = Field(description="The agent's working directory path")
-    harness: str = Field(
-        default="claude",
+    harness: HarnessType = Field(
+        default=DEFAULT_HARNESS,
         description=(
-            "The agent's harness/type (e.g. 'claude', 'codex'), sourced from mngr's "
-            "``AgentDetails.type`` (set at launch by the create template). Drives the "
-            "harness-specific activity derivation and caption routing. Defaults to "
-            "'claude' when a snapshot has not yet reported the agent's type."
+            "The agent's harness, narrowed from mngr's ``AgentDetails.type`` in "
+            "``agent_discovery``. Drives activity derivation and caption routing."
         ),
     )
     activity_state: str | None = Field(
