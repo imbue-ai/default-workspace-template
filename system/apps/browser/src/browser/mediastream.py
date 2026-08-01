@@ -35,6 +35,7 @@ from flask import Response, jsonify, request
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
+from browser import telemetry
 from browser.audiopipe import AudioPipe, AudioPipeError
 from browser.audiopipe import is_available as is_audio_available
 from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
@@ -293,6 +294,10 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         logger.warning("video pipe failed to start for {} ({})", browser_id, error)
         ws.close(1011)
         return
+    # Passive telemetry: begin recording for this browser (the hot paths emit into a
+    # lock-free ring drained by the read-only /telemetry firehose; see browser.telemetry).
+    telemetry.hub.open(browser_id)
+    telemetry.hub.emit(browser_id, {"type": "conn", "event": "open"})
     router = InputRouter(display)
     # Cold-start size: the viewer passes its real pane size as ?w=&h= on the connect
     # URL, so the first emitted frame is already pane-sized -- no 1280x800 frame is
@@ -331,9 +336,17 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     )
     receiver.start()
     last_send = time.monotonic()
+    last_tcpinfo = last_send
     audio_pending = audio_pipe.has_pending if audio_pipe is not None else None
     try:
         while not stop_event.is_set():
+            # Local-hop TCP health, ~2Hz (rules out local buffering; the socket peers
+            # with a local forwarder so it does NOT see WAN loss -- see browser.telemetry).
+            if time.monotonic() - last_tcpinfo >= 0.5:
+                last_tcpinfo = time.monotonic()
+                info = telemetry.read_tcp_info(ws.sock)
+                if info is not None:
+                    telemetry.hub.emit(browser_id, {"type": "tcpinfo", **info})
             control_message = pipe.take_control_message()
             if control_message is not None:
                 # Ahead of any new-size stripe (single sender thread => ordered).
@@ -361,6 +374,8 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         pass
     finally:
         stop_event.set()
+        telemetry.hub.emit(browser_id, {"type": "conn", "event": "close"})
+        telemetry.hub.close(browser_id)
         _unregister_clip_sink(browser_id, clip_sink)
         if audio_pipe is not None:
             audio_pipe.stop()

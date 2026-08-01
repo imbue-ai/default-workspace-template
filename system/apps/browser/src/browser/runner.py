@@ -55,7 +55,7 @@ from simple_websocket import ConnectionClosed
 from browser.loop_bridge import AsyncLoopBridge, cancel_task
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
-from browser import mediastream
+from browser import mediastream, telemetry
 from browser.session import (
     BrowserSessionManager,
     BrowserStartupError,
@@ -70,6 +70,7 @@ from browser.wsgi import make_threaded_server
 
 ROOT_PATH = os.environ.get("ROOT_PATH", "")
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
+_TELEMETRY_HTML = Path(__file__).parent / "assets" / "telemetry.html"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
 # browser-use drives Chromium over cdp-use, whose failures surface as these built-ins.
@@ -903,11 +904,44 @@ def stream_socket(ws: Any, browser_id: str) -> None:
     mediastream.serve_stream(ws, browser_id, display, session)
 
 
+def telemetry_page() -> Response:
+    """The standalone client-side observability lens (all joining/percentiles/drawing
+    happen in the browser; this only serves the static page)."""
+    return Response(_TELEMETRY_HTML.read_text(), mimetype="text/html")
+
+
+def telemetry_socket(ws: Any, browser_id: str) -> None:
+    """Read-only firehose: replay recent history, then stream new telemetry records
+    (batched JSON arrays) to the lens. Subscribing/draining never touches the pipe's
+    lock, so a slow or absent lens cannot back-pressure the stream."""
+    history, records = telemetry.hub.subscribe(browser_id)
+    try:
+        if history:
+            ws.send(json.dumps(history))
+        while True:
+            batch = []
+            try:
+                while True:
+                    batch.append(records.popleft())
+            except IndexError:
+                pass
+            if batch:
+                ws.send(json.dumps(batch))
+            # Pace at ~10Hz and detect a closed socket (receive raises on close); we
+            # expect no inbound, so the returned value is ignored.
+            ws.receive(timeout=0.1)
+    except ConnectionClosed:
+        pass
+    finally:
+        telemetry.hub.unsubscribe(browser_id, records)
+
+
 # --- app construction + lifecycle --------------------------------------------
 
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
+    application.add_url_rule("/telemetry", view_func=telemetry_page, methods=["GET"])
     application.add_url_rule("/health", view_func=health, methods=["GET"])
     application.add_url_rule("/init-status", view_func=init_status, methods=["GET"])
     application.add_url_rule("/key-status", view_func=key_status, methods=["GET"])
@@ -937,6 +971,8 @@ def _register_routes() -> None:
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
     # Pixelflux media socket: H.264 stripes out + credit acks/resize in (the pixel plane).
     sock.route("/browsers/<string:browser_id>/stream")(stream_socket)
+    # Read-only telemetry firehose feeding the standalone lens at /telemetry.
+    sock.route("/browsers/<string:browser_id>/telemetry")(telemetry_socket)
     # Strip permessage-deflate so already-compressed H.264 stripes aren't re-deflated (#22).
     application.before_request(mediastream.strip_websocket_compression)
 
