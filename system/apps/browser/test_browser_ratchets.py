@@ -88,7 +88,10 @@ def test_prevent_broad_exception_catch() -> None:
     #    never propagate: 2 in telemetry.py (emit must never break the stream; the resource
     #    sampler must never crash the daemon) and 2 in telemetry_watch.py (the CLI reconnects
     #    on any socket drop and exits cleanly on any read error).
-    rc.check_broad_exception_catch(_DIR, snapshot(22))
+    #  * +1 in stream_conductor.py: StreamConnection.wake() nudges a sender loop and is
+    #    best-effort by contract (a failed wake must never fault the caller flipping the
+    #    active viewer), so it swallows any wake-callback error and logs at debug.
+    rc.check_broad_exception_catch(_DIR, snapshot(23))
 
 
 def test_prevent_builtin_exception_raises() -> None:

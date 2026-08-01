@@ -912,14 +912,21 @@ def telemetry_client(browser_id: str) -> Response:
     it just forwards each client record into the same hub so the lens can join them to
     the server's sent/ack by (fid, y) and subtract client render from the round trip.
     Never touches the stream; a bad body is dropped, not fatal."""
-    if request.content_length is not None and request.content_length > 512 * 1024:
+    # Cap on the bytes actually READ (not the declared content_length, which a chunked
+    # request omits): read at most 512KiB+1 and reject anything larger, so a hostile client
+    # can't stream an unbounded body into memory through this watch-only sink.
+    raw = request.stream.read(512 * 1024 + 1)
+    if len(raw) > 512 * 1024:
         return jsonify({"error": "too large"}), 413
-    records = request.get_json(force=True, silent=True)
+    try:
+        records = json.loads(raw) if raw else []
+    except (ValueError, TypeError):
+        return jsonify({"error": "expected JSON"}), 400
     if isinstance(records, dict):
         records = [records]
     if not isinstance(records, list):
         return jsonify({"error": "expected a JSON list"}), 400
-    for record in records:
+    for record in records[:5000]:  # bound the batch: a client reports a handful of stripes per post
         if isinstance(record, dict):
             record["type"] = "client"
             telemetry.hub.emit(browser_id, record)
