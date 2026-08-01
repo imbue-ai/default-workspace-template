@@ -29,6 +29,8 @@ import {
   getEffectiveActivityState,
   removeActivityOverlayListener,
 } from "../models/PendingMessages";
+import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
+import { setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
@@ -2592,6 +2594,11 @@ function updateEmptyState(): void {
   }
 }
 
+function closeActiveTabFromEmbedder(): void {
+  const activePanel = dockview?.activePanel;
+  if (activePanel) activePanel.api.close();
+}
+
 function initializeDockview(parentElement: HTMLElement): void {
   if (initialized) return;
   initialized = true;
@@ -2702,6 +2709,11 @@ function initializeDockview(parentElement: HTMLElement): void {
   });
 
   dockview = dv;
+
+  // The embedding minds chrome forwards its close-tab shortcut (Cmd/Ctrl+W
+  // while this workspace is displayed) through the embed contract; close the
+  // active dockview tab in response.
+  setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, closeActiveTabFromEmbedder);
 
   // Listen for layout changes and auto-save
   dv.api.onDidLayoutChange(() => {

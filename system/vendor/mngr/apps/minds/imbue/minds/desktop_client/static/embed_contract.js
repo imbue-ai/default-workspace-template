@@ -149,23 +149,27 @@ function dispatchValidated(validators, handlers, data, side, origin) {
  */
 export function createWorkspaceEndpoint(options) {
   const handlers = (options && options.handlers) || {};
+  // Bind to the window that exists at creation time so dispose() detaches
+  // from the same window it attached to (unit tests swap the global between
+  // creation and teardown).
+  const boundWindow = window;
   function onMessage(event) {
     // Only the direct parent document may drive the workspace. A nested
     // third-party iframe can post to this window but can never satisfy
     // `event.source === window.parent`.
-    if (event.source !== window.parent) return;
+    if (event.source !== boundWindow.parent) return;
     const data = event.data;
     if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
     dispatchValidated(EMBEDDER_TO_WORKSPACE_VALIDATORS, handlers, data, 'workspace', event.origin);
   }
-  window.addEventListener('message', onMessage);
+  boundWindow.addEventListener('message', onMessage);
   return {
     send: function (type, payload) {
       debugLog('workspace', 'sent', type, '');
-      window.parent.postMessage(Object.assign({ type: type }, payload || {}), '*');
+      boundWindow.parent.postMessage(Object.assign({ type: type }, payload || {}), '*');
     },
     dispose: function () {
-      window.removeEventListener('message', onMessage);
+      boundWindow.removeEventListener('message', onMessage);
     },
   };
 }
@@ -183,6 +187,7 @@ export function createEmbedderEndpoint(options) {
   const handlers = options.handlers || {};
   const getFrameWindow = options.getFrameWindow;
   const isExpectedOrigin = options.isExpectedOrigin || function () { return true; };
+  const boundWindow = window;
   function onMessage(event) {
     const frameWindow = getFrameWindow();
     if (!frameWindow || event.source !== frameWindow) return;
@@ -194,7 +199,7 @@ export function createEmbedderEndpoint(options) {
     if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
     dispatchValidated(WORKSPACE_TO_EMBEDDER_VALIDATORS, handlers, data, 'embedder', event.origin);
   }
-  window.addEventListener('message', onMessage);
+  boundWindow.addEventListener('message', onMessage);
   return {
     send: function (type, payload) {
       const frameWindow = getFrameWindow();
@@ -203,7 +208,7 @@ export function createEmbedderEndpoint(options) {
       frameWindow.postMessage(Object.assign({ type: type }, payload || {}), '*');
     },
     dispose: function () {
-      window.removeEventListener('message', onMessage);
+      boundWindow.removeEventListener('message', onMessage);
     },
   };
 }
