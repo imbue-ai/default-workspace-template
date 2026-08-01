@@ -180,6 +180,62 @@ def test_500_lease_raises_connector_error(monkeypatch: pytest.MonkeyPatch) -> No
         client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=1), "ssh-ed25519 X", "my-host")
 
 
+# -- Auth email verification --
+
+
+def test_auth_is_email_verified_sends_bearer_token_and_parses_verified() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/auth/email/is-verified"
+        assert request.headers["Authorization"] == "Bearer at-secret"
+        assert _json.loads(request.content) == {"email": "alice@imbue.com"}
+        return httpx.Response(200, json={"verified": True})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    assert client.auth_is_email_verified(SecretStr("at-secret"), "alice@imbue.com") is True
+
+
+def test_auth_send_verification_email_reports_cooldown_suppression() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/auth/email/send-verification"
+        assert request.headers["Authorization"] == "Bearer at-secret"
+        assert _json.loads(request.content) == {"email": "alice@imbue.com"}
+        return httpx.Response(200, json={"status": "OK", "sent": False})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    assert client.auth_send_verification_email(SecretStr("at-secret"), "alice@imbue.com") is False
+
+
+def test_auth_send_verification_email_raises_on_missing_sent() -> None:
+    """A 2xx body without a 'sent' bool is a broken contract, not a cooldown suppression."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "OK"})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudAuthError, match="Malformed send-verification response"):
+        client.auth_send_verification_email(SecretStr("at-secret"), "alice@imbue.com")
+
+
+def test_auth_is_email_verified_raises_on_missing_verified() -> None:
+    """A 2xx body without a 'verified' bool is a broken contract, not "not verified"."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "OK"})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudAuthError, match="Malformed is-verified response"):
+        client.auth_is_email_verified(SecretStr("at-secret"), "alice@imbue.com")
+
+
+def test_auth_is_email_verified_raises_auth_error_on_401() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "Invalid token"})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudAuthError):
+        client.auth_is_email_verified(SecretStr("stale"), "alice@imbue.com")
+
+
 # -- R2 buckets --
 #
 # Same MockTransport approach as above, but patched through a single loop so the

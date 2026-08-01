@@ -323,11 +323,14 @@ def _stream_filtered_events(
     sentinel) ends the stream.
     """
     keepalive_counter = 0
+    _loguru_logger.info("SSE stream opened for agent {} (conn {})", agent_id, id(event_queue))
+    close_reason = "event-queues shutdown"
     try:
         while not event_queues.is_shutdown:
             try:
                 event = event_queue.get(timeout=1)
                 if event is None:
+                    close_reason = "queue shutdown sentinel"
                     break
                 if not should_forward(event):
                     continue
@@ -339,8 +342,11 @@ def _stream_filtered_events(
                     keepalive_counter = 0
                     yield ": keepalive\n\n"
     except GeneratorExit:
-        pass
+        close_reason = "client disconnected"
     finally:
+        _loguru_logger.info(
+            "SSE stream closed for agent {} (conn {}, reason: {})", agent_id, id(event_queue), close_reason
+        )
         event_queues.unregister(agent_id, event_queue)
 
 
@@ -1218,6 +1224,26 @@ def _handle_client_state_message(
     if not client_id or not active_layout:
         return False
     ws_broadcaster.set_client_info(client_queue, client_id, active_layout, device_kind)
+    if is_first_report:
+        _loguru_logger.info(
+            "WS client registered: client_id={} layout={} device={} (conn {})",
+            client_id,
+            active_layout,
+            device_kind,
+            id(client_queue),
+        )
+    elif previous_layout and previous_layout != active_layout:
+        _loguru_logger.info(
+            "WS client {} switched layout {} -> {} (conn {})",
+            client_id,
+            previous_layout,
+            active_layout,
+            id(client_queue),
+        )
+    else:
+        # A re-report on an already-registered connection with an unchanged
+        # layout; not worth a log line.
+        pass
     if layout_dir is not None:
         workspace_layouts.set_last_active_slug(layout_dir, active_layout)
         events_path = client_activity.get_events_path(layout_dir)
@@ -1256,6 +1282,10 @@ def _run_ws_broadcast_loop(
     op that depends on the registration.
     """
     client_queue = ws_broadcaster.register()
+    _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
+    # Overwritten by the paths below; every exit from the loop goes through one
+    # of them, so this default should never surface in a log line.
+    disconnect_reason = "handler exited"
     try:
         websocket.send(
             json.dumps(
@@ -1297,11 +1327,19 @@ def _run_ws_broadcast_loop(
                 continue
             if message is None:
                 shutdown = True
+                disconnect_reason = "shutdown sentinel (evicted by broadcaster or server shutdown)"
             else:
                 websocket.send(message)
     except ConnectionClosed:
-        pass
+        disconnect_reason = "connection closed"
     finally:
+        client_info = ws_broadcaster.get_client_info(client_queue)
+        _loguru_logger.info(
+            "WS /api/ws connection closed (conn {}, client_id={}, reason: {})",
+            id(client_queue),
+            client_info["client_id"] if client_info is not None else "<unregistered>",
+            disconnect_reason,
+        )
         ws_broadcaster.unregister(client_queue)
 
 
@@ -1634,10 +1672,25 @@ def _layout_broadcast_endpoint() -> Response:
         if layout_error_response is not None:
             return layout_error_response
         if target_layout_slug is None or not broadcaster.has_client_on_layout(target_layout_slug):
+            connected_clients = broadcaster.get_connected_client_infos()
+            _loguru_logger.warning(
+                "Layout op {!r} rejected (412): no connected client on layout {!r}; connected clients: {}",
+                op,
+                requested_layout,
+                connected_clients,
+            )
+            client_summary = (
+                ", ".join(
+                    f"{info['client_id']} (layout={info['active_layout_slug']}, device={info['device_kind']})"
+                    for info in connected_clients
+                )
+                or "none"
+            )
             error = ErrorResponse(
                 detail=(
                     f"No connected client has layout '{requested_layout}' active. Ask the user to switch "
-                    f"to it, or run `layout.py load {requested_layout!r}` first."
+                    f"to it, or run `layout.py load {requested_layout!r}` first. "
+                    f"Connected clients: {client_summary}."
                 )
             )
             return _json_response(error.model_dump(), status_code=412)

@@ -213,6 +213,14 @@ tmr-mngr *args:
 tmr-minds *args:
   uv run --project libs/mngr_tmr mngr tmr apps/minds --name tmr-minds --mapper-prompt apps/minds/tmr/mapper.j2 {{args}} -- -m 'release and not minds_deployment and not minds_services and not minds_snapshot_resume'
 
+# minds behavior corpus (`mngr tmr-behaviors`: one agent per feature file, creating
+# and updating the tests that witness the behaviors). No testing flags after `--`:
+# behavior mappers run the specific witness tests they touch by node id, and
+# host-capability guardrails live in the variant prompt's infra_blockers block.
+[group("minds test")]
+tmr-behaviors-minds *args:
+  uv run --project libs/mngr_tmr mngr tmr-behaviors --root apps/minds/behaviors --name tmr-behaviors-minds --mapper-prompt apps/minds/tmr/behaviors_mapper.j2 {{args}}
+
 # === minds deployment / services test orchestrator ===
 # Wraps apps/minds/scripts/test_deployments.py. See specs/minds-deployment-tests.md
 # and apps/minds/deployment_tests/README.md for the full design + usage.
@@ -449,6 +457,7 @@ minds-install:
 #   just minds-start                     # launch against the worktree's branch
 #   just minds-start my-branch           # pin the DEFAULT_WORKSPACE_TEMPLATE branch to `my-branch`
 #   just minds-start "" .external_worktrees/my-default-workspace-template-worktree   # 2nd arg = default_workspace_template
+#   just minds-start "" "" 9223          # 3rd arg = Chromium remote-debugging port (CDP on 127.0.0.1)
 # `default_workspace_template` defaults to .external_worktrees/default-workspace-template; an absolute
 # path is used as-is, a relative one is resolved against the mngr root. This
 # is what gets synced (system/vendor/mngr/) and exported as MINDS_WORKSPACE_GIT_URL,
@@ -457,7 +466,7 @@ minds-install:
 # worktree (PID file under /tmp keyed by worktree path). Use `just
 # minds-stop` to kill the running instance first.
 [group("minds dev")]
-minds-start branch="" default_workspace_template="":
+minds-start branch="" default_workspace_template="" debug_port="":
     #!/bin/bash
     set -ueo pipefail
     if [ -z "${MINDS_ROOT_NAME:-}" ]; then
@@ -570,6 +579,12 @@ minds-start branch="" default_workspace_template="":
         echo "       Then re-run \`just minds-start\`." >&2
         exit 2
     fi
+    if [ -n "{{debug_port}}" ]; then
+        # Read by electron/main.js, which appends Chromium's
+        # --remote-debugging-port switch (CDP, bound to 127.0.0.1).
+        export MINDS_REMOTE_DEBUGGING_PORT="{{debug_port}}"
+        echo "MINDS_REMOTE_DEBUGGING_PORT=$MINDS_REMOTE_DEBUGGING_PORT (CDP at http://127.0.0.1:$MINDS_REMOTE_DEBUGGING_PORT)"
+    fi
     # Put the Node version apps/minds pins (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
@@ -597,8 +612,10 @@ minds-start branch="" default_workspace_template="":
 # minds-start). In the form's advanced settings, pick the SAME region the
 # slice was baked in -- region is a hard match and is never relaxed. Stop it
 # with `just minds-stop` (shared PID file, keyed by worktree path).
+#
+#   just minds-start-cloud 9223   # optional arg = Chromium remote-debugging port (CDP on 127.0.0.1)
 [group("minds dev")]
-minds-start-cloud:
+minds-start-cloud debug_port="":
     #!/bin/bash
     set -ueo pipefail
     if [ -z "${MINDS_ROOT_NAME:-}" ]; then
@@ -633,6 +650,12 @@ minds-start-cloud:
         echo "error: minds desktop client isn't installed/built yet in this worktree." >&2
         echo "       Run \`just minds-install\` first, then re-run \`just minds-start-cloud\`." >&2
         exit 2
+    fi
+    if [ -n "{{debug_port}}" ]; then
+        # Read by electron/main.js, which appends Chromium's
+        # --remote-debugging-port switch (CDP, bound to 127.0.0.1).
+        export MINDS_REMOTE_DEBUGGING_PORT="{{debug_port}}"
+        echo "MINDS_REMOTE_DEBUGGING_PORT=$MINDS_REMOTE_DEBUGGING_PORT (CDP at http://127.0.0.1:$MINDS_REMOTE_DEBUGGING_PORT)"
     fi
     # Put apps/minds's pinned Node (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.

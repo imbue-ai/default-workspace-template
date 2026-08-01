@@ -9,6 +9,7 @@ dependencies = [
     "modal>=1.4.3",
     "prisma>=0.15",
     "pyyaml>=6.0",
+    "tenacity>=8.0",
 ]
 license = {text = "MIT"}
 

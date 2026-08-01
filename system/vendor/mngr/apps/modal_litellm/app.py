@@ -1,7 +1,8 @@
 """LiteLLM proxy deployed as a Modal serverless function.
 
 This file is entirely self-contained -- it has NO imports from the monorepo.
-Only stdlib, modal, pyyaml, and litellm (installed in the Modal image) are used.
+Only stdlib, modal, pyyaml, tenacity, and litellm (installed in the Modal
+image) are used.
 This keeps deployment simple: ``modal deploy app.py`` ships just this file.
 
 LiteLLM's native ``POST /v1/messages`` route accepts the Anthropic API
@@ -22,10 +23,14 @@ Usage:
 """
 
 import json
+import logging
 import os
 import subprocess
+import urllib.parse
+from typing import Final
 
 import modal
+import tenacity
 
 _DEPLOY_ENV = os.environ.get("MNGR_DEPLOY_ENV", "production")
 
@@ -161,7 +166,7 @@ _LITELLM_VERSION = "1.93.0"
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install(f"litellm[proxy]=={_LITELLM_VERSION}", "prisma", "pyyaml")
+    .pip_install(f"litellm[proxy]=={_LITELLM_VERSION}", "prisma", "pyyaml", "tenacity")
     .run_commands(
         'python -c "import litellm.proxy; import os; print(os.path.dirname(litellm.proxy.__file__))" > /tmp/litellm_proxy_dir.txt',
         "prisma generate --schema $(cat /tmp/litellm_proxy_dir.txt)/schema.prisma",
@@ -199,6 +204,76 @@ def litellm_app():
     return fastapi_app
 
 
+# Prisma error codes that mean the database server could not be reached at all
+# (P1001: can't reach server, P1002: server reached but timed out, P1017:
+# server closed the connection). These are the transient connect-path failures
+# worth retrying (e.g. a network/DNS blip in the fresh Modal container); every
+# other failure (auth, schema, migration state) must fail fast so the deploy's
+# rollback fires on the first attempt.
+_PRISMA_CONNECTION_ERROR_CODES: Final[tuple[str, ...]] = ("P1001", "P1002", "P1017")
+
+# Neon serves PgBouncer (transaction pooling) on hostnames whose first label
+# ends with this suffix; the same hostname without it is the direct compute.
+_POOLER_LABEL_SUFFIX: Final[str] = "-pooler"
+
+
+class _PrismaMigrationError(Exception):
+    """Raised when `prisma db push` fails for a non-connection reason."""
+
+
+class _PrismaConnectionError(_PrismaMigrationError):
+    """Raised when `prisma db push` could not reach the database server (retryable)."""
+
+
+def _direct_database_url(database_url: str) -> str:
+    """Return ``database_url`` with Neon's ``-pooler`` suffix stripped from the hostname.
+
+    Schema migrations must run over a direct connection: Prisma's schema engine
+    takes session-scoped advisory locks, which are unsafe through PgBouncer's
+    transaction-mode pooling (Neon's ``-pooler`` endpoints). Non-Neon and
+    already-direct URLs are returned unchanged. Twin of
+    ``_direct_migration_dsn`` in ``apps/minds/imbue/minds/envs/migrations.py``
+    (duplicated because this file must stay monorepo-import-free).
+    """
+    parsed = urllib.parse.urlsplit(database_url)
+    userinfo, at_sign, host_and_port = parsed.netloc.rpartition("@")
+    host, colon, port = host_and_port.partition(":")
+    first_label, dot, remaining_labels = host.partition(".")
+    if not dot or not first_label.endswith(_POOLER_LABEL_SUFFIX):
+        return database_url
+    direct_host = first_label[: -len(_POOLER_LABEL_SUFFIX)] + dot + remaining_labels
+    direct_netloc = f"{userinfo}{at_sign}{direct_host}{colon}{port}"
+    return urllib.parse.urlunsplit(parsed._replace(netloc=direct_netloc))
+
+
+def _is_connection_failure_output(prisma_output: str) -> bool:
+    return any(code in prisma_output for code in _PRISMA_CONNECTION_ERROR_CODES)
+
+
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(_PrismaConnectionError),
+    stop=tenacity.stop_after_attempt(5),
+    wait=tenacity.wait_exponential(multiplier=2, min=2, max=30),
+    reraise=True,
+)
+def _run_prisma_db_push(schema_path: str, subprocess_env: dict[str, str]) -> None:
+    """Run one `prisma db push` attempt, retrying only on connection-class failures."""
+    result = subprocess.run(
+        ["prisma", "db", "push", "--schema", schema_path, "--accept-data-loss", "--skip-generate"],
+        env=subprocess_env,
+        capture_output=True,
+        text=True,
+    )
+    combined_output = (result.stdout + "\n" + result.stderr).strip()
+    if result.returncode == 0:
+        logging.info("Completed prisma db push:\n%s", combined_output)
+        return
+    if _is_connection_failure_output(combined_output):
+        logging.warning("Failed to reach the database server during prisma db push (retryable):\n%s", combined_output)
+        raise _PrismaConnectionError(combined_output)
+    raise _PrismaMigrationError(f"prisma db push exited {result.returncode}:\n{combined_output}")
+
+
 @app.function(
     secrets=[modal.Secret.from_name(f"litellm-{_DEPLOY_ENV}-{_MINDS_DEPLOY_ID}")],
     timeout=300,
@@ -215,7 +290,11 @@ def migrate_db() -> None:
     litellm[proxy] package (which ships the canonical schema.prisma)
     are already installed. Runs against the same `litellm-<tier>` Modal
     Secret the proxy consumes, so DATABASE_URL is necessarily the same
-    Postgres the proxy will talk to at runtime.
+    Postgres the proxy will talk to at runtime -- except that the push
+    itself connects over the DIRECT (non-``-pooler``) host, since schema
+    operations are unsafe through transaction pooling (see
+    ``_direct_database_url``). Connection-class failures are retried with
+    backoff (see ``_run_prisma_db_push``); real schema failures fail fast.
 
     Idempotent: prisma db push only applies diffs, so re-running on an
     already-current database is a no-op (~1s wall-clock). The
@@ -227,8 +306,9 @@ def migrate_db() -> None:
     """
     import litellm.proxy
 
+    logging.basicConfig(level=logging.INFO, force=True)
+    direct_database_url = _direct_database_url(os.environ["DATABASE_URL"])
+    direct_host = urllib.parse.urlsplit(direct_database_url).hostname
+    logging.info("Running prisma db push against database host %s", direct_host)
     schema_path = os.path.join(os.path.dirname(litellm.proxy.__file__), "schema.prisma")
-    subprocess.run(
-        ["prisma", "db", "push", "--schema", schema_path, "--accept-data-loss", "--skip-generate"],
-        check=True,
-    )
+    _run_prisma_db_push(schema_path, {**os.environ, "DATABASE_URL": direct_database_url})

@@ -23,10 +23,12 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthSession
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudVerificationStatus
 from imbue.minds.desktop_client.imbue_cloud_cli import LiteLLMKeyMaterial
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
+from imbue.minds.desktop_client.testing import device_id_for_test
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.minds.primitives import ServiceName
 from imbue.minds.utils.mngr_caller import MngrCaller
@@ -79,10 +81,56 @@ class FakeImbueCloudCli(ImbueCloudCli):
         description="When True, get_share_status raises ImbueCloudCliError (simulates a connector hiccup)",
     )
 
+    signup_session_to_return: ImbueCloudAuthSession | None = Field(
+        default=None, description="Session auth_signup returns; raises ImbueCloudCliError when unset"
+    )
+    signin_session_to_return: ImbueCloudAuthSession | None = Field(
+        default=None, description="Session auth_signin returns; raises ImbueCloudCliError when unset"
+    )
+    verification_status_by_email: dict[str, ImbueCloudVerificationStatus] = Field(
+        default_factory=dict,
+        description="auth_is_email_verified answers per email; unknown emails raise (no session)",
+    )
+    resent_verification_emails: list[str] = Field(
+        default_factory=list, description="Every email auth_resend_verification was called with, in order"
+    )
+    is_resend_suppressed: bool = Field(
+        default=False, description="When True, auth_resend_verification reports the server cooldown (sent=False)"
+    )
+    forgot_password_emails: list[str] = Field(
+        default_factory=list, description="Every email auth_forgot_password was called with, in order"
+    )
+
     def auth_list(self) -> list[ImbueCloudAuthAccount]:
         if self.is_auth_list_failing:
             raise ImbueCloudCliError("fake transient auth list failure")
         return list(self.accounts_to_return)
+
+    def auth_signup(self, account: str, password: str) -> ImbueCloudAuthSession:
+        # Without a canned session, fall through to the real implementation so
+        # tests that drive the subprocess boundary (a failing ``mngr_caller``
+        # exercising ``_expect_success``) keep working.
+        if self.signup_session_to_return is None:
+            return super().auth_signup(account, password)
+        return self.signup_session_to_return
+
+    def auth_signin(self, account: str, password: str) -> ImbueCloudAuthSession:
+        if self.signin_session_to_return is None:
+            return super().auth_signin(account, password)
+        return self.signin_session_to_return
+
+    def auth_is_email_verified(self, account: str) -> ImbueCloudVerificationStatus:
+        status = self.verification_status_by_email.get(account)
+        if status is None:
+            raise ImbueCloudCliError(f"auth is-verified failed: No session for {account}; sign in first.")
+        return status
+
+    def auth_resend_verification(self, account: str) -> bool:
+        self.resent_verification_emails.append(account)
+        return not self.is_resend_suppressed
+
+    def auth_forgot_password(self, account: str) -> None:
+        self.forgot_password_emails.append(account)
 
     def auth_oauth(
         self,
@@ -278,7 +326,7 @@ def make_session_store_for_test(data_dir: Path, cli: ImbueCloudCli | None = None
     record_store = WorkspaceRecordStore(
         paths=WorkspacePaths(data_dir=data_dir),
         cli=effective_cli,
-        device_id="device-test",
+        device_id=device_id_for_test("session-store"),
         device_label="test-device",
     )
     return MultiAccountSessionStore(data_dir=data_dir, cli=effective_cli, record_store=record_store)

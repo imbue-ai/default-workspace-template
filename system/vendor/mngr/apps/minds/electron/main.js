@@ -9,7 +9,7 @@ const { runEnvSetup } = require('./env-setup');
 const { startBackend, shutdown, getBackendProcess } = require('./backend');
 const { decideStartupRoute } = require('./startup-routing');
 const { computeBundleViewBounds } = require('./view-layout');
-const { deeplinkTargetPath, extractDeeplinkUrlFromArgv } = require('./deeplink');
+const { deeplinkTargetPath, deeplinkModalPath, extractDeeplinkUrlFromArgv } = require('./deeplink');
 // URL classification for the two content surfaces lives in ./surface-routing so
 // it can be unit-tested under plain node (main.js can't be required outside
 // Electron). navigateBundle uses selectSurfaceForUrl / SURFACE_CONTENT to send
@@ -38,6 +38,17 @@ initElectronLogging();
 // referencing it here before its definition is fine; it's only invoked at crash
 // time, long after ``bundles`` is populated).
 initSentry({ getRendererName: rendererNameForWebContents });
+
+// Expose Chromium's DevTools protocol (CDP) when MINDS_REMOTE_DEBUGGING_PORT
+// is set, for driving the real client with Playwright/CDP during development
+// (`just minds-start`/`just minds-start-cloud` take an optional debug-port
+// argument that sets this). An env var rather than a CLI flag because `pnpm
+// start` hardcodes `electron .` with no argument passthrough, and Chromium
+// switches must be appended before the app's 'ready' event. The port binds to
+// 127.0.0.1 only.
+if (process.env.MINDS_REMOTE_DEBUGGING_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.MINDS_REMOTE_DEBUGGING_PORT);
+}
 
 // Only init the auto-updater in packaged builds: in dev, electron.autoUpdater
 // is undefined on macOS, so todesktop's constructor throws.
@@ -707,6 +718,12 @@ function createBundle() {
     modalView: null,
     modalVisible: false,
     modalUrl: null,
+    // Set when the whole-window sign-in modal must stay up until the chrome
+    // view commits the navigation it just dispatched (closing on dispatch
+    // flashes the outgoing page). Cleared on commit, by the fallback timer,
+    // and by closeModal itself.
+    pendingModalCloseOnCommit: false,
+    modalCloseOnCommitTimer: null,
     // The latest 'show-modal' overlay command, replayed on the overlay host's
     // did-finish-load if it was issued before the host page finished loading.
     pendingOverlayCommand: null,
@@ -869,6 +886,15 @@ function createBundle() {
     bundle.chromeLoadRetryPendingUrl = null;
     bundle.chromeLoadFailedUrl = null;
     console.log(`[nav] chrome view committed (${inPage ? 'in-place' : 'full load'}) ${url}`);
+    // A held sign-in modal comes down now that its destination is on screen.
+    if (bundle.pendingModalCloseOnCommit) {
+      bundle.pendingModalCloseOnCommit = false;
+      if (bundle.modalCloseOnCommitTimer) {
+        clearTimeout(bundle.modalCloseOnCommitTimer);
+        bundle.modalCloseOnCommitTimer = null;
+      }
+      closeModal(bundle);
+    }
     // Confirm a dispatched in-place swap (its pushState lands here as
     // did-navigate-in-page) so the lost-swap fallback timer stands down.
     if (bundle.pendingSwapUrl) {
@@ -1839,7 +1865,36 @@ function navigateBundle(bundle, url) {
     // will-redirect guard.
     loadLocalIntoChrome(bundle, absolute);
   }
-  closeModal(bundle);
+  closeModalNowOrAfterChromeCommit(bundle);
+}
+
+// How long a held modal may wait for the chrome view to commit before closing
+// anyway -- a stalled or failed load must not leave the modal stuck (the
+// did-fail-load recovery machinery owns the window underneath).
+const MODAL_CLOSE_ON_COMMIT_FALLBACK_MS = 3000;
+
+// Close the modal now -- unless it is the whole-window sign-in modal, which
+// stays up until the chrome view commits the destination this navigation just
+// dispatched. Closing it on dispatch reveals the outgoing page for the whole
+// load (e.g. the welcome screen flashing back right after a completed
+// sign-up). Sidebar / inbox / panel dismissals keep closing instantly:
+// responsiveness on click is the point there.
+function closeModalNowOrAfterChromeCommit(bundle) {
+  let modalPathname = null;
+  try { modalPathname = bundle.modalUrl ? new URL(bundle.modalUrl).pathname : null; } catch { modalPathname = null; }
+  if (!bundle.modalVisible || modalPathname !== '/auth/signin-modal') {
+    closeModal(bundle);
+    return;
+  }
+  if (bundle.modalCloseOnCommitTimer) clearTimeout(bundle.modalCloseOnCommitTimer);
+  bundle.pendingModalCloseOnCommit = true;
+  bundle.modalCloseOnCommitTimer = setTimeout(() => {
+    bundle.modalCloseOnCommitTimer = null;
+    if (bundle.pendingModalCloseOnCommit && !bundle.window.isDestroyed()) {
+      bundle.pendingModalCloseOnCommit = false;
+      closeModal(bundle);
+    }
+  }, MODAL_CLOSE_ON_COMMIT_FALLBACK_MS);
 }
 
 // -- Sidebar helpers (per-bundle) --
@@ -1925,6 +1980,7 @@ function overlayIdForUrl(url) {
   if (pathname === '/settings/modal') return 'settings';
   if (pathname === '/settings/ai-keys') return 'ai-keys';
   if (pathname === '/accounts/modal') return 'accounts';
+  if (pathname === '/create/inspiration/modal') return 'inspiration';
   if (/^\/accounts\/[A-Za-z0-9._-]+\/plan-modal$/.test(pathname)) return 'account-plan';
   if (/^\/workspace\/agent-[a-f0-9]+\/options\/modal$/i.test(pathname)) return 'ws-options';
   return null;
@@ -2176,6 +2232,12 @@ function closeModal(bundle) {
     clearTimeout(bundle.modalStallTimer);
     bundle.modalStallTimer = null;
   }
+  // An explicit close (Escape, backdrop click) supersedes a hold-until-commit.
+  if (bundle.modalCloseOnCommitTimer) {
+    clearTimeout(bundle.modalCloseOnCommitTimer);
+    bundle.modalCloseOnCommitTimer = null;
+  }
+  bundle.pendingModalCloseOnCommit = false;
   bundle.modalOpenedAt = null;
   bundle.modalAwaitingLoad = false;
   // Closing outright abandons the detour: whatever it displaced is not coming
@@ -4433,6 +4495,16 @@ function handleDeeplink(rawUrl) {
   }
   if (!mru) return; // only reachable mid-quit; nothing to focus or navigate
   focusBundle(mru);
+  // An Inspiration link (repo-carrying) pops the Create from Inspiration modal
+  // over the machine ONLY when the app is already inside one -- a modal is
+  // less disruptive there than a full-page takeover, and it can offer "Add to
+  // {this machine}". Outside a machine (home/general screens) it falls
+  // through to navigate to the full Create from Inspiration page instead.
+  const modalPath = deeplinkModalPath(rawUrl);
+  if (modalPath && mru.currentWorkspaceId) {
+    openModal(mru, backendBaseUrl + modalPath + '&current_machine=' + encodeURIComponent(mru.currentWorkspaceId));
+    return;
+  }
   const targetPath = deeplinkTargetPath(rawUrl);
   if (!targetPath) return; // bare/unknown/malformed minds:// -> focus only
   navigateBundle(mru, targetPath);
