@@ -27,9 +27,11 @@ compositor-atomic typing path (X11-only here; the overlay keycodes cover
 unmapped keysyms instead).
 """
 
+import struct
 import threading
 import time
 
+import Xlib.error
 import Xlib.X
 from loguru import logger
 from Xlib.display import Display
@@ -209,7 +211,9 @@ class InputRouter:
         (never tears down the stream -- Selkies' contract)."""
         try:
             self._dispatch(message)
-        except (ValueError, IndexError, InputInjectionError) as error:
+        except (ValueError, IndexError, InputInjectionError, struct.error, Xlib.error.XError) as error:
+            # struct.error/XError guard a hostile frame whose out-of-range values would
+            # otherwise escape python-xlib's serialization and tear down the receive thread.
             logger.warning("dropped malformed/uninjectable input {!r} ({})", message[:64], error)
 
     def _dispatch(self, message: str) -> None:
@@ -217,11 +221,15 @@ class InputRouter:
         kind = tokens[0]
         if kind == "kd":
             keysym = int(tokens[1])
+            if not 0 <= keysym <= 0xFFFFFFFF:
+                return  # out of Card32 range: drop (would raise struct.error in XTEST/change_keyboard_mapping)
             with self._lock:
                 self._pressed_keysyms.add(keysym)
                 self._keyboard.press(keysym)
         elif kind == "ku":
             keysym = int(tokens[1])
+            if not 0 <= keysym <= 0xFFFFFFFF:
+                return
             with self._lock:
                 self._pressed_keysyms.discard(keysym)
                 self._keyboard.release(keysym)
@@ -243,6 +251,10 @@ class InputRouter:
                         logger.debug("failed releasing stale keysym {}", keysym)
         elif kind == "m":
             x, y, mask, magnitude = (int(t) for t in tokens[1:5])
+            # Clamp coords to int16 (the XTEST wire type); an out-of-range coordinate would
+            # otherwise raise struct.error and tear down the stream.
+            x = max(-32768, min(32767, x))
+            y = max(-32768, min(32767, y))
             with self._lock:
                 self._mouse.move(x, y)
                 for action, x_button in diff_button_mask(self._button_mask, mask, magnitude):
@@ -313,4 +325,9 @@ class InputRouter:
 
     def close(self) -> None:
         self.release_all()
-        self._display.close()
+        try:
+            self._display.close()
+        except Xlib.error.ConnectionClosedError:
+            # The browser's X server is already gone (e.g. teardown on daemon restart):
+            # closing our end best-effort. Swallow so it doesn't escape the /stream finally.
+            logger.debug("input router display already closed")

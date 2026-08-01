@@ -350,6 +350,32 @@ class PixelfluxVideoPipe:
         # never mis-joins an old stripe to a new one.
         self._epoch = 0
         self._last_frame_id = -1
+        # Pause state for the stream conductor: an inactive viewer's capture is fully
+        # STOPPED (not throttled) so it costs ~0 CPU and 0 bandwidth; resume restarts it
+        # in ~40ms with fresh keyframes. Track the current capture region so resume
+        # re-applies the viewer's pane size.
+        self._paused = False
+        self._region_w = _INIT_CAPTURE_W
+        self._region_h = _INIT_CAPTURE_H
+        # After a resize the row map is cleared and geometry changes; drop in-flight
+        # old-geometry stripes (a HEIGHT-only resize keeps the stripe width, so the width
+        # guard alone misses them) until the fresh post-resize keyframe re-establishes rows.
+        self._resync = False
+
+    def _build_settings(self, pixelflux_module: Any, width: int, height: int) -> Any:
+        """A CaptureSettings for this pipe at the given region and the current CRF.
+        Shared by start() and resume() so both configure the encoder identically."""
+        settings = pixelflux_module.CaptureSettings()
+        settings.capture_width = width
+        settings.capture_height = height
+        settings.target_fps = _CAPTURE_FPS
+        settings.output_mode = 1  # H.264
+        settings.use_cpu = True  # no GPU in these workspaces; fail loud, not slow
+        settings.video_crf = self._current_crf
+        settings.use_paint_over_quality = True
+        settings.video_paintover_crf = _PAINTOVER_CRF
+        settings.paint_over_trigger_frames = _PAINTOVER_TRIGGER_FRAMES
+        return settings
 
     def start(self) -> None:
         _attempt_pixelflux_import()
@@ -364,19 +390,10 @@ class PixelfluxVideoPipe:
         width = min(_INIT_CAPTURE_W, self._cap_w)
         height = min(_INIT_CAPTURE_H, self._cap_h)
         self._expected_w = width
-        settings = pixelflux_module.CaptureSettings()
-        settings.capture_width = width
-        settings.capture_height = height
-        settings.target_fps = _CAPTURE_FPS
-        settings.output_mode = 1  # H.264
-        settings.use_cpu = True  # no GPU in these workspaces; fail loud, not slow
-        # STRIPE mode (no video_fullframe): min(cores, height/64) rows, each
-        # with its own change detection and encoder -- only changed rows
-        # encode, in parallel.
-        settings.video_crf = _VIDEO_CRF
-        settings.use_paint_over_quality = True
-        settings.video_paintover_crf = _PAINTOVER_CRF
-        settings.paint_over_trigger_frames = _PAINTOVER_TRIGGER_FRAMES
+        self._region_w, self._region_h = width, height
+        # STRIPE mode (no video_fullframe): min(cores, height/64) rows, each with its own
+        # change detection and encoder -- only changed rows encode, in parallel.
+        settings = self._build_settings(pixelflux_module, width, height)
         capture = pixelflux_module.ScreenCapture()
         # Bind the capture to THIS pipe's display under the fleet-global lock so a
         # concurrent pipe/launch can't cross os.environ["DISPLAY"] mid-start.
@@ -414,6 +431,13 @@ class PixelfluxVideoPipe:
                 # A stripe encoded at the pre-resize width: drop it so the row
                 # map never mixes geometries (the client resets on `res,`).
                 return
+            if self._resync:
+                # Post-resize: reject in-flight old-geometry deltas (a height-only resize
+                # keeps stripe_w, so the check above misses them) until the fresh keyframe.
+                if not is_idr:
+                    self.frames_dropped += 1
+                    return
+                self._resync = False  # fresh keyframe: new geometry re-established
             row = self._rows.setdefault(y_start, _StripeRow())
             if row.mailbox is not None and row.mailbox_is_idr and not is_idr:
                 # STICKY IDR: an unsent keyframe is the row's recovery -- letting
@@ -468,12 +492,18 @@ class PixelfluxVideoPipe:
         width = max(2, min(width - (width % 2), self._cap_w))
         height = max(2, min(height - (height % 2), self._cap_h))
         with self._condition:
+            # Remember the region so a resume() after a pause re-applies the viewer's size.
+            self._region_w, self._region_h = width, height
             if self._capture is None:
-                return width, height
+                return width, height  # paused or not yet started: applied on (re)start
             self._capture.update_capture_region(0, 0, width, height)
-            self._capture.request_idr_frame()
+            # Route the post-resize keyframe through the RATE-LIMITED request: a resize
+            # storm (dragging a pane edge) otherwise forced back-to-back full-keyframe
+            # encodes -- the most expensive frames -- and pegged the CPU.
+            self._request_idr_locked()
             self._expected_w = width
             self._rows.clear()
+            self._resync = True  # drop old-geometry stripes until the fresh keyframe
             self._epoch += 1  # row map reset: new y-offsets, keep joins apart
             self._control_message = f"res,{width},{height}"
             telemetry.hub.emit(self.browser_id, {"type": "resize", "epoch": self._epoch, "w": width, "h": height})
@@ -697,6 +727,70 @@ class PixelfluxVideoPipe:
             self._capture.request_idr_frame()
             telemetry.hub.emit(self.browser_id, {"type": "idr", "epoch": self._epoch})
 
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def pause(self) -> None:
+        """Stop the capture entirely so an inactive viewer costs ~0 CPU and 0 bandwidth
+        (verified: pixelflux stops in ~23ms and contributes ~0% while stopped). The pipe
+        object and its socket stay alive; resume() restarts capture in ~40ms. Called only
+        on the connection's own sender thread (serialized), so no lock is held across the
+        slow stop."""
+        with self._condition:
+            if self._paused or self._closed:
+                return
+            self._paused = True
+            capture, self._capture = self._capture, None
+            self._rows.clear()          # stale once capture stops; resume forces fresh keyframes
+            self._cursor_message = None
+            self._condition.notify_all()
+        if capture is not None:
+            self._guarded_stop(capture)
+        logger.info("video pipe paused for {} (capture stopped, ~0 CPU)", self.browser_id)
+
+    def resume(self) -> None:
+        """Restart the capture after a pause and force fresh keyframes so the viewer
+        repaints immediately (~40ms to first frame), re-applying the current region.
+        start_capture runs OUTSIDE the condition lock so it can't block the encoder
+        callback / sender. Called only on the sender thread (serialized with pause)."""
+        pixelflux_module: Any = _pixelflux["module"]
+        with self._condition:
+            if not self._paused or self._closed:
+                return
+            if pixelflux_module is None:
+                self._paused = False
+                return
+            width, height = self._region_w, self._region_h
+        settings = self._build_settings(pixelflux_module, width, height)
+        capture = pixelflux_module.ScreenCapture()
+        with _DISPLAY_START_LOCK:
+            os.environ["DISPLAY"] = self.display
+            capture.start_capture(self._on_frame, settings)
+        capture.set_cursor_callback(self._on_cursor)
+        with self._condition:
+            if self._closed:  # closed while (re)starting -- unwind the fresh capture
+                self._guarded_stop(capture)
+                return
+            self._settings = settings
+            self._capture = capture
+            self._expected_w = width
+            self._epoch += 1
+            self._rows.clear()
+            self._paused = False
+            self._condition.notify_all()
+        capture.request_idr_frame()
+        logger.info("video pipe resumed for {}", self.browser_id)
+
+    def _guarded_stop(self, capture) -> None:  # noqa: ANN001
+        """stop_capture joins native encoder threads; run it on a guarded thread so a
+        stuck callback can't wedge the caller."""
+        stopper = threading.Thread(target=lambda: self._stop_capture(capture), daemon=True)
+        stopper.start()
+        stopper.join(timeout=5)
+        if stopper.is_alive():
+            logger.warning("video pipe {} capture did not stop within 5s; abandoning it", self.browser_id)
+
     def stop(self) -> None:
         with self._condition:
             self._closed = True
@@ -704,18 +798,11 @@ class PixelfluxVideoPipe:
         capture, self._capture = self._capture, None
         if capture is None:
             return
-        # stop_capture joins native encoder threads; guard against it wedging
-        # the service if a callback is stuck (observed flakiness in testing).
-        stopper = threading.Thread(target=lambda: self._stop_capture(capture), daemon=True)
-        stopper.start()
-        stopper.join(timeout=5)
-        if stopper.is_alive():
-            logger.warning("video pipe {} capture did not stop within 5s; abandoning it", self.browser_id)
-        else:
-            logger.info(
-                "video pipe stopped for {} (captured {}, dropped {})",
-                self.browser_id, self.frames_captured, self.frames_dropped,
-            )
+        self._guarded_stop(capture)
+        logger.info(
+            "video pipe stopped for {} (captured {}, dropped {})",
+            self.browser_id, self.frames_captured, self.frames_dropped,
+        )
 
     @staticmethod
     def _stop_capture(capture) -> None:  # noqa: ANN001

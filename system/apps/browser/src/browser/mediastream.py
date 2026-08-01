@@ -34,6 +34,7 @@ from simple_websocket import ConnectionClosed
 from browser import telemetry
 from browser.audiopipe import AudioPipe, AudioPipeError
 from browser.audiopipe import is_available as is_audio_available
+from browser.stream_conductor import StreamConnection, conductor
 from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
 from browser.xclipboard import (
     ClipboardError,
@@ -77,6 +78,34 @@ class _BrowserClipboard:
 # paste/out routes and the /stream send loop / monitor thread all reach it here.
 _clip_lock = threading.Lock()
 _clips: dict[str, _BrowserClipboard] = {}
+
+# Backstop cap on concurrent /stream connections per browser. The conductor already holds
+# CPU to one live encoder (the rest are paused, ~0 CPU), but each connection still owns a
+# thread, an X display connection and a pipe object; this bounds that footprint so a client
+# can't exhaust threads/FDs by opening connections in a loop. Generous for real use (a few
+# devices, split panes) while still finite.
+_MAX_STREAMS_PER_BROWSER = 8
+_stream_slots_lock = threading.Lock()
+_stream_slots: dict[str, int] = {}
+
+
+def _reserve_stream_slot(browser_id: str) -> bool:
+    """Claim a connection slot for ``browser_id``; False if the browser is already at cap."""
+    with _stream_slots_lock:
+        count = _stream_slots.get(browser_id, 0)
+        if count >= _MAX_STREAMS_PER_BROWSER:
+            return False
+        _stream_slots[browser_id] = count + 1
+        return True
+
+
+def _release_stream_slot(browser_id: str) -> None:
+    with _stream_slots_lock:
+        count = _stream_slots.get(browser_id, 0)
+        if count <= 1:
+            _stream_slots.pop(browser_id, None)
+        else:
+            _stream_slots[browser_id] = count - 1
 
 
 def _on_remote_clipboard(browser_id: str, data: bytes, mime: str) -> None:
@@ -221,17 +250,19 @@ def _set_nodelay(ws: Any) -> None:
 
 
 def _receive_pump(
-    ws: Any, pipe: PixelfluxVideoPipe, router: InputRouter, session: Any, stop_event: threading.Event
+    ws: Any, pipe: PixelfluxVideoPipe, router: InputRouter, session: Any,
+    conn: StreamConnection, stop_event: threading.Event,
 ) -> None:
-    """Read credit acks, resize, and Selkies input on a dedicated thread until the
-    socket closes.
+    """Read credit acks, resize, active/hidden, and Selkies input on a dedicated thread
+    until the socket closes.
 
-    Ack (flow control) and resize handling are unchanged. Live
-    input (``router.handle`` -- Selkies kd/ku/kr/kh/m -> XTEST) is GATED on the browser's
-    ``input_allowed`` (the thread-safe mirror of who holds control): a human's mouse/key
-    is injected only while the human owns the browser, so a stale event can't land after
-    an agent takes over. Release/heartbeat (``kr``/``kh``) always pass so held keys are
-    freed on a flip even after the gate closes.
+    ``i``/``h`` report this viewer's attention to the conductor (``i`` = the user is
+    attending to this pane -> make it the sole active stream; ``h`` = it went off-screen
+    -> pause). Live input (``router.handle`` -- Selkies kd/ku/kr/kh/m -> XTEST) is GATED on
+    ``session.input_allowed`` (who holds control); a real key/mouse also claims the active
+    stream, since interacting with a pane means you're attending to it. Resize of the
+    SHARED Chromium window is likewise gated on control (only the controller reshapes the
+    window); the per-connection capture region is honored regardless.
     """
     try:
         while not stop_event.is_set():
@@ -244,6 +275,10 @@ def _receive_pump(
                     pipe.ack(int(frame_id), int(y_start))
                 except ValueError:
                     logger.warning("dropped malformed ack {!r}", data[:32])
+            elif data == "i":
+                conductor.interact(conn)  # user is attending to this pane -> sole active stream
+            elif data == "h":
+                conductor.hidden(conn)    # pane off-screen -> pause (0 CPU, 0 bandwidth)
             elif data.startswith("r,"):
                 try:
                     width_s, height_s = data[2:].split(",")
@@ -255,25 +290,13 @@ def _receive_pump(
                     logger.warning("dropped malformed resize {!r}", data[:32])
                 else:
                     applied_w, applied_h = pipe.set_capture_region(requested_w, requested_h)
-                    router.resize_window(applied_w, applied_h)
-            elif data.startswith("f,"):
-                # Viewer visibility throttle: a hidden pane asks for ~1fps so the
-                # encoder stops burning CPU while nobody watches; a shown pane asks for
-                # the full rate. Ungated (it's the viewer's own render concern, not an
-                # input action). The pipe clamps to [1, _CAPTURE_FPS].
-                try:
-                    pipe.set_target_fps(float(data[2:]))
-                except ValueError:
-                    logger.warning("dropped malformed fps {!r}", data[:32])
+                    if session.input_allowed:  # only the controller reshapes the shared window
+                        router.resize_window(applied_w, applied_h)
             elif data.startswith("kr") or data.startswith("kh"):
                 router.handle(data)  # release-all / held-key heartbeat: always allowed
             elif session.input_allowed:
-                # A real key/mouse event means a human is actively driving a VISIBLE pane,
-                # so lift any visibility throttle to full rate -- a bulletproof un-stick that
-                # doesn't depend on the client's IntersectionObserver firing (idempotent, so
-                # it's a cheap no-op once already full).
-                pipe.set_target_fps(float("inf"))
-                router.handle(data)  # kd/ku/m: only while the human holds control
+                conductor.interact(conn)  # driving a pane means you're attending to it
+                router.handle(data)       # kd/ku/m: only while the human holds control
     except ConnectionClosed:
         pass
     finally:
@@ -288,11 +311,16 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     ``audio_capture_device`` (this browser's PulseAudio monitor, or None if no audio).
     """
     _set_nodelay(ws)
+    if not _reserve_stream_slot(browser_id):
+        logger.warning("stream connection cap reached for {}; rejecting new viewer", browser_id)
+        ws.close(1013)  # retryable: an existing viewer may free a slot
+        return
     pipe = PixelfluxVideoPipe(browser_id, display)
     try:
         pipe.start()
     except VideoPipeError as error:
         logger.warning("video pipe failed to start for {} ({})", browser_id, error)
+        _release_stream_slot(browser_id)
         ws.close(1011)
         return
     # Passive telemetry: begin recording for this browser (the hot paths emit into a
@@ -305,6 +333,7 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     clip_sink: "Callable[[str], None] | None" = None
     audio_pipe: "AudioPipe | None" = None
     receiver: "threading.Thread | None" = None
+    conn: "StreamConnection | None" = None
     stop_event = threading.Event()
     try:
         telemetry.hub.emit(browser_id, {"type": "conn", "event": "open"})
@@ -323,30 +352,57 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         clip_queue: "deque[str]" = deque(maxlen=32)
         clip_sink = clip_queue.append  # one identity for register/unregister set membership
         _register_clip_sink(browser_id, display, clip_sink)
-        # Audio is strictly additive: gate on pcmflux being importable AND this browser having
-        # its own sink. It shares the video pipe's Condition so a fresh Opus chunk wakes the
-        # same single sender thread. A start failure leaves video untouched.
-        audio_device = session.audio_capture_device
-        if is_audio_available() and audio_device:
-            candidate = AudioPipe(audio_device, pipe.condition)
-            try:
-                candidate.start()
-                audio_pipe = candidate
-            except AudioPipeError as error:
-                logger.warning("audio pipe unavailable for {} ({}); streaming video only", browser_id, error)
+        # Audio is strictly additive (pcmflux importable AND this browser has a sink). It's
+        # started lazily on the first RESUME (not here) so a connection that opens paused
+        # doesn't spin up a capture just to stop it; the sender loop owns its lifecycle.
+        audio_device = session.audio_capture_device if is_audio_available() else None
+
+        # The conductor decides which single viewer streams; this connection starts PAUSED
+        # and its sender loop reconciles the conductor's ``active`` flag against the pipe.
+        def _wake() -> None:
+            with pipe.condition:
+                pipe.condition.notify_all()
+
+        conn = StreamConnection(browser_id, _wake)
         receiver = threading.Thread(
             target=_receive_pump,
-            kwargs={"ws": ws, "pipe": pipe, "router": router, "session": session, "stop_event": stop_event},
+            kwargs={"ws": ws, "pipe": pipe, "router": router, "session": session,
+                    "conn": conn, "stop_event": stop_event},
             name=f"browser-stream-recv-{browser_id}",
             daemon=True,
         )
         receiver.start()
         last_send = time.monotonic()
         last_tcpinfo = last_send
-        audio_pending = audio_pipe.has_pending if audio_pipe is not None else None
         while not stop_event.is_set():
-            # Local-hop TCP health, ~2Hz (rules out local buffering; the socket peers
-            # with a local forwarder so it does NOT see WAN loss -- see browser.telemetry).
+            # Reconcile the conductor's desired state with the live pipe. Exactly one
+            # viewer (across all browsers and devices) is active; the rest fully STOP the
+            # capture -- ~0 CPU, 0 bandwidth -- and resume in ~40ms with fresh keyframes.
+            want_active = conn.active.is_set()
+            if want_active and pipe.is_paused:
+                pipe.resume()
+                if audio_device and audio_pipe is None:
+                    candidate = AudioPipe(audio_device, pipe.condition)
+                    try:
+                        candidate.start()
+                        audio_pipe = candidate
+                    except AudioPipeError as error:
+                        logger.warning("audio pipe unavailable on resume for {} ({})", browser_id, error)
+                ws.send("active")  # viewer clears its paused overlay
+                last_send = time.monotonic()
+            elif not want_active and not pipe.is_paused:
+                pipe.pause()
+                if audio_pipe is not None:
+                    audio_pipe.stop()
+                    audio_pipe = None
+                ws.send("paused")  # viewer shows its paused overlay over the frozen frame
+                last_send = time.monotonic()
+            if pipe.is_paused:
+                # Nothing to encode; block for a conductor wakeup and send NO heartbeat
+                # (0 bandwidth -- the WS ping keeps the socket alive).
+                pipe.next_packet(timeout=_HEARTBEAT_SECONDS)
+                continue
+            # Local-hop TCP health, ~2Hz (see browser.telemetry).
             if time.monotonic() - last_tcpinfo >= 0.5:
                 last_tcpinfo = time.monotonic()
                 info = telemetry.read_tcp_info(ws.sock)
@@ -354,8 +410,7 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
                     telemetry.hub.emit(browser_id, {"type": "tcpinfo", **info})
             control_message = pipe.take_control_message()
             if control_message is not None:
-                # Ahead of any new-size stripe (single sender thread => ordered).
-                ws.send(control_message)
+                ws.send(control_message)  # ahead of any new-size stripe (single sender => ordered)
                 last_send = time.monotonic()
             cursor_message = pipe.take_cursor_message()
             if cursor_message is not None:
@@ -364,6 +419,7 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
             while clip_queue:
                 ws.send(clip_queue.popleft())
                 last_send = time.monotonic()
+            audio_pending = audio_pipe.has_pending if audio_pipe is not None else None
             if audio_pipe is not None:
                 for chunk in audio_pipe.drain():
                     ws.send(chunk)
@@ -379,6 +435,8 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         pass
     finally:
         stop_event.set()
+        if conn is not None:
+            conductor.leave(conn)
         telemetry.hub.emit(browser_id, {"type": "conn", "event": "close"})
         telemetry.hub.close(browser_id)
         if clip_sink is not None:
@@ -390,3 +448,4 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
             router.close()
         if receiver is not None:
             receiver.join(timeout=5)
+        _release_stream_slot(browser_id)

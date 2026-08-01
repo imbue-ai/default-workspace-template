@@ -55,6 +55,9 @@ _HISTORY_MAXLEN = 4000
 # Per-subscriber queue depth: a slow lens drops OLDEST here (deque maxlen) rather
 # than back-pressuring the pipe; the seq gap makes the loss visible in the UI.
 _SUBSCRIBER_MAXLEN = 20000
+# Cap concurrent firehose readers per browser: emit() fans out to every subscriber under
+# the hub lock, so an unbounded set would let read-only clients amplify the stream's cost.
+_MAX_SUBSCRIBERS = 8
 
 
 class _BrowserTelemetry:
@@ -154,7 +157,13 @@ class TelemetryHub:
                 state = _BrowserTelemetry()
                 self._state[browser_id] = state
             history = list(state.history)
-            state.subscribers = state.subscribers + (queue,)
+            if len(state.subscribers) < _MAX_SUBSCRIBERS:
+                state.subscribers = state.subscribers + (queue,)
+            else:
+                # Cap the live fan-out: emit() iterates subscribers under the lock on every
+                # record, so an unbounded set is an amplification vector. Past the cap the
+                # reader still gets the history snapshot, just no live tail.
+                logger.debug("telemetry subscriber cap reached for {}; new reader gets history only", browser_id)
         return history, queue
 
     def unsubscribe(self, browser_id: str, queue: deque[dict[str, Any]]) -> None:
