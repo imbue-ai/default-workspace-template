@@ -21,6 +21,7 @@ One domain-scoped session cookie covers the whole family.
 import asyncio
 import ipaddress
 import re
+import secrets
 import socket as socket_module
 import threading
 from collections.abc import AsyncGenerator
@@ -60,7 +61,10 @@ from imbue.mngr_forward.cookie import verify_session_cookie
 from imbue.mngr_forward.cookie import verify_subdomain_auth_token
 from imbue.mngr_forward.data_types import SystemInterfaceBackendFailurePayload
 from imbue.mngr_forward.data_types import SystemInterfaceBackendFailureReason
+from imbue.mngr_forward.embedding import EmbedderOrigin
+from imbue.mngr_forward.embedding import build_frame_ancestors_policy
 from imbue.mngr_forward.envelope import EnvelopeWriter
+from imbue.mngr_forward.errors import MngrForwardError
 from imbue.mngr_forward.loading_page import render_loading_page
 from imbue.mngr_forward.primitives import MNGR_FORWARD_SESSION_COOKIE_NAME
 from imbue.mngr_forward.primitives import OneTimeCode
@@ -76,6 +80,11 @@ from imbue.mngr_forward.ssh_tunnel import parse_url_host_port
 _PROXY_TIMEOUT_SECONDS: Final[float] = 30.0
 
 _SUBDOMAIN_AUTH_PATH: Final[str] = "/_subdomain_auth"
+
+# The bare-origin browser auth bridge: a host application that spawned the
+# plugin 302s a browser here with the spawn-time opaque token so the browser
+# gets the bare-origin session cookie without consuming an OTP.
+BROWSER_BRIDGE_PATH: Final[str] = "/_bridge"
 
 # Strict shape for the /goto/{host_id} path segment: the exact (lowercased)
 # ``host-<32hex>`` coordinate FORWARD_SUBDOMAIN_PATTERN routes.
@@ -149,6 +158,63 @@ def _render_index_page(
 
 
 # -- Auth helpers ----------------------------------------------------------
+
+
+def _append_partitioned_to_last_set_cookie(response: Response) -> None:
+    """Append ``; Partitioned`` to the most recently written ``Set-Cookie`` header.
+
+    ``http.cookies`` (which starlette's ``set_cookie`` serializes through)
+    only learned the ``Partitioned`` attribute in Python 3.14, so on earlier
+    interpreters the attribute must be appended to the raw header.
+    """
+    for index in range(len(response.raw_headers) - 1, -1, -1):
+        header_key, header_value = response.raw_headers[index]
+        if header_key == b"set-cookie":
+            response.raw_headers[index] = (header_key, header_value + b"; Partitioned")
+            return
+    raise MngrForwardError("No Set-Cookie header to mark Partitioned")
+
+
+def _set_forward_session_cookie(
+    response: Response,
+    cookie_value: str,
+    use_http2: bool,
+    domain: str | None = None,
+) -> None:
+    """Set the plugin session cookie with embedding-compatible attributes.
+
+    On the TLS path (``use_http2``) the cookie is ``SameSite=None; Secure;
+    Partitioned`` so it is sent from inside a cross-site iframe (the minds
+    chrome embeds workspace origins; the top-level page is a different site).
+    ``Partitioned`` keys the jar by the embedding top-level site in browsers
+    that block unpartitioned third-party cookies; browsers without CHIPS
+    support ignore the attribute. The plain-HTTP path keeps ``Lax``
+    (``SameSite=None`` requires ``Secure``), so embedding is unsupported
+    there -- top-level navigation keeps working as before.
+    """
+    if use_http2:
+        response.set_cookie(
+            key=MNGR_FORWARD_SESSION_COOKIE_NAME,
+            value=cookie_value,
+            path="/",
+            domain=domain,
+            httponly=True,
+            samesite="none",
+            secure=True,
+        )
+        # starlette's ``partitioned=`` kwarg needs the Python 3.14 SimpleCookie,
+        # so the attribute is appended to the just-written header directly.
+        _append_partitioned_to_last_set_cookie(response)
+    else:
+        response.set_cookie(
+            key=MNGR_FORWARD_SESSION_COOKIE_NAME,
+            value=cookie_value,
+            path="/",
+            domain=domain,
+            httponly=True,
+            samesite="lax",
+            secure=False,
+        )
 
 
 def _is_authenticated(
@@ -580,14 +646,11 @@ def _handle_subdomain_auth_bridge(
         return Response(status_code=403, content="Invalid or expired subdomain auth token")
     cookie_value = create_session_cookie(signing_key=signing_key)
     response = Response(status_code=302, headers={"Location": next_url})
-    response.set_cookie(
-        key=MNGR_FORWARD_SESSION_COOKIE_NAME,
-        value=cookie_value,
-        path="/",
+    _set_forward_session_cookie(
+        response,
+        cookie_value=cookie_value,
+        use_http2=use_http2,
         domain=str(host_info.workspace_domain),
-        httponly=True,
-        samesite="lax",
-        secure=use_http2,
     )
     return response
 
@@ -884,14 +947,35 @@ def _handle_authenticate(
     signing_key = auth_store.get_signing_key()
     cookie_value = create_session_cookie(signing_key=signing_key)
     response = Response(status_code=307, headers={"Location": "/"})
-    response.set_cookie(
-        key=MNGR_FORWARD_SESSION_COOKIE_NAME,
-        value=cookie_value,
-        path="/",
-        httponly=True,
-        samesite="lax",
-        secure=use_http2,
-    )
+    _set_forward_session_cookie(response, cookie_value=cookie_value, use_http2=use_http2)
+    return response
+
+
+def _handle_browser_bridge(
+    request: Request,
+    auth_store: AuthStoreInterface,
+    browser_bridge_token: str | None,
+    use_http2: bool,
+) -> Response:
+    """Redeem the spawn-time browser-bridge token and set the bare-origin cookie.
+
+    A host application (minds) that spawned the plugin with
+    ``--browser-bridge-token`` 302s an already-authenticated browser here so
+    it obtains a bare-origin plugin session without consuming an OTP -- the
+    browser twin of the Electron shell's programmatic preauth cookie
+    injection. The token compare is constant-time; when the flag was never
+    passed the route does not exist (404).
+    """
+    if browser_bridge_token is None:
+        return Response(status_code=404)
+    token = request.query_params.get("token", "")
+    if not token or not secrets.compare_digest(token, browser_bridge_token):
+        return Response(status_code=403, content="Invalid browser bridge token")
+    next_url = _sanitize_next_url(request.query_params.get("next", "/"))
+    signing_key = auth_store.get_signing_key()
+    cookie_value = create_session_cookie(signing_key=signing_key)
+    response = Response(status_code=302, headers={"Location": next_url})
+    _set_forward_session_cookie(response, cookie_value=cookie_value, use_http2=use_http2)
     return response
 
 
@@ -1037,6 +1121,8 @@ def create_forward_app(
     on_listening: Callable[[], None] | None = None,
     allow_host_loopback: bool = False,
     use_http2: bool = False,
+    browser_bridge_token: str | None = None,
+    embedder_origins: tuple[EmbedderOrigin, ...] = (),
 ) -> FastAPI:
     """Create the FastAPI app for ``mngr forward``.
 
@@ -1053,6 +1139,11 @@ def create_forward_app(
     ``https``/``wss`` and its session cookie is marked ``Secure``. It does not
     itself enable TLS -- the serve path does -- but the two must agree so the
     URLs the browser is told to visit match the scheme the socket speaks.
+
+    ``browser_bridge_token`` enables the ``/_bridge`` route (see
+    ``_handle_browser_bridge``); ``embedder_origins`` extends the
+    ``frame-ancestors`` policy appended to every proxied workspace response
+    beyond the default 'self' + workspace-family deny-external posture.
     """
     env = _build_jinja_env()
 
@@ -1076,7 +1167,7 @@ def create_forward_app(
         host_info = parse_forward_host(host_header)
         if host_info is None:
             return await call_next(request)
-        return await _handle_workspace_forward_http(
+        response = await _handle_workspace_forward_http(
             request=request,
             host_info=host_info,
             auth_store=auth_store,
@@ -1091,6 +1182,20 @@ def create_forward_app(
             envelope_writer=envelope_writer,
             use_http2=use_http2,
         )
+        # The proxy owns embedding policy for every workspace origin: APPEND a
+        # frame-ancestors CSP header (never modify what the service sent --
+        # multiple CSP headers compose by intersection). This is the one
+        # narrowly-blessed deviation from pure byte-forwarding.
+        response.headers.append(
+            "content-security-policy",
+            build_frame_ancestors_policy(
+                host_info=host_info,
+                listen_port=listen_port,
+                use_http2=use_http2,
+                embedder_origins=embedder_origins,
+            ),
+        )
+        return response
 
     @app.get("/login")
     def _login(one_time_code: str, request: Request) -> Response:
@@ -1120,6 +1225,15 @@ def create_forward_app(
             env=env,
             preauth_cookie_value=preauth_cookie_value,
             listen_port=listen_port,
+        )
+
+    @app.get(BROWSER_BRIDGE_PATH)
+    def _browser_bridge(request: Request) -> Response:
+        return _handle_browser_bridge(
+            request=request,
+            auth_store=auth_store,
+            browser_bridge_token=browser_bridge_token,
+            use_http2=use_http2,
         )
 
     @app.get("/goto/{host_id}/")

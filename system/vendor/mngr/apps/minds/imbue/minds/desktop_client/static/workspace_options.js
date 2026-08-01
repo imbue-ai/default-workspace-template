@@ -324,12 +324,33 @@
     if (!errorEl) return;
     errorEl.textContent = message;
     errorEl.classList.remove('hidden');
+    setRetryShown(false);
+  }
+
+  // A LOAD failure gets its own Try again affordance: the editor stays locked
+  // until a clean status read lands, and nothing else on screen re-triggers
+  // one. Action failures (enable, disable, list edits) never show it -- their
+  // retry is redoing the action, whose control is still right there.
+  function showLoadFailure(message) {
+    showError(message);
+    setRetryShown(true);
+  }
+
+  function setRetryShown(isShown) {
+    var retryRow = el('ws-share-retry-row');
+    if (retryRow) retryRow.classList.toggle('hidden', !isShown);
   }
 
   function clearError() {
     var errorEl = el('ws-share-error');
     if (errorEl) errorEl.classList.add('hidden');
+    setRetryShown(false);
   }
+
+  window.wsShareRetryLoad = function () {
+    clearError();
+    loadMachine();
+  };
 
   // ``fetch`` only rejects on network failure -- a 4xx/5xx response is a
   // successful Promise. Wrap it so callers treat transport errors and
@@ -514,21 +535,30 @@
     machine.failed = false;
   }
 
-  // The link each target hands out: the machine's own URL for the whole
-  // machine, the service's own origin (its label in front of the machine
-  // domain) for an app. Derived, never stored -- a service registered while
-  // shared is reachable immediately, so its link must not wait on anything.
+  // The link each target hands out is a service origin: the service's label in
+  // front of the machine domain. This holds for the whole machine too -- its
+  // link is the SHELL's (system_interface) label origin, because the bare
+  // machine domain does not route on a share (only explicit ``<label>.<domain>``
+  // origins are claimed on the relay and served).
+  // ``machine.url`` supplies the base host (the bare machine domain / host
+  // coordinate); the label is prefixed onto it. Derived, never stored -- a
+  // service registered while shared is reachable immediately.
   function targetUrl(service) {
     if (!machine.url) return '';
-    if (service === wholeService) return machine.url;
     var host;
     try {
       host = new URL(machine.url).host;
     } catch (_) {
       return '';
     }
-    var label = serviceLabels[service] || service;
-    return 'https://' + label + '.' + host + '/';
+    var label = serviceLabels[service];
+    if (service === wholeService) {
+      // Fall back to the bare machine URL only if the shell label is somehow
+      // not known yet -- better a link that may not route than a broken one
+      // built from the shell's NAME (which is not its routable label).
+      return label ? 'https://' + label + '.' + host + '/' : machine.url;
+    }
+    return 'https://' + (label || service) + '.' + host + '/';
   }
 
   // The status line under the editor, for a wait whose own control is not on
@@ -691,11 +721,15 @@
         // grants: null means the machine is shared but the grants read never
         // landed. That is a failed read, not an empty policy -- adopting it
         // would render every grantee as revoked and let an edit replace a
-        // policy nobody ever saw.
+        // policy nobody ever saw. Say what still works (the share itself) so
+        // a management-view hiccup does not read as a broken share.
         if (data && data.enabled && !data.grants) {
           machine.failed = true;
           renderTarget();
-          showError('Could not load sharing status -- select a target again to retry.');
+          showLoadFailure(
+            'This machine is shared and everyone granted access still has it, but the list of ' +
+            'who that is could not be loaded, so it cannot be edited right now.'
+          );
           return;
         }
         syncFromDocument(data);
@@ -707,7 +741,7 @@
       .catch(function (error) {
         machine.failed = true;
         renderTarget();
-        showError('Could not load sharing status: ' + error.message + ' -- select a target again to retry.');
+        showLoadFailure('Could not load sharing status: ' + error.message);
       });
   }
 
@@ -730,6 +764,7 @@
     currentTarget = service;
     var input = el('ws-share-new-email');
     if (input) input.value = '';
+    updateAddButtonEmphasis();
     if (machine.failed) {
       loadMachine();
       return;
@@ -768,6 +803,30 @@
     if (state.enabled) persistEntries();
   }
 
+  // What the add-email input currently holds, trimmed ('' when blank).
+  function pendingEmailText() {
+    var input = el('ws-share-new-email');
+    return input ? (input.value || '').trim() : '';
+  }
+
+  // While the input holds un-added text the Add button wears the prominent
+  // (primary) variant so it reads as the obvious next action; empty goes back
+  // to the quiet secondary. The two class sets ride on the button's data
+  // attributes (rendered from the template's variant recipes).
+  function updateAddButtonEmphasis() {
+    var addBtn = el('ws-share-add-btn');
+    if (!addBtn) return;
+    var secondaryClasses = (addBtn.dataset.variantSecondary || '').split(/\s+/).filter(Boolean);
+    var primaryClasses = (addBtn.dataset.variantPrimary || '').split(/\s+/).filter(Boolean);
+    if (!secondaryClasses.length || !primaryClasses.length) return;
+    var activeClasses = pendingEmailText() ? primaryClasses : secondaryClasses;
+    secondaryClasses.concat(primaryClasses).forEach(function (cls) { addBtn.classList.remove(cls); });
+    activeClasses.forEach(function (cls) { addBtn.classList.add(cls); });
+  }
+
+  var addEmailInput = el('ws-share-new-email');
+  if (addEmailInput) addEmailInput.addEventListener('input', updateAddButtonEmphasis);
+
   window.wsShareAddEmail = function () {
     var input = el('ws-share-new-email');
     if (!input) return;
@@ -776,6 +835,7 @@
     var state = stateFor(currentTarget);
     if (entry !== ownerEmail && state.entries.indexOf(entry) < 0) state.entries.push(entry);
     input.value = '';
+    updateAddButtonEmphasis();
     clearError();
     renderAcl();
     if (state.enabled) persistEntries();
@@ -806,6 +866,14 @@
   }
 
   window.wsShareEnable = function () {
+    // Un-added text left in the email box must not be silently dropped by the
+    // publish (that is how a share once went out without its intended
+    // grantee) -- and auto-adding it would be guessing. Block and say which.
+    var residualEntry = pendingEmailText();
+    if (residualEntry) {
+      showError("Either click 'Add' to share with " + residualEntry + ", or clear the box first.");
+      return;
+    }
     clearError();
     var service = currentTarget;
     startPending(service, 'enable');

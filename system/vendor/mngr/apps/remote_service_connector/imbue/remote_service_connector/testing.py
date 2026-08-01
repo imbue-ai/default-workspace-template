@@ -441,6 +441,7 @@ class FakeSuperTokensBackend:
             "create_email_verification_token": self.create_email_verification_token,
             "verify_email_using_token": self.verify_email_using_token,
             "get_provider": self.get_provider,
+            "get_broker_oauth_provider": self.get_broker_oauth_provider,
             "manually_create_or_update_user": self.manually_create_or_update_user,
         }
         for name, fake in fakes.items():
@@ -799,6 +800,10 @@ class FakeSuperTokensBackend:
     ) -> FakeProvider | None:
         del tenant_id, client_type, user_context
         return self.registered_providers.get(third_party_id)
+
+    def get_broker_oauth_provider(self) -> FakeProvider | None:
+        """Stand-in for the broker's env-driven Google provider: configured iff 'google' is registered."""
+        return self.registered_providers.get("google")
 
     def manually_create_or_update_user(
         self,

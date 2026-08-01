@@ -13,10 +13,14 @@ need shell quoting.
 """
 
 import base64
+import json
+import threading
 from typing import Final
 
 from loguru import logger
+from pydantic import PrivateAttr
 
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.utils.mngr_caller import MngrCaller
 from imbue.mngr.primitives import AgentId
 
@@ -28,6 +32,28 @@ _SHARE_EXEC_TIMEOUT_SECONDS: Final[float] = 60.0
 
 class ShareInjectionError(RuntimeError):
     """Raised when the share materials could not be written into the agent."""
+
+
+class MachineSharingLockRegistry(MutableModel):
+    """Per-machine locks serializing the desktop backend's sharing writes.
+
+    Two concurrent sharing edits for one machine (the Share pane open from the
+    titlebar and the workspace list, or two windows) would otherwise run their
+    full-document replaces fully interleaved; the machine-sharing PUT/DELETE
+    handlers hold this lock so one machine's edits serialize regardless of
+    which pane or window they came from.
+    """
+
+    _lock_by_host_id: dict[str, threading.Lock] = PrivateAttr(default_factory=dict)
+    _registry_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
+    def get_lock(self, host_id: str) -> threading.Lock:
+        with self._registry_lock:
+            lock = self._lock_by_host_id.get(host_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._lock_by_host_id[host_id] = lock
+            return lock
 
 
 def build_share_env_text(
@@ -82,12 +108,18 @@ def _quote_toml_key(key: str) -> str:
 
 def _write_file_via_exec(agent_id: AgentId, relative_path: str, content: str, mngr_caller: MngrCaller) -> None:
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    directory, _, filename = relative_path.rpartition("/")
+    # The tmp name comes from mktemp, never a fixed `<path>.tmp`: two
+    # concurrent writers sharing one tmp path interleave their bytes and the
+    # loser's mv publishes a corrupted file. With a unique tmp per write the
+    # final mv stays atomic for readers and the last writer wins whole.
     result = mngr_caller.call(
         [
             "exec",
             str(agent_id),
-            f"mkdir -p data/.secrets && printf '%s' {encoded} | base64 -d > {relative_path}.tmp "
-            f"&& mv {relative_path}.tmp {relative_path}",
+            f'mkdir -p {directory} && tmp="$(mktemp {directory}/.{filename}.XXXXXX)" '
+            f"&& printf '%s' {encoded} | base64 -d > \"$tmp\" "
+            f'&& mv "$tmp" {relative_path}',
         ],
         timeout=_SHARE_EXEC_TIMEOUT_SECONDS,
     )
@@ -137,20 +169,50 @@ def clear_share_materials_from_agent(agent_id: AgentId, mngr_caller: MngrCaller)
         logger.warning("Failed to clear share materials from agent {}: {}", agent_id, result.stderr.strip())
 
 
+def _extract_exec_stdout(exec_json_stdout: str) -> str | None:
+    """Unwrap the remote command's own stdout from ``mngr exec --format json`` output.
+
+    Returns None (with a warning logged) when the envelope is unparseable or
+    reports the remote command as failed -- callers treat that as "the read
+    never landed", never as file content.
+    """
+    try:
+        envelope = json.loads(exec_json_stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning("Unparseable mngr exec JSON envelope ({}): {}", exc, exec_json_stdout[:200])
+        return None
+    results = envelope.get("results") if isinstance(envelope, dict) else None
+    first = results[0] if isinstance(results, list) and results else None
+    if not isinstance(first, dict) or not isinstance(first.get("stdout"), str) or first.get("success") is not True:
+        logger.warning("Unexpected mngr exec JSON envelope shape: {}", exec_json_stdout[:200])
+        return None
+    return first["stdout"]
+
+
 def read_share_grants_from_agent(agent_id: AgentId, mngr_caller: MngrCaller) -> str | None:
     """Read the grants document back from the agent; None when absent.
 
-    A failed exec raises :class:`ShareInjectionError` rather than returning
-    None: "no document exists" and "the read never landed" must stay
-    distinguishable, or a caller could mistake an unreadable policy for an
-    empty one (the ``|| true`` folds the absent-file case into rc 0).
+    The exec rides ``--format json`` and the document is unwrapped from the
+    result envelope: in its default (human) format ``mngr exec`` appends its
+    own ``Command succeeded on agent <name>`` status line to stdout, which is
+    indistinguishable from file content and turned every raw read of a
+    perfectly valid document into a "malformed grants" failure.
+
+    A failed exec, or an unreadable envelope, raises
+    :class:`ShareInjectionError` rather than returning None: "no document
+    exists" and "the read never landed" must stay distinguishable, or a caller
+    could mistake an unreadable policy for an empty one (the ``|| true`` folds
+    the absent-file case into rc 0 with empty stdout).
     """
     result = mngr_caller.call(
-        ["exec", str(agent_id), f"cat {_SHARE_GRANTS_FILE} 2>/dev/null || true", "--no-start"],
+        ["exec", str(agent_id), f"cat {_SHARE_GRANTS_FILE} 2>/dev/null || true", "--no-start", "--format", "json"],
         timeout=_SHARE_EXEC_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         raise ShareInjectionError(
             f"Could not read share grants from agent {agent_id}: {result.stderr.strip() or 'exec failed'}"
         )
-    return result.stdout if result.stdout.strip() else None
+    grants_text = _extract_exec_stdout(result.stdout)
+    if grants_text is None:
+        raise ShareInjectionError(f"Could not read share grants from agent {agent_id}: unrecognized exec output")
+    return grants_text if grants_text.strip() else None

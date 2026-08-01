@@ -50,6 +50,7 @@ from imbue.minds.desktop_client.conftest import FakeImbueCloudCli
 from imbue.minds.desktop_client.conftest import make_agents_json
 from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
 from imbue.minds.desktop_client.conftest import make_resolver_with_data
+from imbue.minds.desktop_client.conftest import make_service_log
 from imbue.minds.desktop_client.conftest import make_session_store_for_test
 from imbue.minds.desktop_client.cookie_manager import SESSION_COOKIE_NAME
 from imbue.minds.desktop_client.cookie_manager import create_session_cookie
@@ -1833,7 +1834,8 @@ def test_machine_sharing_status_disabled_when_no_share(tmp_path: Path) -> None:
 
 def test_machine_sharing_status_enabled(tmp_path: Path) -> None:
     agent_id = AgentId()
-    cli = _fake_sharing_cli(share=_active_share())
+    grants_toml = '[workspace]\nemails = ["viewer@example.com"]\nemail_domains = []\n'
+    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_GrantsReadCaller(grants_stdout=grants_toml))
     client = _sharing_client(tmp_path, agent_id, cli)
 
     response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing", headers=_auth_header())
@@ -1843,6 +1845,8 @@ def test_machine_sharing_status_enabled(tmp_path: Path) -> None:
     assert body["enabled"] is True
     assert body["workspace_domain"] == f"{_TEST_HOST_ID}.owner1234.us1.shares.example"
     assert body["url"] == f"https://{_TEST_HOST_ID}.owner1234.us1.shares.example/"
+    # The grants document survives the exec envelope round trip.
+    assert body["grants"]["workspace"]["emails"] == ["viewer@example.com"]
 
 
 def test_machine_sharing_status_reports_unknown_grants_when_the_read_fails(tmp_path: Path) -> None:
@@ -1862,6 +1866,66 @@ def test_machine_sharing_status_reports_unknown_grants_when_the_read_fails(tmp_p
     body = json.loads(response.data)
     assert body["enabled"] is True
     assert body["grants"] is None
+
+
+class _GrantsReadCaller(RecordingMngrCaller):
+    """Recording caller that answers the grants read with a proper exec JSON envelope.
+
+    The real read unwraps ``mngr exec --format json`` output, so a canned raw
+    string cannot stand in for it; ``grants_stdout`` is the remote ``cat``'s
+    own output ('' plays the absent-file case, unparseable text a corrupted
+    document). Every other call keeps the canned default result.
+    """
+
+    grants_stdout: str = Field(default="", description="The remote cat's stdout inside the envelope")
+
+    def call(
+        self,
+        argv: Sequence[str],
+        timeout: float | None = None,
+        env_overrides: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
+    ) -> MngrCallResult:
+        result = super().call(argv, timeout=timeout, env_overrides=env_overrides, cwd=cwd)
+        if any("cat" in part and "share_grants.toml" in part for part in argv):
+            envelope = {"results": [{"agent": "a", "stdout": self.grants_stdout, "stderr": "", "success": True}]}
+            return MngrCallResult(returncode=0, stdout=json.dumps(envelope))
+        return result
+
+
+def test_machine_sharing_status_reports_unknown_grants_when_the_document_is_malformed(tmp_path: Path) -> None:
+    # A malformed grants file must read back as grants: null (unknown), never
+    # as an empty policy -- the pane would render every grantee revoked and a
+    # save from that state would erase grants nobody ever saw.
+    agent_id = AgentId()
+    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_GrantsReadCaller(grants_stdout="not toml [["))
+    client = _sharing_client(tmp_path, agent_id, cli)
+
+    response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing", headers=_auth_header())
+
+    assert response.status_code == 200
+    body = json.loads(response.data)
+    assert body["enabled"] is True
+    assert body["grants"] is None
+
+
+def test_machine_sharing_put_refuses_to_replace_a_malformed_grants_document(tmp_path: Path) -> None:
+    agent_id = AgentId()
+    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_GrantsReadCaller(grants_stdout="not toml [["))
+    client = _sharing_client(tmp_path, agent_id, cli)
+
+    response = client.put(
+        f"/api/v1/machines/{_TEST_HOST_ID}/sharing",
+        headers=_auth_header(),
+        json={"workspace": {"emails": ["viewer@example.com"]}},
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.data)
+    assert "disable sharing" in body["error"].lower()
+    # The corrupted document was left untouched: no grants write was issued.
+    recorded = _recorded_mngr_calls(cli)
+    assert not any("share_grants.toml" in " ".join(argv) and "printf" in " ".join(argv) for argv in recorded)
 
 
 def test_machine_sharing_put_enables_and_injects_materials(tmp_path: Path) -> None:
@@ -1890,7 +1954,8 @@ def test_machine_sharing_put_enables_and_injects_materials(tmp_path: Path) -> No
 
 def test_machine_sharing_put_on_active_share_updates_grants_without_rotation(tmp_path: Path) -> None:
     agent_id = AgentId()
-    cli = _fake_sharing_cli(share=_active_share())
+    # The guard read before the replace sees no existing document (fresh envelope).
+    cli = _fake_sharing_cli(share=_active_share(), mngr_caller=_GrantsReadCaller())
     client = _sharing_client(tmp_path, agent_id, cli)
 
     response = client.put(
@@ -2015,20 +2080,45 @@ def test_machine_sharing_requires_bearer(tmp_path: Path) -> None:
     assert response.status_code == 401
 
 
-def test_machine_sharing_readiness_ready_when_domain_answers(tmp_path: Path) -> None:
+def test_machine_sharing_readiness_ready_when_shell_label_origin_answers(tmp_path: Path) -> None:
     agent_id = AgentId()
     cli = _fake_sharing_cli(share=_active_share())
+    probed_hosts: list[str] = []
 
     def _handler(request: httpx.Request) -> httpx.Response:
+        probed_hosts.append(request.url.host)
         return httpx.Response(302, headers={"location": "https://accounts.example/share/authorize"})
 
     http_client = httpx.Client(transport=httpx.MockTransport(_handler), follow_redirects=False)
-    client = _sharing_client(tmp_path, agent_id, cli, http_client=http_client)
+    # The shell's label must be known for readiness -- the probe hits the shell's
+    # label origin, not the bare machine domain (which does not route on a share).
+    client = _sharing_client(
+        tmp_path,
+        agent_id,
+        cli,
+        http_client=http_client,
+        service_logs={str(agent_id): make_service_log("system_interface", "http://localhost:8000", "system_interface-shl1")},
+    )
 
     response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())
 
     assert response.status_code == 200
     assert json.loads(response.data) == {"ready": True}
+    # It probed the shell LABEL origin, never the bare machine domain.
+    assert probed_hosts == [f"system_interface-shl1.{_active_share().workspace_domain}"]
+
+
+def test_machine_sharing_readiness_not_ready_when_shell_label_unknown(tmp_path: Path) -> None:
+    # Enabled share, but the workspace has not registered its shell service yet,
+    # so there is no routable origin to probe -- report not-ready.
+    agent_id = AgentId()
+    cli = _fake_sharing_cli(share=_active_share())
+    client = _sharing_client(tmp_path, agent_id, cli, http_client=httpx.Client())
+
+    response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())
+
+    assert response.status_code == 200
+    assert json.loads(response.data) == {"ready": False}
 
 
 def test_machine_sharing_readiness_not_ready_when_disabled(tmp_path: Path) -> None:

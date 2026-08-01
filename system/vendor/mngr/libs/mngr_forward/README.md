@@ -54,6 +54,49 @@ Consumers (notably `minds run`) can spawn `mngr forward --format jsonl
 and pre-set the `mngr_forward_session` cookie in their browser session so the
 OTP flow is bypassed.
 
+For plain browsers (which cannot pre-set cookies programmatically), the
+consumer can additionally pass `--browser-bridge-token <opaque-token>` and
+302 an already-authenticated browser to
+`/_bridge?token=<opaque-token>&next=<path>`; the plugin sets the bare-origin
+session cookie and redirects onward -- no OTP consumed.
+
+## Embedding (iframes)
+
+Workspace origins are designed to be embeddable in an iframe by a trusted
+host application (the minds chrome). Two pieces make this work:
+
+- **Cookies**: on the TLS path (`--use-http2`) session cookies are
+  `SameSite=None; Secure; Partitioned` so they are sent from inside a
+  cross-site iframe. The plain-HTTP path keeps `SameSite=Lax` (the `None`
+  attribute requires `Secure`), so embedding is unsupported without TLS.
+- **frame-ancestors**: the proxy APPENDS a
+  `Content-Security-Policy: frame-ancestors ...` header to every proxied
+  workspace response. The default policy denies external embedding
+  (`'self'` + the workspace's own origin family only); pass
+  `--embedder-origin <scheme://host[:port]>` (repeatable) to allow specific
+  embedders. This is a deliberate, narrow carve-out from the plugin's
+  byte-forwarding purity: the proxy may *add* response headers (a service's
+  own CSP still applies -- multiple CSP headers compose by intersection),
+  but never touches bodies or existing headers.
+
+**Breaking change note**: earlier versions sent no `frame-ancestors` header
+at all, so any page could iframe a workspace origin. The default is now
+deny-external; embedders must be allowlisted via `--embedder-origin`.
+
+## TLS trust for plain browsers
+
+With `--use-http2` the proxy serves leaf certificates minted per startup from
+a persistent local CA (stored under `$MNGR_HOST_DIR/plugin/forward/ca/`). Run
+
+```bash
+mngr forward --trust-ca
+```
+
+once to install that CA into your platform's trust stores (macOS login
+keychain; Linux per-user NSS database used by Chrome), after which browsers
+accept every workspace origin without certificate warnings. The Electron
+minds app trusts the proxy programmatically and does not need this.
+
 ## Status
 
 Experimental.

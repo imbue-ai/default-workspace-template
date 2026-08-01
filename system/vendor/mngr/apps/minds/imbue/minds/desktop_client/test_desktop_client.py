@@ -3694,3 +3694,52 @@ def test_resolve_destroying_for_landing_tombstones_even_if_the_share_delete_fail
     assert not (paths.data_dir / "destroying" / str(agent_id)).exists()
     assert session_store.record_store is not None
     assert session_store.record_store.list_records("user-1")[0].state == "destroyed"
+
+
+def test_forward_bridge_redirects_authenticated_browser_to_plugin(tmp_path: Path) -> None:
+    """/forward-bridge bounces a signed-in browser to the plugin's /_bridge with the spawn secret.
+
+    This is browser mode's twin of the Electron preauth cookie injection: the
+    chrome iframe enters workspaces through this hop so the plugin can set its
+    bare-origin session cookie without an OTP.
+    """
+    auth_store = FileAuthStore(data_directory=tmp_path / "auth")
+    app = create_desktop_client(
+        auth_store=auth_store,
+        backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
+        http_client=None,
+        mngr_forward_port=9876,
+        mngr_forward_browser_bridge_token="bridge-tok",
+    )
+    client = app.test_client()
+    _authenticate_client(client, auth_store)
+    next_path = "/goto/host-00000000000000000000000000000000/"
+    response = client.get(f"/forward-bridge?next={next_path}")
+    assert response.status_code == 302
+    location = response.headers["Location"]
+    assert location.startswith("https://localhost:9876/_bridge?token=bridge-tok&next=")
+    assert "goto" in location
+    # Off-origin next targets collapse to "/" (no open redirect).
+    evil = client.get("/forward-bridge?next=//evil.com/")
+    assert evil.headers["Location"].endswith("&next=%2F")
+
+
+def test_forward_bridge_unauthenticated_redirects_home(tmp_path: Path) -> None:
+    auth_store = FileAuthStore(data_directory=tmp_path / "auth")
+    app = create_desktop_client(
+        auth_store=auth_store,
+        backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
+        http_client=None,
+        mngr_forward_port=9876,
+        mngr_forward_browser_bridge_token="bridge-tok",
+    )
+    client = app.test_client()
+    response = client.get("/forward-bridge?next=/goto/host-00000000000000000000000000000000/")
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/"
+
+
+def test_forward_bridge_is_404_without_spawn_token(tmp_path: Path) -> None:
+    client, auth_store, _agent_id = _setup_test_server(tmp_path)
+    _authenticate_client(client, auth_store)
+    assert client.get("/forward-bridge?next=/").status_code == 404

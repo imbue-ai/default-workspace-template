@@ -149,6 +149,7 @@ from imbue.minds.desktop_client.sharing_handler import enable_sharing
 from imbue.minds.desktop_client.sharing_handler import get_active_share
 from imbue.minds.desktop_client.sharing_handler import get_sharing
 from imbue.minds.desktop_client.sharing_handler import probe_share_readiness
+from imbue.minds.desktop_client.sharing_handler import resolve_share_probe_host
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forward_supervisor
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
@@ -2691,13 +2692,18 @@ def _handle_machine_sharing_put(host_id: str) -> MachineSharingResponse | Respon
     """Enable sharing (or update the grants) for a machine. Body: the grants document."""
     body = MachineSharingRequest.model_validate(request.get_json(silent=True, force=True) or {})
     workspace_grants, service_grants = _grants_to_plain(_grants_document_from_request(body))
+    state = get_state()
     try:
-        document = enable_sharing(
-            host_id=host_id,
-            workspace_grants=workspace_grants,
-            service_grants=service_grants,
-            backend_resolver=get_state().backend_resolver,
-        )
+        # Serialized per machine: the desktop-side JS only serializes writes
+        # within one pane, so two panes/windows editing one machine would
+        # otherwise interleave their full-document replaces.
+        with state.machine_sharing_locks.get_lock(host_id):
+            document = enable_sharing(
+                host_id=host_id,
+                workspace_grants=workspace_grants,
+                service_grants=service_grants,
+                backend_resolver=state.backend_resolver,
+            )
     except EmptyGrantsError as exc:
         # A grants document naming nobody is a request-validation failure,
         # not an upstream fault. 400 rather than 422: spectree reserves 422
@@ -2714,7 +2720,10 @@ def _handle_machine_sharing_delete(host_id: str) -> MachineSharingResponse | Res
     """Disable sharing for a machine (revokes the relay token; live viewers are cut)."""
     state = get_state()
     try:
-        disable_sharing(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
+        # Same per-machine serialization as the PUT: a disable racing a grants
+        # write must not interleave with its materials removal.
+        with state.machine_sharing_locks.get_lock(host_id):
+            disable_sharing(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
     except SharingError as exc:
         return _json_error(str(exc), 502)
     return MachineSharingResponse(host_id=host_id, enabled=False)
@@ -2737,7 +2746,14 @@ def _handle_machine_sharing_readiness(host_id: str) -> SharingReadinessResponse:
     share = get_active_share(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
     if share is None or not share.workspace_domain:
         return SharingReadinessResponse(ready=False)
-    return SharingReadinessResponse(ready=probe_share_readiness(http_client, share.workspace_domain))
+    # Probe the shell's routable label origin, not the bare machine domain
+    # (which does not route on a share). Not-ready until the shell label is known.
+    probe_host = resolve_share_probe_host(
+        state.backend_resolver, state.session_store, host_id, share.workspace_domain
+    )
+    if probe_host is None:
+        return SharingReadinessResponse(ready=False)
+    return SharingReadinessResponse(ready=probe_share_readiness(http_client, probe_host))
 
 
 # -- Desktop namespace routes (cookie-or-bearer; no agent verb) --

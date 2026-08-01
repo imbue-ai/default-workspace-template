@@ -28,6 +28,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -36,10 +37,12 @@ from typing import Any
 from typing import Final
 from typing import NoReturn
 from typing import Protocol
+from urllib.parse import parse_qsl
 from urllib.parse import quote
 from urllib.parse import unquote
 from urllib.parse import urlencode
 from urllib.parse import urlparse
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -60,6 +63,7 @@ from fastapi import FastAPI
 from fastapi import Form
 from fastapi import HTTPException
 from fastapi import Request
+from fastapi import Response
 from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
@@ -101,10 +105,12 @@ from supertokens_python.recipe.session.syncio import get_session_without_request
 from supertokens_python.recipe.session.syncio import refresh_session_without_request_response
 from supertokens_python.recipe.session.syncio import revoke_all_sessions_for_user
 from supertokens_python.recipe.thirdparty.interfaces import ManuallyCreateOrUpdateUserOkResult
+from supertokens_python.recipe.thirdparty.provider import Provider
 from supertokens_python.recipe.thirdparty.provider import ProviderClientConfig
 from supertokens_python.recipe.thirdparty.provider import ProviderConfig
 from supertokens_python.recipe.thirdparty.provider import ProviderInput
 from supertokens_python.recipe.thirdparty.provider import RedirectUriInfo
+from supertokens_python.recipe.thirdparty.providers.config_utils import find_and_create_provider_instance
 from supertokens_python.recipe.thirdparty.syncio import get_provider
 from supertokens_python.recipe.thirdparty.syncio import manually_create_or_update_user
 from supertokens_python.syncio import get_user
@@ -3447,13 +3453,24 @@ _BROKER_SSO_COOKIE_MAX_AGE_SECONDS = 3600
 _BROKER_HANDOFF_TOKEN_TTL_SECONDS = 60
 _BROKER_HANDOFF_ALGORITHM = "RS256"
 
+_BROKER_LOGIN_PAGE_STYLES = (
+    _HTML_SHARED_STYLES
+    + ".oauth-btn{display:block;width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:8px;"
+    "font-size:14px;font-weight:600;color:#0f172a;text-decoration:none;box-sizing:border-box;"
+    "background:white}"
+    ".oauth-btn:hover{background:#f8fafc}"
+    ".divider{display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:12px;margin:16px 0}"
+    ".divider::before,.divider::after{content:'';flex:1;height:1px;background:#e2e8f0}"
+)
+
 _BROKER_LOGIN_PAGE_TEMPLATE = (
     "<!DOCTYPE html><html><head><meta charset='utf-8'>"
     "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<title>Sign in - Imbue</title><style>" + _HTML_SHARED_STYLES + "</style></head><body><div class='card'>"
+    "<title>Sign in - Imbue</title><style>" + _BROKER_LOGIN_PAGE_STYLES + "</style></head><body><div class='card'>"
     "<h1>Sign in to Imbue</h1>"
     "<p>Sign in to open the workspace that was shared with you.</p>"
     "{error_block}"
+    "{oauth_block}"
     "<form method='post' action='/share/session'>"
     "<input type='hidden' name='next' value='{next_value}'>"
     "<p><input type='email' name='email' placeholder='Email' required autofocus "
@@ -3463,6 +3480,13 @@ _BROKER_LOGIN_PAGE_TEMPLATE = (
     "<p><button type='submit' name='mode' value='signin' style='padding:8px 16px'>Sign in</button> "
     "<button type='submit' name='mode' value='signup' style='padding:8px 16px'>Create account</button></p>"
     "</form></div></body></html>"
+)
+
+# The OAuth block rendered onto the login page when the broker's Google client
+# is configured. ``{next_value}`` is substituted by the shared page render.
+_BROKER_LOGIN_OAUTH_BLOCK = (
+    "<a class='oauth-btn' href='/share/oauth/google/start?next={next_value}'>Continue with Google</a>"
+    "<div class='divider'>or</div>"
 )
 
 _BROKER_VERIFY_EMAIL_PAGE = (
@@ -3582,21 +3606,34 @@ def _is_url_under_domain(url: str, machine_domain: str) -> bool:
 
 
 def _is_origin_under_domain(origin: str, machine_domain: str) -> bool:
-    """Whether ``origin`` is a bare https origin (no path/query) that is a subdomain of ``machine_domain``."""
+    """Whether ``origin`` is a bare https origin (no path/query) exactly one label under ``machine_domain``."""
     parsed = urlparse(origin)
     if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
         return False
+    if parsed.scheme != "https":
+        return False
     host = (parsed.hostname or "").lower()
-    # A real subdomain (the dedicated auth label), not the bare domain (which
-    # no longer routes) and not a foreign host.
-    return host != machine_domain.lower() and host.endswith("." + machine_domain.lower()) and parsed.scheme == "https"
+    suffix = "." + machine_domain.lower()
+    if not host.endswith(suffix):
+        return False
+    # Exactly one non-empty label (the dedicated auth label) -- not the bare
+    # domain (which no longer routes), not a deeper host (which the relay
+    # refuses to route and the wildcard cert does not cover), and not a
+    # foreign host. Mirrors ``decide_frps_new_proxy``'s per-label model.
+    label = host[: -len(suffix)]
+    return bool(label) and "." not in label
 
 
 def _render_broker_login_page(next_path: str, error_message: str) -> HTMLResponse:
     error_block = f"<p style='color:#b91c1c'>{error_message}</p>" if error_message else ""
+    oauth_block = _BROKER_LOGIN_OAUTH_BLOCK if get_broker_oauth_provider() is not None else ""
     # str.replace, not str.format: the shared styles block contains CSS braces.
-    page = _BROKER_LOGIN_PAGE_TEMPLATE.replace("{error_block}", error_block).replace(
-        "{next_value}", quote(next_path, safe="")
+    # The oauth block is substituted before {next_value} so its start link
+    # picks up the same encoded next path as the password form.
+    page = (
+        _BROKER_LOGIN_PAGE_TEMPLATE.replace("{error_block}", error_block)
+        .replace("{oauth_block}", oauth_block)
+        .replace("{next_value}", quote(next_path, safe=""))
     )
     status_code = 401 if error_message else 200
     return HTMLResponse(content=page, status_code=status_code)
@@ -3673,15 +3710,7 @@ def broker_create_session(
             response: HTMLResponse | RedirectResponse = HTMLResponse(content=_BROKER_VERIFY_EMAIL_PAGE)
         else:
             response = RedirectResponse(url=next_path, status_code=303)
-        response.set_cookie(
-            key=_BROKER_SSO_COOKIE_NAME,
-            value=tokens.access_token,
-            max_age=_BROKER_SSO_COOKIE_MAX_AGE_SECONDS,
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            path="/",
-        )
+        _set_broker_sso_cookie(response, tokens.access_token)
         return response
 
 
@@ -3729,6 +3758,229 @@ def broker_authorize(request: Request) -> RedirectResponse:
         )
         callback_query = urlencode({"token": handoff_token, "state": state, "next": safe_next})
         return RedirectResponse(url=f"{callback_origin}/_auth/callback?{callback_query}", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Broker browser OAuth (Continue with Google on the share login page)
+#
+# The password form cannot serve accounts created via Google OAuth (they have
+# no password), so the login page offers the provider's own browser flow. The
+# whole flow is web-only: the visitor's browser is bounced to the provider and
+# back to ``/share/oauth/google/callback`` on this same host, which creates
+# the SuperTokens session, sets the SSO cookie exactly as the password form
+# does, and resumes the pending ``/share/authorize`` request.
+# ---------------------------------------------------------------------------
+
+_BROKER_OAUTH_NONCE_COOKIE_NAME = "imbue_oauth_nonce"
+_BROKER_OAUTH_STATE_TTL_SECONDS = 600
+_BROKER_OAUTH_STATE_PURPOSE = "broker_oauth"
+_BROKER_OAUTH_CALLBACK_PATH = "/share/oauth/google/callback"
+
+
+def get_broker_oauth_provider() -> Provider | None:
+    """The Google provider for the broker's browser sign-in, or None when not configured.
+
+    Built from the ``BROKER_GOOGLE_CLIENT_ID`` / ``BROKER_GOOGLE_CLIENT_SECRET``
+    pair in the ``sharing-<env>`` secret: a Web-application OAuth client with
+    each tier's ``/share/oauth/google/callback`` URL registered. Deliberately
+    distinct from the ``GOOGLE_CLIENT_*`` pair in the supertokens secret --
+    that one is a Desktop-type client serving the CLI's loopback flow, and
+    Desktop clients cannot accept https redirect URIs.
+    """
+    client_id = os.environ.get("BROKER_GOOGLE_CLIENT_ID", "")
+    client_secret = os.environ.get("BROKER_GOOGLE_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return None
+    provider_input = ProviderInput(
+        config=ProviderConfig(
+            third_party_id="google",
+            clients=[ProviderClientConfig(client_id=client_id, client_secret=client_secret)],
+        ),
+    )
+    # ``find_and_create_provider_instance`` is async-only on the SuperTokens
+    # SDK (see ``auth_oauth_authorize`` for why the sync wrapper is safe here);
+    # for Google it assembles the provider from static endpoint config without
+    # any network calls.
+    return _supertokens_sync_run(find_and_create_provider_instance([provider_input], "google", None, {}))
+
+
+def mint_broker_oauth_state(signing_key: rsa.RSAPrivateKey, nonce: str, next_path: str) -> str:
+    """Mint the self-contained OAuth ``state``: the browser's nonce + where to resume after login.
+
+    Self-contained (signed, never stored) because the connector runs as
+    multiple concurrent containers: the provider's callback can land on a
+    different container than the one that started the flow, so a server-side
+    pending-flow registry would be invisible to it.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "purpose": _BROKER_OAUTH_STATE_PURPOSE,
+        "nonce": nonce,
+        "next": next_path,
+        "iat": now,
+        "exp": now + timedelta(seconds=_BROKER_OAUTH_STATE_TTL_SECONDS),
+    }
+    return pyjwt.encode(payload, signing_key, algorithm=_BROKER_HANDOFF_ALGORITHM)
+
+
+def verify_broker_oauth_state(public_key: rsa.RSAPublicKey, state: str) -> tuple[str, str] | None:
+    """Return ``(nonce, next_path)`` from a valid OAuth state token, or None when invalid/expired."""
+    try:
+        claims = pyjwt.decode(state, public_key, algorithms=[_BROKER_HANDOFF_ALGORITHM])
+    except pyjwt.InvalidTokenError:
+        return None
+    if claims.get("purpose") != _BROKER_OAUTH_STATE_PURPOSE:
+        return None
+    nonce = claims.get("nonce")
+    next_path = claims.get("next")
+    if not isinstance(nonce, str) or not nonce or not isinstance(next_path, str):
+        return None
+    return nonce, _sanitize_broker_path(next_path)
+
+
+def _broker_public_base_url(request: Request) -> str:
+    """The broker's externally-visible base URL, for building the OAuth redirect URI.
+
+    ``ACCOUNTS_BASE_URL`` (sharing secret) wins when set; otherwise the URL is
+    derived from the request itself, which on a dev tier is the per-env
+    connector URL -- the exact host whose callback path must be registered on
+    the OAuth client.
+    """
+    configured = os.environ.get("ACCOUNTS_BASE_URL", "").strip()
+    if configured:
+        return configured.rstrip("/")
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return f"{scheme}://{request.url.netloc}"
+
+
+def _set_broker_sso_cookie(response: Response, access_token: str) -> None:
+    response.set_cookie(
+        key=_BROKER_SSO_COOKIE_NAME,
+        value=access_token,
+        max_age=_BROKER_SSO_COOKIE_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+@web_app.get("/share/oauth/google/start")
+def broker_oauth_start(request: Request) -> RedirectResponse:
+    """Begin the browser Google sign-in: stamp a nonce cookie and bounce to the provider."""
+    with handle_endpoint_errors():
+        _require_supertokens_configured()
+        provider = get_broker_oauth_provider()
+        if provider is None:
+            raise HTTPException(status_code=404, detail="Google sign-in is not configured on this server")
+        next_path = _sanitize_broker_path(request.query_params.get("next", "/"))
+        nonce = secrets.token_urlsafe(16)
+        state = mint_broker_oauth_state(_broker_signing_key(), nonce, next_path)
+        redirect_uri = _broker_public_base_url(request) + _BROKER_OAUTH_CALLBACK_PATH
+        redirect = _supertokens_sync_run(
+            provider.get_authorisation_redirect_url(
+                redirect_uri_on_provider_dashboard=redirect_uri,
+                user_context={},
+            )
+        )
+        # The SDK builds the provider URL without a ``state``; splice ours in
+        # (replacing any present) rather than blindly appending a second one.
+        authorize_parts = urlsplit(redirect.url_with_query_params)
+        authorize_query = dict(parse_qsl(authorize_parts.query))
+        authorize_query["state"] = state
+        authorize_url = authorize_parts._replace(query=urlencode(authorize_query)).geturl()
+        response = RedirectResponse(url=authorize_url, status_code=302)
+        # The nonce cookie binds the callback to the browser that started the
+        # flow. Login CSRF needs no existing session (the attack signs the
+        # victim into the ATTACKER's account by forcing a callback that
+        # carries the attacker's code), so the state signature alone is not
+        # enough -- the callback must also present this cookie.
+        response.set_cookie(
+            key=_BROKER_OAUTH_NONCE_COOKIE_NAME,
+            value=nonce,
+            max_age=_BROKER_OAUTH_STATE_TTL_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path="/share/oauth",
+        )
+        return response
+
+
+@web_app.get(_BROKER_OAUTH_CALLBACK_PATH, response_model=None)
+def broker_oauth_callback(request: Request) -> HTMLResponse | RedirectResponse:
+    """Finish the browser Google sign-in: verify state + nonce, create the session, resume the share flow."""
+    with handle_endpoint_errors():
+        _require_supertokens_configured()
+        provider = get_broker_oauth_provider()
+        if provider is None:
+            raise HTTPException(status_code=404, detail="Google sign-in is not configured on this server")
+        state_param = request.query_params.get("state", "")
+        verified_state = verify_broker_oauth_state(_broker_signing_key().public_key(), state_param)
+        if verified_state is None:
+            return _render_broker_login_page("/", "This sign-in link is invalid or has expired. Please try again.")
+        nonce, next_path = verified_state
+        if request.query_params.get("error"):
+            # The provider reported a failure (most commonly the user
+            # cancelling the consent screen).
+            return _render_broker_login_page(next_path, "Google sign-in was cancelled. Please try again.")
+        cookie_nonce = request.cookies.get(_BROKER_OAUTH_NONCE_COOKIE_NAME, "")
+        if not cookie_nonce or not secrets.compare_digest(cookie_nonce, nonce):
+            return _render_broker_login_page(next_path, "This sign-in attempt could not be verified. Please try again.")
+
+        redirect_uri = _broker_public_base_url(request) + _BROKER_OAUTH_CALLBACK_PATH
+        auth_result = _complete_oauth_code_exchange(
+            provider=provider,
+            provider_id="google",
+            callback_url=redirect_uri,
+            query_params=dict(request.query_params),
+        )
+        if auth_result.status == _ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS:
+            return _render_broker_login_page(
+                next_path,
+                "An account with this email already signs in with a password. "
+                "Use the email and password form below.",
+            )
+        if auth_result.status != "OK" or auth_result.tokens is None or auth_result.user is None:
+            logger.warning("Broker OAuth callback failed: %s", auth_result.message)
+            return _render_broker_login_page(next_path, "Google sign-in failed. Please try again.")
+
+        if auth_result.needs_email_verification:
+            _send_broker_oauth_verification_email(auth_result.user.user_id, auth_result.user.email)
+            response: HTMLResponse | RedirectResponse = HTMLResponse(content=_BROKER_VERIFY_EMAIL_PAGE)
+        else:
+            # 303: the callback is a GET, but stay explicit that the follow-up
+            # to /share/authorize must also be a GET.
+            response = RedirectResponse(url=next_path, status_code=303)
+        _set_broker_sso_cookie(response, auth_result.tokens.access_token)
+        response.delete_cookie(key=_BROKER_OAUTH_NONCE_COOKIE_NAME, path="/share/oauth")
+        return response
+
+
+def _send_broker_oauth_verification_email(user_id: str, email: str) -> None:
+    """Send a verification email for an OAuth account whose provider reported the email unverified.
+
+    Mirrors the password form's inline send (the broker has no other surface
+    to trigger it from). Best-effort: the verify page it accompanies already
+    tells the visitor what to do, so a send failure is logged, not fatal.
+    """
+    user = get_user(user_id)
+    if user is None:
+        logger.warning("Could not send a verification email: user %s not found", user_id[:8])
+        return
+    recipe_user_id = next(
+        (method.recipe_user_id for method in user.login_methods if method.email == email),
+        RecipeUserId(user_id),
+    )
+    try:
+        send_email_verification_email(
+            tenant_id=_AUTH_TENANT_ID,
+            user_id=user_id,
+            recipe_user_id=recipe_user_id,
+            email=email,
+        )
+    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+        logger.warning("Failed to send the broker OAuth verification email: %s", exc)
 
 
 @web_app.get("/share/jwks.json")
@@ -7153,6 +7405,84 @@ def auth_oauth_authorize(body: OAuthAuthorizeRequest) -> OAuthAuthorizeResponse:
         return OAuthAuthorizeResponse(status="OK", url=redirect.url_with_query_params)
 
 
+def _complete_oauth_code_exchange(
+    provider: Provider,
+    provider_id: str,
+    callback_url: str,
+    query_params: Mapping[str, str],
+) -> AuthResponse:
+    """Exchange a provider callback's params for a SuperTokens session.
+
+    Shared by the desktop CLI's ``/auth/oauth/callback`` and the broker's
+    browser callback, so the one-account-per-email guard, the account
+    create/update, and the error shapes cannot drift between the two flows.
+    """
+    try:
+        # ``Provider.exchange_auth_code_for_oauth_tokens`` and
+        # ``Provider.get_user_info`` are async-only on the SuperTokens SDK
+        # (see ``auth_oauth_authorize`` for the rationale). FastAPI runs
+        # these sync endpoints in threadpool workers with no running event
+        # loop, so the SDK's async-to-sync wrapper is safe here.
+        oauth_tokens = _supertokens_sync_run(
+            provider.exchange_auth_code_for_oauth_tokens(
+                redirect_uri_info=RedirectUriInfo(
+                    redirect_uri_on_provider_dashboard=callback_url,
+                    redirect_uri_query_params=dict(query_params),
+                    pkce_code_verifier=None,
+                ),
+                user_context={},
+            )
+        )
+        oauth_user = _supertokens_sync_run(provider.get_user_info(oauth_tokens=oauth_tokens, user_context={}))
+    except (ValueError, KeyError, OSError) as exc:
+        logger.error("OAuth callback failed for %s", provider_id, exc_info=exc)
+        return AuthResponse(status="ERROR", message=str(exc))
+
+    if oauth_user.email is None or oauth_user.email.id is None:
+        return AuthResponse(status="ERROR", message="No email provided by the OAuth provider")
+
+    email = oauth_user.email.id
+
+    # One-account-per-email: refuse the OAuth callback when the email
+    # already has an account under another login method (e.g. a password
+    # account). The provider dialog has already run by this point, but
+    # nothing has been written to SuperTokens yet -- returning here leaves
+    # no user, no session, and no partial state. A core outage during the
+    # lookup is surfaced as the same structured ERROR the other /auth/*
+    # endpoints return, so the typed desktop client gets a stable JSON
+    # shape rather than a FastAPI 500 body.
+    try:
+        rejection = _cross_method_signup_rejection(email, provider_id)
+    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+        logger.error("SuperTokens SDK error during OAuth callback", exc_info=exc)
+        return AuthResponse(status="ERROR", message="Auth backend unavailable")
+    if rejection is not None:
+        return rejection
+
+    result = manually_create_or_update_user(
+        tenant_id=_AUTH_TENANT_ID,
+        third_party_id=provider_id,
+        third_party_user_id=oauth_user.third_party_user_id,
+        email=email,
+        is_verified=oauth_user.email.is_verified,
+    )
+    if not isinstance(result, ManuallyCreateOrUpdateUserOkResult):
+        return AuthResponse(status="ERROR", message="Could not create or update account")
+
+    display_name: str | None = None
+    if oauth_user.raw_user_info_from_provider and oauth_user.raw_user_info_from_provider.from_user_info_api:
+        raw = oauth_user.raw_user_info_from_provider.from_user_info_api
+        display_name = raw.get("name") or raw.get("login") or raw.get("displayName")
+
+    tokens = _build_session_tokens(result.user.id)
+    return AuthResponse(
+        status="OK",
+        user=AuthUser(user_id=result.user.id, email=email, display_name=display_name),
+        tokens=tokens,
+        needs_email_verification=not oauth_user.email.is_verified,
+    )
+
+
 @web_app.post("/auth/oauth/callback", response_model=AuthResponse)
 def auth_oauth_callback(body: OAuthCallbackRequest) -> AuthResponse:
     """Exchange an OAuth callback's query params for a supertokens session."""
@@ -7161,70 +7491,11 @@ def auth_oauth_callback(body: OAuthCallbackRequest) -> AuthResponse:
         provider = get_provider(tenant_id=_AUTH_TENANT_ID, third_party_id=body.provider_id)
         if provider is None:
             return AuthResponse(status="ERROR", message=f"Unknown provider: {body.provider_id}")
-
-        try:
-            # ``Provider.exchange_auth_code_for_oauth_tokens`` and
-            # ``Provider.get_user_info`` are async-only on the SuperTokens SDK
-            # (see ``auth_oauth_authorize`` for the rationale). FastAPI runs
-            # this sync endpoint in a threadpool worker with no running event
-            # loop, so the SDK's async-to-sync wrapper is safe here.
-            oauth_tokens = _supertokens_sync_run(
-                provider.exchange_auth_code_for_oauth_tokens(
-                    redirect_uri_info=RedirectUriInfo(
-                        redirect_uri_on_provider_dashboard=body.callback_url,
-                        redirect_uri_query_params=dict(body.query_params),
-                        pkce_code_verifier=None,
-                    ),
-                    user_context={},
-                )
-            )
-            oauth_user = _supertokens_sync_run(provider.get_user_info(oauth_tokens=oauth_tokens, user_context={}))
-        except (ValueError, KeyError, OSError) as exc:
-            logger.error("OAuth callback failed for %s", body.provider_id, exc_info=exc)
-            return AuthResponse(status="ERROR", message=str(exc))
-
-        if oauth_user.email is None or oauth_user.email.id is None:
-            return AuthResponse(status="ERROR", message="No email provided by the OAuth provider")
-
-        email = oauth_user.email.id
-
-        # One-account-per-email: refuse the OAuth callback when the email
-        # already has an account under another login method (e.g. a password
-        # account). The provider dialog has already run by this point, but
-        # nothing has been written to SuperTokens yet -- returning here leaves
-        # no user, no session, and no partial state. A core outage during the
-        # lookup is surfaced as the same structured ERROR the other /auth/*
-        # endpoints return, so the typed desktop client gets a stable JSON
-        # shape rather than a FastAPI 500 body.
-        try:
-            rejection = _cross_method_signup_rejection(email, body.provider_id)
-        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-            logger.error("SuperTokens SDK error during OAuth callback", exc_info=exc)
-            return AuthResponse(status="ERROR", message="Auth backend unavailable")
-        if rejection is not None:
-            return rejection
-
-        result = manually_create_or_update_user(
-            tenant_id=_AUTH_TENANT_ID,
-            third_party_id=body.provider_id,
-            third_party_user_id=oauth_user.third_party_user_id,
-            email=email,
-            is_verified=oauth_user.email.is_verified,
-        )
-        if not isinstance(result, ManuallyCreateOrUpdateUserOkResult):
-            return AuthResponse(status="ERROR", message="Could not create or update account")
-
-        display_name: str | None = None
-        if oauth_user.raw_user_info_from_provider and oauth_user.raw_user_info_from_provider.from_user_info_api:
-            raw = oauth_user.raw_user_info_from_provider.from_user_info_api
-            display_name = raw.get("name") or raw.get("login") or raw.get("displayName")
-
-        tokens = _build_session_tokens(result.user.id)
-        return AuthResponse(
-            status="OK",
-            user=AuthUser(user_id=result.user.id, email=email, display_name=display_name),
-            tokens=tokens,
-            needs_email_verification=not oauth_user.email.is_verified,
+        return _complete_oauth_code_exchange(
+            provider=provider,
+            provider_id=body.provider_id,
+            callback_url=body.callback_url,
+            query_params=body.query_params,
         )
 
 

@@ -327,6 +327,30 @@ def _is_request_authenticated() -> bool:
 # -- Route handlers (module-level; deps read from get_state()) --
 
 
+def _handle_forward_bridge() -> Response:
+    """Bounce an authenticated browser into a forward-plugin session.
+
+    The chrome page's iframe cannot be pre-set a cookie the way the Electron
+    shell pre-sets the preauth cookie, so browser-mode workspace entry routes
+    through here first: minds verifies its own session, then 302s to the
+    plugin's ``/_bridge`` with the spawn-time secret, which sets the plugin's
+    bare-origin session cookie and redirects onward to ``next`` (normally a
+    ``/goto/<host-id>/`` workspace entry).
+    """
+    token = get_state().mngr_forward_browser_bridge_token
+    if token is None:
+        abort(404)
+    if not _is_request_authenticated():
+        return make_response(status_code=302, headers={"Location": "/"})
+    next_path = request.args.get("next", "/")
+    # Only a same-origin path may ride through (the plugin re-sanitizes too);
+    # protocol-relative forms would make this an open redirector.
+    if not next_path.startswith("/") or next_path.startswith("//") or next_path.startswith("/\\"):
+        next_path = "/"
+    location = f"{_get_mngr_forward_origin()}/_bridge?token={quote(token, safe='')}&next={quote(next_path, safe='')}"
+    return make_response(status_code=302, headers={"Location": location})
+
+
 def _handle_login() -> Response:
     code = _required_one_time_code()
 
@@ -3502,7 +3526,8 @@ def _build_workspace_context(agent_id: str) -> _WorkspaceContext:
         accounts=tuple(accounts),
         servers=tuple(str(service) for service in backend_resolver.list_services_for_agent(parsed_agent_id)),
         service_labels={
-            str(name): label for name, label in backend_resolver.list_service_labels_for_agent(parsed_agent_id).items()
+            str(name): label
+            for name, label in backend_resolver.list_service_labels_for_agent(parsed_agent_id).items()
         },
         host_id=_workspace_host_coordinate(info, session_store, agent_id),
         account_email=current_account.email if current_account else "",
@@ -3986,6 +4011,7 @@ def create_desktop_client(
     server_port: int = 0,
     mngr_forward_port: int = 0,
     mngr_forward_preauth_cookie: str | None = None,
+    mngr_forward_browser_bridge_token: str | None = None,
     output_format: OutputFormat | None = None,
     root_concurrency_group: ConcurrencyGroup | None = None,
     system_interface_health_tracker: SystemInterfaceHealthTracker | None = None,
@@ -4078,6 +4104,7 @@ def create_desktop_client(
         auth_server_port=server_port,
         mngr_forward_port=mngr_forward_port,
         mngr_forward_preauth_cookie=mngr_forward_preauth_cookie,
+        mngr_forward_browser_bridge_token=mngr_forward_browser_bridge_token,
         auth_output_format=output_format or OutputFormat.JSONL,
         root_concurrency_group=root_concurrency_group,
         system_interface_health_tracker=system_interface_health_tracker,
@@ -4140,6 +4167,7 @@ def create_desktop_client(
     app.add_url_rule("/welcome/skip", view_func=_handle_welcome_skip)
     app.add_url_rule("/login", view_func=_handle_login)
     app.add_url_rule("/authenticate", view_func=_handle_authenticate)
+    app.add_url_rule("/forward-bridge", view_func=_handle_forward_bridge)
     app.add_url_rule("/", view_func=_handle_landing_page)
     app.add_url_rule("/post-login", view_func=_handle_post_login_redirect)
 

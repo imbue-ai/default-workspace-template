@@ -22,4 +22,8 @@ class ForwardSubprocessError(MngrForwardError):
 
 
 class ForwardTLSError(MngrForwardError):
-    """Raised when the ephemeral TLS material cannot be built or loaded."""
+    """Raised when the TLS material (local CA or server leaf) cannot be built or loaded."""
+
+
+class ForwardTrustError(MngrForwardError):
+    """Raised when the local CA cannot be installed into the platform trust stores."""
