@@ -183,10 +183,13 @@ def _bottleneck(state: "_State", pnet: dict, hold: dict, have_pure: bool, net_he
     SAME verdict shown above (``net_head``) so the two lines can never disagree."""
     hot = []
     rs = state.resource
-    # compute: a core pegged on this 2-vCPU box while fps is low = encode-bound
+    # compute: judge off the browser's own vCPU spend (per-process, reliable under gVisor),
+    # not host sys cpu. Near the box's ceiling (ncpu*100%) = encode/render compute-bound.
     if rs is not None:
-        if rs["sys_cpu"] >= 90 or (rs.get("per_cpu") and max(rs["per_cpu"]) >= 95):
-            hot.append(f'{_C["r"]}COMPUTE{_C["x"]} (cpu {rs["sys_cpu"]:.0f}% of {rs["ncpu"]} vCPU)')
+        browser_cpu = rs["daemon_cpu"] + rs["chrome_cpu"]
+        ceiling = rs["ncpu"] * 100
+        if browser_cpu >= ceiling * 0.85:
+            hot.append(f'{_C["r"]}COMPUTE{_C["x"]} (browser {browser_cpu:.0f}% of {ceiling}% on {rs["ncpu"]} vCPU)')
         if rs["mem_pct"] >= 92 or rs["swap_pct"] >= 10:
             hot.append(f'{_C["r"]}MEMORY{_C["x"]} (mem {rs["mem_pct"]:.0f}%, swap {rs["swap_pct"]:.0f}%)')
     # renderer: client hold materially above a few ms
@@ -318,22 +321,24 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
     else:
         lines.append(f'{_C["b"]}local hop{_C["x"]} {_C["gray"]}no TCP sample yet (needs an active viewer streaming){_C["x"]}')
 
-    # host resources (compute / memory)
+    # host resources (compute / memory). The browser's own vCPU spend (per-process) is the
+    # reliable compute signal here; host-wide sys CPU is shown only when trustworthy (gVisor
+    # zeroes it -- see sys_ok).
     if state.resource:
         rs = state.resource
-        cores = "  ".join(
-            f'{("c" + str(i))} {col(v, 80, 95)}{v:.0f}%{_C["x"]}' for i, v in enumerate(rs.get("per_cpu", []))
-        )
+        ncpu = rs["ncpu"]
+        browser_cpu = rs["daemon_cpu"] + rs["chrome_cpu"]
+        pct_of_box = browser_cpu / (ncpu * 100) * 100
         lines.append("")
         lines.append(
-            f'{_C["b"]}cpu{_C["x"]}   sys {col(rs["sys_cpu"], 80, 95)}{rs["sys_cpu"]:.0f}%{_C["x"]} of {rs["ncpu"]} vCPU   '
-            f'{cores}   load {rs["load1"]}'
+            f'{_C["b"]}cpu{_C["x"]}   browser {col(pct_of_box, 70, 90)}{pct_of_box:.0f}%{_C["x"]} of {ncpu} vCPU'
+            f'   {_C["gray"]}= encoder{_C["x"]} {rs["daemon_cpu"]:.0f}%{_C["gray"]} + chromium{_C["x"]} {rs["chrome_cpu"]:.0f}%'
+            f' {_C["gray"]}({rs["chrome_procs"]} procs; 100% = one core){_C["x"]}'
         )
-        lines.append(
-            f'{_C["b"]}vCPU{_C["x"]}  encoder(daemon) {col(rs["daemon_cpu"], 90, 150)}{rs["daemon_cpu"]:.0f}%{_C["x"]}   '
-            f'chromium {col(rs["chrome_cpu"], 120, 180)}{rs["chrome_cpu"]:.0f}%{_C["x"]} ({rs["chrome_procs"]} procs)   '
-            f'{_C["gray"]}(100% = one core){_C["x"]}'
-        )
+        if rs.get("sys_ok", True):
+            lines.append(f'      {_C["gray"]}host sys cpu {rs["sys_cpu"]:.0f}%   load {rs["load1"]}{_C["x"]}')
+        else:
+            lines.append(f'      {_C["gray"]}host sys cpu n/a (sandbox doesn\'t report it) — using per-process above{_C["x"]}')
         lines.append(
             f'{_C["b"]}mem{_C["x"]}   used {col(rs["mem_pct"], 85, 95)}{rs["mem_pct"]:.0f}%{_C["x"]}   '
             f'avail {rs["mem_avail_mb"]}MB   swap {col(rs["swap_pct"], 5, 25)}{rs["swap_pct"]:.0f}%{_C["x"]}   '
