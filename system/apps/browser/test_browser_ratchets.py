@@ -22,7 +22,13 @@ def test_prevent_eval_usage() -> None:
 
 
 def test_prevent_while_true() -> None:
-    rc.check_while_true(_DIR, snapshot(0))
+    # +2 for telemetry_watch.py, the STANDALONE terminal telemetry dashboard (a diagnostic
+    # CLI, not daemon/library code): its reader (reconnect-and-ingest) and painter
+    # (redraw-on-a-timer) are two genuine infinite loops that run until the user quits with
+    # Ctrl-C. The daemon-side telemetry paths deliberately avoid while-true (the resource
+    # sampler ticks via Event.wait; the firehose socket loops on a `connected` flag like the
+    # cast/stream handlers).
+    rc.check_while_true(_DIR, snapshot(2))
 
 
 def test_prevent_time_sleep() -> None:
@@ -46,7 +52,11 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(0))
+    # +3 for telemetry_watch.py's ``sys.stdout.write`` calls. This is the standalone terminal
+    # dashboard whose entire job is to render to the terminal; writing the frame to stdout is
+    # correct output, not stray debug printing (the rule's target). Daemon/library code still
+    # uses loguru.
+    rc.check_bare_print(_DIR, snapshot(3))
 
 
 # --- Exception handling ---
@@ -74,7 +84,11 @@ def test_prevent_broad_exception_catch() -> None:
     #    set; a monitor-thread or callback crash must be logged, not silent or fatal.
     #  * 1 in audiopipe.py (copied verbatim from the streamed-browser prototype): stopping the native
     #    pcmflux capture handle during teardown must never raise up into the sender thread.
-    rc.check_broad_exception_catch(_DIR, snapshot(18))
+    #  * +4 for the passive telemetry subsystem, all `# noqa: BLE001` boundaries that must
+    #    never propagate: 2 in telemetry.py (emit must never break the stream; the resource
+    #    sampler must never crash the daemon) and 2 in telemetry_watch.py (the CLI reconnects
+    #    on any socket drop and exits cleanly on any read error).
+    rc.check_broad_exception_catch(_DIR, snapshot(22))
 
 
 def test_prevent_builtin_exception_raises() -> None:
@@ -94,7 +108,10 @@ def test_prevent_inline_imports() -> None:
     # at import time (a `_generate` callable is bound), so the importability check costs
     # nothing per call. Making the regex distinguish module-level try/except ImportError
     # from function-inline imports risks missing real violations, so this is bumped.
-    rc.check_inline_imports(_DIR, snapshot(2))
+    # +1 (same MISFIRE shape) for telemetry.py's `try: import psutil except ImportError`
+    # optional-dependency guard -- a module-level import the regex flags only because the
+    # try body is indented; the resource sampler degrades gracefully when psutil is absent.
+    rc.check_inline_imports(_DIR, snapshot(3))
 
 
 def test_prevent_relative_imports() -> None:
@@ -113,7 +130,10 @@ def test_prevent_asyncio_import() -> None:
     # runner.py itself is now synchronous Flask and no longer imports asyncio (it
     # reaches the loop only through the bridge), so the count holds at 4 despite the
     # FastAPI->Flask swap. Mirrors the system_interface lib's async-WS ratchet.
-    rc.check_asyncio_import(_DIR, snapshot(4))
+    # +1 for telemetry_watch.py, the standalone terminal dashboard: it's an async
+    # ``websockets`` client that reads the firehose and renders concurrently -- a separate
+    # CLI process, not daemon code, where asyncio is the natural fit.
+    rc.check_asyncio_import(_DIR, snapshot(5))
 
 
 def test_prevent_dataclasses_import() -> None:

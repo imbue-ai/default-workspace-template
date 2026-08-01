@@ -356,6 +356,11 @@
         },
         error: (error) => {
           telemetryPush({ y: yStart, err: true, t_arrived: performance.now() });
+          // Release the server's credit for this row before dropping our pending acks:
+          // otherwise those stripes stay unacked forever and the row's window never reopens
+          // (the server's stall watchdog is the backstop, but this recovers immediately).
+          if (streamWs && streamWs.readyState === WebSocket.OPEN)
+            for (const fid of row.pendingAcks) streamWs.send(`ack,${fid},${yStart}`);
           row.needKey = true; row.pendingAcks.length = 0; row.arriveInfo = {}; row.decoder = null;
         },
       });
@@ -810,7 +815,14 @@ registerProcessor('pb', PB);`;
         initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the + menu.";
       }
       else if (m.type === "initializing") { if (lifecycle !== "running") setLifecycle("init"); }
-      else if (m.type === "control") { setLifecycle(m.lifecycle); setControl(m); }
+      else if (m.type === "control") {
+        setLifecycle(m.lifecycle); setControl(m);
+        // A cast RECONNECT onto an already-running, already-painted browser: setLifecycle
+        // no-ops (same value) and the reconnect's onclose re-showed the init cover, so it
+        // would sit opaque over the live page forever. Take it down here since pixels are
+        // already flowing. (First-ever load still reveals via revealOnFirstFrame.)
+        if (m.lifecycle === "running" && firstFramePainted) initOverlay.classList.remove("show");
+      }
       else if (m.type === "handoff_request") {
         handoffReason = m.reason || "human verification needed";
         handoffAgent = m.agent_name || "An agent";

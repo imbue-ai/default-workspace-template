@@ -120,6 +120,14 @@ _CRF_MAX = 38
 # to encode AND the largest on the wire.
 _IDR_REQUEST_MIN_INTERVAL = 0.4
 
+# Stall watchdog: if a row has outstanding unacked stripes but has made no progress
+# (no send, no ack) for this long, the viewer has stopped acking (a decoder error clears
+# its pending acks and sends nothing) and the row's credit would never reopen. Force-reset
+# the window and request a fresh keyframe so the row recovers instead of freezing forever.
+# Generous, because the deadlock is permanent -- a false positive on a genuinely slow link
+# only costs one extra keyframe.
+_ROW_STALL_TIMEOUT = 3.0
+
 # 60, not 30: the capture loop is a fixed tick nothing wakes early, so every
 # screen change waits half a tick on average before being seen -- ~8ms at 60
 # vs ~17ms at 30. Encode stays damage-driven, so an idle screen costs the same.
@@ -246,6 +254,12 @@ class CreditWindow:
             return False
         return len(self._unacked) < self.limit
 
+    @property
+    def has_outstanding(self) -> bool:
+        """Any sent-but-unacked stripe (a blocking IDR counts). The stall watchdog uses
+        this to tell a deadlocked row from a merely idle one."""
+        return bool(self._unacked) or self._blocking_idr is not None
+
     def note_sent(self, frame_id: int) -> None:
         self._unacked.append(frame_id)
 
@@ -272,6 +286,15 @@ class CreditWindow:
             return False
         return is_keyframe or not self.needs_keyframe
 
+    def reset(self) -> None:
+        """Forget all outstanding credit and the broken-chain flag. Used by the stall
+        watchdog to break a deadlock (a viewer that stopped acking -- e.g. a decoder
+        error cleared its pending acks -- otherwise leaves this row permanently without
+        credit, since only ``ack`` drains ``_unacked``/``_blocking_idr``)."""
+        self._unacked.clear()
+        self._blocking_idr = None
+        self.needs_keyframe = False
+
 
 class _StripeRow:
     """One row's mailbox (newest unsent stripe wins) plus its credit window."""
@@ -282,6 +305,7 @@ class _StripeRow:
         self.mailbox_ts: float = 0.0  # when the current mailbox stripe was captured (telemetry)
         self.window = CreditWindow()
         self.sent_at: dict[int, float] = {}  # frame_id -> send time, for ack RTT
+        self.last_progress: float = 0.0  # last send or ack (monotonic); 0 = nothing sent yet
 
 
 class PixelfluxVideoPipe:
@@ -517,6 +541,7 @@ class PixelfluxVideoPipe:
                         frame_id, _, _, is_idr = parse_wire_header(packet)
                         now = time.monotonic()
                         row.sent_at[frame_id] = now
+                        row.last_progress = now  # for the stall watchdog
                         telemetry.hub.emit(self.browser_id, {
                             "type": "sent", "epoch": self._epoch, "fid": frame_id, "y": y_start,
                             "idr": is_idr, "bytes": len(packet), "t_mailboxed": mailbox_ts, "t_sent": now,
@@ -533,6 +558,26 @@ class PixelfluxVideoPipe:
                         telemetry.hub.emit(self.browser_id, {"type": "drop", "epoch": self._epoch, "y": y_start, "reason": "needs-keyframe"})
                         row.mailbox = None
                         self._request_idr_locked()
+                # Stall watchdog: a row with outstanding unacked stripes that has made no
+                # progress for a while means the viewer stopped acking (e.g. a decoder error
+                # cleared its pending acks). Its credit would never reopen on its own, so
+                # reset the window and force a fresh keyframe -- the row recovers instead of
+                # freezing for the rest of the connection.
+                stall_now = time.monotonic()
+                for y_start, row in self._rows.items():
+                    if (
+                        row.window.has_outstanding
+                        and row.last_progress
+                        and stall_now - row.last_progress > _ROW_STALL_TIMEOUT
+                    ):
+                        row.window.reset()
+                        row.last_progress = stall_now
+                        self._request_idr_locked(force=True)
+                        telemetry.hub.emit(self.browser_id, {"type": "stall", "epoch": self._epoch, "y": y_start})
+                        logger.warning(
+                            "video pipe {} row y={} stalled >{:.0f}s (viewer stopped acking); reset + forced IDR",
+                            self.browser_id, y_start, _ROW_STALL_TIMEOUT,
+                        )
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return None
@@ -568,6 +613,7 @@ class PixelfluxVideoPipe:
                     "type": "ack", "epoch": self._epoch, "fid": frame_id, "y": y_start, "t_ack": now, "rtt": rtt,
                 })
             row.window.ack(frame_id)
+            row.last_progress = time.monotonic()  # for the stall watchdog
             self._active_rows_since_retune.add(y_start)  # this row delivered this interval
             if row.window.needs_keyframe:
                 self._request_idr_locked()
@@ -642,9 +688,9 @@ class PixelfluxVideoPipe:
                 self.browser_id, wanted_crf, self._rtt_ewma * 1000, self._rtt_min * 1000, wanted_limit,
             )
 
-    def _request_idr_locked(self) -> None:
+    def _request_idr_locked(self, force: bool = False) -> None:
         now = time.monotonic()
-        if now - self._last_idr_request < _IDR_REQUEST_MIN_INTERVAL:
+        if not force and now - self._last_idr_request < _IDR_REQUEST_MIN_INTERVAL:
             return
         self._last_idr_request = now
         if self._capture is not None:

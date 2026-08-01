@@ -2019,6 +2019,12 @@ class BrowserSessionManager(MutableModel):
     # ``deque(maxlen=...)`` auto-evicts the oldest, so this can't grow unbounded; mutated
     # only on the loop thread (the launch task + the cast resolve), so it needs no lock.
     _failed_launch_names: "deque[str]" = PrivateAttr(default_factory=lambda: deque(maxlen=_FAILED_LAUNCH_MEMORY))
+    # Names explicitly retired via ``close``. A viewer whose tab is still open (or a
+    # layout-restored ``?session=<name>`` tab) then resolves to nothing; without this the
+    # cast handler can't tell "closed/gone" from "not created yet" and tells the viewer to
+    # retry (1013) forever, stuck on "Starting browser...". Consulting this closes it 1008
+    # (terminal) instead. Re-creating the name clears it (see _register_init_locked).
+    _closed_names: "deque[str]" = PrivateAttr(default_factory=lambda: deque(maxlen=_FAILED_LAUNCH_MEMORY))
 
     def _register_init_locked(self, name: str) -> LiveBrowser:
         """Construct a LiveBrowser in ``init`` and add it to the registry. Caller must
@@ -2028,10 +2034,14 @@ class BrowserSessionManager(MutableModel):
         session = LiveBrowser(browser_id=name)
         session._crash_save_hook = self._spawn_save  # checkpoint promptly if it crashes
         self._browsers[name] = session
-        # A fresh registration supersedes any earlier launch-failure for this name (the
-        # user re-created it, or restore is retrying it), so it's no longer terminal for a
-        # viewer -- drop it from the failed ring so the cast handler stops 1008-ing it.
+        # A fresh registration supersedes any earlier launch-failure OR close for this name
+        # (the user re-created it, or restore is retrying it), so it's no longer terminal for
+        # a viewer -- drop it from both terminal rings so the cast handler stops 1008-ing it.
         self._clear_failed_launch(name)
+        if name in self._closed_names:
+            self._closed_names = deque(
+                (n for n in self._closed_names if n != name), maxlen=_FAILED_LAUNCH_MEMORY
+            )
         return session
 
     def _clear_failed_launch(self, name: str) -> None:
@@ -2053,6 +2063,12 @@ class BrowserSessionManager(MutableModel):
         running the ``_failed_launch_names`` read ON the loop thread (where the launch task
         mutates it) is what makes it race-free, like ``capacity_async``."""
         return self.recently_failed_launch(name)
+
+    async def recently_closed_async(self, name: str) -> bool:
+        """Whether ``name`` was explicitly closed (and not since re-created). The cast/stream
+        handlers use this to terminally close (1008) a viewer of a retired browser instead
+        of telling it to retry forever. Read on the loop thread, race-free like the above."""
+        return name in self._closed_names
 
     async def _launch(
         self, session: LiveBrowser, restore_tabs: list[str] | None = None, active_tab: int = 0, persist: bool = True
@@ -2196,6 +2212,9 @@ class BrowserSessionManager(MutableModel):
         session = self._browsers.pop(browser_id, None)
         if session is None:
             return
+        # Remember it as terminally gone so a still-open viewer tab is closed 1008 rather
+        # than looping on 1013 "Starting browser..." (cleared if the name is re-created).
+        self._closed_names.append(browser_id)
         # Mark closed FIRST, then serialize against an in-flight launch: if create's
         # background _launch is suspended mid-start(), await it so the launch finishes (or
         # aborts via start()'s _abort_start_if_torn_down guard, which now sees _closed)
@@ -2264,9 +2283,32 @@ class BrowserSessionManager(MutableModel):
         registers means it is restored next boot (an ``init`` browser has no tabs yet, so
         it restores to the home page -- the same as a fresh create). A persisted entry that
         fails to relaunch is preserved-for-retry by restore's flaked-browser path, not
-        stranded; only an explicit ``close`` forgets it. Crashed shells are still excluded
-        (they're dead, kept only to report ``crashed`` until the user closes them)."""
+        stranded; only an explicit ``close`` forgets it.
+
+        Crashed (not explicitly-closed) browsers are PRESERVED too, carried forward with
+        their last-known entry (we can't query dead Chromium for tabs). Dropping them here
+        was silent data loss: a crash excluded the browser from the manifest, so the next
+        restart swept its profile -- deleting every login -- contradicting "logins persist
+        across restarts". Keeping the entry means its profile survives and it relaunches
+        fresh from that profile next boot (logged back in). Only an explicit ``close`` (which
+        pops it from ``_browsers`` and forgets its profile) removes it."""
         entries = [await self._entry_for(browser) for browser in self.live_browsers()]
+        live_ids = {entry.id for entry in entries}
+        crashed_ids = {name for name, browser in self._browsers.items() if browser._crashed and name not in live_ids}
+        if crashed_ids and self._last_manifest_json is not None:
+            try:
+                previous = fleet_manifest.Manifest.model_validate_json(self._last_manifest_json)
+            except (ValueError, TypeError) as error:
+                logger.debug("could not parse last manifest to preserve crashed entries ({})", error)
+            else:
+                for entry in previous.browsers:
+                    if entry.id in crashed_ids:
+                        entries.append(entry)
+                        crashed_ids.discard(entry.id)
+        # A browser that crashed before its first checkpoint has no prior entry; keep it with
+        # empty tabs so its profile (logins) still survives the next restart.
+        for name in crashed_ids:
+            entries.append(fleet_manifest.ManifestEntry(id=name, tabs=[], active_tab=0))
         return fleet_manifest.Manifest(browsers=entries)
 
     def _spawn_save(self) -> None:

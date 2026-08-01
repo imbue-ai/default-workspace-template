@@ -1062,11 +1062,12 @@ def test_restore_passes_saved_tabs_and_comes_up_resting(monkeypatch: pytest.Monk
     assert restored._resume_queue == [] and restored._wait_queue == []
 
 
-def test_snapshot_persists_init_and_running_excludes_crashed_topology_only() -> None:
-    # The durable manifest snapshots the LIVE fleet -- init AND running (finding [5]: an
-    # init browser the user just created must survive a daemon crash before its Chromium
-    # is up). Crashed shells are excluded (dead, kept only to report `crashed`). Only
-    # topology (id/tabs/active_tab) is persisted -- never ownership/queues.
+def test_snapshot_persists_init_running_and_crashed_topology_only() -> None:
+    # The durable manifest snapshots init + running from the LIVE fleet (finding [5]: an
+    # init browser the user just created must survive a daemon crash before its Chromium is
+    # up). Crashed (not explicitly-closed) browsers are PRESERVED too, carried forward with
+    # their last-known entry -- dropping them let the next restart sweep their profile and
+    # delete every login. Only topology (id/tabs/active_tab) is persisted, never ownership.
     mgr = bsession.BrowserSessionManager()
     healthy = _running_browser("alex-smith")
     healthy.controller = "agent"  # ownership state that must NOT be persisted
@@ -1079,14 +1080,21 @@ def test_snapshot_persists_init_and_running_excludes_crashed_topology_only() -> 
     mgr._browsers["alex-smith"] = healthy
     mgr._browsers["morgan-lee"] = starting
     mgr._browsers["riley-jones"] = crashed
+    # A prior checkpoint knew riley-jones's tabs; the crashed entry is carried forward from
+    # it (we can't query dead Chromium), so its profile survives and it relaunches logged in.
+    mgr._last_manifest_json = bsession.fleet_manifest.Manifest(
+        browsers=[bsession.fleet_manifest.ManifestEntry(id="riley-jones", tabs=["https://example.com"], active_tab=0)]
+    ).model_dump_json()
 
     async def go() -> bsession.fleet_manifest.Manifest:
         async with mgr._lock:
             return await mgr._snapshot_manifest_locked()
 
     snap = asyncio.run(go())
-    # init + running persisted (sorted by name); crashed excluded.
-    assert [e.id for e in snap.browsers] == ["alex-smith", "morgan-lee"]
+    # init + running + crashed all persisted; crashed keeps its last-known tabs.
+    assert sorted(e.id for e in snap.browsers) == ["alex-smith", "morgan-lee", "riley-jones"]
+    riley = next(e for e in snap.browsers if e.id == "riley-jones")
+    assert riley.tabs == ["https://example.com"]  # carried forward from the prior checkpoint
     assert set(snap.browsers[0].model_dump().keys()) == {"id", "tabs", "active_tab"}
 
 

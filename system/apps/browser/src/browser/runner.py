@@ -827,6 +827,8 @@ def cast_socket(ws: Any, browser_id: str) -> None:
         #   shows "browser closed -- reopen" and stops reconnecting.
         if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
             ws.close(1008)  # launch failed -> terminal (stop retrying)
+        elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):
+            ws.close(1008)  # explicitly closed -> terminal (stop retrying)
         elif is_valid_browser_name(browser_id):
             ws.close(1013)  # not yet created -> retryable
         else:
@@ -891,6 +893,8 @@ def stream_socket(ws: Any, browser_id: str) -> None:
     if resolved is None:
         if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
             ws.close(1008)  # launch failed -> terminal
+        elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):
+            ws.close(1008)  # explicitly closed -> terminal
         elif is_valid_browser_name(browser_id):
             ws.close(1013)  # not created yet -> retryable
         else:
@@ -934,21 +938,22 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
     (batched JSON arrays) to the lens. Subscribing/draining never touches the pipe's
     lock, so a slow or absent lens cannot back-pressure the stream."""
     history, records = telemetry.hub.subscribe(browser_id)
+    connected = True
     try:
         if history:
             ws.send(json.dumps(history))
-        while True:
+        while connected:
             batch = []
-            try:
-                while True:
-                    batch.append(records.popleft())
-            except IndexError:
-                pass
+            while records:  # drain whatever the fan-out has queued (bounded by contents)
+                batch.append(records.popleft())
             if batch:
                 ws.send(json.dumps(batch))
             # Pace at ~10Hz and detect a closed socket (receive raises on close); we
             # expect no inbound, so the returned value is ignored.
-            ws.receive(timeout=0.1)
+            try:
+                ws.receive(timeout=0.1)
+            except ConnectionClosed:
+                connected = False
     except ConnectionClosed:
         pass
     finally:
