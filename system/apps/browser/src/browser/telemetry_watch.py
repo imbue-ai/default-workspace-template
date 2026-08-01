@@ -1,17 +1,18 @@
-"""Live terminal dashboard for the pixelflux stream telemetry (Rung 1).
+"""Live terminal dashboard for the pixelflux stream telemetry (watch-only).
 
-A watch-only CLI companion to the ``/telemetry`` firehose: it connects to the same
-read-only WebSocket, joins nothing on the server, and redraws a compact dashboard in
-place every ~0.4s. Run it in a terminal you keep open while you drive the browser.
+    uv run python -m browser.telemetry_watch [browser-name] [--sample] [--for N]
 
-    uv run python -m browser.telemetry_watch [browser-name]
+Connects to the daemon's read-only ``/telemetry`` firehose (directly on
+127.0.0.1:8081), derives everything in-process, and never influences the stream.
+No name auto-picks the single running browser. ``--sample`` prints one snapshot and
+exits; otherwise it redraws in place ~2.5x/s.
 
-With no name it auto-picks the (single) running browser, or lists them if there are
-several. It reaches the daemon directly on 127.0.0.1:8081, so no proxy is involved.
+Two things worth knowing to read the output honestly: pure network = server round
+trip minus the client's own decode+paint (both same-machine durations, so the
+subtraction needs no clock sync); and the TCP block is the daemon's local hop only
+(it peers with a local forwarder, so it can't see WAN loss).
 
-Everything shown is derived in this process from the raw records; it never influences
-the stream. The round-trip RTT includes the viewer's decode+paint (Rung 1 has no
-client taps yet), and the TCP block is the local hop only -- both labeled as such.
+Depends only on the stdlib and ``websockets`` -- no imports from the browser package.
 """
 
 import asyncio
@@ -25,7 +26,7 @@ import websockets
 _DAEMON = "127.0.0.1:8081"
 _WINDOW_S = 30.0
 _UNACK_TIMEOUT_S = 2.0
-_C = {  # ANSI colors
+_C = {
     "dim": "\033[2m", "b": "\033[1m", "r": "\033[31m", "g": "\033[32m",
     "y": "\033[33m", "c": "\033[36m", "gray": "\033[90m", "x": "\033[0m",
 }
@@ -38,7 +39,6 @@ def _pct(values: list[float], p: float) -> float | None:
 
 
 def _stats(dq: "collections.deque") -> dict:
-    """p50/p95/p99/floor/max/n over the value in each (t, value) tuple."""
     vals = sorted(v for _, v in dq)
     return {
         "p50": _pct(vals, 50), "p95": _pct(vals, 95), "p99": _pct(vals, 99),
@@ -60,27 +60,25 @@ def _pick_browser(explicit: str | None) -> str:
 
 
 class _State:
-    """Rolling telemetry state, pruned to the last _WINDOW_S of records."""
+    """Rolling telemetry, pruned to the last _WINDOW_S. Deques hold (t, value...) tuples."""
 
     def __init__(self) -> None:
         self.acks: collections.deque = collections.deque()   # (t, y, rtt_ms)
-        self.dwell: collections.deque = collections.deque()  # (t, ms)
+        self.dwell: collections.deque = collections.deque()  # (t, mailbox_ms)
         self.rate: dict | None = None
         self.tcp: dict | None = None
         self.resource: dict | None = None
-        self.pending: dict = {}                              # key -> t_sent
+        self.pending: dict = {}                              # "epoch:fid:y" -> t_sent
         self.drops = {"mailbox-overwrite": 0, "sticky-idr": 0, "needs-keyframe": 0}
         self.sent = self.ack = self.idr = self.unacked = 0
         self.max_t = 0.0
         self.last_seq: int | None = None
         self.missed = 0
-        # Rung 2 join state: server RTT and client render, keyed (fid,y), matched either
-        # order. pure network = server RTT - client hold (both same-machine durations).
         self._ack_rtt: dict = {}                             # (fid,y) -> (rtt_ms, t)
         self._client_pending: dict = {}                      # (fid,y) -> client record
-        self.pure_net: collections.deque = collections.deque()   # (t, ms)
-        self.client_hold: collections.deque = collections.deque()  # (t, ms) arrive->paint
-        self.decode: collections.deque = collections.deque()      # (t, ms) arrive->decoded
+        self.pure_net: collections.deque = collections.deque()     # (t, ms)
+        self.client_hold: collections.deque = collections.deque()  # (t, arrive->paint ms)
+        self.decode: collections.deque = collections.deque()       # (t, arrive->decoded ms)
         self.dq_max = 0
         self.client_err = 0
 
@@ -131,8 +129,8 @@ class _State:
             self.tcp = r
 
     def _join(self, t: float, rtt_ms: float, client: dict) -> None:
-        """Pair a server RTT with the client's render for the same stripe: client hold =
-        paint - arrive (ms, client clock); pure network = RTT - hold (offset-free)."""
+        # pure network = server RTT - client hold; both are same-machine durations, so the
+        # subtraction is offset-free (no clock sync between server and viewer).
         hold = client["t_painted"] - client["t_arrived"]
         decode = client["t_decoded"] - client["t_arrived"]
         self.client_hold.append((t, max(0.0, hold)))
@@ -149,20 +147,15 @@ class _State:
             if ts < stale:
                 self.unacked += 1
                 del self.pending[k]
-        # Keep the join dicts bounded to the window (match by (fid,y)).
         for store in (self._ack_rtt, self._client_pending):
             for k in [k for k, v in store.items() if (v[1] if isinstance(v, tuple) else v.get("t", self.max_t)) < cut]:
                 store.pop(k, None)
 
 
 def _verdict(floor: float | None, p50: float | None, p99: float | None, n: int) -> tuple[str, str, str]:
-    """(color, headline, detail) judging distance vs loss vs queuing.
-
-    Keyed off the FLOOR (the best round trip ~= propagation), not the median: distance
-    puts the median right on the floor with a thin tail; a median well above the floor is
-    persistent queuing; a tail far above the median is bursty loss / head-of-line stalls.
-    (Round trip still includes client decode+paint in Rung 1, so a slow client reads as
-    queuing/loss too -- honest, since that also hurts the user.)"""
+    # Keyed off the FLOOR (best round trip ~= propagation): distance keeps the median on
+    # the floor with a thin tail; a lifted median is queuing; a tail far above the median
+    # is bursty loss / head-of-line.
     if n < 20 or floor is None or p50 is None or p99 is None:
         return _C["gray"], "not enough samples", f"({n}) — drive the browser to generate traffic"
     tail = p99 - p50
@@ -178,24 +171,20 @@ def _verdict(floor: float | None, p50: float | None, p99: float | None, n: int) 
 
 
 def _bottleneck(state: "_State", pnet: dict, hold: dict, have_pure: bool, net_head: str) -> str:
-    """One-line synthesis of the dominant constraint from all signals: network, renderer
-    (client decode/paint), compute (vCPU), or memory. The network flag is derived from the
-    SAME verdict shown above (``net_head``) so the two lines can never disagree."""
     hot = []
     rs = state.resource
-    # compute: judge off the browser's own vCPU spend (per-process, reliable under gVisor),
-    # not host sys cpu. Near the box's ceiling (ncpu*100%) = encode/render compute-bound.
     if rs is not None:
+        # Judge compute off the browser's own vCPU spend (per-process; reliable under gVisor,
+        # which zeroes host-wide cpu), against the box ceiling of ncpu*100%.
         browser_cpu = rs["daemon_cpu"] + rs["chrome_cpu"]
         ceiling = rs["ncpu"] * 100
         if browser_cpu >= ceiling * 0.85:
             hot.append(f'{_C["r"]}COMPUTE{_C["x"]} (browser {browser_cpu:.0f}% of {ceiling}% on {rs["ncpu"]} vCPU)')
         if rs["mem_pct"] >= 92 or rs["swap_pct"] >= 10:
             hot.append(f'{_C["r"]}MEMORY{_C["x"]} (mem {rs["mem_pct"]:.0f}%, swap {rs["swap_pct"]:.0f}%)')
-    # renderer: client hold materially above a few ms
     if have_pure and hold["p95"] is not None and hold["p95"] >= 30:
         hot.append(f'{_C["y"]}RENDERER{_C["x"]} (client hold p95 {hold["p95"]:.0f}ms)')
-    # network: exactly when the pure-network verdict is loss or queuing (kept in lockstep)
+    # Derived from the SAME verdict shown above so the two lines can never disagree.
     if have_pure and net_head in ("LOSS / STALLS", "QUEUING"):
         hot.append(f'{_C["r"]}NETWORK{_C["x"]} (pure p50 {pnet["p50"]:.0f} / p99 {pnet["p99"]:.0f} over floor {pnet["floor"]:.0f}ms)')
     if not hot:
@@ -225,8 +214,6 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
     lines.append(f'{dot} {_C["b"]}stream telemetry{_C["x"]}  {_C["c"]}{browser_id}{_C["x"]}{miss}')
     lines.append(_C["gray"] + "─" * 66 + _C["x"])
 
-    # Pure network = round trip minus the client's own render (Rung 2 join). This is the
-    # honest transport number; use it for the headline verdict when we have enough joins.
     pnet = _stats(state.pure_net)
     hold = _stats(state.client_hold)
     dec = _stats(state.decode)
@@ -240,7 +227,6 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
         lines.append(f'  {_C["gray"]}(no client render data yet — this includes decode+paint; open the real viewer for pure network){_C["x"]}')
     lines.append(f'{_C["b"]}bottleneck:{_C["x"]} ' + _bottleneck(state, pnet, hold, have_pure, vhead))
 
-    # round trip
     lines.append("")
     lines.append(f'{_C["b"]}round trip{_C["x"]} {_C["gray"]}(transport + client render; ms){_C["x"]}')
     sc = _C["g"] if n >= 20 else _C["y"]
@@ -250,7 +236,6 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
         f'{sc}n={n}/{int(_WINDOW_S)}s{_C["x"]}'
     )
 
-    # cross-row
     rows: dict = {}
     for _, y, rtt in state.acks:
         rows.setdefault(y, []).append(rtt)
@@ -262,7 +247,6 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
         lines.append(f'  {_C["gray"]}per row:{_C["x"]} ' + "   ".join(parts))
         lines.append(f'  {_C["gray"]}(all rows spike together = network/HOL · one row alone = that decoder){_C["x"]}')
 
-    # pure network + client render (Rung 2)
     lines.append("")
     if have_pure:
         lines.append(f'{_C["b"]}pure network{_C["x"]} {_C["gray"]}(round trip − client render; ms){_C["x"]}')
@@ -276,13 +260,11 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
             f'dq_max {state.dq_max}   {(_C["r"] + "errors " + str(state.client_err) + _C["x"]) if state.client_err else "errors 0"}'
         )
     else:
-        lines.append(f'{_C["b"]}pure network{_C["x"]} {_C["gray"]}waiting for the real viewer to report decode/paint (Rung 2){_C["x"]}')
+        lines.append(f'{_C["b"]}pure network{_C["x"]} {_C["gray"]}waiting for the real viewer to report decode/paint{_C["x"]}')
 
-    # capture rate
     lines.append("")
     if state.rate:
         rr = state.rate
-        ew = rr.get("rtt_ewma")
         lines.append(
             f'{_C["b"]}capture{_C["x"]}   applied {_C["c"]}{rr["applied_fps"]:.0f}{_C["x"]} fps'
             f'   ceiling {rr["ceiling"]:.0f}   AIMD {rr["aimd_fps"]:.0f}   CRF {rr["crf"]}'
@@ -293,14 +275,12 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
     else:
         lines.append(f'{_C["b"]}capture{_C["x"]}   {_C["gray"]}waiting for a rate decision…{_C["x"]}')
 
-    # mailbox dwell
     dvals = sorted(ms for _, ms in state.dwell)
     lines.append(
         f'{_C["b"]}mailbox{_C["x"]}   wait-for-credit  p50 {f(_pct(dvals, 50))}   '
         f'p95 {f(_pct(dvals, 95))}   p99 {f(_pct(dvals, 99))} ms   {_C["gray"]}(server-side; ms){_C["x"]}'
     )
 
-    # mortality
     d = state.drops
     lines.append("")
     ua = _C["r"] if state.unacked else _C["g"]
@@ -310,7 +290,6 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
         f'{ua}unacked {state.unacked}{_C["x"]}   {_C["gray"]}sent/ack {state.sent}/{state.ack}{_C["x"]}'
     )
 
-    # tcp local hop
     if state.tcp:
         t = state.tcp
         rc = _C["y"] if t["total_retrans"] else _C["g"]
@@ -321,9 +300,6 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
     else:
         lines.append(f'{_C["b"]}local hop{_C["x"]} {_C["gray"]}no TCP sample yet (needs an active viewer streaming){_C["x"]}')
 
-    # host resources (compute / memory). The browser's own vCPU spend (per-process) is the
-    # reliable compute signal here; host-wide sys CPU is shown only when trustworthy (gVisor
-    # zeroes it -- see sys_ok).
     if state.resource:
         rs = state.resource
         ncpu = rs["ncpu"]
@@ -335,6 +311,7 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
             f'   {_C["gray"]}= encoder{_C["x"]} {rs["daemon_cpu"]:.0f}%{_C["gray"]} + chromium{_C["x"]} {rs["chrome_cpu"]:.0f}%'
             f' {_C["gray"]}({rs["chrome_procs"]} procs; 100% = one core){_C["x"]}'
         )
+        # gVisor doesn't expose host-wide cpu; show it only when the daemon flagged it usable.
         if rs.get("sys_ok", True):
             lines.append(f'      {_C["gray"]}host sys cpu {rs["sys_cpu"]:.0f}%   load {rs["load1"]}{_C["x"]}')
         else:
@@ -354,8 +331,6 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
 
 
 async def _sample(browser_id: str, duration: float) -> None:
-    """One-shot: collect telemetry for ``duration`` seconds, print a single snapshot,
-    exit. This is ``--sample`` -- a point-in-time reading, not the live loop."""
     state = _State()
     url = f"ws://{_DAEMON}/browsers/{browser_id}/telemetry"
     connected = False
@@ -406,7 +381,6 @@ async def _watch(browser_id: str) -> None:
 
 
 def main() -> None:
-    # Tiny hand-rolled arg parse (kept dependency-free): [browser-name] [--sample] [--for N].
     args = sys.argv[1:]
     sample = "--sample" in args
     duration = 3.0
