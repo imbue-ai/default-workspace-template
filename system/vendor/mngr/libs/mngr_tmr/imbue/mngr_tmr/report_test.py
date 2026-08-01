@@ -17,10 +17,10 @@ from imbue.mngr_tmr.report import IntegratorResult
 from imbue.mngr_tmr.report import ReportSection
 from imbue.mngr_tmr.report import TestMapReduceResult
 from imbue.mngr_tmr.report import TestResult
-from imbue.mngr_tmr.report import _merged_status_html
 from imbue.mngr_tmr.report import _render_markdown
 from imbue.mngr_tmr.report import generate_html_report
 from imbue.mngr_tmr.report import load_testing_agent_outcome
+from imbue.mngr_tmr.report import merged_status_html
 from imbue.mngr_tmr.report import report_section_of
 from imbue.mngr_tmr.report import synthesize_missing_mapper_outcomes
 
@@ -257,13 +257,13 @@ def test_render_markdown_plain_text() -> None:
 
 def test_merged_status_no_integrator() -> None:
     r = make_test_result(before=True, after=True)
-    assert _merged_status_html(r, None) == ""
+    assert merged_status_html(r.branch_name, None) == ""
 
 
 def test_merged_status_no_branch() -> None:
     r = make_test_result(before=True, after=True)
     integrator = IntegratorResult(squashed_branches=("mngr-tmr/a",))
-    assert _merged_status_html(r, integrator) == ""
+    assert merged_status_html(r.branch_name, integrator) == ""
 
 
 def test_merged_status_squashed() -> None:
@@ -276,7 +276,7 @@ def test_merged_status_squashed() -> None:
         changes=SUCCEEDED_FIX,
     )
     integrator = IntegratorResult(squashed_branches=("mngr-tmr/a",))
-    assert "10003" in _merged_status_html(r, integrator)
+    assert "10003" in merged_status_html(r.branch_name, integrator)
 
 
 def test_merged_status_impl_priority() -> None:
@@ -289,7 +289,7 @@ def test_merged_status_impl_priority() -> None:
         changes={ChangeKind.FIX_IMPL: Change(status=ChangeStatus.SUCCEEDED, summary_markdown="fixed")},
     )
     integrator = IntegratorResult(impl_priority=("mngr-tmr/b",), impl_commit_hashes={"mngr-tmr/b": "abc123def"})
-    status = _merged_status_html(r, integrator)
+    status = merged_status_html(r.branch_name, integrator)
     assert "abc123def" in status
     assert "<code>" in status
 
@@ -304,7 +304,7 @@ def test_merged_status_failed() -> None:
         changes=SUCCEEDED_FIX,
     )
     integrator = IntegratorResult(failed=("mngr-tmr/c",))
-    assert "10007" in _merged_status_html(r, integrator)
+    assert "10007" in merged_status_html(r.branch_name, integrator)
 
 
 def test_merged_status_not_in_integrator() -> None:
@@ -317,7 +317,7 @@ def test_merged_status_not_in_integrator() -> None:
         changes=SUCCEEDED_FIX,
     )
     integrator = IntegratorResult(squashed_branches=("mngr-tmr/other",))
-    assert _merged_status_html(r, integrator) == ""
+    assert merged_status_html(r.branch_name, integrator) == ""
 
 
 # --- HTML report tests ---

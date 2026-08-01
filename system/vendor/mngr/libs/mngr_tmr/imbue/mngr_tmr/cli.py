@@ -29,7 +29,7 @@ class TmrCliOptions(MapReduceCliOptions):
     testing_flags: tuple[str, ...]
 
 
-class _TmrCommand(click.Command):
+class SplitTestingFlagsCommand(click.Command):
     """Custom Command that handles -- separator for testing flags.
 
     Everything before -- is treated as positional args (test paths/patterns).
@@ -51,7 +51,7 @@ class _TmrCommand(click.Command):
         return result
 
 
-@click.command("tmr", cls=_TmrCommand, context_settings={"ignore_unknown_options": True})
+@click.command("tmr", cls=SplitTestingFlagsCommand, context_settings={"ignore_unknown_options": True})
 @click.argument("pytest_args", nargs=-1, type=click.UNPROCESSED)
 @click.option(
     "--name",
