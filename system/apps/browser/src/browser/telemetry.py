@@ -182,6 +182,7 @@ class _ResourceSampler(threading.Thread):
         self._hub = hub
         self._proc_cache: dict[int, Any] = {}  # pid -> psutil.Process for browser procs
         self._last_refresh = 0.0
+        self._stopped = threading.Event()  # tick via .wait() so shutdown is prompt and clean
 
     def _refresh_browser_procs(self) -> None:
         """Rebuild the set of Chromium/Fortress processes (every ~3s); prime cpu_percent
@@ -209,14 +210,16 @@ class _ResourceSampler(threading.Thread):
         daemon = psutil.Process(os.getpid())
         daemon.cpu_percent(None)             # prime the daemon + system references
         psutil.cpu_percent(percpu=True)
-        while True:
-            time.sleep(1.0)
+        while not self._stopped.wait(1.0):   # 1s tick; returns early if stopped
             if not self._hub.any_open():
                 continue
             try:
                 self._emit_sample(daemon)
             except Exception as error:  # noqa: BLE001  (sampling must never crash the daemon)
                 logger.debug("resource sample failed ({})", error)
+
+    def stop(self) -> None:
+        self._stopped.set()
 
     def _emit_sample(self, daemon: Any) -> None:
         per_cpu = psutil.cpu_percent(percpu=True)          # since the last call (~1s)

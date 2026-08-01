@@ -296,49 +296,53 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         return
     # Passive telemetry: begin recording for this browser (the hot paths emit into a
     # lock-free ring drained by the read-only /telemetry firehose; see browser.telemetry).
+    # Everything from here on is inside the try so a prologue failure (e.g. InputRouter
+    # can't open the X display) still unwinds the telemetry ref AND the started pipe --
+    # otherwise the ref leaks (pinning the resource sampler on) and the capture is orphaned.
     telemetry.hub.open(browser_id)
-    telemetry.hub.emit(browser_id, {"type": "conn", "event": "open"})
-    router = InputRouter(display)
-    # Cold-start size: the viewer passes its real pane size as ?w=&h= on the connect
-    # URL, so the first emitted frame is already pane-sized -- no 1280x800 frame is
-    # ever shown and no resize round-trip is needed (verbatim from the streamed-browser prototype).
-    initial_w = request.args.get("w", type=int)
-    initial_h = request.args.get("h", type=int)
-    if initial_w is not None and initial_h is not None:
-        applied_w, applied_h = pipe.set_capture_region(max(320, initial_w), max(240, initial_h))
-        router.resize_window(applied_w, applied_h)
-    # Clipboard copy-out signals for THIS viewer: the XFixes monitor thread appends
-    # small control strings here and the send loop below drains them (deque append /
-    # popleft are each thread-safe; a single sender keeps WS sends serialized). Register
-    # the queue as a sink so a remote copy reaches this viewer (verbatim from the streamed-browser prototype).
-    clip_queue: "deque[str]" = deque(maxlen=32)
-    clip_sink = clip_queue.append  # one identity for register/unregister set membership
-    _register_clip_sink(browser_id, display, clip_sink)
-    # Audio is strictly additive: gate on pcmflux being importable AND this browser having
-    # its own sink. It shares the video pipe's Condition so a fresh Opus chunk wakes the
-    # same single sender thread (simple_websocket sends are not cross-thread safe). A start
-    # failure leaves video untouched. Verbatim from the streamed-browser prototype, keyed to this browser.
+    router: "InputRouter | None" = None
+    clip_sink: "Callable[[str], None] | None" = None
     audio_pipe: "AudioPipe | None" = None
-    audio_device = session.audio_capture_device
-    if is_audio_available() and audio_device:
-        candidate = AudioPipe(audio_device, pipe.condition)
-        try:
-            candidate.start()
-            audio_pipe = candidate
-        except AudioPipeError as error:
-            logger.warning("audio pipe unavailable for {} ({}); streaming video only", browser_id, error)
+    receiver: "threading.Thread | None" = None
     stop_event = threading.Event()
-    receiver = threading.Thread(
-        target=_receive_pump,
-        kwargs={"ws": ws, "pipe": pipe, "router": router, "session": session, "stop_event": stop_event},
-        name=f"browser-stream-recv-{browser_id}",
-        daemon=True,
-    )
-    receiver.start()
-    last_send = time.monotonic()
-    last_tcpinfo = last_send
-    audio_pending = audio_pipe.has_pending if audio_pipe is not None else None
     try:
+        telemetry.hub.emit(browser_id, {"type": "conn", "event": "open"})
+        router = InputRouter(display)
+        # Cold-start size: the viewer passes its real pane size as ?w=&h= on the connect
+        # URL, so the first emitted frame is already pane-sized -- no 1280x800 frame is
+        # ever shown and no resize round-trip is needed.
+        initial_w = request.args.get("w", type=int)
+        initial_h = request.args.get("h", type=int)
+        if initial_w is not None and initial_h is not None:
+            applied_w, applied_h = pipe.set_capture_region(max(320, initial_w), max(240, initial_h))
+            router.resize_window(applied_w, applied_h)
+        # Clipboard copy-out signals for THIS viewer: the XFixes monitor thread appends
+        # small control strings here and the send loop below drains them. Register the queue
+        # as a sink so a remote copy reaches this viewer.
+        clip_queue: "deque[str]" = deque(maxlen=32)
+        clip_sink = clip_queue.append  # one identity for register/unregister set membership
+        _register_clip_sink(browser_id, display, clip_sink)
+        # Audio is strictly additive: gate on pcmflux being importable AND this browser having
+        # its own sink. It shares the video pipe's Condition so a fresh Opus chunk wakes the
+        # same single sender thread. A start failure leaves video untouched.
+        audio_device = session.audio_capture_device
+        if is_audio_available() and audio_device:
+            candidate = AudioPipe(audio_device, pipe.condition)
+            try:
+                candidate.start()
+                audio_pipe = candidate
+            except AudioPipeError as error:
+                logger.warning("audio pipe unavailable for {} ({}); streaming video only", browser_id, error)
+        receiver = threading.Thread(
+            target=_receive_pump,
+            kwargs={"ws": ws, "pipe": pipe, "router": router, "session": session, "stop_event": stop_event},
+            name=f"browser-stream-recv-{browser_id}",
+            daemon=True,
+        )
+        receiver.start()
+        last_send = time.monotonic()
+        last_tcpinfo = last_send
+        audio_pending = audio_pipe.has_pending if audio_pipe is not None else None
         while not stop_event.is_set():
             # Local-hop TCP health, ~2Hz (rules out local buffering; the socket peers
             # with a local forwarder so it does NOT see WAN loss -- see browser.telemetry).
@@ -376,9 +380,12 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         stop_event.set()
         telemetry.hub.emit(browser_id, {"type": "conn", "event": "close"})
         telemetry.hub.close(browser_id)
-        _unregister_clip_sink(browser_id, clip_sink)
+        if clip_sink is not None:
+            _unregister_clip_sink(browser_id, clip_sink)
         if audio_pipe is not None:
             audio_pipe.stop()
         pipe.stop()
-        router.close()
-        receiver.join(timeout=5)
+        if router is not None:
+            router.close()
+        if receiver is not None:
+            receiver.join(timeout=5)

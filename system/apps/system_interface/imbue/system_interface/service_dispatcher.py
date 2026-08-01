@@ -311,18 +311,30 @@ def _forward_backend_to_client(
     stop_event: threading.Event,
 ) -> None:
     """Forward messages from the backend WebSocket to the client until either side closes."""
+    close_code = None
+    close_message = None
     try:
         while not stop_event.is_set():
             message = backend_ws.receive(timeout=1.0)
             if message is None:
                 continue
             client_websocket.send(message)
-    except ConnectionClosed:
-        logger.debug("Backend WebSocket closed for service {}", service_name)
+    except ConnectionClosed as closed:
+        # Preserve the backend's WS close code so the client's close-code contract survives
+        # the proxy (e.g. the browser viewer relies on 1008=terminal vs 1013=retry; flattening
+        # every close to 1000 turned terminal states into infinite reconnect loops).
+        close_code = closed.reason
+        close_message = closed.message
+        logger.debug("Backend WebSocket closed for service {} (code {})", service_name, close_code)
     finally:
         stop_event.set()
         try:
-            client_websocket.close()
+            # 1005/1006/1015 are status codes the peer never puts on the wire; sending them
+            # would be a protocol violation, so fall back to a normal close for those.
+            if close_code is not None and close_code not in (1005, 1006, 1015):
+                client_websocket.close(close_code, close_message)
+            else:
+                client_websocket.close()
         except ConnectionClosed:
             logger.trace("Client WebSocket already closed during backend->client cleanup")
 
