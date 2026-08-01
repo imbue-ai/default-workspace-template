@@ -34,7 +34,7 @@ def test_prevent_while_true() -> None:
 def test_prevent_time_sleep() -> None:
     # +1 for testing.py's _wait_until_serving TCP-ready poll loop, used by the
     # WebSocket/SSE tests that need a real Werkzeug listener.
-    rc.check_time_sleep(_DIR, snapshot(6))
+    rc.check_time_sleep(_DIR, snapshot(7))
 
 
 def test_prevent_global_keyword() -> None:
@@ -63,7 +63,7 @@ def test_prevent_broad_exception_catch() -> None:
     # claude_auth._run_apply_in_background: same thread-boundary shape --
     # anything escaping must surface as the FAILED restart phase in the
     # sign-in modal instead of dying silently in a daemon thread.
-    rc.check_broad_exception_catch(_DIR, snapshot(4))
+    rc.check_broad_exception_catch(_DIR, snapshot(5))
 
 
 def test_prevent_base_exception_catch() -> None:
