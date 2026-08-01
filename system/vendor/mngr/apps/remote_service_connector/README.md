@@ -219,14 +219,14 @@ Email-addressed operator management of per-account entitlements, authenticated b
 
 ### Auth
 
-These endpoints front the SuperTokens core so that clients (e.g. the `minds` desktop client) never need the SuperTokens API key. They require `SUPERTOKENS_CONNECTION_URI` (and usually `SUPERTOKENS_API_KEY`) to be configured on the server; otherwise they return 503. All of them are unauthenticated *except* `/auth/session/revoke`, which must be called with the caller's own access token (see below).
+These endpoints front the SuperTokens core so that clients (e.g. the `minds` desktop client) never need the SuperTokens API key. They require `SUPERTOKENS_CONNECTION_URI` (and usually `SUPERTOKENS_API_KEY`) to be configured on the server; otherwise they return 503. All of them are unauthenticated *except* `/auth/session/revoke`, `/auth/email/send-verification`, and `/auth/email/is-verified`, which must be called with the caller's own access token (see below); those three deliberately accept a session whose email is not yet verified.
 
 - `POST /auth/signup` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending. Refused with status `ACCOUNT_EXISTS_WITH_OTHER_METHOD` when the email is already registered under a different login method (e.g. Google).
 - `POST /auth/signin` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending.
 - `POST /auth/session/refresh` -- Body: `{refresh_token}`. Returns a new access/refresh token pair.
 - `POST /auth/session/revoke` -- Header: `Authorization: Bearer <access_token>`. Revokes every SuperTokens session for the caller's user. The user_id is derived from the access token, so an anonymous caller cannot revoke another user's sessions. Called on sign-out so that access/refresh tokens stored on the client's machine become useless even if copied off-box.
-- `POST /auth/email/send-verification` -- Body: `{user_id, email}`. Resends the verification email.
-- `POST /auth/email/is-verified` -- Body: `{user_id, email}`. Returns `{verified: bool}`.
+- `POST /auth/email/send-verification` -- Header: `Authorization: Bearer <access_token>`. Body: `{email}`; the email must belong to the authenticated caller (403 otherwise). Resends the verification email; returns `{status, sent}` where `sent` is false when the per-user cooldown suppressed the send (a verification email went out moments ago via signup, an unverified signin, or an earlier resend).
+- `POST /auth/email/is-verified` -- Header: `Authorization: Bearer <access_token>`. Body: `{email}`; the email must belong to the authenticated caller (403 otherwise). Returns `{verified: bool}`.
 - `GET /auth/verify-email?token=...` -- Renders an HTML result page. Used by the link inside verification emails.
 - `POST /auth/password/forgot` -- Body: `{email}`. Always returns OK (to avoid account enumeration).
 - `POST /auth/password/reset` -- Body: `{token, new_password}`. Consumes a reset token and sets a new password.

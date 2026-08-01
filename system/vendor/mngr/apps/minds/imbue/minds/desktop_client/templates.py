@@ -292,11 +292,11 @@ def _build_catalog() -> Catalog:
 CATALOG: Final[Catalog] = _build_catalog()
 
 
-class InspirationWorkspaceRow(FrozenModel):
-    """One pickable workspace on the Create from Inspiration page's add flow."""
+class InspirationMachineRow(FrozenModel):
+    """One pickable machine on the Create from Inspiration page's add flow."""
 
-    agent_id: str = Field(description="The workspace agent id (drives the recovery-restart detour)")
-    host_id: str = Field(default="", description="The workspace host id (drives the /goto/ href); '' when unknown")
+    agent_id: str = Field(description="The machine agent id (drives the recovery-restart detour)")
+    host_id: str = Field(default="", description="The machine host id (drives the /goto/ href); '' when unknown")
     name: str = Field(description="Display name")
     accent: str = Field(description="Accent color hex")
     liveness: str = Field(description="RUNNING, STOPPED, or UNKNOWN (drives the recovery-restart detour)")
@@ -721,21 +721,59 @@ def render_inspiration_create_page(
     default_account_id: str = "",
     color: str = DEFAULT_WORKSPACE_COLOR,
     mngr_forward_origin: str = "",
-    workspace_rows: Sequence[InspirationWorkspaceRow] = (),
+    machine_rows: Sequence[InspirationMachineRow] = (),
     region_options_by_launch_mode: Mapping[str, Sequence[str]] | None = None,
     region_selected_by_launch_mode: Mapping[str, str] | None = None,
+    start: str = "",
 ) -> str:
     """Render the Create from Inspiration page (GET /create/inspiration).
 
     The landing page for an Inspiration deeplink: a chooser between creating
-    a new workspace from ``git_url`` and adding the Inspiration to an
-    existing workspace. The add flow shows a copyable ``/use-inspiration
+    a new machine from ``git_url`` and adding the Inspiration to an
+    existing machine. The add flow shows a copyable ``/use-inspiration
     <git-url>`` message (the skill accepts only a URL, so ``branch`` is
-    deliberately absent from it) plus ``workspace_rows`` to open. The new
+    deliberately absent from it) plus ``machine_rows`` to open. The new
     flow's settings step lets the user keep the preset defaults or reveal the
     compute / backup provider and region selects inline (the repo and branch
     stay fixed); the provider enums and region options come from the same
     source the create form uses.
+    """
+    return _render_inspiration_stepper(
+        git_url=git_url,
+        branch=branch,
+        accounts=accounts,
+        default_account_id=default_account_id,
+        color=color,
+        mngr_forward_origin=mngr_forward_origin,
+        machine_rows=machine_rows,
+        region_options_by_launch_mode=region_options_by_launch_mode,
+        region_selected_by_launch_mode=region_selected_by_launch_mode,
+        is_modal=False,
+        start=start,
+    )
+
+
+@pure
+def _render_inspiration_stepper(
+    git_url: str,
+    branch: str,
+    accounts: Sequence[object] | None,
+    default_account_id: str,
+    color: str,
+    mngr_forward_origin: str,
+    machine_rows: Sequence[InspirationMachineRow],
+    region_options_by_launch_mode: Mapping[str, Sequence[str]] | None,
+    region_selected_by_launch_mode: Mapping[str, str] | None,
+    is_modal: bool,
+    current_machine_id: str = "",
+    current_machine_name: str = "",
+    start: str = "",
+) -> str:
+    """Render the Create from Inspiration stepper into one of its two shells.
+
+    ``is_modal`` picks the shell: the full page, or the shared overlay's card
+    (the deeplink modal). The stepper itself is identical; only the add branch's
+    last step differs, and only when a ``current_machine_id`` is supplied.
     """
     return CATALOG.render(
         "pages.InspirationCreate",
@@ -745,13 +783,17 @@ def render_inspiration_create_page(
         default_account_id=default_account_id,
         color=color,
         mngr_forward_origin=mngr_forward_origin,
-        workspace_rows=list(workspace_rows),
+        machine_rows=list(machine_rows),
         launch_modes=list(LaunchMode),
         backup_providers=list(BackupProvider),
         region_options_by_launch_mode={
             key: list(value) for key, value in (region_options_by_launch_mode or {}).items()
         },
         region_selected_by_launch_mode=dict(region_selected_by_launch_mode or {}),
+        is_modal=is_modal,
+        current_machine_id=current_machine_id,
+        current_machine_name=current_machine_name,
+        start=start,
     )
 
 
@@ -2251,17 +2293,23 @@ def _split_share_targets(servers: Sequence[str]) -> tuple[list[str], str]:
 
 
 @pure
-def _app_service_labels(app_services: Sequence[str], service_labels: Mapping[str, str] | None) -> dict[str, str]:
-    """The origin-label map for the rendered per-app targets, keyed by service name.
+def _share_target_labels(app_services: Sequence[str], service_labels: Mapping[str, str] | None) -> dict[str, str]:
+    """The origin-label map for the rendered share targets, keyed by service name.
 
-    A per-app share link is a real origin (``<label>.<machine domain>``), so the
-    Share pane needs each app's persistent origin ``label`` (``<name>-<rand>``)
-    rather than its name. Restricted to the ``app_services`` actually rendered and
-    to services that carry a label -- a service with none is omitted, and
-    workspace_options.js falls back to the service name for it.
+    Every share link is a real origin. A per-app link is ``<label>.<machine
+    domain>``; the whole-machine link is the SHELL's own label origin
+    (``<system_interface label>.<machine domain>``), because the bare machine
+    domain does not route on a share (only explicit ``<label>.<machine domain>``
+    origins are claimed on the relay and served). So the map
+    covers the rendered ``app_services`` plus the whole-machine (shell) service,
+    restricted to services that actually carry a label -- a service with none is
+    omitted, and workspace_options.js falls back accordingly.
     """
     labels = service_labels or {}
-    return {service: labels[service] for service in app_services if service in labels}
+    target_labels = {service: labels[service] for service in app_services if service in labels}
+    if _WHOLE_MACHINE_SERVICE in labels:
+        target_labels[_WHOLE_MACHINE_SERVICE] = labels[_WHOLE_MACHINE_SERVICE]
+    return target_labels
 
 
 @pure
@@ -2298,7 +2346,7 @@ def render_workspace_options_page(
         current_account=current_account,
         accounts=accounts,
         app_services=app_services,
-        service_labels=_app_service_labels(app_services, service_labels),
+        service_labels=_share_target_labels(app_services, service_labels),
         whole_service=whole_service,
         selected_target=selected_target or whole_service,
         account_email=account_email,
@@ -2353,7 +2401,7 @@ def render_workspace_options_modal_page(
         current_account=current_account,
         accounts=accounts,
         app_services=app_services,
-        service_labels=_app_service_labels(app_services, service_labels),
+        service_labels=_share_target_labels(app_services, service_labels),
         whole_service=whole_service,
         selected_target=selected_target or whole_service,
         account_email=account_email,
@@ -2547,7 +2595,7 @@ def render_destroyed_workspaces_page(retention_days: int, error: str = "") -> st
 
 @pure
 def render_destroyed_workspaces_rows_fragment(
-    # Row dicts from _collect_destroyed_workspace_rows (agent_id, display_name,
+    # Row dicts from _collect_destroyed_machine_rows (agent_id, display_name,
     # account_label, countdown/lock/delete affordance fields).
     rows: Sequence[Mapping[str, object]],
 ) -> str:
@@ -2571,4 +2619,43 @@ def render_account_plan_modal_page(acct_user_id: str, account_email: str) -> str
         "pages.AccountPlanModal",
         acct_user_id=acct_user_id,
         account_email=account_email,
+    )
+
+
+@pure
+def render_inspiration_modal_page(
+    git_url: str,
+    branch: str = "",
+    current_machine_id: str = "",
+    current_machine_name: str = "",
+    accounts: Sequence[object] | None = None,
+    default_account_id: str = "",
+    color: str = DEFAULT_WORKSPACE_COLOR,
+    mngr_forward_origin: str = "",
+    machine_rows: Sequence[InspirationMachineRow] = (),
+    region_options_by_launch_mode: Mapping[str, Sequence[str]] | None = None,
+    region_selected_by_launch_mode: Mapping[str, str] | None = None,
+) -> str:
+    """Render the Create from Inspiration stepper as a modal (``GET /create/inspiration/modal``).
+
+    The deeplink entry point when the app is already inside a workspace. It is
+    the SAME stepper the full page renders (``render_inspiration_create_page``),
+    hosted in the shared overlay's card instead of the page shell, so the create
+    flow behaves identically. The one difference: the add branch targets the
+    workspace the user is already in, so its last step drops the picker and just
+    says to paste the copied message into that chat, then dismisses itself.
+    """
+    return _render_inspiration_stepper(
+        git_url=git_url,
+        branch=branch,
+        accounts=accounts,
+        default_account_id=default_account_id,
+        color=color,
+        mngr_forward_origin=mngr_forward_origin,
+        machine_rows=machine_rows,
+        region_options_by_launch_mode=region_options_by_launch_mode,
+        region_selected_by_launch_mode=region_selected_by_launch_mode,
+        is_modal=True,
+        current_machine_id=current_machine_id,
+        current_machine_name=current_machine_name,
     )

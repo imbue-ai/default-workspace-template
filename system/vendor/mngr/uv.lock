@@ -20,6 +20,7 @@ members = [
     "imbue-mngr-antigravity",
     "imbue-mngr-aws",
     "imbue-mngr-azure",
+    "imbue-mngr-behaviors",
     "imbue-mngr-claude",
     "imbue-mngr-claude-subagent-proxy",
     "imbue-mngr-claude-usage",
@@ -1561,6 +1562,18 @@ wheels = [
 ]
 
 [[package]]
+name = "gherkin-official"
+version = "39.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ab/73/511f4338d6f23f0c4d0f5ae0ffd942d891d73593d59ed2622abc749bf57e/gherkin_official-39.1.0.tar.gz", hash = "sha256:d5e98fa982411948b74aa72e4fe039dd51a07905dcd1e8bc58df47c8d5ae1800", size = 34009, upload-time = "2026-05-06T14:49:40.115Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/c3/080d581f02c868b1dfec88e7285a091d39d978f1d4f05126a586db0e6de2/gherkin_official-39.1.0-py3-none-any.whl", hash = "sha256:0e688b31bbc40561d950dc2b47cd3127fcc903f8cbf63d01fa45a0ec39fc72ab", size = 38845, upload-time = "2026-05-06T14:49:39.096Z" },
+]
+
+[[package]]
 name = "google-api-core"
 version = "2.30.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2331,6 +2344,31 @@ requires-dist = [
 ]
 
 [[package]]
+name = "imbue-mngr-behaviors"
+version = "0.1.0"
+source = { editable = "libs/mngr_behaviors" }
+dependencies = [
+    { name = "click" },
+    { name = "concurrency-group" },
+    { name = "gherkin-official" },
+    { name = "imbue-common" },
+    { name = "imbue-mngr" },
+    { name = "loguru" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click" },
+    { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "gherkin-official", specifier = ">=39.1.0" },
+    { name = "imbue-common", editable = "libs/imbue_common" },
+    { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "loguru" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
+
+[[package]]
 name = "imbue-mngr-claude"
 version = "0.2.17"
 source = { editable = "libs/mngr_claude" }
@@ -2827,6 +2865,7 @@ source = { editable = "libs/mngr_tmr" }
 dependencies = [
     { name = "boto3" },
     { name = "imbue-mngr" },
+    { name = "imbue-mngr-behaviors" },
     { name = "imbue-mngr-mapreduce" },
     { name = "jinja2" },
     { name = "markdown-it-py" },
@@ -2836,6 +2875,7 @@ dependencies = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.40,<2" },
     { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "imbue-mngr-behaviors", editable = "libs/mngr_behaviors" },
     { name = "imbue-mngr-mapreduce", editable = "libs/mngr_mapreduce" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "markdown-it-py", specifier = ">=3.0.0" },
