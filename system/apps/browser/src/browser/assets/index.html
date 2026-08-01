@@ -70,7 +70,7 @@
   #initoverlay .msg { font-size: 15px; color: #ccc; font-weight: 600; }
 
   /* Transient clipboard status chip ("Pasting…", "Copied from remote", errors). Bottom
-     of the pane, fades in on activity and out after a moment (verbatim from the streamed-browser prototype). */
+     of the pane, fades in on activity and out after a moment. */
   #clipchip { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 12;
     padding: 6px 12px; border-radius: 14px; font-size: 12px; background: #333; color: #ddd;
     opacity: 0; transition: opacity 0.2s; pointer-events: none; }
@@ -272,10 +272,10 @@
     crashOverlay.classList.add("show");
   }
 
-  // ---- pixel plane: verbatim the streamed-browser prototype stripe decoder over /stream ----
+  // ---- pixel plane: per-stripe H.264 decoder over /stream ----
   // Each horizontal stripe row is its own H.264 chain, decoded by its own WebCodecs
   // VideoDecoder and composited at its y-offset; the viewer acks every stripe as it
-  // leaves its decoder (credit-ack flow control). Copied from the streamed-browser prototype's
+  // leaves its decoder (credit-ack flow control). From the
   // client; the only adaptations are the /browsers/<id>/stream URL and revealing the
   // fleet's init overlay (instead of a status pill) on first paint.
   let streamWs = null, streamRetry = 500, lastSentSize = "";
@@ -480,7 +480,7 @@
   for (const ev of ["pointerdown", "pointermove", "keydown", "wheel", "focus"]) canvas.addEventListener(ev, fpsFull, true);
 
   // ---- audio playback (Opus over WebCodecs -> AudioWorklet) ----
-  // Verbatim from the streamed-browser prototype. The server sends mono Opus chunks (magic byte 0x01)
+  // The server sends mono Opus chunks (magic byte 0x01)
   // interleaved on the SAME /stream socket, only while the tab actually makes sound
   // (pcmflux's sample-level silence gate), so this stays idle otherwise. WebCodecs
   // AudioDecoder outputs f32-planar; we duplicate mono to L/R and hand it to a tiny
@@ -553,7 +553,7 @@ registerProcessor('pb', PB);`;
   window.addEventListener("pointerdown", () => { audioCtx?.resume?.(); }, true);
 
   // ---- input capture: Selkies grammar over /stream, gated on human control ----
-  // Verbatim from the streamed-browser prototype (keysym map, letterbox-aware coords, coalesced
+  // Ported from Selkies (keysym map, letterbox-aware coords, coalesced
   // pointer moves #26, held-key heartbeat #12, release-on-blur), with two fleet
   // adaptations: input is sent ONLY while the human holds control (client-side
   // suppression; the server gates too), and Cmd/Meta combos stay local (#30).
@@ -755,7 +755,7 @@ registerProcessor('pb', PB);`;
 
   // Local clipboard WRITE with a deferred retry: a programmatic write needs the document
   // focused, and a server-pushed copy can arrive while the user is elsewhere -- queue it
-  // and flush on the next focus (verbatim from the streamed-browser prototype).
+  // and flush on the next focus.
   let pendingWrite = null;
   function flushPendingWrite() { if (pendingWrite) { const w = pendingWrite; pendingWrite = null; w(); } }
   window.addEventListener("focus", flushPendingWrite);

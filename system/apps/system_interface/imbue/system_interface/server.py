@@ -5,7 +5,6 @@ import socket
 import threading
 import traceback
 from collections.abc import Callable
-from collections.abc import Iterable
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any

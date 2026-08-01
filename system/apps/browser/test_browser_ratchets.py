@@ -39,8 +39,8 @@ def test_prevent_time_sleep() -> None:
     # cannot exercise. +4 for OFF-LOOP blocking waits on the pixelflux/pcmflux media path:
     # session.py's Xvfb-readiness poll in _spawn_xvfb and PulseAudio-daemon-readiness poll
     # in _ensure_pulse_daemon (both run via asyncio.to_thread, so neither blocks the loop),
-    # xinput.py's XTEST device-recycle settle (copied verbatim from the streamed-browser
-    # prototype, on its own capture thread), and mediastream.py's _await_clipboard_owned
+    # xinput.py's XTEST device-recycle settle (on its own capture thread), and
+    # mediastream.py's _await_clipboard_owned
     # poll in the Flask request thread (confirms xclip has claimed the X selection before
     # injecting Ctrl+V, so paste success is truthful). All are real hardware/display/daemon
     # settles, not event-loop sleeps.
@@ -77,12 +77,12 @@ def test_prevent_broad_exception_catch() -> None:
     #    drives Chromium over cdp-use, whose errors are NOT a fixed subclass of the
     #    _BROWSER_ERRORS tuple, so a narrow catch could let a CDP hiccup wedge the single
     #    event loop. These are bounded (asyncio.wait_for) and best-effort by design.
-    #  * 4 in xinput.py (copied verbatim from the streamed-browser prototype): XTEST injection is
+    #  * 4 in xinput.py: XTEST injection is
     #    best-effort and must never raise into the /stream request thread.
-    #  * 3 in xclipboard.py (copied verbatim from the streamed-browser prototype): the XFixes monitor
+    #  * 3 in xclipboard.py: the XFixes monitor
     #    runs on its own thread against a python-xlib connection whose errors are an open
     #    set; a monitor-thread or callback crash must be logged, not silent or fatal.
-    #  * 1 in audiopipe.py (copied verbatim from the streamed-browser prototype): stopping the native
+    #  * 1 in audiopipe.py: stopping the native
     #    pcmflux capture handle during teardown must never raise up into the sender thread.
     #  * +4 for the passive telemetry subsystem, all `# noqa: BLE001` boundaries that must
     #    never propagate: 2 in telemetry.py (emit must never break the stream; the resource

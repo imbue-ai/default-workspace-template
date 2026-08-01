@@ -1,22 +1,18 @@
 """Fleet media socket: pixelflux H.264 video to one viewer of one browser.
 
-The pixel path here is copied VERBATIM from the streamed-browser prototype's ``/stream``
-handler -- the newest-wins credit-ack pipe, the outbound send loop
-(control message, out-of-band cursor, stripe packets), TCP_NODELAY (#21), the
-permessage-deflate strip (#22), and the 250ms heartbeat the client's freeze
-attributor keys on (#25). The ONLY adaptation is the fleet's multi-browser
-reality: the caller resolves the browser by NAME and hands us its private display
-(:N), so we open a capture pipe on THAT display instead of a single global
-session.
+The pixel path here is the fleet's streaming stack -- the newest-wins credit-ack pipe,
+the outbound send loop (control message, out-of-band cursor, stripe packets),
+TCP_NODELAY, the permessage-deflate strip, and the 250ms heartbeat the client keys on.
+The caller resolves the browser by NAME and hands us its private display (:N), so we
+open a capture pipe on THAT display.
 
-The clipboard bridge is likewise ported verbatim from the streamed-browser prototype (XFixes
-copy-out monitor + xclip paste-in via :mod:`browser.xclipboard`), adapted two
-ways for the fleet: the state is keyed per browser (each has its own display and
-possibly several viewers), and paste-IN is GATED on ``session.input_allowed`` so
-only the controlling human can write into the browser -- copy-OUT (what's already
-on the screen the human is watching) is ungated.
+The clipboard bridge (XFixes copy-out monitor + xclip paste-in via
+:mod:`browser.xclipboard`) is keyed per browser (each has its own display and possibly
+several viewers), and paste-IN is GATED on ``session.input_allowed`` so only the
+controlling human can write into the browser -- copy-OUT (what's already on the screen
+the human is watching) is ungated.
 
-Audio is ported verbatim too: pcmflux Opus chunks (:mod:`browser.audiopipe`) ride
+Audio: pcmflux Opus chunks (:mod:`browser.audiopipe`) ride
 the SAME ``/stream`` socket as video, interleaved by a leading magic byte and
 drained on the single sender thread. The fleet adaptation is that each browser
 captures ITS OWN PulseAudio sink monitor (``session.audio_capture_device``), so
@@ -55,11 +51,11 @@ _HEARTBEAT_SECONDS = 0.25
 
 # Paste-in bodies (images) can be large; the runner caps the request body so a giant
 # paste is rejected before it's read. 10 MiB matches xclipboard's read cap and the
-# client-side pre-check (verbatim from the streamed-browser prototype).
+# client-side pre-check.
 _CLIPBOARD_MAX_BYTES = 10 * 1024 * 1024
 # Text small enough to inline over the stream control channel; larger text and all
 # images route through GET /clipboard/out so no >1 MiB WS frame tears down the video
-# socket (verbatim threshold from the streamed-browser prototype).
+# socket.
 _CLIP_INLINE_TEXT_MAX = 200 * 1024
 
 
@@ -87,7 +83,7 @@ def _on_remote_clipboard(browser_id: str, data: bytes, mime: str) -> None:
     """A copy happened in the remote browser (XFixes fired): stash it for the GET and
     signal every connected viewer of this browser. Small text inlines over the control
     channel; images and large text ride the GET so no >1 MiB WS frame can tear down the
-    video socket (verbatim policy from the streamed-browser prototype)."""
+    video socket."""
     with _clip_lock:
         clip = _clips.get(browser_id)
         if clip is None:
@@ -161,7 +157,7 @@ def clipboard_paste(browser_id: str, session: Any, data: bytes, mime: str) -> Re
     GATED on ``session.input_allowed`` -- only the controlling human may write into the
     browser (an agent mid-task must not have a stray paste land). The selection is set
     BEFORE the paste keystroke, and the write is recorded so the copy-out monitor doesn't
-    echo it back (verbatim from the streamed-browser prototype, plus the fleet's control gate)."""
+    echo it back (plus the fleet's control gate)."""
     if not session.input_allowed:
         return jsonify({"error": "not controlling"}), 409
     with _clip_lock:
@@ -230,7 +226,7 @@ def _receive_pump(
     """Read credit acks, resize, and Selkies input on a dedicated thread until the
     socket closes.
 
-    Ack (flow control) and resize handling are verbatim from the streamed-browser prototype. Live
+    Ack (flow control) and resize handling are unchanged. Live
     input (``router.handle`` -- Selkies kd/ku/kr/kh/m -> XTEST) is GATED on the browser's
     ``input_allowed`` (the thread-safe mirror of who holds control): a human's mouse/key
     is injected only while the human owns the browser, so a stale event can't land after
@@ -287,7 +283,7 @@ def _receive_pump(
 def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     """Serve one viewer of one already-running browser on its private ``display``.
 
-    The outbound send loop is verbatim from the streamed-browser prototype's stream handler. ``session``
+    The outbound send loop drives one viewer's media plane. ``session``
     is the LiveBrowser, read for ``input_allowed`` (the control gate for injected input) and
     ``audio_capture_device`` (this browser's PulseAudio monitor, or None if no audio).
     """
