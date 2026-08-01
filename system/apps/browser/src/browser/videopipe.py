@@ -1,7 +1,7 @@
 """Pixelflux H.264 stripe pipe with per-row credit-ack flow control.
 
-Pixelflux (linuxserver's Rust capture/encode engine, the one behind Selkies)
-watches the session's private X display and encodes damage-driven H.264 on the
+Pixelflux (the Rust capture/encode engine behind Selkies) watches the session's
+private X display and encodes damage-driven H.264 on the
 CPU -- in STRIPE mode: the frame splits into min(cores, height/64) horizontal
 stripes, each with its own change detection and its own encoder, so only
 changed rows are encoded (in parallel) and an idle screen costs nothing. Each

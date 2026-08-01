@@ -443,8 +443,10 @@ dependencies = [
     { name = "oom-priority" },
     { name = "pcmflux" },
     { name = "pixelflux" },
+    { name = "psutil" },
     { name = "python-xlib" },
     { name = "simple-websocket" },
+    { name = "websockets" },
     { name = "werkzeug" },
 ]
 
@@ -456,8 +458,10 @@ requires-dist = [
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pcmflux", specifier = ">=2.0.0" },
     { name = "pixelflux", specifier = ">=2.0.0" },
+    { name = "psutil", specifier = ">=5.9" },
     { name = "python-xlib", specifier = ">=0.33" },
     { name = "simple-websocket", specifier = ">=1.0" },
+    { name = "websockets", specifier = ">=13" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
 
