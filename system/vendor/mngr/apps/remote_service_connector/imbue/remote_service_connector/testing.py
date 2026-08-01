@@ -600,6 +600,11 @@ class FakeSuperTokensBackend:
         }
         for name, fake in fakes.items():
             monkeypatch.setattr(app_mod, name, fake)
+        # Verification-email cooldown state is keyed by user_id, and the fake
+        # derives user_ids deterministically from the email -- so without a
+        # reset, a test that signs up "a@b.com" would suppress verification
+        # sends for every later test reusing that address.
+        app_mod._verification_email_sent_at_monotonic_by_user_id.clear()
 
     def register_provider(
         self,
@@ -747,6 +752,7 @@ class FakeSuperTokensBackend:
         user_context: dict[str, Any] | None = None,
     ) -> None:
         del tenant_id, recipe_user_id, user_context
+        self._raise_if_configured("send_email_verification_email")
         token = f"verify-{secrets.token_hex(8)}"
         self.verification_tokens[token] = (user_id, email)
         self.sent_verification_emails.append((user_id, email))
