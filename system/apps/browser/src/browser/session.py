@@ -281,7 +281,7 @@ _CAST_QUEUE_MAX_SIZE = 16
 
 # Each live session = one headful Chromium on its own Xvfb; cap the concurrent count so
 # a small compute (e.g. 4 GB) can't be OOM-ed. Override via BROWSER_MAX_SESSIONS.
-_MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "3"))
+_MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "2"))
 
 # Names whose background launch FAILED are remembered briefly so a late/retrying optimistic
 # viewer (still in 1013 reconnect-backoff when the launch failed, so it never registered a

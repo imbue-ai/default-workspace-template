@@ -57,10 +57,14 @@
   /* Paused-stream overlay: a translucent tint + label OVER the frozen last frame while
      this viewer isn't the active stream (another pane/device is). Click anywhere to resume. */
   #pausedoverlay { display: none; position: absolute; inset: 0; z-index: 14; cursor: pointer;
-    background: rgba(20, 24, 34, 0.55); flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 20px; }
+    background: rgba(12, 15, 22, 0.62); align-items: center; justify-content: center; padding: 20px; }
   #pausedoverlay.show { display: flex; }
-  #pausedoverlay .msg { font-size: 14px; color: #e6e6e6; font-weight: 600; background: rgba(0,0,0,0.45); padding: 8px 14px; border-radius: 16px; }
-  #pausedoverlay .sub { font-size: 12px; color: #9fb0c8; }
+  /* Solid card so the control bar behind it never bleeds through; a soft shadow makes it pop. */
+  #pausedoverlay .card { display: flex; flex-direction: column; gap: 9px; align-items: center; text-align: center;
+    max-width: 82%; padding: 18px 24px; border-radius: 14px;
+    background: #1b2230; border: 1px solid rgba(255, 255, 255, 0.10); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55); }
+  #pausedoverlay .title { font-size: 15px; font-weight: 700; color: #f2f5fa; letter-spacing: 0.2px; }
+  #pausedoverlay .body { font-size: 13px; line-height: 1.45; color: #aab8cc; max-width: 36ch; }
 
   /* Cover shown until the FIRST streamed frame paints. Removed on first paint (NOT on
      the lifecycle=running control message): running means Chromium is up, but pixels
@@ -110,8 +114,10 @@
       <div class="msg">Starting browser…</div>
     </div>
     <div id="pausedoverlay">
-      <div class="msg">Stream paused</div>
-      <div class="sub">Tab inactive — click to resume</div>
+      <div class="card">
+        <div class="title">Livestream paused</div>
+        <div class="body" id="pausedbody">Browser is still running, livestream is just paused to save resources.</div>
+      </div>
     </div>
     <div id="clipchip"></div>
     <div id="tipsmodal">
@@ -204,7 +210,7 @@
       releaseHeldInput();  // agent took over: release any keys/buttons we were holding
       const who = state.owner_name || state.owner_agent_id || "an agent";
       overlayMsg.textContent = "Agent has control: " + who;
-      overlay.classList.add("show");
+      if (!pausedOverlay.classList.contains("show")) overlay.classList.add("show");  // stay hidden behind the paused card
       takeControlBtn.disabled = false;
       waitingList = Array.isArray(state.waiting) ? state.waiting : [];
       if (typeof state.idle_release_seconds === "number") {
@@ -237,6 +243,7 @@
     }
     returnBar.classList.toggle("show", !agentDriving);
     returnBar.classList.toggle("handoff", !agentDriving && !!handoffReason);
+    refreshPausedAgent();  // keep the paused overlay's agent line in sync if control flips
   }
 
   // Lifecycle drives the crash overlay + the init overlay's PRESENCE, but NOT its
@@ -452,6 +459,12 @@
   // committed once the socket is OPEN so a dropped send retries; verbatim sizing).
   function sendPaneSize() {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
+    // A hidden/collapsed pane (display:none dockview tab, backgrounded app) reads a 0x0 box.
+    // Reporting that clamps to the 320x240 minimum, and the server records it as the capture
+    // region -- so on the next resume/tab-click it re-captures only that tiny top-left
+    // rectangle. Never report a pane that isn't really on screen; the ResizeObserver fires
+    // again with the true size the moment it becomes visible.
+    if (!paneVisible()) return;
     const rect = canvas.getBoundingClientRect();
     const w = Math.max(320, Math.round(rect.width) & ~1);
     const h = Math.max(240, Math.round(rect.height) & ~1);
@@ -498,9 +511,26 @@
   for (const ev of ["pointerdown", "keydown", "wheel", "focus"]) canvas.addEventListener(ev, claimActive, true);
   window.addEventListener("focus", () => { if (paneVisible()) claimActive(); });
 
-  // Paused overlay: a tint + label over the FROZEN last frame; clicking resumes.
-  function showPaused() { if (firstFramePainted) pausedOverlay.classList.add("show"); }
-  function hidePaused() { pausedOverlay.classList.remove("show"); }
+  // Paused overlay: a dimmed backdrop over the FROZEN last frame with a solid card; clicking
+  // resumes. The message is conditional on whether an agent is driving -- the stream is a
+  // separate layer, so the browser (and any agent in it) keeps running while paused. While the
+  // card is up we hide the agent control bar behind it so its text can't bleed through.
+  const pausedBody = document.getElementById("pausedbody");
+  const PAUSED_BODY_AGENT = "Browser is still running and an agent is still working on it. Livestream is just paused to save resources.";
+  const PAUSED_BODY_IDLE = "Browser is still running, livestream is just paused to save resources.";
+  function refreshPausedAgent() {
+    pausedBody.textContent = controlOwner === "agent" ? PAUSED_BODY_AGENT : PAUSED_BODY_IDLE;
+  }
+  function showPaused() {
+    if (!firstFramePainted) return;
+    refreshPausedAgent();
+    overlay.classList.remove("show");  // tuck the control bar away behind the card
+    pausedOverlay.classList.add("show");
+  }
+  function hidePaused() {
+    pausedOverlay.classList.remove("show");
+    if (controlOwner === "agent") overlay.classList.add("show");  // restore the control bar on resume
+  }
   pausedOverlay.addEventListener("pointerdown", claimActive, true);
 
   // ---- audio playback (Opus over WebCodecs -> AudioWorklet) ----
