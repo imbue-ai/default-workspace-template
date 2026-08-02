@@ -120,7 +120,6 @@ Added OpenAI Codex CLI support to the workspace image.
   broadcasting a browser reload -- existed only to change a value the process reads once
   at exec. Set `FEATURE_FLAG_ENABLE_CODEX` at workspace creation instead; absent at
   startup means off for that container's life.
-- The index shell keeps its `no-store`, now documented for the reason that actually
-  requires it: it names content-hashed bundles, and `reveal_system_interface` rebuilds
-  those and broadcasts a reload, which a heuristically-cached shell would satisfy from
-  cache while pointing at bundle filenames no longer on disk.
+- The index shell's `no-store` header is dropped from this branch. It is unrelated to
+  codex, and gabriel's default-workspace-template#349 lands the same header on the same
+  function with tests and the refresh motion that actually needs it.

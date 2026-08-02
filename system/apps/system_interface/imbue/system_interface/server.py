@@ -148,19 +148,7 @@ def _json_response(content: Any, status_code: int = 200) -> Response:
 
 
 def _html_response(html_content: str, status_code: int = 200) -> Response:
-    """An HTML response the browser must never reuse without asking.
-
-    The index shell names the frontend's content-hashed bundles (``/assets/index-<hash>.js``)
-    and is generated per request. Rebuilding the frontend -- what ``reveal_system_interface``
-    does on every system-interface update -- produces new hashes and then broadcasts a
-    reload. Served with no cache headers at all, as this was, a browser may apply
-    heuristic caching and satisfy that reload from cache, loading a shell that points at
-    bundle filenames no longer on disk. Pinning the shell is what makes the reload
-    actually fetch it; the hashed bundles keep their own caching.
-    """
-    response = Response(html_content, status=status_code, mimetype="text/html")
-    response.headers["Cache-Control"] = "no-store, must-revalidate"
-    return response
+    return Response(html_content, status=status_code, mimetype="text/html")
 
 
 def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
