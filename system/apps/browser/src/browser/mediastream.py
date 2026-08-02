@@ -169,6 +169,32 @@ def release_cast_slot(browser_id: str) -> None:
             _cast_slots[browser_id] = count - 1
 
 
+# Same backstop for the read-only /telemetry firehose: each is a thread reading the hub, so an
+# uncapped fan-out is a thread amplifier even though it's diagnostic-only.
+_MAX_TELEMETRY_PER_BROWSER = 8
+_telemetry_slots_lock = threading.Lock()
+_telemetry_slots: dict[str, int] = {}
+
+
+def reserve_telemetry_slot(browser_id: str) -> bool:
+    """Claim a /telemetry firehose slot for ``browser_id``; False if already at cap."""
+    with _telemetry_slots_lock:
+        count = _telemetry_slots.get(browser_id, 0)
+        if count >= _MAX_TELEMETRY_PER_BROWSER:
+            return False
+        _telemetry_slots[browser_id] = count + 1
+        return True
+
+
+def release_telemetry_slot(browser_id: str) -> None:
+    with _telemetry_slots_lock:
+        count = _telemetry_slots.get(browser_id, 0)
+        if count <= 1:
+            _telemetry_slots.pop(browser_id, None)
+        else:
+            _telemetry_slots[browser_id] = count - 1
+
+
 def _on_remote_clipboard(browser_id: str, data: bytes, mime: str) -> None:
     """A copy happened in the remote browser (XFixes fired): stash it for the GET and
     signal every connected viewer of this browser. Small text inlines over the control

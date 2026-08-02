@@ -43,6 +43,7 @@ Cloud / litellm proxy (``ANTHROPIC_BASE_URL``) path is intentionally unsupported
 
 import asyncio
 import base64
+import ipaddress
 import json
 import os
 import queue
@@ -51,6 +52,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from urllib.parse import urlparse
 from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Literal
@@ -282,6 +284,34 @@ _CAST_QUEUE_MAX_SIZE = 16
 # Each live session = one headful Chromium on its own Xvfb; cap the concurrent count so
 # a small compute (e.g. 4 GB) can't be OOM-ed. Override via BROWSER_MAX_SESSIONS.
 _MAX_SESSIONS = int(os.environ.get("BROWSER_MAX_SESSIONS", "2"))
+
+_ALLOWED_NAV_SCHEMES = frozenset({"http", "https"})
+
+
+def _unsafe_navigation_reason(url: str) -> "str | None":
+    """Reason a caller-supplied URL must not be navigated to (SSRF guard), or None if allowed.
+
+    Blocks non-web schemes (``file:``/``chrome:``/``data:``...) and loopback/link-local hosts
+    (including the cloud-metadata IP 169.254.169.254), so a caller can't make the browser read a
+    local file -- e.g. the Anthropic key at ``file:///home/user/.mngr/env`` -- or hit an internal
+    service and exfiltrate it back through the state/screenshot channel. Literal-IP based; a
+    hostname that DNS-rebinds to a blocked IP is a residual this minimal guard does not resolve."""
+    parsed = urlparse((url or "").strip())
+    scheme = parsed.scheme.lower()
+    if scheme not in _ALLOWED_NAV_SCHEMES:
+        return f"scheme {scheme or '(none)'!r} is not allowed (only http/https)"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return "URL has no host"
+    if host == "localhost" or host.endswith(".localhost"):
+        return "loopback host is not allowed"
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None  # a regular hostname
+    if address.is_loopback or address.is_link_local:
+        return f"internal address {host} is not allowed"
+    return None
 
 # Names whose background launch FAILED are remembered briefly so a late/retrying optimistic
 # viewer (still in 1013 reconnect-backoff when the launch failed, so it never registered a
@@ -1712,6 +1742,10 @@ class LiveBrowser(MutableModel):
         return await self.run_action(agent_id, agent_name, _do, enqueue_on_busy=False)
 
     async def act_navigate(self, agent_id: str, agent_name: str | None, url: str) -> dict[str, Any]:
+        reason = _unsafe_navigation_reason(url)
+        if reason is not None:
+            return {"ok": False, "status": "blocked", "error": f"navigation blocked: {reason}"}
+
         async def _do(handler: ActionHandler) -> dict[str, Any]:
             await handler.navigate(url)
             self._selector_map = {}  # page changed -- old element indices are void

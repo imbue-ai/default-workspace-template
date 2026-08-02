@@ -228,6 +228,21 @@ def _handle_service_sw_js(service_name: str) -> Response:
     )
 
 
+def _is_blocked_cross_origin() -> bool:
+    """True when the request carries an ``Origin`` from a DIFFERENT host than it targets -- a
+    cross-site caller (e.g. a page on another origin riding the user's session cookie). Same-
+    origin requests (Origin host == request Host) and non-browser requests (no Origin header)
+    are allowed. This is the CSRF / cross-site-WebSocket-hijacking guard the proxied backends
+    (like the browser daemon) do not do themselves; browsers always send Origin on a WS upgrade
+    and on cross-origin fetches, so a genuine same-origin viewer is never blocked."""
+    origin = request.headers.get("Origin")
+    if not origin:
+        return False
+    origin_host = urlsplit(origin).hostname
+    request_host = (request.host or "").split(":", 1)[0]
+    return bool(origin_host) and origin_host != request_host
+
+
 def _handle_service_http(service_name: str, path: str) -> Response:
     """Handle an HTTP request under ``/service/<name>/<path>``."""
     parsed_service = ServiceName(service_name)
@@ -235,6 +250,11 @@ def _handle_service_http(service_name: str, path: str) -> Response:
 
     if path == "__sw.js":
         return _handle_service_sw_js(service_name)
+
+    # Block cross-site STATE-CHANGING requests (safe methods can't be CSRF'd for side effects,
+    # and the CORS barrier hides their responses); a same-origin viewer sends a matching Origin.
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and _is_blocked_cross_origin():
+        return Response("cross-origin request blocked", status=403)
 
     is_navigation = request.headers.get("sec-fetch-mode") == "navigate"
 
@@ -388,6 +408,11 @@ def _handle_service_websocket(
     path: str,
 ) -> None:
     """Proxy a WebSocket connection under ``/service/<name>/<path>`` to the backend service."""
+    # A WebSocket upgrade always carries Origin; reject a cross-site one before touching the
+    # backend, so a page on another origin can't hijack the stream/control sockets via the cookie.
+    if _is_blocked_cross_origin():
+        client_websocket.close(4003, "cross-origin blocked")
+        return
     agent_manager = get_state().agent_manager
 
     backend_url = agent_manager.get_service_url(service_name)

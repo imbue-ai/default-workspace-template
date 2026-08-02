@@ -542,8 +542,8 @@
   // separate layer, so the browser (and any agent in it) keeps running while paused. While the
   // card is up we hide the agent control bar behind it so its text can't bleed through.
   const pausedBody = document.getElementById("pausedbody");
-  const PAUSED_BODY_AGENT = "Browser is still running and an agent is still working on it. Livestream is just paused to save resources.";
-  const PAUSED_BODY_IDLE = "Browser is still running, livestream is just paused to save resources.";
+  const PAUSED_BODY_AGENT = "Browser is still running and an agent is still working on it. Livestream is just paused to save resources. Click to resume.";
+  const PAUSED_BODY_IDLE = "Browser is still running, livestream is just paused to save resources. Click to resume.";
   function refreshPausedAgent() {
     pausedBody.textContent = controlOwner === "agent" ? PAUSED_BODY_AGENT : PAUSED_BODY_IDLE;
   }
