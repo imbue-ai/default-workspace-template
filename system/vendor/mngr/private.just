@@ -1107,9 +1107,30 @@ list-pool-hosts:
 
 # List bare-metal servers (per-server + fleet slot accounting) for the activated
 # minds env (read-only; DSN resolved from the env, no manual exports).
+#
+# NOTE: the slot columns are derived from THIS env's pool_hosts rows, so a box
+# shared with another env reads as emptier than it is. Use `just audit-boxes` for
+# true occupancy before deciding you have free slots.
 [group("minds ops")]
 list-servers:
     uv run minds server list
+
+# Audit every bare-metal box for the activated env: SSH each one and report its
+# REAL occupancy (all envs' slices, not just this env's rows) plus any cross-tier
+# contamination -- a slice stamped for another TIER, or an extra key in the lima
+# user's authorized_keys (prep writes exactly one, so a second was added by hand).
+#
+# Tiers are isolated by construction (each has its own pool keypair, and there is
+# meant to be zero cross-tier reach), so a box serving two tiers is a box both
+# tiers' keys can SSH -- each tier's operators and connector gain limactl, and so
+# root, over the other's workspaces. A bake onto a contaminated box now refuses;
+# this is how you find one WITHOUT a failed bake.
+# Read-only. Activate first and `vault login` (the pool SSH key comes from Vault).
+#
+#   eval "$(uv run minds env activate staging)" && just audit-boxes
+[group("minds ops")]
+audit-boxes:
+    uv run minds server list --verify-occupancy
 
 # (Re-)prep a bare-metal box for slice baking: qemu/lima/tooling + image staging +
 # the per-box default-workspace-template image cache dir. Pool SSH key + DSN come from
