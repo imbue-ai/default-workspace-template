@@ -126,14 +126,15 @@ _MAX_INBOUND_FRAME_BYTES = 64 * 1024
 # Warn the viewer when the box is under memory pressure. gVisor makes per-process memory
 # accounting unreliable (RSS double-counts shared pages across Chromium's ~10 processes, so
 # an idle browser already reads ~4GB), so we can't threshold a single browser. Instead we
-# trigger box-wide: allocatable memory (MemAvailable, reliable under gVisor) dropping below
-# a fraction of total RAM -- default 0.5, i.e. the box is more than half committed.
-_MEM_WARN_FRACTION = float(os.environ.get("BROWSER_MEM_WARN_FRACTION", "0.5"))
+# trigger box-wide off MemAvailable (reliable under gVisor): warn once the box is more than
+# this fraction committed. Default 0.75 -- half was too alarmist.
+_MEM_WARN_USED_FRACTION = float(os.environ.get("BROWSER_MEM_WARN_USED_FRACTION", "0.75"))
 _MEM_CHECK_INTERVAL = 5.0
 
 
 def _memory_pressure_high() -> bool:
-    """True when allocatable memory has fallen below the warn fraction of total RAM."""
+    """True when the box is more than _MEM_WARN_USED_FRACTION committed (allocatable memory
+    below the remaining fraction of total RAM)."""
     total = available = None
     try:
         with open("/proc/meminfo") as meminfo:
@@ -148,7 +149,7 @@ def _memory_pressure_high() -> bool:
         return False
     if not total or available is None:
         return False
-    return available < _MEM_WARN_FRACTION * total
+    return available < (1.0 - _MEM_WARN_USED_FRACTION) * total
 
 
 def _on_remote_clipboard(browser_id: str, data: bytes, mime: str) -> None:
