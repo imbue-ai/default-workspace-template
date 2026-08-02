@@ -208,6 +208,12 @@ def _resolve_sync(browser_id: str) -> "LiveBrowser | Response":
 
 
 def _agent_identity() -> tuple[str | None, str | None]:
+    # ADVISORY ONLY: these are client-set headers, so a local caller can present any agent id.
+    # They drive ownership/accountability among cooperating in-container agents (all the same
+    # user -- one trust domain), NOT authentication. The cross-ORIGIN boundary (a web page riding
+    # the user's cookie) is enforced upstream by the system_interface proxy's same-origin check;
+    # a non-spoofable per-agent identity would require a token minted by the proxy/manager, which
+    # this daemon has no way to verify today.
     return request.headers.get("x-mngr-agent-id"), request.headers.get("x-mngr-agent-name")
 
 
@@ -975,6 +981,9 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
     if _resolve_sync_for_ws(browser_id) is None:
         ws.close(1008)
         return
+    if not mediastream.reserve_telemetry_slot(browser_id):
+        ws.close(1013)  # per-browser firehose cap reached; retryable
+        return
     history, records = telemetry.hub.subscribe(browser_id)
     connected = True
     try:
@@ -996,6 +1005,7 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
         pass
     finally:
         telemetry.hub.unsubscribe(browser_id, records)
+        mediastream.release_telemetry_slot(browser_id)
 
 
 # --- app construction + lifecycle --------------------------------------------
