@@ -21,6 +21,7 @@ the sink is unavailable, video streams unchanged.
 """
 
 import base64
+import os
 import socket as socket_module
 import threading
 import time
@@ -34,8 +35,10 @@ from simple_websocket import ConnectionClosed
 from browser import telemetry
 from browser.audiopipe import AudioPipe, AudioPipeError
 from browser.audiopipe import is_available as is_audio_available
+from browser import window_guardian
 from browser.stream_conductor import StreamConnection, conductor
 from browser.videopipe import PixelfluxVideoPipe, VideoPipeError
+from browser.window_guardian import WindowGuardian
 from browser.xclipboard import (
     ClipboardError,
     ClipboardMonitor,
@@ -87,6 +90,34 @@ _clips: dict[str, _BrowserClipboard] = {}
 _MAX_STREAMS_PER_BROWSER = 8
 _stream_slots_lock = threading.Lock()
 _stream_slots: dict[str, int] = {}
+
+
+# Warn the viewer when the box is under memory pressure. gVisor makes per-process memory
+# accounting unreliable (RSS double-counts shared pages across Chromium's ~10 processes, so
+# an idle browser already reads ~4GB), so we can't threshold a single browser. Instead we
+# trigger box-wide: allocatable memory (MemAvailable, reliable under gVisor) dropping below
+# a fraction of total RAM -- default 0.5, i.e. the box is more than half committed.
+_MEM_WARN_FRACTION = float(os.environ.get("BROWSER_MEM_WARN_FRACTION", "0.5"))
+_MEM_CHECK_INTERVAL = 5.0
+
+
+def _memory_pressure_high() -> bool:
+    """True when allocatable memory has fallen below the warn fraction of total RAM."""
+    total = available = None
+    try:
+        with open("/proc/meminfo") as meminfo:
+            for line in meminfo:
+                if line.startswith("MemTotal:"):
+                    total = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    available = int(line.split()[1])
+                if total is not None and available is not None:
+                    break
+    except OSError:
+        return False
+    if not total or available is None:
+        return False
+    return available < _MEM_WARN_FRACTION * total
 
 
 def _reserve_stream_slot(browser_id: str) -> bool:
@@ -334,6 +365,7 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     audio_pipe: "AudioPipe | None" = None
     receiver: "threading.Thread | None" = None
     conn: "StreamConnection | None" = None
+    guardian: "WindowGuardian | None" = None
     stop_event = threading.Event()
     try:
         telemetry.hub.emit(browser_id, {"type": "conn", "event": "open"})
@@ -352,6 +384,10 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         clip_queue: "deque[str]" = deque(maxlen=32)
         clip_sink = clip_queue.append  # one identity for register/unregister set membership
         _register_clip_sink(browser_id, display, clip_sink)
+        # Keep the browser to one window pinned to the pane: re-pin against drags, close any
+        # Ctrl+N / torn-out window. Its own X connection + thread, stopped via stop_event.
+        guardian = WindowGuardian(browser_id, display, stop_event)
+        guardian.start()
         # Audio is strictly additive (pcmflux importable AND this browser has a sink). It's
         # started lazily on the first RESUME (not here) so a connection that opens paused
         # doesn't spin up a capture just to stop it; the sender loop owns its lifecycle.
@@ -374,6 +410,8 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         receiver.start()
         last_send = time.monotonic()
         last_tcpinfo = last_send
+        last_memcheck = 0.0
+        mem_high = False  # last high-memory state sent to this viewer (edge-triggered)
         while not stop_event.is_set():
             # Reconcile the conductor's desired state with the live pipe. Exactly one
             # viewer (across all browsers and devices) is active; the rest fully STOP the
@@ -408,6 +446,20 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
                 info = telemetry.read_tcp_info(ws.sock)
                 if info is not None:
                     telemetry.hub.emit(browser_id, {"type": "tcpinfo", **info})
+            # Box-wide memory pressure -> nudge the viewer to close tabs. Edge-triggered so we
+            # send only on a change; only reaches this active viewer (a paused one continues above).
+            if time.monotonic() - last_memcheck >= _MEM_CHECK_INTERVAL:
+                last_memcheck = time.monotonic()
+                high = _memory_pressure_high()
+                if high != mem_high:
+                    mem_high = high
+                    ws.send("mem,high" if high else "mem,ok")
+                    last_send = time.monotonic()
+            # A guardian (this browser's, any viewer) closed a Ctrl+N / torn-out window -> tell
+            # the ACTIVE viewer why it vanished. Browser-wide signal, drained only here (active).
+            if window_guardian.take_extra_closed(browser_id):
+                ws.send("multiwin")
+                last_send = time.monotonic()
             control_message = pipe.take_control_message()
             if control_message is not None:
                 ws.send(control_message)  # ahead of any new-size stripe (single sender => ordered)
@@ -448,4 +500,6 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
             router.close()
         if receiver is not None:
             receiver.join(timeout=5)
+        if guardian is not None:
+            guardian.join(timeout=5)  # stop_event already set above; it exits its next tick
         _release_stream_slot(browser_id)

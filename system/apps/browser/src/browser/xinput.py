@@ -33,6 +33,7 @@ import time
 
 import Xlib.error
 import Xlib.X
+import Xlib.Xatom
 from loguru import logger
 from Xlib.display import Display
 from Xlib.ext import xtest
@@ -205,6 +206,10 @@ class InputRouter:
         self._pressed_keysyms: set[int] = set()
         self._button_mask = 0
         self._lock = threading.Lock()
+        # Identify the browser window by TYPE, never size (a default-sized Ctrl+N window
+        # would fool a size heuristic). Matches the window guardian's discriminator.
+        self._window_type_atom = self._display.intern_atom("_NET_WM_WINDOW_TYPE")
+        self._normal_type_atom = self._display.intern_atom("_NET_WM_WINDOW_TYPE_NORMAL")
 
     def handle(self, message: str) -> None:
         """Dispatch one client text frame; malformed input logs and drops
@@ -295,33 +300,39 @@ class InputRouter:
                 logger.debug("paste injection failed")
 
     def resize_window(self, width: int, height: int) -> None:
-        """Resize the browser's toplevel window to fill the pane (no WM here, so
-        we configure the window directly). Best-effort: the largest mapped,
-        viewable top-level child of the root is Chromium's window; anchor it at
-        the origin so capture-region coords map 1:1. X errors (a window that
-        vanished mid-call) are swallowed -- a failed resize is cosmetic."""
+        """Resize the browser's toplevel window to fill the pane (no WM here, so we configure
+        the window directly), anchored at the origin so capture-region coords map 1:1. The
+        window is found by TYPE and id (the lowest-id NORMAL top-level -- the same window the
+        guardian keeps), NOT by size: a default-sized Ctrl+N window would fool a size pick. X
+        errors (a window that vanished mid-call) are swallowed -- a failed resize is cosmetic."""
         with self._lock:
             # Broad on purpose: python-xlib raises assorted protocol errors
             # (BadWindow/BadMatch) if the window changes under us; none should
             # take the input thread down.
             try:
-                root = self._display.screen().root
-                best = None
-                best_area = -1
-                for window in root.query_tree().children:
-                    attrs = window.get_attributes()
-                    if attrs.map_state != Xlib.X.IsViewable or attrs.override_redirect:
-                        continue
-                    geometry = window.get_geometry()
-                    area = geometry.width * geometry.height
-                    if area > best_area:
-                        best_area = area
-                        best = window
-                if best is not None:
-                    best.configure(x=0, y=0, width=width, height=height)
+                main = self._main_browser_window()
+                if main is not None:
+                    main.configure(x=0, y=0, width=width, height=height)
                     self._display.sync()
             except Exception:  # noqa: BLE001
                 logger.debug("resize_window({},{}) failed (window changed?)", width, height)
+
+    def _main_browser_window(self):  # noqa: ANN202  (Xlib window object)
+        """The browser's main top-level: the lowest-id viewable, non-override window of type
+        NORMAL. Identified by TYPE + id (never size), matching the window guardian's choice so
+        input and resize target the same window the guardian keeps."""
+        root = self._display.screen().root
+        main = None
+        for window in root.query_tree().children:
+            attrs = window.get_attributes()
+            if attrs.map_state != Xlib.X.IsViewable or attrs.override_redirect:
+                continue
+            prop = window.get_full_property(self._window_type_atom, Xlib.Xatom.ATOM)
+            if prop is not None and prop.value and self._normal_type_atom not in prop.value:
+                continue  # a dialog/utility popup, not a browser window
+            if main is None or window.id < main.id:
+                main = window
+        return main
 
     def close(self) -> None:
         self.release_all()

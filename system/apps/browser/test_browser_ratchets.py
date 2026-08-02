@@ -91,7 +91,11 @@ def test_prevent_broad_exception_catch() -> None:
     #  * +1 in stream_conductor.py: StreamConnection.wake() nudges a sender loop and is
     #    best-effort by contract (a failed wake must never fault the caller flipping the
     #    active viewer), so it swallows any wake-callback error and logs at debug.
-    rc.check_broad_exception_catch(_DIR, snapshot(23))
+    #  * +2 in window_guardian.py: the per-viewer window-pinning thread runs on its own X
+    #    connection and must never die on a transient X error -- one guards opening the display
+    #    (a failure just disables the guard) and one guards each tick (logged at debug, loop
+    #    continues). ConnectionClosedError is caught narrowly above these.
+    rc.check_broad_exception_catch(_DIR, snapshot(25))
 
 
 def test_prevent_builtin_exception_raises() -> None:

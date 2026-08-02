@@ -39,6 +39,12 @@
   #tipscard b { color: #4ec9b0; }
   #tipsclose { margin-top: 18px; padding: 6px 14px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
 
+  /* Shown once when the guardian closes a Ctrl+N / torn-out window the capture can't show. */
+  #multiwinmodal { display: none; position: absolute; inset: 0; z-index: 31; background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center; padding: 24px; }
+  #multiwinmodal.show { display: flex; }
+  #multiwinmodal .card { background: #252526; border: 1px solid #3a3a3a; border-radius: 8px; max-width: 420px; padding: 20px 22px; color: #ddd; font-size: 13px; line-height: 1.5; text-align: center; }
+  #multiwinclose { margin-top: 16px; padding: 6px 14px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+
   /* Full-stage grey overlay while an agent has control (sits above the canvas and
      swallows pointer events; the server also drops input, this blocks it locally too). */
   #overlay { display: none; position: absolute; inset: 0; z-index: 10; background: rgba(30, 30, 30, 0.72); flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 20px; }
@@ -65,6 +71,13 @@
     background: #1b2230; border: 1px solid rgba(255, 255, 255, 0.10); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55); }
   #pausedoverlay .title { font-size: 15px; font-weight: 700; color: #f2f5fa; letter-spacing: 0.2px; }
   #pausedoverlay .body { font-size: 13px; line-height: 1.45; color: #aab8cc; max-width: 36ch; }
+
+  /* Memory-pressure warning: its OWN bar above the stage, shown while the box is > half
+     committed regardless of who holds control, hidden on its own when memory recovers. */
+  #memwarn { display: none; align-items: center; gap: 6px; padding: 6px 10px;
+    background: #3a1e1e; border-bottom: 1px solid #5a2a2a; font-size: 12px; color: #ff8a8a; font-weight: 600; }
+  #memwarn.show { display: flex; }
+  #memwarn .tri { color: #ff5252; font-size: 13px; }
 
   /* Cover shown until the FIRST streamed frame paints. Removed on first paint (NOT on
      the lifecycle=running control message): running means Chromium is up, but pixels
@@ -98,6 +111,7 @@
     <button id="returnbtn">Return control to agents</button>
     <button id="tipsbtn">View tips</button>
   </div>
+  <div id="memwarn"><span class="tri">&#9888;</span><span>Warning: Browser is taking up &gt;50% of RAM. Close some tabs.</span></div>
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
     <div id="overlay">
@@ -139,6 +153,12 @@
         <button id="tipsclose">Got it</button>
       </div>
     </div>
+    <div id="multiwinmodal">
+      <div class="card">
+        <div>Sorry, multiple windows are not supported.</div>
+        <button id="multiwinclose">Got it</button>
+      </div>
+    </div>
   </div>
 </div>
 <script>
@@ -152,6 +172,7 @@
   const crashOverlay = document.getElementById("crashoverlay");
   const initOverlay = document.getElementById("initoverlay");
   const pausedOverlay = document.getElementById("pausedoverlay");
+  const memWarn = document.getElementById("memwarn");
   const overlayMsg = document.getElementById("overlaymsg");
   const overlaySub = document.getElementById("overlaysub");
   const takeControlBtn = document.getElementById("takecontrol");
@@ -161,6 +182,8 @@
   const tipsBtn = document.getElementById("tipsbtn");
   const tipsModal = document.getElementById("tipsmodal");
   const tipsCloseBtn = document.getElementById("tipsclose");
+  const multiWinModal = document.getElementById("multiwinmodal");
+  document.getElementById("multiwinclose").addEventListener("click", () => multiWinModal.classList.remove("show"));
 
   const HEADER_LEN = 10;
   const FRAME_TYPE_IDR = 1;
@@ -400,6 +423,9 @@
       if (typeof event.data === "string") {
         if (event.data === "paused") { showPaused(); return; }   // conductor paused this viewer
         if (event.data === "active") { hidePaused(); return; }   // resumed as the active viewer
+        if (event.data === "mem,high") { memWarn.classList.add("show"); return; }     // box > half committed
+        if (event.data === "mem,ok") { memWarn.classList.remove("show"); return; }    // recovered -> auto-hide
+        if (event.data === "multiwin") { multiWinModal.classList.add("show"); return; }  // guardian closed a stray window
         if (event.data.startsWith("res,")) {
           const [, w, h] = event.data.split(",");
           for (const y in rows) { try { rows[y].decoder?.close(); } catch (_) {} }
