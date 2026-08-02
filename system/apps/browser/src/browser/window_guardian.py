@@ -45,12 +45,11 @@ def signal_extra_closed(browser_id: str) -> None:
 
 
 def take_extra_closed(browser_id: str) -> bool:
-    """True (once) if a stray window was closed for this browser since the last call."""
+    """True (once) if a stray window was closed for this browser since the last call. Pops the
+    key so the map holds only pending signals -- it can't accumulate one entry per browser id
+    ever seen for the life of the process."""
     with _closed_lock:
-        if _closed_signals.get(browser_id):
-            _closed_signals[browser_id] = False
-            return True
-        return False
+        return bool(_closed_signals.pop(browser_id, False))
 
 
 class WindowGuardian(threading.Thread):
