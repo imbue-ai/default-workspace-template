@@ -1,8 +1,3 @@
-Made the TUI-ready timeout overridable per agent type (`get_tui_ready_timeout_seconds`),
-so a harness whose startup legitimately renders the composer late -- e.g. a cold codex
-resume that replays the whole rollout -- waits long enough instead of turning a
-slow-but-fine resume into a hard send failure.
-
 Added two harness-neutral create options, `--output-style` and `--append-system-prompt`, so
 a create template can describe an agent's *role* without naming the harness that will run it.
 Previously the only way to express either was `agent_args`, which is raw argv and therefore
