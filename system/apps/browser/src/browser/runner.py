@@ -310,6 +310,12 @@ def create_browser() -> Response:
 def close_browser(browser_id: str) -> Response:
     if (gate := _require_ready()) is not None:
         return gate
+    # Validate the name before it reaches manager.close / forget_profile_dir, which build a
+    # filesystem path from it and rmtree it. The route converter already rejects encoded
+    # slashes, but an explicit guard is the real defense against a crafted id escaping the
+    # profile directory (defense in depth for the delete path).
+    if not is_valid_browser_name(browser_id):
+        return jsonify({"error": "invalid browser name"}), 404
     bridge.run(manager.close(browser_id), timeout=_ROUTE_TIMEOUT)
     # Rewrite the manifest (name now gone) BEFORE deleting the profile, so a crash between
     # them leaves an orphan dir (swept next boot), never a manifest entry pointing at a
@@ -753,12 +759,15 @@ def cmd_clipboard_paste(browser_id: str) -> Response:
 
 
 def cmd_clipboard_out(browser_id: str) -> Response:
-    """Copy-out: the bytes of the last remote copy on this browser, native mime. Ungated
-    -- it's what's already on the screen the human is watching. As with paste,
-    GET /clipboard/out, keyed per browser."""
+    """Copy-out: the bytes of the last remote copy on this browser, native mime. Gated on
+    human control (like paste-in) -- a copy-out can carry a secret the human just copied
+    (a password, a 2FA code), so only the party currently holding control may read it, not
+    an idle agent. GET /clipboard/out, keyed per browser."""
     resolved = _resolve_sync(browser_id)
     if isinstance(resolved, Response):
         return resolved
+    if not resolved.input_allowed:
+        return jsonify({"error": "clipboard is readable only while you hold control"}), 403
     return mediastream.clipboard_out(browser_id)
 
 
@@ -834,6 +843,9 @@ def cast_socket(ws: Any, browser_id: str) -> None:
             ws.close(1008)  # gone / never valid -> terminal
         return
     session = resolved
+    if not mediastream.reserve_cast_slot(browser_id):
+        ws.close(1013)  # per-browser cast cap reached; retryable
+        return
     # Register + seed the initial control/tabs sync atomically on the loop, so no
     # live frame can interleave ahead of the state the viewer needs first. The lifecycle
     # is captured in the same on-loop step so the initializing banner below is consistent
@@ -871,6 +883,7 @@ def cast_socket(ws: Any, browser_id: str) -> None:
         stop_event.set()
         inbound.join(timeout=5)
         bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
+        mediastream.release_cast_slot(browser_id)
 
 
 def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
@@ -926,17 +939,42 @@ def telemetry_client(browser_id: str) -> Response:
         records = [records]
     if not isinstance(records, list):
         return jsonify({"error": "expected a JSON list"}), 400
+    if not is_valid_browser_name(browser_id):
+        return jsonify({"error": "invalid browser name"}), 404
     for record in records[:5000]:  # bound the batch: a client reports a handful of stripes per post
         if isinstance(record, dict):
-            record["type"] = "client"
-            telemetry.hub.emit(browser_id, record)
+            telemetry.hub.emit(browser_id, _clean_client_record(record))
     return jsonify({"ok": True})
+
+
+# The only fields the lens joins on / renders for a client record. Coercing to just these
+# (numbers only) means a hostile POST can't pin arbitrary-sized values in the by-reference
+# telemetry rings -- the records stay a few bytes each, so they can't be inflated into an OOM.
+_CLIENT_RECORD_FIELDS = ("fid", "y", "t_arrived", "t_decoded", "t_painted", "dq")
+
+
+def _clean_client_record(record: dict) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {"type": "client"}
+    for key in _CLIENT_RECORD_FIELDS:
+        value = record.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            cleaned[key] = value
+    if record.get("err") is True:
+        cleaned["err"] = True
+    return cleaned
 
 
 def telemetry_socket(ws: Any, browser_id: str) -> None:
     """Read-only firehose: replay recent history, then stream new telemetry records
     (batched JSON arrays) to the lens. Subscribing/draining never touches the pipe's
     lock, so a slow or absent lens cannot back-pressure the stream."""
+    # Resolve the browser BEFORE subscribing: subscribe() auto-creates hub state for whatever
+    # id it's handed, so an unvalidated id would let a caller allocate unbounded per-id state
+    # (and keep the resource sampler running) just by opening firehose sockets. Only a real,
+    # registered browser may be watched.
+    if _resolve_sync_for_ws(browser_id) is None:
+        ws.close(1008)
+        return
     history, records = telemetry.hub.subscribe(browser_id)
     connected = True
     try:

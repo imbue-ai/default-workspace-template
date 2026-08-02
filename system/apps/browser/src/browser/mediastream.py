@@ -91,6 +91,17 @@ _MAX_STREAMS_PER_BROWSER = 8
 _stream_slots_lock = threading.Lock()
 _stream_slots: dict[str, int] = {}
 
+# Same backstop for /cast (control) connections: each spawns two threads and a broadcast
+# queue the loop iterates on every control event, so an uncapped fan-out is a thread/CPU
+# amplifier. /stream was already capped; /cast was not.
+_MAX_CASTS_PER_BROWSER = 8
+_cast_slots_lock = threading.Lock()
+_cast_slots: dict[str, int] = {}
+
+# Reject an oversized inbound /stream control frame before parsing. Control frames (ack,
+# resize, i/h, held-key list) are tiny; a multi-MB frame is hostile, not real traffic.
+_MAX_INBOUND_FRAME_BYTES = 64 * 1024
+
 
 # Warn the viewer when the box is under memory pressure. gVisor makes per-process memory
 # accounting unreliable (RSS double-counts shared pages across Chromium's ~10 processes, so
@@ -137,6 +148,25 @@ def _release_stream_slot(browser_id: str) -> None:
             _stream_slots.pop(browser_id, None)
         else:
             _stream_slots[browser_id] = count - 1
+
+
+def reserve_cast_slot(browser_id: str) -> bool:
+    """Claim a /cast connection slot for ``browser_id``; False if already at cap."""
+    with _cast_slots_lock:
+        count = _cast_slots.get(browser_id, 0)
+        if count >= _MAX_CASTS_PER_BROWSER:
+            return False
+        _cast_slots[browser_id] = count + 1
+        return True
+
+
+def release_cast_slot(browser_id: str) -> None:
+    with _cast_slots_lock:
+        count = _cast_slots.get(browser_id, 0)
+        if count <= 1:
+            _cast_slots.pop(browser_id, None)
+        else:
+            _cast_slots[browser_id] = count - 1
 
 
 def _on_remote_clipboard(browser_id: str, data: bytes, mime: str) -> None:
@@ -228,6 +258,8 @@ def clipboard_paste(browser_id: str, session: Any, data: bytes, mime: str) -> Re
         return jsonify({"error": "no active viewer"}), 409
     if not data:
         return jsonify({"error": "empty clipboard"}), 400
+    if len(data) > _CLIPBOARD_MAX_BYTES:  # enforce the declared cap (was previously unused)
+        return jsonify({"error": "clipboard too large"}), 413
     router = InputRouter(display)
     try:
         set_clipboard(display, data, mime)
@@ -299,6 +331,10 @@ def _receive_pump(
         while not stop_event.is_set():
             data = ws.receive(timeout=_RECEIVE_POLL_SECONDS)
             if data is None or isinstance(data, bytes):
+                continue
+            if len(data) > _MAX_INBOUND_FRAME_BYTES:
+                # Control frames are tiny; a giant one is hostile (e.g. a multi-MB `kh`
+                # held-key list building a huge int set). Drop it before parsing.
                 continue
             if data.startswith("ack,"):
                 try:
