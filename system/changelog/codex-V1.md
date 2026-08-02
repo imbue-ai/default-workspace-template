@@ -106,3 +106,11 @@ Added OpenAI Codex CLI support to the workspace image.
   (`CodexAgent._TUI_READY_TIMEOUT_SECONDS`) rather than restated, and the delivery pool
   bounded at 8 workers so a burst of cold starts queues instead of spawning per send.
   No behavior change.
+- The send endpoint is a plain synchronous send again. The worker pool, the 20s sync
+  budget and the accepted-for-delivery 202 are gone. Known regression, taken
+  deliberately: messaging a STOPPED agent blocks until the harness confirms, and a cold
+  codex resume replays its whole rollout, so that request can outlast the ingress
+  proxy's timeout and surface as "failed to send: null". The durable fix is a
+  pending-message queue owned by the app rather than by each harness's TUI process --
+  codex and antigravity both keep theirs in memory where nothing can see it or recover
+  it, while pi and opencode expose durable ones. Tracked as follow-up work.
