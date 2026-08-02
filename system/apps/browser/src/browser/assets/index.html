@@ -17,6 +17,10 @@
   #returnbar { display: none; align-items: center; gap: 10px; padding: 6px 10px; background: #2a2a2a; border-bottom: 1px solid #333; font-size: 12px; color: #4ec9b0; }
   #returnbar.show { display: flex; }
   #returnbar.handoff { background: #5a3a1a; color: #ffcc66; }
+  /* The status text (esp. a long "agents waiting: ..." queue) truncates with an ellipsis so it
+     can't push the buttons off-screen; the warning and buttons keep their size. */
+  #returnqueue { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #memwarn, #returnbtn, #tipsbtn { flex: 0 0 auto; }
   #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
   /* "View tips" is pushed to the far right of the bar; margin-left:auto absorbs the free
      space to its left regardless of what else is shown. */
