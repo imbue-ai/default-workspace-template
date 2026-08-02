@@ -114,3 +114,13 @@ Added OpenAI Codex CLI support to the workspace image.
   pending-message queue owned by the app rather than by each harness's TUI process --
   codex and antigravity both keep theirs in memory where nothing can see it or recover
   it, while pi and opencode expose durable ones. Tracked as follow-up work.
+- Feature flags are set at process start and nowhere else. `enable_workspace_feature_flag.sh`
+  is deleted: 293 lines whose every step -- rewriting supervisord's `environment=` line,
+  reread/update/restart, waiting for the port, verifying the value reached the process,
+  broadcasting a browser reload -- existed only to change a value the process reads once
+  at exec. Set `FEATURE_FLAG_ENABLE_CODEX` at workspace creation instead; absent at
+  startup means off for that container's life.
+- The index shell keeps its `no-store`, now documented for the reason that actually
+  requires it: it names content-hashed bundles, and `reveal_system_interface` rebuilds
+  those and broadcasts a reload, which a heuristically-cached shell would satisfy from
+  cache while pointing at bundle filenames no longer on disk.
