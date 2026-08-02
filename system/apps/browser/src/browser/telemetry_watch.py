@@ -267,11 +267,9 @@ def _render(state: _State, browser_id: str, connected: bool, live: bool = True) 
         rr = state.rate
         lines.append(
             f'{_C["b"]}capture{_C["x"]}   applied {_C["c"]}{rr["applied_fps"]:.0f}{_C["x"]} fps'
-            f'   ceiling {rr["ceiling"]:.0f}   AIMD {rr["aimd_fps"]:.0f}   CRF {rr["crf"]}'
+            f'   AIMD {rr["aimd_fps"]:.0f}   CRF {rr["crf"]}'
             f'   window {rr["limit"]}   {_C["gray"]}reason {rr["reason"]}{_C["x"]}'
         )
-        if rr["ceiling"] <= 3:
-            lines.append(f'  {_C["y"]}↳ throttled to ~{rr["ceiling"]:.0f}fps: the pane is hidden, not the network{_C["x"]}')
     else:
         lines.append(f'{_C["b"]}capture{_C["x"]}   {_C["gray"]}waiting for a rate decision…{_C["x"]}')
 
