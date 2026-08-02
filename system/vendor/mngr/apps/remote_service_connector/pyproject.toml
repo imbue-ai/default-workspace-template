@@ -11,6 +11,7 @@ dependencies = [
     "imbue-common",
     "loguru>=0.7",
     "modal>=1.4.3",
+    "modal-app-kit",
     "paramiko>=3.0",
     "psycopg2-binary>=2.9",
     "pydantic>=2.0",
@@ -32,6 +33,7 @@ exclude = ["*_test.py", "test_*.py", "**/conftest.py", "**/testing.py"]
 
 [tool.uv.sources]
 imbue-common = { workspace = true }
+modal-app-kit = { workspace = true }
 
 # Shared pytest settings (markers, filterwarnings, coverage report config)
 # are centralized in:

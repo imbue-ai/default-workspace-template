@@ -18,12 +18,15 @@ import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
 
-import imbue.remote_service_connector.app as app_module
-from imbue.remote_service_connector.app import ForwardingCtx
-from imbue.remote_service_connector.app import HttpCloudflareOps
-from imbue.remote_service_connector.app import UserAuth
-from imbue.remote_service_connector.app import web_app
+import imbue.remote_service_connector.auth as auth_module
+import imbue.remote_service_connector.entitlements as entitlements_module
+import imbue.remote_service_connector.forwarding as forwarding_module
+import imbue.remote_service_connector.hosts as hosts_module
+from imbue.remote_service_connector.auth import UserAuth
+from imbue.remote_service_connector.cloudflare import HttpCloudflareOps
+from imbue.remote_service_connector.forwarding import ForwardingCtx
 from imbue.remote_service_connector.testing import make_fake_entitlements_store
+from imbue.remote_service_connector.web import web_app
 
 _RELEASE_USER_EMAIL = "release-test@example.com"
 
@@ -79,20 +82,20 @@ def test_full_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     # patching, matching the app_test pattern); every Cloudflare call is real.
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.invalid")
     entitlements_store = make_fake_entitlements_store()
-    fakes: dict[str, object] = {
-        "get_ctx": lambda: ctx,
-        "_authenticate_supertokens": _stub_supertokens,
-        "get_entitlements_store": lambda: entitlements_store,
-        "_get_user_id_from_access_token": lambda token: user_id,
+    fakes: list[tuple[object, str, object]] = [
+        (forwarding_module, "get_ctx", lambda: ctx),
+        (auth_module, "_authenticate_supertokens", _stub_supertokens),
+        (entitlements_module, "get_entitlements_store", lambda: entitlements_store),
+        (auth_module, "get_user_id_from_access_token", lambda token: user_id),
         # A post-cutoff time_joined makes the lazily-created entitlements row
         # resolve to the explorer plan without consulting the paid-list DB.
-        "_get_user_time_joined_ms": lambda queried_user_id, user_getter=None: 2**53,
+        (entitlements_module, "_get_user_time_joined_ms", lambda queried_user_id, user_getter=None: 2**53),
         # The tunnel-token service path looks the owner's email up from
         # SuperTokens; return the stub email instead of a live core lookup.
-        "_default_email_getter": lambda queried_user_id, user_getter=None: _RELEASE_USER_EMAIL,
-    }
-    for name, fake_impl in fakes.items():
-        monkeypatch.setattr(app_module, name, fake_impl)
+        (auth_module, "default_email_getter", lambda queried_user_id, user_getter=None: _RELEASE_USER_EMAIL),
+    ]
+    for target_module, name, fake_impl in fakes:
+        monkeypatch.setattr(target_module, name, fake_impl)
 
     client = TestClient(web_app)
     user_headers = {"Authorization": f"Bearer {stub_session_token}"}
@@ -174,7 +177,7 @@ def test_build_slice_teardown_commands_includes_disk_when_present() -> None:
     """Verify that when a data disk name is supplied, teardown emits both the instance
     delete and a separate disk delete command (in that order). The test would fail if the
     disk-delete command were omitted, reordered, or built with the wrong name."""
-    commands = app_module.build_slice_teardown_commands("mngr-slice-abc", "mngr-slice-abc-data")
+    commands = hosts_module.build_slice_teardown_commands("mngr-slice-abc", "mngr-slice-abc-data")
     assert commands == (
         "limactl delete --force mngr-slice-abc",
         "limactl disk delete --force mngr-slice-abc-data",
@@ -185,7 +188,7 @@ def test_build_slice_teardown_commands_omits_disk_when_absent() -> None:
     """Verify that when no data disk name is supplied (None), teardown emits only the single
     instance-delete command and no disk-delete command. The test would fail if a spurious
     disk-delete were appended for the diskless case."""
-    commands = app_module.build_slice_teardown_commands("mngr-slice-abc", None)
+    commands = hosts_module.build_slice_teardown_commands("mngr-slice-abc", None)
     assert commands == ("limactl delete --force mngr-slice-abc",)
 
 
@@ -195,6 +198,6 @@ def test_build_slice_teardown_commands_quotes_unsafe_names() -> None:
     test would fail if the names were interpolated raw, leaving the ``;`` separator active."""
     # Defense-in-depth: instance/disk names flow into a shell command, so they
     # must be shell-quoted.
-    commands = app_module.build_slice_teardown_commands("a b; rm -rf /", "d$x")
+    commands = hosts_module.build_slice_teardown_commands("a b; rm -rf /", "d$x")
     assert ";" not in commands[0].replace("'a b; rm -rf /'", "")
     assert commands[0] == "limactl delete --force 'a b; rm -rf /'"

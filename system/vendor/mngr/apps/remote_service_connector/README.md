@@ -15,6 +15,17 @@ Allows authenticated users to:
 
 After creating a tunnel, users receive a token to run `cloudflared tunnel run --token <TOKEN>` on their host.
 
+## Code layout
+
+The service lives in `imbue/remote_service_connector/`:
+
+- `app.py` -- the Modal deployment entrypoint, and nothing else: image, `modal.App`, secrets, function definitions (web app + crons). Deployed by file path; the shipped modules may never import it.
+- `web.py` -- FastAPI assembly (mounts every feature router) plus the unauthenticated system endpoints (`/health/liveness`, `/generation`, `/version`).
+- Feature modules, each an `APIRouter`: `tunnels.py`, `hosts.py`, `llm_keys.py`, `accounts.py`, `sync.py`, `retention.py`, `auth_proxy.py`, and the `r2/` subpackage (`naming`, `stores`, `buckets`, `grants`, `sweep`).
+- Foundation modules: `forwarding.py` (Cloudflare business logic + `get_ctx`), `auth.py`, `entitlements.py`, `litellm_client.py`, `cloudflare.py` (raw API client), `naming.py`, `http_api.py`, `db.py`, `errors.py`, `deploy_constants.py` (the image's pip set).
+
+The container receives only these modules plus `imbue.modal_app_kit` -- nothing else from the monorepo exists at runtime, so shipped modules must not import anything else from it. The rules (and why they exist) are documented in [libs/modal_app_kit/README.md](../../libs/modal_app_kit/README.md) and enforced by `test_project_ratchets.py`.
+
 ## Deployment
 
 Deployment is split into two pieces so you can rotate secrets without redeploying code and vice versa.

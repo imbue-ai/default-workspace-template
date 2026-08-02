@@ -54,6 +54,7 @@ members = [
     "imbue-mngr-wait",
     "minds",
     "mngr-minds-eval",
+    "modal-app-kit",
     "modal-litellm",
     "modal-proxy",
     "overlay",
@@ -3586,12 +3587,28 @@ wheels = [
 ]
 
 [[package]]
+name = "modal-app-kit"
+version = "0.1.0"
+source = { editable = "libs/modal_app_kit" }
+dependencies = [
+    { name = "imbue-common" },
+    { name = "modal" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "imbue-common", editable = "libs/imbue_common" },
+    { name = "modal", specifier = ">=1.4.3" },
+]
+
+[[package]]
 name = "modal-litellm"
 version = "0.1.0"
 source = { editable = "apps/modal_litellm" }
 dependencies = [
     { name = "litellm", extra = ["proxy"] },
     { name = "modal" },
+    { name = "modal-app-kit" },
     { name = "prisma" },
     { name = "pyyaml" },
     { name = "tenacity" },
@@ -3601,6 +3618,7 @@ dependencies = [
 requires-dist = [
     { name = "litellm", extras = ["proxy"], specifier = ">=1.83" },
     { name = "modal", specifier = ">=1.4.3" },
+    { name = "modal-app-kit", editable = "libs/modal_app_kit" },
     { name = "prisma", specifier = ">=0.15" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "tenacity", specifier = ">=8.0" },
@@ -4978,6 +4996,7 @@ dependencies = [
     { name = "imbue-common" },
     { name = "loguru" },
     { name = "modal" },
+    { name = "modal-app-kit" },
     { name = "paramiko" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
@@ -4993,6 +5012,7 @@ requires-dist = [
     { name = "imbue-common", editable = "libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "modal", specifier = ">=1.4.3" },
+    { name = "modal-app-kit", editable = "libs/modal_app_kit" },
     { name = "paramiko", specifier = ">=3.0" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.0" },
