@@ -82,21 +82,41 @@ class _BrowserClipboard:
 _clip_lock = threading.Lock()
 _clips: dict[str, _BrowserClipboard] = {}
 
-# Backstop cap on concurrent /stream connections per browser. The conductor already holds
-# CPU to one live encoder (the rest are paused, ~0 CPU), but each connection still owns a
-# thread, an X display connection and a pipe object; this bounds that footprint so a client
-# can't exhaust threads/FDs by opening connections in a loop. Generous for real use (a few
-# devices, split panes) while still finite.
-_MAX_STREAMS_PER_BROWSER = 8
-_stream_slots_lock = threading.Lock()
-_stream_slots: dict[str, int] = {}
+class _BrowserSlotCap:
+    """Per-browser connection cap: a keyed counter under one lock. reserve() claims a slot for
+    a browser id (False at cap); release() frees one, dropping the key at zero so the map holds
+    only browsers with a live connection. Backstops the per-connection footprint (threads, FDs,
+    X connections) that the conductor's one-live-encoder cap doesn't bound -- a client can't
+    exhaust resources by opening connections in a loop."""
 
-# Same backstop for /cast (control) connections: each spawns two threads and a broadcast
-# queue the loop iterates on every control event, so an uncapped fan-out is a thread/CPU
-# amplifier. /stream was already capped; /cast was not.
-_MAX_CASTS_PER_BROWSER = 8
-_cast_slots_lock = threading.Lock()
-_cast_slots: dict[str, int] = {}
+    def __init__(self, cap: int) -> None:
+        self._cap = cap
+        self._lock = threading.Lock()
+        self._counts: dict[str, int] = {}
+
+    def reserve(self, browser_id: str) -> bool:
+        with self._lock:
+            count = self._counts.get(browser_id, 0)
+            if count >= self._cap:
+                return False
+            self._counts[browser_id] = count + 1
+            return True
+
+    def release(self, browser_id: str) -> None:
+        with self._lock:
+            count = self._counts.get(browser_id, 0)
+            if count <= 1:
+                self._counts.pop(browser_id, None)
+            else:
+                self._counts[browser_id] = count - 1
+
+
+# One cap per connection kind: /stream (a thread + X connection + pipe each), /cast (two
+# threads + a broadcast queue the loop iterates per control event), and the read-only
+# /telemetry firehose (a reader thread each). Same generous per-browser limit for all three.
+stream_slots = _BrowserSlotCap(8)
+cast_slots = _BrowserSlotCap(8)
+telemetry_slots = _BrowserSlotCap(8)
 
 # Reject an oversized inbound /stream control frame before parsing. Control frames (ack,
 # resize, i/h, held-key list) are tiny; a multi-MB frame is hostile, not real traffic.
@@ -129,70 +149,6 @@ def _memory_pressure_high() -> bool:
     if not total or available is None:
         return False
     return available < _MEM_WARN_FRACTION * total
-
-
-def _reserve_stream_slot(browser_id: str) -> bool:
-    """Claim a connection slot for ``browser_id``; False if the browser is already at cap."""
-    with _stream_slots_lock:
-        count = _stream_slots.get(browser_id, 0)
-        if count >= _MAX_STREAMS_PER_BROWSER:
-            return False
-        _stream_slots[browser_id] = count + 1
-        return True
-
-
-def _release_stream_slot(browser_id: str) -> None:
-    with _stream_slots_lock:
-        count = _stream_slots.get(browser_id, 0)
-        if count <= 1:
-            _stream_slots.pop(browser_id, None)
-        else:
-            _stream_slots[browser_id] = count - 1
-
-
-def reserve_cast_slot(browser_id: str) -> bool:
-    """Claim a /cast connection slot for ``browser_id``; False if already at cap."""
-    with _cast_slots_lock:
-        count = _cast_slots.get(browser_id, 0)
-        if count >= _MAX_CASTS_PER_BROWSER:
-            return False
-        _cast_slots[browser_id] = count + 1
-        return True
-
-
-def release_cast_slot(browser_id: str) -> None:
-    with _cast_slots_lock:
-        count = _cast_slots.get(browser_id, 0)
-        if count <= 1:
-            _cast_slots.pop(browser_id, None)
-        else:
-            _cast_slots[browser_id] = count - 1
-
-
-# Same backstop for the read-only /telemetry firehose: each is a thread reading the hub, so an
-# uncapped fan-out is a thread amplifier even though it's diagnostic-only.
-_MAX_TELEMETRY_PER_BROWSER = 8
-_telemetry_slots_lock = threading.Lock()
-_telemetry_slots: dict[str, int] = {}
-
-
-def reserve_telemetry_slot(browser_id: str) -> bool:
-    """Claim a /telemetry firehose slot for ``browser_id``; False if already at cap."""
-    with _telemetry_slots_lock:
-        count = _telemetry_slots.get(browser_id, 0)
-        if count >= _MAX_TELEMETRY_PER_BROWSER:
-            return False
-        _telemetry_slots[browser_id] = count + 1
-        return True
-
-
-def release_telemetry_slot(browser_id: str) -> None:
-    with _telemetry_slots_lock:
-        count = _telemetry_slots.get(browser_id, 0)
-        if count <= 1:
-            _telemetry_slots.pop(browser_id, None)
-        else:
-            _telemetry_slots[browser_id] = count - 1
 
 
 def _on_remote_clipboard(browser_id: str, data: bytes, mime: str) -> None:
@@ -404,7 +360,7 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
     ``audio_capture_device`` (this browser's PulseAudio monitor, or None if no audio).
     """
     _set_nodelay(ws)
-    if not _reserve_stream_slot(browser_id):
+    if not stream_slots.reserve(browser_id):
         logger.warning("stream connection cap reached for {}; rejecting new viewer", browser_id)
         ws.close(1013)  # retryable: an existing viewer may free a slot
         return
@@ -413,7 +369,7 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
         pipe.start()
     except VideoPipeError as error:
         logger.warning("video pipe failed to start for {} ({})", browser_id, error)
-        _release_stream_slot(browser_id)
+        stream_slots.release(browser_id)
         ws.close(1011)
         return
     # Passive telemetry: begin recording for this browser (the hot paths emit into a
@@ -533,8 +489,9 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
             while clip_queue:
                 ws.send(clip_queue.popleft())
                 last_send = time.monotonic()
-            audio_pending = audio_pipe.has_pending if audio_pipe is not None else None
+            audio_pending = None
             if audio_pipe is not None:
+                audio_pending = audio_pipe.has_pending
                 for chunk in audio_pipe.drain():
                     ws.send(chunk)
                     last_send = time.monotonic()
@@ -564,4 +521,4 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
             receiver.join(timeout=5)
         if guardian is not None:
             guardian.join(timeout=5)  # stop_event already set above; it exits its next tick
-        _release_stream_slot(browser_id)
+        stream_slots.release(browser_id)

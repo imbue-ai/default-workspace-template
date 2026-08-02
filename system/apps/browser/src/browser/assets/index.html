@@ -228,8 +228,8 @@
     controlOwner = state.owner;
     const agentDriving = state.owner === "agent";
     const humanPinned = state.owner === "human" && !!state.human_pinned;
-    if (agentDriving) { handoffReason = null; handoffAgent = null; }
     if (agentDriving) {
+      handoffReason = null; handoffAgent = null;
       releaseHeldInput();  // agent took over: release any keys/buttons we were holding
       const who = state.owner_name || state.owner_agent_id || "an agent";
       overlayMsg.textContent = "Agent has control: " + who;

@@ -4,7 +4,7 @@ Reached through the system_interface proxy at ``/service/browser/``. Serves one
 self-contained viewer page (assets/index.html) that renders a streamed browser
 and an "Agent has control" overlay. The page talks over two WebSockets: the media
 plane ``/browsers/{name}/stream`` (pixelflux H.264 pixels + Opus audio out; XTEST
-input, resize, and fps-throttle in) and the control plane ``/browsers/{name}/cast``
+input, resize, and attention (interact/hidden) in) and the control plane ``/browsers/{name}/cast``
 (control/ownership state out; take/return-control in). Browsers are addressed by NAME
 (a random ~2-word english name like ``alex-smith``), not a sequential int; there is
 no default browser.
@@ -393,7 +393,7 @@ def _stream_acquire(
 def _drain_ndjson(gen_queue: "queue.Queue[dict[str, Any] | None]") -> Iterator[str]:
     """Yield every event currently buffered in ``gen_queue`` (until it is empty)."""
     drained = False
-    while not drained:
+    while not drained:  # flag loop, not `while True` -- the daemon avoids while-true (ratchet)
         try:
             event = gen_queue.get_nowait()
         except queue.Empty:
@@ -559,7 +559,7 @@ def hold_browser(browser_id: str) -> Response:
         yield _ndjson({"type": "held", "browser_id": browser_id})
         try:
             held = True
-            while held:
+            while held:  # flag loop, not `while True` -- the daemon avoids while-true (ratchet)
                 # No agent run; just heartbeat-ping until the client drops. The
                 # gen_queue is never written, so this always times out and pings --
                 # the write is what makes a dead client surface as GeneratorExit.
@@ -827,29 +827,10 @@ def cast_socket(ws: Any, browser_id: str) -> None:
     """
     resolved = _resolve_sync_for_ws(browser_id)
     if resolved is None:
-        # Three cases, distinguished by the close code so the viewer can react correctly:
-        # - The name's background launch FAILED (finding [7]). A late/retrying optimistic
-        #   viewer that was in 1013 backoff when it failed never registered a cast queue,
-        #   so it missed the launch_failed broadcast and would otherwise retry forever.
-        #   Close 1008 -- terminal, so the pane stops retrying and shows the failed state.
-        # - The name is syntactically valid but no browser is registered under it YET.
-        #   This is the OPTIMISTIC PANE opened on modal-accept BEFORE the serialized
-        #   launch finished registering the name -- a transient miss, not "gone". Close
-        #   1013 ("Try Again Later"); the viewer retries with backoff and connects once
-        #   the launch registers the name.
-        # - The name is invalid (could never exist). Close 1008 -- terminal, the viewer
-        #   shows "browser closed -- reopen" and stops reconnecting.
-        if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
-            ws.close(1008)  # launch failed -> terminal (stop retrying)
-        elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):
-            ws.close(1008)  # explicitly closed -> terminal (stop retrying)
-        elif is_valid_browser_name(browser_id):
-            ws.close(1013)  # not yet created -> retryable
-        else:
-            ws.close(1008)  # gone / never valid -> terminal
+        _close_unresolved_ws(ws, browser_id)
         return
     session = resolved
-    if not mediastream.reserve_cast_slot(browser_id):
+    if not mediastream.cast_slots.reserve(browser_id):
         ws.close(1013)  # per-browser cast cap reached; retryable
         return
     # Register + seed the initial control/tabs sync atomically on the loop, so no
@@ -889,7 +870,7 @@ def cast_socket(ws: Any, browser_id: str) -> None:
         stop_event.set()
         inbound.join(timeout=5)
         bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
-        mediastream.release_cast_slot(browser_id)
+        mediastream.cast_slots.release(browser_id)
 
 
 def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
@@ -898,6 +879,24 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
         return bridge.run(manager.resolve(browser_id), timeout=_ROUTE_TIMEOUT)
     except (KeyError, *_STARTUP_ERRORS):
         return None
+
+
+def _close_unresolved_ws(ws: Any, browser_id: str) -> None:
+    """Close a /cast or /stream WS whose browser didn't resolve, with the close code that tells
+    the viewer how to react (both handlers share this one contract):
+    - launch FAILED, or the browser was explicitly CLOSED -> 1008 terminal (stop retrying); a
+      late optimistic viewer that missed the launch_failed broadcast otherwise retries forever.
+    - a syntactically valid name not registered YET (the optimistic pane opened on modal-accept
+      before the serialized launch finished) -> 1013 retryable; the viewer backs off and reconnects.
+    - an invalid name (could never exist) -> 1008 terminal (shows "browser closed -- reopen")."""
+    if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
+        ws.close(1008)
+    elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):
+        ws.close(1008)
+    elif is_valid_browser_name(browser_id):
+        ws.close(1013)
+    else:
+        ws.close(1008)
 
 
 def stream_socket(ws: Any, browser_id: str) -> None:
@@ -909,14 +908,7 @@ def stream_socket(ws: Any, browser_id: str) -> None:
     """
     resolved = _resolve_sync_for_ws(browser_id)
     if resolved is None:
-        if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
-            ws.close(1008)  # launch failed -> terminal
-        elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):
-            ws.close(1008)  # explicitly closed -> terminal
-        elif is_valid_browser_name(browser_id):
-            ws.close(1013)  # not created yet -> retryable
-        else:
-            ws.close(1008)  # gone / never valid -> terminal
+        _close_unresolved_ws(ws, browser_id)
         return
     session = resolved
     display = getattr(session, "_display", "")
@@ -981,7 +973,7 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
     if _resolve_sync_for_ws(browser_id) is None:
         ws.close(1008)
         return
-    if not mediastream.reserve_telemetry_slot(browser_id):
+    if not mediastream.telemetry_slots.reserve(browser_id):
         ws.close(1013)  # per-browser firehose cap reached; retryable
         return
     history, records = telemetry.hub.subscribe(browser_id)
@@ -1005,7 +997,7 @@ def telemetry_socket(ws: Any, browser_id: str) -> None:
         pass
     finally:
         telemetry.hub.unsubscribe(browser_id, records)
-        mediastream.release_telemetry_slot(browser_id)
+        mediastream.telemetry_slots.release(browser_id)
 
 
 # --- app construction + lifecycle --------------------------------------------
