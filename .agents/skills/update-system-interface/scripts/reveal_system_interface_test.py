@@ -319,6 +319,10 @@ def test_no_relevant_changes_does_nothing() -> None:
     assert code == 0
     assert not runner.ran("npm", "run", "build")
     assert not runner.ran("mngr", "start")
+    # The unconditional refresh in _apply_reveal is only safe because this run
+    # never reaches it: nothing changed, so there is nothing to reveal and no
+    # reason to reload the view the user is already looking at.
+    assert not _refreshed_the_view(runner)
 
 
 # --- failure + autonomous rollback ------------------------------------------
@@ -397,6 +401,10 @@ def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
         )
         == 2
     )
+    # Recovery got the service healthy again, so the restored tree is what the
+    # open view should be rendering -- a failed reveal must not leave the user
+    # looking at the build that broke.
+    assert _refreshed_the_view(runner)
 
 
 def test_emergency_when_rollback_cannot_restore_health() -> None:
