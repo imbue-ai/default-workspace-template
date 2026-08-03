@@ -119,6 +119,12 @@ TOOL_NAME = "system-interface"
 # that restart the services agent (``update-app``, ``update-self``), so they
 # cannot drift on that policy. Stdlib-only, so it runs under our interpreter.
 _REFRESH_SCRIPT = "system/scripts/refresh_workspace_view.py"
+# The helper budgets its own calls to ~50s in total, so this is a backstop for a
+# child that ignores those budgets (a wedged ``mngr`` that does not answer a
+# SIGTERM), not the normal bound. A reveal that has already landed must not hang
+# on a courtesy reload; TimeoutExpired is a SubprocessError, so overrunning it
+# takes the same reported-and-continue path as a helper we cannot spawn.
+_REFRESH_TIMEOUT_SECONDS = 120.0
 
 # Pre-merge preview: the deterministic boot + teardown of a previewable instance
 # is the shared ``serve_isolated_instance.py`` motion that every service flow
@@ -446,6 +452,7 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
             cwd=str(repo_root),
             capture_output=True,
             text=True,
+            timeout=_REFRESH_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         sys.stderr.write(
