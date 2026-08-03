@@ -1,6 +1,7 @@
 // The Machine settings pane: General / Account / Backup groups behind a left
-// nav, shared by the options panel's Settings tab and the standalone
-// /workspace/<id>/settings page (WorkspaceSettingsSections.jinja's successor).
+// nav, rendered by the options panel's Settings tab
+// (WorkspaceSettingsSections.jinja's successor; the old standalone
+// /workspace/<id>/settings page now redirects into that tab).
 
 import m from "mithril";
 import { Button } from "../../components/Button";

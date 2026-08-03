@@ -1,10 +1,14 @@
-// The workspace options page (/workspace/<id>/options?tab=&group=&target=):
-// Share machine + Machine settings tabs over one options-data load. The
-// titlebar's ws-tab buttons land here; ?tab preselects the pane, ?group the
-// settings group, ?target the share target.
+// The workspace options overlay (/workspace/<id>/options?tab=&group=&target=):
+// Share machine + Machine settings tabs over one options-data load, rendered
+// by the Shell as a panel floating over the still-mounted workspace surface.
+// The titlebar's ws-tab buttons land here; ?tab preselects the pane, ?group
+// the settings group, ?target the share target.
+//
+// The URL is the single source of truth for tab/group: they are re-read from
+// the route on every render, so titlebar-driven navigation (which changes
+// only the query string, preserving this component instance) switches panes.
 
 import m from "mithril";
-import { PageContainer } from "../components/Layout";
 import type { OptionsTab, SettingsGroup } from "../../models/workspaceOptions";
 import { WorkspaceOptionsModel } from "../../models/workspaceOptions";
 import { OptionsPanel } from "./workspace/OptionsPanel";
@@ -30,42 +34,40 @@ function rememberInUrl(param: string, value: string): void {
 
 export const WorkspaceOptionsPage: m.ClosureComponent = () => {
   let model: WorkspaceOptionsModel | null = null;
-  let tab: OptionsTab = "share";
-  let group: SettingsGroup = "general";
+
+  function ensureModelForRouteAgent(): WorkspaceOptionsModel {
+    const agentId = m.route.param("agentId");
+    // Route param changes preserve this component instance, so a navigation
+    // to another workspace's options must swap the model by hand.
+    if (model !== null && model.agentId !== agentId) {
+      model.dispose();
+      model = null;
+    }
+    if (model === null) {
+      const created = new WorkspaceOptionsModel(agentId);
+      model = created;
+      void created.load().then(() => {
+        const target = m.route.param("target");
+        if (target && created.share) created.share.selectTarget(target);
+      });
+    }
+    return model;
+  }
 
   return {
-    oninit() {
-      const agentId = m.route.param("agentId");
-      tab = requestedTab();
-      group = requestedGroup();
-      model = new WorkspaceOptionsModel(agentId);
-      void model.load().then(() => {
-        const target = m.route.param("target");
-        if (target && model?.share) model.share.selectTarget(target);
-      });
-    },
     onremove() {
       model?.dispose();
+      model = null;
     },
     view() {
-      if (model === null) return null;
-      return m(
-        PageContainer,
-        { extra: "flex flex-col min-h-0" },
-        m(OptionsPanel, {
-          model,
-          tab,
-          group,
-          onSelectTab: (nextTab: OptionsTab) => {
-            tab = nextTab;
-            rememberInUrl("tab", nextTab);
-          },
-          onSelectGroup: (nextGroup: SettingsGroup) => {
-            group = nextGroup;
-            rememberInUrl("group", nextGroup);
-          },
-        }),
-      );
+      const currentModel = ensureModelForRouteAgent();
+      return m(OptionsPanel, {
+        model: currentModel,
+        tab: requestedTab(),
+        group: requestedGroup(),
+        onSelectTab: (nextTab: OptionsTab) => rememberInUrl("tab", nextTab),
+        onSelectGroup: (nextGroup: SettingsGroup) => rememberInUrl("group", nextGroup),
+      });
     },
   };
 };

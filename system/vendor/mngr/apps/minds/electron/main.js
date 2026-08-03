@@ -449,13 +449,14 @@ function wireBundleNavigationEvents(bundle) {
     bundle.chromeLoadFailedUrl = null;
     bundle.isChromeCrashed = false;
     console.log(`[nav] window committed ${url}`);
-    // The SPA's workspace route (/workspace/<id>, exactly one segment --
-    // /workspace/<id>/settings is a settings page, not a display) shows a
-    // workspace: the path id is the authoritative record until the iframe
-    // commits. Other SPA routes clear the displayed workspace. Either
-    // workspace coordinate counts (a cold-start restore may carry the
-    // host-scoped id before discovery re-confirms the agent).
-    const workspaceRouteMatch = parsed.pathname.match(/^\/workspace\/((?:agent|host)-[a-f0-9]+)\/?$/i);
+    // The SPA's workspace routes (/workspace/<id>, and its /options overlay,
+    // which keeps the workspace surface mounted underneath -- but NOT
+    // /workspace/<id>/settings, a legacy redirect route) show a workspace:
+    // the path id is the authoritative record until the iframe commits.
+    // Other SPA routes clear the displayed workspace. Either workspace
+    // coordinate counts (a cold-start restore may carry the host-scoped id
+    // before discovery re-confirms the agent).
+    const workspaceRouteMatch = parsed.pathname.match(/^\/workspace\/((?:agent|host)-[a-f0-9]+)(?:\/options)?\/?$/i);
     if (workspaceRouteMatch) {
       bundle.currentWorkspaceId = toHostScopedWorkspaceId(workspaceRouteMatch[1]);
       bundle.currentContentUrl = '/goto/' + bundle.currentWorkspaceId + '/';
@@ -1799,7 +1800,28 @@ function handleAuthEvent(event) {
   if (event.event === 'auth_success') {
     for (const b of bundles) {
       if (b.window.isDestroyed() || b.window.webContents.isDestroyed()) continue;
-      b.window.webContents.reload();
+      // A window sitting on a backend-served /auth page cannot pick the
+      // sign-in up from a reload: that just re-renders the pristine auth form
+      // and kills the page's own status poller (which loses a deterministic
+      // race anyway -- auth_success is emitted before the OAuth flow is
+      // marked done). Send it through /post-login, which owns the
+      // just-signed-in landing decision, preserving any ?return_to it
+      // carried. Other windows keep the legacy reload so pre-WS surfaces
+      // pick up has_accounts.
+      let authPageReturnTo = null;
+      let isOnAuthPage = false;
+      try {
+        const current = new URL(b.window.webContents.getURL());
+        isOnAuthPage = current.pathname.startsWith('/auth/');
+        authPageReturnTo = current.searchParams.get('return_to');
+      } catch { /* non-URL states (about:blank, shell.html) just reload */ }
+      if (isOnAuthPage && backendBaseUrl) {
+        const postLoginUrl = `${backendBaseUrl}/post-login` +
+          (authPageReturnTo ? `?return_to=${encodeURIComponent(authPageReturnTo)}` : '');
+        b.window.webContents.loadURL(postLoginUrl).catch(() => {});
+      } else {
+        b.window.webContents.reload();
+      }
     }
   } else if (event.event === 'auth_required') {
     const mru = getMostRecentWindow();

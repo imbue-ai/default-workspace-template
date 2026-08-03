@@ -6,7 +6,7 @@
 
 import m from "mithril";
 import { Shell } from "./views/shell/Shell";
-import { workspaceDisplayIdFromPath } from "./views/shell/classify";
+import { workspaceDisplayIdFromPath, workspaceSurfaceIdFromPath } from "./views/shell/classify";
 import type { ShellState } from "./views/shell/shell-state";
 import { DevStyleguide } from "./views/pages/DevStyleguide";
 import { AccountsPage } from "./views/pages/AccountsPage";
@@ -25,7 +25,7 @@ import { SettingsPage } from "./views/pages/SettingsPage";
 import { WelcomePage } from "./views/pages/WelcomePage";
 import { WorkspaceBackupsPage } from "./views/pages/WorkspaceBackupsPage";
 import { WorkspaceOptionsPage } from "./views/pages/WorkspaceOptionsPage";
-import { WorkspaceSettingsPage } from "./views/pages/WorkspaceSettingsPage";
+import { WorkspaceSettingsRedirect } from "./views/pages/WorkspaceSettingsRedirect";
 import { RouteError } from "./views/pages/RouteError";
 
 interface RouteEntry {
@@ -46,7 +46,9 @@ const ROUTE_ENTRIES: RouteEntry[] = [
   // Accepts agent- OR host-scoped ids: cold-start restore navigates with a
   // host-scoped id before the snapshot provides the alias mapping.
   { path: "/workspace/:workspaceId", component: LandingPage },
-  { path: "/workspace/:agentId/settings", component: WorkspaceSettingsPage },
+  // Legacy URL: redirects into the options overlay's settings tab.
+  { path: "/workspace/:agentId/settings", component: WorkspaceSettingsRedirect },
+  // The options overlay: rendered by the Shell OVER the workspace surface.
   { path: "/workspace/:agentId/options", component: WorkspaceOptionsPage },
   { path: "/workspace/:agentId/backups", component: WorkspaceBackupsPage },
   { path: "/inbox", component: InboxPage },
@@ -65,7 +67,10 @@ export function mountRouter(root: Element, shell: ShellState): void {
     onmatch: () => component,
     render(vnode) {
       const path = shell.currentRoutePath();
-      const workspaceParam = workspaceDisplayIdFromPath(path);
+      // The surface id (bare workspace OR its options overlay) keeps the
+      // WorkspaceFrame mounted across overlay open/close, so opening Share /
+      // Settings never tears down and reloads the workspace iframe.
+      const workspaceParam = workspaceSurfaceIdFromPath(path);
       shell.handleRouteChanged(path);
       return m(Shell, {
         shell,

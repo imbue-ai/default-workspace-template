@@ -41,7 +41,7 @@ from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import read_min_containers
 from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
-from imbue.modal_app_kit.image import IMAGE_REQUIREMENTS_FILENAME
+from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 from imbue.remote_service_connector import db
@@ -89,7 +89,7 @@ _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
 # invalidate the image cache (Modal enforces the ordering). The entrypoint
 # (this file) ships separately via Modal's automatic file mount and is
 # excluded from the package mount by ``shipped_python_source_ignore``.
-image = pinned_image(Path(__file__).parents[2] / IMAGE_REQUIREMENTS_FILENAME).add_local_python_source(
+image = pinned_image(locate_image_requirements(Path(__file__))).add_local_python_source(
     "imbue.remote_service_connector",
     "imbue.modal_app_kit",
     ignore=shipped_python_source_ignore,

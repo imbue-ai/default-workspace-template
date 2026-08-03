@@ -115,8 +115,15 @@ function main(): void {
     );
     m.redraw();
   });
+  // Esc forwarded by Electron main (needed when focus sits inside the
+  // cross-origin workspace iframe, whose key events never reach this
+  // document): dismiss the switcher popover first, else the options overlay.
   electronBridge.onEscapePressed(() => {
-    shell.closeSidebar();
+    if (shell.isSidebarOpen) {
+      shell.closeSidebar();
+    } else {
+      shell.closeWorkspaceOverlay();
+    }
     m.redraw();
   });
 

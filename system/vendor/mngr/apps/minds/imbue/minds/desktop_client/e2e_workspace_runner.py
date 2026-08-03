@@ -1239,8 +1239,8 @@ def _resolve_workspace_agent_id(content_page: Page, workspace_name: str) -> str:
 
 
 def _destroy_via_settings(content_page: Page, backend_origin: str, agent_id: str, workspace_name: str) -> None:
-    """Open the workspace settings page and run the destroy flow; confirm it leaves the list."""
-    settings_url = f"{backend_origin}/workspace/{agent_id}/settings"
+    """Open the machine-settings overlay and run the destroy flow; confirm it leaves the list."""
+    settings_url = f"{backend_origin}/workspace/{agent_id}/options?tab=settings"
     logger.info("Navigating to settings: {}", settings_url)
     content_page.goto(settings_url, wait_until="domcontentloaded")
     content_page.wait_for_selector("#destroy-btn", state="visible", timeout=15_000)

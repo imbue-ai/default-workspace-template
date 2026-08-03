@@ -8,6 +8,7 @@ from imbue.imbue_common.modal_image_requirements import image_pinned_app_dir
 from imbue.imbue_common.modal_image_requirements import image_requirements_path
 from imbue.modal_app_kit import image as modal_app_kit_image
 from imbue.modal_app_kit.image import PINNED_BASE_IMAGE
+from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
 
 _REPO_ROOT = Path(__file__).parents[4]
@@ -38,3 +39,29 @@ def test_pinned_image_builds_an_image_definition(tmp_path: Path) -> None:
         "tenacity==9.1.4 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000\n"
     )
     assert isinstance(pinned_image(requirements_file), modal.Image)
+
+
+def test_locate_image_requirements_finds_the_export_in_an_ancestor(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    entrypoint = project_dir / "imbue" / "some_app" / "app.py"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("")
+    export = project_dir / "image_requirements.txt"
+    export.write_text("")
+
+    assert locate_image_requirements(entrypoint) == export
+
+
+def test_locate_image_requirements_never_raises_on_shallow_container_paths(tmp_path: Path) -> None:
+    """The in-container case: /root/app.py has no export anywhere above it.
+
+    The returned placeholder is never read there (the image is already
+    built); the call must simply not crash the module import the way a
+    fixed ``parents[2]`` index did.
+    """
+    entrypoint = tmp_path / "app.py"
+    entrypoint.write_text("")
+
+    located = locate_image_requirements(entrypoint)
+
+    assert located == tmp_path / "image_requirements.txt"
