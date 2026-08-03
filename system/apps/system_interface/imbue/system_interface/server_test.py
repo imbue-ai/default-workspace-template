@@ -1371,9 +1371,9 @@ def test_layout_broadcast_refresh_bypasses_mutex(app: Flask) -> None:
 def test_layout_broadcast_reload_system_interface_emits_ws_message(app: Flask) -> None:
     """``reload_system_interface`` broadcasts a layout_op so the shell reloads.
 
-    This is the frontend-reveal trigger: the reload script POSTs this op and the
-    dockview shell responds by reloading the whole top-level page. It carries no
-    args and bypasses the mutex (read-only).
+    ``system/scripts/refresh_workspace_view.py`` POSTs this op after any
+    interface change, and the dockview shell responds by reloading the whole
+    top-level page. It carries no args and bypasses the mutex (read-only).
     """
     client = app.test_client()
     with serve_app(app) as served:
