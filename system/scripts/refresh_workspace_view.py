@@ -131,7 +131,7 @@ def resolve_primary_agent_id(runner: Runner) -> str:
     def unresolved(reason: str) -> str:
         sys.stderr.write(
             f"refresh: could not resolve this workspace's primary agent id ({reason}); "
-            "skipping the Minds app refresh (the reload broadcast still went out).\n"
+            "skipping the Minds app refresh.\n"
         )
         return ""
 
@@ -201,8 +201,7 @@ def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
     permissions = os.environ.get(ENV_GATEWAY_PERMISSIONS, "")
     if not gateway or not password or not permissions:
         sys.stderr.write(
-            "refresh: latchkey gateway env not set; skipping the Minds app refresh "
-            "(the reload broadcast still went out).\n"
+            "refresh: latchkey gateway env not set; skipping the Minds app refresh.\n"
         )
         return False
     primary_agent_id = resolve_primary_agent_id(runner)
