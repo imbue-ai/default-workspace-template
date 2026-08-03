@@ -267,7 +267,7 @@ def test_prevent_if_elif_without_else() -> None:
 
 
 def test_prevent_inline_functions() -> None:
-    rc.check_inline_functions(_DIR, snapshot(7))
+    rc.check_inline_functions(_DIR, snapshot(8))
 
 
 def test_prevent_underscore_imports() -> None:
@@ -300,3 +300,10 @@ def test_prevent_per_file_host_upload() -> None:
 
 def test_prevent_code_in_init_files() -> None:
     rc.check_code_in_init_files(_DIR, snapshot(1))
+
+
+# --- Modal images ---
+
+
+def test_prevent_unpinned_modal_pip_install() -> None:
+    rc.check_unpinned_modal_pip_install(_DIR, snapshot(0))

@@ -32,11 +32,11 @@
   }
 
   // Enter the just-created workspace. redirectUrl is the /goto/<host-id>/ URL.
-  // On the trusted chrome surface, hand it to the shell bridge so the
-  // workspace opens in the caged content view instead of navigating this
-  // (chrome) frame into untrusted agent content; a plain browser (no shell)
-  // full-page navigates as before. Shared by the plain-loading auto-enter
-  // (tickProgress) and the walkthrough (onboarding.js, via
+  // Inside the chrome shell, hand it to the shell bridge so the workspace
+  // opens in the sandboxed #content-frame iframe instead of navigating this
+  // (chrome) frame into untrusted agent content; a standalone page load (no
+  // shell bridge) full-page navigates as before. Shared by the plain-loading
+  // auto-enter (tickProgress) and the walkthrough (onboarding.js, via
   // window.mindsEnterWorkspace).
   function enterWorkspace(url) {
     if (window.minds && window.minds.navigateContent) {

@@ -22,12 +22,13 @@ The install is idempotent: re-running replaces/no-ops on the existing entry.
 
 import platform
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Final
 
 from loguru import logger
 
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.concurrency_group.errors import ProcessError
 from imbue.mngr_forward.errors import ForwardTrustError
 
 _NSS_NICKNAME: Final[str] = "mngr forward local CA"
@@ -35,28 +36,22 @@ _NSS_NICKNAME: Final[str] = "mngr forward local CA"
 _TRUST_COMMAND_TIMEOUT_SECONDS: Final[float] = 60.0
 
 
-def _run_trust_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_trust_command(concurrency_group: ConcurrencyGroup, command: list[str]) -> None:
     """Run one trust-store command, raising ``ForwardTrustError`` on failure."""
     try:
-        result = subprocess.run(
+        concurrency_group.run_process_to_completion(
             command,
-            capture_output=True,
-            text=True,
             timeout=_TRUST_COMMAND_TIMEOUT_SECONDS,
-            check=False,
+            name="forward-trust-install",
         )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise ForwardTrustError(f"Trust-store command failed to run: {' '.join(command)}") from e
-    if result.returncode != 0:
-        raise ForwardTrustError(
-            f"Trust-store command exited {result.returncode}: {' '.join(command)}\n{result.stderr.strip()}"
-        )
-    return result
+    except (OSError, ProcessError) as e:
+        raise ForwardTrustError(f"Trust-store command failed: {' '.join(command)}\n{e}") from e
 
 
-def _install_ca_macos(ca_cert_path: Path) -> None:
+def _install_ca_macos(concurrency_group: ConcurrencyGroup, ca_cert_path: Path) -> None:
     login_keychain = Path.home() / "Library" / "Keychains" / "login.keychain-db"
     _run_trust_command(
+        concurrency_group,
         [
             "security",
             "add-trusted-cert",
@@ -65,12 +60,12 @@ def _install_ca_macos(ca_cert_path: Path) -> None:
             "-k",
             str(login_keychain),
             str(ca_cert_path),
-        ]
+        ],
     )
     logger.info("Installed the local CA into the login keychain ({})", login_keychain)
 
 
-def _install_ca_linux_nss(ca_cert_path: Path) -> None:
+def _install_ca_linux_nss(concurrency_group: ConcurrencyGroup, ca_cert_path: Path) -> None:
     certutil = shutil.which("certutil")
     if certutil is None:
         raise ForwardTrustError(
@@ -83,6 +78,7 @@ def _install_ca_linux_nss(ca_cert_path: Path) -> None:
     # `-A` adds-or-replaces by nickname, so re-running is idempotent. "C,,"
     # marks the cert trusted for issuing TLS server certs.
     _run_trust_command(
+        concurrency_group,
         [
             certutil,
             "-d",
@@ -94,7 +90,7 @@ def _install_ca_linux_nss(ca_cert_path: Path) -> None:
             _NSS_NICKNAME,
             "-i",
             str(ca_cert_path),
-        ]
+        ],
     )
     logger.info("Installed the local CA into the per-user NSS store ({})", nss_dir)
     logger.info(
@@ -104,18 +100,22 @@ def _install_ca_linux_nss(ca_cert_path: Path) -> None:
     )
 
 
-def install_ca_into_trust_stores(ca_cert_path: Path) -> None:
+def install_ca_into_trust_stores(
+    concurrency_group: ConcurrencyGroup, ca_cert_path: Path, system: str | None = None
+) -> None:
     """Install the CA certificate at ``ca_cert_path`` into this platform's trust stores.
 
     Raises ``ForwardTrustError`` with actionable text when the platform's
-    tooling is missing or the install command fails.
+    tooling is missing or the install command fails. ``system`` overrides the
+    detected platform (a seam for tests); ``None`` means ``platform.system()``.
     """
     if not ca_cert_path.exists():
         raise ForwardTrustError(f"CA certificate not found at {ca_cert_path}")
-    system = platform.system()
+    if system is None:
+        system = platform.system()
     if system == "Darwin":
-        _install_ca_macos(ca_cert_path)
+        _install_ca_macos(concurrency_group, ca_cert_path)
     elif system == "Linux":
-        _install_ca_linux_nss(ca_cert_path)
+        _install_ca_linux_nss(concurrency_group, ca_cert_path)
     else:
         raise ForwardTrustError(f"CA trust install is not supported on {system} (macOS and Linux only).")

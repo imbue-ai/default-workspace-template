@@ -1028,16 +1028,27 @@ jobs:
       - name: pnpm install (apps/minds dev deps incl. playwright)
         working-directory: apps/minds
         run: pnpm install --frozen-lockfile
-      - name: run macos-launch spec
+      # The renderer-contract specs launch a plain chromium (macos-launch
+      # itself drives the installed Electron app over CDP and needs no
+      # browser download).
+      - name: install playwright chromium
+        working-directory: apps/minds
+        run: pnpm exec playwright install chromium
+      - name: run macos-launch + renderer-contract specs
         working-directory: apps/minds
         run: |
-          # Headless on CI; the spec asserts DOM state and the chrome
+          # Headless on CI; the specs assert DOM state and the chrome
           # iframe sources -- no display dependency. `html` reporter writes
           # a browsable report with embedded screenshots and traces;
           # Playwright skips opening it when stdout isn't a TTY (CI is fine).
+          # The renderer-contract specs (embed-flow, local-swap,
+          # recovery-redirect, landing-stopped-mind-restart) drive the REAL
+          # shell scripts in a plain chromium against the local harness
+          # server -- no Electron, no backend -- so they add only seconds.
           pnpm exec playwright test \
             --config=test/e2e/playwright.config.js \
-            macos-launch.spec.js \
+            macos-launch.spec.js embed-flow.spec.js local-swap.spec.js \
+            recovery-redirect.spec.js landing-stopped-mind-restart.spec.js \
             --reporter=list,html
       - name: upload Playwright report
         if: always()

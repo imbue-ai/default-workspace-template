@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 from playwright.sync_api import Browser
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import Frame
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
@@ -27,8 +28,8 @@ class _FakeElement:
         return self._text
 
 
-class _FakeContentPage:
-    """A candidate WebContentsView page; the waiter's page scan only reads ``url``.
+class _FakeFrame:
+    """A frame of a candidate page; the waiter's frame scan only reads ``url``.
 
     ``urls`` is consumed one entry per read; the final entry repeats so a steady
     state (or a machine that appears after N polls) can be expressed as a list.
@@ -40,6 +41,21 @@ class _FakeContentPage:
     @property
     def url(self) -> str:
         return self._urls.pop(0) if len(self._urls) > 1 else self._urls[0]
+
+
+class _FakeContentPage:
+    """A candidate page hosting frames (the workspace surface is an iframe now)."""
+
+    def __init__(self, urls: Sequence[str]) -> None:
+        self.main_frame = _FakeFrame(urls)
+
+    @property
+    def frames(self) -> "list[_FakeFrame]":
+        return [self.main_frame]
+
+    @property
+    def url(self) -> str:
+        return self.main_frame.url
 
 
 class _FakeContext:
@@ -56,10 +72,10 @@ class _FakeBrowser:
 class _FakeCreatingPage:
     """Duck-typed stand-in for the chrome-view page the create form is driven on.
 
-    After the content-in-chrome split the ready workspace opens on a *separate*
-    content-view page, so the waiter scans ``browser.contexts[*].pages`` for the
-    one that reached the ``host-<id>.localhost`` URL, and watches THIS page's
-    ``#failure-view`` for the failure branch. ``urls`` / ``is_visible_results``
+    The ready workspace opens inside the chrome page's content IFRAME, so the
+    waiter scans every page's frames for the one that reached the
+    ``host-<id>.localhost`` URL, and watches THIS page's ``#failure-view`` for
+    the failure branch. ``urls`` / ``is_visible_results``
     are consumed one entry per poll iteration; the final entry repeats. An
     ``is_visible_results`` entry that is an exception is raised, simulating an
     execution-context-destroyed error when the chrome view swaps to ``/_chrome``.
@@ -89,6 +105,10 @@ class _FakeCreatingPage:
     def url(self) -> str:
         return self._urls.pop(0) if len(self._urls) > 1 else self._urls[0]
 
+    @property
+    def frames(self) -> list[object]:
+        return []
+
     def is_visible(self, selector: str) -> bool:
         result = self._is_visible_results.pop(0) if len(self._is_visible_results) > 1 else self._is_visible_results[0]
         if isinstance(result, BaseException):
@@ -107,12 +127,12 @@ class _FakeCreatingPage:
 def test_wait_returns_the_content_page_that_reached_the_workspace() -> None:
     workspace = _FakeContentPage(urls=[_READY_URL])
     creating = _FakeCreatingPage(urls=[_PENDING_URL], is_visible_results=[False], candidate_pages=[workspace])
-    # Returns the content-view page once its agent-subdomain URL is reached (the
-    # chrome view that drove the form -- ``creating`` -- stays on /create-ish).
+    # Returns the workspace frame once its agent-subdomain URL is reached (the
+    # chrome page that drove the form -- ``creating`` -- stays on /create-ish).
     result = _wait_for_workspace_ready_or_failure(
         cast(Browser, creating.browser), cast(Page, creating), timeout_seconds=5
     )
-    assert result is cast(Page, workspace)
+    assert result is cast(Frame, workspace.main_frame)
 
 
 def test_wait_returns_for_https_workspace_url() -> None:
@@ -127,7 +147,7 @@ def test_wait_returns_for_https_workspace_url() -> None:
     result = _wait_for_workspace_ready_or_failure(
         cast(Browser, creating.browser), cast(Page, creating), timeout_seconds=5
     )
-    assert result is cast(Page, workspace)
+    assert result is cast(Frame, workspace.main_frame)
 
 
 def test_wait_raises_with_surfaced_error_on_failure_view() -> None:
@@ -158,7 +178,7 @@ def test_wait_recovers_from_context_destroyed_during_redirect() -> None:
     result = _wait_for_workspace_ready_or_failure(
         cast(Browser, creating.browser), cast(Page, creating), timeout_seconds=5
     )
-    assert result is cast(Page, workspace)
+    assert result is cast(Frame, workspace.main_frame)
     assert creating.wait_for_timeout_calls == 1
 
 

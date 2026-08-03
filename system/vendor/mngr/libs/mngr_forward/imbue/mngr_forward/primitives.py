@@ -25,6 +25,13 @@ class CookieSigningKey(SecretStr):
 
 MNGR_FORWARD_SESSION_COOKIE_NAME: Final[str] = "mngr_forward_session"
 
+# The bare-origin browser auth bridge: a host application that spawned the
+# plugin with ``--browser-bridge-token`` 302s a browser here with the
+# spawn-time opaque token so the browser gets the bare-origin session cookie
+# without consuming an OTP. Exposed here (not in server.py) because host
+# applications (minds) build the redirect URL without importing the server.
+BROWSER_BRIDGE_PATH: Final[str] = "/_bridge"
+
 MNGR_BINARY: Final[str] = "mngr"
 
 # A single service name usable as a hostname label: lowercase alphanumeric /

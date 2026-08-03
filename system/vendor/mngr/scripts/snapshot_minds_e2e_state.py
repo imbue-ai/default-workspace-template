@@ -307,6 +307,11 @@ _PNPM_MANIFEST_RELATIVE_PATHS: Final[tuple[str, ...]] = (
     "apps/minds/pnpm-lock.yaml",
     "apps/minds/pnpm-workspace.yaml",
     "apps/minds/.npmrc",
+    # The desktop client's Mithril frontend is its own pnpm workspace root
+    # (separate lockfile); its manifests ride in the same cacheable layer.
+    "apps/minds/frontend/package.json",
+    "apps/minds/frontend/pnpm-lock.yaml",
+    "apps/minds/frontend/pnpm-workspace.yaml",
 )
 
 
@@ -540,7 +545,10 @@ def _build_snapshot_image(
             'if [ $attempt -ge 3 ]; then echo "pnpm install: all 3 attempts failed" >&2; exit 1; fi; '
             'echo "pnpm install attempt $attempt failed; retrying in $((attempt * 10))s..." >&2; '
             "sleep $((attempt * 10)); "
-            "done",
+            "done && "
+            # The frontend workspace's deps warm the same cacheable layer; no
+            # retry loop needed (its only postinstall is esbuild's tiny check).
+            "cd /code/mngr/apps/minds/frontend && pnpm install --frozen-lockfile",
         )
         # Third-party Python deps layer: only the uv manifests. `--no-install-workspace`
         # installs just the locked third-party deps (uv constructs the
@@ -591,10 +599,15 @@ def _build_snapshot_image(
         # v0.9.7's create_from_image hardcoding workdir="/app": our project is at
         # /code/mngr, so the symlink lets `uv run pytest` find the project venv
         # from offload's chosen workdir.
+        # The SPA bundle build mirrors build:css's role for the Mithril UI:
+        # static/ui/ is gitignored build output, and without it every hub
+        # route serves the "frontend not built" page, so the e2e onboarding
+        # driver never sees the create form.
         .run_commands(
             "( cd /code/mngr && uv sync --all-packages ) && "
             "( cd /code/mngr/apps/minds && pnpm install --frozen-lockfile ) && "
             "( cd /code/mngr/apps/minds && node scripts/ensure-binaries.js && pnpm run build:css ) && "
+            "( cd /code/mngr/apps/minds/frontend && pnpm install --frozen-lockfile && pnpm generate && pnpm build ) && "
             "ln -s /code/mngr /app",
         )
     )

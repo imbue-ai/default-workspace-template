@@ -20,15 +20,16 @@
   'use strict';
 
   // The full-page auth flow, which the shell replaces with its sign-in modal.
-  // A completed sign-in lands the content view on the workspace list; the
-  // panel's own URL is not a content path, so it cannot be the return target.
+  // A completed sign-in lands the shell on the workspace list; the panel's
+  // own URL is not a content path, so it cannot be the return target.
   var AUTH_LOGIN_PATH = '/auth/login';
   var SIGNIN_RETURN_PATH = '/';
 
   // -- Panel chrome ---------------------------------------------------------
 
-  // Dismissal: in Electron the panel is an overlay iframe, so it must ask the
-  // shell to tear the overlay down; as a plain page there is nothing to close,
+  // Dismissal: hosted in the chrome shell the panel is an overlay-layer
+  // iframe, so it must ask the shell to tear the overlay down; as a plain
+  // page there is nothing to close,
   // so fall back to the workspace. The ``/goto/`` bridge is served by the mngr
   // forward plugin, NOT by minds' own origin, so it needs the plugin origin the
   // page carries on its body (same read as sidebar.js); without one there is
@@ -54,13 +55,12 @@
       if (event.target === backdropEl) window.dismissWorkspaceOptions();
     });
 
-    // No link inside the panel may navigate the overlay iframe: the shell's
-    // overlay guard only blocks FOREIGN origins, so a same-origin href (the
-    // backups page's "View all backups", the Associate prompt's sign-in link)
-    // would load a full page into the modal view and strand the app there.
-    // Hand those to the shell instead and dismiss. Only present on the
-    // overlay surface -- the browser-mode page and the standalone settings
-    // page navigate normally.
+    // No link inside the panel may navigate the overlay iframe: a same-origin
+    // href (the backups page's "View all backups", the Associate prompt's
+    // sign-in link) would load a full page inside the modal iframe and strand
+    // the app there. Hand those to the shell instead and dismiss. Only
+    // present when hosted in the overlay layer -- the standalone settings
+    // page navigates normally.
     document.addEventListener('click', function (event) {
       if (!window.minds || !window.minds.navigateContent) return;
       // Let the browser handle new-tab / new-window intents unchanged.
@@ -77,14 +77,14 @@
       // Only a real same-origin page load has to be redirected. An anchor that
       // resolves back to this page is going nowhere -- backup_table.js's
       // Download rows are href="#" plus their own preventDefault, and handing
-      // the panel's own URL to the content view would be a spurious navigation.
+      // the panel's own URL to the shell would be a spurious navigation.
       if (target.origin !== window.location.origin) return;
       if (target.pathname === window.location.pathname && target.search === window.location.search) return;
       event.preventDefault();
-      // Signing in is a modal in the desktop shell, so the Associate prompt's
+      // Signing in is a modal in the chrome shell, so the Associate prompt's
       // "Sign in or create an account" opens that rather than sending the whole
       // app off to the full-page auth flow -- the panel is where the user is
-      // working, and the full page is only the browser-mode fallback.
+      // working, and the full page is only the standalone fallback.
       if (target.pathname === AUTH_LOGIN_PATH && window.minds.openSigninModal) {
         window.minds.openSigninModal(SIGNIN_RETURN_PATH);
         return;

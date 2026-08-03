@@ -43,14 +43,11 @@ from imbue.mngr_forward.cli import _validate_options
 from imbue.mngr_forward.data_types import ForwardAgentSnapshot
 from imbue.mngr_forward.data_types import ForwardListSnapshot
 from imbue.mngr_forward.data_types import ForwardPortStrategy
-from imbue.mngr_forward.tls import LocalCertificateAuthority
-from imbue.mngr_forward.tls import _build_ca_certificate
-from imbue.mngr_forward.tls import _generate_rsa_key
-from imbue.mngr_forward.tls import _key_to_pem
 from imbue.mngr_forward.data_types import ForwardServiceStrategy
 from imbue.mngr_forward.primitives import ReverseTunnelSpec
 from imbue.mngr_forward.testing import TEST_AGENT_ID_1
 from imbue.mngr_forward.testing import TEST_AGENT_ID_2
+from imbue.mngr_forward.testing import make_in_memory_test_ca
 from imbue.mngr_forward.tls import InMemoryTLSConfig
 
 
@@ -186,11 +183,6 @@ def test_bind_listen_socket_falls_back_when_default_port_taken() -> None:
             sock.close()
 
 
-def _make_in_memory_ca() -> LocalCertificateAuthority:
-    ca_key = _generate_rsa_key()
-    return LocalCertificateAuthority(cert_pem=_build_ca_certificate(ca_key), key_pem=_key_to_pem(ca_key))
-
-
 def _fd_from_bind(config: Config) -> int:
     """Parse the fd number out of a ``fd://<n>`` bind entry."""
     assert len(config.bind) == 1
@@ -223,7 +215,7 @@ def test_build_hypercorn_config_enables_tls_when_flag_on() -> None:
     """A CA yields an ``InMemoryTLSConfig`` whose context is a real SSLContext."""
     sock = _bind_listen_socket("127.0.0.1", None)
     try:
-        config = _build_hypercorn_config(sock, ca=_make_in_memory_ca())
+        config = _build_hypercorn_config(sock, ca=make_in_memory_test_ca())
         dup_fd = _fd_from_bind(config)
         try:
             assert isinstance(config, InMemoryTLSConfig)
@@ -368,7 +360,7 @@ def test_abandoned_tls_connection_is_torn_down_quickly_and_quietly(caplog: pytes
     """
     listen_socket = _bind_listen_socket("127.0.0.1", 0)
     listen_port = listen_socket.getsockname()[1]
-    config = _build_hypercorn_config(listen_socket, ca=_make_in_memory_ca())
+    config = _build_hypercorn_config(listen_socket, ca=make_in_memory_test_ca())
     # Shrink the keep-alive so the server initiates the close (and thereby the
     # TLS shutdown) shortly after the client goes idle.
     config.keep_alive_timeout = 0.25

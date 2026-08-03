@@ -5,19 +5,27 @@ from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
+from flask import Flask
+from flask.testing import FlaskClient
 from pydantic import AnyUrl
 from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.desktop_client.app import create_desktop_client
+from imbue.minds.desktop_client.auth import FileAuthStore
+from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backend_resolver import ParsedAgentsResult
 from imbue.minds.desktop_client.backend_resolver import ServiceLogRecord
 from imbue.minds.desktop_client.backend_resolver import parse_agents_from_json
 from imbue.minds.desktop_client.backend_resolver import parse_service_log_records
+from imbue.minds.desktop_client.cookie_manager import SESSION_COOKIE_NAME
+from imbue.minds.desktop_client.cookie_manager import create_session_cookie
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthAccount
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthSession
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
@@ -330,6 +338,33 @@ def make_session_store_for_test(data_dir: Path, cli: ImbueCloudCli | None = None
         device_label="test-device",
     )
     return MultiAccountSessionStore(data_dir=data_dir, cli=effective_cli, record_store=record_store)
+
+
+def build_desktop_client_for_test(
+    tmp_path: Path,
+    is_authenticated: bool,
+    backend_resolver: BackendResolverInterface | None = None,
+    **create_kwargs: Any,
+) -> tuple[FlaskClient, Flask, FileAuthStore]:
+    """Build a desktop-client Flask app over a fresh ``FileAuthStore`` and return its test client.
+
+    ``backend_resolver`` defaults to a bare ``MngrCliBackendResolver``; any extra
+    keyword arguments are forwarded to ``create_desktop_client``. When
+    ``is_authenticated`` is True the returned client already carries a valid
+    session cookie signed with the auth store's key.
+    """
+    auth_store = FileAuthStore(data_directory=tmp_path / "auth")
+    effective_resolver = backend_resolver if backend_resolver is not None else MngrCliBackendResolver()
+    app = create_desktop_client(
+        auth_store=auth_store,
+        backend_resolver=effective_resolver,
+        http_client=None,
+        **create_kwargs,
+    )
+    client = app.test_client()
+    if is_authenticated:
+        client.set_cookie(SESSION_COOKIE_NAME, create_session_cookie(signing_key=auth_store.get_signing_key()))
+    return client, app, auth_store
 
 
 @pytest.fixture

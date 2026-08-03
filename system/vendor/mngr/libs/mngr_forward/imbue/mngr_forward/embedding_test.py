@@ -5,12 +5,13 @@ import pytest
 from imbue.imbue_common.primitives import InvalidPrimitiveValueError
 from imbue.mngr_forward.embedding import EmbedderOrigin
 from imbue.mngr_forward.embedding import build_frame_ancestors_policy
+from imbue.mngr_forward.primitives import ParsedForwardHost
 from imbue.mngr_forward.primitives import parse_forward_host
 
 _TEST_HOST = "host-" + "0123456789abcdef0123456789abcdef"
 
 
-def _host_info(host_header: str):
+def _host_info(host_header: str) -> ParsedForwardHost:
     parsed = parse_forward_host(host_header)
     assert parsed is not None
     return parsed
