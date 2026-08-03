@@ -1,6 +1,7 @@
 Added OpenAI Codex CLI support to the workspace image.
 
-- Bake codex 0.145.0 into the image (CODEX_VERSION).
+- Bake codex 0.146.0 into the image (CODEX_VERSION). This is the version the codex
+  tool-label table and the `code_mode_host` feature check were confirmed against.
 - Ship a repo-committed codex private-instructions channel at .codex/AGENTS.md,
   provisioned as codex's global instructions without polluting the shared
   AGENTS.md every harness reads.
