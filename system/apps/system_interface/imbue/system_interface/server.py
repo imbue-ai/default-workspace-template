@@ -1528,8 +1528,10 @@ def _layout_broadcast_endpoint() -> Response:
     - ``refresh`` / ``reload_system_interface``: state-preserving
       broadcasts that don't mutate serialized layout. Bypass the mutex.
       ``reload_system_interface`` tells connected browsers to reload the
-      whole top-level page (the frontend-reveal step of the
-      ``update-system-interface`` flow).
+      whole top-level page. Broadcast by
+      ``system/scripts/refresh_workspace_view.py`` for any interface
+      change, backend-only ones included, from whichever flow made it
+      (``update-system-interface``, ``update-app``, ``update-self``).
     - All other ops (``open``, ``focus``, ``split``, ``close``, ``move``,
       ``rename``, ``maximize``, ``restore``, ``replace-url``): acquire
       the advisory mutex first; on contention return HTTP 409 with the
