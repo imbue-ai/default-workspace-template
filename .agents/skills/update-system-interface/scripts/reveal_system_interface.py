@@ -439,12 +439,12 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
     endpoint (which works when the frontend's WebSocket never came back from the
     restart, because it does not go through the workspace server at all).
 
-    Best-effort and never fatal: the helper always exits 0 and reports each
-    channel on stderr, which we pass through. The change is already on disk and
-    will load on the next visit regardless. A helper we cannot even spawn (no
-    memory to fork right after the restart) is caught here for the same reason:
-    both callers run this once the reveal -- or the rollback recovery -- has
-    already succeeded, and neither treats it as a step that can fail.
+    Best-effort and never fatal: the helper always exits 0 and names any channel
+    that did not land on stderr, which we pass through. The change is already on
+    disk and will load on the next visit regardless. A helper we cannot even
+    spawn (no memory to fork right after the restart) is caught here for the
+    same reason: both callers run this once the reveal -- or the rollback
+    recovery -- has already succeeded, and neither treats it as a step that can fail.
     """
     try:
         completed = runner.run(
