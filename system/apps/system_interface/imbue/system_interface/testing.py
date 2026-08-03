@@ -37,6 +37,7 @@ from imbue.system_interface.claude_auth import RestartProgress
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.service_dispatcher import make_service_proxy_client
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -95,7 +96,7 @@ def build_test_state(
             resolve_agent=manager.get_agent_info_by_id,
             send_message_fn=manager.send_message_to_agent,
         ),
-        http_client=httpx.Client(follow_redirects=False, timeout=30.0),
+        http_client=make_service_proxy_client(),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
     )
 

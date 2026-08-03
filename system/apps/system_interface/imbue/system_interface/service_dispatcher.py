@@ -47,6 +47,35 @@ from imbue.system_interface.proxy import rewrite_proxied_html
 
 _PROXY_TIMEOUT_SECONDS: Final[float] = 30.0
 
+# Dialing a service is loopback inside this container, so a connection that
+# takes this long is never coming.
+_SERVICE_CONNECT_TIMEOUT_SECONDS: Final[float] = 30.0
+
+# How long a service may take to answer. Deliberately generous: this proxy sits
+# between a user's app and their own browser, and an app endpoint that takes
+# minutes is a legitimate thing to build. httpx applies this per read, and a
+# buffered handler sends nothing until it returns, so a shorter value silently
+# caps every app request at that duration. It exists only to stop a wedged
+# backend from pinning a Werkzeug thread forever.
+_SERVICE_RESPONSE_TIMEOUT_SECONDS: Final[float] = 300.0
+
+# SSE keeps the original tight budget: a stream is expected to heartbeat, so a
+# 30s gap really is a dead backend rather than slow work.
+_SERVICE_SSE_READ_TIMEOUT_SECONDS: Final[float] = 30.0
+
+
+def make_service_proxy_client() -> httpx.Client:
+    """Build the shared client backing the ``/service/<name>/`` forwarding layer."""
+    return httpx.Client(
+        follow_redirects=False,
+        timeout=httpx.Timeout(
+            connect=_SERVICE_CONNECT_TIMEOUT_SECONDS,
+            pool=_SERVICE_CONNECT_TIMEOUT_SECONDS,
+            read=_SERVICE_RESPONSE_TIMEOUT_SECONDS,
+            write=_SERVICE_RESPONSE_TIMEOUT_SECONDS,
+        ),
+    )
+
 _EXCLUDED_RESPONSE_HEADERS: Final[frozenset[str]] = frozenset(
     {
         "transfer-encoding",
@@ -142,6 +171,12 @@ def _forward_http_request_streaming(
         url=proxy_url,
         headers=headers,
         content=body,
+        timeout=httpx.Timeout(
+            connect=_SERVICE_CONNECT_TIMEOUT_SECONDS,
+            pool=_SERVICE_CONNECT_TIMEOUT_SECONDS,
+            read=_SERVICE_SSE_READ_TIMEOUT_SECONDS,
+            write=_SERVICE_SSE_READ_TIMEOUT_SECONDS,
+        ),
     )
     try:
         backend_response = http_client.send(backend_request, stream=True)

@@ -1,0 +1,5 @@
+An app endpoint that takes longer than 30 seconds no longer fails. The `/service/<name>/` forwarding layer used a flat 30-second `httpx` timeout, and because that budget is applied per read -- while a buffered handler sends nothing until it returns -- it acted as a hard 30-second ceiling on every app request. Clicking a button that kicked off half a minute of work returned "Backend request timed out" (504), or, on an HTML navigation, dropped the tab into the auto-retrying loading page and reloaded every second forever.
+
+The forwarding client is now built by `make_service_proxy_client()`, which keeps a 30-second connect budget (dialing a service is loopback inside the container, so a slow dial is never coming) and allows 300 seconds for the service to respond. The long budget is not a target; it exists only so a wedged backend cannot pin a Werkzeug thread forever. Server-sent-event streams keep the original 30-second read budget, since a stream is expected to heartbeat.
+
+Verified end to end against a real service whose endpoint sleeps 45 seconds: previously a 504 at exactly 30.0s, now a 200 with the real response body at 45.0s.
