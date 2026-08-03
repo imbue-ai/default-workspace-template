@@ -445,6 +445,11 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
     spawn (no memory to fork right after the restart) is caught here for the
     same reason: both callers run this once the reveal -- or the rollback
     recovery -- has already succeeded, and neither treats it as a step that can fail.
+
+    ``UnicodeDecodeError`` is in that group because capturing text output decodes
+    it, and output the stdio encoding cannot decode is a ``ValueError`` rather
+    than a ``SubprocessError`` -- the same escape the helper's own ``_run_channel``
+    guards against on its side of the boundary.
     """
     try:
         completed = runner.run(
@@ -454,7 +459,7 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
             text=True,
             timeout=_REFRESH_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
         sys.stderr.write(
             f"refresh: could not run {_REFRESH_SCRIPT} ({type(exc).__name__}: {exc}); "
             "an open view may still be showing the previous build until reloaded.\n"

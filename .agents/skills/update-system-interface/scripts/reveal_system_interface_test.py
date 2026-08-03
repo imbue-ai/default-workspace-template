@@ -271,6 +271,28 @@ def test_unspawnable_refresh_helper_does_not_fail_a_successful_reveal() -> None:
     assert _refreshed_the_view(runner)  # it was attempted, not skipped
 
 
+def test_undecodable_refresh_output_does_not_fail_a_successful_reveal() -> None:
+    """Capturing the helper's output must not become the thing that fails a reveal.
+
+    ``capture_output=True, text=True`` decodes what the child wrote, and output
+    the stdio encoding cannot decode raises ``UnicodeDecodeError`` -- a
+    ``ValueError``, so neither ``OSError`` nor ``SubprocessError`` covers it.
+    The helper guards the mirror image of this on its own side; letting it
+    escape here would abort a reveal whose change has already landed.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    runner.respond(
+        (sys.executable,),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    )
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+
+
 def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> None:
     runner = _runner_with_diff(
         "M\tsystem/apps/system_interface/imbue/system_interface/server.py\nM\tsystem/apps/system_interface/pyproject.toml\n"
