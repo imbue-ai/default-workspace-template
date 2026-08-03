@@ -29,7 +29,7 @@ _SHIPPED_IMBUE_PACKAGES = ("imbue.remote_service_connector", "imbue.modal_app_ki
 # and silently escapes the patch, so cross-module callers must reference these
 # through the module attribute (``module.seam(...)``) instead.
 _MODULE_ATTRIBUTE_SEAMS = (
-    "get_ctx",
+    "get_cloudflare_ctx",
     "get_pool_db_connection",
     "get_entitlements_store",
     "get_key_store",
@@ -38,6 +38,9 @@ _MODULE_ATTRIBUTE_SEAMS = (
     "get_orphan_bucket_store",
     "litellm_request",
     "get_user_id_from_access_token",
+    "default_email_getter",
+    "issue_share_certificate",
+    "get_broker_oauth_provider",
 )
 
 
@@ -94,8 +97,8 @@ def test_only_the_entrypoint_imports_modal() -> None:
 def test_runtime_seams_are_referenced_through_their_module() -> None:
     """Cross-module seam calls must be late-bound (module attribute), never from-imported.
 
-    Checked on the AST so that aliasing (``import get_ctx as _get_ctx``) and
-    relative imports cannot early-bind a seam unnoticed.
+    Checked on the AST so that aliasing (``import get_key_store as _get_key_store``)
+    and relative imports cannot early-bind a seam unnoticed.
     """
     violations: list[str] = []
     for path in shipped_module_files(_PACKAGE_DIR):

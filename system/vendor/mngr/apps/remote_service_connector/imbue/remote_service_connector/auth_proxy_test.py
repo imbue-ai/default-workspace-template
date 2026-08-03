@@ -724,3 +724,29 @@ def test_auth_get_user_missing_returns_404(monkeypatch: pytest.MonkeyPatch) -> N
     client = TestClient(web_app, raise_server_exceptions=False)
     resp = client.get("/auth/users/does-not-exist")
     assert resp.status_code == 404
+
+
+def test_build_oauth_providers_includes_only_fully_configured_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-secret")
+    # GitHub has an id but no secret, so it must be left out rather than
+    # registered half-configured.
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "github-id")
+    monkeypatch.delenv("GITHUB_CLIENT_SECRET", raising=False)
+
+    providers = auth_proxy_mod._build_oauth_providers()
+
+    assert [provider.config.third_party_id for provider in providers] == ["google"]
+    assert providers[0].config.clients is not None
+    assert providers[0].config.clients[0].client_id == "google-id"
+
+
+def test_build_oauth_providers_builds_github_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "github-id")
+    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "github-secret")
+
+    providers = auth_proxy_mod._build_oauth_providers()
+
+    assert [provider.config.third_party_id for provider in providers] == ["github"]

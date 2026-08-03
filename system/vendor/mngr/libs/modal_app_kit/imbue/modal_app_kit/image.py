@@ -57,3 +57,24 @@ def pinned_image(image_requirements_file: Path) -> modal.Image:
         extra_options="--require-hashes",
         uv_version=IMAGE_BUILD_UV_VERSION,
     )
+
+
+def locate_image_requirements(entrypoint_file: Path) -> Path:
+    """The app's committed ``image_requirements.txt``, searched upward from the entrypoint.
+
+    Entrypoints must use this instead of fixed-depth path arithmetic like
+    ``Path(__file__).parents[2]``: inside the Modal container the entrypoint is
+    re-imported from its automatic file mount at ``/root/app.py``, where a
+    fixed ancestor index can be out of range and crash the container at import
+    (observed as ``IndexError`` killing every fresh remote-service-connector
+    boot). The image is already built by then, so the returned path is never
+    read in-container -- it only has to be computable. When no ancestor holds
+    the export (the in-container case), the entrypoint's own directory is
+    returned as the never-read placeholder.
+    """
+    resolved_entrypoint = entrypoint_file.resolve()
+    for ancestor in resolved_entrypoint.parents:
+        candidate = ancestor / IMAGE_REQUIREMENTS_FILENAME
+        if candidate.exists():
+            return candidate
+    return resolved_entrypoint.parent / IMAGE_REQUIREMENTS_FILENAME

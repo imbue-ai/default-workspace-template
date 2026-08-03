@@ -1,19 +1,14 @@
 # remote_service_connector
 
-A lightweight service deployed as a Modal Function that connects minds clients to the remote services they need: Cloudflare tunnels, SuperTokens authentication, pool-host leasing, LiteLLM keys, R2 buckets, and per-account plans/quotas. All endpoints are authenticated, and every resource grant is checked against the account's entitlements (see "Plans and entitlements" below).
+A lightweight service deployed as a Modal Function that connects minds clients to the remote services they need: SuperTokens authentication, pool-host leasing, LiteLLM keys, R2 buckets, self-hosted workspace sharing, and per-account plans/quotas. All endpoints are authenticated, and every resource grant is checked against the account's entitlements (see "Plans and entitlements" below).
 
 ## What it does
 
 Allows authenticated users to:
-- Create Cloudflare tunnels (one per host running `cloudflared`)
-- Add/remove forwarding rules (ingress + DNS) on those tunnels
-- List their tunnels and configured services
-- Delete tunnels (cascading cleanup of DNS and ingress)
 - Lease pre-provisioned pool hosts, mint LiteLLM keys, and create R2 buckets
+- Share workspaces via the self-hosted relay design (`/shares/*`): share records + relay tokens, frps plugin authorization, ACME DNS-01 certificate issuance, and the accounts broker for share login handoff
 - See their plan, quotas, and live usage (and switch plans)
 - Sign in / sign up via SuperTokens (proxying the SuperTokens core so clients never need its API key)
-
-After creating a tunnel, users receive a token to run `cloudflared tunnel run --token <TOKEN>` on their host.
 
 ## Code layout
 
@@ -21,8 +16,8 @@ The service lives in `imbue/remote_service_connector/`:
 
 - `app.py` -- the Modal deployment entrypoint, and nothing else: image, `modal.App`, secrets, function definitions (web app + crons). Deployed by file path; the shipped modules may never import it.
 - `web.py` -- FastAPI assembly (mounts every feature router) plus the unauthenticated system endpoints (`/health/liveness`, `/generation`, `/version`).
-- Feature modules, each an `APIRouter`: `tunnels.py`, `hosts.py`, `llm_keys.py`, `accounts.py`, `sync.py`, `retention.py`, `auth_proxy.py`, and the `r2/` subpackage (`naming`, `stores`, `buckets`, `grants`, `sweep`).
-- Foundation modules: `forwarding.py` (Cloudflare business logic + `get_ctx`), `auth.py`, `entitlements.py`, `litellm_client.py`, `cloudflare.py` (raw API client), `naming.py`, `http_api.py`, `db.py`, `errors.py`, `deploy_constants.py` (the image's pip set).
+- Feature modules, each an `APIRouter`: `shares.py` (share records, relay tokens, frps plugin auth), `share_certs.py` (ACME DNS-01 issuance), `share_broker.py` (the accounts broker), `hosts.py`, `llm_keys.py`, `accounts.py`, `sync.py`, `retention.py`, `auth_proxy.py`, and the `r2/` subpackage (`naming`, `stores`, `buckets`, `grants`, `sweep`).
+- Foundation modules: `auth.py`, `entitlements.py`, `litellm_client.py`, `cloudflare.py` (raw R2 API client + the shared `CloudflareCtx`), `http_api.py`, `db.py`, `errors.py`, `deploy_constants.py` (the image's pip set).
 
 The container receives only these modules plus `imbue.modal_app_kit` -- nothing else from the monorepo exists at runtime, so shipped modules must not import anything else from it. The rules (and why they exist) are documented in [libs/modal_app_kit/README.md](../../libs/modal_app_kit/README.md) and enforced by `test_project_ratchets.py`.
 
@@ -65,22 +60,21 @@ connector and the LiteLLM proxy. The push aborts with a diagnostic if
 any Vault entry is missing a key declared by the template (empty
 values are fine -- the deploy skips them when pushing to Modal).
 
-**cloudflare.sh** holds the Cloudflare API credentials:
+**cloudflare.sh** holds the Cloudflare API credentials (R2 buckets + ACME DNS-01 TXT records; the tunnel/Access stack is gone):
 
-- `CLOUDFLARE_API_TOKEN` (required): API token with Tunnel Write and DNS Write permissions.
+- `CLOUDFLARE_API_TOKEN` (required): account-owned API token; see "Cloudflare token requirements for R2" below.
 - `CLOUDFLARE_ACCOUNT_ID` (required): Cloudflare account ID.
-- `CLOUDFLARE_ZONE_ID` (required): Cloudflare zone ID for DNS records.
-- `CLOUDFLARE_DOMAIN` (required): Base domain for service subdomains (e.g. `example.com`).
-- `CLOUDFLARE_ALLOWED_IDPS` (optional): Comma-separated list of Cloudflare identity provider UUIDs allowed on Access Applications (e.g. Google OAuth, one-time PIN). When unset, Cloudflare uses the account default.
+- `CLOUDFLARE_ZONE_ID` (required): Cloudflare zone ID (used for the ACME DNS-01 challenge TXT records).
+- `CLOUDFLARE_DOMAIN` (required): Base domain for the tier's DNS records (read by the tier setup scripts, not by the connector).
 
 **supertokens.sh** holds the SuperTokens + OAuth credentials:
 
 - `SUPERTOKENS_CONNECTION_URI` (required): URL of the SuperTokens core.
 - `SUPERTOKENS_API_KEY` (required for most deployments): SuperTokens core API key.
-- `AUTH_WEBSITE_DOMAIN` (optional): Public base URL embedded in password-reset and email-verification links. Must match the URL Modal assigns to the deployed function. If unset, the app derives `https://{workspace}--remote-service-connector-<env>-fastapi-app.modal.run` (using the hardcoded default workspace in `app.py`), which is only correct for that specific Modal workspace -- set this explicitly for every deploy.
+- `AUTH_WEBSITE_DOMAIN` (required whenever `SUPERTOKENS_CONNECTION_URI` is set): Public base URL embedded in password-reset and email-verification links. Must match the URL Modal assigns to the deployed function. There is no derived fallback: if unset, `init_supertokens()` raises `MissingAuthWebsiteDomainError` at container startup, so populate it in the per-tier `supertokens-<env>-<deploy-id>` Modal secret (the deploy script pushes it from the tier's Vault entry).
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (optional): override Google OAuth client credentials. Leave blank to inherit from the SuperTokens core's dashboard.
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` (optional): override GitHub OAuth client credentials. Leave blank to inherit from the SuperTokens core's dashboard.
-- `MINDS_ADMIN_KEY` (optional): fixed API key authenticating the operator admin endpoints -- the paid-list CRUD (`/paid/*`), the account admin API (`/admin/accounts/*`), and the on-demand sweeps (`/admin/sweep/*`). Distinct from every other auth path -- the connector accepts it ONLY on those routes and rejects SuperTokens / tunnel tokens there, and rejects this key on every other route. Leave empty to disable the admin API. The `mngr imbue_cloud admin ...` CLI reads the same value from `$MINDS_ADMIN_KEY`. The deprecated `MINDS_PAID_ADMIN_KEY` spelling is still accepted (with a warning) while Vault entries and operator environments migrate.
+- `MINDS_ADMIN_KEY` (optional): fixed API key authenticating the operator admin endpoints -- the paid-list CRUD (`/paid/*`), the account admin API (`/admin/accounts/*`), and the on-demand sweeps (`/admin/sweep/*`). Distinct from every other auth path -- the connector accepts it ONLY on those routes and rejects SuperTokens tokens there, and rejects this key on every other route. Leave empty to disable the admin API. The `mngr imbue_cloud admin ...` CLI reads the same value from `$MINDS_ADMIN_KEY`. The deprecated `MINDS_PAID_ADMIN_KEY` spelling is still accepted (with a warning) while Vault entries and operator environments migrate.
 - `MINDS_PAID_LIST_CACHE_TTL_SECONDS` (optional): how long (seconds) the connector caches a per-email paid-status lookup before re-querying the tables. Unset uses the built-in default (60s); `0` disables caching. Each container caches independently, so a paid-list change propagates within this window.
 
 ### Plans and entitlements (quotas)
@@ -91,9 +85,9 @@ Resource access is governed by per-account quotas ("entitlements"), not by a pai
 - The `account_entitlements` table holds one row per account, created lazily on the account's first quota-relevant request. The row's values are copied wholesale from the plan at assignment and are the adjustable source of truth thereafter -- changing a plan's defaults never retroactively changes existing rows.
 - Lazy-creation backfill rule: accounts whose SuperTokens `time_joined` predates the feature-ship cutoff get "ally" when their email is paid-listed; every newer account starts as "explorer".
 - Quota rejections are HTTP 403 with structured detail: `{"code": "quota_exceeded", "entitlement": "<name>", "limit": N, "current": N, "message": "..."}`.
-- Quotas are checked when a resource is *granted* (lease, tunnel, service, bucket, sync record, key). Lowering a quota below current usage never revokes existing resources; the two continuous exceptions are the monthly LLM budget (enforced per-request by LiteLLM user budgets) and R2 storage (enforced by the hourly sweep, see "R2 storage-quota sweep" below).
+- Quotas are checked when a resource is *granted* (lease, bucket, sync record, key, share). Lowering a quota below current usage never revokes existing resources; the two continuous exceptions are the monthly LLM budget (enforced per-request by LiteLLM user budgets) and R2 storage (enforced by the hourly sweep, see "R2 storage-quota sweep" below).
 
-The quota entitlements: `max_remote_workspaces`, `max_tunnels`, `max_services_per_tunnel`, `max_buckets`, `max_total_bucket_bytes`, `monthly_llm_spend_usd`, `max_active_synced_workspaces`.
+The quota entitlements: `max_remote_workspaces`, `max_buckets`, `max_total_bucket_bytes`, `monthly_llm_spend_usd`, `max_active_synced_workspaces`.
 
 ### Paid lists (ally-plan eligibility)
 
@@ -110,16 +104,12 @@ On deploy, `minds env deploy` seeds each tier's configured default entries (the 
 
 The R2 bucket routes require `CLOUDFLARE_API_TOKEN` to be an **account-owned** token (`cfat_`) -- not a user-owned token (`cfut_`) -- because the connector mints account-owned per-bucket R2 tokens on the user's behalf. The token needs these permissions:
 
-- `Cloudflare Tunnel: Edit`
-- `DNS: Edit` (on the tier zone)
-- `Access: Apps and Policies: Edit`
-- `Access: Service Tokens: Edit`
-- `Workers KV Storage: Edit`
+- `DNS: Edit` (on the tier zone; ACME DNS-01 challenge TXT records for shared-workspace certificates)
 - `Workers R2 Storage: Edit` (R2 buckets)
 - `Account API Tokens: Edit` (mint/revoke/roll per-bucket R2 keys)
 - `Account Analytics: Read` (the storage-quota sweep's GraphQL usage query)
 
-**R2 must also be enabled on the Cloudflare account** (a one-time dashboard action; until then the API returns `code 10042 "Please enable R2 through the Cloudflare Dashboard"`). Existing tiers shipped with a user-owned tunnel/DNS token and must be migrated (create the account-owned token with the permissions above, replace `CLOUDFLARE_API_TOKEN` in Vault, then redeploy) before the bucket routes work.
+**R2 must also be enabled on the Cloudflare account** (a one-time dashboard action; until then the API returns `code 10042 "Please enable R2 through the Cloudflare Dashboard"`). Existing tiers shipped with a user-owned DNS token and must be migrated (create the account-owned token with the permissions above, replace `CLOUDFLARE_API_TOKEN` in Vault, then redeploy) before the bucket routes work.
 
 ### 2. Deploy the Modal app
 
@@ -141,10 +131,11 @@ Running `modal deploy` directly without the wrapper defaults to
 
 ## Authentication
 
-All non-`/auth/*` endpoints require a Bearer token:
+All non-`/auth/*` endpoints require a Bearer token, with the exceptions noted below:
 
-- **Agent (tunnel token)**: `Authorization: Bearer <tunnel_token>` — scoped to a single tunnel. Can add/remove/list services on that tunnel only; cannot create/delete tunnels or manage auth policies.
-- **User (SuperTokens JWT)**: `Authorization: Bearer <access_token>` — the signed-in user's SuperTokens session. A signed-in user has full authority over their own resources; their user-id prefix (the first 16 hex chars of their SuperTokens user ID) namespaces their tunnels, leases, and buckets.
+- **User (SuperTokens JWT)**: `Authorization: Bearer <access_token>` — the signed-in user's SuperTokens session. A signed-in user has full authority over their own resources; their user-id prefix (the first 16 hex chars of their SuperTokens user ID) namespaces their leases and buckets.
+- The share-certificate endpoint (`POST /shares/cert`) is instead authenticated by the share's relay token (see `share_certs.py`), and the frps plugin callback by its shared secret (see `shares.py`).
+- The accounts-broker routes (`GET /share/login`, `POST /share/session`, `GET /share/authorize`) are a browser-facing flow authenticated by the login form and the `imbue_sso_session` cookie; `GET /share/jwks.json` is public (it serves only the broker's verification keys).
 
 The `/auth/*` endpoints are themselves the authentication flow, so they do not require a token.
 
@@ -153,53 +144,31 @@ The `/auth/*` endpoints are themselves the authentication flow, so they do not r
 Every resource-granting endpoint checks the caller's entitlements (see "Plans and entitlements" above) on top of user auth:
 
 - `POST /hosts/lease` -- `max_remote_workspaces` (strict: a per-user advisory lock serializes concurrent leases; stopped workspaces still hold their lease and count).
-- `POST /tunnels` -- `max_tunnels` (idempotent re-creates of an existing tunnel are always allowed).
-- `POST /tunnels/{name}/services` -- `max_services_per_tunnel` (re-adding an existing service is always allowed; enforced under both user and tunnel-token auth).
 - `POST /buckets` -- `max_buckets`, plus `max_total_bucket_bytes` against live REST-measured usage (an account already over its storage quota cannot create new buckets; an unreadable usage number fails open). New keys minted while the owner is enforced-over-quota (bucket creation and roll-key's fresh mint) come out read-only with the downgrade recorded, so a fresh mint can never bypass the sweep.
 - `POST /keys/create` -- refused outright when `monthly_llm_spend_usd` is 0 (e.g. the explorer plan); otherwise the account's LiteLLM user-level budget is upserted before minting, so LiteLLM caps aggregate spend across all the account's keys.
 - `PUT /sync/records/{host_id}` -- `max_active_synced_workspaces` when the push would create a new ACTIVE record.
 
 ### Paid-list admin API (`/paid/*`)
 
-The paid lists are managed by a separate set of endpoints authenticated by the fixed `MINDS_ADMIN_KEY` (passed as `Authorization: Bearer <key>`). This key is rejected on all other routes, and SuperTokens / tunnel tokens are rejected here. All operations are idempotent; `list` returns every row with its `is_paid` status by default (`?paid_only=true` filters to active rows):
+The paid lists are managed by a separate set of endpoints authenticated by the fixed `MINDS_ADMIN_KEY` (passed as `Authorization: Bearer <key>`). This key is rejected on all other routes, and SuperTokens tokens are rejected here. All operations are idempotent; `list` returns every row with its `is_paid` status by default (`?paid_only=true` filters to active rows):
 
 - `GET /paid/domains` / `GET /paid/emails` -- list rows.
 - `POST /paid/domains/add` / `POST /paid/emails/add` -- body `{"value": "..."}`; add or reactivate.
 - `POST /paid/domains/remove` / `POST /paid/emails/remove` -- body `{"value": "..."}`; soft-delete (`is_paid = false`).
 
-## Identity providers for Access Applications
-
-When `CLOUDFLARE_ALLOWED_IDPS` is set, Access Applications created for forwarded services will restrict authentication to the specified identity providers (e.g. Google OAuth, one-time PIN). This controls how end users authenticate when visiting a tunneled service URL. Set it to a comma-separated list of Cloudflare identity provider UUIDs. You can find these UUIDs in the Cloudflare Zero Trust dashboard under Settings > Authentication.
-
 ## API
 
-### Tunnels (signed-in user only)
+### Shares (signed-in user; self-hosted workspace sharing)
 
-- `POST /tunnels` -- Create a tunnel. Body: `{"agent_id": "...", "default_auth_policy": ...}`. Returns tunnel info with token.
-- `GET /tunnels` -- List your tunnels with their configured services.
-- `GET /tunnels/by-agent/{agent_id}` -- Resolve your tunnel for a single agent (O(1)): looks the tunnel up by its exact name (`<user_id_prefix>--<agent-prefix>`) via Cloudflare's server-side name filter plus one config fetch, instead of enumerating every tunnel like `GET /tunnels`. Returns the tunnel info (no token), or HTTP 200 with `null` when no tunnel exists for that agent yet. 404 is reserved for "this connector predates the endpoint" (an unknown route), which lets clients that are newer than the connector fall back to enumerating `GET /tunnels`.
-- `DELETE /tunnels/{tunnel_name}` -- Delete a tunnel and all its DNS records, Access Applications, ingress rules, and KV entries.
-- `POST /sharing/enable` -- Enable (or update) sharing for one service in a single call. Body: `{"agent_id": "...", "service_name": "...", "service_url": "...", "auth_policy": {...}}`. Ensures the tunnel (idempotent), adds the service, and applies the Access policy directly to its Access Application (replacing a pre-existing app's policies on re-enable). Returns `{"tunnel": {...with token}, "service": {...}}` so the caller needs no follow-up reads. Enforces the same `max_tunnels` / `max_services_per_tunnel` quotas as the individual endpoints.
+A shared workspace lives at `<service>.<host-id>.<user-label>.<region>.<content-domain>` behind a self-hosted frps relay; the connector owns the share records, relay tokens, and certificate issuance:
 
-### Services (user or tunnel token)
-
-- `POST /tunnels/{tunnel_name}/services` -- Add a service. Body: `{"service_name": "...", "service_url": "http://localhost:8080"}`.
-- `GET /tunnels/{tunnel_name}/services` -- List services on a tunnel.
-- `DELETE /tunnels/{tunnel_name}/services/{service_name}` -- Remove a service, its DNS record, and its Access Application.
-
-### Auth policies (signed-in user only)
-
-- `GET /tunnels/{tunnel_name}/auth` -- Get the default auth policy for a tunnel (stored in Workers KV).
-- `PUT /tunnels/{tunnel_name}/auth` -- Set the default auth policy for a tunnel. New services inherit this policy.
-- `GET /tunnels/{tunnel_name}/services/{service_name}/auth` -- Get the auth policy for a specific service.
-- `PUT /tunnels/{tunnel_name}/services/{service_name}/auth` -- Set/override the auth policy for a specific service.
-
-Every forwarded service gets a Cloudflare Access Application, unconditionally:
-
-- A tunnel created without an explicit default auth policy gets an allow-only-the-owner's-verified-email default.
-- Adding a service creates its Access Application (with the tunnel default, or the owner-email fallback) *before* any DNS/ingress exists; if the Access step fails, the add is aborted and rolled back rather than leaving the service publicly reachable.
-- Auth-policy writes reject policies with no identity constraint (every rule must name emails, email domains, an IdP login method, or a group). Access service tokens remain supported via the dedicated service-token endpoints.
-- Per-service overrides replace the inherited policy entirely.
+- `POST /shares` -- Enable sharing for one workspace. Body: `{"host_id": "host-<32hex>"}`. Returns the workspace domain, the relay endpoint the workspace's frpc should dial, and the plaintext relay token (returned exactly once; only its hash is stored). Re-sharing rotates the token.
+- `GET /shares` -- List the caller's share records (active and inactive).
+- `DELETE /shares/{host_id}` -- Disable sharing (share goes `inactive`, relay token deleted).
+- `GET /shares/{host_id}/status` -- One share's domain, tunnel-liveness signal, and certificate expiry.
+- `POST /shares/cert` -- Sign the workspace's CSR via ACME DNS-01 (authenticated by the share's relay token; the workspace keeps its private key).
+- `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` operations.
+- `GET /share/login`, `POST /share/session`, `GET /share/authorize`, `GET /share/jwks.json` -- the accounts broker: browser login + short-lived handoff JWTs for visiting a shared workspace.
 
 ### Buckets (signed-in user only)
 

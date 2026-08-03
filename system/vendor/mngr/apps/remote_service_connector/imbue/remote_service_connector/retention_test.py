@@ -10,7 +10,7 @@ from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.r2.naming import DESTROYED_WORKSPACE_BACKUP_RETENTION_SECONDS
 from imbue.remote_service_connector.testing import _make_bucket_test_client
 from imbue.remote_service_connector.testing import _store_record
-from imbue.remote_service_connector.testing import make_fake_forwarding_ctx
+from imbue.remote_service_connector.testing import make_fake_cloudflare_ctx
 from imbue.remote_service_connector.testing import make_fake_key_store
 from imbue.remote_service_connector.testing import make_fake_orphan_bucket_store
 from imbue.remote_service_connector.testing import make_fake_sync_store
@@ -18,7 +18,7 @@ from imbue.remote_service_connector.testing import make_fake_sync_store
 
 def _make_reap_deps() -> tuple[Any, Any, Any, Any]:
     """(ops, sync_store, key_store, orphan_store) fakes for direct reaper runs."""
-    fake_ctx = make_fake_forwarding_ctx()
+    fake_ctx = make_fake_cloudflare_ctx()
     return fake_ctx.fake, make_fake_sync_store(), make_fake_key_store(), make_fake_orphan_bucket_store()
 
 

@@ -11,44 +11,44 @@ class CloudflareApiError(RuntimeError):
         super().__init__(f"Cloudflare API error ({status_code}): {messages}")
 
 
-class TunnelNotFoundError(KeyError):
-    def __init__(self, tunnel_name: str) -> None:
-        self.tunnel_name = tunnel_name
-        super().__init__(f"Tunnel not found: {tunnel_name}")
+class InvalidShareCoordinateError(ValueError):
+    """Raised when a host id, user label, or region is not a valid hostname coordinate."""
 
 
-class TunnelOwnershipError(PermissionError):
-    def __init__(self, tunnel_name: str, user_id_prefix: str) -> None:
-        self.tunnel_name = tunnel_name
-        self.user_id_prefix = user_id_prefix
-        super().__init__(f"User '{user_id_prefix}' does not own tunnel '{tunnel_name}'")
+class ShareQuotaExceededError(RuntimeError):
+    """Raised when enabling a share would exceed the per-user shared-workspace quota."""
+
+    def __init__(self, current: int, limit: int) -> None:
+        self.current = current
+        self.limit = limit
+        super().__init__(f"user already has {current} shared workspaces (max {limit})")
 
 
-class ServiceNotFoundError(KeyError):
-    def __init__(self, service_name: str, tunnel_name: str) -> None:
-        self.service_name = service_name
-        self.tunnel_name = tunnel_name
-        super().__init__(f"Service '{service_name}' not found on tunnel '{tunnel_name}'")
+class ShareNotFoundError(KeyError):
+    """Raised when the caller has no share record for the requested host id."""
+
+    def __init__(self, host_id: str) -> None:
+        self.host_id = host_id
+        super().__init__(f"No share found for host '{host_id}'")
 
 
-class InvalidTunnelComponentError(ValueError):
-    def __init__(self, component_name: str, value: str, forbidden: str) -> None:
-        self.component_name = component_name
-        self.value = value
-        self.forbidden = forbidden
+class MissingShareConfigError(RuntimeError):
+    """Raised when a required sharing env var (from the sharing-<env> Modal secret) is unset."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
         super().__init__(
-            f"{component_name} '{value}' must not contain '{forbidden}' (used as the tunnel name separator)"
+            f"Sharing is not configured on this server: {name} is unset. "
+            f"Populate it in the tier's `sharing` Vault entry (pushed as the sharing-<env> Modal secret)."
         )
 
 
-class TunnelComponentTooLongError(ValueError):
-    """Raised when a tunnel component exceeds the maximum length."""
+class InvalidCsrError(ValueError):
+    """Raised when a workspace's CSR is malformed or claims the wrong names."""
 
-    def __init__(self, component_name: str, value: str, max_length: int) -> None:
-        self.component_name = component_name
-        self.value = value
-        self.max_length = max_length
-        super().__init__(f"{component_name} '{value}' exceeds maximum length of {max_length}")
+
+class AcmeIssuanceError(RuntimeError):
+    """Raised when every configured ACME CA failed to issue the certificate."""
 
 
 class InvalidHostNameError(ValueError):
@@ -208,29 +208,11 @@ class PlanNotFoundError(KeyError):
         )
 
 
-class InvalidAuthPolicyError(ValueError):
-    """Raised when an auth policy has no identity constraint (would expose the service publicly)."""
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(f"Auth policy rejected: {reason}")
-
-
 class UnknownEntitlementColumnError(ValueError):
     """Raised when an entitlements update names a column that does not exist."""
 
     def __init__(self, unknown_columns: list[str]) -> None:
         super().__init__(f"Unknown entitlement columns: {unknown_columns}")
-
-
-class ServicePolicyMissingError(RuntimeError):
-    """Raised when a service would be added with no Access policy available at all."""
-
-    def __init__(self, tunnel_name: str) -> None:
-        self.tunnel_name = tunnel_name
-        super().__init__(
-            f"Tunnel '{tunnel_name}' has no default auth policy and no owner policy could be derived; "
-            "set a default auth policy on the tunnel before adding services."
-        )
 
 
 class PoolHostCleanupError(RuntimeError):

@@ -26,11 +26,9 @@ from pydantic import Field
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.entitlements as entitlements_module
-import imbue.remote_service_connector.forwarding as forwarding_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import authenticate_request
-from imbue.remote_service_connector.auth import require_user_auth
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -497,8 +495,7 @@ def _decode_size_capped_base64(field_name: str, encoded: str, max_bytes: int) ->
 
 def _sync_caller(request: Request) -> tuple[UserAuth, str]:
     """Authenticate a sync endpoint call; returns (user auth, full user_id)."""
-    auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-    user = require_user_auth(auth)
+    user = authenticate_request(request)
     return user, auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
 
 

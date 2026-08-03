@@ -1,3 +1,6 @@
+acme==5.6.0 \
+    --hash=sha256:23f706ef1c437fc743b2f90704b97f263a56d83198b3af1c25c7dd42c4b463e4 \
+    --hash=sha256:fbf7ee8880485f2339942a2eff9a87deb79b74a8dcac4a572c08e7e640f046cd
 aiohappyeyeballs==2.6.1 \
     --hash=sha256:c3f9d0113123803ccadfdf3f0faa505bc78e6a72d1cc4806cbd719826e943558 \
     --hash=sha256:f349ba8f4b75cb25c99c5c2d84e997e485204d2902a9597802b0371f09331fb8
@@ -358,8 +361,11 @@ cryptography==48.0.1 \
     --hash=sha256:f817adc181390bd54f2f700107a7419040fb7c1bdf2fc26f36551a06a68c3345 \
     --hash=sha256:fe0180af5bf9236518a087e35bf2d9a347d5f5f51e63c579d683ddff424e3d46
     # via
+    #   acme
+    #   josepy
     #   paramiko
     #   pyjwt
+    #   pyopenssl
 deprecated==1.2.18 \
     --hash=sha256:422b6f6d859da6f2ef57857761bfb392480502a64c3028ca9bbe86085d72115d \
     --hash=sha256:bd5011788200372a32418f888e326a09ff80d0214bd961147cfed01b5c018eec
@@ -599,6 +605,10 @@ jinja2==3.1.6 \
     --hash=sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
     # via fastapi
+josepy==2.2.0 \
+    --hash=sha256:63e9dd116d4078778c25ca88f880cc5d95f1cab0099bebe3a34c2e299f65d10b \
+    --hash=sha256:74c033151337c854f83efe5305a291686cef723b4b970c43cfe7270cf4a677a9
+    # via acme
 markdown-it-py==4.2.0 \
     --hash=sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49 \
     --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
@@ -1040,10 +1050,18 @@ pynacl==1.6.2 \
     --hash=sha256:d29bfe37e20e015a7d8b23cfc8bd6aa7909c92a1b8f41ee416bbb3e79ef182b2 \
     --hash=sha256:fe9847ca47d287af41e82be1dd5e23023d3c31a951da134121ab02e42ac218c9
     # via paramiko
+pyopenssl==26.2.0 \
+    --hash=sha256:4f9d971bc5298b8bc1fab282803da04bf000c755d4ad9d99b52de2569ca19a70 \
+    --hash=sha256:8c6fcecd1183a7fc897548dfe388b0cdb7f37e018200d8409cf33959dbe35387
+    # via acme
 pyotp==2.9.0 \
     --hash=sha256:346b6642e0dbdde3b4ff5a930b664ca82abfa116356ed48cc42c7d6590d36f63 \
     --hash=sha256:81c2e5865b8ac55e825b0358e496e1d9387c811e85bb40e71a3b29b288963612
     # via supertokens-python
+pyrfc3339==2.1.0 \
+    --hash=sha256:560f3f972e339f579513fe1396974352fd575ef27caff160a38b312252fcddf3 \
+    --hash=sha256:c569a9714faf115cdb20b51e830e798c1f4de8dabb07f6ff25d221b5d09d8d7f
+    # via acme
 python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
     --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
@@ -1103,6 +1121,7 @@ requests==2.34.0 \
     --hash=sha256:7d62fe92f50eb82c529b0916bb445afa1531a566fc8f35ffdc64446e771b856a \
     --hash=sha256:917520a21b767485ce7c588f4ebb917c436b24a31231b44228715eaeb5a52c60
     # via
+    #   acme
     #   requests-file
     #   tldextract
     #   twilio
@@ -1235,6 +1254,7 @@ typing-extensions==4.15.0 \
     #   pydantic
     #   pydantic-core
     #   pydantic-extra-types
+    #   pyopenssl
     #   rich-toolkit
     #   starlette
     #   supertokens-python

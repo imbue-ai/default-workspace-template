@@ -18,8 +18,10 @@ from imbue.remote_service_connector.llm_keys import router as llm_keys_router
 from imbue.remote_service_connector.r2.buckets import router as r2_buckets_router
 from imbue.remote_service_connector.r2.grants import router as r2_grants_router
 from imbue.remote_service_connector.retention import router as retention_router
+from imbue.remote_service_connector.share_broker import router as share_broker_router
+from imbue.remote_service_connector.share_certs import router as share_certs_router
+from imbue.remote_service_connector.shares import router as shares_router
 from imbue.remote_service_connector.sync import router as sync_router
-from imbue.remote_service_connector.tunnels import router as tunnels_router
 
 web_app = FastAPI()
 web_app.include_router(auth_proxy_router)
@@ -27,7 +29,9 @@ web_app.include_router(sync_router)
 web_app.include_router(hosts_router)
 web_app.include_router(r2_buckets_router)
 web_app.include_router(r2_grants_router)
-web_app.include_router(tunnels_router)
+web_app.include_router(shares_router)
+web_app.include_router(share_certs_router)
+web_app.include_router(share_broker_router)
 web_app.include_router(llm_keys_router)
 web_app.include_router(accounts_router)
 web_app.include_router(retention_router)

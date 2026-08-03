@@ -1,10 +1,14 @@
-"""Cloudflare API client: pure request helpers plus the ops Protocol used by the app.
+"""Cloudflare API client for R2: pure request helpers plus the ops Protocol used by the app.
 
 The ``cf_*`` functions are thin, stateless wrappers over the Cloudflare v4
-API. ``CloudflareOps`` is the seam the rest of the app depends on;
+API (R2 buckets, bucket-scoped account tokens, and the storage-analytics
+GraphQL query). ``CloudflareOps`` is the seam the rest of the app depends on;
 ``HttpCloudflareOps`` is its real implementation (tests provide fakes).
+``CloudflareCtx`` / ``get_cloudflare_ctx`` hold the per-container ops
+instance shared by the endpoints and crons.
 """
 
+import functools
 import logging
 import os
 from datetime import datetime
@@ -16,10 +20,6 @@ from typing import Protocol
 from urllib.parse import quote
 
 import httpx
-from tenacity import retry
-from tenacity import retry_if_exception
-from tenacity import stop_after_attempt
-from tenacity import wait_exponential
 
 from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import R2BucketNotEmptyError
@@ -28,8 +28,7 @@ from imbue.remote_service_connector.errors import R2StorageResultTruncatedError
 
 logger = logging.getLogger(__name__)
 
-_CF_BASE_URL = "https://api.cloudflare.com/client/v4"
-KV_NAMESPACE_TITLE = "cloudflare-forwarding-defaults"
+CF_BASE_URL = "https://api.cloudflare.com/client/v4"
 
 
 def cf_check(response: httpx.Response) -> dict[str, Any]:
@@ -42,35 +41,14 @@ def cf_check(response: httpx.Response) -> dict[str, Any]:
     return data
 
 
-def cf_list_all_pages(client: httpx.Client, url: str, params: dict[str, str]) -> list[dict[str, Any]]:
-    all_results: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        paginated = {**params, "page": str(page), "per_page": "100"}
-        response = client.get(url, params=paginated)
-        data = cf_check(response)
-        results: list[dict[str, Any]] = data["result"]
-        all_results.extend(results)
-        total_count = data.get("result_info", {}).get("total_count", len(results))
-        if len(all_results) >= total_count:
-            break
-        page += 1
-    return all_results
-
-
-# --- Tunnel operations ---
-
-
 # Env var the deployed connector reads at startup to identify which
 # minds env it belongs to. The value is pushed by ``minds env deploy``
 # into the per-tier ``litellm-connector-<tier>`` Modal Secret. For
 # dev-tier deploys this is the per-developer dev env name (e.g.
 # ``josh-3``); for tier deploys it's the tier itself (``staging`` /
-# ``production``). Used to tag every Cloudflare tunnel the connector
-# creates so the destroy-side can enumerate + delete only the tunnels
-# belonging to a specific minds env -- without it, deleting tunnels
-# would have to walk every tunnel on the dev-tier CF account
-# (potentially clobbering other devs' tunnels).
+# ``production``). Used to scope the slice-box reconcile audit to this
+# env's stamped slices, so the hourly cron is safe on a bare-metal box
+# shared by multiple dev envs.
 MINDS_ENV_NAME_VAR = "MINDS_ENV_NAME"
 
 
@@ -78,208 +56,10 @@ def current_minds_env_name() -> str:
     """Return the value of ``MINDS_ENV_NAME`` or empty string.
 
     Empty when the deploy didn't push one (e.g. a pre-this-branch
-    deploy). Callers must treat the empty case as "no env tag" -- the
-    tunnel will still be creatable, just without env-aware destroy
-    cleanup metadata.
+    deploy); the slice reconcile then skips rather than auditing with
+    an unscoped view.
     """
     return os.environ.get(MINDS_ENV_NAME_VAR, "")
-
-
-def cf_create_tunnel(client: httpx.Client, account_id: str, name: str) -> dict[str, Any]:
-    """Create a Cloudflare tunnel + tag it with the minds env name in metadata.
-
-    The ``metadata`` field on ``cfd_tunnel`` POST accepts arbitrary
-    string-keyed values; we shove ``{"env": "<minds-env-name>"}`` in so
-    ``minds env destroy`` can later filter the tier's tunnels by env.
-    Empty env_name still creates the tunnel (back-compat with older
-    connector deploys); destroy then filters by exact match, so empty
-    means "doesn't match any env" -- the operator can clean those up
-    manually.
-    """
-    body: dict[str, Any] = {"name": name, "config_src": "cloudflare"}
-    env_name = current_minds_env_name()
-    if env_name:
-        body["metadata"] = {"env": env_name}
-    response = client.post(f"/accounts/{account_id}/cfd_tunnel", json=body)
-    return cf_check(response)["result"]
-
-
-def cf_list_tunnels(client: httpx.Client, account_id: str, include_prefix: str = "") -> list[dict[str, Any]]:
-    params: dict[str, str] = {"is_deleted": "false"}
-    if include_prefix:
-        params["include_prefix"] = include_prefix
-    return cf_list_all_pages(client, f"/accounts/{account_id}/cfd_tunnel", params)
-
-
-def cf_get_tunnel_by_name(client: httpx.Client, account_id: str, name: str) -> dict[str, Any] | None:
-    params: dict[str, str] = {"is_deleted": "false", "name": name}
-    response = client.get(f"/accounts/{account_id}/cfd_tunnel", params=params)
-    for tunnel in cf_check(response)["result"]:
-        if tunnel["name"] == name:
-            return tunnel
-    return None
-
-
-def cf_get_tunnel_by_id(client: httpx.Client, account_id: str, tunnel_id: str) -> dict[str, Any] | None:
-    response = client.get(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}")
-    try:
-        data = cf_check(response)
-        return data["result"]
-    except CloudflareApiError as exc:
-        if exc.status_code == 404:
-            return None
-        raise
-
-
-def cf_get_tunnel_token(client: httpx.Client, account_id: str, tunnel_id: str) -> str:
-    response = client.get(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/token")
-    return cf_check(response)["result"]
-
-
-def cf_delete_tunnel(client: httpx.Client, account_id: str, tunnel_id: str) -> None:
-    cf_check(client.delete(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}"))
-
-
-def cf_get_tunnel_config(client: httpx.Client, account_id: str, tunnel_id: str) -> dict[str, Any]:
-    response = client.get(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations")
-    return cf_check(response)["result"]
-
-
-def cf_put_tunnel_config(client: httpx.Client, account_id: str, tunnel_id: str, config: dict[str, Any]) -> None:
-    cf_check(client.put(f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations", json=config))
-
-
-# --- DNS operations ---
-
-
-def cf_create_cname(client: httpx.Client, zone_id: str, name: str, target: str) -> dict[str, Any]:
-    response = client.post(
-        f"/zones/{zone_id}/dns_records",
-        json={"type": "CNAME", "name": name, "content": target, "proxied": True, "ttl": 1},
-    )
-    return cf_check(response)["result"]
-
-
-def cf_list_dns_records(client: httpx.Client, zone_id: str, name: str = "") -> list[dict[str, Any]]:
-    params: dict[str, str] = {"type": "CNAME"}
-    if name:
-        params["name"] = name
-    return cf_list_all_pages(client, f"/zones/{zone_id}/dns_records", params)
-
-
-def cf_delete_dns_record(client: httpx.Client, zone_id: str, record_id: str) -> None:
-    cf_check(client.delete(f"/zones/{zone_id}/dns_records/{record_id}"))
-
-
-# --- Access operations ---
-
-
-def _is_transient_cloudflare_access_error(exc: BaseException) -> bool:
-    """Whether a Cloudflare Access failure is worth retrying after a short wait.
-
-    Cloudflare's Access control plane is eventually consistent around
-    application deletion: recreating (or mutating) an app for a hostname whose
-    previous app was deleted seconds earlier intermittently makes the API
-    itself fail with its generic ``access.api.error.internal_server_error``
-    (code 10001). Those 5xx responses are transient -- the same call succeeds
-    once the teardown settles -- so the Access operations retry them.
-    """
-    return isinstance(exc, CloudflareApiError) and exc.status_code >= 500
-
-
-_retry_transient_access_errors = retry(
-    retry=retry_if_exception(_is_transient_cloudflare_access_error),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=4),
-    reraise=True,
-)
-
-
-@_retry_transient_access_errors
-def cf_create_access_app(
-    client: httpx.Client,
-    account_id: str,
-    hostname: str,
-    app_name: str,
-    allowed_idps: list[str] | None = None,
-) -> dict[str, Any]:
-    body: dict[str, Any] = {
-        "name": app_name,
-        "domain": hostname,
-        "type": "self_hosted",
-        "session_duration": "24h",
-    }
-    if allowed_idps is not None:
-        body["allowed_idps"] = allowed_idps
-    response = client.post(
-        f"/accounts/{account_id}/access/apps",
-        json=body,
-    )
-    return cf_check(response)["result"]
-
-
-@_retry_transient_access_errors
-def cf_delete_access_app(client: httpx.Client, account_id: str, app_id: str) -> None:
-    cf_check(client.delete(f"/accounts/{account_id}/access/apps/{app_id}"))
-
-
-@_retry_transient_access_errors
-def cf_get_access_app_by_domain(client: httpx.Client, account_id: str, hostname: str) -> dict[str, Any] | None:
-    response = client.get(f"/accounts/{account_id}/access/apps")
-    data = cf_check(response)
-    for app_item in data["result"]:
-        if app_item.get("domain") == hostname:
-            return app_item
-    return None
-
-
-@_retry_transient_access_errors
-def cf_list_access_policies(client: httpx.Client, account_id: str, app_id: str) -> list[dict[str, Any]]:
-    response = client.get(f"/accounts/{account_id}/access/apps/{app_id}/policies")
-    return cf_check(response)["result"]
-
-
-@_retry_transient_access_errors
-def cf_create_access_policy(
-    client: httpx.Client, account_id: str, app_id: str, policy: dict[str, Any]
-) -> dict[str, Any]:
-    response = client.post(f"/accounts/{account_id}/access/apps/{app_id}/policies", json=policy)
-    return cf_check(response)["result"]
-
-
-@_retry_transient_access_errors
-def cf_update_access_policy(
-    client: httpx.Client, account_id: str, app_id: str, policy_id: str, policy: dict[str, Any]
-) -> dict[str, Any]:
-    response = client.put(f"/accounts/{account_id}/access/apps/{app_id}/policies/{policy_id}", json=policy)
-    return cf_check(response)["result"]
-
-
-@_retry_transient_access_errors
-def cf_delete_access_policy(client: httpx.Client, account_id: str, app_id: str, policy_id: str) -> None:
-    cf_check(client.delete(f"/accounts/{account_id}/access/apps/{app_id}/policies/{policy_id}"))
-
-
-# --- Service token operations ---
-
-
-def cf_create_service_token(
-    client: httpx.Client, account_id: str, name: str, duration: str = "8760h"
-) -> dict[str, Any]:
-    response = client.post(
-        f"/accounts/{account_id}/access/service_tokens",
-        json={"name": name, "duration": duration},
-    )
-    return cf_check(response)["result"]
-
-
-def cf_list_service_tokens(client: httpx.Client, account_id: str) -> list[dict[str, Any]]:
-    response = client.get(f"/accounts/{account_id}/access/service_tokens")
-    return cf_check(response)["result"]
-
-
-def cf_delete_service_token(client: httpx.Client, account_id: str, token_id: str) -> None:
-    cf_check(client.delete(f"/accounts/{account_id}/access/service_tokens/{token_id}"))
 
 
 # --- R2 bucket + account-token operations ---
@@ -519,89 +299,17 @@ def build_r2_bucket_token_policies(
     ]
 
 
-# --- Workers KV operations ---
-
-
-def cf_kv_list_namespaces(client: httpx.Client, account_id: str) -> list[dict[str, Any]]:
-    response = client.get(f"/accounts/{account_id}/storage/kv/namespaces")
-    return cf_check(response)["result"]
-
-
-def cf_kv_create_namespace(client: httpx.Client, account_id: str, title: str) -> dict[str, Any]:
-    response = client.post(f"/accounts/{account_id}/storage/kv/namespaces", json={"title": title})
-    return cf_check(response)["result"]
-
-
-def cf_kv_get(client: httpx.Client, account_id: str, namespace_id: str, key: str) -> str | None:
-    response = client.get(f"/accounts/{account_id}/storage/kv/namespaces/{namespace_id}/values/{key}")
-    if response.status_code == 404:
-        return None
-    response.raise_for_status()
-    return response.text
-
-
-def cf_kv_put(client: httpx.Client, account_id: str, namespace_id: str, key: str, value: str) -> None:
-    response = client.put(
-        f"/accounts/{account_id}/storage/kv/namespaces/{namespace_id}/values/{key}",
-        content=value,
-        headers={"Content-Type": "text/plain"},
-    )
-    cf_check(response)
-
-
-def cf_kv_delete(client: httpx.Client, account_id: str, namespace_id: str, key: str) -> None:
-    response = client.delete(f"/accounts/{account_id}/storage/kv/namespaces/{namespace_id}/values/{key}")
-    cf_check(response)
-
-
-def cf_kv_ensure_namespace(client: httpx.Client, account_id: str, title: str) -> str:
-    """Find or create a KV namespace by title. Returns the namespace ID."""
-    namespaces = cf_kv_list_namespaces(client, account_id)
-    for ns in namespaces:
-        if ns["title"] == title:
-            return ns["id"]
-    result = cf_kv_create_namespace(client, account_id, title)
-    return result["id"]
-
-
 # ---------------------------------------------------------------------------
 
 
 class CloudflareOps(Protocol):
-    """Abstraction over Cloudflare API calls used by ForwardingCtx."""
+    """Abstraction over the Cloudflare API calls used by the R2 bucket endpoints and sweeps.
 
-    def create_tunnel(self, name: str) -> dict[str, Any]: ...
-    def list_tunnels(self, include_prefix: str = "") -> list[dict[str, Any]]: ...
-    def get_tunnel_by_name(self, name: str) -> dict[str, Any] | None: ...
-    def get_tunnel_by_id(self, tunnel_id: str) -> dict[str, Any] | None: ...
-    def get_tunnel_token(self, tunnel_id: str) -> str: ...
-    def delete_tunnel(self, tunnel_id: str) -> None: ...
-    def get_tunnel_config(self, tunnel_id: str) -> dict[str, Any]: ...
-    def put_tunnel_config(self, tunnel_id: str, config: dict[str, Any]) -> None: ...
-    def create_cname(self, name: str, target: str) -> dict[str, Any]: ...
-    def list_dns_records(self, name: str = "") -> list[dict[str, Any]]: ...
-    def delete_dns_record(self, record_id: str) -> None: ...
-    def create_access_app(
-        self, hostname: str, app_name: str, allowed_idps: list[str] | None = None
-    ) -> dict[str, Any]: ...
-    def delete_access_app(self, app_id: str) -> None: ...
-    def get_access_app_by_domain(self, hostname: str) -> dict[str, Any] | None: ...
-    def list_access_policies(self, app_id: str) -> list[dict[str, Any]]: ...
-    def create_access_policy(self, app_id: str, policy: dict[str, Any]) -> dict[str, Any]: ...
-    def update_access_policy(self, app_id: str, policy_id: str, policy: dict[str, Any]) -> dict[str, Any]: ...
-    def delete_access_policy(self, app_id: str, policy_id: str) -> None: ...
-    def kv_get(self, key: str) -> str | None: ...
-    def kv_put(self, key: str, value: str) -> None: ...
-    def kv_delete(self, key: str) -> None: ...
-    def create_service_token(self, name: str) -> dict[str, Any]: ...
-    def list_service_tokens(self) -> list[dict[str, Any]]: ...
-    def delete_service_token(self, token_id: str) -> None: ...
+    R2 bucket + bucket-scoped-token operations share one authenticated client
+    + account_id; the genuinely-different concern (the key-metadata DB) lives
+    behind the separate KeyStore abstraction.
+    """
 
-    # R2 bucket + bucket-scoped-token operations. These are folded into the
-    # CloudflareOps surface (rather than a parallel R2Ops abstraction) because
-    # they are just more Cloudflare REST calls sharing the same authenticated
-    # client + account_id; the genuinely-different concern (the key-metadata DB)
-    # lives behind the separate KeyStore abstraction below.
     account_id: str
 
     def create_bucket(self, name: str) -> dict[str, Any]: ...
@@ -620,99 +328,17 @@ class CloudflareOps(Protocol):
 class HttpCloudflareOps:
     """CloudflareOps implementation backed by real Cloudflare HTTP API calls."""
 
-    def __init__(self, api_token: str, account_id: str, zone_id: str) -> None:
+    def __init__(self, api_token: str, account_id: str) -> None:
         self.client = httpx.Client(
-            base_url=_CF_BASE_URL,
+            base_url=CF_BASE_URL,
             headers={"Authorization": f"Bearer {api_token}"},
             timeout=30.0,
         )
         self.account_id = account_id
-        self.zone_id = zone_id
-        self._kv_namespace_id: str | None = None
         # Per-container cache of R2 permission-group UUIDs, looked up lazily.
         # Looked up at runtime (not hard-coded) because the connector runs
         # against different Cloudflare accounts across deploy environments.
         self._r2_permission_group_id_by_access: dict[str, str] = {}
-
-    def _ensure_kv_namespace(self) -> str:
-        if self._kv_namespace_id is None:
-            self._kv_namespace_id = cf_kv_ensure_namespace(self.client, self.account_id, KV_NAMESPACE_TITLE)
-        return self._kv_namespace_id
-
-    def create_tunnel(self, name: str) -> dict[str, Any]:
-        return cf_create_tunnel(self.client, self.account_id, name)
-
-    def list_tunnels(self, include_prefix: str = "") -> list[dict[str, Any]]:
-        return cf_list_tunnels(self.client, self.account_id, include_prefix=include_prefix)
-
-    def get_tunnel_by_name(self, name: str) -> dict[str, Any] | None:
-        return cf_get_tunnel_by_name(self.client, self.account_id, name)
-
-    def get_tunnel_by_id(self, tunnel_id: str) -> dict[str, Any] | None:
-        return cf_get_tunnel_by_id(self.client, self.account_id, tunnel_id)
-
-    def get_tunnel_token(self, tunnel_id: str) -> str:
-        return cf_get_tunnel_token(self.client, self.account_id, tunnel_id)
-
-    def delete_tunnel(self, tunnel_id: str) -> None:
-        cf_delete_tunnel(self.client, self.account_id, tunnel_id)
-
-    def get_tunnel_config(self, tunnel_id: str) -> dict[str, Any]:
-        return cf_get_tunnel_config(self.client, self.account_id, tunnel_id)
-
-    def put_tunnel_config(self, tunnel_id: str, config: dict[str, Any]) -> None:
-        cf_put_tunnel_config(self.client, self.account_id, tunnel_id, config)
-
-    def create_cname(self, name: str, target: str) -> dict[str, Any]:
-        return cf_create_cname(self.client, self.zone_id, name, target)
-
-    def list_dns_records(self, name: str = "") -> list[dict[str, Any]]:
-        return cf_list_dns_records(self.client, self.zone_id, name=name)
-
-    def delete_dns_record(self, record_id: str) -> None:
-        cf_delete_dns_record(self.client, self.zone_id, record_id)
-
-    def create_access_app(self, hostname: str, app_name: str, allowed_idps: list[str] | None = None) -> dict[str, Any]:
-        return cf_create_access_app(self.client, self.account_id, hostname, app_name, allowed_idps=allowed_idps)
-
-    def delete_access_app(self, app_id: str) -> None:
-        cf_delete_access_app(self.client, self.account_id, app_id)
-
-    def get_access_app_by_domain(self, hostname: str) -> dict[str, Any] | None:
-        return cf_get_access_app_by_domain(self.client, self.account_id, hostname)
-
-    def list_access_policies(self, app_id: str) -> list[dict[str, Any]]:
-        return cf_list_access_policies(self.client, self.account_id, app_id)
-
-    def create_access_policy(self, app_id: str, policy: dict[str, Any]) -> dict[str, Any]:
-        return cf_create_access_policy(self.client, self.account_id, app_id, policy)
-
-    def update_access_policy(self, app_id: str, policy_id: str, policy: dict[str, Any]) -> dict[str, Any]:
-        return cf_update_access_policy(self.client, self.account_id, app_id, policy_id, policy)
-
-    def delete_access_policy(self, app_id: str, policy_id: str) -> None:
-        cf_delete_access_policy(self.client, self.account_id, app_id, policy_id)
-
-    def kv_get(self, key: str) -> str | None:
-        ns_id = self._ensure_kv_namespace()
-        return cf_kv_get(self.client, self.account_id, ns_id, key)
-
-    def kv_put(self, key: str, value: str) -> None:
-        ns_id = self._ensure_kv_namespace()
-        cf_kv_put(self.client, self.account_id, ns_id, key, value)
-
-    def kv_delete(self, key: str) -> None:
-        ns_id = self._ensure_kv_namespace()
-        cf_kv_delete(self.client, self.account_id, ns_id, key)
-
-    def create_service_token(self, name: str) -> dict[str, Any]:
-        return cf_create_service_token(self.client, self.account_id, name)
-
-    def list_service_tokens(self) -> list[dict[str, Any]]:
-        return cf_list_service_tokens(self.client, self.account_id)
-
-    def delete_service_token(self, token_id: str) -> None:
-        cf_delete_service_token(self.client, self.account_id, token_id)
 
     def _r2_permission_group_id(self, access: str) -> str:
         if access not in self._r2_permission_group_id_by_access:
@@ -761,3 +387,24 @@ class HttpCloudflareOps:
 
     def query_r2_storage_by_bucket(self) -> dict[str, int]:
         return cf_query_r2_storage_by_bucket(self.client, self.account_id)
+
+
+# ---------------------------------------------------------------------------
+# Shared context
+# ---------------------------------------------------------------------------
+
+
+class CloudflareCtx:
+    """Thin holder of the Cloudflare ops abstraction. Created once per container."""
+
+    def __init__(self, ops: CloudflareOps) -> None:
+        self.ops = ops
+
+
+@functools.cache
+def get_cloudflare_ctx() -> CloudflareCtx:
+    ops = HttpCloudflareOps(
+        api_token=os.environ["CLOUDFLARE_API_TOKEN"],
+        account_id=os.environ["CLOUDFLARE_ACCOUNT_ID"],
+    )
+    return CloudflareCtx(ops=ops)

@@ -5,12 +5,11 @@ import logging
 from fastapi import APIRouter
 from fastapi import Request
 
+import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
-import imbue.remote_service_connector.forwarding as forwarding_module
 import imbue.remote_service_connector.r2.stores as stores_module
 import imbue.remote_service_connector.r2.sweep as sweep_module
 from imbue.remote_service_connector.auth import authenticate_request
-from imbue.remote_service_connector.auth import require_user_auth
 from imbue.remote_service_connector.errors import CleanupGrantBudgetExhaustedError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.buckets import CleanupGrantResponse
@@ -41,9 +40,8 @@ def create_storage_cleanup_grant(request: Request) -> dict[str, object]:
     'not_needed' no-op.
     """
     with handle_endpoint_errors():
-        ops = forwarding_module.get_ctx().ops
-        auth = authenticate_request(request, ops)
-        user = require_user_auth(auth)
+        ops = cloudflare_module.get_cloudflare_ctx().ops
+        user = authenticate_request(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
         key_store = stores_module.get_key_store()
         grant_store = stores_module.get_grant_store()
@@ -94,9 +92,8 @@ def recheck_storage_enforcement(request: Request) -> dict[str, object]:
     measurement.
     """
     with handle_endpoint_errors():
-        ops = forwarding_module.get_ctx().ops
-        auth = authenticate_request(request, ops)
-        user = require_user_auth(auth)
+        ops = cloudflare_module.get_cloudflare_ctx().ops
+        user = authenticate_request(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
         key_store = stores_module.get_key_store()
         grant_store = stores_module.get_grant_store()

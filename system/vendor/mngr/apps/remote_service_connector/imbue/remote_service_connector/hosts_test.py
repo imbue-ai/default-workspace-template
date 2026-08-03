@@ -458,3 +458,34 @@ def test_slice_name_env_owner_returns_none_for_legacy_and_non_slice_names() -> N
     # Non-slice lima names are never attributed to an env.
     assert hosts_mod.slice_name_env_owner("default") is None
     assert hosts_mod.slice_name_env_owner("some-other-vm") is None
+
+
+def test_build_slice_teardown_commands_includes_disk_when_present() -> None:
+    """Verify that when a data disk name is supplied, teardown emits both the instance
+    delete and a separate disk delete command (in that order). The test would fail if the
+    disk-delete command were omitted, reordered, or built with the wrong name."""
+    commands = hosts_mod.build_slice_teardown_commands("mngr-slice-abc", "mngr-slice-abc-data")
+    assert commands == (
+        "limactl delete --force mngr-slice-abc",
+        "limactl disk delete --force mngr-slice-abc-data",
+    )
+
+
+def test_build_slice_teardown_commands_omits_disk_when_absent() -> None:
+    """Verify that when no data disk name is supplied (None), teardown emits only the single
+    instance-delete command and no disk-delete command. The test would fail if a spurious
+    disk-delete were appended for the diskless case."""
+    commands = hosts_mod.build_slice_teardown_commands("mngr-slice-abc", None)
+    assert commands == ("limactl delete --force mngr-slice-abc",)
+
+
+def test_build_slice_teardown_commands_quotes_unsafe_names() -> None:
+    """Verify that instance/disk names containing shell metacharacters are shell-quoted so
+    they cannot break out of the teardown command (defense-in-depth against injection). The
+    test would fail if the names were interpolated raw, leaving the ``;`` separator active."""
+    # Defense-in-depth: instance/disk names flow into a shell command, so they
+    # must be shell-quoted.
+    commands = hosts_mod.build_slice_teardown_commands("a b; rm -rf /", "d$x")
+    assert ";" not in commands[0].replace("'a b; rm -rf /'", "")
+    assert commands[0] == "limactl delete --force 'a b; rm -rf /'"
+    assert commands[1] == "limactl disk delete --force 'd$x'"

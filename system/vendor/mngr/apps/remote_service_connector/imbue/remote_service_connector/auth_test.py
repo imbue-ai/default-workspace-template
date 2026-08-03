@@ -19,6 +19,7 @@ from imbue.remote_service_connector.testing import _FakeLoginMethod
 from imbue.remote_service_connector.testing import _admin_key_headers
 from imbue.remote_service_connector.testing import _make_paid_crud_test_client
 from imbue.remote_service_connector.testing import _make_pool_test_client
+from imbue.remote_service_connector.testing import _make_test_client
 from imbue.remote_service_connector.testing import make_fake_pool_backend
 
 
@@ -377,4 +378,23 @@ def test_admin_key_is_rejected_on_user_routes(monkeypatch: pytest.MonkeyPatch) -
     """The admin key must not authenticate user-facing routes (e.g. /hosts)."""
     client, _backend = _make_paid_crud_test_client(monkeypatch)
     resp = client.get("/hosts", headers=_admin_key_headers())
+    assert resp.status_code == 401
+
+
+def test_route_no_auth_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_test_client(monkeypatch)
+    resp = client.get("/hosts")
+    assert resp.status_code == 401
+
+
+def test_route_rejects_basic_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Basic Auth is not a supported scheme; only Bearer credentials are accepted."""
+    client = _make_test_client(monkeypatch)
+    resp = client.get("/hosts", headers={"Authorization": "Basic dGVzdDp0ZXN0"})
+    assert resp.status_code == 401
+
+
+def test_route_invalid_bearer_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_test_client(monkeypatch)
+    resp = client.get("/hosts", headers={"Authorization": "Bearer not-a-valid-jwt!!!"})
     assert resp.status_code == 401

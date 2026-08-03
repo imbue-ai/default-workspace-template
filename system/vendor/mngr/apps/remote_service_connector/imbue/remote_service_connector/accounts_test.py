@@ -2,6 +2,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from starlette.testclient import TestClient
@@ -16,10 +17,12 @@ from imbue.remote_service_connector.testing import InMemoryEntitlementsStore
 from imbue.remote_service_connector.testing import _ADMIN_KEY_TEST_VALUE
 from imbue.remote_service_connector.testing import _USER_STUB_EMAIL
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID
+from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
 from imbue.remote_service_connector.testing import _admin_key_headers
 from imbue.remote_service_connector.testing import _make_bucket_quota_test_client
 from imbue.remote_service_connector.testing import _make_bucket_test_client
 from imbue.remote_service_connector.testing import _make_paid_crud_test_client
+from imbue.remote_service_connector.testing import _make_pool_quota_test_client
 from imbue.remote_service_connector.testing import _make_pool_test_client
 from imbue.remote_service_connector.testing import _make_quota_test_client
 from imbue.remote_service_connector.testing import _make_test_client
@@ -404,3 +407,30 @@ def test_admin_backup_retention_reap_endpoint_requires_admin_key(monkeypatch: py
     client, _fake, _store = _make_bucket_test_client(monkeypatch)
     resp = client.post("/admin/sweep/backup-retention")
     assert resp.status_code in (401, 403)
+
+
+def test_route_get_account_reports_plan_entitlements_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend, entitlements_store, litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000042"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    litellm.users_by_id[_USER_STUB_USER_ID] = {
+        "user_id": _USER_STUB_USER_ID,
+        "spend": 12.5,
+        "max_budget": 1000.0,
+        "budget_reset_at": "2026-08-01T00:00:00Z",
+    }
+    resp = client.get("/account", headers=_user_headers())
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["user_id"] == _USER_STUB_USER_ID
+    assert body["email"] == _USER_STUB_EMAIL
+    # Stub email is paid-listed + pre-cutoff, so the lazily-created plan is ally.
+    assert body["plan_name"] == "ally"
+    assert body["entitlements"]["max_remote_workspaces"] == ALLY_PLAN_VALUES["max_remote_workspaces"]
+    assert body["usage"]["remote_workspaces"] == 1
+    assert body["usage"]["llm_spend_usd_this_period"] == 12.5
+    assert body["usage"]["llm_budget_resets_at"] == "2026-08-01T00:00:00Z"
+    assert sorted(body["available_plans"]) == ["ally", "explorer"]

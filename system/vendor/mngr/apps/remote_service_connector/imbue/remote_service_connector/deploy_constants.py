@@ -17,8 +17,12 @@ from typing import Final
 # client into containers, but only the entrypoint (app.py) may import it.
 THIRD_PARTY_IMPORT_ROOTS: Final[frozenset[str]] = frozenset(
     {
+        "acme",
+        "cryptography",
         "fastapi",
         "httpx",
+        "josepy",
+        "jwt",
         "supertokens_python",
         "psycopg2",
         "paramiko",

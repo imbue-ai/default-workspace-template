@@ -175,6 +175,14 @@ def _write_config_file() -> str:
 # image_requirements.txt.
 image = (
     pinned_image(Path(__file__).parent / IMAGE_REQUIREMENTS_FILENAME)
+    # The prisma codegen step below downloads a current Node via nodeenv at
+    # build time (a floating input the prisma layer already accepts -- it also
+    # npm-installs the prisma CLI). Node 24+ links against libatomic, which
+    # the slim base image does not ship, so new image builds fail with
+    # "node: error while loading shared libraries: libatomic.so.1" without it
+    # (cached images kept working, which is why this surfaced only on fresh
+    # env deploys).
+    .apt_install("libatomic1")
     .run_commands(
         'python -c "import litellm.proxy; import os; print(os.path.dirname(litellm.proxy.__file__))" > /tmp/litellm_proxy_dir.txt',
         "prisma generate --schema $(cat /tmp/litellm_proxy_dir.txt)/schema.prisma",

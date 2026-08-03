@@ -22,8 +22,8 @@ from supertokens_python.types.base import AccountInfoInput
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
+import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
-import imbue.remote_service_connector.forwarding as forwarding_module
 import imbue.remote_service_connector.litellm_client as litellm_client
 import imbue.remote_service_connector.sync as sync_module
 from imbue.remote_service_connector import db
@@ -32,7 +32,6 @@ from imbue.remote_service_connector.auth import clear_paid_status_cache
 from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.auth import require_admin_key
 from imbue.remote_service_connector.auth import require_ally_eligible
-from imbue.remote_service_connector.auth import require_user_auth
 from imbue.remote_service_connector.auth_proxy import AUTH_TENANT_ID
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.entitlements import AccountEntitlements
@@ -48,7 +47,6 @@ from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.buckets import list_owned_buckets
 from imbue.remote_service_connector.r2.buckets import read_bucket_usage_bytes_concurrently
 from imbue.remote_service_connector.sync import WorkspaceRecordState
-from imbue.remote_service_connector.tunnels import count_user_tunnels
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +57,6 @@ class AccountUsage(BaseModel):
     """Live usage numbers for the account, one per quota entitlement."""
 
     remote_workspaces: int = Field(description="Current pool-host leases")
-    tunnels: int = Field(description="Current Cloudflare tunnels")
     buckets: int = Field(description="Current R2 buckets")
     total_bucket_bytes: int = Field(description="Total bytes across the account's buckets (live REST usage)")
     llm_spend_usd_this_period: float = Field(description="LiteLLM aggregate spend in the current budget period")
@@ -274,25 +271,22 @@ def summarize_owner_bucket_usage(ops: CloudflareOps, user_id_prefix: str) -> tup
 def compute_account_usage(ops: CloudflareOps, user_id_prefix: str, user_id: str) -> AccountUsage:
     """Compute the account's live usage numbers, querying the upstream sources concurrently.
 
-    The three network-backed sources (Cloudflare tunnel count, per-bucket
-    REST usage, LiteLLM spend) are independent and run concurrently; the two
-    DB-backed counts stay on the request thread because the stores' psycopg2
-    connections are not shared-safe across threads. Bucket byte counts come
-    from the real-time per-bucket REST usage endpoint (bounded by the
-    account's bucket quota, itself read concurrently).
+    The network-backed sources (per-bucket REST usage, LiteLLM spend) are
+    independent and run concurrently; the two DB-backed counts stay on the
+    request thread because the stores' psycopg2 connections are not
+    shared-safe across threads. Bucket byte counts come from the real-time
+    per-bucket REST usage endpoint (bounded by the account's bucket quota,
+    itself read concurrently).
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        tunnel_count_future = pool.submit(count_user_tunnels, ops, user_id_prefix)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         bucket_summary_future = pool.submit(summarize_owner_bucket_usage, ops, user_id_prefix)
         llm_spend_future = pool.submit(litellm_client.get_litellm_user_spend, user_id)
         leased_host_count = count_leased_hosts(user_id_prefix)
         active_sync_count = _count_active_sync_records(user_id)
         bucket_count, total_bucket_bytes = bucket_summary_future.result()
         spend, reset_at = llm_spend_future.result()
-        tunnel_count = tunnel_count_future.result()
     return AccountUsage(
         remote_workspaces=leased_host_count,
-        tunnels=tunnel_count,
         buckets=bucket_count,
         total_bucket_bytes=total_bucket_bytes,
         llm_spend_usd_this_period=spend,
@@ -310,9 +304,8 @@ def get_account(request: Request) -> dict[str, object]:
     to materialize an account's plan.
     """
     with handle_endpoint_errors():
-        ops = forwarding_module.get_ctx().ops
-        auth = authenticate_request(request, ops)
-        user = require_user_auth(auth)
+        ops = cloudflare_module.get_cloudflare_ctx().ops
+        user = authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = auth_module.get_user_id_from_access_token(token)
         entitlements = entitlements_module.ensure_account_entitlements(
@@ -355,8 +348,7 @@ def set_account_plan(request: Request, body: SetPlanRequest) -> dict[str, object
     paid-listed email.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
         if body.plan == entitlements.plan_name:
             return {"plan_name": entitlements.plan_name, "entitlements": entitlements.quota_values().model_dump()}
@@ -390,7 +382,7 @@ def admin_get_account(request: Request, email: str) -> dict[str, object]:
         require_admin_key(request)
         entitlements = _admin_ensure_entitlements(email)
         usage = compute_account_usage(
-            forwarding_module.get_ctx().ops, entitlements.user_id_prefix, entitlements.user_id
+            cloudflare_module.get_cloudflare_ctx().ops, entitlements.user_id_prefix, entitlements.user_id
         )
         return AccountInfoResponse(
             user_id=entitlements.user_id,

@@ -25,7 +25,7 @@ _TRANSITIVELY_PROVIDED_ROOTS = frozenset({"pydantic"})
 
 # Import roots whose distribution name differs beyond the usual dash ->
 # underscore normalization.
-_IMPORT_ROOT_BY_DISTRIBUTION = {"psycopg2-binary": "psycopg2"}
+_IMPORT_ROOT_BY_DISTRIBUTION = {"psycopg2-binary": "psycopg2", "pyjwt": "jwt"}
 
 
 def _image_group_entries() -> list[str]:

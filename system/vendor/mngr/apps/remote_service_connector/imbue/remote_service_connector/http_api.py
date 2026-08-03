@@ -7,12 +7,14 @@ from typing import NoReturn
 
 from fastapi import HTTPException
 
+from imbue.remote_service_connector.errors import AcmeIssuanceError
 from imbue.remote_service_connector.errors import CleanupGrantBudgetExhaustedError
 from imbue.remote_service_connector.errors import CloudflareApiError
-from imbue.remote_service_connector.errors import InvalidAuthPolicyError
+from imbue.remote_service_connector.errors import InvalidCsrError
 from imbue.remote_service_connector.errors import InvalidPaidListEntryError
 from imbue.remote_service_connector.errors import InvalidR2BucketNameError
-from imbue.remote_service_connector.errors import InvalidTunnelComponentError
+from imbue.remote_service_connector.errors import InvalidShareCoordinateError
+from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.errors import PlanNotFoundError
 from imbue.remote_service_connector.errors import PoolHostCleanupError
 from imbue.remote_service_connector.errors import QuotaExceededError
@@ -23,11 +25,8 @@ from imbue.remote_service_connector.errors import R2BucketNotFoundError
 from imbue.remote_service_connector.errors import R2BucketOwnershipError
 from imbue.remote_service_connector.errors import R2ReservedBucketNameError
 from imbue.remote_service_connector.errors import R2StorageResultTruncatedError
-from imbue.remote_service_connector.errors import ServiceNotFoundError
-from imbue.remote_service_connector.errors import ServicePolicyMissingError
-from imbue.remote_service_connector.errors import TunnelComponentTooLongError
-from imbue.remote_service_connector.errors import TunnelNotFoundError
-from imbue.remote_service_connector.errors import TunnelOwnershipError
+from imbue.remote_service_connector.errors import ShareNotFoundError
+from imbue.remote_service_connector.errors import ShareQuotaExceededError
 
 logger = logging.getLogger(__name__)
 
@@ -42,16 +41,6 @@ def raise_as_http(exc: Exception) -> NoReturn:
         # error so the client retries rather than treating the lease as gone.
         logger.error("Pool host cleanup error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if isinstance(exc, TunnelNotFoundError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, TunnelOwnershipError):
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    if isinstance(exc, ServiceNotFoundError):
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if isinstance(exc, InvalidTunnelComponentError):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if isinstance(exc, TunnelComponentTooLongError):
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isinstance(exc, InvalidPaidListEntryError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if isinstance(exc, InvalidR2BucketNameError):
@@ -94,10 +83,29 @@ def raise_as_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if isinstance(exc, PlanNotFoundError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if isinstance(exc, InvalidAuthPolicyError):
+    if isinstance(exc, InvalidShareCoordinateError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if isinstance(exc, ServicePolicyMissingError):
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, ShareNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, ShareQuotaExceededError):
+        # Same shape as QuotaExceededError so clients surface it uniformly.
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "quota_exceeded",
+                "entitlement": "max_shared_workspaces",
+                "limit": exc.limit,
+                "current": exc.current,
+                "message": str(exc),
+            },
+        ) from exc
+    if isinstance(exc, MissingShareConfigError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if isinstance(exc, InvalidCsrError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, AcmeIssuanceError):
+        logger.error("ACME issuance failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     logger.error("Unexpected error in endpoint handler", exc_info=exc)
     raise HTTPException(status_code=500, detail=str(exc)) from exc
 

@@ -60,8 +60,25 @@ members = [
     "overlay",
     "remote-service-connector",
     "resource-guards",
+    "share-relay",
     "skitwright",
     "slack-exporter",
+]
+
+[[package]]
+name = "acme"
+version = "5.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "josepy" },
+    { name = "pyopenssl" },
+    { name = "pyrfc3339" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e5/5e/df38c186bcb5c2fc4827fa373a5c93a55cc0d82842af670e23c1e61c7867/acme-5.6.0.tar.gz", hash = "sha256:23f706ef1c437fc743b2f90704b97f263a56d83198b3af1c25c7dd42c4b463e4", size = 90686, upload-time = "2026-05-11T17:06:21.104Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/47/5eb27f6f065170380bd4bd782177a2f1f67e721d6b3fa7de18c492f52917/acme-5.6.0-py3-none-any.whl", hash = "sha256:fbf7ee8880485f2339942a2eff9a87deb79b74a8dcac4a572c08e7e640f046cd", size = 95023, upload-time = "2026-05-11T17:06:01.31Z" },
 ]
 
 [[package]]
@@ -3217,6 +3234,18 @@ wheels = [
 ]
 
 [[package]]
+name = "josepy"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7f/ad/6f520aee9cc9618d33430380741e9ef859b2c560b1e7915e755c084f6bc0/josepy-2.2.0.tar.gz", hash = "sha256:74c033151337c854f83efe5305a291686cef723b4b970c43cfe7270cf4a677a9", size = 56500, upload-time = "2025-10-14T14:54:42.108Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/b2/b5caed897fbb1cc286c62c01feca977e08d99a17230ff3055b9a98eccf1d/josepy-2.2.0-py3-none-any.whl", hash = "sha256:63e9dd116d4078778c25ca88f880cc5d95f1cab0099bebe3a34c2e299f65d10b", size = 29211, upload-time = "2025-10-14T14:54:41.144Z" },
+]
+
+[[package]]
 name = "json5"
 version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3580,6 +3609,7 @@ dependencies = [
     { name = "psycopg2-binary" },
     { name = "pydantic" },
     { name = "sentry-sdk" },
+    { name = "simple-websocket" },
     { name = "spectree" },
     { name = "telethon" },
     { name = "tenacity" },
@@ -3619,6 +3649,7 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "sentry-sdk", specifier = ">=2.59.0" },
+    { name = "simple-websocket", specifier = ">=1.0" },
     { name = "spectree", specifier = ">=1.4" },
     { name = "telethon", specifier = ">=1.40.0" },
     { name = "tenacity" },
@@ -4741,12 +4772,34 @@ wheels = [
 ]
 
 [[package]]
+name = "pyopenssl"
+version = "26.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/51/27a5ad5f939d08f690a326ef9582cda7140555180db71695f6fb747d6a36/pyopenssl-26.2.0.tar.gz", hash = "sha256:8c6fcecd1183a7fc897548dfe388b0cdb7f37e018200d8409cf33959dbe35387", size = 182195, upload-time = "2026-05-04T23:06:09.72Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/b8/a0e2790ae249d6f38c9f66de7a211621a7ab2650217bcd04e1262f578a56/pyopenssl-26.2.0-py3-none-any.whl", hash = "sha256:4f9d971bc5298b8bc1fab282803da04bf000c755d4ad9d99b52de2569ca19a70", size = 55823, upload-time = "2026-05-04T23:06:08.395Z" },
+]
+
+[[package]]
 name = "pyotp"
 version = "2.9.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f3/b2/1d5994ba2acde054a443bd5e2d384175449c7d2b6d1a0614dbca3a63abfc/pyotp-2.9.0.tar.gz", hash = "sha256:346b6642e0dbdde3b4ff5a930b664ca82abfa116356ed48cc42c7d6590d36f63", size = 17763, upload-time = "2023-07-27T23:41:03.295Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c3/c0/c33c8792c3e50193ef55adb95c1c3c2786fe281123291c2dbf0eaab95a6f/pyotp-2.9.0-py3-none-any.whl", hash = "sha256:81c2e5865b8ac55e825b0358e496e1d9387c811e85bb40e71a3b29b288963612", size = 13376, upload-time = "2023-07-27T23:41:01.685Z" },
+]
+
+[[package]]
+name = "pyrfc3339"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/7f/3c194647ecb80ada6937c38a162ab3edba85a8b6a58fa2919405f4de2509/pyrfc3339-2.1.0.tar.gz", hash = "sha256:c569a9714faf115cdb20b51e830e798c1f4de8dabb07f6ff25d221b5d09d8d7f", size = 12589, upload-time = "2025-08-23T16:40:31.889Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/90/0200184d2124484f918054751ef997ed6409cb05b7e8dcbf5a22da4c4748/pyrfc3339-2.1.0-py3-none-any.whl", hash = "sha256:560f3f972e339f579513fe1396974352fd575ef27caff160a38b312252fcddf3", size = 6758, upload-time = "2025-08-23T16:40:30.49Z" },
 ]
 
 [[package]]
@@ -5090,52 +5143,68 @@ name = "remote-service-connector"
 version = "0.1.0"
 source = { editable = "apps/remote_service_connector" }
 dependencies = [
+    { name = "acme" },
     { name = "click" },
+    { name = "cryptography" },
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx" },
     { name = "imbue-common" },
+    { name = "josepy" },
     { name = "loguru" },
     { name = "modal" },
     { name = "modal-app-kit" },
     { name = "paramiko" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
+    { name = "pyjwt" },
     { name = "supertokens-python" },
     { name = "tenacity" },
 ]
 
 [package.dev-dependencies]
 image = [
+    { name = "acme" },
+    { name = "cryptography" },
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx" },
+    { name = "josepy" },
     { name = "paramiko" },
     { name = "psycopg2-binary" },
+    { name = "pyjwt" },
     { name = "supertokens-python" },
     { name = "tenacity" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "acme", specifier = ">=2.11" },
     { name = "click", specifier = ">=8.0" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "imbue-common", editable = "libs/imbue_common" },
+    { name = "josepy", specifier = ">=1.14" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "modal", specifier = ">=1.4.3" },
     { name = "modal-app-kit", editable = "libs/modal_app_kit" },
     { name = "paramiko", specifier = ">=3.0" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyjwt", specifier = ">=2.8" },
     { name = "supertokens-python", specifier = ">=0.31.3" },
     { name = "tenacity", specifier = ">=8.0" },
 ]
 
 [package.metadata.requires-dev]
 image = [
+    { name = "acme", specifier = "==5.6.0" },
+    { name = "cryptography", specifier = "==48.0.1" },
     { name = "fastapi", extras = ["standard"], specifier = "==0.139.2" },
     { name = "httpx", specifier = "==0.28.1" },
+    { name = "josepy", specifier = "==2.2.0" },
     { name = "paramiko", specifier = "==3.5.1" },
     { name = "psycopg2-binary", specifier = "==2.9.12" },
+    { name = "pyjwt", specifier = "==2.13.0" },
     { name = "supertokens-python", specifier = "==0.31.3" },
     { name = "tenacity", specifier = "==9.1.4" },
 ]
@@ -5558,6 +5627,33 @@ wheels = [
 ]
 
 [[package]]
+name = "share-relay"
+version = "0.1.0"
+source = { editable = "apps/share_relay" }
+dependencies = [
+    { name = "click" },
+    { name = "concurrency-group" },
+    { name = "httpx" },
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "ovh" },
+    { name = "pydantic" },
+    { name = "tenacity" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.1" },
+    { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "imbue-common", editable = "libs/imbue_common" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "ovh", specifier = ">=1.1" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "tenacity", specifier = ">=8.0" },
+]
+
+[[package]]
 name = "shellcheck-py"
 version = "0.11.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5576,6 +5672,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/58/15/8b3609fd3830ef7b27b655beb4b4e9c62313a4e8da8c676e142cc210d58e/shellingham-1.5.4.tar.gz", hash = "sha256:8dbca0739d487e5bd35ab3ca4b36e11c4078f3a234bfce294b0a0291363404de", size = 10310, upload-time = "2023-10-24T04:13:40.426Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl", hash = "sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686", size = 9755, upload-time = "2023-10-24T04:13:38.866Z" },
+]
+
+[[package]]
+name = "simple-websocket"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wsproto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b0/d4/bfa032f961103eba93de583b161f0e6a5b63cebb8f2c7d0c6e6efe1e3d2e/simple_websocket-1.1.0.tar.gz", hash = "sha256:7939234e7aa067c534abdab3a9ed933ec9ce4691b0713c78acb195560aa52ae4", size = 17300, upload-time = "2024-10-10T22:39:31.412Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/59/0782e51887ac6b07ffd1570e0364cf901ebc36345fea669969d2084baebb/simple_websocket-1.1.0-py3-none-any.whl", hash = "sha256:4af6069630a38ed6c561010f0e11a5bc0d4ca569b36306eb257cd9a192497c8c", size = 13842, upload-time = "2024-10-10T22:39:29.645Z" },
 ]
 
 [[package]]

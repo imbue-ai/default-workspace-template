@@ -10,10 +10,8 @@ from pydantic import Field
 
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.entitlements as entitlements_module
-import imbue.remote_service_connector.forwarding as forwarding_module
 import imbue.remote_service_connector.litellm_client as litellm_client
 from imbue.remote_service_connector.auth import authenticate_request
-from imbue.remote_service_connector.auth import require_user_auth
 from imbue.remote_service_connector.errors import QuotaExceededError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -69,8 +67,7 @@ def create_litellm_key(request: Request, body: CreateKeyRequest) -> dict[str, ob
     budgets remain entirely caller-controlled.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
         if entitlements.monthly_llm_spend_usd <= 0:
             raise QuotaExceededError(
@@ -109,8 +106,7 @@ def create_litellm_key(request: Request, body: CreateKeyRequest) -> dict[str, ob
 def list_litellm_keys(request: Request) -> list[dict[str, object]]:
     """List all LiteLLM virtual keys owned by the authenticated user."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = auth_module.get_user_id_from_access_token(token)
 
@@ -151,8 +147,7 @@ def list_litellm_keys(request: Request) -> list[dict[str, object]]:
 def get_litellm_key_info(request: Request, key_id: str) -> dict[str, object]:
     """Get info (including spend and budget) for a specific LiteLLM key."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = auth_module.get_user_id_from_access_token(token)
 
@@ -178,8 +173,7 @@ def get_litellm_key_info(request: Request, key_id: str) -> dict[str, object]:
 def update_litellm_key_budget(request: Request, key_id: str, body: UpdateBudgetRequest) -> dict[str, object]:
     """Update the budget for a LiteLLM key owned by the authenticated user."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = auth_module.get_user_id_from_access_token(token)
 
@@ -204,8 +198,7 @@ def update_litellm_key_budget(request: Request, key_id: str, body: UpdateBudgetR
 def delete_litellm_key(request: Request, key_id: str) -> dict[str, object]:
     """Delete a LiteLLM key owned by the authenticated user."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = auth_module.get_user_id_from_access_token(token)
 

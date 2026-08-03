@@ -1,9 +1,6 @@
-"""Request authentication: tunnel tokens, SuperTokens sessions, paid lists, and the admin key."""
+"""Request authentication: SuperTokens sessions, paid lists, and the admin key."""
 
-import base64
-import binascii
 import hmac
-import json
 import logging
 import os
 import threading
@@ -21,8 +18,6 @@ from supertokens_python.recipe.session.syncio import get_session_without_request
 from supertokens_python.syncio import get_user
 
 from imbue.remote_service_connector import db
-from imbue.remote_service_connector.cloudflare import CloudflareOps
-from imbue.remote_service_connector.naming import extract_user_id_prefix_from_tunnel_name
 
 logger = logging.getLogger(__name__)
 
@@ -37,70 +32,23 @@ class UserAuth(BaseModel):
     email: str | None = None
 
 
-class TunnelTokenAuth(BaseModel):
-    tunnel_id: str
-    tunnel_name: str
+def authenticate_request(request: Request) -> UserAuth:
+    """Authenticate a request via its SuperTokens JWT Bearer token.
 
-
-AuthResult = UserAuth | TunnelTokenAuth
-
-
-def authenticate_request(request: Request, ops: CloudflareOps) -> AuthResult:
-    """Authenticate a request. Returns UserAuth or TunnelTokenAuth.
-
-    Supports two Bearer-token auth methods:
-    1. Base64-encoded Cloudflare tunnel token (held by the agent, scoped to one tunnel).
-    2. SuperTokens JWT (a signed-in user's session, identified by their user-id prefix).
+    Raises ``HTTPException(401)`` when the Bearer credentials are missing or
+    the token is not a valid SuperTokens session for a verified-email user.
     """
     auth_header = request.headers.get("authorization", "")
-
     if not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer credentials")
-
-    token = auth_header[7:]
-    # Try tunnel token first.
-    tunnel_token_exc: HTTPException | None = None
-    try:
-        return _authenticate_tunnel_token(token, ops)
-    except HTTPException as exc:
-        tunnel_token_exc = exc
-    # Only try SuperTokens JWT if it is configured; otherwise preserve the
-    # original tunnel-token auth error so callers receive a meaningful message.
-    if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
-        assert tunnel_token_exc is not None
-        raise tunnel_token_exc
-    # If SuperTokens also fails, raise the SuperTokens error since the
-    # token is clearly a JWT (not a base64 tunnel token).
-    try:
-        return _authenticate_supertokens(token)
-    except HTTPException as st_exc:
-        raise st_exc from None
-
-
-def _authenticate_tunnel_token(token: str, ops: CloudflareOps) -> TunnelTokenAuth:
-    """Validate a tunnel token. Returns TunnelTokenAuth with tunnel_id and tunnel_name."""
-    try:
-        decoded = base64.b64decode(token).decode("utf-8")
-        token_data = json.loads(decoded)
-    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=401, detail="Malformed tunnel token") from exc
-
-    tunnel_id = token_data.get("t")
-    if not tunnel_id:
-        raise HTTPException(status_code=401, detail="Invalid tunnel token: missing tunnel ID")
-
-    tunnel = ops.get_tunnel_by_id(tunnel_id)
-    if tunnel is None:
-        raise HTTPException(status_code=401, detail="Invalid tunnel token: tunnel not found")
-
-    return TunnelTokenAuth(tunnel_id=tunnel_id, tunnel_name=tunnel["name"])
+    return _authenticate_supertokens(auth_header[7:])
 
 
 _USER_ID_PREFIX_LENGTH = 16
 
 
 def derive_user_id_prefix(user_id: str) -> str:
-    """The 16-hex prefix of a SuperTokens user id, used to namespace tunnels/leases/buckets.
+    """The 16-hex prefix of a SuperTokens user id, used to namespace leases/buckets.
 
     Also the ``account_entitlements.user_id_prefix`` lookup key, so every
     caller must derive it identically -- always go through this helper.
@@ -232,24 +180,6 @@ def get_user_id_from_access_token(token: str) -> str:
     if session is None:
         raise HTTPException(status_code=401, detail="Invalid or expired SuperTokens session")
     return session.get_user_id()
-
-
-def require_user_auth(auth: AuthResult) -> UserAuth:
-    """Require a signed-in user session. Raises 403 for tunnel-token callers."""
-    if isinstance(auth, TunnelTokenAuth):
-        raise HTTPException(status_code=403, detail="This operation requires a signed-in user session")
-    return auth
-
-
-def require_tunnel_access(auth: AuthResult, tunnel_name: str) -> str:
-    """Require access to a specific tunnel. Returns the user_id_prefix.
-    A signed-in user can access any of their own tunnels. A tunnel token can
-    only access the one tunnel it belongs to."""
-    if isinstance(auth, UserAuth):
-        return auth.user_id_prefix
-    if auth.tunnel_name != tunnel_name:
-        raise HTTPException(status_code=403, detail=f"Token does not grant access to tunnel '{tunnel_name}'")
-    return extract_user_id_prefix_from_tunnel_name(tunnel_name)
 
 
 # Env var holding the cache TTL (in seconds) for paid-status lookups. The
@@ -400,10 +330,10 @@ def require_ally_eligible(
 # Env var holding the single fixed API key that authenticates the operator
 # admin endpoints: the paid-list CRUD (``/paid/*``), the account admin API
 # (``/admin/accounts/*``), and the on-demand sweeps (``/admin/sweep/*``).
-# Distinct from the SuperTokens / tunnel-token auth used by every other
-# route: those routes reject this key, and the admin routes reject
-# SuperTokens JWTs / tunnel tokens. Folded into the ``supertokens-<env>``
-# Modal secret (see .minds/template/supertokens.sh).
+# Distinct from the SuperTokens auth used by every other route: those
+# routes reject this key, and the admin routes reject SuperTokens JWTs.
+# Folded into the ``supertokens-<env>`` Modal secret (see
+# .minds/template/supertokens.sh).
 _ADMIN_KEY_ENV = "MINDS_ADMIN_KEY"
 
 # Deprecated spelling of ``_ADMIN_KEY_ENV`` from when the key only guarded the

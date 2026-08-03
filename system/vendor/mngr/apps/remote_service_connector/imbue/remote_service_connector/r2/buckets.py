@@ -15,12 +15,11 @@ from pydantic import Field
 from pydantic import field_validator
 
 import imbue.remote_service_connector.auth as auth_module
+import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
-import imbue.remote_service_connector.forwarding as forwarding_module
 import imbue.remote_service_connector.r2.stores as stores_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import authenticate_request
-from imbue.remote_service_connector.auth import require_user_auth
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.entitlements import AccountEntitlements
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
@@ -301,11 +300,10 @@ def _workspace_record_is_active(user_id: str, host_id: str) -> bool:
 def create_bucket_endpoint(request: Request, body: CreateBucketRequest) -> dict[str, object]:
     """Create an R2 bucket for the caller and mint its single key (returned inline)."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
         owner_user_id = auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
-        ops = forwarding_module.get_ctx().ops
+        ops = cloudflare_module.get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, body.name)
         # The `host-` short-name shape is reserved for workspace-backup buckets:
         # allowed only when the caller has a workspace record (any state) with
@@ -347,9 +345,8 @@ def create_bucket_endpoint(request: Request, body: CreateBucketRequest) -> dict[
 def list_buckets_endpoint(request: Request) -> list[dict[str, object]]:
     """List all R2 buckets owned by the caller."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
-        ops = forwarding_module.get_ctx().ops
+        user = authenticate_request(request)
+        ops = cloudflare_module.get_cloudflare_ctx().ops
         endpoint = r2_s3_endpoint(ops.account_id)
         return [
             BucketInfo(bucket_name=str(b["name"]), s3_endpoint=endpoint).model_dump()
@@ -361,9 +358,8 @@ def list_buckets_endpoint(request: Request) -> list[dict[str, object]]:
 def get_bucket_endpoint(request: Request, name: str) -> dict[str, object]:
     """Return metadata for one of the caller's buckets (keys come from the keys endpoints)."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
-        ops = forwarding_module.get_ctx().ops
+        user = authenticate_request(request)
+        ops = cloudflare_module.get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
         if not _owned_bucket_exists(ops, user.user_id_prefix, full_name):
             raise R2BucketNotFoundError(full_name)
@@ -379,10 +375,9 @@ def delete_bucket_endpoint(request: Request, name: str) -> dict[str, str]:
     live workspace's backups can never be deleted.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         owner_user_id = auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
-        ops = forwarding_module.get_ctx().ops
+        ops = cloudflare_module.get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
         verify_bucket_ownership(full_name, user.user_id_prefix)
         # The interlock runs on the slugified short name -- the name the
@@ -411,10 +406,9 @@ def roll_bucket_key_endpoint(request: Request, name: str) -> dict[str, object]:
     a legacy bucket), a fresh key is minted instead.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         owner_user_id = auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
-        ops = forwarding_module.get_ctx().ops
+        ops = cloudflare_module.get_cloudflare_ctx().ops
         full_name = make_bucket_name(user.user_id_prefix, name)
         if not _owned_bucket_exists(ops, user.user_id_prefix, full_name):
             raise R2BucketNotFoundError(full_name)
@@ -451,8 +445,7 @@ def roll_bucket_key_endpoint(request: Request, name: str) -> dict[str, object]:
 def list_bucket_keys_endpoint(request: Request, name: str) -> list[dict[str, object]]:
     """List the caller's keys scoped to one bucket."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         owner_user_id = auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         full_name = make_bucket_name(user.user_id_prefix, name)
         rows = stores_module.get_key_store().list_keys(owner_user_id, full_name)
@@ -463,8 +456,7 @@ def list_bucket_keys_endpoint(request: Request, name: str) -> list[dict[str, obj
 def list_all_bucket_keys_endpoint(request: Request) -> list[dict[str, object]]:
     """List all of the caller's bucket keys across every bucket."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         owner_user_id = auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         rows = stores_module.get_key_store().list_keys(owner_user_id, None)
         return [key_info_from_row(row).model_dump() for row in rows]
@@ -474,13 +466,12 @@ def list_all_bucket_keys_endpoint(request: Request) -> list[dict[str, object]]:
 def delete_bucket_key_endpoint(request: Request, access_key_id: str) -> dict[str, str]:
     """Revoke one of the caller's bucket keys (by Access Key ID) and drop its DB row."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        require_user_auth(auth)
+        authenticate_request(request)
         owner_user_id = auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
         store = stores_module.get_key_store()
         row = store.get_key(access_key_id)
         if row is None or row["owner_user_id"] != owner_user_id:
             raise HTTPException(status_code=404, detail="Key not found")
-        forwarding_module.get_ctx().ops.delete_bucket_token(access_key_id)
+        cloudflare_module.get_cloudflare_ctx().ops.delete_bucket_token(access_key_id)
         store.delete_key(access_key_id)
         return {"status": "deleted"}

@@ -27,10 +27,8 @@ from pydantic import Field
 from pydantic import field_validator
 
 import imbue.remote_service_connector.entitlements as entitlements_module
-import imbue.remote_service_connector.forwarding as forwarding_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import authenticate_request
-from imbue.remote_service_connector.auth import require_user_auth
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
 from imbue.remote_service_connector.errors import InvalidHostNameError
 from imbue.remote_service_connector.errors import PoolHostCleanupError
@@ -456,8 +454,7 @@ def lease_host(request: Request, body: LeaseHostRequest) -> dict[str, object]:
     they count against the quota too.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
         conn = db.get_pool_db_connection()
         try:
@@ -603,8 +600,7 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
     Ownership is still enforced -- a row leased by another user returns 403.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         conn = db.get_pool_db_connection()
         try:
             with conn.cursor() as cur:
@@ -687,8 +683,7 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
     request model against mngr's SafeName regex.
     """
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         conn = db.get_pool_db_connection()
         try:
             with conn.cursor() as cur:
@@ -719,8 +714,7 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
 def list_leased_hosts(request: Request) -> list[dict[str, object]]:
     """List all hosts currently leased by the authenticated user."""
     with handle_endpoint_errors():
-        auth = authenticate_request(request, forwarding_module.get_ctx().ops)
-        user = require_user_auth(auth)
+        user = authenticate_request(request)
         conn = db.get_pool_db_connection()
         try:
             with conn.cursor() as cur:

@@ -1,8 +1,8 @@
 """Remote service connector: the Modal deployment entrypoint.
 
 Exposes authenticated HTTP endpoints for managing remote services used by the
-minds desktop client (Cloudflare tunnels, pool-host leasing, LiteLLM keys, R2
-buckets, workspace sync, SuperTokens-backed authentication). The endpoints and
+minds desktop client (pool-host leasing, LiteLLM keys, R2 buckets, workspace
+sync, self-hosted workspace sharing, SuperTokens-backed authentication). The endpoints and
 business logic live in this package's modules; this file holds ONLY what Modal
 needs at deploy time: the image, the app, the secrets, and the function
 definitions (web app + crons).
@@ -31,8 +31,8 @@ from pathlib import Path
 import modal
 from fastapi import FastAPI
 
+import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
-import imbue.remote_service_connector.forwarding as forwarding_module
 import imbue.remote_service_connector.r2.stores as r2_stores_module
 import imbue.remote_service_connector.sync as sync_module
 from imbue.modal_app_kit.deploy import deploy_metadata_secret
@@ -41,7 +41,7 @@ from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import read_min_containers
 from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
-from imbue.modal_app_kit.image import IMAGE_REQUIREMENTS_FILENAME
+from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 from imbue.remote_service_connector import db
@@ -89,7 +89,7 @@ _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
 # invalidate the image cache (Modal enforces the ordering). The entrypoint
 # (this file) ships separately via Modal's automatic file mount and is
 # excluded from the package mount by ``shipped_python_source_ignore``.
-image = pinned_image(Path(__file__).parents[2] / IMAGE_REQUIREMENTS_FILENAME).add_local_python_source(
+image = pinned_image(locate_image_requirements(Path(__file__))).add_local_python_source(
     "imbue.remote_service_connector",
     "imbue.modal_app_kit",
     ignore=shipped_python_source_ignore,
@@ -105,6 +105,7 @@ def _connector_secrets() -> list[modal.Secret]:
         stamped_secret("neon", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("pool-ssh", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("litellm-connector", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        stamped_secret("sharing", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         deploy_metadata_secret(_DEPLOY_ENV, _MINDS_DEPLOY_ID),
     ]
 
@@ -114,7 +115,7 @@ def _connector_secrets() -> list[modal.Secret]:
     secrets=_connector_secrets(),
     # Warm-pool size driven by ``_MIN_CONTAINERS`` at the top of this
     # module: defaults to 1 for production / staging (avoid cold-boot
-    # penalty on auth / lease / tunnel hits from the desktop client) and
+    # penalty on auth / lease / share hits from the desktop client) and
     # 0 for dev (per-developer envs sit idle most of the time). Override
     # at deploy time with ``MINDS_CONNECTOR_MIN_CONTAINERS=<n>``. Mirrors the
     # equivalent block in apps/modal_litellm/app.py.
@@ -185,7 +186,7 @@ def _init_supertokens_once() -> None:
 def r2_quota_sweep() -> dict[str, int]:
     _init_supertokens_once()
     counters = run_r2_quota_sweep(
-        forwarding_module.get_ctx().ops,
+        cloudflare_module.get_cloudflare_ctx().ops,
         r2_stores_module.get_key_store(),
         entitlements_module.get_entitlements_store(),
         r2_stores_module.get_grant_store(),
@@ -205,7 +206,7 @@ def r2_quota_sweep() -> dict[str, int]:
 )
 def backup_retention_reap() -> dict[str, int]:
     counters = run_backup_retention_reap(
-        forwarding_module.get_ctx().ops,
+        cloudflare_module.get_cloudflare_ctx().ops,
         sync_module.get_sync_store(),
         r2_stores_module.get_key_store(),
         sync_module.get_orphan_bucket_store(),

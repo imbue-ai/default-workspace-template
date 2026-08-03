@@ -12,6 +12,7 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Mapping
 from typing import Final
 
 import psycopg2
@@ -53,6 +54,7 @@ from supertokens_python.recipe.session.syncio import create_new_session_without_
 from supertokens_python.recipe.session.syncio import refresh_session_without_request_response
 from supertokens_python.recipe.session.syncio import revoke_all_sessions_for_user
 from supertokens_python.recipe.thirdparty.interfaces import ManuallyCreateOrUpdateUserOkResult
+from supertokens_python.recipe.thirdparty.provider import Provider
 from supertokens_python.recipe.thirdparty.provider import ProviderClientConfig
 from supertokens_python.recipe.thirdparty.provider import ProviderConfig
 from supertokens_python.recipe.thirdparty.provider import ProviderInput
@@ -77,7 +79,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-_HTML_SHARED_STYLES = (
+HTML_SHARED_STYLES = (
     "body{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;"
     "display:flex;justify-content:center;align-items:center;min-height:100vh;"
     "margin:0;padding:20px}"
@@ -98,7 +100,7 @@ _HTML_SHARED_STYLES = (
 
 _VERIFY_EMAIL_SUCCESS_HTML = (
     "<!doctype html><html><head><title>Email verified</title><style>"
-    + _HTML_SHARED_STYLES
+    + HTML_SHARED_STYLES
     + "</style></head><body><div class='card'>"
     "<h1 style='color:#15803d'>Email verified</h1>"
     "<p>Your email has been verified. You may close this tab and return to the app.</p>"
@@ -107,7 +109,7 @@ _VERIFY_EMAIL_SUCCESS_HTML = (
 
 _VERIFY_EMAIL_FAILED_HTML = (
     "<!doctype html><html><head><title>Verification failed</title><style>"
-    + _HTML_SHARED_STYLES
+    + HTML_SHARED_STYLES
     + "</style></head><body><div class='card'>"
     "<h1 style='color:#dc2626'>Verification failed</h1>"
     "<p>The verification link is invalid or has expired. "
@@ -117,7 +119,7 @@ _VERIFY_EMAIL_FAILED_HTML = (
 
 _RESET_PASSWORD_PAGE_TEMPLATE = (
     "<!doctype html><html><head><title>Reset password</title><style>"
-    + _HTML_SHARED_STYLES
+    + HTML_SHARED_STYLES
     + "</style></head><body><div class='card'>"
     "<h1>Set new password</h1><p>Enter your new password below.</p>"
     "<form id='f' onsubmit='return submitForm(event)'>"
@@ -241,7 +243,7 @@ class UserProviderInfo(BaseModel):
     provider: str = Field(description="Login method: 'email' or a third-party provider ID")
 
 
-def _build_session_tokens(user_id: str) -> SessionTokens:
+def build_session_tokens(user_id: str) -> SessionTokens:
     """Create a new SuperTokens session for the given user and return the tokens."""
     session = create_new_session_without_request_response(
         tenant_id=AUTH_TENANT_ID,
@@ -348,7 +350,7 @@ def mark_paid_email_verified_best_effort(email: str) -> None:
         logger.warning("Failed to auto-verify paid email %s: %s", email, exc)
 
 
-def _require_supertokens_configured() -> None:
+def require_supertokens_configured() -> None:
     if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
         raise HTTPException(status_code=503, detail="SuperTokens not configured on the server")
 
@@ -358,7 +360,7 @@ def _require_supertokens_configured() -> None:
 # caller tries a password signup, or vice versa). Without this guard each
 # method would happily create its own SuperTokens user for the same email --
 # duplicate accounts with disjoint workspaces, keys, and entitlements.
-_ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS: Final[str] = "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
+ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS: Final[str] = "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
 
 _EMAIL_PASSWORD_LOGIN_METHOD_ID: Final[str] = "emailpassword"
 
@@ -421,7 +423,7 @@ def _cross_method_signup_rejection(email: str, attempted_method_id: str) -> Auth
         existing_method_names,
     )
     return AuthResponse(
-        status=_ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS,
+        status=ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS,
         message=(
             f"An account for this email already exists using {existing_method_names}. "
             "Sign in with that method instead."
@@ -439,7 +441,7 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
     default 500 body that its typed client cannot parse.
     """
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         email = body.email.strip()
         if not email or not body.password:
             return AuthResponse(status="FIELD_ERROR", message="Email and password are required")
@@ -477,7 +479,7 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
             if is_paid:
                 _mark_email_verified(recipe_user_id=recipe_user_id, email=email)
 
-            tokens = _build_session_tokens(user.id)
+            tokens = build_session_tokens(user.id)
             if not is_paid:
                 _send_verification_email_with_cooldown(
                     user_id=user.id,
@@ -504,7 +506,7 @@ def auth_signin(body: SignInRequest) -> AuthResponse:
     the rationale.
     """
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         email = body.email.strip()
         if not email or not body.password:
             return AuthResponse(status="FIELD_ERROR", message="Email and password are required")
@@ -521,7 +523,7 @@ def auth_signin(body: SignInRequest) -> AuthResponse:
             user = result.user
             recipe_user_id = user.login_methods[0].recipe_user_id if user.login_methods else RecipeUserId(user.id)
             verified = is_email_verified(recipe_user_id=recipe_user_id, email=email)
-            tokens = _build_session_tokens(user.id)
+            tokens = build_session_tokens(user.id)
             if not verified:
                 _send_verification_email_with_cooldown(
                     user_id=user.id,
@@ -543,7 +545,7 @@ def auth_signin(body: SignInRequest) -> AuthResponse:
 def auth_refresh_session(body: RefreshSessionRequest) -> RefreshSessionResponse:
     """Exchange a refresh token for a fresh access/refresh token pair."""
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         try:
             new_session = refresh_session_without_request_response(refresh_token=body.refresh_token)
         except (SuperTokensSessionError, SuperTokensGeneralError, ValueError, TypeError) as exc:
@@ -573,7 +575,7 @@ def auth_revoke_sessions(request: Request) -> dict[str, object]:
     no-op when the caller has no other active sessions.
     """
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         user_id = auth_module.get_user_id_from_bearer_header(request)
         revoked = revoke_all_sessions_for_user(user_id=user_id)
         logger.info("Revoked %d sessions for user %s...", len(revoked), user_id[:8])
@@ -607,7 +609,7 @@ def auth_send_verification_email(body: SendVerificationEmailRequest, request: Re
     suppressed the send.
     """
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         user_id = auth_module.get_user_id_from_bearer_header(request)
         recipe_user_id = _recipe_user_id_for_callers_email(user_id, body.email)
         is_sent = _send_verification_email_with_cooldown(
@@ -627,7 +629,7 @@ def auth_is_email_verified(body: IsEmailVerifiedRequest, request: Request) -> di
     verification poll that calls this).
     """
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         user_id = auth_module.get_user_id_from_bearer_header(request)
         recipe_user_id = _recipe_user_id_for_callers_email(user_id, body.email)
         verified = is_email_verified(recipe_user_id=recipe_user_id, email=body.email)
@@ -644,7 +646,7 @@ def auth_verify_email_page(request: Request) -> HTMLResponse:
     emitted links and we do not want that to leak into the Python identifier.
     """
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         token = request.query_params.get("token", "")
         tenant_id = request.query_params.get("tenantId") or AUTH_TENANT_ID
         if not token:
@@ -662,7 +664,7 @@ def auth_verify_email_page(request: Request) -> HTMLResponse:
 @router.get("/auth/reset-password", response_class=HTMLResponse)
 def auth_reset_password_page(token: str = "") -> HTMLResponse:
     """Render the password-reset form linked from a password-reset email."""
-    _require_supertokens_configured()
+    require_supertokens_configured()
     safe_token = json.dumps(token)
     return HTMLResponse(_RESET_PASSWORD_PAGE_TEMPLATE.replace("__TOKEN_JSON__", safe_token))
 
@@ -679,7 +681,7 @@ def auth_forgot_password(body: ForgotPasswordRequest) -> dict[str, str]:
     "always succeeds" contract.
     """
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         email = body.email.strip()
         success = {"status": "OK", "message": "If an account exists, a reset email has been sent"}
         if not email:
@@ -704,7 +706,7 @@ def auth_forgot_password(body: ForgotPasswordRequest) -> dict[str, str]:
 def auth_reset_password(body: ResetPasswordRequest) -> dict[str, str]:
     """Consume a password reset token and set a new password."""
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         if not body.token or not body.new_password:
             raise HTTPException(status_code=400, detail="Token and new password are required")
 
@@ -727,7 +729,7 @@ def auth_reset_password(body: ResetPasswordRequest) -> dict[str, str]:
 def auth_oauth_authorize(body: OAuthAuthorizeRequest) -> OAuthAuthorizeResponse:
     """Return the URL to which the user should be redirected to begin OAuth."""
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         provider = get_provider(tenant_id=AUTH_TENANT_ID, third_party_id=body.provider_id)
         if provider is None:
             return OAuthAuthorizeResponse(status="ERROR", message=f"Unknown provider: {body.provider_id}")
@@ -747,85 +749,104 @@ def auth_oauth_authorize(body: OAuthAuthorizeRequest) -> OAuthAuthorizeResponse:
         return OAuthAuthorizeResponse(status="OK", url=redirect.url_with_query_params)
 
 
+def complete_oauth_code_exchange(
+    provider: Provider,
+    provider_id: str,
+    callback_url: str,
+    query_params: Mapping[str, str],
+) -> AuthResponse:
+    """Exchange a provider callback's params for a SuperTokens session.
+
+    Shared by the desktop CLI's ``/auth/oauth/callback`` and the share
+    broker's browser callback, so the one-account-per-email guard, the account
+    create/update, and the error shapes cannot drift between the two flows.
+    """
+    try:
+        # ``Provider.exchange_auth_code_for_oauth_tokens`` and
+        # ``Provider.get_user_info`` are async-only on the SuperTokens SDK
+        # (see ``auth_oauth_authorize`` for the rationale). FastAPI runs
+        # these sync endpoints in threadpool workers with no running event
+        # loop, so the SDK's async-to-sync wrapper is safe here.
+        oauth_tokens = _supertokens_sync_run(
+            provider.exchange_auth_code_for_oauth_tokens(
+                redirect_uri_info=RedirectUriInfo(
+                    redirect_uri_on_provider_dashboard=callback_url,
+                    redirect_uri_query_params=dict(query_params),
+                    pkce_code_verifier=None,
+                ),
+                user_context={},
+            )
+        )
+        oauth_user = _supertokens_sync_run(provider.get_user_info(oauth_tokens=oauth_tokens, user_context={}))
+    except (ValueError, KeyError, OSError) as exc:
+        logger.error("OAuth callback failed for %s", provider_id, exc_info=exc)
+        return AuthResponse(status="ERROR", message=str(exc))
+
+    if oauth_user.email is None or oauth_user.email.id is None:
+        return AuthResponse(status="ERROR", message="No email provided by the OAuth provider")
+
+    email = oauth_user.email.id
+
+    # One-account-per-email: refuse the OAuth callback when the email
+    # already has an account under another login method (e.g. a password
+    # account). The provider dialog has already run by this point, but
+    # nothing has been written to SuperTokens yet -- returning here leaves
+    # no user, no session, and no partial state. A core outage during the
+    # lookup is surfaced as the same structured ERROR the other /auth/*
+    # endpoints return, so the typed desktop client gets a stable JSON
+    # shape rather than a FastAPI 500 body.
+    try:
+        rejection = _cross_method_signup_rejection(email, provider_id)
+    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+        logger.error("SuperTokens SDK error during OAuth callback", exc_info=exc)
+        return AuthResponse(status="ERROR", message="Auth backend unavailable")
+    if rejection is not None:
+        return rejection
+
+    result = manually_create_or_update_user(
+        tenant_id=AUTH_TENANT_ID,
+        third_party_id=provider_id,
+        third_party_user_id=oauth_user.third_party_user_id,
+        email=email,
+        is_verified=oauth_user.email.is_verified,
+    )
+    if not isinstance(result, ManuallyCreateOrUpdateUserOkResult):
+        return AuthResponse(status="ERROR", message="Could not create or update account")
+
+    display_name: str | None = None
+    if oauth_user.raw_user_info_from_provider and oauth_user.raw_user_info_from_provider.from_user_info_api:
+        raw = oauth_user.raw_user_info_from_provider.from_user_info_api
+        display_name = raw.get("name") or raw.get("login") or raw.get("displayName")
+
+    tokens = build_session_tokens(result.user.id)
+    return AuthResponse(
+        status="OK",
+        user=AuthUser(user_id=result.user.id, email=email, display_name=display_name),
+        tokens=tokens,
+        needs_email_verification=not oauth_user.email.is_verified,
+    )
+
+
 @router.post("/auth/oauth/callback", response_model=AuthResponse)
 def auth_oauth_callback(body: OAuthCallbackRequest) -> AuthResponse:
     """Exchange an OAuth callback's query params for a supertokens session."""
     with handle_endpoint_errors():
-        _require_supertokens_configured()
+        require_supertokens_configured()
         provider = get_provider(tenant_id=AUTH_TENANT_ID, third_party_id=body.provider_id)
         if provider is None:
             return AuthResponse(status="ERROR", message=f"Unknown provider: {body.provider_id}")
-
-        try:
-            # ``Provider.exchange_auth_code_for_oauth_tokens`` and
-            # ``Provider.get_user_info`` are async-only on the SuperTokens SDK
-            # (see ``auth_oauth_authorize`` for the rationale). FastAPI runs
-            # this sync endpoint in a threadpool worker with no running event
-            # loop, so the SDK's async-to-sync wrapper is safe here.
-            oauth_tokens = _supertokens_sync_run(
-                provider.exchange_auth_code_for_oauth_tokens(
-                    redirect_uri_info=RedirectUriInfo(
-                        redirect_uri_on_provider_dashboard=body.callback_url,
-                        redirect_uri_query_params=dict(body.query_params),
-                        pkce_code_verifier=None,
-                    ),
-                    user_context={},
-                )
-            )
-            oauth_user = _supertokens_sync_run(provider.get_user_info(oauth_tokens=oauth_tokens, user_context={}))
-        except (ValueError, KeyError, OSError) as exc:
-            logger.error("OAuth callback failed for %s", body.provider_id, exc_info=exc)
-            return AuthResponse(status="ERROR", message=str(exc))
-
-        if oauth_user.email is None or oauth_user.email.id is None:
-            return AuthResponse(status="ERROR", message="No email provided by the OAuth provider")
-
-        email = oauth_user.email.id
-
-        # One-account-per-email: refuse the OAuth callback when the email
-        # already has an account under another login method (e.g. a password
-        # account). The provider dialog has already run by this point, but
-        # nothing has been written to SuperTokens yet -- returning here leaves
-        # no user, no session, and no partial state. A core outage during the
-        # lookup is surfaced as the same structured ERROR the other /auth/*
-        # endpoints return, so the typed desktop client gets a stable JSON
-        # shape rather than a FastAPI 500 body.
-        try:
-            rejection = _cross_method_signup_rejection(email, body.provider_id)
-        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-            logger.error("SuperTokens SDK error during OAuth callback", exc_info=exc)
-            return AuthResponse(status="ERROR", message="Auth backend unavailable")
-        if rejection is not None:
-            return rejection
-
-        result = manually_create_or_update_user(
-            tenant_id=AUTH_TENANT_ID,
-            third_party_id=body.provider_id,
-            third_party_user_id=oauth_user.third_party_user_id,
-            email=email,
-            is_verified=oauth_user.email.is_verified,
-        )
-        if not isinstance(result, ManuallyCreateOrUpdateUserOkResult):
-            return AuthResponse(status="ERROR", message="Could not create or update account")
-
-        display_name: str | None = None
-        if oauth_user.raw_user_info_from_provider and oauth_user.raw_user_info_from_provider.from_user_info_api:
-            raw = oauth_user.raw_user_info_from_provider.from_user_info_api
-            display_name = raw.get("name") or raw.get("login") or raw.get("displayName")
-
-        tokens = _build_session_tokens(result.user.id)
-        return AuthResponse(
-            status="OK",
-            user=AuthUser(user_id=result.user.id, email=email, display_name=display_name),
-            tokens=tokens,
-            needs_email_verification=not oauth_user.email.is_verified,
+        return complete_oauth_code_exchange(
+            provider=provider,
+            provider_id=body.provider_id,
+            callback_url=body.callback_url,
+            query_params=body.query_params,
         )
 
 
 @router.get("/auth/users/{user_id}", response_model=UserProviderInfo)
 def auth_get_user(user_id: str) -> UserProviderInfo:
     """Return basic info about a user, including the provider used to sign in."""
-    _require_supertokens_configured()
+    require_supertokens_configured()
     user = get_user(user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")

@@ -39,8 +39,6 @@ logger = logging.getLogger(__name__)
 # endpoint validates entitlement names against it.
 QUOTA_ENTITLEMENT_NAMES: tuple[str, ...] = (
     "max_remote_workspaces",
-    "max_tunnels",
-    "max_services_per_tunnel",
     "max_buckets",
     "max_total_bucket_bytes",
     "monthly_llm_spend_usd",
@@ -56,8 +54,6 @@ class PlanEntitlements(BaseModel):
     """The quota values a plan grants (also the per-user entitlement values)."""
 
     max_remote_workspaces: int = Field(description="Max concurrent pool-host leases (running or stopped)")
-    max_tunnels: int = Field(description="Max Cloudflare tunnels")
-    max_services_per_tunnel: int = Field(description="Max forwarded services per tunnel")
     max_buckets: int = Field(description="Max R2 buckets")
     max_total_bucket_bytes: int = Field(description="Max total bytes across all the account's buckets")
     monthly_llm_spend_usd: float = Field(description="Monthly LLM spend cap in USD (rolling; 0 disables key minting)")
@@ -83,14 +79,12 @@ class AccountEntitlements(PlanEntitlements):
     """One account's entitlement row: identity fields plus the quota values."""
 
     user_id: str = Field(description="Full SuperTokens user id (row key)")
-    user_id_prefix: str = Field(description="16-hex user-id prefix used to namespace tunnels/leases/buckets")
+    user_id_prefix: str = Field(description="16-hex user-id prefix used to namespace leases/buckets")
     plan_name: str = Field(description="The plan this row was last assigned from")
 
     def quota_values(self) -> PlanEntitlements:
         return PlanEntitlements(
             max_remote_workspaces=self.max_remote_workspaces,
-            max_tunnels=self.max_tunnels,
-            max_services_per_tunnel=self.max_services_per_tunnel,
             max_buckets=self.max_buckets,
             max_total_bucket_bytes=self.max_total_bucket_bytes,
             monthly_llm_spend_usd=self.monthly_llm_spend_usd,

@@ -22,8 +22,8 @@ from fastapi import APIRouter
 from fastapi import Request
 
 import imbue.remote_service_connector.accounts as accounts_module
+import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
-import imbue.remote_service_connector.forwarding as forwarding_module
 import imbue.remote_service_connector.r2.stores as r2_stores_module
 import imbue.remote_service_connector.sync as sync_module
 from imbue.remote_service_connector.auth import derive_user_id_prefix
@@ -231,7 +231,7 @@ def admin_run_backup_retention_reap(
     with handle_endpoint_errors():
         require_admin_key(request)
         result = run_backup_retention_reap(
-            forwarding_module.get_ctx().ops,
+            cloudflare_module.get_cloudflare_ctx().ops,
             sync_module.get_sync_store(),
             r2_stores_module.get_key_store(),
             sync_module.get_orphan_bucket_store(),
@@ -256,7 +256,7 @@ def admin_run_r2_sweep(request: Request, email: str | None = None) -> dict[str, 
         require_admin_key(request)
         only_user_id = accounts_module.resolve_user_id_by_email(email) if email else None
         counters = run_r2_quota_sweep(
-            forwarding_module.get_ctx().ops,
+            cloudflare_module.get_cloudflare_ctx().ops,
             r2_stores_module.get_key_store(),
             entitlements_module.get_entitlements_store(),
             r2_stores_module.get_grant_store(),
