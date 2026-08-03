@@ -389,16 +389,7 @@ def _stream_events(agent_id: str) -> Response:
 
 
 def _send_message_endpoint(agent_id: str) -> Response:
-    """Send a message to an agent.
-
-    Synchronous: ``send_message_to_agent`` auto-starts a STOPPED agent
-    (``is_start_desired=True``) and blocks until the harness confirms delivery. Warm,
-    that is sub-second. Cold it is not -- codex replays its whole rollout before its
-    composer renders -- and this request can outlast the ingress proxy's timeout, which
-    surfaces to the user as "failed to send: null". Known gap: the durable fix is a
-    pending-message queue owned by the app rather than by each harness's TUI process,
-    tracked separately.
-    """
+    """Send a message to an agent."""
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
