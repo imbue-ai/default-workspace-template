@@ -1736,6 +1736,9 @@ def test_browser_bridge_rejects_wrong_token(tmp_path: Path) -> None:
     assert "set-cookie" not in response.headers
     # A missing token is rejected the same way (never treated as a match).
     assert client.get("/_bridge").status_code == 403
+    # A non-ASCII token is a clean 403, not a 500 (compare_digest raises
+    # TypeError on non-ASCII str; the compare must happen on bytes).
+    assert client.get("/_bridge?token=%C3%A9&next=/").status_code == 403
 
 
 def test_browser_bridge_sets_cookie_and_redirects_to_sanitized_next(tmp_path: Path) -> None:
@@ -1774,14 +1777,11 @@ def test_workspace_responses_carry_default_deny_frame_ancestors(tmp_path: Path) 
         listen_port=18421,
         use_http2=True,
     )
-    with TestClient(
-        app, base_url=f"https://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False
-    ) as client:
+    with TestClient(app, base_url=f"https://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         response = client.get("/", headers={"accept": "text/html"})
     policy = response.headers["content-security-policy"]
     assert policy == (
-        f"frame-ancestors 'self' https://{_TEST_HOST_ID}.localhost:18421 "
-        f"https://*.{_TEST_HOST_ID}.localhost:18421"
+        f"frame-ancestors 'self' https://{_TEST_HOST_ID}.localhost:18421 https://*.{_TEST_HOST_ID}.localhost:18421"
     )
 
 
@@ -1798,9 +1798,7 @@ def test_workspace_responses_include_configured_embedder_origins(tmp_path: Path)
         use_http2=True,
         embedder_origins=(EmbedderOrigin("http://localhost:8420"),),
     )
-    with TestClient(
-        app, base_url=f"https://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False
-    ) as client:
+    with TestClient(app, base_url=f"https://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
         response = client.get("/", headers={"accept": "text/html"})
     assert response.headers["content-security-policy"].endswith("http://localhost:8420")
 

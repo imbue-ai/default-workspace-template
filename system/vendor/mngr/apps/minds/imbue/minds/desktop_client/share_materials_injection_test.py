@@ -73,6 +73,7 @@ class _ExecutingMngrCaller(MngrCaller):
             returncode=completed.returncode, stdout=completed.stdout + trailer, stderr=completed.stderr
         )
 
+
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.shares.example"
 
 
@@ -194,7 +195,7 @@ def test_writes_use_a_unique_tmp_name_per_write() -> None:
     inject_share_grants_into_agent(AgentId(), "[workspace]\n", caller)
 
     command = caller.calls[0][2]
-    assert 'mktemp data/.secrets/.share_grants.toml.XXXXXX' in command
+    assert "mktemp data/.secrets/.share_grants.toml.XXXXXX" in command
     assert "share_grants.toml.tmp" not in command
 
 

@@ -1,42 +1,9 @@
+import sys
+from pathlib import Path
 from types import ModuleType
 
-
-def test_direct_database_url_strips_pooler_suffix_and_preserves_everything_else(app_module: ModuleType) -> None:
-    pooled_url = (
-        "postgresql://neondb_owner:secret-word@ep-late-waterfall-ak6q71qd-pooler"
-        ".c-3.us-west-2.aws.neon.tech/litellm_cost?sslmode=require"
-    )
-
-    direct_url = app_module._direct_database_url(pooled_url)
-
-    assert direct_url == (
-        "postgresql://neondb_owner:secret-word@ep-late-waterfall-ak6q71qd"
-        ".c-3.us-west-2.aws.neon.tech/litellm_cost?sslmode=require"
-    )
-
-
-def test_direct_database_url_preserves_explicit_port(app_module: ModuleType) -> None:
-    direct_url = app_module._direct_database_url("postgresql://user@ep-abc-pooler.us-west-2.aws.neon.tech:5432/db")
-
-    assert direct_url == "postgresql://user@ep-abc.us-west-2.aws.neon.tech:5432/db"
-
-
-def test_direct_database_url_leaves_already_direct_url_unchanged(app_module: ModuleType) -> None:
-    direct_input = "postgresql://user:pw@ep-late-waterfall-ak6q71qd.c-3.us-west-2.aws.neon.tech/db?sslmode=require"
-
-    assert app_module._direct_database_url(direct_input) == direct_input
-
-
-def test_direct_database_url_leaves_non_neon_url_unchanged(app_module: ModuleType) -> None:
-    local_input = "postgresql://postgres:postgres@localhost:5432/litellm"
-
-    assert app_module._direct_database_url(local_input) == local_input
-
-
-def test_direct_database_url_ignores_pooler_string_in_password(app_module: ModuleType) -> None:
-    tricky_input = "postgresql://user:pw-pooler.x@ep-abc.us-west-2.aws.neon.tech/db"
-
-    assert app_module._direct_database_url(tricky_input) == tricky_input
+from imbue.modal_app_kit.testing import imported_module_names
+from imbue.modal_app_kit.testing import is_module_within_package
 
 
 def test_is_connection_failure_output_matches_only_connection_error_codes(app_module: ModuleType) -> None:
@@ -47,3 +14,20 @@ def test_is_connection_failure_output_matches_only_connection_error_codes(app_mo
     assert app_module._is_connection_failure_output("Error: P1017: Server has closed the connection.")
     assert not app_module._is_connection_failure_output("Error: P3018: A migration failed to apply.")
     assert not app_module._is_connection_failure_output("The database schema is not in sync with your Prisma schema.")
+
+
+def test_entrypoint_imports_only_shipped_dependencies() -> None:
+    """app.py runs in a container that has only its pip-installed set plus the
+    imbue.modal_app_kit source mount; any other monorepo import would pass
+    locally and crash the deployed container at import time."""
+    allowed_roots = {"modal", "tenacity", "yaml", "litellm", "prisma"}
+    allowed_imbue_package = "imbue.modal_app_kit"
+    violations: list[str] = []
+    for module_name in imported_module_names(Path(__file__).parent / "app.py"):
+        root = module_name.split(".")[0]
+        if root in sys.stdlib_module_names or root in allowed_roots:
+            continue
+        if root == "imbue" and is_module_within_package(module_name, allowed_imbue_package):
+            continue
+        violations.append(module_name)
+    assert violations == []

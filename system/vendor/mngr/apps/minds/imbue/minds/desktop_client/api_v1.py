@@ -2748,9 +2748,7 @@ def _handle_machine_sharing_readiness(host_id: str) -> SharingReadinessResponse:
         return SharingReadinessResponse(ready=False)
     # Probe the shell's routable label origin, not the bare machine domain
     # (which does not route on a share). Not-ready until the shell label is known.
-    probe_host = resolve_share_probe_host(
-        state.backend_resolver, state.session_store, host_id, share.workspace_domain
-    )
+    probe_host = resolve_share_probe_host(state.backend_resolver, state.session_store, host_id, share.workspace_domain)
     if probe_host is None:
         return SharingReadinessResponse(ready=False)
     return SharingReadinessResponse(ready=probe_share_readiness(http_client, probe_host))

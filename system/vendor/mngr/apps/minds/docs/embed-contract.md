@@ -100,5 +100,6 @@ payloads -- to the console.
 - **1** -- initial reification of the pre-existing relay message set
   (`open-request-modal`, `open-help`, `open-ai-keys-page`+ack,
   `bring-app-to-front`, `close-active-tab`). `reload-crashed-view` (an
-  Electron-internal crash-page affordance) was deliberately dropped: crash
-  handling is native in Electron and absent in plain browsers.
+  Electron-internal crash-page affordance) was deliberately dropped: the
+  desktop app handles a crashed window natively, and neither mode observes a
+  crashed workspace iframe (Electron exposes no OOPIF process-gone signal).

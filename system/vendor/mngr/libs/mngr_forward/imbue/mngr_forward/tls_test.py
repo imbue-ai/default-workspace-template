@@ -9,22 +9,14 @@ from typing import cast
 from cryptography import x509
 from cryptography.x509.oid import ExtendedKeyUsageOID
 
+from imbue.mngr_forward.testing import make_in_memory_test_ca
 from imbue.mngr_forward.tls import InMemoryTLSConfig
-from imbue.mngr_forward.tls import LocalCertificateAuthority
 from imbue.mngr_forward.tls import _MAX_MINTED_CONTEXTS
 from imbue.mngr_forward.tls import _SNICertMinter
-from imbue.mngr_forward.tls import _build_ca_certificate
-from imbue.mngr_forward.tls import _generate_rsa_key
 from imbue.mngr_forward.tls import _is_covered_by_static_sans
-from imbue.mngr_forward.tls import _key_to_pem
 from imbue.mngr_forward.tls import build_server_ssl_context
 from imbue.mngr_forward.tls import generate_server_credentials
 from imbue.mngr_forward.tls import load_or_create_local_ca
-
-
-def _make_in_memory_ca() -> LocalCertificateAuthority:
-    ca_key = _generate_rsa_key()
-    return LocalCertificateAuthority(cert_pem=_build_ca_certificate(ca_key), key_pem=_key_to_pem(ca_key))
 
 
 def _leaf_certificate(chain_pem: bytes) -> x509.Certificate:
@@ -56,7 +48,7 @@ def test_generate_server_credentials_has_expected_sans_and_chain() -> None:
     entries are needed); `127.0.0.1` covers loopback probes that dial the IP.
     Nested service origins are covered by per-SNI minting, not this cert.
     """
-    ca = _make_in_memory_ca()
+    ca = make_in_memory_test_ca()
     chain_pem, key_pem = generate_server_credentials(ca)
     assert b"PRIVATE KEY" in key_pem
     certificates = x509.load_pem_x509_certificates(chain_pem)
@@ -74,7 +66,7 @@ def test_generate_server_credentials_has_expected_sans_and_chain() -> None:
 
 
 def _server_context() -> ssl.SSLContext:
-    ca = _make_in_memory_ca()
+    ca = make_in_memory_test_ca()
     chain_pem, key_pem = generate_server_credentials(ca)
     return build_server_ssl_context(chain_pem, key_pem, ca)
 
@@ -168,7 +160,7 @@ def test_sni_minting_evicts_oldest_when_cap_reached() -> None:
     The SNI callback runs pre-authentication, so a misbehaving local client
     could fill the cache; new legitimate origins must still get a minted cert.
     """
-    ca = _make_in_memory_ca()
+    ca = make_in_memory_test_ca()
     _chain_pem, key_pem = generate_server_credentials(ca)
     minter = _SNICertMinter(server_key_pem=key_pem, ca=ca)
     placeholder = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

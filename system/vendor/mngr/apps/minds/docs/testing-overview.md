@@ -62,16 +62,15 @@ excludes the whole `apps/minds` tree by path.
 
 ### 1.4 JS / Electron tests (`apps/minds/test/`)
 
-- **Node unit** (`test/unit/startup-routing.test.js`): 7 `node --test` cases for
-  startup routing. Run via `pnpm test:unit`. **Not in any CI workflow.**
+- **Node unit** (`test/unit/*.test.js`): `node --test` suites for the pure
+  Electron-shell helpers (startup routing, surface routing, deeplinks, session
+  persistence, log handling, the embed contract). Run via `pnpm test:unit`.
+  **Not in any CI workflow.**
 - **Playwright e2e** (`test/e2e/`, `playwright.config.js`, `pnpm test:e2e`):
   - `macos-launch.spec.js` -- launches the installed `/Applications/Minds.app`
-    via the `mindsApp` fixture. **The only JS spec wired into CI** (in
-    `minds-launch-to-msg.yml`).
-  - `landing-stopped-mind-restart.spec.js` and `recovery-redirect.spec.js` --
-    fast DOM-level renderer-contract tests (plain browser `page`, no
-    Electron/Docker/backend; shell out to `uv` to render the real Jinja). Run
-    locally only; **not in CI.**
+    via the `mindsApp` fixture. **The only JS spec** (wired into CI in
+    `minds-launch-to-msg.yml`). The legacy renderer-contract specs were
+    deleted with the pre-SPA shell scripts they drove.
 
 ### 1.5 CI map
 

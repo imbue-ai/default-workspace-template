@@ -66,6 +66,7 @@ from imbue.mngr_forward.embedding import build_frame_ancestors_policy
 from imbue.mngr_forward.envelope import EnvelopeWriter
 from imbue.mngr_forward.errors import MngrForwardError
 from imbue.mngr_forward.loading_page import render_loading_page
+from imbue.mngr_forward.primitives import BROWSER_BRIDGE_PATH
 from imbue.mngr_forward.primitives import MNGR_FORWARD_SESSION_COOKIE_NAME
 from imbue.mngr_forward.primitives import OneTimeCode
 from imbue.mngr_forward.primitives import ParsedForwardHost
@@ -81,10 +82,6 @@ _PROXY_TIMEOUT_SECONDS: Final[float] = 30.0
 
 _SUBDOMAIN_AUTH_PATH: Final[str] = "/_subdomain_auth"
 
-# The bare-origin browser auth bridge: a host application that spawned the
-# plugin 302s a browser here with the spawn-time opaque token so the browser
-# gets the bare-origin session cookie without consuming an OTP.
-BROWSER_BRIDGE_PATH: Final[str] = "/_bridge"
 
 # Strict shape for the /goto/{host_id} path segment: the exact (lowercased)
 # ``host-<32hex>`` coordinate FORWARD_SUBDOMAIN_PATTERN routes.
@@ -969,7 +966,9 @@ def _handle_browser_bridge(
     if browser_bridge_token is None:
         return Response(status_code=404)
     token = request.query_params.get("token", "")
-    if not token or not secrets.compare_digest(token, browser_bridge_token):
+    # Compare bytes: compare_digest raises TypeError on non-ASCII str, and the
+    # token comes straight from the query string.
+    if not token or not secrets.compare_digest(token.encode("utf-8"), browser_bridge_token.encode("utf-8")):
         return Response(status_code=403, content="Invalid browser bridge token")
     next_url = _sanitize_next_url(request.query_params.get("next", "/"))
     signing_key = auth_store.get_signing_key()

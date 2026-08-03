@@ -19,6 +19,7 @@ from uuid import UUID
 import psycopg2
 import pytest
 from fastapi import HTTPException
+from starlette.testclient import TestClient
 from supertokens_python.recipe.emailpassword.interfaces import ConsumePasswordResetTokenOkResult
 from supertokens_python.recipe.emailpassword.interfaces import EmailAlreadyExistsError
 from supertokens_python.recipe.emailpassword.interfaces import SignInOkResult as EPSignInOkResult
@@ -43,15 +44,34 @@ from supertokens_python.types import RecipeUserId
 from supertokens_python.types import User
 from supertokens_python.types.base import AccountInfoInput
 
-from imbue.remote_service_connector.app import CloudflareApiError
-from imbue.remote_service_connector.app import CloudflareCtx
-from imbue.remote_service_connector.app import PoolHostCleanupError
-from imbue.remote_service_connector.app import R2BucketNotEmptyError
-from imbue.remote_service_connector.app import R2BucketNotFoundError
-from imbue.remote_service_connector.app import SyncActiveAgentConflictError
-from imbue.remote_service_connector.app import SyncRevisionConflictError
-from imbue.remote_service_connector.app import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
-from imbue.remote_service_connector.app import _WORKSPACE_RECORD_COLUMNS
+import imbue.remote_service_connector.accounts as accounts_module
+import imbue.remote_service_connector.app as app_mod
+import imbue.remote_service_connector.auth as auth_mod
+import imbue.remote_service_connector.auth_proxy as auth_proxy_module
+import imbue.remote_service_connector.cloudflare as cloudflare_mod
+import imbue.remote_service_connector.db as db_mod
+import imbue.remote_service_connector.entitlements as entitlements_mod
+import imbue.remote_service_connector.hosts as hosts_module
+import imbue.remote_service_connector.litellm_client as litellm_client_mod
+import imbue.remote_service_connector.r2.stores as r2_stores_mod
+import imbue.remote_service_connector.share_broker as share_broker_module
+import imbue.remote_service_connector.sync as sync_mod
+from imbue.remote_service_connector.auth import UserAuth
+from imbue.remote_service_connector.cloudflare import CloudflareCtx
+from imbue.remote_service_connector.errors import CloudflareApiError
+from imbue.remote_service_connector.errors import PoolHostCleanupError
+from imbue.remote_service_connector.errors import R2BucketNotEmptyError
+from imbue.remote_service_connector.errors import R2BucketNotFoundError
+
+# Imported from the production module so the fake's tuple order can never
+# drift from what PostgresShareStore SELECTs (same rationale as
+# _WORKSPACE_RECORD_COLUMNS below).
+from imbue.remote_service_connector.shares import _SHARE_COLUMN_NAMES
+from imbue.remote_service_connector.sync import SyncActiveAgentConflictError
+from imbue.remote_service_connector.sync import SyncRevisionConflictError
+from imbue.remote_service_connector.sync import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
+from imbue.remote_service_connector.sync import _WORKSPACE_RECORD_COLUMNS
+from imbue.remote_service_connector.web import web_app
 
 
 class FakeCloudflareOps:
@@ -418,11 +438,14 @@ class FakeSuperTokensBackend:
     sdk_errors_by_method: dict[str, Exception]
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Swap every SuperTokens SDK call site on ``app_mod`` with a fake.
+        """Swap every SuperTokens SDK call site with a fake.
 
         Driving the patches through a single dict + loop keeps this helper to
         exactly one attribute-patch call no matter how many SDK functions we
         stub, which limits the blast radius on the test-patching ratchet.
+        Each SDK name is patched on every connector module that imported it
+        (the SDK functions are referenced as module globals at call time, so
+        patching the importing module's attribute is what takes effect).
         """
         fakes: dict[str, Any] = {
             "ep_sign_up": self.sign_up,
@@ -444,13 +467,19 @@ class FakeSuperTokensBackend:
             "get_broker_oauth_provider": self.get_broker_oauth_provider,
             "manually_create_or_update_user": self.manually_create_or_update_user,
         }
+        target_modules = [app_mod, auth_mod, auth_proxy_module, accounts_module, share_broker_module]
         for name, fake in fakes.items():
-            monkeypatch.setattr(app_mod, name, fake)
+            matching_modules = [module for module in target_modules if hasattr(module, name)]
+            # A fake that matches no module would leave the real SDK function in
+            # place, so fail loudly instead of silently skipping it.
+            assert matching_modules, f"no connector module imports SuperTokens SDK name {name!r}"
+            for target_module in matching_modules:
+                monkeypatch.setattr(target_module, name, fake)
         # Verification-email cooldown state is keyed by user_id, and the fake
         # derives user_ids deterministically from the email -- so without a
         # reset, a test that signs up "a@b.com" would suppress verification
         # sends for every later test reusing that address.
-        app_mod._verification_email_sent_at_monotonic_by_user_id.clear()
+        auth_proxy_module._verification_email_sent_at_monotonic_by_user_id.clear()
 
     def register_provider(
         self,
@@ -1487,18 +1516,6 @@ _PAID_ENTRY_UPDATED_AT = "2026-01-02T00:00:00+00:00"
 _SHARE_ROW_CREATED_AT = "2026-01-01T00:00:00+00:00"
 _SHARE_ROW_UPDATED_AT = "2026-01-02T00:00:00+00:00"
 
-# Column order of the app's _SHARE_COLUMNS projection.
-_SHARE_COLUMN_NAMES = (
-    "host_id",
-    "user_id",
-    "region",
-    "workspace_domain",
-    "state",
-    "created_at",
-    "updated_at",
-    "last_tunnel_login_at",
-)
-
 
 class FakePoolBackend:
     """In-memory pool database replacement for testing host pool + paid-list endpoints."""
@@ -1622,18 +1639,22 @@ class FakePoolBackend:
             existing["updated_at"] = _PAID_ENTRY_UPDATED_AT
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Swap DB and SSH functions on the app module with fakes.
+        """Swap DB and SSH functions on their owning modules with fakes.
 
         Uses the same single-loop-setattr pattern as FakeSuperTokensBackend to
-        minimize the test-patching ratchet count.
+        minimize the test-patching ratchet count. The DB connection factory is
+        patched on the ``db`` module and the SSH seams on the ``hosts`` module
+        (every caller resolves these through the module attribute). ``app_mod``
+        is unused here; it is accepted only so both ``Fake*Backend`` install
+        helpers share one calling convention.
         """
-        fakes: dict[str, Any] = {
-            "_get_pool_db_connection": self.get_connection,
-            "_append_authorized_key": self.append_authorized_key,
-            "clean_up_slice_on_box": self.clean_up_slice_on_box,
-        }
-        for name, fake in fakes.items():
-            monkeypatch.setattr(app_mod, name, fake)
+        fakes: list[tuple[Any, str, Any]] = [
+            (db_mod, "get_pool_db_connection", self.get_connection),
+            (hosts_module, "_append_authorized_key", self.append_authorized_key),
+            (hosts_module, "clean_up_slice_on_box", self.clean_up_slice_on_box),
+        ]
+        for target_module, name, fake in fakes:
+            monkeypatch.setattr(target_module, name, fake)
 
     def get_connection(self) -> FakeConnection:
         return _make_fake_connection(self)
@@ -2199,12 +2220,12 @@ class _FakeLiteLLMResponse:
 
 
 class FakeLiteLLMBackend:
-    """In-memory replacement for the connector's ``_litellm_request`` helper.
+    """In-memory replacement for the connector's ``litellm_client.litellm_request`` helper.
 
     Tracks internal users (for the user-level budget upserts) and key
     operations; ``fail_user_writes`` lets tests simulate a LiteLLM outage
     during a budget push (both /user/new and /user/update fail while set). Install by monkeypatching
-    ``app_mod._litellm_request`` to :meth:`request`.
+    ``litellm_client.litellm_request`` to :meth:`request`.
     """
 
     def __init__(self) -> None:
@@ -2278,3 +2299,281 @@ class FakeLiteLLMBackend:
 def make_fake_litellm_backend() -> FakeLiteLLMBackend:
     """Construct an empty in-memory LiteLLM admin-API fake."""
     return FakeLiteLLMBackend()
+
+
+# --- Shared route-test helpers (moved from the pre-split app_test.py) ---
+
+
+_USER_STUB_TOKEN = "user-stub-jwt"
+
+
+_USER_STUB_USER_ID_PREFIX = "testuser"
+
+
+_USER_STUB_EMAIL = "testuser@example.com"
+
+
+_USER_STUB_USER_ID = "12345678-1234-5678-1234-567812345678"
+
+
+_ADMIN_KEY_TEST_VALUE = "admin-key-secret-9f3a2b"
+
+
+def _user_headers() -> dict[str, str]:
+    """Return a Bearer header for a fake SuperTokens user session.
+
+    Paired with ``_make_test_client`` which stubs ``_authenticate_supertokens``
+    to recognise ``_USER_STUB_TOKEN`` and return a canned ``UserAuth``.
+    """
+    return {"Authorization": f"Bearer {_USER_STUB_TOKEN}"}
+
+
+def _make_quota_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, InMemoryEntitlementsStore, FakeLiteLLMBackend]:
+    """Create a TestClient with the FastAPI app plus every quota-relevant fake.
+
+    Sets up the SuperTokens Bearer auth path so tests calling user-authenticated endpoints
+    can authenticate with ``_user_headers()`` without needing a real JWT.
+    Installs an in-memory paid-list backend seeded with the stub user email,
+    an entitlements store pre-seeded with the two launch plans (with the stub
+    user's SuperTokens ``time_joined`` faked to 0, i.e. pre-cutoff, so the
+    stub's lazy plan resolves to ally by default), and a fake LiteLLM admin
+    API. The paid-status cache is disabled
+    (``MINDS_PAID_LIST_CACHE_TTL_SECONDS=0``) so the module-level cache never
+    bleeds between tests.
+    """
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
+    monkeypatch.setenv("MINDS_PAID_LIST_CACHE_TTL_SECONDS", "0")
+    # ``/keys/create`` embeds the proxy URL in its response (the LiteLLM calls
+    # themselves go through the installed fake).
+    monkeypatch.setenv("LITELLM_PROXY_URL", "https://fake-litellm.example.com")
+    fake_ctx = make_fake_cloudflare_ctx()
+
+    def _stub_supertokens(token: str) -> UserAuth:
+        if token != _USER_STUB_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return UserAuth(user_id_prefix=_USER_STUB_USER_ID_PREFIX, email=_USER_STUB_EMAIL)
+
+    entitlements_store = make_fake_entitlements_store()
+    litellm = make_fake_litellm_backend()
+    # Single-loop patching (matches the Fake*Backend.install_on_app_module
+    # pattern) so the monkeypatch ratchet only counts one occurrence. Each
+    # seam is patched on its owning module (call sites resolve seams through
+    # the module attribute).
+    quota_fakes: list[tuple[object, str, object]] = [
+        (cloudflare_mod, "get_cloudflare_ctx", lambda: fake_ctx),
+        (auth_mod, "_authenticate_supertokens", _stub_supertokens),
+        (entitlements_mod, "get_entitlements_store", lambda: entitlements_store),
+        (auth_mod, "get_user_id_from_access_token", lambda token: _USER_STUB_USER_ID),
+        (entitlements_mod, "_get_user_time_joined_ms", lambda user_id, user_getter=None: 0),
+        (litellm_client_mod, "litellm_request", litellm.request),
+    ]
+    for target_module, name, fake_impl in quota_fakes:
+        monkeypatch.setattr(target_module, name, fake_impl)
+    backend = make_fake_pool_backend()
+    backend.add_paid_email(_USER_STUB_EMAIL)
+    backend.install_on_app_module(app_mod, monkeypatch)
+    return TestClient(web_app), entitlements_store, litellm
+
+
+def _make_test_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Create a TestClient with the standard fakes (see ``_make_quota_test_client``)."""
+    client, _entitlements_store, _litellm = _make_quota_test_client(monkeypatch)
+    return client
+
+
+_PLAN_VALUES_BY_NAME = {"explorer": EXPLORER_PLAN_VALUES, "ally": ALLY_PLAN_VALUES}
+
+
+def _seed_entitlements_row(
+    entitlements_store: InMemoryEntitlementsStore,
+    plan_name: str = "explorer",
+    user_id: str = _USER_STUB_USER_ID,
+    user_id_prefix: str = _USER_STUB_USER_ID_PREFIX,
+    **overrides: float,
+) -> None:
+    """Insert an entitlements row copied from the named launch plan, with per-test quota overrides."""
+    entitlements_store.insert_entitlements_if_absent(
+        {
+            "user_id": user_id,
+            "user_id_prefix": user_id_prefix,
+            "plan_name": plan_name,
+            **{**_PLAN_VALUES_BY_NAME[plan_name], **overrides},
+        }
+    )
+
+
+class _FakeLoginMethod:
+    """Stand-in for a SuperTokens LoginMethod -- only ``email`` and ``verified`` are used."""
+
+    def __init__(self, email: str | None, verified: bool = True) -> None:
+        self.email = email
+        self.verified = verified
+
+
+def _make_pool_quota_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+    pool_backend: FakePoolBackend | None = None,
+) -> tuple[TestClient, FakePoolBackend, InMemoryEntitlementsStore, FakeLiteLLMBackend]:
+    """Create a TestClient with pool-backend and quota fakes installed.
+
+    The returned pool backend is seeded with the stub user email as paid, so
+    the stub's lazily-created entitlements row resolves to the ally plan by
+    default; explorer-plan tests flip the entry via ``backend.add_paid_email``
+    or write a row into the entitlements store directly.
+    """
+    client, entitlements_store, litellm = _make_quota_test_client(monkeypatch)
+    monkeypatch.setenv("POOL_SSH_PRIVATE_KEY", "fake-management-key-pem")
+    backend = pool_backend if pool_backend is not None else make_fake_pool_backend()
+    backend.add_paid_email(_USER_STUB_EMAIL)
+    backend.install_on_app_module(app_mod, monkeypatch)
+    return client, backend, entitlements_store, litellm
+
+
+def _make_pool_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+    pool_backend: FakePoolBackend | None = None,
+) -> tuple[TestClient, FakePoolBackend]:
+    """Pool test client without the quota handles (see ``_make_pool_quota_test_client``)."""
+    client, backend, _entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch, pool_backend)
+    return client, backend
+
+
+def _admin_key_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {_ADMIN_KEY_TEST_VALUE}"}
+
+
+def _make_paid_crud_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakePoolBackend]:
+    """Test client with the admin key configured and a fresh paid-list backend."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    return client, backend
+
+
+def _make_bucket_quota_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, FakeCloudflareOps, InMemoryKeyStore, InMemoryEntitlementsStore, InMemoryGrantStore]:
+    """Create a TestClient with the R2 fakes installed (Cloudflare ops + key/grant stores + entitlements)."""
+    client, entitlements_store, _litellm = _make_quota_test_client(monkeypatch)
+    # Build our own fake ctx so the fake is typed as FakeCloudflareCtx (which
+    # exposes ``.fake``); re-patching get_cloudflare_ctx overrides the one the quota
+    # client installed.
+    fake_ctx = make_fake_cloudflare_ctx()
+    store = make_fake_key_store()
+    grant_store = make_fake_grant_store()
+    # Single-loop patching (same pattern as the Fake*Backend.install_on_app_module
+    # helpers) so the monkeypatch ratchet only counts one occurrence.
+    bucket_fakes: list[tuple[object, str, object]] = [
+        (cloudflare_mod, "get_cloudflare_ctx", lambda: fake_ctx),
+        (r2_stores_mod, "get_key_store", lambda: store),
+        (r2_stores_mod, "get_grant_store", lambda: grant_store),
+    ]
+    for target_module, name, fake_impl in bucket_fakes:
+        monkeypatch.setattr(target_module, name, fake_impl)
+    return client, fake_ctx.fake, store, entitlements_store, grant_store
+
+
+def _make_bucket_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, FakeCloudflareOps, InMemoryKeyStore]:
+    """Bucket test client without the entitlements/grant handles (see ``_make_bucket_quota_test_client``)."""
+    client, fake, store, _entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
+    return client, fake, store
+
+
+def _make_sync_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, InMemorySyncStore, dict[str, str]]:
+    """Create a TestClient with the in-memory sync store installed.
+
+    Returns a mutable ``caller`` holder whose ``user_id`` entry the stubbed
+    token-decode reads on every request, so tests can switch the calling user
+    without another patch (keeps the monkeypatch ratchet at one occurrence,
+    mirroring the bucket-test helper's single-loop pattern).
+    """
+    client = _make_test_client(monkeypatch)
+    store = make_fake_sync_store()
+    caller = {"user_id": _USER_STUB_USER_ID}
+    sync_fakes: list[tuple[object, str, object]] = [
+        (sync_mod, "get_sync_store", lambda: store),
+        (auth_mod, "get_user_id_from_access_token", lambda token: caller["user_id"]),
+    ]
+    for target_module, name, fake_impl in sync_fakes:
+        monkeypatch.setattr(target_module, name, fake_impl)
+    return client, store, caller
+
+
+def _store_record(
+    host_id: str = "host-aaa111",
+    agent_id: str = "agent-1",
+    display_name: str = "my-workspace",
+    state: str = "active",
+    encrypted_secrets: bytes | None = None,
+    revision: int = 1,
+) -> dict[str, Any]:
+    """A store-layer record dict (raw-bytes secrets), as the endpoints hand to put_record."""
+    return {
+        "host_id": host_id,
+        "agent_id": agent_id,
+        "display_name": display_name,
+        "color": None,
+        "provider_kind": "docker",
+        "hosting_device_id": "device-1",
+        "device_label": "laptop",
+        "state": state,
+        "restored_from_host_id": None,
+        "encrypted_secrets": encrypted_secrets,
+        "revision": revision,
+    }
+
+
+# Shared coordinates for the self-hosted sharing tests (shares / certs / broker).
+_SHARE_STUB_TOKEN = "share-user-stub-jwt"
+_SHARE_STUB_USER_ID = "12345678-1234-5678-1234-567812345678"
+_SHARE_STUB_USER_LABEL = "12345678123456781234567812345678"
+_SHARE_STUB_EMAIL = "sharer@example.com"
+_SHARE_STUB_HOST_ID = "host-" + "a" * 32
+_OTHER_HOST_ID = "host-" + "b" * 32
+_CONTENT_DOMAIN = "minds-test.example"
+_DEFAULT_REGION = "us1"
+_RELAY_ENDPOINTS = "us1=relay-us1.infra.example.com:7000,us2=relay-us2.infra.example.com:7000"
+_FRPS_SECRET = "frps-plugin-secret-8d1c44"
+
+
+def _share_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {_SHARE_STUB_TOKEN}"}
+
+
+def _make_share_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakePoolBackend]:
+    """TestClient with sharing env config, a stubbed SuperTokens user, and the in-memory DB."""
+
+    def _stub_user_id_from_token(token: str) -> str:
+        if token != _SHARE_STUB_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return _SHARE_STUB_USER_ID
+
+    return _make_share_test_client_with_fakes(
+        monkeypatch,
+        {
+            "get_user_id_from_access_token": _stub_user_id_from_token,
+            "default_email_getter": lambda user_id: _SHARE_STUB_EMAIL,
+        },
+    )
+
+
+def _make_share_test_client_with_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    session_fakes: dict[str, object],
+) -> tuple[TestClient, FakePoolBackend]:
+    """Shared client setup; ``session_fakes`` supplies the token -> user resolution to install on the auth module."""
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
+    monkeypatch.setenv("SHARE_CONTENT_DOMAIN", _CONTENT_DOMAIN)
+    monkeypatch.setenv("SHARE_DEFAULT_REGION", _DEFAULT_REGION)
+    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
+    monkeypatch.setenv("FRPS_AUTH_SECRET", _FRPS_SECRET)
+    for name, fake_impl in session_fakes.items():
+        monkeypatch.setattr(auth_mod, name, fake_impl)
+    backend = make_fake_pool_backend()
+    backend.install_on_app_module(app_mod, monkeypatch)
+    return TestClient(web_app), backend

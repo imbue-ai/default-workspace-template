@@ -478,6 +478,17 @@ def default_workspace_template_ref() -> str:
     return _operator_workspace_default("MINDS_WORKSPACE_BRANCH", FALLBACK_BRANCH)
 
 
+def default_workspace_git_url() -> str:
+    """Return the template repository a plain create uses -- the create form's Repository default.
+
+    For an end-user ``minds run`` this is always the public
+    default-workspace-template URL; only an opted-in operator
+    (``just minds-start``) sees the ``MINDS_WORKSPACE_GIT_URL`` override,
+    which points at their local DEFAULT_WORKSPACE_TEMPLATE worktree.
+    """
+    return _operator_workspace_default("MINDS_WORKSPACE_GIT_URL", _FALLBACK_GIT_URL)
+
+
 # Base for auto-generated workspace host names. The generic default is never
 # used bare -- it is always numbered (``workspace-1``, ``workspace-2``, ...).
 _DEFAULT_HOST_NAME_BASE: Final[str] = "workspace"
@@ -625,7 +636,7 @@ def render_create_form(
     explicit ``/create`` page so a deliberate "create another machine" flow is
     never bounced away by the user's existing workspaces.
     """
-    effective_url = git_url if git_url else _operator_workspace_default("MINDS_WORKSPACE_GIT_URL", _FALLBACK_GIT_URL)
+    effective_url = git_url if git_url else default_workspace_git_url()
     # The env/operator branch default pairs with the default template repo, so
     # it only applies when the repository was NOT explicitly supplied. With an
     # explicit repository (e.g. an inspiration deeplink's git_url) the branch
@@ -1399,21 +1410,19 @@ _RECOVERY_SCRIPT: Final[str] = """\
           return u;
         }
         // Convergence poll while a restart is in flight (the RESTARTING state).
-        // A full-page reload here would steal OS focus from any Electron view
-        // layered over this one -- e.g. the bug-report modal opened from
-        // "Report a problem" -- on every tick, making its inputs impossible to
-        // type into (Electron has no per-WebContentsView focus-on-navigation
-        // control; see https://github.com/electron/electron/issues/42578). So
-        // poll in the background instead: a HEALTHY tracker 302s back to the
-        // workspace (an opaque redirect, which we follow), and any non-restarting
-        // status (e.g. restart_failed) means we reload to render that state.
-        // While the status stays 'restarting' we leave the page -- and any
-        // focused overlay -- untouched and just poll again.
-        // Go back to the now-recovered workspace. On the desktop shell this
-        // recovery screen renders on the trusted chrome surface, whose guard
-        // blocks agent-content navigations -- so hand return_to (an agent URL)
-        // to the shell bridge, which loads it into the caged content view. In a
-        // plain browser (no bridge) follow the server's healthy 302 as before.
+        // A full-page reload here would tear down any overlay modal layered
+        // over this page -- e.g. the bug-report modal opened from "Report a
+        // problem" -- on every tick, making its inputs impossible to type
+        // into. So poll in the background instead: a HEALTHY tracker 302s
+        // back to the workspace (an opaque redirect, which we follow), and
+        // any non-restarting status (e.g. restart_failed) means we reload to
+        // render that state. While the status stays 'restarting' we leave the
+        // page -- and any focused overlay -- untouched and just poll again.
+        // Go back to the now-recovered workspace. Inside the chrome shell
+        // this recovery screen renders as a trusted local page, so hand
+        // return_to (an agent URL) to the shell bridge, which loads it into
+        // the sandboxed workspace iframe. On a standalone page load (no
+        // bridge) follow the server's healthy 302 as before.
         function goToWorkspace() {
           if (pageTornDown) return;
           if (window.minds && window.minds.navigateContent && returnTo) {
@@ -1838,10 +1847,10 @@ _RECOVERY_SCRIPT: Final[str] = """\
         if (reportBtn) {
           reportBtn.addEventListener('click', function () {
             // Open the get-help / report-a-bug modal, scoped to this workspace.
-            // The recovery page renders on the trusted chrome surface, so in the
-            // desktop shell it calls the window.minds bridge directly (opens the
-            // shared overlay modal). In a plain browser (no bridge) navigate to
-            // the full-page /help fallback.
+            // The recovery page renders inside the chrome shell, so it calls
+            // the window.minds bridge directly (opens the overlay-layer help
+            // modal). On a standalone page load (no bridge) navigate to the
+            // full-page /help fallback.
             if (window.minds && window.minds.openHelp) {
               window.minds.openHelp(agentId);
             } else {
@@ -2059,6 +2068,7 @@ def render_chrome_page(
     accent: str = "",
     crumb_workspace_name: str = "",
     crumb_agent_id: str = "",
+    boot_workspace_id: str = "",
 ) -> str:
     """Render the persistent chrome page (title bar + sidebar + content iframe).
 
@@ -2069,9 +2079,10 @@ def render_chrome_page(
     ``data-mngr-forward-origin`` attribute on the body so chrome.js can build
     workspace links that target the plugin's port directly.
 
-    In Electron mode, the iframe and browser sidebar are hidden via JS; the content
-    is handled by a separate WebContentsView, and the sidebar page is loaded into
-    the shared modal WebContentsView when opened.
+    Workspace content renders in the page's sandboxed cross-origin
+    ``#content-frame`` iframe, and the sidebar page is mounted as an
+    overlay-layer iframe when opened -- identically in the desktop app and
+    plain browsers.
 
     ``accent`` optionally seeds the titlebar's workspace color server-side (a
     ``#rrggbb`` string) so the wrapper's first paint is already tinted when the
@@ -2082,8 +2093,14 @@ def render_chrome_page(
     workspace breadcrumb (name + Workspace/Settings tabs, Workspace tab active)
     server-side, mirroring the accent: the desktop shell passes the workspace it
     is loading so the bar's first paint already carries the full context instead
-    of a bare "Minds" until the content view commits. chrome.js owns every later
-    update.
+    of a bare "Minds" until the workspace iframe commits. chrome.js owns every
+    later update.
+
+    ``boot_workspace_id`` is the workspace coordinate stamped into
+    ``data-boot-workspace-id`` (the id chrome.js arms the content iframe
+    from). The caller resolves it to the HOST coordinate when known -- the
+    forward plugin's /goto/ route only accepts host ids -- falling back to
+    ``crumb_agent_id`` when empty.
     """
     return CATALOG.render(
         "pages.Chrome",
@@ -2094,6 +2111,7 @@ def render_chrome_page(
         accent=accent,
         crumb_workspace_name=crumb_workspace_name,
         crumb_agent_id=crumb_agent_id,
+        boot_workspace_id=boot_workspace_id or crumb_agent_id,
     )
 
 
@@ -2107,22 +2125,24 @@ def render_sidebar_page(
     offset_x: int = -24,
     offset_y: int = 2,
 ) -> str:
-    """Render the standalone sidebar page loaded into the shared modal WebContentsView.
+    """Render the standalone sidebar page mounted as an overlay-layer iframe.
 
-    This page shows the workspace list and subscribes to SSE updates. In Electron,
-    clicking a workspace sends an IPC message via the preload bridge to navigate
-    the content WebContentsView. ``mngr_forward_origin`` is exposed via
-    ``data-mngr-forward-origin`` so sidebar.js can build the cross-origin
-    ``/goto/<agent>/`` URL the plugin serves.
+    This page shows the workspace list and subscribes to SSE updates. Clicking
+    a workspace hands the target to the hosting shell through the
+    ``window.minds`` bridge, which loads it into the workspace iframe.
+    ``mngr_forward_origin`` is exposed via ``data-mngr-forward-origin`` so
+    sidebar.js can build the cross-origin ``/goto/<agent>/`` URL the plugin
+    serves.
 
-    Position is driven entirely by the caller. The chrome view (which owns the
-    trigger button) passes the button's viewport-relative rect (``trigger_x``,
-    ``trigger_y``, ``trigger_w``, ``trigger_h``) plus a caller-chosen offset
-    (``offset_x``, ``offset_y``). The menu's top-left lands at the trigger's
-    bottom-left + offset. The chrome view and the modal view share window
-    coordinate space, so the rect translates directly. Defaults (no query
-    params) anchor a 38px-tall element at the top-left of the window,
-    nudged 24px left and 2px below it -- right for the titlebar's first button.
+    Position is driven entirely by the caller. The chrome shell (which owns
+    the trigger button) passes the button's viewport-relative rect
+    (``trigger_x``, ``trigger_y``, ``trigger_w``, ``trigger_h``) plus a
+    caller-chosen offset (``offset_x``, ``offset_y``). The menu's top-left
+    lands at the trigger's bottom-left + offset. The full-window iframe shares
+    the shell's viewport coordinate space, so the rect translates directly.
+    Defaults (no query params) anchor a 38px-tall element at the top-left of
+    the window, nudged 24px left and 2px below it -- right for the titlebar's
+    first button.
     """
     return CATALOG.render(
         "pages.Sidebar",
@@ -2151,7 +2171,6 @@ def warm_template_caches() -> None:
     for render in (
         render_chrome_page,
         render_sidebar_page,
-        render_overlay_host_page,
         lambda: render_help_page(workspace_agent_id=""),
         lambda: render_inbox_page(cards=()),
     ):
@@ -2159,19 +2178,6 @@ def warm_template_caches() -> None:
             render()
         except (TemplateError, OSError):
             logger.opt(exception=True).debug("Template warmup render failed (ignored)")
-
-
-def render_overlay_host_page() -> str:
-    """Render the always-warm overlay host page loaded into the shared modal WebContentsView.
-
-    The page is a transparent shell hosting the overlay manager (overlay.js).
-    Every overlay -- the migrated workspace menu / inbox / help / sign-in modals
-    (as mount-on-demand iframes, created when opened and destroyed when closed)
-    and hover tooltips -- is in-page DOM driven over IPC, so opening an overlay
-    never costs a per-open page load. main.js loads this once at window create attempt
-    and keeps it mounted for the window's life.
-    """
-    return CATALOG.render("pages.OverlayHost")
 
 
 # -- Workspace/settings/sharing/accounts --
@@ -2382,9 +2388,9 @@ def render_workspace_options_modal_page(
 ) -> str:
     """Render the workspace options panel (``GET /workspace/<agent_id>/options/modal``).
 
-    Hosted in the shared modal WebContentsView. The anchor is the titlebar's
+    Hosted as an overlay-layer modal iframe. The anchor is the titlebar's
     workspace icon-tab strip, measured by chrome.js and packed into the URL by
-    the Electron main process. Supplying it docks the panel under that strip and
+    the overlay layer. Supplying it docks the panel under that strip and
     draws the tab strip in its place; omitting it -- there is no such strip
     outside a workspace -- centers the panel and drops the tabs.
     """
@@ -2542,7 +2548,7 @@ def render_settings_modal_page(
 ) -> str:
     """Render the centered "Minds Settings" modal page (``GET /settings/modal``).
 
-    Hosted in the shared modal WebContentsView; shows the same shared sections
+    Hosted as an overlay-layer modal iframe; shows the same shared sections
     as :func:`render_settings_page`, minus the "back to machines" link (the
     modal is dismissed via its X or a backdrop click).
     """
@@ -2565,8 +2571,8 @@ def render_accounts_modal_page(
 ) -> str:
     """Render the centered "Manage Accounts" modal page (``GET /accounts/modal``).
 
-    Hosted in the shared modal WebContentsView; the full accounts page
-    (:func:`render_accounts_page`) remains as the browser-mode fallback.
+    Hosted as an overlay-layer modal iframe; the full accounts page
+    (:func:`render_accounts_page`) remains as the standalone fallback.
     """
     return CATALOG.render(
         "pages.AccountsModal",

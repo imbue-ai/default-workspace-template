@@ -1,7 +1,7 @@
 {#def agent_id, tab, host_id="", anchor_x=None, anchor_y=None, anchor_height=None, accent="" #}
 {#
   The workspace-options panel: the overlay chrome shared by the Share machine
-  and Machine settings tabs. Hosted in the shared overlay WebContentsView by
+  and Machine settings tabs. Hosted as an overlay-layer modal iframe by
   pages.WorkspaceOptionsModal.
 
   It has two presentations, chosen by whether an anchor was supplied.
@@ -17,8 +17,8 @@
   reads as hanging from the tabs.
 
   The anchor is measured by chrome.js on that strip and packed into this page's
-  URL by the Electron main process -- the same trick the workspace switcher menu
-  uses. The chrome view hides its own icon-tabs (body.ws-options-open) while the
+  URL by the overlay layer -- the same trick the workspace switcher menu uses.
+  The chrome shell hides its own icon-tabs (body.ws-options-open) while the
   panel is up, so the strip here stands in for them rather than doubling them.
 
   CENTERED (no anchor: opened from the workspace list, where there is no strip

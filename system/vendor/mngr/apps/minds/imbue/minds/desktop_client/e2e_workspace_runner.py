@@ -40,6 +40,7 @@ import httpx
 from loguru import logger
 from playwright.sync_api import Browser
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import Frame
 from playwright.sync_api import Page
 from playwright.sync_api import Playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -62,12 +63,6 @@ _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[5]
 # so :func:`_backend_origin_from_page` can reuse the same pattern instead of
 # re-encoding the localhost-origin contract a second time.
 _BACKEND_ORIGIN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(http://localhost:\d+)(?:/|$)")
-_CHROME_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(r"^http://localhost:\d+/_chrome(?:/|$|\?)")
-# The modal overlay view loads ``/inbox`` (optionally with ``?selected=<id>``)
-# when the inbox modal is shown. Like the chrome views, it lives on the
-# backend origin but is not the content view; exclude it so the runner does
-# not pick it up if the modal has ever been opened.
-_INBOX_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(r"^http://localhost:\d+/inbox(?:/|$|\?)")
 # The agent subdomain URL the create flow redirects to once the workspace's
 # ``system_interface`` is reachable. The desktop client wraps that origin in
 # the mngr_forward plugin, so the port may differ from the bare backend. The
@@ -466,15 +461,15 @@ class _ElectronConnectError(RuntimeError):
 
 
 def _pick_content_page(browser: Browser, timeout_seconds: int) -> Page:
-    """Return the Electron WebContentsView that serves the main content.
+    """Return the Electron window page that serves the chrome UI.
 
-    Electron's BaseWindow has multiple WebContentsView's (chrome view,
-    content view, sidebar, and a lazy modal overlay view). Each is its
-    own CDP page. The content view is the one whose URL is on the
-    backend origin and is not one of the chrome-owned surfaces: not
-    rooted at ``/_chrome`` (chrome / sidebar) and not the inbox modal
-    at ``/inbox``. We poll until that page exists because Electron
-    spawns the backend asynchronously after launch.
+    Each window is a single web context now (the chrome page, which hosts
+    hub pages, the workspace iframe, and the in-DOM overlay layer), so the
+    right page is simply the one on the backend origin -- including the
+    ``/_chrome`` wrapper, which IS the top-level page while a workspace is
+    displayed. We poll until that page exists because Electron spawns the
+    backend asynchronously after launch (the window sits on the file://
+    shell.html loading screen until then).
     """
     deadline = time.monotonic() + timeout_seconds
     last_observed: list[str] = []
@@ -485,10 +480,6 @@ def _pick_content_page(browser: Browser, timeout_seconds: int) -> Page:
                 url = page.url
                 last_observed.append(url)
                 if not _BACKEND_ORIGIN_PATTERN.match(url):
-                    continue
-                if _CHROME_PATH_PATTERN.match(url):
-                    continue
-                if _INBOX_PATH_PATTERN.match(url):
                     continue
                 logger.info("Picked Electron content page at {}", url)
                 return page
@@ -625,21 +616,19 @@ def _read_failure_message(page: Page) -> str:
     return message or "unknown error: the '#error-message' element was empty"
 
 
-def _wait_for_workspace_ready_or_failure(browser: Browser, creating_page: Page, timeout_seconds: int) -> Page:
-    """Block until the create flow reaches the workspace or reports failure; return the workspace page.
+def _wait_for_workspace_ready_or_failure(browser: Browser, creating_page: Page, timeout_seconds: int) -> Frame:
+    """Block until the create flow reaches the workspace or reports failure; return the workspace frame.
 
     The create flow has two mutually exclusive terminal states after the create
-    form is submitted, and after the content-in-chrome surface split they live on
-    DIFFERENT WebContentsViews (separate CDP pages):
+    form is submitted:
 
-    - **success**: the ready workspace opens on the CONTENT view -- its own page
-      on the ``host-<id>.localhost`` origin. ``creating.js`` hands the ready
-      workspace's ``/goto`` URL to the ``window.minds`` bridge, which shows it on
-      the content surface while the chrome view that drove the form
-      (``creating_page``) returns to the ``/_chrome`` wrapper. (Before the split
-      the workspace loaded into the same page, so this waited on
-      ``creating_page.url``; now it scans every WebContentsView for the content
-      page that reached the agent subdomain.)
+    - **success**: the ready workspace opens inside the chrome page's sandboxed
+      content iframe on the ``host-<id>.localhost`` origin. ``creating.js``
+      hands the ready workspace's ``/goto`` URL to the ``window.minds`` bridge,
+      which navigates the window onto the ``/_chrome`` wrapper and arms the
+      iframe. This scans every page's FRAMES for the one that reached the
+      agent subdomain (the workspace is a cross-origin iframe now, not its own
+      CDP page).
     - **failure**: the loading screen's failure sub-view (``#failure-view``)
       becomes visible on ``creating_page`` (still showing the ``/creating``
       loader) -- ``creating.js``'s ``showFailure()`` un-hides it once the status
@@ -648,22 +637,23 @@ def _wait_for_workspace_ready_or_failure(browser: Browser, creating_page: Page, 
     Polls both rather than only waiting for success, so a create attempt failure raises
     ``WorkspaceCreateAttemptFailedError`` with the surfaced error text immediately
     instead of hanging until ``timeout_seconds`` expires. Returns the workspace
-    (content-view) ``Page``; raises ``PlaywrightTimeoutError`` if neither state is
-    reached within the budget.
+    ``Frame``; raises ``PlaywrightTimeoutError`` if neither state is reached
+    within the budget.
     """
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         for context in browser.contexts:
             for candidate in context.pages:
-                if _AGENT_SUBDOMAIN_PATTERN.search(candidate.url):
-                    return candidate
+                for frame in candidate.frames:
+                    if _AGENT_SUBDOMAIN_PATTERN.search(frame.url):
+                        return frame
         try:
             failure_is_visible = creating_page.is_visible("#failure-view")
         except PlaywrightError:
-            # The chrome view re-navigates to /_chrome the instant the bridge
-            # shows the workspace, which can destroy the execution context
-            # mid-check; loop so the next iteration re-scans the pages and finds
-            # the content view now on the agent subdomain.
+            # The window navigates onto the /_chrome wrapper the instant the
+            # bridge shows the workspace, which can destroy the execution
+            # context mid-check; loop so the next iteration re-scans the frames
+            # and finds the workspace iframe on the agent subdomain.
             failure_is_visible = False
         if failure_is_visible:
             raise WorkspaceCreateAttemptFailedError(
@@ -684,12 +674,12 @@ def _drive_create_flow(
     launch_mode: str = "DOCKER",
     account_label: str | None = None,
     region: str | None = None,
-) -> Page:
-    """Drive the create form to a ready workspace; return the workspace (content-view) page.
+) -> Frame:
+    """Drive the create form to a ready workspace; return the workspace frame.
 
-    ``page`` is the chrome-view page the form is driven on; the ready workspace
-    opens on the separate content view, whose page this returns (see
-    ``_wait_for_workspace_ready_or_failure``).
+    ``page`` is the chrome page the form is driven on; the ready workspace
+    opens inside that page's sandboxed content iframe, whose frame this
+    returns (see ``_wait_for_workspace_ready_or_failure``).
 
     Runs exactly once per successful Electron attach; any failure here is a real
     test failure (not a wedged-launch flake) and propagates to fail the test.
@@ -795,7 +785,7 @@ def _attempt_create_workspace_via_electron(
     launch_mode: str = "DOCKER",
     account_label: str | None = None,
     region: str | None = None,
-    on_workspace_ready: Callable[[Page], None] | None = None,
+    on_workspace_ready: Callable[[Frame], None] | None = None,
 ) -> None:
     """One Electron launch + CDP attach + create-flow drive.
 
@@ -803,7 +793,7 @@ def _attempt_create_workspace_via_electron(
     (a wedged Electron the caller should recover by relaunching). Errors from the
     create flow itself propagate unchanged so real test failures are not retried.
 
-    ``on_workspace_ready``, if given, is called with the workspace (content-view)
+    ``on_workspace_ready``, if given, is called with the workspace (content-iframe)
     page once the workspace's ``system_interface`` has rendered, while the browser
     is still connected (e.g. to send a chat message). Its exceptions propagate
     unchanged -- they are real failures, not launch flakes, so they are not
@@ -897,7 +887,7 @@ def create_workspace_via_electron(
     launch_mode: str = "DOCKER",
     account_label: str | None = None,
     region: str | None = None,
-    on_workspace_ready: Callable[[Page], None] | None = None,
+    on_workspace_ready: Callable[[Frame], None] | None = None,
 ) -> None:
     """Drive Electron to create a workspace from ``default_workspace_template_path``.
 
@@ -998,36 +988,25 @@ class WorkspaceFlowError(RuntimeError):
     """Raised when a step of the full Electron workspace flow does not reach its expected state."""
 
 
-def _flow_screenshot(page: Page, name: str) -> None:
-    """Save a screenshot for post-hoc debugging of a flow step; never raise."""
+def _flow_screenshot(target: Page | Frame, name: str) -> None:
+    """Save a screenshot for post-hoc debugging of a flow step; never raise.
+
+    Accepts either a Page or a Frame (the workspace surface is a frame of the
+    chrome page now); a frame's screenshot is taken from its owning page.
+    """
     try:
         _FLOW_SHOT_DIR.mkdir(parents=True, exist_ok=True)
         path = _FLOW_SHOT_DIR / f"{name}.png"
+        page = target.page if isinstance(target, Frame) else target
         page.screenshot(path=str(path), full_page=False)
         logger.info("Saved screenshot {}", path)
     except (PlaywrightError, OSError) as exc:
         logger.warning("Could not screenshot {}: {!r}", name, exc)
 
 
-def _pick_chrome_page(browser: Browser, timeout_seconds: int) -> Page:
-    """Return the Electron chrome WebContentsView (the ``/_chrome`` page)."""
-    deadline = time.monotonic() + timeout_seconds
-    observed: list[str] = []
-    while time.monotonic() < deadline:
-        observed = []
-        for context in browser.contexts:
-            for page in context.pages:
-                observed.append(page.url)
-                if _CHROME_PATH_PATTERN.match(page.url):
-                    logger.info("Picked Electron chrome page at {}", page.url)
-                    return page
-        threading.Event().wait(timeout=0.5)
-    raise WorkspaceFlowError(f"No /_chrome page within {timeout_seconds}s; observed: {observed}")
-
-
 def drive_create_docker_imbue_workspace(
     browser: Browser, page: Page, default_workspace_template_path: Path, workspace_name: str
-) -> Page:
+) -> Frame:
     """Fill + submit the create form for a local-Docker workspace with an Imbue account.
 
     Local Docker compute keeps the workspace on this machine; the selected
@@ -1036,8 +1015,8 @@ def drive_create_docker_imbue_workspace(
     synced Claude subscription credentials keeping the workspace
     authenticated. Backups are deferred to keep create fast.
 
-    ``page`` is the chrome-view page the form is driven on; returns the workspace
-    (content-view) page the ready workspace opens on.
+    ``page`` is the chrome page the form is driven on; returns the workspace
+    frame (the chrome page's content iframe) the ready workspace opens in.
     """
     backend_origin = _backend_origin_from_page(page)
     logger.info("Backend origin: {}", backend_origin)
@@ -1132,7 +1111,7 @@ def _agent_id_for_host(content_page: Page, backend_origin: str, host_id: str) ->
     raise WorkspaceFlowError(f"No workspace with host id {host_id!r} in /api/v1/workspaces")
 
 
-def _send_message_and_await_reply(page: Page, token: str) -> None:
+def _send_message_and_await_reply(page: Page | Frame, token: str) -> None:
     """Type a unique-token prompt into the dockview chat and wait for the reply to echo it."""
     logger.info("Waiting up to {}s for the initial chat agent / chat input", _CHAT_INPUT_TIMEOUT_SECONDS)
     page.wait_for_selector(_CHAT_INPUT_SELECTOR, state="visible", timeout=_CHAT_INPUT_TIMEOUT_SECONDS * 1000)
@@ -1160,7 +1139,7 @@ def _send_message_and_await_reply(page: Page, token: str) -> None:
     _flow_screenshot(page, "04-reply-received")
 
 
-def _open_terminal(page: Page) -> None:
+def _open_terminal(page: Page | Frame) -> None:
     """Open a New terminal tab in the dockview and confirm the ttyd iframe renders."""
     add_button = "button.dockview-add-tab-button"
     empty_action = "button.dockview-empty-state-action"
@@ -1205,16 +1184,17 @@ def _verify_v1_lifecycle(content_page: Page, backend_origin: str, agent_id: str)
 
 
 def _navigate_home(browser: Browser, content_page: Page, backend_origin: str, workspace_name: str) -> None:
-    """Click the chrome Home button (re-picking the chrome view + retrying) and confirm the content view lands home.
+    """Click the titlebar Home button (retrying) and confirm the window lands home.
 
-    The chrome view is a separate WebContentsView whose ``#home-btn`` handler is
-    wired by chrome.js after load, and the chrome view reloads several times
-    during the flow -- so we re-pick it fresh each attempt and retry the click,
-    polling the content view's URL for the landing navigation.
+    The Home button lives on the same chrome page as everything else now; its
+    handler is wired by chrome.js after load, and the page can be mid-swap
+    when we click, so we retry, polling the page URL for the landing
+    navigation.
     """
+    del browser
     landing_targets = (backend_origin + "/", backend_origin)
     for attempt in range(1, _HOME_CLICK_ATTEMPTS + 1):
-        chrome_page = _pick_chrome_page(browser, 15)
+        chrome_page = content_page
         try:
             chrome_page.wait_for_selector("#home-btn", state="visible", timeout=10_000)
             chrome_page.click("#home-btn")
@@ -1297,7 +1277,7 @@ def _destroy_via_settings(content_page: Page, backend_origin: str, agent_id: str
     raise WorkspaceFlowError(f"Workspace {agent_id} still listed after {_DESTROY_TIMEOUT_SECONDS}s")
 
 
-def _run_flow_step(results: dict[str, str], name: str, page: Page, action: Callable[[], None]) -> None:
+def _run_flow_step(results: dict[str, str], name: str, page: Page | Frame, action: Callable[[], None]) -> None:
     """Run one flow step, recording PASS/FAIL and screenshotting on failure."""
     logger.info("=== {} ===", name)
     try:

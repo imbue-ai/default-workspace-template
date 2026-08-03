@@ -2097,7 +2097,9 @@ def test_machine_sharing_readiness_ready_when_shell_label_origin_answers(tmp_pat
         agent_id,
         cli,
         http_client=http_client,
-        service_logs={str(agent_id): make_service_log("system_interface", "http://localhost:8000", "system_interface-shl1")},
+        service_logs={
+            str(agent_id): make_service_log("system_interface", "http://localhost:8000", "system_interface-shl1")
+        },
     )
 
     response = client.get(f"/api/v1/machines/{_TEST_HOST_ID}/sharing/readiness", headers=_auth_header())

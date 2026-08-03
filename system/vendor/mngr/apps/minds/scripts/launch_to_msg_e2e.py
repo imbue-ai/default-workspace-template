@@ -776,11 +776,10 @@ def find_chat_window(ctx: BrowserContext, host: str | None = None) -> Page | Non
 def find_inbox_frame(ctx: BrowserContext) -> tuple[Page, Frame] | None:
     """Locate the open inbox: the (owner page, frame at /inbox) pair, or None.
 
-    The inbox renders as an iframe inside the warm overlay host
-    (``/_chrome/overlay``): ``openModal`` sends ``show-modal`` to overlay.js,
-    which mounts a modal iframe at ``/inbox`` -- the modal view's own URL
-    never changes. A page's main frame is included in ``page.frames``, so a
-    window navigated directly to ``/inbox`` also matches.
+    The inbox renders as a modal iframe mounted in the chrome page's in-DOM
+    overlay layer (``overlay_layer.js``) -- the window's own URL never
+    changes. A page's main frame is included in ``page.frames``, so a window
+    navigated directly to ``/inbox`` also matches.
     """
     for w in all_pages(ctx):
         with contextlib.suppress(Exception):
@@ -791,25 +790,15 @@ def find_inbox_frame(ctx: BrowserContext) -> tuple[Page, Frame] | None:
 
 
 def pick_chrome_page(ctx: BrowserContext, origin: str, timeout: float = 30.0) -> Page:
-    """Return the window's chrome view -- the surface trusted local pages render on.
+    """Return a window's chrome page -- the surface trusted local pages render on.
 
-    An Electron window is several WebContentsViews and CDP's page ordering
-    follows attach timing, so ``ctx.pages[0]`` is a coin flip. They are told
-    apart by what each holds:
-
-    * **chrome view** -- every trusted local page (``/welcome``, ``/``,
-      ``/create``, ``/accounts``, the settings screens) and, while a workspace
-      is displayed, the ``/_chrome`` agent wrapper. This is the one to drive.
-    * **overlay** -- the always-warm modal host, pinned to ``/_chrome/overlay``.
-      main.js keeps it collapsed and reloads it, so driving it breaks
-      screenshots and navigation.
-    * **content view** -- agent content on ``https://…:8421`` (``about:blank``
-      until a workspace opens), a different origin entirely.
-
-    So the chrome view is the loopback page on the backend port (pages use
-    ``localhost`` while ``wait_backend_url`` reports ``127.0.0.1``) that is not
-    the overlay. Matching the ``/_chrome`` wrapper too is deliberate: after a
-    restart that reopens a workspace, the wrapper is all the chrome view holds,
+    After the single-web-context collapse each Electron window is ONE page
+    (workspace content lives in a cross-origin iframe inside it), but CDP can
+    still surface multiple targets (several windows, shell.html takeovers on
+    ``file://``). The chrome page is the loopback page on the backend port
+    (pages use ``localhost`` while ``wait_backend_url`` reports
+    ``127.0.0.1``). Matching the ``/_chrome`` wrapper too is deliberate: after
+    a restart that reopens a workspace, the wrapper is all the window holds,
     and it is still where local navigation belongs.
     """
     backend_port = urllib.parse.urlsplit(origin).port
@@ -818,11 +807,7 @@ def pick_chrome_page(ctx: BrowserContext, origin: str, timeout: float = 30.0) ->
         for p in all_pages(ctx):
             with contextlib.suppress(Exception):
                 parts = urllib.parse.urlsplit(live_url(p))
-                if (
-                    parts.hostname in ("localhost", "127.0.0.1")
-                    and parts.port == backend_port
-                    and not parts.path.startswith("/_chrome/overlay")
-                ):
+                if parts.hostname in ("localhost", "127.0.0.1") and parts.port == backend_port:
                     return p
         _sleep(0.5)
     urls = [live_url(p) for p in all_pages(ctx)]

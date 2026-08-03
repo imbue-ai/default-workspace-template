@@ -52,7 +52,7 @@
     }
     window.dismissInspirationModal = closeModalIfAny;
 
-    // Navigate the MAIN content view and dismiss the modal. Never plain
+    // Navigate the shell underneath and dismiss the modal. Never plain
     // ``window.location`` in modal mode: that would load the destination inside
     // the overlay iframe (a window inside a window).
     function leaveTo(url) {

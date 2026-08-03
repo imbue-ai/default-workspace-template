@@ -316,7 +316,7 @@ def forward(ctx: click.Context, **kwargs: Any) -> None:
         ca_dir = _resolve_plugin_state_dir(_resolve_mngr_host_dir(mngr_ctx)) / "ca"
         load_or_create_local_ca(ca_dir)
         try:
-            install_ca_into_trust_stores(ca_dir / CA_CERT_FILENAME)
+            install_ca_into_trust_stores(mngr_ctx.concurrency_group, ca_dir / CA_CERT_FILENAME)
         except ForwardTrustError as e:
             raise click.ClickException(str(e)) from e
         logger.info("Local CA trusted. Browsers now accept `mngr forward --use-http2` origins.")
