@@ -21,11 +21,11 @@ from imbue.remote_service_connector.share_broker import mint_share_handoff_token
 from imbue.remote_service_connector.testing import FakePoolBackend
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import _CONTENT_DOMAIN
-from imbue.remote_service_connector.testing import _STUB_EMAIL
-from imbue.remote_service_connector.testing import _STUB_HOST_ID
-from imbue.remote_service_connector.testing import _STUB_TOKEN
-from imbue.remote_service_connector.testing import _STUB_USER_ID
-from imbue.remote_service_connector.testing import _STUB_USER_LABEL
+from imbue.remote_service_connector.testing import _SHARE_STUB_EMAIL
+from imbue.remote_service_connector.testing import _SHARE_STUB_HOST_ID
+from imbue.remote_service_connector.testing import _SHARE_STUB_TOKEN
+from imbue.remote_service_connector.testing import _SHARE_STUB_USER_ID
+from imbue.remote_service_connector.testing import _SHARE_STUB_USER_LABEL
 from imbue.remote_service_connector.testing import _make_share_test_client_with_fakes
 from imbue.remote_service_connector.testing import make_fake_supertokens_backend
 from imbue.remote_service_connector.web import web_app
@@ -49,10 +49,10 @@ def _make_broker_test_client(
 
     # Resolve the SSO cookie against the fake backend's sessions (so a session
     # minted by the broker's own login/OAuth flows works end to end), with the
-    # legacy _STUB_TOKEN accepted for tests that seed the cookie directly.
+    # legacy _SHARE_STUB_TOKEN accepted for tests that seed the cookie directly.
     def _resolve_token_user_id(token: str) -> str:
-        if token == _STUB_TOKEN:
-            return _STUB_USER_ID
+        if token == _SHARE_STUB_TOKEN:
+            return _SHARE_STUB_USER_ID
         session = supertokens_backend.sessions_by_access_token.get(token)
         if session is None:
             raise HTTPException(status_code=401, detail="Invalid token")
@@ -61,7 +61,7 @@ def _make_broker_test_client(
     def _resolve_verified_email(user_id: str) -> str | None:
         account = supertokens_backend.accounts_by_id.get(user_id)
         if account is None:
-            return _STUB_EMAIL
+            return _SHARE_STUB_EMAIL
         return account.email if account.is_verified else None
 
     _plain_client, backend = _make_share_test_client_with_fakes(
@@ -80,8 +80,8 @@ def _make_broker_test_client(
 
 
 def _seed_active_share(backend: FakePoolBackend) -> str:
-    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
-    backend.add_share(_STUB_HOST_ID, _STUB_USER_LABEL, "us1", domain)
+    domain = f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
+    backend.add_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL, "us1", domain)
     return domain
 
 
@@ -100,19 +100,19 @@ def test_build_broker_jwks_matches_signing_key() -> None:
 
 
 def test_mint_share_handoff_token_roundtrips_with_jwks() -> None:
-    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
+    domain = f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
 
     token = mint_share_handoff_token(
         signing_key=_TEST_BROKER_KEY,
-        user_id=_STUB_USER_ID,
-        email=_STUB_EMAIL,
+        user_id=_SHARE_STUB_USER_ID,
+        email=_SHARE_STUB_EMAIL,
         machine_domain=domain,
         nonce="nonce-123",
     )
 
     claims = pyjwt.decode(token, _TEST_BROKER_KEY.public_key(), algorithms=["RS256"], audience=domain)
-    assert claims["sub"] == _STUB_USER_ID
-    assert claims["email"] == _STUB_EMAIL
+    assert claims["sub"] == _SHARE_STUB_USER_ID
+    assert claims["email"] == _SHARE_STUB_EMAIL
     assert claims["nonce"] == "nonce-123"
     assert claims["jti"]
     assert claims["exp"] - claims["iat"] == 60
@@ -157,7 +157,7 @@ def test_broker_authorize_requires_machine_domain_and_state(monkeypatch: pytest.
 def test_broker_authorize_rejects_missing_or_foreign_callback_origin(monkeypatch: pytest.MonkeyPatch) -> None:
     client, backend, _st = _make_broker_test_client(monkeypatch)
     domain = _seed_active_share(backend)
-    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
+    client.cookies.set("imbue_sso_session", _SHARE_STUB_TOKEN)
 
     # No callback_origin at all.
     missing = client.get(f"/share/authorize?machine_domain={domain}&state=abc", follow_redirects=False)
@@ -185,7 +185,7 @@ def test_broker_authorize_rejects_missing_or_foreign_callback_origin(monkeypatch
 
 def test_broker_authorize_404s_without_active_share(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend, _st = _make_broker_test_client(monkeypatch)
-    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
+    client.cookies.set("imbue_sso_session", _SHARE_STUB_TOKEN)
 
     resp = client.get(
         "/share/authorize?machine_domain=unknown.example.com"
@@ -199,7 +199,7 @@ def test_broker_authorize_404s_without_active_share(monkeypatch: pytest.MonkeyPa
 def test_broker_authorize_hands_off_signed_token_to_the_auth_callback(monkeypatch: pytest.MonkeyPatch) -> None:
     client, backend, _st = _make_broker_test_client(monkeypatch)
     domain = _seed_active_share(backend)
-    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
+    client.cookies.set("imbue_sso_session", _SHARE_STUB_TOKEN)
     callback_origin = f"https://auth-x7k9q2w1.{domain}"
     next_url = f"https://web-1a2b3c4d.{domain}/panel?x=1"
 
@@ -216,15 +216,15 @@ def test_broker_authorize_hands_off_signed_token_to_the_auth_callback(monkeypatc
     assert query["state"] == ["nonce-9"]
     assert query["next"] == [next_url]
     claims = pyjwt.decode(query["token"][0], _TEST_BROKER_KEY.public_key(), algorithms=["RS256"], audience=domain)
-    assert claims["sub"] == _STUB_USER_ID
-    assert claims["email"] == _STUB_EMAIL
+    assert claims["sub"] == _SHARE_STUB_USER_ID
+    assert claims["email"] == _SHARE_STUB_EMAIL
     assert claims["nonce"] == "nonce-9"
 
 
 def test_broker_authorize_drops_a_foreign_next(monkeypatch: pytest.MonkeyPatch) -> None:
     client, backend, _st = _make_broker_test_client(monkeypatch)
     domain = _seed_active_share(backend)
-    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
+    client.cookies.set("imbue_sso_session", _SHARE_STUB_TOKEN)
     callback_origin = f"https://auth-x7k9q2w1.{domain}"
 
     resp = client.get(
@@ -242,10 +242,10 @@ def test_broker_authorize_drops_a_foreign_next(monkeypatch: pytest.MonkeyPatch) 
 def test_broker_authorize_rejects_inactive_share(monkeypatch: pytest.MonkeyPatch) -> None:
     client, backend, _st = _make_broker_test_client(monkeypatch)
     domain = _seed_active_share(backend)
-    share = backend.find_share(_STUB_HOST_ID, _STUB_USER_LABEL)
+    share = backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL)
     assert share is not None
     share["state"] = "inactive"
-    client.cookies.set("imbue_sso_session", _STUB_TOKEN)
+    client.cookies.set("imbue_sso_session", _SHARE_STUB_TOKEN)
 
     resp = client.get(
         f"/share/authorize?machine_domain={domain}&callback_origin=https://auth-x7k9q2w1.{domain}&state=abc",
@@ -464,8 +464,8 @@ def test_broker_oauth_callback_rejects_garbage_or_wrong_purpose_state(monkeypatc
     # wrong purpose; it must not open the OAuth callback.
     handoff = mint_share_handoff_token(
         signing_key=_TEST_BROKER_KEY,
-        user_id=_STUB_USER_ID,
-        email=_STUB_EMAIL,
+        user_id=_SHARE_STUB_USER_ID,
+        email=_SHARE_STUB_EMAIL,
         machine_domain="x.example.com",
         nonce="n",
     )

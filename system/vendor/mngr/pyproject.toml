@@ -353,8 +353,8 @@ layers = [
 ]
 
 # The connector's shipped modules form a DAG: the Modal entrypoint (app) on
-# top of the FastAPI assembly (web), feature routers above the forwarding /
-# auth / entitlements foundation, everything above errors. app.py itself is
+# top of the FastAPI assembly (web), feature routers above the auth /
+# entitlements foundation, everything above errors. app.py itself is
 # excluded from the container's source mount, so nothing below it may import
 # it (also enforced by test_project_ratchets.py).
 [[tool.importlinter.contracts]]
@@ -366,13 +366,12 @@ layers = [
     "imbue.remote_service_connector.web",
     "imbue.remote_service_connector.retention",
     "imbue.remote_service_connector.accounts",
-    "imbue.remote_service_connector.tunnels | imbue.remote_service_connector.llm_keys | imbue.remote_service_connector.r2.grants",
+    "imbue.remote_service_connector.llm_keys | imbue.remote_service_connector.r2.grants | imbue.remote_service_connector.share_certs | imbue.remote_service_connector.share_broker",
     "imbue.remote_service_connector.r2.sweep",
     "imbue.remote_service_connector.r2.buckets",
-    "imbue.remote_service_connector.hosts | imbue.remote_service_connector.sync | imbue.remote_service_connector.auth_proxy | imbue.remote_service_connector.r2.stores | imbue.remote_service_connector.r2.naming",
-    "imbue.remote_service_connector.forwarding",
+    "imbue.remote_service_connector.hosts | imbue.remote_service_connector.sync | imbue.remote_service_connector.auth_proxy | imbue.remote_service_connector.shares | imbue.remote_service_connector.r2.stores | imbue.remote_service_connector.r2.naming",
     "imbue.remote_service_connector.entitlements | imbue.remote_service_connector.litellm_client",
     "imbue.remote_service_connector.auth",
-    "imbue.remote_service_connector.cloudflare | imbue.remote_service_connector.db | imbue.remote_service_connector.http_api | imbue.remote_service_connector.naming",
+    "imbue.remote_service_connector.cloudflare | imbue.remote_service_connector.db | imbue.remote_service_connector.http_api",
     "imbue.remote_service_connector.errors",
 ]

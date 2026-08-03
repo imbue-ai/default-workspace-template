@@ -21,8 +21,8 @@ from imbue.remote_service_connector.share_certs import parse_acme_ca_list
 from imbue.remote_service_connector.share_certs import validate_share_csr
 from imbue.remote_service_connector.testing import _CONTENT_DOMAIN
 from imbue.remote_service_connector.testing import _OTHER_HOST_ID
-from imbue.remote_service_connector.testing import _STUB_HOST_ID
-from imbue.remote_service_connector.testing import _STUB_USER_LABEL
+from imbue.remote_service_connector.testing import _SHARE_STUB_HOST_ID
+from imbue.remote_service_connector.testing import _SHARE_STUB_USER_LABEL
 from imbue.remote_service_connector.testing import _make_share_test_client
 from imbue.remote_service_connector.testing import _share_headers
 
@@ -89,23 +89,23 @@ def test_acme_ca_configs_from_env_attaches_eab_credentials(monkeypatch: pytest.M
 
 
 def test_validate_share_csr_accepts_exact_domain_and_wildcard() -> None:
-    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
+    domain = f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
     validate_share_csr(_make_share_csr(domain), domain)
 
 
 def test_validate_share_csr_rejects_wrong_or_extra_sans() -> None:
-    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
+    domain = f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
     with pytest.raises(InvalidCsrError):
         validate_share_csr(_make_share_csr(domain, sans=[domain]), domain)
     with pytest.raises(InvalidCsrError):
         validate_share_csr(_make_share_csr(domain, sans=[domain, f"*.{domain}", "evil.example.com"]), domain)
-    other_domain = domain.replace(_STUB_HOST_ID, _OTHER_HOST_ID)
+    other_domain = domain.replace(_SHARE_STUB_HOST_ID, _OTHER_HOST_ID)
     with pytest.raises(InvalidCsrError):
         validate_share_csr(_make_share_csr(other_domain), domain)
 
 
 def test_validate_share_csr_rejects_garbage_and_weak_keys() -> None:
-    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
+    domain = f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
     with pytest.raises(InvalidCsrError):
         validate_share_csr("not a csr", domain)
     weak_key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
@@ -114,7 +114,7 @@ def test_validate_share_csr_rejects_garbage_and_weak_keys() -> None:
 
 
 def test_extract_cert_chain_metadata_reads_leaf() -> None:
-    domain = f"{_STUB_HOST_ID}.{_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
+    domain = f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
     chain = _make_self_signed_chain([domain, f"*.{domain}"])
 
     not_after, sans = extract_cert_chain_metadata(chain)
@@ -137,8 +137,8 @@ def test_issue_share_cert_requires_valid_relay_token(monkeypatch: pytest.MonkeyP
 
 def test_issue_share_cert_rejects_token_of_inactive_share(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
-    created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
-    client.delete(f"/shares/{_STUB_HOST_ID}", headers=_share_headers())
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    client.delete(f"/shares/{_SHARE_STUB_HOST_ID}", headers=_share_headers())
 
     resp = client.post(
         "/shares/cert", json={"csr_pem": "x"}, headers={"Authorization": f"Bearer {created['relay_token']}"}
@@ -150,13 +150,13 @@ def test_issue_share_cert_rejects_token_of_inactive_share(monkeypatch: pytest.Mo
 def test_issue_share_cert_rate_limits_per_share_per_day(monkeypatch: pytest.MonkeyPatch) -> None:
     """The sixth issuance inside a day 429s before any ACME or DNS work happens."""
     client, backend = _make_share_test_client(monkeypatch)
-    created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
     for _ in range(5):
         backend.issued_cert_rows.append(
             {
                 "workspace_domain": created["workspace_domain"],
-                "host_id": _STUB_HOST_ID,
-                "user_id": _STUB_USER_LABEL,
+                "host_id": _SHARE_STUB_HOST_ID,
+                "user_id": _SHARE_STUB_USER_LABEL,
                 "ca_name": "test-ca",
                 "cert_chain_pem": "pem",
                 "sans": "[]",
@@ -176,7 +176,7 @@ def test_issue_share_cert_rate_limits_per_share_per_day(monkeypatch: pytest.Monk
 
 def test_issue_share_cert_rejects_csr_with_wrong_names(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
-    created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
     wrong_domain_csr = _make_share_csr("evil.example.com")
 
     resp = client.post(
@@ -193,7 +193,7 @@ def test_issue_share_cert_returns_chain_and_records_it(monkeypatch: pytest.Monke
     monkeypatch.setenv("ACME_CA_LIST", "letsencrypt=https://le.example/dir")
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "fake-cf-token")
     monkeypatch.setenv("CLOUDFLARE_ZONE_ID", "fake-zone-id")
-    created = client.post("/shares", json={"host_id": _STUB_HOST_ID}, headers=_share_headers()).json()
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
     domain = created["workspace_domain"]
     chain = _make_self_signed_chain([domain, f"*.{domain}"])
 
@@ -221,5 +221,5 @@ def test_issue_share_cert_returns_chain_and_records_it(monkeypatch: pytest.Monke
     assert recorded["workspace_domain"] == domain
     assert recorded["ca_name"] == "letsencrypt"
 
-    status = client.get(f"/shares/{_STUB_HOST_ID}/status", headers=_share_headers()).json()
+    status = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers()).json()
     assert status["cert_not_after"] == body["not_after"]

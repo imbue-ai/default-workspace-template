@@ -6,9 +6,11 @@ A shared workspace lives at
 ``<host-id>.<user-label>.<region>.<content-domain>`` is the workspace shell,
 and ``<user-label>.<region>.<content-domain>`` is the registrable-site
 boundary (the Public-Suffix-List entry is ``<region>.<content-domain>``).
-The workspace's frpc registers the bare domain plus its wildcard on a relay,
-so any service (at any sub-origin depth) routes without per-service DNS or
-per-service authorization at the relay. Ids are full and untruncated: host
+The workspace's frpc claims explicit per-service labels directly under the
+bare domain on a relay (plus a dedicated auth label), so services route
+without per-service DNS records while the relay only routes hostnames the
+workspace was authorized to claim (see ``decide_frps_new_proxy``). Ids are
+full and untruncated: host
 ids are ``host-<32hex>`` and the user label is the SuperTokens user id with
 hyphens stripped (the same normalization ``derive_user_id_prefix`` applies,
 without the truncation). Both are opaque and non-secret (they appear in
@@ -86,7 +88,12 @@ class ShareCoordinate(BaseModel):
 
     @property
     def vhost_wildcard(self) -> str:
-        """The wildcard the relay's frps registers for this workspace's services."""
+        """The wildcard SAN the workspace's certificate covers its per-service labels with.
+
+        Cert-only: the relay never routes the wildcard itself -- frpc claims
+        explicit per-service labels and ``decide_frps_new_proxy`` rejects
+        wildcard claims.
+        """
         return f"*.{self.workspace_domain}"
 
     @property
@@ -548,7 +555,7 @@ def get_share_store() -> ShareStore:
     return PostgresShareStore()
 
 
-def require_share_user(request: Request) -> tuple[str, str]:
+def _require_share_user(request: Request) -> tuple[str, str]:
     """Authenticate a share endpoint caller and return (full SuperTokens user id, verified email).
 
     Share endpoints need the FULL user id (its hyphen-stripped form is a
@@ -602,7 +609,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
     workspace reuses the share row and rotates the token.
     """
     with handle_endpoint_errors():
-        user_id, _email = require_share_user(request)
+        user_id, _email = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
         datacenter = store.get_pool_host_datacenter(body.host_id)
@@ -630,7 +637,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
 def list_shares(request: Request) -> dict[str, object]:
     """List all of the caller's share records (active and inactive)."""
     with handle_endpoint_errors():
-        user_id, _email = require_share_user(request)
+        user_id, _email = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         return {"shares": get_share_store().list_shares(user_label)}
 
@@ -644,7 +651,7 @@ def delete_share(request: Request, host_id: str) -> dict[str, object]:
     tunnel Login/reconnect.
     """
     with handle_endpoint_errors():
-        user_id, _email = require_share_user(request)
+        user_id, _email = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
         share = store.get_share(host_id, user_label)
@@ -659,7 +666,7 @@ def delete_share(request: Request, host_id: str) -> dict[str, object]:
 def get_share_status(request: Request, host_id: str) -> dict[str, object]:
     """Report one share's state for the sharing UI: domain, tunnel liveness signal, cert expiry."""
     with handle_endpoint_errors():
-        user_id, _email = require_share_user(request)
+        user_id, _email = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
         share = store.get_share(host_id, user_label)
@@ -685,7 +692,8 @@ def frps_auth(plugin_secret: str, body: FrpsAuthRequest) -> dict[str, object]:
     The relay's frps calls this for every workspace tunnel connect and hostname
     claim, authenticated by the shared secret embedded in its rendered plugin
     URL path. The presented relay token must resolve to an active share, and a
-    ``NewProxy`` may only claim that share's own bare domain and wildcard.
+    ``NewProxy`` may only claim single per-service labels directly under that
+    share's own domain (see ``decide_frps_new_proxy``).
     Every operation must present a relay token resolving to an active share
     (token-less bodies are rejected whatever the op); beyond that, operations
     other than the two we subscribe to are allowed unchanged -- frps should

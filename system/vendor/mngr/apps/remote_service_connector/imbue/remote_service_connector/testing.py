@@ -62,6 +62,11 @@ from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import PoolHostCleanupError
 from imbue.remote_service_connector.errors import R2BucketNotEmptyError
 from imbue.remote_service_connector.errors import R2BucketNotFoundError
+
+# Imported from the production module so the fake's tuple order can never
+# drift from what PostgresShareStore SELECTs (same rationale as
+# _WORKSPACE_RECORD_COLUMNS below).
+from imbue.remote_service_connector.shares import _SHARE_COLUMN_NAMES
 from imbue.remote_service_connector.sync import SyncActiveAgentConflictError
 from imbue.remote_service_connector.sync import SyncRevisionConflictError
 from imbue.remote_service_connector.sync import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
@@ -1511,18 +1516,6 @@ _PAID_ENTRY_UPDATED_AT = "2026-01-02T00:00:00+00:00"
 _SHARE_ROW_CREATED_AT = "2026-01-01T00:00:00+00:00"
 _SHARE_ROW_UPDATED_AT = "2026-01-02T00:00:00+00:00"
 
-# Column order of the app's _SHARE_COLUMNS projection.
-_SHARE_COLUMN_NAMES = (
-    "host_id",
-    "user_id",
-    "region",
-    "workspace_domain",
-    "state",
-    "created_at",
-    "updated_at",
-    "last_tunnel_login_at",
-)
-
 
 class FakePoolBackend:
     """In-memory pool database replacement for testing host pool + paid-list endpoints."""
@@ -2423,7 +2416,7 @@ def _make_pool_quota_test_client(
     monkeypatch: pytest.MonkeyPatch,
     pool_backend: FakePoolBackend | None = None,
 ) -> tuple[TestClient, FakePoolBackend, InMemoryEntitlementsStore, FakeLiteLLMBackend]:
-    """Create a TestClient with tunnel-auth, pool-backend, and quota fakes installed.
+    """Create a TestClient with pool-backend and quota fakes installed.
 
     The returned pool backend is seeded with the stub user email as paid, so
     the stub's lazily-created entitlements row resolves to the ally plan by
@@ -2463,8 +2456,8 @@ def _make_bucket_quota_test_client(
 ) -> tuple[TestClient, FakeCloudflareOps, InMemoryKeyStore, InMemoryEntitlementsStore, InMemoryGrantStore]:
     """Create a TestClient with the R2 fakes installed (Cloudflare ops + key/grant stores + entitlements)."""
     client, entitlements_store, _litellm = _make_quota_test_client(monkeypatch)
-    # Build our own fake ctx so the fake is typed as FakeForwardingCtx (which
-    # exposes ``.fake``); re-patching get_ctx overrides the one the quota
+    # Build our own fake ctx so the fake is typed as FakeCloudflareCtx (which
+    # exposes ``.fake``); re-patching get_cloudflare_ctx overrides the one the quota
     # client installed.
     fake_ctx = make_fake_cloudflare_ctx()
     store = make_fake_key_store()
@@ -2536,11 +2529,11 @@ def _store_record(
 
 
 # Shared coordinates for the self-hosted sharing tests (shares / certs / broker).
-_STUB_TOKEN = "share-user-stub-jwt"
-_STUB_USER_ID = "12345678-1234-5678-1234-567812345678"
-_STUB_USER_LABEL = "12345678123456781234567812345678"
-_STUB_EMAIL = "sharer@example.com"
-_STUB_HOST_ID = "host-" + "a" * 32
+_SHARE_STUB_TOKEN = "share-user-stub-jwt"
+_SHARE_STUB_USER_ID = "12345678-1234-5678-1234-567812345678"
+_SHARE_STUB_USER_LABEL = "12345678123456781234567812345678"
+_SHARE_STUB_EMAIL = "sharer@example.com"
+_SHARE_STUB_HOST_ID = "host-" + "a" * 32
 _OTHER_HOST_ID = "host-" + "b" * 32
 _CONTENT_DOMAIN = "minds-test.example"
 _DEFAULT_REGION = "us1"
@@ -2549,22 +2542,22 @@ _FRPS_SECRET = "frps-plugin-secret-8d1c44"
 
 
 def _share_headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {_STUB_TOKEN}"}
+    return {"Authorization": f"Bearer {_SHARE_STUB_TOKEN}"}
 
 
 def _make_share_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakePoolBackend]:
     """TestClient with sharing env config, a stubbed SuperTokens user, and the in-memory DB."""
 
     def _stub_user_id_from_token(token: str) -> str:
-        if token != _STUB_TOKEN:
+        if token != _SHARE_STUB_TOKEN:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return _STUB_USER_ID
+        return _SHARE_STUB_USER_ID
 
     return _make_share_test_client_with_fakes(
         monkeypatch,
         {
             "get_user_id_from_access_token": _stub_user_id_from_token,
-            "default_email_getter": lambda user_id: _STUB_EMAIL,
+            "default_email_getter": lambda user_id: _SHARE_STUB_EMAIL,
         },
     )
 

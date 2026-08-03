@@ -71,7 +71,7 @@ values are fine -- the deploy skips them when pushing to Modal).
 
 - `SUPERTOKENS_CONNECTION_URI` (required): URL of the SuperTokens core.
 - `SUPERTOKENS_API_KEY` (required for most deployments): SuperTokens core API key.
-- `AUTH_WEBSITE_DOMAIN` (optional): Public base URL embedded in password-reset and email-verification links. Must match the URL Modal assigns to the deployed function. If unset, the app derives `https://{workspace}--remote-service-connector-<env>-fastapi-app.modal.run` (using the hardcoded default workspace in `app.py`), which is only correct for that specific Modal workspace -- set this explicitly for every deploy.
+- `AUTH_WEBSITE_DOMAIN` (required whenever `SUPERTOKENS_CONNECTION_URI` is set): Public base URL embedded in password-reset and email-verification links. Must match the URL Modal assigns to the deployed function. There is no derived fallback: if unset, `init_supertokens()` raises `MissingAuthWebsiteDomainError` at container startup, so populate it in the per-tier `supertokens-<env>-<deploy-id>` Modal secret (the deploy script pushes it from the tier's Vault entry).
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (optional): override Google OAuth client credentials. Leave blank to inherit from the SuperTokens core's dashboard.
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` (optional): override GitHub OAuth client credentials. Leave blank to inherit from the SuperTokens core's dashboard.
 - `MINDS_ADMIN_KEY` (optional): fixed API key authenticating the operator admin endpoints -- the paid-list CRUD (`/paid/*`), the account admin API (`/admin/accounts/*`), and the on-demand sweeps (`/admin/sweep/*`). Distinct from every other auth path -- the connector accepts it ONLY on those routes and rejects SuperTokens tokens there, and rejects this key on every other route. Leave empty to disable the admin API. The `mngr imbue_cloud admin ...` CLI reads the same value from `$MINDS_ADMIN_KEY`. The deprecated `MINDS_PAID_ADMIN_KEY` spelling is still accepted (with a warning) while Vault entries and operator environments migrate.
@@ -134,7 +134,7 @@ Running `modal deploy` directly without the wrapper defaults to
 All non-`/auth/*` endpoints require a Bearer token, with the exceptions noted below:
 
 - **User (SuperTokens JWT)**: `Authorization: Bearer <access_token>` — the signed-in user's SuperTokens session. A signed-in user has full authority over their own resources; their user-id prefix (the first 16 hex chars of their SuperTokens user ID) namespaces their leases and buckets.
-- The share-certificate endpoint (`POST /shares/cert`) is instead authenticated by the share's relay token, and the frps plugin callback by its shared secret (see the sharing section of `app.py`).
+- The share-certificate endpoint (`POST /shares/cert`) is instead authenticated by the share's relay token (see `share_certs.py`), and the frps plugin callback by its shared secret (see `shares.py`).
 - The accounts-broker routes (`GET /share/login`, `POST /share/session`, `GET /share/authorize`) are a browser-facing flow authenticated by the login form and the `imbue_sso_session` cookie; `GET /share/jwks.json` is public (it serves only the broker's verification keys).
 
 The `/auth/*` endpoints are themselves the authentication flow, so they do not require a token.
