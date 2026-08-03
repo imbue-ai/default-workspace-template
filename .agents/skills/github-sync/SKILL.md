@@ -156,7 +156,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     # The oom_tag_service.py prefix sets its OOM shed-priority band (see
     # system/services/oom_priority).
     [program:github-sync]
-    command=python3 system/scripts/oom_tag_service.py github-sync uv run github-sync run
+    command=python3 system/services/oom_priority/bin/oom_tag_service.py github-sync uv run github-sync run
     directory=/home/user/workspace
     autostart=true
     autorestart=true

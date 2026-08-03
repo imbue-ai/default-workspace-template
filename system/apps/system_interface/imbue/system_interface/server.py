@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 from flask import Flask
 from flask import Response
 from flask import request
@@ -22,6 +23,7 @@ from werkzeug.exceptions import HTTPException
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
+from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
@@ -40,6 +42,13 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.fast_mode_policy import FastModeSettingsError
+from imbue.system_interface.fast_mode_policy import get_agent_fast_mode_write_path
+from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
+from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
+from imbue.system_interface.fast_mode_policy import resolve_agent_fast_mode
+from imbue.system_interface.fast_mode_policy import write_fast_mode_setting
+from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
@@ -49,12 +58,13 @@ from imbue.system_interface.layout_ops import is_broadcasting_op
 from imbue.system_interface.layout_ops import is_destroyable_terminal_session
 from imbue.system_interface.layout_ops import is_known_op
 from imbue.system_interface.layout_ops import is_mutating_op
+from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
 from imbue.system_interface.model_settings import MODEL_OPTIONS
 from imbue.system_interface.model_settings import is_valid_model_id
-from imbue.system_interface.model_settings import read_model_settings
+from imbue.system_interface.model_settings import read_model_from_settings
 from imbue.system_interface.model_settings import supports_fast_mode
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
@@ -75,10 +85,11 @@ from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
 from imbue.system_interface.models import SetFastModeRequest
 from imbue.system_interface.models import SetModelRequest
+from imbue.system_interface.models import SetWorkspaceFastModeRequest
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
+from imbue.system_interface.models import WorkspaceFastModeResponse
 from imbue.system_interface.plugins import get_plugin_manager
-from imbue.system_interface.service_dispatcher import register_service_routes
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -93,6 +104,11 @@ _FRONTEND_NOT_BUILT_HTML = (
 
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
+
+# Name under which the browser daemon registers itself (via forward_port.py)
+# in data/.state/apps.toml. The /api/browsers passthrough resolves the daemon's
+# local backend URL from this registry entry.
+_BROWSER_SERVICE_NAME = "browser"
 
 # How often flask-sock sends a keepalive ping on each WebSocket connection.
 # Pings detect (and tear down) half-dead peers without any asyncio machinery --
@@ -112,17 +128,13 @@ class _ReflectClientSubprotocols:
     transparent passthrough -- the server echoes back whatever subprotocol the
     client requested.
 
-    This is required for the ``/service/<name>/`` proxy: ttyd's browser client
-    opens its socket with the ``tty`` subprotocol, and Chrome aborts the
-    handshake (close 1006, "press enter to reconnect" in the terminal tab) if it
-    offered a subprotocol and the 101 response echoes none. Reflecting the
-    offered subprotocol keeps the proxy transparent for any service, not just
-    ttyd, so a new service that uses its own subprotocol works without touching
-    this list.
-
-    Clients that offer no subprotocol (the ``/api/ws`` broadcaster and the
-    proto-agent-logs stream) are unaffected: with nothing offered, the
-    negotiation loop never runs and no subprotocol is echoed.
+    Chrome aborts a WebSocket handshake (close 1006) if the client offered a
+    subprotocol and the 101 response echoes none, so any future WS route that
+    negotiates a subprotocol works without touching this list. Today's own
+    endpoints (the ``/api/ws`` broadcaster and the proto-agent-logs stream)
+    offer no subprotocol, so the negotiation loop never runs and no
+    subprotocol is echoed -- the passthrough is inert for them but keeps the
+    server permissive for subprotocol-bearing clients.
     """
 
     def __contains__(self, _subprotocol: object) -> bool:
@@ -338,11 +350,14 @@ def _stream_filtered_events(
     sentinel) ends the stream.
     """
     keepalive_counter = 0
+    _loguru_logger.info("SSE stream opened for agent {} (conn {})", agent_id, id(event_queue))
+    close_reason = "event-queues shutdown"
     try:
         while not event_queues.is_shutdown:
             try:
                 event = event_queue.get(timeout=1)
                 if event is None:
+                    close_reason = "queue shutdown sentinel"
                     break
                 if not should_forward(event):
                     continue
@@ -354,8 +369,11 @@ def _stream_filtered_events(
                     keepalive_counter = 0
                     yield ": keepalive\n\n"
     except GeneratorExit:
-        pass
+        close_reason = "client disconnected"
     finally:
+        _loguru_logger.info(
+            "SSE stream closed for agent {} (conn {}, reason: {})", agent_id, id(event_queue), close_reason
+        )
         event_queues.unregister(agent_id, event_queue)
 
 
@@ -421,16 +439,20 @@ def _send_message_endpoint(agent_id: str) -> Response:
 def _get_model_settings_endpoint(agent_id: str) -> Response:
     """Return the agent's current model + fast-mode selection for the composer picker.
 
-    Reads the agent's Claude Code ``settings.json`` (the source of truth the
-    ``/model`` and ``/fast`` commands write to). ``fast_mode_supported`` reflects
-    the current model so the frontend knows whether to surface the fast toggle.
+    The model comes from the agent's Claude Code ``settings.json`` (what ``/model``
+    writes). Fast mode is resolved separately because it is layered across two
+    settings files (see ``resolve_agent_fast_mode``). ``fast_mode_supported``
+    reflects the current model so the frontend knows whether to surface the toggle.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
-    settings_path = agent_info.claude_config_dir / "settings.json"
-    model, fast_mode = read_model_settings(settings_path)
+    model = read_model_from_settings(agent_info.claude_config_dir / "settings.json")
+    fast_mode = resolve_agent_fast_mode(
+        claude_settings_path=agent_info.claude_config_dir / "settings.json",
+        managed_settings_path=get_managed_settings_path(agent_info.agent_state_dir),
+    )
     response = ModelSettingsResponse(
         model=model,
         fast_mode=fast_mode,
@@ -470,10 +492,15 @@ def _set_model_endpoint(agent_id: str) -> Response:
 def _set_fast_mode_endpoint(agent_id: str) -> Response:
     """Toggle the agent's fast mode by sending it a ``/fast on|off`` command.
 
-    Same interactive-send path as ``_set_model_endpoint``; Claude Code persists
-    the choice to its ``settings.json`` ``fastMode`` field. Fast mode is an
-    Opus-only capability, so the frontend only surfaces the toggle for Opus; this
-    endpoint does not re-check the model, matching how ``/fast`` itself behaves.
+    Same interactive-send path as ``_set_model_endpoint``, which changes the running
+    session. Claude Code does not leave a usable record of the result -- it deletes
+    the ``fastMode`` key on ``/fast off`` instead of writing false -- so the change
+    is also written into the agent's own launch settings. That is what the composer's
+    toggle reads back, and what the agent comes back with if it restarts.
+
+    Fast mode is an Opus-only capability, so the frontend only surfaces the toggle
+    for Opus; this endpoint does not re-check the model, matching how ``/fast``
+    itself behaves.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
@@ -488,7 +515,59 @@ def _set_fast_mode_endpoint(agent_id: str) -> Response:
         error = ErrorResponse(detail=f"Failed to set fast mode for agent '{agent_info.name}' (0 successful agents)")
         return _json_response(error.model_dump(), status_code=500)
 
+    write_path = get_agent_fast_mode_write_path(agent_info.claude_config_dir, agent_info.agent_state_dir)
+    try:
+        write_fast_mode_setting(write_path, set_fast_mode_request.enabled)
+    except (FastModeSettingsError, OSError) as e:
+        # The running session already took the command, so report the part that
+        # failed: the setting will revert the next time the agent launches.
+        logger.opt(exception=e).error("Failed to record fast mode for agent {} at {}", agent_info.name, write_path)
+        error = ErrorResponse(detail=f"Set fast mode for agent '{agent_info.name}' but could not record it")
+        return _json_response(error.model_dump(), status_code=500)
+
     return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+def _workspace_fast_mode_decision_path() -> Path | None:
+    """Where this workspace records its fast-mode decision, or None outside a workspace."""
+    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
+    if not work_dir:
+        return None
+    return get_workspace_fast_mode_decision_path(Path(work_dir))
+
+
+def _get_workspace_fast_mode_endpoint() -> Response:
+    """Return the workspace's fast-mode decision, or null if it has not answered.
+
+    The frontend uses this to decide whether a chat still owes the user the
+    fast-mode prompt.
+    """
+    decision_path = _workspace_fast_mode_decision_path()
+    decision = None if decision_path is None else read_workspace_fast_mode_decision(decision_path)
+    return _json_response(WorkspaceFastModeResponse(fast_mode=decision).model_dump())
+
+
+def _set_workspace_fast_mode_endpoint() -> Response:
+    """Record the user's answer to the fast-mode prompt for the whole workspace.
+
+    Every chat agent created from here on launches with this setting, and no chat
+    prompts again. Applying it to the *running* agent is a separate call to the
+    per-agent fast endpoint, so the two stay independently testable.
+    """
+    decision_path = _workspace_fast_mode_decision_path()
+    if decision_path is None:
+        error = ErrorResponse(detail="Cannot record a fast-mode decision outside a workspace")
+        return _json_response(error.model_dump(), status_code=500)
+
+    set_request = SetWorkspaceFastModeRequest.model_validate(request.get_json())
+    try:
+        write_workspace_fast_mode_decision(decision_path, set_request.enabled)
+    except OSError as e:
+        logger.opt(exception=e).error("Failed to record the workspace fast-mode decision")
+        error = ErrorResponse(detail="Failed to record the fast-mode decision")
+        return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(WorkspaceFastModeResponse(fast_mode=set_request.enabled).model_dump())
 
 
 def _activity_endpoint() -> Response:
@@ -565,7 +644,7 @@ def _interrupt_agent_endpoint(agent_id: str) -> Response:
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
-    bootstrap, web, cloudflared, and other supervised services. The
+    bootstrap, web, share-gateway, and other supervised services. The
     frontend already hides ``is_primary=true`` agents from the visible agent
     list; this is defense-in-depth for callers that hit the endpoint directly
     (curl, scripted use, etc.).
@@ -1013,6 +1092,45 @@ def _terminal_notify_endpoint() -> Response:
     return _json_response(error.model_dump(), status_code=400)
 
 
+def _browsers_passthrough() -> Response:
+    """Same-origin passthrough for the browser daemon's fleet API.
+
+    Browser panels live on their own service origin now, so the shell frontend
+    can no longer ``fetch()`` the daemon's ``/browsers`` endpoint directly
+    (sibling service origins are same-site but not same-origin, and the daemon
+    sends no CORS headers). This server-side hop forwards ``GET`` /
+    ``POST /api/browsers`` to the registered ``browser`` service's local
+    backend and relays the backend's body and status verbatim (GET returns
+    ``{"browsers": [...]}``; POST relays the daemon's create result, including
+    its 400/409/503 rejections). Returns a 503 JSON error when the service is
+    not registered or unreachable.
+    """
+    state = get_state()
+    base_url = state.agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
+    if base_url is None:
+        error = ErrorResponse(detail="Browser service is not registered")
+        return _json_response(error.model_dump(), status_code=503)
+    backend_url = f"{base_url.rstrip('/')}/browsers"
+    try:
+        if request.method == "POST":
+            backend_response = state.http_client.post(
+                backend_url,
+                content=request.get_data(),
+                headers={"Content-Type": request.headers.get("Content-Type") or "application/json"},
+            )
+        else:
+            backend_response = state.http_client.get(backend_url)
+    except httpx.HTTPError as e:
+        _loguru_logger.warning("Browser service request to {} failed: {}", backend_url, e)
+        error = ErrorResponse(detail="Browser service is unreachable")
+        return _json_response(error.model_dump(), status_code=503)
+    return Response(
+        backend_response.content,
+        status=backend_response.status_code,
+        content_type=backend_response.headers.get("content-type", "application/json"),
+    )
+
+
 def _get_screen_capture(agent_id: str) -> Response:
     """Capture the tmux pane content for an agent.
 
@@ -1146,6 +1264,26 @@ def _handle_client_state_message(
     if not client_id or not active_layout:
         return False
     ws_broadcaster.set_client_info(client_queue, client_id, active_layout, device_kind)
+    if is_first_report:
+        _loguru_logger.info(
+            "WS client registered: client_id={} layout={} device={} (conn {})",
+            client_id,
+            active_layout,
+            device_kind,
+            id(client_queue),
+        )
+    elif previous_layout and previous_layout != active_layout:
+        _loguru_logger.info(
+            "WS client {} switched layout {} -> {} (conn {})",
+            client_id,
+            previous_layout,
+            active_layout,
+            id(client_queue),
+        )
+    else:
+        # A re-report on an already-registered connection with an unchanged
+        # layout; not worth a log line.
+        pass
     if layout_dir is not None:
         workspace_layouts.set_last_active_slug(layout_dir, active_layout)
         events_path = client_activity.get_events_path(layout_dir)
@@ -1184,6 +1322,10 @@ def _run_ws_broadcast_loop(
     op that depends on the registration.
     """
     client_queue = ws_broadcaster.register()
+    _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
+    # Overwritten by the paths below; every exit from the loop goes through one
+    # of them, so this default should never surface in a log line.
+    disconnect_reason = "handler exited"
     try:
         websocket.send(
             json.dumps(
@@ -1225,11 +1367,19 @@ def _run_ws_broadcast_loop(
                 continue
             if message is None:
                 shutdown = True
+                disconnect_reason = "shutdown sentinel (evicted by broadcaster or server shutdown)"
             else:
                 websocket.send(message)
     except ConnectionClosed:
-        pass
+        disconnect_reason = "connection closed"
     finally:
+        client_info = ws_broadcaster.get_client_info(client_queue)
+        _loguru_logger.info(
+            "WS /api/ws connection closed (conn {}, client_id={}, reason: {})",
+            id(client_queue),
+            client_info["client_id"] if client_info is not None else "<unregistered>",
+            disconnect_reason,
+        )
         ws_broadcaster.unregister(client_queue)
 
 
@@ -1285,7 +1435,7 @@ def _destroy_agent(agent_id: str) -> Response:
 
     Refuses to destroy agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and destroying it would tear down
-    the bootstrap, web, cloudflared, and other supervised services
+    the bootstrap, web, share-gateway, and other supervised services
     along with it. The frontend already hides ``is_primary=true`` agents
     from the visible agent list; this is defense-in-depth for callers that
     hit the endpoint directly (curl, scripted use, etc.).
@@ -1524,6 +1674,22 @@ def _layout_broadcast_endpoint() -> Response:
     # in the HTTP response. Every other ref kind either dedups against
     # the existing panel set or is discoverable via a subsequent
     # ``inspect``.
+    # A browser pane must name a specific fleet browser. Reject a session-less
+    # ``service:browser`` open/split before it broadcasts, so an agent can't spawn
+    # the orphan "Open a browser from the + menu" placeholder pane. Guides the caller
+    # to the right form rather than erroring opaquely. The fleet's own pane-pull
+    # always carries ``?session=<name>``, so it is unaffected.
+    if op in {"open", "split"} and is_sessionless_browser_ref(args_raw.get("ref")):
+        error = ErrorResponse(
+            detail=(
+                "A browser pane needs a specific browser name: use "
+                "'service:browser?session=<name>', or the agentic-browser-fleet 'new'/'task' "
+                "commands, which open the pane for you. The bare 'service:browser' opens a "
+                "viewer bound to no browser."
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+
     allocated_ref: str | None = None
     if op in {"open", "split"} and args_raw.get("ref") == "service:terminal":
         panel_id, allocated_ref = allocate_terminal_panel_id()
@@ -1546,10 +1712,25 @@ def _layout_broadcast_endpoint() -> Response:
         if layout_error_response is not None:
             return layout_error_response
         if target_layout_slug is None or not broadcaster.has_client_on_layout(target_layout_slug):
+            connected_clients = broadcaster.get_connected_client_infos()
+            _loguru_logger.warning(
+                "Layout op {!r} rejected (412): no connected client on layout {!r}; connected clients: {}",
+                op,
+                requested_layout,
+                connected_clients,
+            )
+            client_summary = (
+                ", ".join(
+                    f"{info['client_id']} (layout={info['active_layout_slug']}, device={info['device_kind']})"
+                    for info in connected_clients
+                )
+                or "none"
+            )
             error = ErrorResponse(
                 detail=(
                     f"No connected client has layout '{requested_layout}' active. Ask the user to switch "
-                    f"to it, or run `layout.py load {requested_layout!r}` first."
+                    f"to it, or run `layout.py load {requested_layout!r}` first. "
+                    f"Connected clients: {client_summary}."
                 )
             )
             return _json_response(error.model_dump(), status_code=412)
@@ -1606,8 +1787,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application = Flask(__name__, static_folder=None)
     application.config["SOCK_SERVER_OPTIONS"] = {
         "ping_interval": _WS_PING_INTERVAL_SECONDS,
-        # Echo back whatever subprotocol the client offered so the WS proxy is
-        # transparent (e.g. ttyd's ``tty``); see ``_ReflectClientSubprotocols``.
+        # Echo back whatever subprotocol a client offers so subprotocol-bearing
+        # WS clients can connect; see ``_ReflectClientSubprotocols``.
         "subprotocols": _ReflectClientSubprotocols(),
     }
     attach_state(application, state)
@@ -1636,6 +1817,13 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_endpoint, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/fast", view_func=_set_fast_mode_endpoint, methods=["POST"])
+    application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/workspace/fast-mode",
+        view_func=_set_workspace_fast_mode_endpoint,
+        methods=["POST"],
+        endpoint="_set_workspace_fast_mode",
+    )
     application.add_url_rule("/api/activity", view_func=_activity_endpoint, methods=["POST"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
     application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])
@@ -1680,6 +1868,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
         methods=["POST"],
     )
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
+    application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
     claude_auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
@@ -1700,11 +1889,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
     assets_directory = STATIC_DIRECTORY / "assets"
     if assets_directory.is_dir():
         application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
-
-    # Service forwarding routes: /service/<name>/... forwards to the service's
-    # local backend (from data/.state/apps.toml) with path rewriting,
-    # cookie scoping, WS shim, and a scoped service worker.
-    register_service_routes(application, sock)
 
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
 

@@ -19,9 +19,9 @@ Once enabled, three pieces work together:
    for every checkout in the container (main repo and worker worktrees). The
    GitHub credential is injected server-side by the gateway; no token ever
    enters the container. The wiring also points `core.hooksPath` at
-   `system/scripts/git_hooks`, activating the post-commit auto-push hook for
+   `system/libs/github_sync/git_hooks`, activating the post-commit auto-push hook for
    every checkout.
-3. **The post-commit hook** (`system/scripts/git_hooks/post-commit`, in the
+3. **The post-commit hook** (`system/libs/github_sync/git_hooks/post-commit`, in the
    repo but inert until the hooks path is wired): auto-pushes the active
    branch of any checkout after each commit, so both main-agent and worker
    commits land on the GitHub remote without manual pushes.

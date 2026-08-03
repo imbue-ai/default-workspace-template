@@ -6,6 +6,11 @@ does is touch backup.toml -- except when a backup is currently running,
 in which case it waits for the in-flight one to finish first (so the
 user's most recent edits are guaranteed to land in the next tick rather
 than the in-flight one).
+
+It then waits for the triggered tick to reach any terminal event and prints it,
+exiting 0 on success, 3 when backups are not configured, 1 on any other tick
+outcome, and 2 when no outcome was observed at all (no terminal event before the
+timeout, or no events log to read in the first place).
 """
 
 import json
@@ -13,15 +18,29 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Final
 
 import click
 from loguru import logger
 
 from host_backup.config import BACKUP_TOML_PATH, resolve_service_events_dir
-from host_backup.events import BACKUP_EVENT_SOURCE, BackupEventType
+from host_backup.events import (
+    BACKUP_EVENT_SOURCE,
+    TICK_TERMINAL_EVENT_TYPES,
+    BackupEventType,
+)
 
 DEFAULT_TIMEOUT_SECONDS = 1800.0  # 30 minutes
 _POLL_INTERVAL_SECONDS = 0.5
+
+# Exit codes. "Backups are not configured" is a distinct outcome from "the
+# backup attempt failed": callers that take a backup as a precondition (e.g. the
+# update-self skill) have to tell "there is no restore point" from "something
+# broke" without parsing the printed event.
+EXIT_BACKUP_SUCCEEDED: Final[int] = 0
+EXIT_BACKUP_FAILED: Final[int] = 1
+EXIT_NO_COMPLETION_OBSERVED: Final[int] = 2
+EXIT_BACKUPS_NOT_CONFIGURED: Final[int] = 3
 
 
 @click.command()
@@ -40,7 +59,7 @@ def backup_now_main(timeout_seconds: float) -> None:
             "Cannot locate the host-backup events log: the service has published "
             "no events-dir pointer and MNGR_AGENT_STATE_DIR is unset"
         )
-        sys.exit(2)
+        sys.exit(EXIT_NO_COMPLETION_OBSERVED)
     events_path = events_dir / "events.jsonl"
 
     deadline = time.monotonic() + timeout_seconds
@@ -53,13 +72,19 @@ def backup_now_main(timeout_seconds: float) -> None:
     )
     if completion is None:
         logger.error("Timed out waiting for backup to complete")
-        sys.exit(2)
+        sys.exit(EXIT_NO_COMPLETION_OBSERVED)
     click.echo(json.dumps(completion, default=str))
-    sys.exit(
-        0
-        if completion.get("type") == BackupEventType.RESTIC_BACKUP_SUCCEEDED.value
-        else 1
-    )
+    sys.exit(_exit_code_for_completion(completion))
+
+
+def _exit_code_for_completion(completion: dict[str, object]) -> int:
+    """Map the terminal event that ended the tick to this command's exit code."""
+    event_type = completion.get("type")
+    if event_type == BackupEventType.RESTIC_BACKUP_SUCCEEDED.value:
+        return EXIT_BACKUP_SUCCEEDED
+    if event_type == BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value:
+        return EXIT_BACKUPS_NOT_CONFIGURED
+    return EXIT_BACKUP_FAILED
 
 
 def _safe_file_size(path: Path) -> int:
@@ -108,11 +133,9 @@ def _wait_for_no_inflight_backup(
         if new_size > last_size:
             for event in _read_new_events(events_path, last_size, new_size):
                 tick_id = event.get("tick_id")
-                if isinstance(tick_id, str) and event.get("type") in (
-                    BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
-                    BackupEventType.RESTIC_BACKUP_FAILED.value,
-                    BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value,
-                    BackupEventType.TICK_ERROR.value,
+                if (
+                    isinstance(tick_id, str)
+                    and event.get("type") in TICK_TERMINAL_EVENT_TYPES
                 ):
                     pending_tick_ids.discard(tick_id)
             last_size = new_size
@@ -124,16 +147,13 @@ def _wait_for_next_completion(
     initial_size: int,
     deadline: float,
 ) -> dict[str, object] | None:
-    """Block until the next RESTIC_BACKUP_SUCCEEDED / FAILED event appears."""
+    """Block until the triggered tick emits a terminal event, or the deadline passes."""
     last_size = initial_size
     while time.monotonic() < deadline:
         new_size = _safe_file_size(events_path)
         if new_size > last_size:
             for event in _read_new_events(events_path, last_size, new_size):
-                if event.get("type") in (
-                    BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
-                    BackupEventType.RESTIC_BACKUP_FAILED.value,
-                ):
+                if event.get("type") in TICK_TERMINAL_EVENT_TYPES:
                     return event
             last_size = new_size
         time.sleep(_POLL_INTERVAL_SECONDS)
@@ -165,12 +185,7 @@ def _scan_for_inflight_tick_ids(events_path: Path, *, max_lines: int) -> set[str
         event_type = event.get("type")
         if event_type == BackupEventType.BACKUP_STARTED.value:
             started.add(tick_id)
-        elif event_type in (
-            BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
-            BackupEventType.RESTIC_BACKUP_FAILED.value,
-            BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value,
-            BackupEventType.TICK_ERROR.value,
-        ):
+        elif event_type in TICK_TERMINAL_EVENT_TYPES:
             finished.add(tick_id)
     return started - finished
 

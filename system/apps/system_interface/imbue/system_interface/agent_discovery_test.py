@@ -31,11 +31,13 @@ def test_reads_claude_config_dir_from_env_file(tmp_path: Path) -> None:
 def test_falls_back_to_host_env_when_per_agent_env_lacks_config_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Mimics use_env_config_dir=True chat agents: mngr_claude does not write
-    CLAUDE_CONFIG_DIR to the per-agent env file, but the bootstrap wrote it
-    to $MNGR_HOST_DIR/env. Without this layer the system_interface's
-    session_watcher pointed at ~/.claude and chat messages never showed up
-    in the UI."""
+    """Mirrors the runtime env-resolution chain: the per-agent env file is
+    sourced after the host env file, so a CLAUDE_CONFIG_DIR pin in
+    $MNGR_HOST_DIR/env applies to any agent whose own env file lacks the var.
+    Nothing in the current workspace writes that host-env entry anymore
+    (every claude resolves the default ~/.claude), but the layer keeps the
+    session_watcher pointed at whatever dir a host-pinned agent actually
+    uses."""
     host_dir = tmp_path / "host"
     host_dir.mkdir()
     (host_dir / "env").write_text("MNGR_HOST_DIR=/home/user/.mngr\nCLAUDE_CONFIG_DIR=/shared/claude/config\n")

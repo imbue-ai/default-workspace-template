@@ -1,0 +1,1 @@
+Combined integration PR (carries mngr/break-apart-scripts): new package -- the Caretaker's weekly check (`caretaker_check.sh`) moves out of `system/scripts/` into `system/services/caretaker/`. See `mngr-break-apart-scripts.md` in this directory for details.

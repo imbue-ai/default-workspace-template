@@ -1231,26 +1231,36 @@ def test_move_within_self_uses_any_change_predicate_not_share_group(
     assert "timeout" not in err
 
 
-def test_replace_url_predicate_matches_resolved_service_url_not_shorthand(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    "stored_url",
+    [
+        # Local shape: the service name prefixes the local workspace host.
+        "http://api.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421/health",
+        # Shared shape: the same nesting rule on a longer base hostname.
+        "https://api.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.us-east.imbueminds.com/health",
+    ],
+)
+def test_replace_url_predicate_matches_derived_service_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stored_url: str,
 ) -> None:
-    """``replace-url <ref> service:<name>[/<path>]`` must compare its
-    wait-stable predicate against the frontend-resolved ``/service/...``
-    path, not the literal ``service:...`` shorthand. The frontend's
-    ``resolveReplaceUrl`` projects the shorthand onto the on-origin path
-    before storing it on the panel, so a predicate that compared against
-    the literal shorthand would never match and the CLI would time out
-    after 5 s with an error -- even though the op actually succeeded."""
+    """``replace-url <ref> service:<name>[/<path>]`` must recognize the
+    absolute service-origin URL the frontend stores on the panel. The
+    frontend derives that origin from its own ``location.host`` (which the
+    script cannot know), so the wait-stable predicate compares service
+    coordinates -- name plus path-and-query -- against the stored URL. A
+    literal string comparison would never match and the CLI would time out
+    after 5 s with an error even though the op actually succeeded."""
     monkeypatch.delenv(layout.ENV_NO_WAIT_STABLE, raising=False)
 
-    resolved_url = "/service/api/health"
     layout_after = {
         "active_panel": "p1",
         "panels": [
             {
                 "ref": "service:web",
                 "panel_type": "iframe",
-                "url": resolved_url,
+                "url": stored_url,
                 "title": "web",
             },
         ],
@@ -1266,7 +1276,7 @@ def test_replace_url_predicate_matches_resolved_service_url_not_shorthand(
             {
                 "ref": "service:web",
                 "panel_type": "iframe",
-                "url": "/service/web/",
+                "url": "http://web.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421/",
                 "title": "web",
             },
         ],
@@ -1280,7 +1290,7 @@ def test_replace_url_predicate_matches_resolved_service_url_not_shorthand(
 
     def fake_post(op: str, args: dict[str, Any]) -> tuple[int, dict[str, Any] | str]:
         # Pre-op reads (ref-existence pre-flight + wait-stable ``before``
-        # snapshot) see the old URL; the post-op poll sees the resolved one.
+        # snapshot) see the old URL; the post-op poll sees the new one.
         if op == "inspect":
             return 200, {"ok": True, "layout": layout_after if posted_op["done"] else layout_before}
         posted_op["done"] = True
@@ -1291,23 +1301,45 @@ def test_replace_url_predicate_matches_resolved_service_url_not_shorthand(
     rc = layout.main(["replace-url", "service:web", "service:api/health", "--layout", "desktop"])
     assert rc == 0
     err = capsys.readouterr().err
-    # Success diff (with resolved URL), not a timeout error.
+    # Success diff (with the canonical service-relative expectation), not a
+    # timeout error.
     assert "replace-url" in err
-    assert resolved_url in err
+    assert "service:api/health" in err
     assert "timeout" not in err
 
 
-def test_resolve_replace_url_matches_frontend_resolver() -> None:
-    """``_resolve_replace_url`` mirrors the frontend's ``resolveReplaceUrl``:
-    ``service:<name>`` -> ``/service/<name>/`` (trailing slash, matches
-    ``getServiceUrl``), ``service:<name>/<path>`` -> ``/service/<name>/<path>``,
-    ``https://...`` passes through. Any divergence between this helper and
-    the frontend breaks the wait-stable predicate for ``replace-url``."""
-    assert layout._resolve_replace_url("service:web") == "/service/web/"
-    assert layout._resolve_replace_url("service:web/") == "/service/web/"
-    assert layout._resolve_replace_url("service:api/health") == "/service/api/health"
-    assert layout._resolve_replace_url("service:api/v1/users") == "/service/api/v1/users"
+def test_resolve_replace_url_stays_service_relative() -> None:
+    """``_resolve_replace_url`` never emits an absolute service URL: the
+    frontend derives each service origin from its own ``location.host``,
+    which the script cannot know, so ``service:`` shorthands stay in
+    canonical service-relative form and ``https://`` URLs pass through."""
+    assert layout._resolve_replace_url("service:web") == "service:web"
+    assert layout._resolve_replace_url("service:web/") == "service:web"
+    assert layout._resolve_replace_url("service:api/health") == "service:api/health"
+    assert layout._resolve_replace_url("service:api/v1/users") == "service:api/v1/users"
+    assert layout._resolve_replace_url("service:browser?session=2") == "service:browser/?session=2"
     assert layout._resolve_replace_url("https://example.com/") == "https://example.com/"
+
+
+def test_service_coordinates_from_url_requires_the_workspace_coordinate() -> None:
+    """The predicate's URL parser accepts both the local and shared service
+    origin spellings (one nesting rule, different bases) and rejects
+    non-service URLs (external panels, the bare workspace origin) so a
+    ``service:`` expectation can never match them."""
+    local_host = "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421"
+    shared_host = "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.us-east.imbueminds.com"
+    assert layout._service_coordinates_from_url(f"http://api.{local_host}/health") == ("api", "/health")
+    assert layout._service_coordinates_from_url(f"http://web.{local_host}/") == ("web", "/")
+    assert layout._service_coordinates_from_url(f"https://api.{shared_host}/health") == ("api", "/health")
+    assert layout._service_coordinates_from_url(f"http://browser.{local_host}/?session=2") == (
+        "browser",
+        "/?session=2",
+    )
+    assert layout._service_coordinates_from_url("https://example.com/") is None
+    # The bare workspace origin is the shell itself, not a service.
+    assert layout._service_coordinates_from_url(f"http://{local_host}/") is None
+    # A hostname with a host-like label that is not host-<32hex> is external.
+    assert layout._service_coordinates_from_url("https://host-abc.example.com/") is None
 
 
 def test_service_name_from_ref_strips_query_and_path() -> None:

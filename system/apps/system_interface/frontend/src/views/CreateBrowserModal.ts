@@ -87,9 +87,6 @@ export function validateBrowserName(name: string): string | null {
 }
 
 interface CreateBrowserModalAttrs {
-  // Service base URL for the browser daemon (``/service/browser/``). Passed in
-  // so the modal does not need to import the workspace's service-URL helper.
-  browserServiceUrl: string;
   // Names of the browsers already in the fleet (the same list that drives the
   // "active browser" dropdown). Used to pre-validate a typed name: a duplicate
   // is rejected inline before any pane is opened or any create is attempted.
@@ -186,7 +183,9 @@ export function CreateBrowserModal(): m.Component<CreateBrowserModalAttrs> {
     void (async () => {
       let response: globalThis.Response;
       try {
-        response = await fetch(`${attrs.browserServiceUrl}browsers`, {
+        // Same-origin backend passthrough to the browser daemon (the daemon
+        // itself lives on a sibling service origin).
+        response = await fetch(apiUrl("/api/browsers"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: chosen }),

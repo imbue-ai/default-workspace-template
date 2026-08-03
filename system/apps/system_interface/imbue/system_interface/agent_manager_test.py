@@ -109,6 +109,7 @@ def test_read_apps_parses_toml(agent_manager: AgentManager, tmp_path: Path) -> N
 [[apps]]
 name = "web"
 url = "http://localhost:8000"
+label = "web-x7k9q2w1"
 
 [[apps]]
 name = "terminal"
@@ -123,8 +124,11 @@ url = "http://localhost:7681"
     assert len(apps) == 2
     assert apps[0].name == "web"
     assert apps[0].url == "http://localhost:8000"
+    assert apps[0].label == "web-x7k9q2w1"
     assert apps[1].name == "terminal"
     assert apps[1].url == "http://localhost:7681"
+    # A row written before labels existed reads back with an empty label.
+    assert apps[1].label == ""
 
 
 def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -179,11 +183,11 @@ def test_get_agents_serialized(agent_manager: AgentManager) -> None:
 def test_get_apps_serialized(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
         agent_manager._apps = [
-            AppEntry(name="web", url="http://localhost:8000"),
+            AppEntry(name="web", url="http://localhost:8000", label="web-x7k9q2w1"),
         ]
 
     serialized = agent_manager.get_apps_serialized()
-    assert serialized == [{"name": "web", "url": "http://localhost:8000"}]
+    assert serialized == [{"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1"}]
 
 
 def test_resolve_agent_work_dir_from_own_env(agent_manager: AgentManager) -> None:
@@ -906,11 +910,36 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "proj"},
+        is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
     # The chat carries user_created so the OOM launch wrapper puts it in the
     # dynamic chat band rather than the least-protected worker/unclassified band.
     assert "user_created=true" in argv
+
+
+def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
+    """Chat is the only type that starts fast, so its create must say which way."""
+    enabled_argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={},
+        is_fast_mode_enabled=True,
+    )
+    disabled_argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={},
+        is_fast_mode_enabled=False,
+    )
+    assert "agent_types.claude.settings_overrides.fastMode=true" in enabled_argv
+    assert "agent_types.claude.settings_overrides.fastMode=false" in disabled_argv
+    # Both forms must resolve against the live mngr config model, not just parse
+    # as CLI tokens: an unresolvable -S key path fails the create outright.
+    assert_mngr_argv_valid(enabled_argv)
+    assert_mngr_argv_valid(disabled_argv)
 
 
 def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:

@@ -1,0 +1,1 @@
+Combined integration PR (carries mngr/claude-config-dir): the bootstrap no longer resolves or writes `CLAUDE_CONFIG_DIR` into the host env file; every claude uses the shared default `~/.claude`. See `mngr-claude-config-dir.md` in this directory for details.

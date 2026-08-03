@@ -1,6 +1,7 @@
 """Live-browser fleet web service: spawn headless Chromium, stream it, drive it with browser-use.
 
-Reached through the system_interface proxy at ``/service/browser/``. Serves one
+Served at its own workspace origin (``browser.host-<hex>.localhost`` locally;
+share hostnames follow the same prefix rule). Serves one
 self-contained viewer page (assets/index.html) that renders a streamed browser
 and an "Agent has control" overlay; the page talks back over one WebSocket,
 ``/browsers/{name}/cast`` (screencast frames out; human input, tab control, and
@@ -28,11 +29,8 @@ are all async and run on ONE background asyncio event loop, quarantined behind a
 single :class:`~browser.loop_bridge.AsyncLoopBridge`. Every route handler reaches
 the async world only through ``bridge.run(coro)`` (blocking) or ``bridge.submit``
 (fire-and-forget, returns the in-loop asyncio.Task). This mirrors the proven
-Flask+WS pattern in system/apps/system_interface. ``ROOT_PATH`` is read for informational
-parity but is no longer wired into URL generation: the viewer uses relative URLs,
-so the ``/service/browser/`` proxy prefix needs no server-side awareness (the
-FastAPI ``root_path`` it replaced only emitted prefix-aware URLs the page never
-relied on).
+Flask+WS pattern in system/apps/system_interface. The service owns its origin, so
+the viewer's relative URLs need no prefix or root-path awareness anywhere.
 """
 
 import json
@@ -68,7 +66,6 @@ from browser.session import (
 )
 from browser.wsgi import make_threaded_server
 
-ROOT_PATH = os.environ.get("ROOT_PATH", "")
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
@@ -109,6 +106,9 @@ manager = BrowserSessionManager()
 
 application = Flask(__name__, static_folder=None)
 application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
+# Clipboard paste bodies carry raw image bytes (the WS proxy's ~1 MiB cap is why
+# clipboard rides HTTP, not the cast socket). Bound it so a giant paste can't OOM.
+application.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 sock = Sock(application)
 
 # Init gate: cleared at import, set when startup restore finishes (always, even on
@@ -734,6 +734,28 @@ def cmd_tab(browser_id: str) -> Response:
     )
 
 
+def cmd_clipboard_copy(browser_id: str) -> Response:
+    """Human viewer copies (or cuts, ``?cut=1``) the browser's current selection to
+    their local clipboard. Not agent-gated -- the session gates on human control.
+    Returns ``{ok, mime, text|data}``; ``mime`` is null when nothing is selected."""
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    cut = request.args.get("cut") == "1"
+    return jsonify(bridge.run(resolved.clipboard_copy(cut=cut), timeout=_DIRECT_ACTION_TIMEOUT))
+
+
+def cmd_clipboard_paste(browser_id: str) -> Response:
+    """Human viewer pastes their local clipboard into the browser. Body is the raw
+    clipboard bytes; Content-Type is the mime (text/plain or image/*)."""
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    data = request.get_data()
+    mime = (request.content_type or "text/plain").split(";")[0].strip() or "text/plain"
+    return jsonify(bridge.run(resolved.clipboard_paste(data, mime), timeout=_DIRECT_ACTION_TIMEOUT))
+
+
 # --- screencast WebSocket ----------------------------------------------------
 
 
@@ -876,6 +898,8 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/keys", view_func=cmd_keys, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/screenshot", view_func=cmd_screenshot, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
+    application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_copy, methods=["GET"], endpoint="clipboard_copy")
+    application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
 
 
@@ -919,9 +943,8 @@ def _exit_on_signal(_signum: int, _frame: FrameType | None) -> None:
 def main() -> None:
     """Build the app, register shutdown, and serve on the threaded HTTP/1.1 server.
 
-    Replaces ``uvicorn.run``. The supervisord command line and ``ROOT_PATH`` env are
-    unchanged; ``ROOT_PATH`` is now only informational (the viewer uses relative URLs,
-    so the proxy prefix needs no server-side awareness).
+    Replaces ``uvicorn.run``. The service is reached at its own workspace origin;
+    the viewer uses relative URLs, so no prefix or root-path awareness is needed.
     """
     app = create_app()
     # Chromium overwrites the inherited oom_score_adj with its own gradation;
