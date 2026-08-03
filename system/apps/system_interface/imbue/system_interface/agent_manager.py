@@ -53,6 +53,9 @@ from imbue.system_interface.agent_events import AgentEventsMode
 from imbue.system_interface.agent_events import AgentEventsStatus
 from imbue.system_interface.agent_events import ObserveEventFollower
 from imbue.system_interface.agent_events import ObserveStreamUnavailableError
+from imbue.system_interface.fast_mode_policy import FAST_MODE_BEFORE_DECISION
+from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
+from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
@@ -117,6 +120,7 @@ def _build_chat_create_command(
     name: str,
     agent_id: str,
     primary_labels: dict[str, str],
+    is_fast_mode_enabled: bool,
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent. Pure (see above)."""
     cmd = [
@@ -133,6 +137,12 @@ def _build_chat_create_command(
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
         "user_created=true",
+        # Chat is the one interactive agent type, so it is the only one that starts
+        # fast; .mngr/settings.toml defaults every other type to standard speed. See
+        # that file's [agent_types.claude] note for why the override targets `claude`
+        # rather than `chat`.
+        "-S",
+        f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
         "--no-connect",
     ]
     # Inherit the project label from the primary agent. The chat agent belongs to
@@ -637,7 +647,7 @@ class AgentManager:
     def get_apps_serialized(self) -> list[dict[str, str]]:
         """Return the primary agent's app list serialized for JSON."""
         with self._lock:
-            return [{"name": app.name, "url": app.url} for app in self._apps]
+            return [{"name": app.name, "url": app.url, "label": app.label} for app in self._apps]
 
     def get_service_url(self, service_name: str) -> str | None:
         """Return the local backend URL for a service, or None if it isn't registered."""
@@ -744,7 +754,11 @@ class AgentManager:
             msg = f"Cannot determine work directory for primary agent {self._own_agent_id}"
             raise AgentCreationError(msg)
 
-        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels)
+        # New chats launch at the workspace's fast-mode setting: fast until the
+        # user answers the prompt, then whatever they chose.
+        decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
+        is_fast_mode_enabled = FAST_MODE_BEFORE_DECISION if decision is None else decision
+        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels, is_fast_mode_enabled)
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
 
@@ -1450,8 +1464,9 @@ class AgentManager:
                 for entry in data.get("apps", []):
                     name = entry.get("name", "")
                     url = entry.get("url", "")
+                    label = entry.get("label", "")
                     if name and url:
-                        apps.append(AppEntry(name=name, url=url))
+                        apps.append(AppEntry(name=name, url=url, label=label))
             except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError) as e:
                 _loguru_logger.opt(exception=e).error("Failed to parse {}", toml_path)
 

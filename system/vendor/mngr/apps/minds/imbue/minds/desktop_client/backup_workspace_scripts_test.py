@@ -34,10 +34,11 @@ from imbue.minds.testing import write_stub_supervisorctl
 
 
 def _make_workspace_repo(tmp_path: Path, *, code_path: str = "libs/host_backup") -> Path:
-    """A git repo shaped like a workspace: the backup-service code dir + an unrelated file.
+    """A git repo shaped like a machine: the backup-service code dir + an unrelated file.
 
     ``code_path`` is the repo-relative backup-service directory (pass
-    ``system/libs/host_backup`` for a repo shaped like the decluttered template).
+    ``system/services/host_backup`` for a repo shaped like the creation-rename
+    template, ``system/libs/host_backup`` for the decluttered one).
     """
     repo = tmp_path / "workspace"
     repo.mkdir()
@@ -81,11 +82,11 @@ def _make_stub_bin(
     list_ok: bool = True,
     supervisorctl_call_log: Path | None = None,
 ) -> Path:
-    """A PATH dir with stub `uv` and `supervisorctl` acting like a healthy workspace.
+    """A PATH dir with stub `uv` and `supervisorctl` acting like a healthy machine.
 
     ``sync_ok=False`` fails `uv sync` (a post-restore failpoint for the
     restore script); ``list_ok=False`` fails `uv run mngr list` (a broken
-    workspace whose chat gate cannot answer); ``supervisorctl_call_log`` is
+    machine whose chat gate cannot answer); ``supervisorctl_call_log`` is
     forwarded to the supervisorctl stub for lifecycle-order assertions.
     """
     stub_bin = tmp_path / "stub-bin"
@@ -195,6 +196,19 @@ def test_check_script_reports_outdated_on_a_new_layout_workspace(tmp_path: Path)
     # read "matches").
     repo = _make_workspace_repo(tmp_path, code_path="system/libs/host_backup")
     tag_newer_release_content(repo, code_path="system/libs/host_backup")
+    stub_bin = _make_stub_bin(tmp_path)
+    run = _run_script(repo, BACKUP_CHECK_SCRIPT, ("--minimum-tag", "minds-v2.0.0"), extra_path=stub_bin)
+    payload = extract_marker_json(run["stdout"], CHECK_RESULT_MARKER)
+    assert payload is not None, run
+    assert payload["code_state"] == "outdated"
+
+
+def test_check_script_reports_outdated_on_a_creation_rename_layout_workspace(tmp_path: Path) -> None:
+    # A workspace shaped like the creation-rename template keeps the backup
+    # code at system/services/host_backup, checked against a tag with the same
+    # layout. The check must resolve and diff that path.
+    repo = _make_workspace_repo(tmp_path, code_path="system/services/host_backup")
+    tag_newer_release_content(repo, code_path="system/services/host_backup")
     stub_bin = _make_stub_bin(tmp_path)
     run = _run_script(repo, BACKUP_CHECK_SCRIPT, ("--minimum-tag", "minds-v2.0.0"), extra_path=stub_bin)
     payload = extract_marker_json(run["stdout"], CHECK_RESULT_MARKER)
@@ -588,6 +602,10 @@ def test_apply_update_is_blocked_by_running_chats_without_stop_flag(tmp_path: Pa
     assert payload["running_chats"] == ["chat-1"]
 
 
+# Runs the apply-update script twice (apply, then re-check) over a real git
+# repo, which exceeds the 10s default under a loaded parallel run. Same 120s
+# budget the restore-script tests below already take for the same reason.
+@pytest.mark.timeout(120)
 def test_apply_update_rolls_back_when_service_restart_fails(tmp_path: Path) -> None:
     repo = _make_workspace_repo(tmp_path)
     tag_newer_release_content(repo)
@@ -860,7 +878,7 @@ def test_restore_script_reports_failure_when_the_restored_tree_lacks_a_checkout(
     host, code, restic_repo = _make_restore_workspace(tmp_path)
     junk = (tmp_path / "junk").resolve()
     junk.mkdir()
-    (junk / "unrelated.txt").write_text("not a workspace\n")
+    (junk / "unrelated.txt").write_text("not a machine\n")
     _restic_for_test(restic_repo, "backup", str(junk))
     snapshot_id = _snapshot_entries(restic_repo)[0]["id"]
 

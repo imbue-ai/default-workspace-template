@@ -42,7 +42,7 @@ def test_logged_in_smoke(
     2. ``GET <connector_url>/version`` returns ``{"deploy_id": <non-empty>, "generation_id": <maybe-empty-for-dev>}`` (200).
     3. ``GET <connector_url>/generation`` returns ``{"generation_id": ...}`` (200).
     4. ``GET <litellm_proxy_url>/health/liveness`` returns 200.
-    5. ``GET <connector_url>/tunnels`` with the verified-user session token returns ``[]`` (200; the user has no tunnels yet).
+    5. ``GET <connector_url>/shares`` with the verified-user session token returns ``{"shares": []}`` (200; the user has no shares yet).
 
     All five together take well under a second when the env is healthy;
     when this test fails the heavier tests' failures are noise.
@@ -75,9 +75,9 @@ def test_logged_in_smoke(
         litellm_liveness = client.get(f"{litellm_proxy_url}/health/liveness")
         assert litellm_liveness.status_code == 200, litellm_liveness.text
 
-        tunnels = client.get(
-            f"{connector_url}/tunnels",
+        shares = client.get(
+            f"{connector_url}/shares",
             headers={"Authorization": f"Bearer {verified_user.session_token.get_secret_value()}"},
         )
-        assert tunnels.status_code == 200, tunnels.text
-        assert tunnels.json() == [], tunnels.text
+        assert shares.status_code == 200, shares.text
+        assert shares.json() == {"shares": []}, shares.text

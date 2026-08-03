@@ -12,6 +12,8 @@ from urllib.parse import quote
 
 import pytest
 from flask import Flask
+from flask import Response
+from flask import request as flask_request
 from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
@@ -19,6 +21,7 @@ from oom_priority import bands
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.api.observe import make_full_agent_state_event
 from imbue.mngr.errors import AgentStartError
+from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -29,6 +32,7 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
@@ -506,16 +510,10 @@ def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
     assert response.status_code == 404
 
 
-def test_set_fast_mode_sends_on_and_off() -> None:
+def test_set_fast_mode_sends_on_and_off(tmp_path: Path) -> None:
     """POSTing fast mode sends the running agent a `/fast on` or `/fast off` command."""
     agent_id = "agent-00000000000000000000000000000006"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
@@ -532,6 +530,94 @@ def test_set_fast_mode_unknown_agent_returns_404(client: FlaskClient) -> None:
     with patch("imbue.system_interface.server._find_agent", return_value=None):
         response = client.post("/api/agents/nonexistent/fast", json={"enabled": True})
     assert response.status_code == 404
+
+
+def test_model_settings_prefers_managed_settings_over_user_settings(client: FlaskClient, tmp_path: Path) -> None:
+    """mngr passes the managed file via --settings, which Claude layers above the
+    shared user settings -- so a freshly launched agent reports the provisioned
+    value, not the stale one the shared config happens to carry."""
+    agent_id = "agent-00000000000000000000000000000020"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_path.write_text(json.dumps({"fastMode": True}))
+
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.get(f"/api/agents/{agent_id}/model-settings")
+
+    # The user settings file has no fastMode key at all, which on its own reads as
+    # off; the managed overlay is what makes this agent fast.
+    assert response.get_json()["fast_mode"] is True
+
+
+def test_setting_fast_mode_records_it_where_the_next_launch_reads_it(tmp_path: Path) -> None:
+    """`/fast off` deletes the key instead of writing false, so the toggle is written
+    into the agent's own launch settings -- which is both what the picker reads back
+    and what the agent comes back with if it restarts."""
+    agent_id = "agent-00000000000000000000000000000021"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    # The agent was provisioned fast, and mngr's hooks share the file.
+    managed_path.write_text(json.dumps({"hooks": {"SessionStart": ["mark-active"]}, "fastMode": True}))
+
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is True
+        assert client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False}).status_code == 200
+        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is False
+
+    # On disk, so a restart of this service or of the agent reports the same thing --
+    # and mngr's hooks are still there.
+    assert json.loads(managed_path.read_text()) == {
+        "hooks": {"SessionStart": ["mark-active"]},
+        "fastMode": False,
+    }
+
+
+def test_setting_fast_mode_reports_settings_it_cannot_record(tmp_path: Path) -> None:
+    """The running session took the command but the change will not outlive it, so
+    the caller is told rather than shown a success it cannot rely on."""
+    agent_id = "agent-00000000000000000000000000000022"
+    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
+    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
+    managed_path.parent.mkdir(parents=True, exist_ok=True)
+    managed_path.write_text("{not valid json")
+
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False})
+
+    assert response.status_code == 500
+    # Whatever mngr had in there is untouched rather than replaced.
+    assert managed_path.read_text() == "{not valid json"
+
+
+def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The prompt is owed until answered, and the answer survives for later chats."""
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    client = create_application(build_test_state()).test_client()
+
+    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is None
+
+    recorded = client.post("/api/workspace/fast-mode", json={"enabled": False}).get_json()
+    assert recorded["fast_mode"] is False
+
+    # A later reader (a new chat create, another browser) sees the same answer.
+    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is False
+
+
+def test_workspace_fast_mode_can_keep_fast_mode_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Answering "keep it" must also stick, or the prompt would reappear forever."""
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    client = create_application(build_test_state()).test_client()
+
+    client.post("/api/workspace/fast-mode", json={"enabled": True})
+    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is True
 
 
 def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dict[str, int]) -> AgentManager:
@@ -1127,6 +1213,34 @@ def test_layout_broadcast_mutating_op_without_matching_client_is_412(app: Flask)
     )
     assert response.status_code == 412
     assert "No connected client has layout" in response.get_json()["detail"]
+
+
+def test_layout_broadcast_sessionless_browser_is_rejected(app: Flask) -> None:
+    """A bare ``service:browser`` open (no ``?session=<name>``) is a 400 -- it would spawn
+    the orphan session-less viewer pane. A session-qualified ref goes through."""
+    matching_queue = _register_fake_client(app, "client-1", "desktop")
+    client = app.test_client()
+    # Bare browser ref -> rejected with a guiding message (fires before the layout checks).
+    bare = client.post(
+        "/api/layout/broadcast",
+        json={"op": "open", "args": {"ref": "service:browser", "layout": "desktop"}, "agent_id": "agent-42"},
+    )
+    assert bare.status_code == 400
+    assert "needs a specific browser name" in bare.get_json()["detail"]
+    # nothing should have been broadcast to the client
+    assert matching_queue.empty()
+    # A session-qualified browser ref is allowed and reaches the client.
+    ok = client.post(
+        "/api/layout/broadcast",
+        json={
+            "op": "open",
+            "args": {"ref": "service:browser?session=alex-smith", "layout": "desktop"},
+            "agent_id": "agent-42",
+        },
+    )
+    assert ok.status_code == 200
+    msg = _next_broadcast_message(matching_queue)
+    assert msg["args"]["ref"] == "service:browser?session=alex-smith"
 
 
 def test_layout_broadcast_mutating_op_unknown_layout_is_404(app: Flask) -> None:
@@ -1973,3 +2087,82 @@ def test_missing_non_image_path_is_not_a_download(client: FlaskClient, tmp_path:
     assert response.status_code == 200
     assert "text/html" in response.content_type
     assert "attachment" not in response.headers.get("Content-Disposition", "")
+
+
+def _build_stub_browser_backend() -> Flask:
+    """A tiny stand-in for the browser daemon's fleet API.
+
+    ``GET /browsers`` returns a fixed fleet listing; ``POST /browsers``
+    echoes the submitted name on success and rejects the reserved name
+    ``taken`` with the daemon's 409 error shape, so tests can observe both
+    the body forwarding and the status relay through the passthrough.
+    """
+    stub = Flask(__name__, static_folder=None)
+
+    def list_browsers() -> Response:
+        body = json.dumps({"browsers": [{"name": "main", "controller": None}]})
+        return Response(body, mimetype="application/json")
+
+    def create_browser() -> Response:
+        payload = json.loads(flask_request.get_data() or b"{}")
+        name = payload.get("name", "")
+        if name == "taken":
+            return Response(json.dumps({"error": "name already in use"}), status=409, mimetype="application/json")
+        return Response(json.dumps({"name": name}), status=200, mimetype="application/json")
+
+    stub.add_url_rule("/browsers", view_func=list_browsers, methods=["GET"])
+    stub.add_url_rule("/browsers", view_func=create_browser, methods=["POST"], endpoint="create_browser")
+    return stub
+
+
+def _client_with_browser_service(url: str | None) -> FlaskClient:
+    """Build a workspace app test client whose ``browser`` service points at ``url``.
+
+    ``None`` leaves the apps registry empty (browser service not registered).
+    """
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [AppEntry(name="browser", url=url)] if url is not None else []
+    return create_application(build_test_state(agent_manager=agent_manager)).test_client()
+
+
+def test_get_browsers_passthrough_relays_backend_fleet() -> None:
+    """``GET /api/browsers`` forwards to the browser daemon and relays its JSON."""
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        response = test_client.get("/api/browsers")
+        assert response.status_code == 200
+        assert response.get_json() == {"browsers": [{"name": "main", "controller": None}]}
+
+
+def test_post_browsers_passthrough_forwards_body_and_relays_success() -> None:
+    """``POST /api/browsers`` forwards the JSON body and relays the daemon's response."""
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        response = test_client.post("/api/browsers", json={"name": "research"})
+        assert response.status_code == 200
+        assert response.get_json() == {"name": "research"}
+
+
+def test_post_browsers_passthrough_relays_backend_rejection() -> None:
+    """A daemon rejection (409 + error body) passes through status and body verbatim."""
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        response = test_client.post("/api/browsers", json={"name": "taken"})
+        assert response.status_code == 409
+        assert response.get_json() == {"error": "name already in use"}
+
+
+def test_browsers_passthrough_returns_503_when_service_not_registered() -> None:
+    """Without a registered ``browser`` service, both methods return a 503 JSON error."""
+    test_client = _client_with_browser_service(None)
+    for response in (test_client.get("/api/browsers"), test_client.post("/api/browsers", json={"name": "x"})):
+        assert response.status_code == 503
+        assert "not registered" in response.get_json()["detail"]
+
+
+def test_browsers_passthrough_returns_503_when_backend_is_unreachable() -> None:
+    """A registered but dead backend surfaces as a 503 JSON error, not a raised exception."""
+    test_client = _client_with_browser_service("http://127.0.0.1:1")
+    response = test_client.get("/api/browsers")
+    assert response.status_code == 503
+    assert "unreachable" in response.get_json()["detail"]

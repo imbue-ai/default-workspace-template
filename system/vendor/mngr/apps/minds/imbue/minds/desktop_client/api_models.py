@@ -210,6 +210,17 @@ class EmptyResponse(FrozenModel):
     """An empty ``{}`` success body (e.g. an idempotent dismissal)."""
 
 
+class TimezoneResponse(FrozenModel):
+    """The host machine's timezone, for callers that need the user's local time."""
+
+    timezone: str = Field(
+        description=(
+            "IANA timezone of the machine the desktop client runs on (e.g. America/Los_Angeles); "
+            "empty string when it cannot be determined"
+        )
+    )
+
+
 class AgentNotificationRequest(ApiRequestModel):
     """Body for sending a desktop notification on behalf of an agent."""
 
@@ -301,15 +312,33 @@ class RestartWorkspaceRequest(ApiRequestModel):
     )
 
 
-class EnableSharingRequest(ApiRequestModel):
-    """Body for enabling/updating Cloudflare sharing of a workspace service."""
+class SharingGrantList(FrozenModel):
+    """One sharing scope's allow-list: exact emails plus whole email domains."""
 
-    emails: tuple[str, ...] = Field(
-        min_length=1,
-        description=(
-            "Emails allowed by the Cloudflare Access policy; at least one is required. "
-            "An empty list is rejected because it would expose the service publicly."
-        ),
+    emails: tuple[str, ...] = Field(default=(), description="Exact email addresses granted access")
+    email_domains: tuple[str, ...] = Field(default=(), description="Whole email domains granted access")
+
+
+class SharingGrantsDocument(FrozenModel):
+    """A machine's full grants document: workspace-level plus per-service scopes."""
+
+    workspace: SharingGrantList = Field(default=SharingGrantList(), description="Workspace-level grants")
+    services: dict[str, SharingGrantList] = Field(
+        default_factory=dict, description="Per-service grants, keyed by registered service name"
+    )
+
+
+class MachineSharingRequest(ApiRequestModel):
+    """Body for enabling/updating a machine's sharing grants document.
+
+    ``workspace`` grants admit every service; ``services`` entries admit only
+    that one service's origin. At least one grantee is required overall (an
+    empty document would share with nobody and is rejected by the handler).
+    """
+
+    workspace: SharingGrantList = Field(default=SharingGrantList(), description="Workspace-level grants")
+    services: dict[str, SharingGrantList] = Field(
+        default_factory=dict, description="Per-service grants, keyed by registered service name"
     )
 
 
@@ -443,6 +472,19 @@ class AccountsResponse(FrozenModel):
     accounts: tuple[AccountSummary, ...] = Field(description="All signed-in accounts")
 
 
+class AppVersionResponse(FrozenModel):
+    """The version identity of the minds desktop app a workspace is attached to."""
+
+    workspace_template_ref: str = Field(
+        description=(
+            "The newest workspace-template ref this app supports, and the app's own release "
+            "identity: a released binary ships the ``minds-v*`` tag it was verified against. "
+            "A workspace must not update itself past this. A dev build reports a branch instead, "
+            "which imposes no ceiling."
+        )
+    )
+
+
 class OkResponse(FrozenModel):
     """A minimal ``{"ok": true}`` acknowledgement."""
 
@@ -539,20 +581,28 @@ class WorkspaceBackupCheckResponse(FrozenModel):
 
 
 class SharingReadinessResponse(FrozenModel):
-    """Whether a shared service's hostname is live yet at the Cloudflare edge."""
+    """Whether a shared machine's hostname is live yet end to end."""
 
-    ready: bool = Field(description="Whether the shared URL is reachable yet")
+    ready: bool = Field(description="Whether the shared hostname answers over the relay yet")
 
 
-class SharingToggleResponse(FrozenModel):
-    """Result of enabling/disabling sharing for a workspace service."""
+class MachineSharingResponse(FrozenModel):
+    """A machine's sharing document: status plus the grants read from the workspace."""
 
-    agent_id: str = Field(description="The workspace agent id")
-    service_name: str = Field(description="The service whose sharing was changed")
-    enabled: bool = Field(description="Whether sharing is now enabled")
-    url: str | None = Field(
-        default=None,
-        description="The service's public share URL (enable only); lets the editor skip a follow-up status read",
+    host_id: str = Field(description="The machine's host coordinate (host-<hex>)")
+    enabled: bool = Field(description="Whether the machine is currently shared")
+    workspace_domain: str | None = Field(default=None, description="The share's public domain")
+    url: str | None = Field(default=None, description="The share's public URL (https://<workspace_domain>/)")
+    region: str | None = Field(default=None, description="Relay region code")
+    last_tunnel_login_at: str | None = Field(default=None, description="Last relay tunnel connect stamp")
+    cert_not_after: str | None = Field(default=None, description="Expiry of the share's TLS certificate")
+    grants: SharingGrantsDocument | None = Field(
+        default=SharingGrantsDocument(),
+        description=(
+            "The grants document currently in force; null when the machine is "
+            "shared but the grants read did not land (clients must treat null "
+            "as unknown, never as an empty policy)"
+        ),
     )
 
 

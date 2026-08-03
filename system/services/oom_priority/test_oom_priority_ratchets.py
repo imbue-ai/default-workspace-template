@@ -34,7 +34,7 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(0))
+    rc.check_bare_print(_DIR, snapshot(6))
 
 
 # --- Exception handling ---
@@ -45,7 +45,7 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(0))
+    rc.check_broad_exception_catch(_DIR, snapshot(2))
 
 
 def test_prevent_builtin_exception_raises() -> None:

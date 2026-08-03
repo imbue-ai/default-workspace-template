@@ -109,6 +109,17 @@ def test_parse_service_log_records_parses_valid_jsonl() -> None:
     assert isinstance(records[0], ServiceLogRecord)
     assert records[0].service == ServiceName("web")
     assert records[0].url == "http://127.0.0.1:9100"
+    # No ``label`` in the row -> empty, so callers fall back to the service name.
+    assert records[0].label == ""
+
+
+def test_parse_service_log_records_captures_the_origin_label() -> None:
+    text = '{"service": "terminal", "url": "http://127.0.0.1:9100", "label": "terminal-x7k9q2w1"}\n'
+    records = parse_service_log_records(text)
+
+    assert len(records) == 1
+    assert isinstance(records[0], ServiceLogRecord)
+    assert records[0].label == "terminal-x7k9q2w1"
 
 
 def test_parse_service_log_records_returns_empty_for_empty_input() -> None:
@@ -285,7 +296,7 @@ def _discovered_agent(host_id: HostId, agent_id: AgentId, agent_name: str) -> Di
 
 
 def test_get_system_services_agent_id_finds_agent_sharing_the_host() -> None:
-    """The system-services agent on the workspace agent's host is resolved, not one on another host."""
+    """The system-services agent on the machine agent's host is resolved, not one on another host."""
     resolver = MngrCliBackendResolver()
     host_a = HostId.generate()
     host_b = HostId.generate()
@@ -353,7 +364,7 @@ def _resolver_with_workspace_agent(extra_labels: Mapping[str, str] = {}) -> tupl
 
 
 def test_get_workspace_color_returns_none_when_label_missing() -> None:
-    """Pre-migration / freshly-created workspaces have no color label."""
+    """Pre-migration / freshly-created machines have no color label."""
     resolver, agent = _resolver_with_workspace_agent()
     assert resolver.get_workspace_color(agent) is None
 
@@ -380,7 +391,7 @@ def test_get_workspace_color_normalizes_lenient_label_values(stored_label: str, 
 
 def test_get_workspace_color_recovers_to_default_when_label_malformed() -> None:
     """Mngr does not validate label values; a hand-edited / future-version
-    label might be junk. The resolver returns the default workspace color
+    label might be junk. The resolver returns the default machine color
     rather than crashing the SSE generator."""
     resolver, agent = _resolver_with_workspace_agent(extra_labels={"color": "not-a-hex"})
     assert resolver.get_workspace_color(agent) == DEFAULT_WORKSPACE_COLOR
@@ -394,7 +405,7 @@ def test_get_workspace_color_returns_none_for_unknown_agent() -> None:
 def test_set_workspace_color_locally_updates_the_cached_label() -> None:
     """Optimistic write: after a successful CLI mngr label write, the
     resolver's cached snapshot is updated in place so the next SSE
-    workspaces emit reflects the new color -- without waiting for the
+    machines emit reflects the new color -- without waiting for the
     ~10s discovery tick to re-emit through ``mngr observe``."""
     resolver, agent = _resolver_with_workspace_agent()
     assert resolver.get_workspace_color(agent) is None
@@ -453,7 +464,7 @@ def test_get_workspace_color_logs_each_malformed_agent_only_once() -> None:
 
 
 def test_list_active_workspace_ids_excludes_agents_on_destroyed_hosts() -> None:
-    """A workspace on a DESTROYED host stays in the known set but drops from the active set."""
+    """A machine on a DESTROYED host stays in the known set but drops from the active set."""
     resolver = MngrCliBackendResolver()
     live_host = HostId.generate()
     dead_host = HostId.generate()
@@ -478,7 +489,7 @@ def test_list_active_workspace_ids_excludes_agents_on_destroyed_hosts() -> None:
 
 
 def test_list_active_workspace_ids_keeps_agents_whose_host_state_is_unknown() -> None:
-    """Absent host state must not hide a workspace (only an explicit DESTROYED does)."""
+    """Absent host state must not hide a machine (only an explicit DESTROYED does)."""
     resolver = MngrCliBackendResolver()
     host = HostId.generate()
     agent = AgentId.generate()
@@ -509,7 +520,7 @@ def test_get_host_state_returns_known_state_and_none_otherwise() -> None:
 
 
 def _resolver_with_host_state(host: HostId, agent: AgentId, state: HostState | None) -> MngrCliBackendResolver:
-    """A resolver carrying one workspace on ``host`` with the given discovery host state."""
+    """A resolver carrying one machine on ``host`` with the given discovery host state."""
     resolver = MngrCliBackendResolver()
     resolver.update_agents(
         ParsedAgentsResult(
@@ -624,7 +635,7 @@ def test_parse_agents_from_json_extracts_host_state() -> None:
 def _pair_snapshot(
     host: HostId, workspace_agent: AgentId, services_agent: AgentId
 ) -> tuple[DiscoveredAgent, DiscoveredAgent]:
-    """A complete two-agent host snapshot: a claude workspace agent + its system-services agent."""
+    """A complete two-agent host snapshot: a claude machine agent + its system-services agent."""
     return (
         _discovered_agent(host, workspace_agent, "my-claude-agent"),
         _discovered_agent(host, services_agent, "system-services"),
@@ -681,10 +692,10 @@ def test_last_good_topology_falls_back_when_discovery_loses_the_host(tmp_path: P
 
 
 def _primary_system_services_agent(host_id: HostId, agent_id: AgentId) -> DiscoveredAgent:
-    """A minds primary workspace agent: the system-services agent, which carries the workspace labels.
+    """A minds primary machine agent: the system-services agent, which carries the machine labels.
 
-    In minds the user-facing workspace agent IS the host's system-services
-    agent -- it has both the ``workspace`` + ``is_primary`` labels (the live
+    In minds the user-facing machine agent IS the host's system-services
+    agent -- it has both the ``machine`` + ``is_primary`` labels (the live
     filter) and the constant system-services name (the last-good filter).
     """
     return DiscoveredAgent(
@@ -697,9 +708,9 @@ def _primary_system_services_agent(host_id: HostId, agent_id: AgentId) -> Discov
 
 
 def test_list_restorable_workspace_ids_keeps_workspace_after_discovery_loss(tmp_path: Path) -> None:
-    """A workspace absent from the live snapshot is still restorable via the last-good topology.
+    """A machine absent from the live snapshot is still restorable via the last-good topology.
 
-    The cold-start race: a slow provider hasn't re-listed the workspace yet, so
+    The cold-start race: a slow provider hasn't re-listed the machine yet, so
     the live list is empty -- but the restore view must still recognize it so its
     window is not dropped.
     """
@@ -719,8 +730,32 @@ def test_list_restorable_workspace_ids_keeps_workspace_after_discovery_loss(tmp_
     assert resolver.list_restorable_workspace_ids() == (agent,)
 
 
+def test_list_restorable_workspace_host_ids_carries_the_host_coordinate(tmp_path: Path) -> None:
+    """The restorable set's host coordinates mirror the agent-keyed set, live and last-good.
+
+    Persisted window URLs are host-keyed (``/goto/<host-id>/``), so the restore
+    filter needs the host coordinate for exactly the same workspaces the
+    agent-keyed set recognizes -- including one that discovery has lost but the
+    last-good topology remembers.
+    """
+    topology_path = tmp_path / "last_good_agent_topology.json"
+    host = HostId.generate()
+    agent = AgentId.generate()
+    resolver = MngrCliBackendResolver(last_good_agents_path=topology_path)
+    resolver.update_agents(
+        ParsedAgentsResult(agent_ids=(agent,), discovered_agents=(_primary_system_services_agent(host, agent),))
+    )
+    assert resolver.list_restorable_workspace_host_ids() == (str(host),)
+
+    # Discovery loses the host (empty snapshot); the host coordinate survives
+    # via the last-good topology, just like the agent coordinate does.
+    resolver.update_agents(ParsedAgentsResult())
+    assert resolver.list_restorable_workspace_ids() == (agent,)
+    assert resolver.list_restorable_workspace_host_ids() == (str(host),)
+
+
 def test_list_restorable_workspace_ids_unions_live_and_last_good(tmp_path: Path) -> None:
-    """The restorable set is the union of last-good and a freshly-discovered (not-yet-remembered) workspace."""
+    """The restorable set is the union of last-good and a freshly-discovered (not-yet-remembered) machine."""
     topology_path = tmp_path / "last_good_agent_topology.json"
     remembered_host, remembered_agent = HostId.generate(), AgentId.generate()
     fresh_host, fresh_agent = HostId.generate(), AgentId.generate()
@@ -799,7 +834,7 @@ def test_lifecycle_transition_cleared_on_failure_does_not_retain() -> None:
 def test_last_good_topology_prunes_host_on_observed_destroyed(tmp_path: Path) -> None:
     """A host observed DESTROYED is pruned from last-good, and the prune is persisted to disk.
 
-    Reproduces the user destroying their workspace: a complete enumeration lands
+    Reproduces the user destroying their machine: a complete enumeration lands
     the host in last-good, then a later snapshot reports it DESTROYED (its agents
     linger in discovery for the provider's persistence window). The host must be
     dropped from both the in-memory fallback and the on-disk topology so it stops
@@ -936,7 +971,7 @@ def test_last_good_topology_resets_legacy_file_without_provider_names(tmp_path: 
     Deliberate migration: unattributed records can never be pruned by a clean
     provider snapshot, so accumulated ghosts (hosts long gone without a
     DESTROYED observation) would strand the landing page on the discovering
-    state forever. Live workspaces re-enter the topology on their next
+    state forever. Live machines re-enter the topology on their next
     discovery snapshot; only the stale memories are lost.
     """
     topology_path = tmp_path / "last_good_agent_topology.json"
@@ -1027,10 +1062,10 @@ def test_list_restorable_workspace_ids_excludes_destroyed_host_in_live_snapshot(
 
 
 def test_list_restorable_workspace_ids_empties_after_sole_workspace_destroyed(tmp_path: Path) -> None:
-    """Destroying the only workspace empties the restorable set (the spinner-vs-create-form bug).
+    """Destroying the only machine empties the restorable set (the spinner-vs-create-form bug).
 
     Covers the union's last-good half: after a complete enumeration lands the
-    workspace in last-good, observing its host DESTROYED must both prune last-good
+    machine in last-good, observing its host DESTROYED must both prune last-good
     (C1) and exclude the still-lingering live entry (C2), so restorable is empty --
     and stays empty once discovery finally drops the lingering agent. Otherwise the
     landing handler keeps the "Discovering..." spinner up instead of the create form.
@@ -1064,11 +1099,11 @@ def test_list_restorable_workspace_ids_empties_after_sole_workspace_destroyed(tm
 def test_last_good_topology_preserves_other_host_on_partial_discovery_loss() -> None:
     """A snapshot missing one host must not erase that host's remembered pairing.
 
-    Two workspaces on two hosts are both seen; then a later snapshot enumerates
+    Two machines on two hosts are both seen; then a later snapshot enumerates
     only host A (host B's SSH died). Host B's pairing must survive in last-good
     even though A produced a fresh, non-empty snapshot -- otherwise the very
-    workspace a user is trying to restart loses its services agent the moment
-    any sibling workspace reports in.
+    machine a user is trying to restart loses its services agent the moment
+    any sibling machine reports in.
     """
     resolver = MngrCliBackendResolver()
     host_a = HostId.generate()
@@ -1100,7 +1135,7 @@ def test_last_good_topology_preserves_other_host_on_partial_discovery_loss() -> 
 def test_last_good_topology_ignores_incomplete_host_enumeration() -> None:
     """A host snapshot lacking the system-services agent must not clobber the remembered pairing.
 
-    Models a within-host partial discovery loss: the workspace agent is still
+    Models a within-host partial discovery loss: the machine agent is still
     visible but its system-services agent dropped. Since the enumeration is
     incomplete (no system-services agent on the host), last-good keeps the
     prior complete record and the fallback still resolves the services agent.
@@ -1199,6 +1234,31 @@ def test_mngr_cli_resolver_update_services_replaces_state() -> None:
 
     resolver.update_services(_AGENT_A, {"web": "http://127.0.0.1:9200"})
     assert resolver.get_backend_url(_AGENT_A, _SERVICE_WEB) == "http://127.0.0.1:9200"
+
+
+def test_mngr_cli_resolver_exposes_per_service_origin_labels() -> None:
+    """update_services carries the per-service origin labels, keyed by service name."""
+    resolver = MngrCliBackendResolver()
+
+    resolver.update_services(
+        _AGENT_A,
+        {"terminal": "http://127.0.0.1:9100", "web": "http://127.0.0.1:9200"},
+        {"terminal": "terminal-x7k9q2w1"},
+    )
+    # A service with a label is exposed; one with none (``web``) is omitted so
+    # callers fall back to the service name.
+    assert resolver.list_service_labels_for_agent(_AGENT_A) == {ServiceName("terminal"): "terminal-x7k9q2w1"}
+
+
+def test_mngr_cli_resolver_replaces_labels_and_defaults_to_empty() -> None:
+    """A later update_services replaces the label map; omitting labels clears it."""
+    resolver = MngrCliBackendResolver()
+
+    resolver.update_services(_AGENT_A, {"terminal": "http://127.0.0.1:9100"}, {"terminal": "terminal-aaaa"})
+    assert resolver.list_service_labels_for_agent(_AGENT_A) == {ServiceName("terminal"): "terminal-aaaa"}
+
+    resolver.update_services(_AGENT_A, {"terminal": "http://127.0.0.1:9100"})
+    assert resolver.list_service_labels_for_agent(_AGENT_A) == {}
 
 
 # -- parse_agents_from_json tests --

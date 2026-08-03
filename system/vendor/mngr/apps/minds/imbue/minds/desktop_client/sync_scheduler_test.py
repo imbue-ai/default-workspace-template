@@ -20,6 +20,7 @@ from imbue.minds.desktop_client.conftest import make_resolver_with_data
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sync_scheduler import InitialSyncState
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
+from imbue.minds.desktop_client.testing import device_id_for_test
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
@@ -33,7 +34,7 @@ def _make_device(
     record_store = WorkspaceRecordStore(
         paths=paths,
         cli=cli,
-        device_id=f"device-{name}",
+        device_id=device_id_for_test(name),
         device_label=name,
     )
     session_store = MultiAccountSessionStore(data_dir=paths.data_dir, cli=cli, record_store=record_store)
@@ -47,7 +48,7 @@ def _make_fresh_device_scheduler(base: Path, cli: FakeImbueCloudCli) -> Workspac
 
 
 def _push_remote_workspace_record(base: Path, cli: FakeImbueCloudCli, user_id: str, name: str) -> None:
-    """Simulate another device having synced one active workspace for the account."""
+    """Simulate another device having synced one active machine for the account."""
     _, session_store = _make_device(base, f"pusher-{uuid4().hex}", cli)
     agent_id = AgentId.generate()
     host_id = HostId.generate()

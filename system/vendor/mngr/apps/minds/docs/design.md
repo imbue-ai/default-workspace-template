@@ -17,7 +17,7 @@ Workspaces are built on top of `mngr` and should interact with it exclusively th
 
 Each workspace is created from a template repository (or local directory). The repo's own `.mngr/settings.toml` drives all configuration -- agent types, templates, environment variables, and other settings. There is no `minds.toml`, vendoring, or parent tracking.
 
-Within a workspace, the "primary" agent (carrying `is_primary=true`) is dedicated to running the bootstrap and background services -- its window-0 command is `sleep infinity && claude`, so claude never actually starts there. The user's chat agents are separate `mngr` agents; the bootstrap creates the first one on initial container boot and writes `CLAUDE_CONFIG_DIR` to the host env file so every agent (chat, worktree, worker) shares the services agent's Claude config dir (auth, plugins, marketplaces, sessions). The services agent is hidden from the UI agent list and the system_interface destroy endpoint refuses to tear it down. See [the swap-primary-agent spec](../../../specs/swap-primary-agent/spec.md) for the design rationale.
+Within a workspace, the "primary" agent (carrying `is_primary=true`) is dedicated to running the bootstrap and background services -- it is a plain `command`-type agent whose window-0 command is `sleep infinity`, so no claude is ever involved. The user's chat agents are separate `mngr` agents; the bootstrap creates the first one on initial container boot. `CLAUDE_CONFIG_DIR` is deliberately unset workspace-wide, so every claude (chat, worktree, worker agents, and a bare `claude` in a workspace terminal) resolves claude's own default `~/.claude` and shares auth, plugins, marketplaces, and sessions. The services agent is hidden from the UI agent list and the system_interface destroy endpoint refuses to tear it down. See [the swap-primary-agent spec](../../../specs/swap-primary-agent/spec.md) for the original split's design rationale (its shared-config-dir mechanism has since been superseded by the unset-var `~/.claude` layout).
 
 Some workspace dependencies (currently Playwright's Chromium browser + its apt system libraries) are intentionally installed *after* container boot via the `[program:deferred-install]` section in the DEFAULT_WORKSPACE_TEMPLATE `supervisord.conf` (a one-shot `autorestart=false` service), gated by a per-package marker file. This keeps the Docker image build fast: nothing required to start the chat agent or any boot-time service depends on the deferred packages. See the default-workspace-template's `system/libs/bootstrap/README.md` for the deferral contract.
 
@@ -43,16 +43,15 @@ When a user visits the desktop client and no agents exist, they are shown a crea
 
 1. Clones the repository to a temp directory (if a URL) or uses the local path directly
 2. Runs `mngr create system-services@<host> --new-host --no-connect --label workspace_display_name=<name> --label is_primary=true --template main --template <mode>` to create the workspace host and its primary agent (the agent id is read back from the `created` JSONL event; minds does not pre-generate one)
-3. Creates a Cloudflare tunnel (if configured) and injects the tunnel token into the agent via `mngr exec`
-4. Redirects the user to the newly created agent (the user is already authenticated via the global session)
+3. Redirects the user to the newly created agent (the user is already authenticated via the global session)
 
 Agent creation is also available via the `/api/create-agent` API endpoint, which accepts a JSON body with `git_url` (a URL or local path) and returns the agent ID for status polling.
 
-### Cloudflare tunnel integration
+### Workspace sharing
 
-The remote service connector URL comes from the per-tier `client.toml` selected by `minds run --config-file <path>` (see `apps/minds/docs/environments.md`). `minds run` has no implicit default: if neither `--config-file` nor `MINDS_CLIENT_CONFIG_PATH` is set it refuses to start. The packaged Electron build passes `--config-file` explicitly from the bundled `client.toml`. Every tunnel request authenticates with the signed-in user's SuperTokens session: the JWT is sent as a Bearer token, and the session's email becomes the default Cloudflare Access policy for new services. No client-side Basic-auth credentials or `OWNER_EMAIL` need to be configured. Once a user is signed in, the desktop client creates a Cloudflare tunnel per new agent that provides global access to the agent's services gated on that user's email.
+The remote service connector URL comes from the per-tier `client.toml` selected by `minds run --config-file <path>` (see `apps/minds/docs/environments.md`). `minds run` has no implicit default: if neither `--config-file` nor `MINDS_CLIENT_CONFIG_PATH` is set it refuses to start. The packaged Electron build passes `--config-file` explicitly from the bundled `client.toml`. Every share request authenticates with the signed-in user's SuperTokens session (the JWT is sent as a Bearer token). No client-side Basic-auth credentials or `OWNER_EMAIL` need to be configured.
 
-Within each workspace's dockview UI, a Share action per service opens a modal that surfaces the global Cloudflare link and provides toggle controls for enabling/disabling global forwarding per service.
+Sharing is machine-level and user-initiated: nothing sharing-related happens at create time. When the user enables sharing for a workspace, the desktop client registers a share with the connector (`mngr imbue_cloud shares create`) and injects the relay coordinates + relay token into the workspace, whose share-gateway then dials the self-hosted relay and terminates TLS inside the workspace. Within each workspace's dockview UI, a Share action opens a modal that surfaces the shared link and edits the grants controlling who may access it.
 
 # Command line interface
 

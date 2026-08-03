@@ -328,8 +328,9 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     flat = [token for argv in registered for token in argv]
     assert "demo-app" in flat
     assert "demo-preview" in flat
-    # The tab to open (the wrapper's service path) is printed to stdout.
-    assert capsys.readouterr().out.strip() == "/service/demo-preview/"
+    # The tab to open (the wrapper's service name) is printed to stdout; its
+    # browser origin depends on the workspace host, which is not knowable here.
+    assert capsys.readouterr().out.strip() == "demo-preview"
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["pids"] == spawner.detached_pids
     assert state["services"] == ["demo-app", "demo-preview"]
@@ -550,21 +551,19 @@ def test_main_routes_down(tmp_path: Path) -> None:
 # --- wrapper page (moved here with the wrapper server) ----------------------
 
 
-def test_wrapper_page_survives_the_dispatcher_html_rewriter() -> None:
-    # The wrapper page is served *through* the system-interface dispatcher's proxy,
-    # which rewrites absolute-path ``src=``/``href=`` attributes to prepend the
-    # wrapper's own service prefix. The inner iframe URL must therefore NOT appear
-    # as a static ``src="/..."`` attribute, or it would be rewritten to point back
-    # at the wrapper. This runs the *real* rewriter to lock that contract in.
-    from imbue.system_interface.primitives import ServiceName
-    from imbue.system_interface.proxy import rewrite_proxied_html
-
+def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
+    # Every service is served at its own browser origin (a sibling hostname of
+    # the wrapper's own), and the workspace host is not knowable server-side --
+    # so the page must derive the inner iframe's origin from ``location.host``
+    # in JavaScript rather than bake in any static URL. The old path-prefix
+    # scheme (``/service/<name>/``) no longer exists.
     html = wrapper_mod.build_wrapper_html(inner_service="demo-app", title="my change")
-    rewritten = rewrite_proxied_html(html, ServiceName("demo-preview"))
 
-    assert '"/service/"' in rewritten
-    assert "demo-app" in rewritten
-    assert "/service/demo-preview/service/" not in rewritten
+    assert '"demo-app"' in html
+    assert "location.host" in html
+    assert "/service/" not in html
+    # No static src pointing anywhere: the iframe src is assigned in JS only.
+    assert 'src="' not in html
 
 
 def test_wrapper_page_escapes_the_title() -> None:

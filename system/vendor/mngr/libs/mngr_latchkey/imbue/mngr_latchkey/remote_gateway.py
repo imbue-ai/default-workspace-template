@@ -36,6 +36,7 @@ from loguru import logger
 from imbue.imbue_common.logging import log_span
 from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
+from imbue.mngr_latchkey.additional_services import shared_schemas_file_content
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import CREDENTIALS_STORE_FILENAME
@@ -51,23 +52,28 @@ from imbue.mngr_latchkey.services_catalog import ServiceCatalogError
 from imbue.mngr_latchkey.services_catalog import ServicesCatalog
 from imbue.mngr_latchkey.store import LatchkeyPermissionsConfig
 from imbue.mngr_latchkey.store import LatchkeyStoreError
+from imbue.mngr_latchkey.store import SHARED_SCHEMAS_FILENAME
 from imbue.mngr_latchkey.store import load_permissions
 from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import plugin_data_dir
 
 # Version of the upstream ``latchkey`` CLI to install on the VPS.
-LATCHKEY_VERSION: Final[str] = "3.1.0"
+LATCHKEY_VERSION: Final[str] = "3.3.0"
 
 # datalib release the VPS fetches the "dispatch curl" + Chrome-impersonating
 # curl from (``curl-<triple>.tar.gz``). The gateway runs the dispatch curl as
 # its ``LATCHKEY_CURL`` so a caller that sends the ``X-Imbue-Impersonate``
 # marker header gets Chrome TLS impersonation, while every other request
-# passes through to the system curl. The fetch is best-effort: a failure
-# (network, or a host arch datalib doesn't build) must not break
-# provisioning -- the gateway run script guards on the binaries' presence and
-# falls back to system curl when they're absent.
+# passes through to the system curl. The statically linked musl build is
+# fetched rather than the glibc one, so it runs on any VPS image regardless of
+# how old its glibc is. The fetch is fail-loud, like every other component of
+# the install: a network failure, a checksum mismatch, or a host arch datalib
+# doesn't build fails provisioning. The gateway run script exports
+# ``LATCHKEY_CURL`` unconditionally and so depends on that -- pointing latchkey
+# at a curl that isn't there would break every request, not just impersonating
+# ones.
 _DATALIB_REPO: Final[str] = "imbue-ai/datalib"
-DATALIB_CURL_VERSION: Final[str] = "v0.22.0"
+DATALIB_CURL_VERSION: Final[str] = "v0.26.0"
 # Where the two binaries land on the VPS. ``/usr/local/bin`` is already on the
 # gateway run script's PATH, and the dispatch curl finds the impersonator as a sibling.
 _CURL_IMPERSONATE_INSTALL_DIR: Final[str] = "/usr/local/bin"
@@ -75,6 +81,19 @@ _CURL_DISPATCH_BIN: Final[str] = "latchkey-curl-dispatch"
 _CURL_IMPERSONATE_BIN: Final[str] = "latchkey-curl-impersonate"
 _CURL_DISPATCH_PATH: Final[str] = f"{_CURL_IMPERSONATE_INSTALL_DIR}/{_CURL_DISPATCH_BIN}"
 _CURL_IMPERSONATE_PATH: Final[str] = f"{_CURL_IMPERSONATE_INSTALL_DIR}/{_CURL_IMPERSONATE_BIN}"
+# Suffix the new binaries are staged under before being renamed over the old
+# ones. Overwriting them in place would truncate a file the gateway may be
+# executing right then, which fails with ETXTBSY ("Text file busy"); a rename
+# within the same directory is atomic and leaves any running process on the
+# old inode. Staging both before swapping either also means a failure while
+# downloading, verifying, or staging leaves the previous pair untouched.
+_CURL_STAGED_SUFFIX: Final[str] = ".new"
+# Records which datalib release and target triple the installed pair came from.
+# The binaries are installed under fixed, version-less names, so without this
+# stamp a presence check would leave an already-provisioned VPS on whatever
+# build it first received -- exactly the hosts a bump is meant to reach. A
+# dotfile in ``/usr/local/bin`` is never picked up by a PATH lookup.
+_CURL_VERSION_STAMP_PATH: Final[str] = f"{_CURL_IMPERSONATE_INSTALL_DIR}/.latchkey-curl-version"
 
 # Port inside the container on which the VPS-resident gateway is reachable (the
 # VPS->container reverse tunnel binds it). Deliberately distinct from
@@ -253,13 +272,16 @@ def _build_ensure_installed_script(
     It also installs the datalib "dispatch" curl + the Chrome-impersonating
     curl it fronts (see :data:`DATALIB_CURL_VERSION`).
 
-    Each component is gated behind a presence check -- except Node.js, which is
-    gated behind a *version* check: a preinstalled distro node (e.g. Debian
-    bookworm's 18.x) exists but cannot run the pinned latchkey/npm, so mere
-    presence must not skip the NodeSource install. The script avoids
-    ``pipefail`` (unsupported by Debian's default ``/bin/sh``, dash) by
-    downloading the NodeSource setup script to a file instead of piping it,
-    so ``set -e`` still aborts on a failed download. supervisord is installed
+    Each component is gated behind a presence check -- except Node.js, the
+    latchkey CLI, and the curl pair, which are gated behind a *version* check.
+    A preinstalled distro node (e.g. Debian bookworm's 18.x) exists but cannot
+    run the pinned latchkey/npm, so mere presence must not skip the NodeSource
+    install. latchkey and the curl pair are installed under version-less names,
+    so only a recorded version distinguishes a stale install from a current one.
+
+    The script avoids ``pipefail`` (unsupported by Debian's default ``/bin/sh``,
+    dash) by downloading the NodeSource setup script to a file instead of piping
+    it, so ``set -e`` still aborts on a failed download. supervisord is installed
     (and its init service started) so the gateway and reverse tunnel can be run
     as auto-restarting programs that recover from crashes without a desktop
     round-trip.
@@ -284,15 +306,20 @@ def _build_ensure_installed_script(
             # Install the Chrome-impersonating "dispatch" curl + the
             # impersonator it fronts from the datalib release, so marked
             # latchkey requests (X-Imbue-Impersonate header) clear Cloudflare.
-            # Installed only when missing (idempotent), fail-loud under
-            # ``set -e`` like every other component here.
-            f"if [ ! -x {_CURL_DISPATCH_PATH} ]; then",
-            '  _ci_arch="$(uname -m)"',
-            '  case "$_ci_arch" in',
-            "    x86_64) _ci_triple=x86_64-unknown-linux-gnu ;;",
-            "    aarch64|arm64) _ci_triple=aarch64-unknown-linux-gnu ;;",
-            '    *) echo "no impersonating curl build for arch $_ci_arch" >&2; exit 1 ;;',
-            "  esac",
+            # Fail-loud under ``set -e`` like every other component here.
+            '_ci_arch="$(uname -m)"',
+            'case "$_ci_arch" in',
+            "  x86_64) _ci_triple=x86_64-unknown-linux-musl ;;",
+            "  aarch64|arm64) _ci_triple=aarch64-unknown-linux-musl ;;",
+            '  *) echo "no impersonating curl build for arch $_ci_arch" >&2; exit 1 ;;',
+            "esac",
+            # Reinstall whenever the installed pair came from a different
+            # release or triple (a host that predates the stamp, or has no
+            # curl at all, reads as an empty string and so never matches).
+            # ``$(cat ...)`` drops the stamp's trailing newline.
+            f'_ci_want="{DATALIB_CURL_VERSION} ${{_ci_triple}}"',
+            f"if [ ! -x {_CURL_DISPATCH_PATH} ] || "
+            f'[ "$(cat {_CURL_VERSION_STAMP_PATH} 2>/dev/null)" != "$_ci_want" ]; then',
             '  _ci_tb="curl-${_ci_triple}.tar.gz"',
             f'  _ci_url="https://github.com/{_DATALIB_REPO}/releases/download/{DATALIB_CURL_VERSION}/${{_ci_tb}}"',
             '  _ci_tmp="$(mktemp -d)"',
@@ -300,8 +327,18 @@ def _build_ensure_installed_script(
             '  curl -fsSL --retry 2 -o "${_ci_tmp}/${_ci_tb}.sha256" "${_ci_url}.sha256"',
             '  (cd "${_ci_tmp}" && sha256sum -c "${_ci_tb}.sha256" >/dev/null)',
             '  tar -xzf "${_ci_tmp}/${_ci_tb}" -C "${_ci_tmp}" --strip-components=1',
-            f'  install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_BIN}" "{_CURL_DISPATCH_PATH}"',
-            f'  install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_BIN}" "{_CURL_IMPERSONATE_PATH}"',
+            # Staged beside their destinations, then renamed into place: see
+            # :data:`_CURL_STAGED_SUFFIX`. The dispatch curl is swapped last
+            # because it is the one ``LATCHKEY_CURL`` names, so no request ever
+            # reaches a new dispatch curl fronting an old impersonator.
+            f'  install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_BIN}" "{_CURL_DISPATCH_PATH}{_CURL_STAGED_SUFFIX}"',
+            f'  install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_BIN}" "{_CURL_IMPERSONATE_PATH}{_CURL_STAGED_SUFFIX}"',
+            f'  mv -f "{_CURL_IMPERSONATE_PATH}{_CURL_STAGED_SUFFIX}" "{_CURL_IMPERSONATE_PATH}"',
+            f'  mv -f "{_CURL_DISPATCH_PATH}{_CURL_STAGED_SUFFIX}" "{_CURL_DISPATCH_PATH}"',
+            # Stamped only once both binaries are in place: a failed download,
+            # checksum, or swap aborts under ``set -e`` before reaching this,
+            # so the stamp never claims a release the host isn't running.
+            f"  printf '%s\\n' \"$_ci_want\" > {_CURL_VERSION_STAMP_PATH}",
             '  rm -rf "${_ci_tmp}"',
             "fi",
             # Node.js + npm via NodeSource. Version-gated (not presence-gated):
@@ -368,8 +405,9 @@ def _build_ensure_installed_script(
 def _ensure_latchkey_installed(host: OuterHostInterface) -> None:
     """Ensure curl, Node.js, supervisor, and the pinned latchkey CLI are installed on the VPS.
 
-    Idempotent: each component is installed only when missing (or, for
-    latchkey, when the installed version differs from :data:`LATCHKEY_VERSION`).
+    Idempotent: each component is installed only when missing, or -- for
+    latchkey and the impersonating curl pair -- when the installed version
+    differs from :data:`LATCHKEY_VERSION` / :data:`DATALIB_CURL_VERSION`.
     Raises :class:`RemoteGatewayError` if the install fails.
     """
     script = _build_ensure_installed_script(LATCHKEY_VERSION, _NODE_MAJOR_VERSION, _MINIMUM_NODE_MAJOR_VERSION)
@@ -414,9 +452,13 @@ def _resolve_remote_latchkey_directory(host: OuterHostInterface) -> Path:
 def _default_permissions_json() -> str:
     """Serialize the deny-all default permissions config (matches ``save_permissions`` output)."""
     config = LatchkeyPermissionsConfig()
-    # ``save_permissions`` omits an empty ``schemas`` block; mirror it so the
-    # remote file is byte-for-byte the same shape minds writes locally.
-    exclude = {"schemas"} if not config.schemas else set()
+    # ``save_permissions`` omits an empty ``schemas``/``include`` block; mirror it
+    # so the remote file is byte-for-byte the same shape minds writes locally.
+    exclude: set[str] = set()
+    if not config.schemas:
+        exclude.add("schemas")
+    if not config.include:
+        exclude.add("include")
     return config.model_dump_json(indent=2, exclude=exclude)
 
 
@@ -601,7 +643,23 @@ def sync_permissions(host: OuterHostInterface, latchkey_directory: Path, host_id
         logger.debug("No local permissions file for host {} at {}; using the restrictive default", host_id, local_path)
         content = _default_permissions_json()
 
-    remote_path = _resolve_remote_latchkey_directory(host) / _REMOTE_PERMISSIONS_FILENAME
+    remote_dir = _resolve_remote_latchkey_directory(host)
+    # Ship the shared additional-services schemas file *first*, next to the
+    # permissions file, so the bare ``include`` in the permissions file below
+    # always resolves on the VPS (detent resolves it relative to the permissions
+    # file's directory, ``~/.latchkey``). Writing it before the permissions file
+    # avoids a window where a permissions file referencing a custom scope is live
+    # but its schemas are missing.
+    shared_schemas_remote_path = remote_dir / SHARED_SCHEMAS_FILENAME
+    with log_span("Syncing shared latchkey schemas for host {} to VPS {}", host_id, host.get_name()):
+        host.write_file(
+            shared_schemas_remote_path,
+            shared_schemas_file_content().encode("utf-8"),
+            mode=_REMOTE_FILE_MODE,
+            is_atomic=True,
+        )
+
+    remote_path = remote_dir / _REMOTE_PERMISSIONS_FILENAME
     with log_span("Syncing latchkey permissions for host {} to VPS {} ({})", host_id, host.get_name(), remote_path):
         # ``is_atomic`` writes to a sibling ``.tmp`` then ``mv``s it into place, so
         # the gateway never reads a half-written file mid-sync. (``write_text_file``

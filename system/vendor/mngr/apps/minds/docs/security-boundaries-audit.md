@@ -2,6 +2,18 @@
 
 Audit date: 2026-04-23
 
+> **Partially superseded (2026-07, service-per-origin redesign).** This audit
+> predates the move to host-keyed per-origin routing: workspace content now
+> lives on `[<service>.]host-<hex>.localhost:<port>` origins, with every
+> registered service on its own origin and one domain-scoped session cookie
+> per workspace, instead of the system interface multiplexing services under
+> `/service/<name>/...` with cookie `Path` rewriting and Service-Worker
+> scoping described below. Intra-workspace service isolation is therefore
+> enforced by the browser's origin isolation, not path scoping. The
+> between-agent conclusions (origin isolation between workspaces, session
+> cookie stripping before proxying, the separate Electron content session
+> partition) still describe the current design.
+
 ## Architecture summary
 
 The minds desktop app uses a layered proxy architecture:
@@ -10,7 +22,7 @@ The minds desktop app uses a layered proxy architecture:
 
 2. **Desktop client** (FastAPI, `desktop_client/app.py`): Runs on `localhost:PORT`. Handles auth, agent discovery, and proxies `<agent-id>.localhost:PORT` subdomain requests to per-agent system interfaces.
 
-3. **System interface** (`system-interface` CLI, source at `default-workspace-template/system/libs/system_interface/`): One per agent. Multiplexes agent services under `/service/<name>/...` paths. Handles cookie path rewriting, Service Worker registration, and HTML rewriting.
+3. **System interface** (`system-interface` CLI, source at `default-workspace-template/system/apps/system_interface/`): One per agent. Multiplexes agent services under `/service/<name>/...` paths. Handles cookie path rewriting, Service Worker registration, and HTML rewriting.
 
 4. **Agent services**: Individual HTTP servers (web UI, terminal, API, etc.) running inside each agent's container.
 

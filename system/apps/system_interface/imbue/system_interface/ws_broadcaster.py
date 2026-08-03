@@ -100,6 +100,12 @@ class WebSocketBroadcaster(MutableModel):
         with self._lock:
             return [dict(info) for info in self._client_info_by_queue_id.values()]
 
+    def get_client_info(self, client_queue: queue.Queue[str | None]) -> dict[str, str] | None:
+        """The self-reported identity of one connected client, or None if unregistered."""
+        with self._lock:
+            info = self._client_info_by_queue_id.get(id(client_queue))
+            return dict(info) if info is not None else None
+
     def has_client_on_layout(self, layout_slug: str) -> bool:
         """Whether any registered client currently has ``layout_slug`` active."""
         with self._lock:
