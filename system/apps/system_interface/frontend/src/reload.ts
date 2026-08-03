@@ -23,9 +23,7 @@
  * instead guaranteed from the server side -- the shell document is served
  * `Cache-Control: no-store` (see `_html_response` in `server.py`) and the
  * assets it links are content-hashed, so a plain reload always lands on the
- * current bundle. Callers that need the cache itself dropped (the Minds app,
- * which owns the browser session) do that around this reload rather than in
- * it. */
+ * current bundle -- no caller has to drop the cache, and none does. */
 export function reloadInterface(): void {
   try {
     const top = window.top;
