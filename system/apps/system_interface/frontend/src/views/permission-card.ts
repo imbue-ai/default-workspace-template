@@ -12,6 +12,8 @@
  */
 
 import m from "mithril";
+import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
+import { sendToEmbedder } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
@@ -104,11 +106,11 @@ export function parsePermissionRequest(
 
 /**
  * Ask the outer Minds app to open its permission-request modal. The chat UI
- * runs inside an iframe, so we hand the request id to the parent via
- * postMessage rather than rendering the modal ourselves.
+ * runs inside an iframe, so we hand the request id to the embedding chrome
+ * via the embed contract rather than rendering the modal ourselves.
  */
 export function openPermissionRequest(requestId: string): void {
-  window.parent.postMessage({ type: "minds:open-request-modal", requestId }, "*");
+  sendToEmbedder(OPEN_REQUEST_MODAL, { requestId });
 }
 
 /** Small lock glyph shown in the permission-request card heading and button. */

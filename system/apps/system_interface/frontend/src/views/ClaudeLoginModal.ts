@@ -7,12 +7,12 @@
  *   running claudes re-read on their next API call, so a fresh workspace
  *   signs in with NO agent restart; when managed settings-env keys are
  *   active they are cleared and the agents restarted (the switching case).
- * - Sign in with Imbue: ask the desktop shell (via a `minds:open-ai-keys-page`
- *   window message to its content relay, keyed by this workspace's host id)
- *   to open its key-mint page over this window, then paste the copied
- *   env-style blob into a textarea. The relay acks the message; with no ack
- *   (plain browser / share tunnel) an alert explains that the desktop app
- *   is required.
+ * - Sign in with Imbue: ask the embedding minds chrome (via the embed
+ *   contract's `minds:open-ai-keys-page` message, keyed by this workspace's
+ *   host id) to open its key-mint page over this window, then paste the
+ *   copied env-style blob into a textarea. Any minds chrome -- Electron or
+ *   plain-browser -- acks the message; with no ack (a direct share visit) an
+ *   alert explains that the minds app is required.
  * - Raw API key: paste a `sk-ant-...` value (wrapped into an env-style
  *   line client-side).
  * - Get a long-lived token: `claude setup-token` mints a 1-year token
@@ -35,7 +35,9 @@
  */
 
 import m from "mithril";
+import { OPEN_AI_KEYS_ACK, OPEN_AI_KEYS_PAGE } from "@minds/embed-contract";
 import { apiUrl } from "../base-path";
+import { clearEmbedderMessageHandler, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import { claudeLogoIcon, icon, loginSpinnerIcon, warningIcon } from "./icons";
 
 interface ClaudeAuthStatus {
@@ -120,10 +122,12 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
   // fallback block so the user can still select and copy the link by hand.
   let urlCopyFailed = false;
   let urlCopiedResetHandle: ReturnType<typeof setTimeout> | null = null;
-  // Pending ack handshake for the "Open the Imbue key page" relay request
-  // (see openImbueMintPage). Cleared on ack, timeout, or modal teardown.
+  // Pending ack handshake for the "Open the Imbue key page" embed-contract
+  // request (see openImbueMintPage). Cleared on ack, timeout, or modal
+  // teardown. True while the ack handler is registered with the embed
+  // endpoint.
   let mintAckTimer: ReturnType<typeof setTimeout> | null = null;
-  let mintAckListener: ((event: MessageEvent) => void) | null = null;
+  let isMintAckHandlerRegistered = false;
   let pollHandle: ReturnType<typeof setInterval> | null = null;
   let pollInFlight = false;
   // Status polling for the "applying" screen: the background agent restart
@@ -507,37 +511,29 @@ export function ClaudeLoginModal(): m.Component<ClaudeLoginModalAttrs> {
       clearTimeout(mintAckTimer);
       mintAckTimer = null;
     }
-    if (mintAckListener !== null) {
-      window.removeEventListener("message", mintAckListener);
-      mintAckListener = null;
+    if (isMintAckHandlerRegistered) {
+      clearEmbedderMessageHandler(OPEN_AI_KEYS_ACK);
+      isMintAckHandlerRegistered = false;
     }
   }
 
   function openImbueMintPage(): void {
-    // The mint page is served by the Minds desktop app, whose origin this
-    // workspace page cannot know (the app's backend listens on a random
-    // per-run port). Ask the desktop shell to open it over this window via
-    // the content-relay postMessage channel; the relay acks immediately, so
-    // a missing ack means this page is not being viewed inside the desktop
-    // app (plain browser or the share tunnel) and the mint page is
-    // unreachable from this browser.
+    // The mint page is served by the minds app, whose origin this workspace
+    // page cannot know (the app's backend listens on a random per-run port).
+    // Ask the embedding minds chrome to open it over this window via the
+    // embed contract; the chrome acks immediately, so a missing ack means
+    // this page is not being viewed under a minds chrome (a direct share
+    // visit) and the mint page is unreachable from this browser.
     clearMintAckWait();
-    const onAck = (event: MessageEvent): void => {
-      if (event.source !== window) return;
-      const data: unknown = event.data;
-      if (typeof data !== "object" || data === null) return;
-      if ((data as { type?: unknown }).type !== "minds:open-ai-keys-ack") return;
-      clearMintAckWait();
-    };
-    mintAckListener = onAck;
-    window.addEventListener("message", onAck);
+    setEmbedderMessageHandler(OPEN_AI_KEYS_ACK, clearMintAckWait);
+    isMintAckHandlerRegistered = true;
     mintAckTimer = setTimeout(() => {
       clearMintAckWait();
       window.alert(
-        "The Imbue key page is part of the Minds desktop app. Open this workspace from the desktop app on your computer to mint a key, then paste it here.",
+        "The Imbue key page is part of the Minds app. Open this workspace from the Minds app on your computer to mint a key, then paste it here.",
       );
     }, MINT_PAGE_ACK_TIMEOUT_MS);
-    window.postMessage({ type: "minds:open-ai-keys-page", hostId: currentStatus?.workspace_host_id ?? "" }, "*");
+    sendToEmbedder(OPEN_AI_KEYS_PAGE, { hostId: currentStatus?.workspace_host_id ?? "" });
   }
 
   // ----- Renderers -----

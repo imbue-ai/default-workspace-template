@@ -266,6 +266,15 @@ def test_dockerignore_is_symlink_to_gitignore() -> None:
 # creep back into live agent-facing prose. Historical records (changelog
 # entries, blueprint plans, spec archives) are exempt, as is the vendored
 # code and the launch-task file-staging key ``source_artifacts_dir``.
+#
+# The four counts below are NOT zero, and the whole remainder is one deliberate
+# exception: ``.agents/skills/migrate-workspace/references/pre-declutter-layout.md``
+# is the old->new map for a workspace created before the rename. A migration map
+# has to name what the old tree actually called things -- ``creations/``,
+# "artifact", "build-web-service", ``applications.toml`` -- in its left-hand
+# column, or it cannot map them, and its own callout has to name all four to warn
+# the reader off them. The counts stay ratcheted (not path-exempted) so a term
+# creeping into any *other* live prose still fails.
 
 _LIVE_PROSE_EXEMPT_PARTS = frozenset({"changelog", "blueprint", "specs", "vendor"})
 
@@ -306,7 +315,9 @@ def _count_pattern_in_live_prose(pattern: re.Pattern[str]) -> list[str]:
     for path in _live_prose_files():
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
             if pattern.search(line):
-                violations.append(f"{path.relative_to(_REPO_ROOT)}:{lineno}: {line.strip()}")
+                violations.append(
+                    f"{path.relative_to(_REPO_ROOT)}:{lineno}: {line.strip()}"
+                )
     return violations
 
 
@@ -314,8 +325,9 @@ def test_prevent_old_creations_folder_references() -> None:
     """The creations/ folder is gone: apps live in system/apps/, per-app data in data/.apps/."""
     pattern = re.compile(r"\bcreations/")
     violations = _count_pattern_in_live_prose(pattern)
-    assert len(violations) <= snapshot(0), (
-        "References to the removed creations/ folder:\n" + "\n".join(f"  - {v}" for v in violations)
+    assert len(violations) <= snapshot(3), (
+        "References to the removed creations/ folder:\n"
+        + "\n".join(f"  - {v}" for v in violations)
     )
 
 
@@ -327,8 +339,9 @@ def test_prevent_artifact_terminology() -> None:
         for v in _count_pattern_in_live_prose(pattern)
         if "source_artifacts_dir" not in v and "ARTIFACTS_DIR" not in v
     ]
-    assert len(violations) <= snapshot(0), (
-        "Retired 'artifact' terminology in live prose:\n" + "\n".join(f"  - {v}" for v in violations)
+    assert len(violations) <= snapshot(8), (
+        "Retired 'artifact' terminology in live prose:\n"
+        + "\n".join(f"  - {v}" for v in violations)
     )
 
 
@@ -336,15 +349,19 @@ def test_prevent_web_service_terminology() -> None:
     """'web service' was retired: a tab-openable thing is an 'app'."""
     pattern = re.compile(r"(?i)\bweb[ -]services?\b")
     violations = _count_pattern_in_live_prose(pattern)
-    assert len(violations) <= snapshot(0), (
-        "Retired 'web service' terminology in live prose:\n" + "\n".join(f"  - {v}" for v in violations)
+    assert len(violations) <= snapshot(2), (
+        "Retired 'web service' terminology in live prose:\n"
+        + "\n".join(f"  - {v}" for v in violations)
     )
 
 
 def test_prevent_application_terminology() -> None:
     """'application(s)' was retired in prose: always 'app(s)' (MIME types are code, not prose)."""
     pattern = re.compile(r"(?i)\bapplications?\b")
-    violations = [v for v in _count_pattern_in_live_prose(pattern) if "application/" not in v]
-    assert len(violations) <= snapshot(0), (
-        "Retired 'application' terminology in live prose:\n" + "\n".join(f"  - {v}" for v in violations)
+    violations = [
+        v for v in _count_pattern_in_live_prose(pattern) if "application/" not in v
+    ]
+    assert len(violations) <= snapshot(3), (
+        "Retired 'application' terminology in live prose:\n"
+        + "\n".join(f"  - {v}" for v in violations)
     )
