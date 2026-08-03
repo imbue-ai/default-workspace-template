@@ -8,15 +8,19 @@ Covers the behaviors that matter for a clean serve/shutdown cycle:
 """
 
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
+from imbue.minds.desktop_client.server import _shutdown_desktop_client
 from imbue.minds.desktop_client.server import desktop_client_runtime
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import get_state
@@ -44,6 +48,46 @@ def test_runtime_creates_http_client_on_entry_and_closes_it_with_shutdown_flag(t
     assert state.shutdown_event.is_set()
     assert state.http_client is not None
     assert state.http_client.is_closed
+
+
+def test_shutdown_triggers_root_concurrency_group_so_watcher_strands_exit(tmp_path: Path) -> None:
+    """The teardown must trigger the group's shutdown event before exiting it.
+
+    Mirrors the long-lived watcher strands (system-interface-health-probe,
+    discovery-health-watchdog): a loop that only exits once
+    ``is_shutting_down()`` flips. Without the trigger in
+    ``_shutdown_desktop_client``, the group exit waits out its full exit
+    timeout and abandons the strand -- observed live as a fixed 10s stall on
+    every desktop-client shutdown.
+    """
+    concurrency_group = ConcurrencyGroup(
+        name=f"test-shutdown-{uuid4().hex}",
+        exit_timeout_seconds=5.0,
+        shutdown_timeout_seconds=5.0,
+    )
+    concurrency_group.__enter__()
+    is_strand_finished = threading.Event()
+
+    def _watcher_loop() -> None:
+        while not concurrency_group.is_shutting_down():
+            concurrency_group.shutdown_event.wait(timeout=30.0)
+        is_strand_finished.set()
+
+    concurrency_group.start_new_thread(target=_watcher_loop, name=f"watcher-{uuid4().hex}")
+    state = DesktopClientState(
+        auth_store=FileAuthStore(data_directory=tmp_path / "auth"),
+        backend_resolver=MngrCliBackendResolver(),
+        root_concurrency_group=concurrency_group,
+    )
+
+    teardown_start = time.monotonic()
+    _shutdown_desktop_client(state, is_externally_managed_client=True)
+    teardown_elapsed_seconds = time.monotonic() - teardown_start
+
+    # The strand must have been woken and finished (not abandoned by a timeout),
+    # and the teardown must complete far below the group's 5s exit timeout.
+    assert is_strand_finished.is_set()
+    assert teardown_elapsed_seconds < 4.0
 
 
 def test_runtime_leaves_externally_managed_http_client_untouched(tmp_path: Path) -> None:

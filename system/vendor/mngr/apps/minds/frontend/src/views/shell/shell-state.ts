@@ -6,7 +6,7 @@
 import m from "mithril";
 import type { AppStores } from "../../models/boot";
 import type { UiChannelClient } from "../../channel/client";
-import { accentSourceForRoute, workspaceDisplayIdFromPath } from "./classify";
+import { accentSourceForRoute, isWorkspaceOverlayPath, workspaceSurfaceIdFromPath } from "./classify";
 
 export class ShellState {
   readonly stores: AppStores;
@@ -33,10 +33,22 @@ export class ShellState {
     m.route.set(`/workspace/${agentScoped}`);
   }
 
+  /** Close the options overlay if one is open, returning whether it was. */
+  closeWorkspaceOverlay(): boolean {
+    const path = this.currentRoutePath();
+    if (!isWorkspaceOverlayPath(path)) return false;
+    const surfaceId = workspaceSurfaceIdFromPath(path);
+    if (surfaceId === null) return false;
+    m.route.set(`/workspace/${surfaceId}`);
+    return true;
+  }
+
   /** Route-change hook: track displayed workspace, repaint accent, register. */
   handleRouteChanged(path: string): void {
     const accentSource = accentSourceForRoute(path);
-    this.displayedWorkspaceAnyId = workspaceDisplayIdFromPath(path);
+    // The options overlay keeps the workspace surface mounted, so it still
+    // counts as displaying that workspace.
+    this.displayedWorkspaceAnyId = workspaceSurfaceIdFromPath(path);
     this.paintAccent(accentSource);
     const agentScoped =
       this.displayedWorkspaceAnyId === null

@@ -1,7 +1,7 @@
 // The workspace options panel: Share machine / Machine settings tabs over one
-// shared options-data load. Both the /workspace/<id>/options page and the
-// /workspace/<id>/settings page compose from the pieces here so they cannot
-// drift.
+// shared options-data load, rendered inside the Shell's workspace overlay by
+// WorkspaceOptionsPage (/workspace/<id>/settings is a redirect into the
+// settings tab here).
 
 import m from "mithril";
 import { Spinner } from "../../components/Spinner";

@@ -1,25 +1,29 @@
-// First-run splash. Simplified from the legacy three-choice account gate: the
-// separate auth project owns sign-up/sign-in now, so this greets the user and
-// offers one clear way forward -- get started building a machine. Choosing it
-// records the continue-without-account intent so the first-run routing stops
-// returning here. Self-advances to home the moment an account appears (e.g. a
-// sign-in that completed elsewhere): every channel `accounts` message triggers
-// a redraw, so the onupdate hook re-checks the accounts store.
+// First-run splash: the three-choice account gate, matching the legacy
+// Welcome.jinja. Sign Up is the one primary action (most users landing on the
+// first-run splash need an account rather than a session); signing in is the
+// "Already have an account? Sign in" link below it; the third choice is
+// "Continue without an account", which records the skip so the first-run
+// routing stops returning here. Sign Up / Sign in are full-page navigations
+// to the backend-served /auth pages (the same surface the Accounts page's
+// "Add account" uses); their post-login return lands back in the app.
+// Self-advances to home the moment an account appears (e.g. a sign-in that
+// completed elsewhere): every channel `accounts` message triggers a redraw,
+// so the onupdate hook re-checks the accounts store.
 
 import m from "mithril";
 import { getAppContext } from "../../app-context";
 import { skipAccountSetup } from "../../models/onboarding";
-import { Button } from "../components/Button";
+import { Button, ButtonLink } from "../components/Button";
 
 function WelcomePageComponent(): m.Component {
   let isBusy = false;
   let hasAdvanced = false;
 
-  async function getStarted(): Promise<void> {
+  async function continueWithoutAccount(): Promise<void> {
     isBusy = true;
     m.redraw();
     await skipAccountSetup();
-    m.route.set("/create");
+    m.route.set("/");
   }
 
   // A sign-in can complete without this page navigating (OAuth finishing in
@@ -42,16 +46,35 @@ function WelcomePageComponent(): m.Component {
           m("h1", { class: "type-heading-lg text-primary mb-2" }, "Welcome to Minds"),
           m("p", { class: "text-secondary type-body mb-8" }, "Run persistent, autonomous AI agents."),
           m(
-            Button,
+            ButtonLink,
             {
+              href: "/auth/signup",
               variant: "primary",
               size: "lg",
               block: true,
-              id: "welcome-get-started-btn",
-              disabled: isBusy,
-              onclick: () => void getStarted(),
+              id: "welcome-signup-btn",
             },
-            "Get started",
+            "Sign Up",
+          ),
+          m("div", { class: "mt-4 mb-8 type-body text-secondary" }, [
+            "Already have an account? ",
+            m(
+              "a",
+              { href: "/auth/login", id: "welcome-login-btn", class: "font-medium text-primary hover:underline" },
+              "Sign in",
+            ),
+          ]),
+          m(
+            Button,
+            {
+              variant: "ghost",
+              id: "skip-account-btn",
+              disabled: isBusy,
+              extra:
+                "!p-0 !bg-transparent !type-helper !text-tertiary hover:!bg-transparent hover:!text-primary hover:underline",
+              onclick: () => void continueWithoutAccount(),
+            },
+            "Continue without an account",
           ),
         ]),
       ]);

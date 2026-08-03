@@ -10,7 +10,8 @@ import { Icon12, Icon16 } from "../components/Icon";
 import { TitlebarButton } from "../components/TitlebarButton";
 import { electronBridge } from "../../electron-bridge";
 import type { ShellState } from "./shell-state";
-import { classifyRoute } from "./classify";
+import type { TitlebarContext } from "./classify";
+import { classifyRoute, isWorkspaceOverlayPath } from "./classify";
 
 export interface TitlebarAttrs {
   shell: ShellState;
@@ -108,7 +109,7 @@ export function Titlebar(): m.Component<TitlebarAttrs> {
                         "data-tooltip": "Share machine",
                         tone: context.activeTab === "share" ? "default" : "muted",
                         extra: context.activeTab === "share" ? "bg-fill-active" : "",
-                        onclick: () => openWorkspaceOptions(shell, context.workspaceAnyId, "share"),
+                        onclick: () => toggleWorkspaceOptions(shell, routePath, context, "share"),
                       },
                       m(Icon16, { name: "share" }),
                     ),
@@ -120,7 +121,7 @@ export function Titlebar(): m.Component<TitlebarAttrs> {
                         "data-tooltip": "Machine settings",
                         tone: context.activeTab === "settings" ? "default" : "muted",
                         extra: context.activeTab === "settings" ? "bg-fill-active" : "",
-                        onclick: () => openWorkspaceOptions(shell, context.workspaceAnyId, "settings"),
+                        onclick: () => toggleWorkspaceOptions(shell, routePath, context, "settings"),
                       },
                       m(Icon16, { name: "settings" }),
                     ),
@@ -222,8 +223,19 @@ export function Titlebar(): m.Component<TitlebarAttrs> {
   };
 }
 
-function openWorkspaceOptions(shell: ShellState, workspaceAnyId: string | null, tab: "share" | "settings"): void {
-  if (workspaceAnyId === null) return;
-  const agentScoped = shell.stores.workspaces.toAgentScopedId(workspaceAnyId);
+/** Open the options overlay on `tab` -- or, when that tab's overlay is
+ * already showing, close it back to the bare workspace (legacy toggle). */
+function toggleWorkspaceOptions(
+  shell: ShellState,
+  routePath: string,
+  context: TitlebarContext,
+  tab: "share" | "settings",
+): void {
+  if (context.workspaceAnyId === null) return;
+  const agentScoped = shell.stores.workspaces.toAgentScopedId(context.workspaceAnyId);
+  if (isWorkspaceOverlayPath(routePath) && context.activeTab === tab) {
+    m.route.set(`/workspace/${agentScoped}`);
+    return;
+  }
   m.route.set(`/workspace/${agentScoped}/options?tab=${tab}`);
 }

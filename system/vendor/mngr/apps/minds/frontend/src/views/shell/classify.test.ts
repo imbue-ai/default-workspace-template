@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { accentSourceForRoute, classifyRoute } from "./classify";
+import {
+  accentSourceForRoute,
+  classifyRoute,
+  isWorkspaceOverlayPath,
+  workspaceDisplayIdFromPath,
+  workspaceSurfaceIdFromPath,
+} from "./classify";
 import { parseWorkspaceIdFromUrl } from "../../router";
 
 describe("classifyRoute", () => {
@@ -42,6 +48,27 @@ describe("classifyRoute", () => {
     expect(accentSourceForRoute("/destroying/agent-ab12")).toBe("agent-ab12");
     expect(accentSourceForRoute("/agents/host-cd34/recovery")).toBe("host-cd34");
     expect(accentSourceForRoute("/settings")).toBeNull();
+  });
+});
+
+describe("workspaceSurfaceIdFromPath", () => {
+  it("keeps the surface mounted on the bare route and the options overlay only", () => {
+    expect(workspaceSurfaceIdFromPath("/workspace/agent-ab12")).toBe("agent-ab12");
+    expect(workspaceSurfaceIdFromPath("/workspace/host-99aa/options")).toBe("host-99aa");
+    expect(workspaceSurfaceIdFromPath("/workspace/agent-ab12/settings")).toBeNull();
+    expect(workspaceSurfaceIdFromPath("/workspace/agent-ab12/backups")).toBeNull();
+    expect(workspaceSurfaceIdFromPath("/")).toBeNull();
+  });
+
+  it("keeps the display matcher strict to the bare surface", () => {
+    expect(workspaceDisplayIdFromPath("/workspace/agent-ab12")).toBe("agent-ab12");
+    expect(workspaceDisplayIdFromPath("/workspace/agent-ab12/options")).toBeNull();
+  });
+
+  it("flags only the options route as the workspace overlay", () => {
+    expect(isWorkspaceOverlayPath("/workspace/agent-ab12/options")).toBe(true);
+    expect(isWorkspaceOverlayPath("/workspace/agent-ab12")).toBe(false);
+    expect(isWorkspaceOverlayPath("/workspace/agent-ab12/settings")).toBe(false);
   });
 });
 

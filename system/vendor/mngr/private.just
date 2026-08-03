@@ -714,13 +714,24 @@ minds-stop:
     # (portable: pstree is not preinstalled on macOS, and macOS ps has no
     # `cmd=` keyword). We'll use this both to identify electron's main
     # process and to verify the whole tree exits.
-    descendants=$(ps -eo pid=,ppid= | awk -v root="$pid" '
-        { ppid_of[$1] = $2 }
+    #
+    # Subtrees rooted at a process that started its own session (setsid) are
+    # skipped: those are intentionally detached daemons -- the `mngr latchkey
+    # forward` supervisor and its gateway / `mngr observe` children -- which
+    # are DESIGNED to outlive the desktop client so agents keep working across
+    # restarts (see the spawn comment in apps/minds/imbue/minds/cli/run.py).
+    # They are neither waited on nor killed here.
+    root_sess=$(ps -o sess= -p "$pid" | tr -d ' ')
+    descendants=$(ps -eo pid=,ppid=,sess= | awk -v root="$pid" -v root_sess="$root_sess" '
+        { ppid_of[$1] = $2; sess_of[$1] = $3 }
         END {
             n = 1; queue[0] = root; seen[root] = 1
             for (i = 0; i < n; i++)
                 for (p in ppid_of)
-                    if (ppid_of[p] == queue[i] && !(p in seen)) { seen[p] = 1; queue[n++] = p }
+                    if (ppid_of[p] == queue[i] && !(p in seen)) {
+                        if (sess_of[p] != root_sess) continue
+                        seen[p] = 1; queue[n++] = p
+                    }
             for (i = 0; i < n; i++) print queue[i]
         }' | sort -u)
     # Locate Electron's main process: the descendant whose command contains
@@ -749,11 +760,15 @@ minds-stop:
         echo "Stopping minds-start (pid=$pid, electron not yet spawned)"
         kill -TERM "$pid"
     fi
-    # Wait up to 10s for the whole tree to exit.
-    for i in $(seq 1 10); do
+    # Wait up to 15s for the whole (same-session) tree to exit. Zombies are
+    # not counted as alive: they cannot be killed and resolve on their own
+    # once their parent reaps them or exits.
+    for i in $(seq 1 15); do
         still_alive=""
         for descendant in $descendants; do
             if kill -0 "$descendant" 2>/dev/null; then
+                stat=$(ps -o stat= -p "$descendant" 2>/dev/null || true)
+                case "$stat" in Z*) continue ;; esac
                 still_alive="$still_alive $descendant"
             fi
         done
@@ -766,7 +781,7 @@ minds-stop:
     # Force-kill anything that survived the grace period. Each kill targets
     # a specific PID we observed under the recipe shell -- never a broad
     # pgrep-style match.
-    echo "Tree did not exit after 10s SIGTERM grace; force-killing leftovers:$still_alive"
+    echo "Tree did not exit after 15s SIGTERM grace; force-killing leftovers:$still_alive"
     for descendant in $still_alive; do
         kill -9 "$descendant" 2>/dev/null || true
     done

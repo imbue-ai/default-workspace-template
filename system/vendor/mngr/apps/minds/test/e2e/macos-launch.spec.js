@@ -29,11 +29,11 @@ test('main window launches to a usable state (Create or Welcome)', async ({ mind
     // titlebar #minds-titlebar deliberately does NOT count: it also renders
     // on the RouteError page, so it can't prove a good landing):
     //   #landing-minds-settings  the home page's fixed settings launcher
-    //   #welcome-get-started-btn the first-run welcome splash
+    //   #welcome-signup-btn      the first-run welcome splash (three-choice gate)
     //   #consent-continue        the error-reporting notice
     //   #content-frame           the workspace surface (restored session)
     const landingMarker = content.locator(
-      '#landing-minds-settings, #welcome-get-started-btn, #consent-continue, #content-frame'
+      '#landing-minds-settings, #welcome-signup-btn, #consent-continue, #content-frame'
     );
     await expect(landingMarker.first()).toBeVisible({ timeout: 2 * 60 * 1000 });
   } finally {

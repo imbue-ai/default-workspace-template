@@ -36,6 +36,20 @@ export function workspaceDisplayIdFromPath(path: string): string | null {
   return match ? match[1] : null;
 }
 
+/** The workspace id when `path` keeps the workspace surface mounted: the bare
+ * content surface OR the options overlay rendered on top of it. Sub-pages
+ * that replace the surface (/settings, /backups) return null. */
+export function workspaceSurfaceIdFromPath(path: string): string | null {
+  const match = path.match(new RegExp(`^/workspace/${ID_SEGMENT}(/options)?$`, "i"));
+  return match ? match[1] : null;
+}
+
+/** Whether `path` is the options overlay route (share + machine-settings
+ * panel floating over the still-mounted workspace surface). */
+export function isWorkspaceOverlayPath(path: string): boolean {
+  return new RegExp(`^/workspace/${ID_SEGMENT}/options$`, "i").test(path);
+}
+
 export function classifyRoute(path: string, search = ""): TitlebarContext {
   const displayId = workspaceDisplayIdFromPath(path);
   if (displayId !== null) {
