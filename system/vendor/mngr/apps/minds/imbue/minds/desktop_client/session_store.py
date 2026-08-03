@@ -40,7 +40,7 @@ class SuperTokensUserId(NonEmptyStr):
 
 
 class UserIdPrefix(NonEmptyStr):
-    """First 16 hex chars of a SuperTokens user ID, used for tunnel naming."""
+    """First 16 hex chars of a SuperTokens user ID, used to name per-account resources (e.g. R2 buckets)."""
 
     ...
 
@@ -57,6 +57,10 @@ class AccountSession(FrozenModel):
     email: str = Field(description="User email address")
     display_name: str | None = Field(default=None, description="Display name from OAuth provider")
     workspace_ids: list[str] = Field(default_factory=list, description="Agent IDs associated with this account")
+    is_active: bool = Field(
+        default=False,
+        description="Whether the plugin marks this account active (most recent signin / `auth use` pin)",
+    )
 
 
 class UserInfo(FrozenModel):
@@ -65,7 +69,7 @@ class UserInfo(FrozenModel):
     user_id: SuperTokensUserId = Field(description="SuperTokens user ID")
     email: str = Field(description="User email address")
     display_name: str | None = Field(default=None, description="Display name from OAuth provider")
-    user_id_prefix: UserIdPrefix = Field(description="First 16 hex chars of user ID for tunnel naming")
+    user_id_prefix: UserIdPrefix = Field(description="First 16 hex chars of the user ID, used in resource names")
 
 
 def derive_user_id_prefix(user_id: str) -> UserIdPrefix:
@@ -287,4 +291,5 @@ def _build_session(account: ImbueCloudAuthAccount, workspace_ids: list[str]) -> 
         email=account.email,
         display_name=account.display_name,
         workspace_ids=list(workspace_ids),
+        is_active=account.is_active,
     )

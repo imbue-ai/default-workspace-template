@@ -69,6 +69,8 @@ jobs:
     steps:
       - name: resolve the mngr ref being verified
         id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           resolve_ref() {
@@ -86,7 +88,8 @@ jobs:
             MNGR_REF='${{ github.ref_name }}'
             MNGR_SHA='${{ github.sha }}'
           else
-            MNGR_SHA=$(resolve_ref 'https://github.com/${{ github.repository }}.git' "$MNGR_REF")
+            # Credentialed: this repo is private, so an anonymous ls-remote fails.
+            MNGR_SHA=$(resolve_ref "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" "$MNGR_REF")
           fi
           if [[ -z "$MNGR_SHA" ]]; then
             echo "::error::failed to resolve mngr ref '$MNGR_REF'"
@@ -1025,16 +1028,27 @@ jobs:
       - name: pnpm install (apps/minds dev deps incl. playwright)
         working-directory: apps/minds
         run: pnpm install --frozen-lockfile
-      - name: run macos-launch spec
+      # The renderer-contract specs launch a plain chromium (macos-launch
+      # itself drives the installed Electron app over CDP and needs no
+      # browser download).
+      - name: install playwright chromium
+        working-directory: apps/minds
+        run: pnpm exec playwright install chromium
+      - name: run macos-launch + renderer-contract specs
         working-directory: apps/minds
         run: |
-          # Headless on CI; the spec asserts DOM state and the chrome
+          # Headless on CI; the specs assert DOM state and the chrome
           # iframe sources -- no display dependency. `html` reporter writes
           # a browsable report with embedded screenshots and traces;
           # Playwright skips opening it when stdout isn't a TTY (CI is fine).
+          # The renderer-contract specs (embed-flow, local-swap,
+          # recovery-redirect, landing-stopped-mind-restart) drive the REAL
+          # shell scripts in a plain chromium against the local harness
+          # server -- no Electron, no backend -- so they add only seconds.
           pnpm exec playwright test \
             --config=test/e2e/playwright.config.js \
-            macos-launch.spec.js \
+            macos-launch.spec.js embed-flow.spec.js local-swap.spec.js \
+            recovery-redirect.spec.js landing-stopped-mind-restart.spec.js \
             --reporter=list,html
       - name: upload Playwright report
         if: always()
@@ -1094,7 +1108,7 @@ jobs:
   # when SLACK_LAUNCH_TO_MSG_WEBHOOK isn't configured. Uses the curl-the-
   # webhook approach directly so we don't pull in a third-party action.
   notify_slack:
-    needs: [check_should_run, build, launch_to_msg, macos_launch, update_marker]
+    needs: [sync_vendor, check_should_run, build, launch_to_msg, macos_launch, update_marker]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1119,6 +1133,12 @@ jobs:
           DEFAULT_WORKSPACE_TEMPLATE_SHA:  ${{ needs.check_should_run.outputs.default_workspace_template_sha }}
           MNGR_REF: ${{ needs.check_should_run.outputs.mngr_ref }}
           DEFAULT_WORKSPACE_TEMPLATE_REF:  ${{ needs.check_should_run.outputs.default_workspace_template_ref }}
+          # sync_vendor resolves the mngr ref before check_should_run consumes
+          # it, so these still identify the run when check_should_run never got
+          # to publish its own outputs.
+          SYNC_VENDOR_MNGR_SHA: ${{ needs.sync_vendor.outputs.mngr_sha }}
+          SYNC_VENDOR_MNGR_REF: ${{ needs.sync_vendor.outputs.mngr_ref }}
+          SYNC_VENDOR_RESULT:   ${{ needs.sync_vendor.result }}
           BUILD_RESULT:         ${{ needs.build.result }}
           LAUNCH_TO_MSG_RESULT: ${{ needs.launch_to_msg.result }}
           MACOS_LAUNCH_RESULT:  ${{ needs.macos_launch.result }}
@@ -1154,24 +1174,25 @@ jobs:
             fi
           }
           duration=$(fmt_duration "$total_s")
-          # Classify the outcome.
+          # Classify the outcome. Every job is scanned, including the ones that
+          # gate the rest: a job that fails leaves its dependents "skipped"
+          # rather than "failure", so scanning only the downstream ones would
+          # report a broken run as a benign skip.
           failed_jobs=""
           cancelled_jobs=""
-          if [[ "$CHECK_SHOULD_RUN_RESULT" == "failure" ]]; then
-            failed_jobs="check_should_run"
-          else
-            for pair in "build:$BUILD_RESULT" \
-                        "launch_to_msg:$LAUNCH_TO_MSG_RESULT" \
-                        "macos_launch:$MACOS_LAUNCH_RESULT" \
-                        "update_marker:$UPDATE_MARKER_RESULT"; do
-              name="${pair%%:*}"
-              result="${pair##*:}"
-              case "$result" in
-                failure)   failed_jobs="$failed_jobs $name" ;;
-                cancelled) cancelled_jobs="$cancelled_jobs $name" ;;
-              esac
-            done
-          fi
+          for pair in "sync_vendor:$SYNC_VENDOR_RESULT" \
+                      "check_should_run:$CHECK_SHOULD_RUN_RESULT" \
+                      "build:$BUILD_RESULT" \
+                      "launch_to_msg:$LAUNCH_TO_MSG_RESULT" \
+                      "macos_launch:$MACOS_LAUNCH_RESULT" \
+                      "update_marker:$UPDATE_MARKER_RESULT"; do
+            name="${pair%%:*}"
+            result="${pair##*:}"
+            case "$result" in
+              failure)   failed_jobs="$failed_jobs $name" ;;
+              cancelled) cancelled_jobs="$cancelled_jobs $name" ;;
+            esac
+          done
           if [[ -n "$failed_jobs" ]]; then
             emoji=":x:"
             verdict_word="failed"
@@ -1181,7 +1202,11 @@ jobs:
             verdict_word="cancelled"
             detail=" (cancelled:$cancelled_jobs)"
           elif [[ "$SHOULD_RUN" != "true" ]]; then
-            emoji=":fast_forward:"
+            # Reaching here with nothing failed means the marker cache already
+            # holds this exact pair. The emoji answers "is this pair good?",
+            # which a skip does not change, so it stays the success mark and
+            # the verdict word carries the fact that nothing needed rerunning.
+            emoji=":white_check_mark:"
             verdict_word="skipped"
             detail=""
           else
@@ -1189,6 +1214,10 @@ jobs:
             verdict_word="succeeded"
             detail=""
           fi
+          # A run that dies before check_should_run publishes its outputs still
+          # has to say which pair it was about.
+          [[ -z "$MNGR_SHA" ]] && MNGR_SHA="$SYNC_VENDOR_MNGR_SHA"
+          [[ -z "$MNGR_REF" ]] && MNGR_REF="$SYNC_VENDOR_MNGR_REF"
           MNGR_SHORT="${MNGR_SHA:0:12}"
           DEFAULT_WORKSPACE_TEMPLATE_SHORT="${DEFAULT_WORKSPACE_TEMPLATE_SHA:0:12}"
           # Format the e2e per-run metrics line. Each metric is the raw
@@ -1232,8 +1261,9 @@ jobs:
             sep=" | "
           fi
           links_inner+="${sep}<${RUN_URL}|run logs>"
-          links_inner+=" | <https://github.com/imbue-ai/mngr/commit/${MNGR_SHA}|mngr commit>"
-          links_inner+=" | <https://github.com/imbue-ai/default-workspace-template/commit/${DEFAULT_WORKSPACE_TEMPLATE_SHA}|default_workspace_template commit>"
+          # Omit a commit link whose SHA never resolved -- it would 404.
+          [[ -n "$MNGR_SHA" ]] && links_inner+=" | <https://github.com/imbue-ai/mngr/commit/${MNGR_SHA}|mngr commit>"
+          [[ -n "$DEFAULT_WORKSPACE_TEMPLATE_SHA" ]] && links_inner+=" | <https://github.com/imbue-ai/default-workspace-template/commit/${DEFAULT_WORKSPACE_TEMPLATE_SHA}|default_workspace_template commit>"
           links_line="[${links_inner}]"
           # Assemble: verdict line, refs line, metrics line (omitted when
           # empty), links line.
@@ -1241,10 +1271,14 @@ jobs:
             "$emoji" "$verdict_word" "$duration" "$detail" "$TRIGGER")
           # Show "<ref> (<commit>)" when the ref is a name (tag / branch);
           # just the commit when the input was already a raw 40-char SHA.
-          mngr_label="\`${MNGR_SHORT}\`"
-          [[ -n "$MNGR_REF" && ! "$MNGR_REF" =~ ^[0-9a-f]{40}$ ]] && mngr_label="\`${MNGR_REF}\` (\`${MNGR_SHORT}\`)"
-          default_workspace_template_label="\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT}\`"
-          [[ -n "$DEFAULT_WORKSPACE_TEMPLATE_REF" && ! "$DEFAULT_WORKSPACE_TEMPLATE_REF" =~ ^[0-9a-f]{40}$ ]] && default_workspace_template_label="\`${DEFAULT_WORKSPACE_TEMPLATE_REF}\` (\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT}\`)"
+          # `unresolved` rather than empty backticks: a run can fail before a
+          # ref is resolved, and a blank reads as a formatting glitch.
+          mngr_label="\`unresolved\`"
+          [[ -n "$MNGR_SHORT" ]] && mngr_label="\`${MNGR_SHORT}\`"
+          [[ -n "$MNGR_REF" && ! "$MNGR_REF" =~ ^[0-9a-f]{40}$ ]] && mngr_label="\`${MNGR_REF}\`${MNGR_SHORT:+ (\`${MNGR_SHORT}\`)}"
+          default_workspace_template_label="\`unresolved\`"
+          [[ -n "$DEFAULT_WORKSPACE_TEMPLATE_SHORT" ]] && default_workspace_template_label="\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT}\`"
+          [[ -n "$DEFAULT_WORKSPACE_TEMPLATE_REF" && ! "$DEFAULT_WORKSPACE_TEMPLATE_REF" =~ ^[0-9a-f]{40}$ ]] && default_workspace_template_label="\`${DEFAULT_WORKSPACE_TEMPLATE_REF}\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT:+ (\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT}\`)}"
           line2="[_mngr_ ${mngr_label} | _DEFAULT_WORKSPACE_TEMPLATE_ ${default_workspace_template_label}]"
           if [[ -n "$metrics_line" ]]; then
             text=$(printf '%s\n%s\n%s\n%s' "$line1" "$line2" "$metrics_line" "$links_line")

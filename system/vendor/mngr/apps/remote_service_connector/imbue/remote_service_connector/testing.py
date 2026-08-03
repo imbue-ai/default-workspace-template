@@ -19,6 +19,7 @@ from uuid import UUID
 import psycopg2
 import pytest
 from fastapi import HTTPException
+from starlette.testclient import TestClient
 from supertokens_python.recipe.emailpassword.interfaces import ConsumePasswordResetTokenOkResult
 from supertokens_python.recipe.emailpassword.interfaces import EmailAlreadyExistsError
 from supertokens_python.recipe.emailpassword.interfaces import SignInOkResult as EPSignInOkResult
@@ -43,31 +44,40 @@ from supertokens_python.types import RecipeUserId
 from supertokens_python.types import User
 from supertokens_python.types.base import AccountInfoInput
 
-from imbue.remote_service_connector.app import CloudflareApiError
-from imbue.remote_service_connector.app import ForwardingCtx
-from imbue.remote_service_connector.app import PoolHostCleanupError
-from imbue.remote_service_connector.app import R2BucketNotEmptyError
-from imbue.remote_service_connector.app import R2BucketNotFoundError
-from imbue.remote_service_connector.app import SyncActiveAgentConflictError
-from imbue.remote_service_connector.app import SyncRevisionConflictError
-from imbue.remote_service_connector.app import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
-from imbue.remote_service_connector.app import _WORKSPACE_RECORD_COLUMNS
+import imbue.remote_service_connector.accounts as accounts_module
+import imbue.remote_service_connector.app as app_mod
+import imbue.remote_service_connector.auth as auth_mod
+import imbue.remote_service_connector.auth_proxy as auth_proxy_module
+import imbue.remote_service_connector.cloudflare as cloudflare_mod
+import imbue.remote_service_connector.db as db_mod
+import imbue.remote_service_connector.entitlements as entitlements_mod
+import imbue.remote_service_connector.hosts as hosts_module
+import imbue.remote_service_connector.litellm_client as litellm_client_mod
+import imbue.remote_service_connector.r2.stores as r2_stores_mod
+import imbue.remote_service_connector.share_broker as share_broker_module
+import imbue.remote_service_connector.sync as sync_mod
+from imbue.remote_service_connector.auth import UserAuth
+from imbue.remote_service_connector.cloudflare import CloudflareCtx
+from imbue.remote_service_connector.errors import CloudflareApiError
+from imbue.remote_service_connector.errors import PoolHostCleanupError
+from imbue.remote_service_connector.errors import R2BucketNotEmptyError
+from imbue.remote_service_connector.errors import R2BucketNotFoundError
+
+# Imported from the production module so the fake's tuple order can never
+# drift from what PostgresShareStore SELECTs (same rationale as
+# _WORKSPACE_RECORD_COLUMNS below).
+from imbue.remote_service_connector.shares import _SHARE_COLUMN_NAMES
+from imbue.remote_service_connector.sync import SyncActiveAgentConflictError
+from imbue.remote_service_connector.sync import SyncRevisionConflictError
+from imbue.remote_service_connector.sync import _ONE_ACTIVE_PER_AGENT_INDEX_NAME
+from imbue.remote_service_connector.sync import _WORKSPACE_RECORD_COLUMNS
+from imbue.remote_service_connector.web import web_app
 
 
 class FakeCloudflareOps:
     """In-memory fake implementing the CloudflareOps protocol for testing."""
 
     def __init__(self) -> None:
-        self.tunnels: dict[str, dict[str, Any]] = {}
-        self.tunnel_configs: dict[str, dict[str, Any]] = {}
-        self.dns_records: list[dict[str, Any]] = []
-        self.access_apps: dict[str, dict[str, Any]] = {}
-        self.access_policies: dict[str, list[dict[str, Any]]] = {}
-        self.kv_store: dict[str, str] = {}
-        self._next_tunnel_id = 1
-        self._next_record_id = 1
-        self._next_access_app_id = 1
-        self._next_policy_id = 1
         # R2 state
         self.account_id = "test-account"
         self.buckets: dict[str, dict[str, Any]] = {}
@@ -83,148 +93,12 @@ class FakeCloudflareOps:
         # usage_bytes_by_bucket, so tests can model the analytics window peak
         # diverging from live REST usage (the confirm-before-downgrade path).
         self.graphql_usage_bytes_by_bucket: dict[str, int] | None = None
-        # Failure-injection knobs: the next create_access_app /
-        # create_access_policy / delete_bucket_token call raises, exercising
-        # the add-service rollback and sweep revoke-retry paths. While
+        # Failure-injection knobs: the next delete_bucket_token call raises,
+        # exercising the sweep revoke-retry paths. While
         # fail_bucket_usage_reads is set, every per-bucket REST usage read
         # raises (the sweep/gate fail-open paths).
-        self.fail_next_create_access_app = False
-        self.fail_next_create_access_policy = False
         self.fail_next_delete_bucket_token = False
         self.fail_bucket_usage_reads = False
-
-    def create_tunnel(self, name: str) -> dict[str, Any]:
-        tunnel_id = f"tunnel-{self._next_tunnel_id}"
-        self._next_tunnel_id += 1
-        tunnel = {"id": tunnel_id, "name": name}
-        self.tunnels[tunnel_id] = tunnel
-        return tunnel
-
-    def list_tunnels(self, include_prefix: str = "") -> list[dict[str, Any]]:
-        results = list(self.tunnels.values())
-        if include_prefix:
-            results = [t for t in results if t["name"].startswith(include_prefix)]
-        return results
-
-    def get_tunnel_by_name(self, name: str) -> dict[str, Any] | None:
-        for tunnel in self.tunnels.values():
-            if tunnel["name"] == name:
-                return tunnel
-        return None
-
-    def get_tunnel_by_id(self, tunnel_id: str) -> dict[str, Any] | None:
-        return self.tunnels.get(tunnel_id)
-
-    def get_tunnel_token(self, tunnel_id: str) -> str:
-        return f"token-for-{tunnel_id}"
-
-    def delete_tunnel(self, tunnel_id: str) -> None:
-        self.tunnels.pop(tunnel_id, None)
-        self.tunnel_configs.pop(tunnel_id, None)
-
-    def get_tunnel_config(self, tunnel_id: str) -> dict[str, Any]:
-        return self.tunnel_configs.get(tunnel_id, {"config": {"ingress": [{"service": "http_status:404"}]}})
-
-    def put_tunnel_config(self, tunnel_id: str, config: dict[str, Any]) -> None:
-        self.tunnel_configs[tunnel_id] = config
-
-    def create_cname(self, name: str, target: str) -> dict[str, Any]:
-        for existing in self.dns_records:
-            if existing["name"] == name:
-                raise CloudflareApiError(
-                    status_code=400,
-                    errors=[{"code": 81053, "message": "An A, AAAA, or CNAME record with that host already exists."}],
-                )
-        record_id = f"record-{self._next_record_id}"
-        self._next_record_id += 1
-        record = {"id": record_id, "name": name, "content": target, "type": "CNAME"}
-        self.dns_records.append(record)
-        return record
-
-    def list_dns_records(self, name: str = "") -> list[dict[str, Any]]:
-        if name:
-            return [r for r in self.dns_records if r["name"] == name]
-        return list(self.dns_records)
-
-    def delete_dns_record(self, record_id: str) -> None:
-        self.dns_records = [r for r in self.dns_records if r["id"] != record_id]
-
-    def create_access_app(self, hostname: str, app_name: str, allowed_idps: list[str] | None = None) -> dict[str, Any]:
-        if self.fail_next_create_access_app:
-            self.fail_next_create_access_app = False
-            raise CloudflareApiError(status_code=500, errors=[{"message": "simulated Access API failure"}])
-        app_id = f"access-app-{self._next_access_app_id}"
-        self._next_access_app_id += 1
-        access_app: dict[str, Any] = {"id": app_id, "domain": hostname, "name": app_name}
-        if allowed_idps is not None:
-            access_app["allowed_idps"] = allowed_idps
-        self.access_apps[app_id] = access_app
-        self.access_policies[app_id] = []
-        return access_app
-
-    def delete_access_app(self, app_id: str) -> None:
-        self.access_apps.pop(app_id, None)
-        self.access_policies.pop(app_id, None)
-
-    def get_access_app_by_domain(self, hostname: str) -> dict[str, Any] | None:
-        for access_app in self.access_apps.values():
-            if access_app["domain"] == hostname:
-                return access_app
-        return None
-
-    def list_access_policies(self, app_id: str) -> list[dict[str, Any]]:
-        return list(self.access_policies.get(app_id, []))
-
-    def create_access_policy(self, app_id: str, policy: dict[str, Any]) -> dict[str, Any]:
-        if self.fail_next_create_access_policy:
-            self.fail_next_create_access_policy = False
-            raise CloudflareApiError(status_code=500, errors=[{"message": "simulated Access policy failure"}])
-        policy_id = f"policy-{self._next_policy_id}"
-        self._next_policy_id += 1
-        stored = {**policy, "id": policy_id}
-        if app_id not in self.access_policies:
-            self.access_policies[app_id] = []
-        self.access_policies[app_id].append(stored)
-        return stored
-
-    def update_access_policy(self, app_id: str, policy_id: str, policy: dict[str, Any]) -> dict[str, Any]:
-        policies = self.access_policies.get(app_id, [])
-        for i, p in enumerate(policies):
-            if p["id"] == policy_id:
-                policies[i] = {**policy, "id": policy_id}
-                return policies[i]
-        return {**policy, "id": policy_id}
-
-    def delete_access_policy(self, app_id: str, policy_id: str) -> None:
-        if app_id in self.access_policies:
-            self.access_policies[app_id] = [p for p in self.access_policies[app_id] if p["id"] != policy_id]
-
-    def kv_get(self, key: str) -> str | None:
-        return self.kv_store.get(key)
-
-    def kv_put(self, key: str, value: str) -> None:
-        self.kv_store[key] = value
-
-    def kv_delete(self, key: str) -> None:
-        self.kv_store.pop(key, None)
-
-    def create_service_token(self, name: str) -> dict[str, Any]:
-        token_id = f"svc-token-{self._next_policy_id}"
-        self._next_policy_id += 1
-        return {
-            "id": token_id,
-            "client_id": f"client-{token_id}",
-            "client_secret": f"secret-{token_id}",
-            "name": name,
-        }
-
-    def list_service_tokens(self) -> list[dict[str, Any]]:
-        return []
-
-    def delete_service_token(self, token_id: str) -> None:
-        pass
-
-    # -- R2 bucket + token operations --
 
     def create_bucket(self, name: str) -> dict[str, Any]:
         if name in self.buckets:
@@ -361,27 +235,18 @@ def make_fake_key_store() -> InMemoryKeyStore:
     return InMemoryKeyStore()
 
 
-class FakeForwardingCtx(ForwardingCtx):
-    """ForwardingCtx backed by FakeCloudflareOps for testing."""
+class FakeCloudflareCtx(CloudflareCtx):
+    """CloudflareCtx backed by FakeCloudflareOps for testing."""
 
     fake: FakeCloudflareOps
 
 
-def make_fake_forwarding_ctx(
-    domain: str = "example.com",
-    allowed_idps: list[str] | None = None,
-) -> FakeForwardingCtx:
-    """Create a FakeForwardingCtx for testing."""
+def make_fake_cloudflare_ctx() -> FakeCloudflareCtx:
+    """Create a FakeCloudflareCtx for testing."""
     fake = FakeCloudflareOps()
-    ctx = FakeForwardingCtx(ops=fake, domain=domain, allowed_idps=allowed_idps)
+    ctx = FakeCloudflareCtx(ops=fake)
     ctx.fake = fake
     return ctx
-
-
-def make_fake_tunnel_token(tunnel_id: str) -> str:
-    """Create a fake tunnel token (base64-encoded JSON) for testing."""
-    token_data = json.dumps({"a": "test-account", "t": tunnel_id, "s": "test-secret"})
-    return base64.b64encode(token_data.encode()).decode()
 
 
 # ---------------------------------------------------------------------------
@@ -573,11 +438,14 @@ class FakeSuperTokensBackend:
     sdk_errors_by_method: dict[str, Exception]
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Swap every SuperTokens SDK call site on ``app_mod`` with a fake.
+        """Swap every SuperTokens SDK call site with a fake.
 
         Driving the patches through a single dict + loop keeps this helper to
         exactly one attribute-patch call no matter how many SDK functions we
         stub, which limits the blast radius on the test-patching ratchet.
+        Each SDK name is patched on every connector module that imported it
+        (the SDK functions are referenced as module globals at call time, so
+        patching the importing module's attribute is what takes effect).
         """
         fakes: dict[str, Any] = {
             "ep_sign_up": self.sign_up,
@@ -596,10 +464,22 @@ class FakeSuperTokensBackend:
             "create_email_verification_token": self.create_email_verification_token,
             "verify_email_using_token": self.verify_email_using_token,
             "get_provider": self.get_provider,
+            "get_broker_oauth_provider": self.get_broker_oauth_provider,
             "manually_create_or_update_user": self.manually_create_or_update_user,
         }
+        target_modules = [app_mod, auth_mod, auth_proxy_module, accounts_module, share_broker_module]
         for name, fake in fakes.items():
-            monkeypatch.setattr(app_mod, name, fake)
+            matching_modules = [module for module in target_modules if hasattr(module, name)]
+            # A fake that matches no module would leave the real SDK function in
+            # place, so fail loudly instead of silently skipping it.
+            assert matching_modules, f"no connector module imports SuperTokens SDK name {name!r}"
+            for target_module in matching_modules:
+                monkeypatch.setattr(target_module, name, fake)
+        # Verification-email cooldown state is keyed by user_id, and the fake
+        # derives user_ids deterministically from the email -- so without a
+        # reset, a test that signs up "a@b.com" would suppress verification
+        # sends for every later test reusing that address.
+        auth_proxy_module._verification_email_sent_at_monotonic_by_user_id.clear()
 
     def register_provider(
         self,
@@ -618,6 +498,32 @@ class FakeSuperTokensBackend:
         provider.display_name = display_name
         provider.is_verified = is_verified
         self.registered_providers[provider_id] = provider
+
+    def add_third_party_account(
+        self,
+        *,
+        provider_id: str,
+        email: str,
+        third_party_user_id: str,
+        is_verified: bool = True,
+    ) -> str:
+        """Seed a third-party account directly, bypassing the auth routes.
+
+        Lets tests set up pre-existing cross-method duplicates (two accounts
+        sharing one email) that the one-account-per-email signup guard refuses
+        to create through the routes. Returns the new account's user id.
+        """
+        account = _make_account(
+            email=email,
+            password=None,
+            provider_id=provider_id,
+            third_party_user_id=third_party_user_id,
+            display_name=None,
+            is_verified=is_verified,
+        )
+        self.accounts_by_id[account.user_id] = account
+        self.accounts_by_email.setdefault(email, account)
+        return account.user_id
 
     def mark_email_verified(self, user_id: str) -> None:
         """Force-flip an account to verified (bypassing the token flow)."""
@@ -655,7 +561,18 @@ class FakeSuperTokensBackend:
     ) -> EPSignUpOkResult | EmailAlreadyExistsError:
         del tenant_id, user_context
         self._raise_if_configured("sign_up")
-        if email in self.accounts_by_email:
+        # Scope the duplicate check to emailpassword accounts, matching the real
+        # recipe: a same-email third-party account does NOT block a password
+        # signup (that per-recipe scoping is what makes cross-method duplicates
+        # possible, so the fake must permit them for the route-level guard to be
+        # the thing under test). Match emails case-insensitively, like the real
+        # core (which normalizes emails to lowercase) and like the fake's own
+        # ``list_users_by_account_info``.
+        has_email_password_account = any(
+            existing.provider_id == "emailpassword" and existing.email.lower() == email.lower()
+            for existing in self.accounts_by_id.values()
+        )
+        if has_email_password_account:
             return EmailAlreadyExistsError()
         account = _make_account(
             email=email,
@@ -665,6 +582,9 @@ class FakeSuperTokensBackend:
             display_name=None,
             is_verified=False,
         )
+        # Plain assignment (not setdefault): ``sign_in`` resolves passwords
+        # through this dict, so the password account must own the email slot
+        # even when a same-email third-party account claimed it first.
         self.accounts_by_email[email] = account
         self.accounts_by_id[account.user_id] = account
         user = _build_st_user(account)
@@ -707,6 +627,7 @@ class FakeSuperTokensBackend:
         user_context: dict[str, Any] | None = None,
     ) -> None:
         del tenant_id, recipe_user_id, user_context
+        self._raise_if_configured("send_email_verification_email")
         token = f"verify-{secrets.token_hex(8)}"
         self.verification_tokens[token] = (user_id, email)
         self.sent_verification_emails.append((user_id, email))
@@ -791,10 +712,19 @@ class FakeSuperTokensBackend:
         user_context: dict[str, Any] | None = None,
     ) -> list[User]:
         del tenant_id, do_union_of_account_info, user_context
-        account = self.accounts_by_email.get(account_info.email) if account_info.email else None
-        if account is None:
+        self._raise_if_configured("list_users_by_account_info")
+        if account_info.email is None:
             return []
-        return [_build_st_user(account)]
+        # Scan accounts_by_id rather than the one-value-per-email accounts_by_email
+        # dict so cross-method duplicates (same email, different login methods) are
+        # all reported, the way the real SDK reports them. Match emails
+        # case-insensitively, also like the real core (which normalizes emails to
+        # lowercase): callers such as the one-account-per-email guard lowercase the
+        # email before looking it up.
+        email_lower = account_info.email.lower()
+        return [
+            _build_st_user(account) for account in self.accounts_by_id.values() if account.email.lower() == email_lower
+        ]
 
     def send_reset_password_email(
         self,
@@ -900,6 +830,10 @@ class FakeSuperTokensBackend:
         del tenant_id, client_type, user_context
         return self.registered_providers.get(third_party_id)
 
+    def get_broker_oauth_provider(self) -> FakeProvider | None:
+        """Stand-in for the broker's env-driven Google provider: configured iff 'google' is registered."""
+        return self.registered_providers.get("google")
+
     def manually_create_or_update_user(
         self,
         *,
@@ -911,7 +845,17 @@ class FakeSuperTokensBackend:
         user_context: dict[str, Any] | None = None,
     ) -> ManuallyCreateOrUpdateUserOkResult:
         del tenant_id, user_context
-        existing = self.accounts_by_email.get(email)
+        # The real SDK call is keyed by third-party identity, not email: match on
+        # (third_party_id, third_party_user_id) so a returning OAuth sign-in resolves
+        # to the OAuth account even when a same-email password account also exists.
+        existing = next(
+            (
+                candidate
+                for candidate in self.accounts_by_id.values()
+                if candidate.provider_id == third_party_id and candidate.third_party_user_id == third_party_user_id
+            ),
+            None,
+        )
         created_new = existing is None
         if existing is None:
             account = _make_account(
@@ -922,7 +866,9 @@ class FakeSuperTokensBackend:
                 display_name=None,
                 is_verified=is_verified,
             )
-            self.accounts_by_email[email] = account
+            # setdefault: never clobber a same-email password account, which
+            # ``sign_in`` looks up through this dict.
+            self.accounts_by_email.setdefault(email, account)
             self.accounts_by_id[account.user_id] = account
         else:
             account = existing
@@ -1378,6 +1324,140 @@ class FakeCursor:
         elif query_lower.startswith("delete from account_key_bundles"):
             self._backend.sync_bundle_by_user.pop(params[0], None)
 
+        elif query_lower.startswith("select count(*) from shares"):
+            user_label, exclude_host_id = params
+            active_count = sum(
+                1
+                for share in self._backend.share_rows
+                if share["user_id"] == user_label
+                and share["state"] == "active"
+                and share["host_id"] != exclude_host_id
+            )
+            self._results = [(active_count,)]
+
+        elif query_lower.startswith("insert into shares"):
+            host_id, user_label, region, workspace_domain = params
+            self._backend.upsert_share(host_id, user_label, region, workspace_domain)
+
+        elif "from shares where host_id = %s and user_id = %s" in query_lower:
+            share = self._backend.find_share(params[0], params[1])
+            if share is not None:
+                self._results = [self._backend.share_tuple(share)]
+
+        elif "from shares where workspace_domain = %s and state = 'active'" in query_lower:
+            for share in self._backend.share_rows:
+                if share["workspace_domain"] == params[0] and share["state"] == "active":
+                    self._results = [self._backend.share_tuple(share)]
+                    break
+
+        elif "from shares where user_id = %s" in query_lower:
+            self._results = [
+                self._backend.share_tuple(share) for share in self._backend.share_rows if share["user_id"] == params[0]
+            ]
+
+        elif query_lower.startswith("update shares set state = 'inactive'"):
+            deactivated_share = self._backend.find_share(params[0], params[1])
+            if deactivated_share is not None:
+                deactivated_share["state"] = "inactive"
+                deactivated_share["updated_at"] = _SHARE_ROW_UPDATED_AT
+
+        elif query_lower.startswith("update shares set last_tunnel_login_at"):
+            logged_in_share = self._backend.find_share(params[0], params[1])
+            if logged_in_share is not None:
+                logged_in_share["last_tunnel_login_at"] = _SHARE_ROW_UPDATED_AT
+                logged_in_share["updated_at"] = _SHARE_ROW_UPDATED_AT
+
+        elif query_lower.startswith("delete from relay_tokens"):
+            host_id, user_label = params
+            self._backend.relay_token_rows = [
+                token_row
+                for token_row in self._backend.relay_token_rows
+                if not (token_row["host_id"] == host_id and token_row["user_id"] == user_label)
+            ]
+
+        elif query_lower.startswith("insert into relay_tokens"):
+            token_hash, host_id, user_label = params
+            self._backend.relay_token_rows.append(
+                {"token_hash": token_hash, "host_id": host_id, "user_id": user_label}
+            )
+
+        elif "from relay_tokens rt join shares s" in query_lower:
+            for token_row in self._backend.relay_token_rows:
+                if token_row["token_hash"] == params[0]:
+                    joined_share = self._backend.find_share(token_row["host_id"], token_row["user_id"])
+                    if joined_share is not None:
+                        self._results = [
+                            (
+                                joined_share["host_id"],
+                                joined_share["user_id"],
+                                joined_share["region"],
+                                joined_share["workspace_domain"],
+                                joined_share["state"],
+                            )
+                        ]
+                    break
+
+        elif query_lower.startswith("select region from pool_hosts"):
+            for pool_row in self._backend.pool_rows:
+                if pool_row.host_id_str == params[0]:
+                    self._results = [(pool_row.region,)]
+                    break
+
+        elif query_lower.startswith("insert into issued_certs"):
+            workspace_domain, host_id, user_label, ca_name, cert_chain_pem, sans_json, not_after = params
+            self._backend.issued_cert_rows.append(
+                {
+                    "workspace_domain": workspace_domain,
+                    "host_id": host_id,
+                    "user_id": user_label,
+                    "ca_name": ca_name,
+                    "cert_chain_pem": cert_chain_pem,
+                    "sans": sans_json,
+                    "not_after": not_after,
+                }
+            )
+
+        elif query_lower.startswith("select account_key_pem, account_uri from acme_accounts"):
+            for account_row in self._backend.acme_account_rows:
+                if account_row["ca_name"] == params[0] and account_row["directory_url"] == params[1]:
+                    self._results = [(account_row["account_key_pem"], account_row["account_uri"])]
+                    break
+
+        elif query_lower.startswith("insert into acme_accounts"):
+            ca_name, directory_url, account_key_pem, account_uri, eab_kid = params
+            self._backend.acme_account_rows.append(
+                {
+                    "ca_name": ca_name,
+                    "directory_url": directory_url,
+                    "account_key_pem": account_key_pem,
+                    "account_uri": account_uri,
+                    "eab_kid": eab_kid,
+                }
+            )
+
+        elif query_lower.startswith("select count(*) from issued_certs"):
+            # The fake rows carry no created_at; every recorded issuance counts
+            # as recent, which is what the rate-limit tests need.
+            host_id, user_label = params
+            count = sum(
+                1
+                for cert_row in self._backend.issued_cert_rows
+                if cert_row["host_id"] == host_id and cert_row["user_id"] == user_label
+            )
+            self._results = [(count,)]
+
+        elif query_lower.startswith("select not_after from issued_certs"):
+            matching_not_afters = sorted(
+                (
+                    cert_row["not_after"]
+                    for cert_row in self._backend.issued_cert_rows
+                    if cert_row["workspace_domain"] == params[0]
+                ),
+                reverse=True,
+            )
+            if matching_not_afters:
+                self._results = [(matching_not_afters[0],)]
+
         else:
             pass
 
@@ -1433,6 +1513,9 @@ def _make_fake_connection(backend: "FakePoolBackend") -> FakeConnection:
 _PAID_ENTRY_CREATED_AT = "2026-01-01T00:00:00+00:00"
 _PAID_ENTRY_UPDATED_AT = "2026-01-02T00:00:00+00:00"
 
+_SHARE_ROW_CREATED_AT = "2026-01-01T00:00:00+00:00"
+_SHARE_ROW_UPDATED_AT = "2026-01-02T00:00:00+00:00"
+
 
 class FakePoolBackend:
     """In-memory pool database replacement for testing host pool + paid-list endpoints."""
@@ -1460,6 +1543,60 @@ class FakePoolBackend:
     # Orphan-bucket first-seen stamps (bucket_name -> datetime), mirroring the
     # orphan_backup_buckets table.
     orphan_stamps: dict[str, datetime]
+    # Self-hosted sharing stores, mirroring the shares / relay_tokens /
+    # issued_certs tables. Share rows are dicts keyed by _SHARE_COLUMN_NAMES;
+    # token rows carry token_hash / host_id / user_id; cert rows carry
+    # workspace_domain / not_after.
+    share_rows: list[dict[str, Any]]
+    relay_token_rows: list[dict[str, Any]]
+    issued_cert_rows: list[dict[str, Any]]
+    acme_account_rows: list[dict[str, Any]]
+
+    def add_share(
+        self,
+        host_id: str,
+        user_label: str,
+        region: str,
+        workspace_domain: str,
+        state: str = "active",
+    ) -> None:
+        """Seed a share row (bypassing the endpoint), defaulting to active."""
+        self.upsert_share(host_id, user_label, region, workspace_domain)
+        seeded = self.find_share(host_id, user_label)
+        assert seeded is not None
+        seeded["state"] = state
+
+    def upsert_share(self, host_id: str, user_label: str, region: str, workspace_domain: str) -> None:
+        """Mirror the endpoint's INSERT ... ON CONFLICT (host_id, user_id) upsert."""
+        existing = self.find_share(host_id, user_label)
+        if existing is not None:
+            existing["region"] = region
+            existing["workspace_domain"] = workspace_domain
+            existing["state"] = "active"
+            existing["updated_at"] = _SHARE_ROW_UPDATED_AT
+            return
+        self.share_rows.append(
+            {
+                "host_id": host_id,
+                "user_id": user_label,
+                "region": region,
+                "workspace_domain": workspace_domain,
+                "state": "active",
+                "created_at": _SHARE_ROW_CREATED_AT,
+                "updated_at": _SHARE_ROW_CREATED_AT,
+                "last_tunnel_login_at": None,
+            }
+        )
+
+    def find_share(self, host_id: str, user_label: str) -> dict[str, Any] | None:
+        for share in self.share_rows:
+            if share["host_id"] == host_id and share["user_id"] == user_label:
+                return share
+        return None
+
+    def share_tuple(self, share: dict[str, Any]) -> tuple[Any, ...]:
+        """Project a stored share row into the SELECT column order PostgresShareStore uses."""
+        return tuple(share.get(name) for name in _SHARE_COLUMN_NAMES)
 
     def add_paid_domain(self, domain: str, is_paid: bool = True) -> None:
         """Seed a paid-domains row (lowercased), defaulting to active."""
@@ -1502,18 +1639,22 @@ class FakePoolBackend:
             existing["updated_at"] = _PAID_ENTRY_UPDATED_AT
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Swap DB and SSH functions on the app module with fakes.
+        """Swap DB and SSH functions on their owning modules with fakes.
 
         Uses the same single-loop-setattr pattern as FakeSuperTokensBackend to
-        minimize the test-patching ratchet count.
+        minimize the test-patching ratchet count. The DB connection factory is
+        patched on the ``db`` module and the SSH seams on the ``hosts`` module
+        (every caller resolves these through the module attribute). ``app_mod``
+        is unused here; it is accepted only so both ``Fake*Backend`` install
+        helpers share one calling convention.
         """
-        fakes: dict[str, Any] = {
-            "_get_pool_db_connection": self.get_connection,
-            "_append_authorized_key": self.append_authorized_key,
-            "clean_up_slice_on_box": self.clean_up_slice_on_box,
-        }
-        for name, fake in fakes.items():
-            monkeypatch.setattr(app_mod, name, fake)
+        fakes: list[tuple[Any, str, Any]] = [
+            (db_mod, "get_pool_db_connection", self.get_connection),
+            (hosts_module, "_append_authorized_key", self.append_authorized_key),
+            (hosts_module, "clean_up_slice_on_box", self.clean_up_slice_on_box),
+        ]
+        for target_module, name, fake in fakes:
+            monkeypatch.setattr(target_module, name, fake)
 
     def get_connection(self) -> FakeConnection:
         return _make_fake_connection(self)
@@ -1775,6 +1916,10 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.sync_insert_race_winner = None
     backend.sync_update_returns_no_row = False
     backend.orphan_stamps = {}
+    backend.share_rows = []
+    backend.relay_token_rows = []
+    backend.issued_cert_rows = []
+    backend.acme_account_rows = []
     return backend
 
 
@@ -1912,8 +2057,6 @@ def make_fake_orphan_bucket_store() -> InMemoryOrphanBucketStore:
 # Canonical plan values matching the committed deploy.toml [plans] blocks.
 EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 2,
-    "max_tunnels": 50,
-    "max_services_per_tunnel": 10,
     "max_buckets": 5,
     "max_total_bucket_bytes": 50 * 1024**3,
     "monthly_llm_spend_usd": 0.0,
@@ -1921,8 +2064,6 @@ EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
 }
 ALLY_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 10,
-    "max_tunnels": 50,
-    "max_services_per_tunnel": 10,
     "max_buckets": 20,
     "max_total_bucket_bytes": 500 * 1024**3,
     "monthly_llm_spend_usd": 1000.0,
@@ -2079,12 +2220,12 @@ class _FakeLiteLLMResponse:
 
 
 class FakeLiteLLMBackend:
-    """In-memory replacement for the connector's ``_litellm_request`` helper.
+    """In-memory replacement for the connector's ``litellm_client.litellm_request`` helper.
 
     Tracks internal users (for the user-level budget upserts) and key
     operations; ``fail_user_writes`` lets tests simulate a LiteLLM outage
     during a budget push (both /user/new and /user/update fail while set). Install by monkeypatching
-    ``app_mod._litellm_request`` to :meth:`request`.
+    ``litellm_client.litellm_request`` to :meth:`request`.
     """
 
     def __init__(self) -> None:
@@ -2158,3 +2299,281 @@ class FakeLiteLLMBackend:
 def make_fake_litellm_backend() -> FakeLiteLLMBackend:
     """Construct an empty in-memory LiteLLM admin-API fake."""
     return FakeLiteLLMBackend()
+
+
+# --- Shared route-test helpers (moved from the pre-split app_test.py) ---
+
+
+_USER_STUB_TOKEN = "user-stub-jwt"
+
+
+_USER_STUB_USER_ID_PREFIX = "testuser"
+
+
+_USER_STUB_EMAIL = "testuser@example.com"
+
+
+_USER_STUB_USER_ID = "12345678-1234-5678-1234-567812345678"
+
+
+_ADMIN_KEY_TEST_VALUE = "admin-key-secret-9f3a2b"
+
+
+def _user_headers() -> dict[str, str]:
+    """Return a Bearer header for a fake SuperTokens user session.
+
+    Paired with ``_make_test_client`` which stubs ``_authenticate_supertokens``
+    to recognise ``_USER_STUB_TOKEN`` and return a canned ``UserAuth``.
+    """
+    return {"Authorization": f"Bearer {_USER_STUB_TOKEN}"}
+
+
+def _make_quota_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, InMemoryEntitlementsStore, FakeLiteLLMBackend]:
+    """Create a TestClient with the FastAPI app plus every quota-relevant fake.
+
+    Sets up the SuperTokens Bearer auth path so tests calling user-authenticated endpoints
+    can authenticate with ``_user_headers()`` without needing a real JWT.
+    Installs an in-memory paid-list backend seeded with the stub user email,
+    an entitlements store pre-seeded with the two launch plans (with the stub
+    user's SuperTokens ``time_joined`` faked to 0, i.e. pre-cutoff, so the
+    stub's lazy plan resolves to ally by default), and a fake LiteLLM admin
+    API. The paid-status cache is disabled
+    (``MINDS_PAID_LIST_CACHE_TTL_SECONDS=0``) so the module-level cache never
+    bleeds between tests.
+    """
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
+    monkeypatch.setenv("MINDS_PAID_LIST_CACHE_TTL_SECONDS", "0")
+    # ``/keys/create`` embeds the proxy URL in its response (the LiteLLM calls
+    # themselves go through the installed fake).
+    monkeypatch.setenv("LITELLM_PROXY_URL", "https://fake-litellm.example.com")
+    fake_ctx = make_fake_cloudflare_ctx()
+
+    def _stub_supertokens(token: str) -> UserAuth:
+        if token != _USER_STUB_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return UserAuth(user_id_prefix=_USER_STUB_USER_ID_PREFIX, email=_USER_STUB_EMAIL)
+
+    entitlements_store = make_fake_entitlements_store()
+    litellm = make_fake_litellm_backend()
+    # Single-loop patching (matches the Fake*Backend.install_on_app_module
+    # pattern) so the monkeypatch ratchet only counts one occurrence. Each
+    # seam is patched on its owning module (call sites resolve seams through
+    # the module attribute).
+    quota_fakes: list[tuple[object, str, object]] = [
+        (cloudflare_mod, "get_cloudflare_ctx", lambda: fake_ctx),
+        (auth_mod, "_authenticate_supertokens", _stub_supertokens),
+        (entitlements_mod, "get_entitlements_store", lambda: entitlements_store),
+        (auth_mod, "get_user_id_from_access_token", lambda token: _USER_STUB_USER_ID),
+        (entitlements_mod, "_get_user_time_joined_ms", lambda user_id, user_getter=None: 0),
+        (litellm_client_mod, "litellm_request", litellm.request),
+    ]
+    for target_module, name, fake_impl in quota_fakes:
+        monkeypatch.setattr(target_module, name, fake_impl)
+    backend = make_fake_pool_backend()
+    backend.add_paid_email(_USER_STUB_EMAIL)
+    backend.install_on_app_module(app_mod, monkeypatch)
+    return TestClient(web_app), entitlements_store, litellm
+
+
+def _make_test_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Create a TestClient with the standard fakes (see ``_make_quota_test_client``)."""
+    client, _entitlements_store, _litellm = _make_quota_test_client(monkeypatch)
+    return client
+
+
+_PLAN_VALUES_BY_NAME = {"explorer": EXPLORER_PLAN_VALUES, "ally": ALLY_PLAN_VALUES}
+
+
+def _seed_entitlements_row(
+    entitlements_store: InMemoryEntitlementsStore,
+    plan_name: str = "explorer",
+    user_id: str = _USER_STUB_USER_ID,
+    user_id_prefix: str = _USER_STUB_USER_ID_PREFIX,
+    **overrides: float,
+) -> None:
+    """Insert an entitlements row copied from the named launch plan, with per-test quota overrides."""
+    entitlements_store.insert_entitlements_if_absent(
+        {
+            "user_id": user_id,
+            "user_id_prefix": user_id_prefix,
+            "plan_name": plan_name,
+            **{**_PLAN_VALUES_BY_NAME[plan_name], **overrides},
+        }
+    )
+
+
+class _FakeLoginMethod:
+    """Stand-in for a SuperTokens LoginMethod -- only ``email`` and ``verified`` are used."""
+
+    def __init__(self, email: str | None, verified: bool = True) -> None:
+        self.email = email
+        self.verified = verified
+
+
+def _make_pool_quota_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+    pool_backend: FakePoolBackend | None = None,
+) -> tuple[TestClient, FakePoolBackend, InMemoryEntitlementsStore, FakeLiteLLMBackend]:
+    """Create a TestClient with pool-backend and quota fakes installed.
+
+    The returned pool backend is seeded with the stub user email as paid, so
+    the stub's lazily-created entitlements row resolves to the ally plan by
+    default; explorer-plan tests flip the entry via ``backend.add_paid_email``
+    or write a row into the entitlements store directly.
+    """
+    client, entitlements_store, litellm = _make_quota_test_client(monkeypatch)
+    monkeypatch.setenv("POOL_SSH_PRIVATE_KEY", "fake-management-key-pem")
+    backend = pool_backend if pool_backend is not None else make_fake_pool_backend()
+    backend.add_paid_email(_USER_STUB_EMAIL)
+    backend.install_on_app_module(app_mod, monkeypatch)
+    return client, backend, entitlements_store, litellm
+
+
+def _make_pool_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+    pool_backend: FakePoolBackend | None = None,
+) -> tuple[TestClient, FakePoolBackend]:
+    """Pool test client without the quota handles (see ``_make_pool_quota_test_client``)."""
+    client, backend, _entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch, pool_backend)
+    return client, backend
+
+
+def _admin_key_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {_ADMIN_KEY_TEST_VALUE}"}
+
+
+def _make_paid_crud_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakePoolBackend]:
+    """Test client with the admin key configured and a fresh paid-list backend."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    return client, backend
+
+
+def _make_bucket_quota_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, FakeCloudflareOps, InMemoryKeyStore, InMemoryEntitlementsStore, InMemoryGrantStore]:
+    """Create a TestClient with the R2 fakes installed (Cloudflare ops + key/grant stores + entitlements)."""
+    client, entitlements_store, _litellm = _make_quota_test_client(monkeypatch)
+    # Build our own fake ctx so the fake is typed as FakeCloudflareCtx (which
+    # exposes ``.fake``); re-patching get_cloudflare_ctx overrides the one the quota
+    # client installed.
+    fake_ctx = make_fake_cloudflare_ctx()
+    store = make_fake_key_store()
+    grant_store = make_fake_grant_store()
+    # Single-loop patching (same pattern as the Fake*Backend.install_on_app_module
+    # helpers) so the monkeypatch ratchet only counts one occurrence.
+    bucket_fakes: list[tuple[object, str, object]] = [
+        (cloudflare_mod, "get_cloudflare_ctx", lambda: fake_ctx),
+        (r2_stores_mod, "get_key_store", lambda: store),
+        (r2_stores_mod, "get_grant_store", lambda: grant_store),
+    ]
+    for target_module, name, fake_impl in bucket_fakes:
+        monkeypatch.setattr(target_module, name, fake_impl)
+    return client, fake_ctx.fake, store, entitlements_store, grant_store
+
+
+def _make_bucket_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, FakeCloudflareOps, InMemoryKeyStore]:
+    """Bucket test client without the entitlements/grant handles (see ``_make_bucket_quota_test_client``)."""
+    client, fake, store, _entitlements_store, _grant_store = _make_bucket_quota_test_client(monkeypatch)
+    return client, fake, store
+
+
+def _make_sync_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, InMemorySyncStore, dict[str, str]]:
+    """Create a TestClient with the in-memory sync store installed.
+
+    Returns a mutable ``caller`` holder whose ``user_id`` entry the stubbed
+    token-decode reads on every request, so tests can switch the calling user
+    without another patch (keeps the monkeypatch ratchet at one occurrence,
+    mirroring the bucket-test helper's single-loop pattern).
+    """
+    client = _make_test_client(monkeypatch)
+    store = make_fake_sync_store()
+    caller = {"user_id": _USER_STUB_USER_ID}
+    sync_fakes: list[tuple[object, str, object]] = [
+        (sync_mod, "get_sync_store", lambda: store),
+        (auth_mod, "get_user_id_from_access_token", lambda token: caller["user_id"]),
+    ]
+    for target_module, name, fake_impl in sync_fakes:
+        monkeypatch.setattr(target_module, name, fake_impl)
+    return client, store, caller
+
+
+def _store_record(
+    host_id: str = "host-aaa111",
+    agent_id: str = "agent-1",
+    display_name: str = "my-workspace",
+    state: str = "active",
+    encrypted_secrets: bytes | None = None,
+    revision: int = 1,
+) -> dict[str, Any]:
+    """A store-layer record dict (raw-bytes secrets), as the endpoints hand to put_record."""
+    return {
+        "host_id": host_id,
+        "agent_id": agent_id,
+        "display_name": display_name,
+        "color": None,
+        "provider_kind": "docker",
+        "hosting_device_id": "device-1",
+        "device_label": "laptop",
+        "state": state,
+        "restored_from_host_id": None,
+        "encrypted_secrets": encrypted_secrets,
+        "revision": revision,
+    }
+
+
+# Shared coordinates for the self-hosted sharing tests (shares / certs / broker).
+_SHARE_STUB_TOKEN = "share-user-stub-jwt"
+_SHARE_STUB_USER_ID = "12345678-1234-5678-1234-567812345678"
+_SHARE_STUB_USER_LABEL = "12345678123456781234567812345678"
+_SHARE_STUB_EMAIL = "sharer@example.com"
+_SHARE_STUB_HOST_ID = "host-" + "a" * 32
+_OTHER_HOST_ID = "host-" + "b" * 32
+_CONTENT_DOMAIN = "minds-test.example"
+_DEFAULT_REGION = "us1"
+_RELAY_ENDPOINTS = "us1=relay-us1.infra.example.com:7000,us2=relay-us2.infra.example.com:7000"
+_FRPS_SECRET = "frps-plugin-secret-8d1c44"
+
+
+def _share_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {_SHARE_STUB_TOKEN}"}
+
+
+def _make_share_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, FakePoolBackend]:
+    """TestClient with sharing env config, a stubbed SuperTokens user, and the in-memory DB."""
+
+    def _stub_user_id_from_token(token: str) -> str:
+        if token != _SHARE_STUB_TOKEN:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return _SHARE_STUB_USER_ID
+
+    return _make_share_test_client_with_fakes(
+        monkeypatch,
+        {
+            "get_user_id_from_access_token": _stub_user_id_from_token,
+            "default_email_getter": lambda user_id: _SHARE_STUB_EMAIL,
+        },
+    )
+
+
+def _make_share_test_client_with_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    session_fakes: dict[str, object],
+) -> tuple[TestClient, FakePoolBackend]:
+    """Shared client setup; ``session_fakes`` supplies the token -> user resolution to install on the auth module."""
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
+    monkeypatch.setenv("SHARE_CONTENT_DOMAIN", _CONTENT_DOMAIN)
+    monkeypatch.setenv("SHARE_DEFAULT_REGION", _DEFAULT_REGION)
+    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
+    monkeypatch.setenv("FRPS_AUTH_SECRET", _FRPS_SECRET)
+    for name, fake_impl in session_fakes.items():
+        monkeypatch.setattr(auth_mod, name, fake_impl)
+    backend = make_fake_pool_backend()
+    backend.install_on_app_module(app_mod, monkeypatch)
+    return TestClient(web_app), backend

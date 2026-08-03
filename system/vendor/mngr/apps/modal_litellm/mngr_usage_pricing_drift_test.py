@@ -14,27 +14,13 @@ Contract: every Anthropic model this app prices must exist in
 route) -- those are not constrained here.
 """
 
-import importlib.util
-from pathlib import Path
-from typing import Any
+from types import ModuleType
 
 from imbue.mngr_usage.pricing import MODEL_PRICING
 
-_THIS_DIR = Path(__file__).parent
 
-
-def _load_deployed_model_list() -> list[dict[str, Any]]:
-    """Load LITELLM_CONFIG['model_list'] from the Modal app module (app.py)."""
-    app_path = _THIS_DIR / "app.py"
-    spec = importlib.util.spec_from_file_location("modal_litellm_app_for_pricing_drift", app_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.LITELLM_CONFIG["model_list"]
-
-
-def test_mngr_usage_anthropic_pricing_matches_modal_litellm_inline_pricing() -> None:
-    deployed_model_list = _load_deployed_model_list()
+def test_mngr_usage_anthropic_pricing_matches_modal_litellm_inline_pricing(app_module: ModuleType) -> None:
+    deployed_model_list = app_module.LITELLM_CONFIG["model_list"]
     # Sanity: the proxy registers a non-trivial Anthropic set, so an empty/renamed
     # model_list can't make this test vacuously pass.
     assert len(deployed_model_list) >= 4
