@@ -74,8 +74,11 @@ _TIMEOUT_SECONDS = 10.0
 
 # The lookup is a ``mngr ls`` subprocess -- an interpreter start plus provider
 # discovery, which is mostly page faults, so it tracks how much memory the host
-# has to spare (~1.5s idle, 35s measured on a host swapping hard). It gets its
-# own budget because timing out here used to mean addressing the wrong window.
+# has to spare (~1.5s idle, 35s measured on a host swapping hard). It gets a
+# budget of its own, larger than the POSTs', because those are one round trip and
+# this is not. The budget still sits under the swapping-host figure on purpose:
+# a caller is blocked on this, and overrunning it costs a reported skip of the
+# app channel, not a wrong window.
 _PRIMARY_LOOKUP_TIMEOUT_SECONDS = 30.0
 
 # The Minds app identifies a *workspace* by its primary agent id, not by whoever
