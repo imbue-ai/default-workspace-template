@@ -3106,3 +3106,188 @@ body {
 .terminal-banner-btn:hover {
   background: var(--color-bg-hover, #eef2f7);
 }
+
+/* ── Workspace header bar ──
+   Sits in the strip reserved by --minds-titlebar-height and hosts the
+   Settings entry point. See views/Header.ts. */
+.minds-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  height: 44px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-sidebar);
+}
+
+.minds-header-brand {
+  font-family: var(--font-family-heading);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-primary);
+}
+
+.minds-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.minds-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-base);
+  cursor: pointer;
+}
+
+.minds-header-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border-color: var(--color-border);
+}
+
+.minds-header-btn svg {
+  display: block;
+}
+
+/* ── Settings overlay ── (views/SettingsModal.ts) */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.settings-modal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  width: 520px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--color-border-faint);
+}
+
+.settings-modal-title {
+  font-family: var(--font-family-heading);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.settings-modal-close-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-base);
+  cursor: pointer;
+}
+
+.settings-modal-close-x:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.settings-modal-body {
+  padding: 8px 24px 24px;
+}
+
+.settings-section {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--color-border-faint);
+}
+
+.settings-section:last-child {
+  border-bottom: none;
+}
+
+.settings-section-title {
+  font-family: var(--font-family-heading);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 10px;
+}
+
+.settings-row-muted {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.settings-status {
+  font-size: 13px;
+  font-weight: 500;
+  margin: 0 0 12px;
+}
+
+.settings-status--ok {
+  color: #15803d;
+}
+
+.settings-status--warn {
+  color: #b45309;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.settings-btn {
+  padding: 6px 16px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-base);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.settings-btn-primary {
+  background: #1e293b;
+  color: white;
+}
+
+.settings-btn-primary:hover {
+  background: #334155;
+}
+
+.settings-btn-secondary {
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+}
+
+.settings-btn-secondary:hover {
+  background: var(--color-bg-hover);
+}
