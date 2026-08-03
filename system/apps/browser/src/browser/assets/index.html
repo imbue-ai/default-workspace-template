@@ -490,13 +490,12 @@
   // committed once the socket is OPEN so a dropped send retries; verbatim sizing).
   function sendPaneSize() {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
-    // A hidden/collapsed pane (display:none dockview tab, backgrounded app) reads a 0x0 box.
-    // Reporting that clamps to the 320x240 minimum, and the server records it as the capture
-    // region -- so on the next resume/tab-click it re-captures only that tiny top-left
-    // rectangle. Never report a pane that isn't really on screen; the ResizeObserver fires
-    // again with the true size the moment it becomes visible.
-    if (!paneVisible()) return;
     const rect = canvas.getBoundingClientRect();
+    // Skip ONLY a collapsed pane (a display:none dockview tab reads a 0x0 box): reporting that
+    // clamps to the 320x240 minimum and poisons the capture region. A REAL size is always
+    // reported -- even if the app tab is momentarily backgrounded (document.hidden) -- so a
+    // resize is never dropped and the browser reliably grows to fill the pane.
+    if (rect.width < 5 || rect.height < 5) return;
     const w = Math.max(320, Math.round(rect.width) & ~1);
     const h = Math.max(240, Math.round(rect.height) & ~1);
     const key = w + "," + h;
@@ -531,8 +530,15 @@
   // merely sitting visible in a split view does NOT auto-claim -- you click it (below).
   function onVisibilityTransition() {
     const vis = paneVisible();
-    if (vis && !wasVisible) claimActive();
-    else if (!vis && wasVisible) releaseActive();
+    if (vis && !wasVisible) {
+      claimActive();
+      // The pane just became visible (or its layout settled): re-report the true size so the
+      // browser resizes to fill it, correcting any stale/early initial measurement.
+      lastSentSize = "";
+      sendPaneSize();
+    } else if (!vis && wasVisible) {
+      releaseActive();
+    }
     wasVisible = vis;
   }
   document.addEventListener("visibilitychange", onVisibilityTransition);
