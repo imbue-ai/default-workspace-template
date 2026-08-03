@@ -71,6 +71,12 @@
   /* While init/crashed cover the pane, hide the tab + nav chrome so a half-built
      browser never peeks through. Toggled by the `chrome-hidden` class on #app. */
   #app.chrome-hidden #tabbar, #app.chrome-hidden #navbar, #app.chrome-hidden #returnbar { display: none; }
+
+  /* Non-blocking top-center pill shown while a larger clipboard op is in flight
+     (image paste/copy, long text). pointer-events:none so it never traps the user
+     -- the paste is already server-owned, so they can navigate away freely. */
+  #cliptoast { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 30; background: rgba(14, 99, 156, 0.92); color: #fff; padding: 6px 16px; border-radius: 999px; font-size: 13px; pointer-events: none; opacity: 0; transition: opacity .15s; }
+  #cliptoast.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -89,6 +95,7 @@
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
     <div id="placeholder">Starting browser…</div>
+    <div id="cliptoast"></div>
     <div id="overlay">
       <div class="msg" id="overlaymsg">An agent has control.</div>
       <div class="sub" id="overlaysub"></div>
@@ -108,6 +115,8 @@
 (function () {
   "use strict";
   const app = document.getElementById("app");
+  const stage = document.getElementById("stage");
+  const cliptoast = document.getElementById("cliptoast");
   const canvas = document.getElementById("screen");
   const ctx = canvas.getContext("2d");
   const placeholder = document.getElementById("placeholder");
@@ -325,6 +334,18 @@
 
   function sendCast(obj) { if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify(obj)); }
 
+  // Report our pane size so the server grows the browser to fill it (it clamps to
+  // [1280x800 .. 1920x1080] and ignores this while an agent drives). Debounced -- a
+  // drag fires a burst and each server resize re-attaches the screencast.
+  let resizeTimer = null;
+  function reportSize() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      sendCast({ type: "resize", width: Math.round(stage.clientWidth), height: Math.round(stage.clientHeight) });
+    }, 150);
+  }
+  new ResizeObserver(reportSize).observe(stage);
+
   // --- coordinate scaling: canvas CSS px -> frame device px ---
   function scaled(e) {
     const r = canvas.getBoundingClientRect();
@@ -364,8 +385,83 @@
     sendCast({ type: "mouse", event: { type: "mouseWheel", x: p.x, y: p.y, button: "none", deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) } });
   }, { passive: false });
 
+  // --- clipboard bridge -------------------------------------------------------
+  // The remote browser runs headful with a real OS clipboard; these sync it with
+  // the USER's clipboard over HTTP (not the cast socket -- images exceed its cap).
+  // Driven by the real copy/paste/cut EVENTS (below), so it's OS- and keymap-
+  // agnostic: fires on Ctrl+C, Cmd+C, Ctrl+Insert, the right-click menu, or the Edit
+  // menu alike -- never tied to guessing specific keystrokes.
+  function clipUrl() { return new URL("browsers/" + browserId + "/clipboard", document.baseURI).toString(); }
+
+  // Non-blocking progress pill for larger clipboard ops. Delayed so instant text
+  // ops don't flicker; returns a done() that clears it. pointer-events:none (CSS)
+  // means it never traps the user -- the paste is server-owned once uploaded, so
+  // they can navigate away and it still lands.
+  function withClipToast(label) {
+    const t = setTimeout(() => { cliptoast.textContent = label; cliptoast.classList.add("show"); }, 200);
+    return () => { clearTimeout(t); cliptoast.classList.remove("show"); };
+  }
+
+  function b64ToBlob(b64, mime) {
+    const bin = atob(b64), arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+
+  function clipActive() { return controlOwner !== "agent" && hasFrame && castWs && castWs.readyState === 1; }
+
+  // PASTE: the event's own clipboardData carries text + images with no permission
+  // prompt (it's a user-initiated paste gesture). Send the raw bytes to the remote.
+  async function sendPaste(body, mime) {
+    const done = withClipToast("Pasting…");
+    try { await fetch(clipUrl(), { method: "POST", headers: { "Content-Type": mime }, body }); }
+    catch (_) { /* not controlling / network: ignore */ }
+    finally { done(); }
+  }
+  document.addEventListener("paste", (e) => {
+    if (!clipActive()) return;
+    e.preventDefault();
+    for (const it of e.clipboardData.items) {
+      if (it.type.indexOf("image/") === 0) {
+        const blob = it.getAsFile();
+        if (blob) { sendPaste(blob, it.type); return; }
+      }
+    }
+    const text = e.clipboardData.getData("text/plain");
+    if (text) sendPaste(new Blob([text], { type: "text/plain" }), "text/plain");
+  });
+
+  // COPY/CUT: pull the remote browser's selection and write it to the user's real
+  // clipboard (text via writeText, image via ClipboardItem).
+  async function copyFromRemote(cut) {
+    if (!navigator.clipboard) return;  // needs a secure context (https/localhost)
+    const done = withClipToast("Copying…");
+    try {
+      const r = await fetch(clipUrl() + (cut ? "?cut=1" : ""));
+      const j = await r.json();
+      if (j.ok && j.mime) {
+        if (j.mime.indexOf("text/") === 0) { if (j.text) await navigator.clipboard.writeText(j.text); }
+        else if (j.data) await navigator.clipboard.write([new ClipboardItem({ [j.mime]: b64ToBlob(j.data, j.mime) })]);
+      }
+    } catch (_) { /* denied / nothing selected: ignore */ }
+    finally { done(); }
+  }
+  document.addEventListener("copy", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(false); } });
+  document.addEventListener("cut", (e) => { if (clipActive()) { e.preventDefault(); copyFromRemote(true); } });
+
   function key(type, e) {
     if (controlOwner === "agent" || !hasFrame) return;
+    // Clipboard shortcuts are handled by the copy/paste/cut EVENT listeners above.
+    // Let the browser's DEFAULT fire those events -- so DON'T preventDefault and
+    // DON'T forward, or (a) the paste/copy event never fires and (b) the remote
+    // would paste/cut a second time. Covers Ctrl/Cmd+C/V/X plus the legacy
+    // Ctrl/Shift+Insert and Shift+Delete bindings; every other key passes through.
+    const kl = e.key.toLowerCase();
+    if (((e.ctrlKey || e.metaKey) && !e.altKey && ["c", "v", "x"].includes(kl))
+        || (e.key === "Insert" && (e.ctrlKey || e.shiftKey))
+        || (e.key === "Delete" && e.shiftKey)) {
+      return;
+    }
     e.preventDefault();
     const isChar = type === "keyDown" && e.key.length === 1;
     sendCast({ type: "key", event: {
@@ -407,6 +503,7 @@
   function connect(id) {
     browserId = id;
     castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
+    castWs.onopen = () => reportSize();  // send our pane size once the socket is live
     castWs.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "crashed") showCrashed();

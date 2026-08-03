@@ -133,7 +133,7 @@ _SHARED_SERVE_SCRIPT = (
     / "scripts"
     / "serve_isolated_instance.py"
 )
-# The proxied service names the preview registers: the inner booted app and the
+# The service names the preview registers: the inner booted app and the
 # outer wrapper the user actually opens. Fixed because the flow runs one preview
 # at a time -- enforced by the guard in ``preview`` (a different slug's live
 # preview refuses to boot); a re-run of the *same* slug is fine because the

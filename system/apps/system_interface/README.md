@@ -76,8 +76,8 @@ rolled back, `3` emergency, `1` precondition error).
 That reload is delegated to `system/scripts/refresh_workspace_view.py`, the shared
 helper every flow that restarts the services agent uses. It fires two channels,
 because neither reaches every viewer: a `reload_system_interface` op, and the Minds
-app's own refresh endpoint (which additionally drops the app's HTTP cache, and lands
-even when the page's WebSocket never came back from the restart).
+app's own refresh endpoint (which lands even when the page's WebSocket never came
+back from the restart).
 
 The `reload_system_interface` op goes to the loopback-only
 `/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;
