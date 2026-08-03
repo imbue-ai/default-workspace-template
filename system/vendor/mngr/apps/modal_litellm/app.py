@@ -1,8 +1,11 @@
 """LiteLLM proxy deployed as a Modal serverless function.
 
-This file is entirely self-contained -- it has NO imports from the monorepo.
-Only stdlib, modal, pyyaml, and litellm (installed in the Modal image) are used.
-This keeps deployment simple: ``modal deploy app.py`` ships just this file.
+This file is deployed by file path (``modal deploy app.py``), so Modal ships
+just this file plus the packages added via ``add_local_python_source`` below
+(today: ``imbue.modal_app_kit``, our shared Modal deploy conventions).
+Anything else from the monorepo must NOT be imported here -- it would work
+locally and crash the container at import time. See
+libs/modal_app_kit/README.md for the deployment model.
 
 LiteLLM's native ``POST /v1/messages`` route accepts the Anthropic API
 request shape, so the Anthropic SDK / Claude Code can talk to the proxy
@@ -22,44 +25,53 @@ Usage:
 """
 
 import json
+import logging
 import os
 import subprocess
+import urllib.parse
+from pathlib import Path
+from typing import Final
 
 import modal
+import tenacity
 
-_DEPLOY_ENV = os.environ.get("MNGR_DEPLOY_ENV", "production")
+from imbue.modal_app_kit.database import direct_database_url
+from imbue.modal_app_kit.deploy import deploy_metadata_secret
+from imbue.modal_app_kit.deploy import read_deploy_env
+from imbue.modal_app_kit.deploy import read_deploy_id
+from imbue.modal_app_kit.deploy import read_min_containers
+from imbue.modal_app_kit.deploy import read_scaledown_window
+from imbue.modal_app_kit.deploy import stamped_secret
+from imbue.modal_app_kit.image import IMAGE_REQUIREMENTS_FILENAME
+from imbue.modal_app_kit.image import pinned_image
+from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
+
+_DEPLOY_ENV = read_deploy_env()
 
 # Per-deploy timestamp baked into the deployed function spec. ``minds env
 # deploy`` mints this at the start of every deploy and threads it through
 # the ``modal deploy`` subprocess env. The deployed function pins to the
 # matching ``<svc>-<tier>-<MINDS_DEPLOY_ID>`` Modal Secrets, so
 # ``modal app rollback`` reverts the captured env and re-attaches to the
-# previous deploy's secrets in one shot. Falls back to a sentinel value
-# when unset so unit tests can import the module without raising; the
-# resulting ``litellm-<tier>-MINDS_DEPLOY_ID_UNSET`` secret name doesn't
-# exist in any Modal env so a real ``modal deploy`` invocation outside
-# of ``minds env deploy`` will fail with "Secret not found" -- the
-# safety property the timestamped-secret rollback model needs.
-_MINDS_DEPLOY_ID = os.environ.get("MINDS_DEPLOY_ID", "MINDS_DEPLOY_ID_UNSET")
+# previous deploy's secrets in one shot. See ``read_deploy_id`` for the
+# unset-sentinel safety property.
+_MINDS_DEPLOY_ID = read_deploy_id()
 
 # Warm-pool size for the deployed function. ``minds env deploy`` reads
 # the tier's ``[min_containers].litellm_proxy`` from its committed
-# ``deploy.toml`` and threads the value here as
-# ``MINDS_LITELLM_PROXY_MIN_CONTAINERS`` at ``modal deploy`` time --
+# ``deploy.toml`` and threads the value here at ``modal deploy`` time --
 # which is when this module is imported and the function spec is
 # serialized. Defaults to 0 so a deploy that forgets to set the env
 # var gets the cheapest possible warm pool (cold start on first hit).
-_MIN_CONTAINERS = int(os.environ.get("MINDS_LITELLM_PROXY_MIN_CONTAINERS", "0"))
+_MIN_CONTAINERS = read_min_containers("MINDS_LITELLM_PROXY_MIN_CONTAINERS")
 
 # Idle-before-scaledown window (seconds). ``minds env deploy`` threads the
-# tier's ``[scaledown_window].litellm_proxy`` here as
-# ``MINDS_LITELLM_PROXY_SCALEDOWN_WINDOW`` at ``modal deploy`` time. Dev tiers
-# set this high (~10 min) so the no-warm-pool proxy stays hot across a dev
-# session; staging / production leave it unset and rely on ``min_containers``.
-# ``0`` (the default, and what the ci/test tier uses) means "don't pin it" --
-# Modal uses its own default. Modal requires the value > 0, so 0 is normalized
-# to ``None`` at the call site below.
-_SCALEDOWN_WINDOW = int(os.environ.get("MINDS_LITELLM_PROXY_SCALEDOWN_WINDOW", "0"))
+# tier's ``[scaledown_window].litellm_proxy`` here at ``modal deploy`` time.
+# Dev tiers set this high (~10 min) so the no-warm-pool proxy stays hot
+# across a dev session; staging / production leave it unset and rely on
+# ``min_containers``. None (from the unset/0 default, the ci/test tier)
+# means "don't pin it" -- Modal uses its own default.
+_SCALEDOWN_WINDOW = read_scaledown_window("MINDS_LITELLM_PROXY_SCALEDOWN_WINDOW")
 
 # Per-token USD pricing for each Anthropic model, mirrored verbatim from
 # litellm's model_prices_and_context_window map. We register pricing inline
@@ -153,19 +165,29 @@ def _write_config_file() -> str:
     return config_path
 
 
-# litellm is pinned: the proxy's auth/budget behavior (user-level budgets
-# enforce the per-account monthly LLM spend quota) must not drift under us on
-# a redeploy. Bump deliberately, re-verifying budget enforcement + the price
-# map for the models in LITELLM_CONFIG.
-_LITELLM_VERSION = "1.93.0"
-
+# All build steps (the hash-locked pip install onto the digest-pinned base --
+# see ``imbue.modal_app_kit.image`` -- then prisma codegen) come first and are
+# cached; local source is attached as the single final operation. With the
+# default copy=False it is a container-startup mount, not an image layer, so
+# code changes never invalidate the image cache (Modal enforces the ordering).
+# The pip set (including the deliberately-pinned litellm) lives in this app's
+# ``[dependency-groups] image`` in pyproject.toml, exported to
+# image_requirements.txt.
 image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(f"litellm[proxy]=={_LITELLM_VERSION}", "prisma", "pyyaml")
+    pinned_image(Path(__file__).parent / IMAGE_REQUIREMENTS_FILENAME)
+    # The prisma codegen step below downloads a current Node via nodeenv at
+    # build time (a floating input the prisma layer already accepts -- it also
+    # npm-installs the prisma CLI). Node 24+ links against libatomic, which
+    # the slim base image does not ship, so new image builds fail with
+    # "node: error while loading shared libraries: libatomic.so.1" without it
+    # (cached images kept working, which is why this surfaced only on fresh
+    # env deploys).
+    .apt_install("libatomic1")
     .run_commands(
         'python -c "import litellm.proxy; import os; print(os.path.dirname(litellm.proxy.__file__))" > /tmp/litellm_proxy_dir.txt',
         "prisma generate --schema $(cat /tmp/litellm_proxy_dir.txt)/schema.prisma",
     )
+    .add_local_python_source("imbue.modal_app_kit", ignore=shipped_python_source_ignore)
 )
 
 app = modal.App(name=f"llm-{_DEPLOY_ENV}", image=image)
@@ -174,14 +196,14 @@ app = modal.App(name=f"llm-{_DEPLOY_ENV}", image=image)
 @app.function(
     name="proxy",
     secrets=[
-        modal.Secret.from_name(f"litellm-{_DEPLOY_ENV}-{_MINDS_DEPLOY_ID}"),
-        modal.Secret.from_dict({"MNGR_DEPLOY_ENV": _DEPLOY_ENV, "MINDS_DEPLOY_ID": _MINDS_DEPLOY_ID}),
+        stamped_secret("litellm", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        deploy_metadata_secret(_DEPLOY_ENV, _MINDS_DEPLOY_ID),
     ],
     min_containers=_MIN_CONTAINERS,
-    # Idle-before-scaledown window driven by ``_SCALEDOWN_WINDOW``. ``0``
-    # (default / ci) -> ``None`` so Modal uses its own default; dev pins this
-    # high so the no-warm-pool proxy stays hot across a dev session.
-    scaledown_window=_SCALEDOWN_WINDOW or None,
+    # Idle-before-scaledown window driven by ``_SCALEDOWN_WINDOW`` (already
+    # None when unset, so Modal uses its own default); dev pins this high so
+    # the no-warm-pool proxy stays hot across a dev session.
+    scaledown_window=_SCALEDOWN_WINDOW,
     timeout=600,
 )
 @modal.asgi_app()
@@ -199,8 +221,53 @@ def litellm_app():
     return fastapi_app
 
 
+# Prisma error codes that mean the database server could not be reached at all
+# (P1001: can't reach server, P1002: server reached but timed out, P1017:
+# server closed the connection). These are the transient connect-path failures
+# worth retrying (e.g. a network/DNS blip in the fresh Modal container); every
+# other failure (auth, schema, migration state) must fail fast so the deploy's
+# rollback fires on the first attempt.
+_PRISMA_CONNECTION_ERROR_CODES: Final[tuple[str, ...]] = ("P1001", "P1002", "P1017")
+
+
+class _PrismaMigrationError(Exception):
+    """Raised when `prisma db push` fails for a non-connection reason."""
+
+
+class _PrismaConnectionError(_PrismaMigrationError):
+    """Raised when `prisma db push` could not reach the database server (retryable)."""
+
+
+def _is_connection_failure_output(prisma_output: str) -> bool:
+    return any(code in prisma_output for code in _PRISMA_CONNECTION_ERROR_CODES)
+
+
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(_PrismaConnectionError),
+    stop=tenacity.stop_after_attempt(5),
+    wait=tenacity.wait_exponential(multiplier=2, min=2, max=30),
+    reraise=True,
+)
+def _run_prisma_db_push(schema_path: str, subprocess_env: dict[str, str]) -> None:
+    """Run one `prisma db push` attempt, retrying only on connection-class failures."""
+    result = subprocess.run(
+        ["prisma", "db", "push", "--schema", schema_path, "--accept-data-loss", "--skip-generate"],
+        env=subprocess_env,
+        capture_output=True,
+        text=True,
+    )
+    combined_output = (result.stdout + "\n" + result.stderr).strip()
+    if result.returncode == 0:
+        logging.info("Completed prisma db push:\n%s", combined_output)
+        return
+    if _is_connection_failure_output(combined_output):
+        logging.warning("Failed to reach the database server during prisma db push (retryable):\n%s", combined_output)
+        raise _PrismaConnectionError(combined_output)
+    raise _PrismaMigrationError(f"prisma db push exited {result.returncode}:\n{combined_output}")
+
+
 @app.function(
-    secrets=[modal.Secret.from_name(f"litellm-{_DEPLOY_ENV}-{_MINDS_DEPLOY_ID}")],
+    secrets=[stamped_secret("litellm", _DEPLOY_ENV, _MINDS_DEPLOY_ID)],
     timeout=300,
 )
 def migrate_db() -> None:
@@ -215,7 +282,12 @@ def migrate_db() -> None:
     litellm[proxy] package (which ships the canonical schema.prisma)
     are already installed. Runs against the same `litellm-<tier>` Modal
     Secret the proxy consumes, so DATABASE_URL is necessarily the same
-    Postgres the proxy will talk to at runtime.
+    Postgres the proxy will talk to at runtime -- except that the push
+    itself connects over the DIRECT (non-``-pooler``) host, since schema
+    operations are unsafe through transaction pooling (see
+    ``imbue.modal_app_kit.database.direct_database_url``). Connection-class
+    failures are retried with
+    backoff (see ``_run_prisma_db_push``); real schema failures fail fast.
 
     Idempotent: prisma db push only applies diffs, so re-running on an
     already-current database is a no-op (~1s wall-clock). The
@@ -227,8 +299,9 @@ def migrate_db() -> None:
     """
     import litellm.proxy
 
+    logging.basicConfig(level=logging.INFO, force=True)
+    direct_url = direct_database_url(os.environ["DATABASE_URL"])
+    direct_host = urllib.parse.urlsplit(direct_url).hostname
+    logging.info("Running prisma db push against database host %s", direct_host)
     schema_path = os.path.join(os.path.dirname(litellm.proxy.__file__), "schema.prisma")
-    subprocess.run(
-        ["prisma", "db", "push", "--schema", schema_path, "--accept-data-loss", "--skip-generate"],
-        check=True,
-    )
+    _run_prisma_db_push(schema_path, {**os.environ, "DATABASE_URL": direct_url})

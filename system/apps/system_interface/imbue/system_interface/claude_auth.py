@@ -1,12 +1,13 @@
 """In-mind Claude authentication: settings-env credential writes, setup-token flow, agent restarts.
 
 Implements the backend half of the in-UI Claude login modal. All credentials
-live in the ``env`` block of the shared ``$CLAUDE_CONFIG_DIR/settings.json``
-(the config dir every claude in the mind inherits), NEVER in the mngr host
-env file: the host env file is frozen into long-lived processes (supervisord
-and its services) at boot, so changing it would require tearing down the
-whole workspace, while a settings.json edit only requires restarting the
-claude agents themselves.
+live in the ``env`` block of the shared ``~/.claude/settings.json`` (the
+config dir every claude in the mind resolves by claude's own default --
+``CLAUDE_CONFIG_DIR`` is deliberately unset workspace-wide), NEVER in the
+mngr host env file: the host env file is frozen into long-lived processes
+(supervisord and its services) at boot, so changing it would require tearing
+down the whole workspace, while a settings.json edit only requires
+restarting the claude agents themselves.
 
 Five sign-in paths:
 
@@ -33,12 +34,13 @@ mixed-mode pastes (an OAuth token alongside an API key) are rejected so the
 written state is always unambiguous. The writer fully controls the managed
 keys -- switching modes deletes the other mode's keys.
 
-Every successful write restarts the mind's claude-binary agents (types
-``claude`` AND ``worker``; the ``main`` services agent is excluded -- its
-window 0 never runs a live claude, and restarting it would tear down
-supervisord and every background service). Settings-env values are read at
-claude process start, so a restart is what makes new credentials take
-effect. Agent states are snapshotted (via ``mngr list``) before stopping:
+Every successful write restarts the mind's claude-binary agents (every
+claude-parented type: ``claude``, ``chat``, and ``worker``; the ``main``
+services agent is excluded -- its window 0 never runs a live claude, and
+restarting it would tear down supervisord and every background service).
+Settings-env values are read at claude process start, so a restart is what
+makes new credentials take effect. Agent states are snapshotted (via
+``mngr list``) before stopping:
 agents that were RUNNING mid-task get a "please continue" message after the
 restart so unattended workers resume instead of silently dying; WAITING
 agents need nothing (their next user message starts them with the fresh
@@ -92,10 +94,11 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.cli.exit_codes import EXIT_CODE_PROVIDER_INACCESSIBLE
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
+from imbue.mngr_claude.claude_config import get_claude_config_dir
 
 logger = _loguru_logger
 
-_CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 _HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
 ANTHROPIC_API_KEY_ENV_VAR: Final[str] = "ANTHROPIC_API_KEY"
 ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
@@ -116,7 +119,6 @@ _DISPLAY_SUFFIX_LENGTH: Final = 4
 # characters in `.claude.json`'s `customApiKeyResponses.approved` (the same
 # suffix length mngr's `approve_api_key_for_claude` records).
 _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
-_CLAUDE_JSON_FILENAME: Final = ".claude.json"
 # Fires on the first sight of the OAuth URL in the PTY stream. This is only a
 # *trigger*: the CLI's Ink renderer hard-wraps the visible URL at the terminal
 # width (pexpect's default PTY is 80 columns) and pexpect can match mid
@@ -185,10 +187,13 @@ _MNGR_RESTART_TIMEOUT_SECONDS: Final = 600.0
 _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 
 # Agent types whose window-0 process is a real claude binary and therefore
-# holds credentials frozen from process start. The `main` services agent is
-# deliberately absent: its window 0 sleeps forever and restarting it would
-# tear down supervisord and every background service.
-CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "worker"))
+# holds credentials frozen from process start: every claude-parented type in
+# .mngr/settings.toml (a test asserts this set matches the settings file, so
+# a new claude-derived type cannot silently dodge auth-change restarts the
+# way `chat` briefly did when it split off from `claude`). The `main`
+# services agent is deliberately absent: its window 0 sleeps forever and
+# restarting it would tear down supervisord and every background service.
+CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "chat", "worker"))
 _AGENT_STATE_RUNNING: Final[str] = "RUNNING"
 _AGENT_STATE_WAITING: Final[str] = "WAITING"
 
@@ -224,9 +229,7 @@ def _default_pexpect_spawner(executable: str, args: list[str], timeout: float) -
     # Dimensions pinned to the geometry the extraction replays the stream
     # at (see _render_final_screen) -- these are pexpect's defaults, made
     # explicit so the two can never drift apart.
-    return pexpect.spawn(
-        executable, args, timeout=timeout, encoding="utf-8", dimensions=(_PTY_LINES, _PTY_COLUMNS)
-    )
+    return pexpect.spawn(executable, args, timeout=timeout, encoding="utf-8", dimensions=(_PTY_LINES, _PTY_COLUMNS))
 
 
 class AuthMode(str, Enum):
@@ -299,7 +302,8 @@ class AuthStatus(FrozenModel):
     restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
     restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
     restart_reason: str | None = Field(
-        default=None, description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'"
+        default=None,
+        description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
     )
 
 
@@ -463,14 +467,31 @@ def read_workspace_host_id() -> str | None:
 
 
 def _resolve_claude_config_dir() -> Path:
-    config_dir = os.environ.get(_CLAUDE_CONFIG_DIR_ENV_VAR, "")
-    if not config_dir:
-        raise ClaudeAuthError(f"{_CLAUDE_CONFIG_DIR_ENV_VAR} is unset; cannot locate the Claude config")
-    return Path(config_dir)
+    """Resolve the shared Claude config dir the way claude itself does.
+
+    ``$CLAUDE_CONFIG_DIR`` when set, else ``~/.claude`` (delegated to
+    mngr_claude's ``get_claude_config_dir``). In a minds workspace the env
+    var is deliberately unset everywhere (no agent or host env exports it),
+    so this resolves to the same ``~/.claude`` a bare ``claude`` in a
+    workspace terminal uses.
+    """
+    return get_claude_config_dir()
+
+
+def _resolve_claude_json_path() -> Path:
+    """Locate the global claude config file (``.claude.json``) claude reads.
+
+    Delegates to mngr_claude's ``find_user_config_in_unisolated_mode``, which
+    mirrors claude's own resolution: ``$CLAUDE_CONFIG_DIR/.claude.json`` when
+    the env var is set, but ``~/.claude.json`` -- BESIDE ``~/.claude/``, not
+    inside it -- when unset. Writing the approval into the wrong one of the
+    two would leave claude challenging the key.
+    """
+    return find_user_config_in_unisolated_mode()
 
 
 def _resolve_claude_settings_path() -> Path:
-    """Locate the shared `$CLAUDE_CONFIG_DIR/settings.json` for the mind."""
+    """Locate the shared `settings.json` (inside the config dir) for the mind."""
     return _resolve_claude_config_dir() / "settings.json"
 
 
@@ -554,7 +575,7 @@ def record_api_key_approval(managed_env: Mapping[str, str], claude_json_path_ove
     api_key = managed_env.get(ANTHROPIC_API_KEY_ENV_VAR, "")
     if not api_key:
         return
-    claude_json_path = claude_json_path_override or (_resolve_claude_config_dir() / _CLAUDE_JSON_FILENAME)
+    claude_json_path = claude_json_path_override or _resolve_claude_json_path()
     data: dict[str, Any] = {}
     if claude_json_path.exists():
         try:
@@ -732,9 +753,7 @@ def _extract_setup_token(raw_output: str) -> str | None:
     return token
 
 
-def _drain_pty_stream_until_quiet(
-    process: Any, consumed: str, quiet_seconds: float, deadline_seconds: float
-) -> str:
+def _drain_pty_stream_until_quiet(process: Any, consumed: str, quiet_seconds: float, deadline_seconds: float) -> str:
     """Read PTY output until no chunk arrives for `quiet_seconds`.
 
     Used to detect the end of the CLI's paste-echo burst before sending
@@ -882,7 +901,7 @@ class ClaudeAuthService(MutableModel):
         `auth_mode` / `masked_key_suffix` are folded into the returned
         status for the modal's header.
         """
-        managed_env = self._read_managed_env_tolerant()
+        managed_env = read_managed_auth_env()
         combined_extra = {**managed_env, **(dict(extra_env) if extra_env else {})}
         runner_env = {**os.environ, **combined_extra} if combined_extra else None
         try:
@@ -910,19 +929,6 @@ class ClaudeAuthService(MutableModel):
             raise ClaudeAuthError(f"claude auth status returned non-object JSON: {payload!r}")
         return self._with_derived_mode(_parse_status_payload(payload), combined_extra)
 
-    def _read_managed_env_tolerant(self) -> dict[str, str]:
-        """Read the managed settings env, tolerating an unset CLAUDE_CONFIG_DIR.
-
-        Status checks must not explode merely because the env var is
-        missing (e.g. in a degraded mind) -- they degrade to "no managed
-        credentials" and the modal walks the user through recovery.
-        """
-        try:
-            return read_managed_auth_env()
-        except ClaudeAuthError as e:
-            logger.warning("Cannot read managed auth env: {}", e)
-            return {}
-
     def _with_derived_mode(self, status: AuthStatus, managed_env: Mapping[str, str]) -> AuthStatus:
         progress = self.current_restart_progress()
         # Managed env keys outrank everything claude reads elsewhere, so
@@ -947,7 +953,7 @@ class ClaudeAuthService(MutableModel):
         """Return name + state of every claude-binary agent in the local mind.
 
         Uses `mngr list --format json` and filters to the claude-binary
-        types (``claude`` and ``worker``). This excludes the `main`-type
+        types (``claude``, ``chat``, and ``worker``). This excludes the `main`-type
         system-services agent, which has no interactive claude process to
         restart -- and whose restart would tear down every background
         service in the mind.
@@ -1019,15 +1025,11 @@ class ClaudeAuthService(MutableModel):
             running.remove(never_welcomed_agent_name)
             waiting.append(never_welcomed_agent_name)
         if running:
-            self._set_restart_progress(
-                RestartPhase.RESTARTING, f"Restarting {len(running)} active agent(s)", None
-            )
+            self._set_restart_progress(RestartPhase.RESTARTING, f"Restarting {len(running)} active agent(s)", None)
             logger.info("Restarting previously-RUNNING agents {} via mngr start --restart", running)
             self._run_restart_command(_build_restart_with_message_command(running, RESTART_CONTINUE_MESSAGE))
         if waiting:
-            self._set_restart_progress(
-                RestartPhase.RESTARTING, f"Restarting {len(waiting)} idle agent(s)", None
-            )
+            self._set_restart_progress(RestartPhase.RESTARTING, f"Restarting {len(waiting)} idle agent(s)", None)
             logger.info("Restarting previously-WAITING agents {} via mngr start --restart", waiting)
             self._run_restart_command(_build_restart_no_resume_command(waiting))
         return running + waiting
@@ -1040,7 +1042,11 @@ class ClaudeAuthService(MutableModel):
 
     def _set_restart_progress(self, phase: RestartPhase, detail: str | None, error: str | None) -> None:
         with self._restart_state_lock:
-            reason = self._restart_progress.reason if self._restart_progress is not None else RestartReason.CREDENTIALS_SAVED
+            reason = (
+                self._restart_progress.reason
+                if self._restart_progress is not None
+                else RestartReason.CREDENTIALS_SAVED
+            )
             self._restart_progress = RestartProgress(phase=phase, detail=detail, error=error, reason=reason)
 
     def current_restart_progress(self) -> RestartProgress | None:
@@ -1381,12 +1387,16 @@ class ClaudeAuthService(MutableModel):
             )
         if match_index == 0:
             # Drain the goodbye output so the process reaps cleanly.
-            self._current_setup_token_output = _drain_pty_stream(process, self._current_setup_token_output, lambda buffer: False)
+            self._current_setup_token_output = _drain_pty_stream(
+                process, self._current_setup_token_output, lambda buffer: False
+            )
             return True
         if match_index in (1, 3):
             # Failure line matched, or EOF: the buffer decides (success and
             # exit can arrive in one read, so EOF does not imply failure).
-            self._current_setup_token_output = _drain_pty_stream(process, self._current_setup_token_output, lambda buffer: False)
+            self._current_setup_token_output = _drain_pty_stream(
+                process, self._current_setup_token_output, lambda buffer: False
+            )
             if _LOGIN_SUCCESS_REGEX.search(self._current_setup_token_output):
                 return True
             failed_match = _LOGIN_FAILED_LINE_REGEX.search(self._current_setup_token_output)
@@ -1411,7 +1421,7 @@ class ClaudeAuthService(MutableModel):
         process start).
         """
         self._drop_current_session_locked()
-        managed_env = self._read_managed_env_tolerant()
+        managed_env = read_managed_auth_env()
         if provider is OAuthProvider.CLAUDEAI and not managed_env:
             self._clear_terminal_restart_progress()
             status = self.get_auth_status()

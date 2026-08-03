@@ -51,6 +51,21 @@ class BackupEventType(UpperCaseStrEnum):
     TICK_ERROR = auto()
 
 
+# Every event type that ends a tick -- including the endings that never reach
+# restic (secrets absent, snapshot step aborted) and the loop's outer catch.
+# `host-backup-now` waits for one of these, so a new way for a tick to end must
+# be added here or the command polls until its timeout for a tick that is over.
+TICK_TERMINAL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        BackupEventType.RESTIC_BACKUP_SUCCEEDED.value,
+        BackupEventType.RESTIC_BACKUP_FAILED.value,
+        BackupEventType.SNAPSHOT_FAILED.value,
+        BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value,
+        BackupEventType.TICK_ERROR.value,
+    }
+)
+
+
 class BackupEvent(EventEnvelope):
     """Base envelope for every host_backup event; subclasses add payload fields."""
 

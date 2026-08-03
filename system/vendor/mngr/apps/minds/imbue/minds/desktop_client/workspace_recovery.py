@@ -209,7 +209,7 @@ def _run_mngr_capturing(
 
 
 def _await_system_interface_ready(
-    agent_id: AgentId, mngr_forward_port: int, preauth_cookie: str, wait_seconds: float
+    workspace_host_id: str, mngr_forward_port: int, preauth_cookie: str, wait_seconds: float
 ) -> bool:
     """Poll the system interface through the plugin until it answers 200, or ``wait_seconds`` elapses."""
     deadline = time.monotonic() + wait_seconds
@@ -221,7 +221,7 @@ def _await_system_interface_ready(
             status = probe_workspace_through_plugin(
                 mngr_forward_port=mngr_forward_port,
                 preauth_cookie=preauth_cookie,
-                agent_id=agent_id,
+                workspace_host_id=workspace_host_id,
                 probe_timeout_seconds=_WORKSPACE_PROBE_TIMEOUT_SECONDS,
                 client=probe_client,
             )
@@ -287,13 +287,13 @@ def run_restart_sequence(
     state: the sequence must then never bounce a live container, and ``mngr
     start`` alone guarantees that -- it checks ground truth at commit time,
     no-ops on a running host, and cold-boots a stopped one. The manual
-    "Restart workspace" click keeps the stop step, since it may target a
+    "Restart machine" click keeps the stop step, since it may target a
     running-but-wedged container that only a bounce fixes.
     """
     registry.append_log(workspace_agent_id, "Starting host restart.")
     services_agent_id = backend_resolver.get_system_services_agent_id(workspace_agent_id)
     if services_agent_id is None:
-        message = "Could not locate the system-services agent for this workspace."
+        message = "Could not locate the system-services agent for this machine."
         logger.error("Host restart of {} failed: {}", workspace_agent_id, message)
         tracker.mark_restart_failed(workspace_agent_id, message)
         registry.fail(workspace_agent_id, message)
@@ -352,9 +352,22 @@ def run_restart_sequence(
         registry.complete(workspace_agent_id)
         return
 
+    # Workspace origins are keyed by host id; resolve it from discovery. A
+    # missing coordinate (discovery lost the host across the restart) means
+    # the probe could never route, so fail the restart rather than spin. The
+    # real host-<hex> shape is required: the resolver interface's placeholder
+    # ("localhost") would probe the unroutable vhost localhost.localhost.
+    display_info = backend_resolver.get_agent_display_info(workspace_agent_id)
+    if display_info is None or not str(display_info.host_id).startswith("host-"):
+        message = "The workspace's host coordinate is unknown after the restart, so its recovery cannot be confirmed."
+        logger.error("Host restart of {} failed: {}", workspace_agent_id, message)
+        tracker.mark_restart_failed(workspace_agent_id, message)
+        registry.fail(workspace_agent_id, message)
+        return
+
     registry.append_log(workspace_agent_id, "Waiting for the system interface to respond.")
     if _await_system_interface_ready(
-        workspace_agent_id, mngr_forward_port, mngr_forward_preauth_cookie, startup_wait_seconds
+        str(display_info.host_id), mngr_forward_port, mngr_forward_preauth_cookie, startup_wait_seconds
     ):
         tracker.record_probe_success(workspace_agent_id)
         registry.append_log(workspace_agent_id, "The system interface is responding again.")
@@ -434,7 +447,7 @@ def probe_workspace_health(
     display_info = backend_resolver.get_agent_display_info(agent_id)
     provider_name = display_info.provider_name if display_info is not None else None
     # Friendly provider name for the "Can't connect to ..." page title.
-    provider_label = friendly_provider_label(provider_name) or "the workspace backend"
+    provider_label = friendly_provider_label(provider_name) or "the machine backend"
 
     # Read host/provider state from the passive discovery resolver.
     host_state_enum = (

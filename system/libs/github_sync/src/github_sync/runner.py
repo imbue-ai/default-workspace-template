@@ -45,7 +45,7 @@ LOG_FILE = Path("/tmp/github-sync.log")
 # Machine-readable status mirror, read by the post-commit hook (to respect a
 # visibility halt) and by the github-sync skill's status report. Lives in /tmp
 # deliberately: it is per-boot state, not something to sync. The default path
-# is what system/scripts/git_hooks/post-commit reads.
+# is what system/libs/github_sync/git_hooks/post-commit reads.
 DEFAULT_STATUS_FILE = Path("/tmp/github-sync-status.json")
 
 

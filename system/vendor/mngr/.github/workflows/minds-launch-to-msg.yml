@@ -47,6 +47,159 @@ permissions:
   id-token: write
 
 jobs:
+  # Keep default-workspace-template's vendored mngr equal to the mngr SHA this run
+  # verifies. The desktop binary runs the mngr SHA; the in-VM agent imports the
+  # template's system/vendor/mngr. When they diverge the agent's mngr can reject a
+  # field the binary renamed and the workspace never comes up -- a failure that
+  # presents as a frontend hang. Syncing here, before check_should_run freezes the
+  # template SHA, means the pair this run verifies is the pair that exists on both
+  # mains: the push is what makes it true, not a local edit the run throws away.
+  #
+  # Only the unattended main-vs-main run pushes. A dispatch that names a
+  # commit_sha / template_ref / template_url is verifying something specific, and
+  # must never move dwt main onto that branch's mngr.
+  sync_vendor:
+    runs-on: ubuntu-latest
+    # The minds_release_gh Vault role is gated on this environment's OIDC claim.
+    environment: minds-release
+    outputs:
+      mngr_sha: ${{ steps.resolve.outputs.mngr_sha }}
+      mngr_ref: ${{ steps.resolve.outputs.mngr_ref }}
+      did_push: ${{ steps.sync.outputs.did_push }}
+    steps:
+      - name: resolve the mngr ref being verified
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          resolve_ref() {
+            local url="$1" ref="$2" sha=""
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref"
+              return
+            fi
+            sha=$(git ls-remote "$url" "refs/tags/$ref^{}" | awk '{print $1; exit}')
+            [[ -z "$sha" ]] && sha=$(git ls-remote "$url" "refs/heads/$ref" "refs/tags/$ref" | awk '{print $1; exit}')
+            echo "$sha"
+          }
+          MNGR_REF='${{ inputs.commit_sha }}'
+          if [[ -z "$MNGR_REF" ]]; then
+            MNGR_REF='${{ github.ref_name }}'
+            MNGR_SHA='${{ github.sha }}'
+          else
+            # Credentialed: this repo is private, so an anonymous ls-remote fails.
+            MNGR_SHA=$(resolve_ref "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" "$MNGR_REF")
+          fi
+          if [[ -z "$MNGR_SHA" ]]; then
+            echo "::error::failed to resolve mngr ref '$MNGR_REF'"
+            exit 1
+          fi
+          # Every input empty and triggered from the default branch: the pair is
+          # main vs main, so the sync has a well-defined target.
+          if [[ -z '${{ inputs.commit_sha }}' && -z '${{ inputs.template_ref }}' \
+             && -z '${{ inputs.template_url }}' && '${{ github.ref }}' == 'refs/heads/main' ]]; then
+            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "mngr_sha=$MNGR_SHA"
+            echo "mngr_ref=$MNGR_REF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fetch dwt vendor-sync key from Vault
+        if: steps.resolve.outputs.should_sync == 'true'
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: minds_release_gh
+          secrets: |
+            minds/release/DWT_VENDOR_SYNC_KEY_B64
+
+      - name: checkout the mngr SHA to archive
+        if: steps.resolve.outputs.should_sync == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.mngr_sha }}
+
+      - name: sync system/vendor/mngr into default-workspace-template main
+        id: sync
+        if: steps.resolve.outputs.should_sync == 'true'
+        env:
+          MNGR_SHA: ${{ steps.resolve.outputs.mngr_sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DWT_VENDOR_SYNC_KEY_B64:-}" ]]; then
+            echo "::error::DWT_VENDOR_SYNC_KEY_B64 not injected from Vault"
+            exit 1
+          fi
+          workdir="$(mktemp -d)"
+          echo "SYNC_WORKDIR=$workdir" >> "$GITHUB_ENV"
+          printf '%s' "$DWT_VENDOR_SYNC_KEY_B64" | base64 -d > "$workdir/id"
+          chmod 600 "$workdir/id"
+          export GIT_SSH_COMMAND="ssh -i $workdir/id -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --quiet git@github.com:imbue-ai/default-workspace-template.git "$workdir/dwt"
+          cd "$workdir/dwt"
+          git config user.name "mngr vendor sync"
+          git config user.email "vendor-sync@imbue.com"
+
+          # Re-derive from a fresh main on every attempt rather than rebasing a
+          # prepared commit: `git archive` of a fixed SHA is byte-deterministic, so
+          # replaying it onto whatever main now is always yields the same tree and
+          # a concurrent push can never produce a conflict to resolve.
+          did_push=false
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            rm -rf system/vendor/mngr
+            mkdir -p system/vendor/mngr
+            git -C "$GITHUB_WORKSPACE" archive "$MNGR_SHA" | tar -x -C system/vendor/mngr
+            git add -A system/vendor/mngr
+            if git diff --cached --quiet; then
+              echo "vendor already equals mngr $MNGR_SHA -- nothing to push"
+              break
+            fi
+            git commit -q -m "system/vendor/mngr: refresh from mngr $MNGR_SHA"
+            if git push --quiet origin HEAD:main; then
+              echo "pushed vendor refresh for mngr $MNGR_SHA (attempt $attempt)"
+              did_push=true
+              break
+            fi
+            echo "push rejected (attempt $attempt); main moved -- re-deriving"
+            if [[ "$attempt" == 3 ]]; then
+              echo "::error::could not push the vendor refresh after 3 attempts"
+              exit 1
+            fi
+          done
+          echo "did_push=$did_push" >> "$GITHUB_OUTPUT"
+          {
+            echo "## vendor sync"
+            echo ""
+            if [[ "$did_push" == true ]]; then
+              echo "- pushed \`system/vendor/mngr\` refresh to default-workspace-template main from mngr \`${MNGR_SHA:0:12}\`"
+            else
+              echo "- no change: default-workspace-template's vendored mngr already equals \`${MNGR_SHA:0:12}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: report skipped sync
+        if: steps.resolve.outputs.should_sync != 'true'
+        run: |
+          {
+            echo "## vendor sync"
+            echo ""
+            echo "- skipped: this run names an explicit mngr / template input, so it verifies a specific pair rather than main vs main"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: shred key material
+        if: always()
+        run: |
+          if [[ -n "${SYNC_WORKDIR:-}" && -d "$SYNC_WORKDIR" ]]; then
+            find "$SYNC_WORKDIR" -type f -name id -exec shred -u {} + 2>/dev/null || true
+            rm -rf "$SYNC_WORKDIR"
+          fi
+          echo "key material removed"
+
   # Free Linux job with two roles. (1) Freeze point: resolves the mngr and
   # DEFAULT_WORKSPACE_TEMPLATE inputs (branch / tag / SHA) to full SHAs exactly once; downstream
   # jobs consume the `mngr_sha` / `default_workspace_template_sha` outputs, never the raw inputs,
@@ -56,6 +209,9 @@ jobs:
   # -- no download).
   check_should_run:
     runs-on: ubuntu-latest
+    # The template SHA must be frozen AFTER sync_vendor's push, so the pair this
+    # run verifies includes the vendor refresh rather than the state before it.
+    needs: sync_vendor
     outputs:
       should_run: ${{ steps.decide.outputs.should_run }}
       pair_key:   ${{ steps.compute.outputs.pair_key }}
@@ -81,16 +237,11 @@ jobs:
             [[ -z "$sha" ]] && sha=$(git ls-remote "$url" "refs/heads/$ref" "refs/tags/$ref" | awk '{print $1; exit}')
             echo "$sha"
           }
-          # Empty commit_sha -> the trigger commit (for schedule, the default
-          # branch HEAD), labeled with the trigger branch so slack/summaries
-          # show `main (<sha>)` rather than a bare SHA.
-          MNGR_REF='${{ inputs.commit_sha }}'
-          if [[ -z "$MNGR_REF" ]]; then
-            MNGR_REF='${{ github.ref_name }}'
-            MNGR_SHA='${{ github.sha }}'
-          else
-            MNGR_SHA=$(resolve_ref 'https://github.com/${{ github.repository }}.git' "$MNGR_REF")
-          fi
+          # Resolved once in sync_vendor, which needed it to pick the tree to
+          # archive; reused here so the two jobs cannot disagree about what is
+          # being verified.
+          MNGR_REF='${{ needs.sync_vendor.outputs.mngr_ref }}'
+          MNGR_SHA='${{ needs.sync_vendor.outputs.mngr_sha }}'
           DEFAULT_WORKSPACE_TEMPLATE_REF='${{ inputs.template_ref }}'
           [[ -z "$DEFAULT_WORKSPACE_TEMPLATE_REF" ]] && DEFAULT_WORKSPACE_TEMPLATE_REF='main'
           DEFAULT_WORKSPACE_TEMPLATE_REPO_URL='${{ inputs.template_url }}'
@@ -877,16 +1028,27 @@ jobs:
       - name: pnpm install (apps/minds dev deps incl. playwright)
         working-directory: apps/minds
         run: pnpm install --frozen-lockfile
-      - name: run macos-launch spec
+      # The renderer-contract specs launch a plain chromium (macos-launch
+      # itself drives the installed Electron app over CDP and needs no
+      # browser download).
+      - name: install playwright chromium
+        working-directory: apps/minds
+        run: pnpm exec playwright install chromium
+      - name: run macos-launch + renderer-contract specs
         working-directory: apps/minds
         run: |
-          # Headless on CI; the spec asserts DOM state and the chrome
+          # Headless on CI; the specs assert DOM state and the chrome
           # iframe sources -- no display dependency. `html` reporter writes
           # a browsable report with embedded screenshots and traces;
           # Playwright skips opening it when stdout isn't a TTY (CI is fine).
+          # The renderer-contract specs (embed-flow, local-swap,
+          # recovery-redirect, landing-stopped-mind-restart) drive the REAL
+          # shell scripts in a plain chromium against the local harness
+          # server -- no Electron, no backend -- so they add only seconds.
           pnpm exec playwright test \
             --config=test/e2e/playwright.config.js \
-            macos-launch.spec.js \
+            macos-launch.spec.js embed-flow.spec.js local-swap.spec.js \
+            recovery-redirect.spec.js landing-stopped-mind-restart.spec.js \
             --reporter=list,html
       - name: upload Playwright report
         if: always()
@@ -946,7 +1108,7 @@ jobs:
   # when SLACK_LAUNCH_TO_MSG_WEBHOOK isn't configured. Uses the curl-the-
   # webhook approach directly so we don't pull in a third-party action.
   notify_slack:
-    needs: [check_should_run, build, launch_to_msg, macos_launch, update_marker]
+    needs: [sync_vendor, check_should_run, build, launch_to_msg, macos_launch, update_marker]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -971,6 +1133,12 @@ jobs:
           DEFAULT_WORKSPACE_TEMPLATE_SHA:  ${{ needs.check_should_run.outputs.default_workspace_template_sha }}
           MNGR_REF: ${{ needs.check_should_run.outputs.mngr_ref }}
           DEFAULT_WORKSPACE_TEMPLATE_REF:  ${{ needs.check_should_run.outputs.default_workspace_template_ref }}
+          # sync_vendor resolves the mngr ref before check_should_run consumes
+          # it, so these still identify the run when check_should_run never got
+          # to publish its own outputs.
+          SYNC_VENDOR_MNGR_SHA: ${{ needs.sync_vendor.outputs.mngr_sha }}
+          SYNC_VENDOR_MNGR_REF: ${{ needs.sync_vendor.outputs.mngr_ref }}
+          SYNC_VENDOR_RESULT:   ${{ needs.sync_vendor.result }}
           BUILD_RESULT:         ${{ needs.build.result }}
           LAUNCH_TO_MSG_RESULT: ${{ needs.launch_to_msg.result }}
           MACOS_LAUNCH_RESULT:  ${{ needs.macos_launch.result }}
@@ -1006,24 +1174,25 @@ jobs:
             fi
           }
           duration=$(fmt_duration "$total_s")
-          # Classify the outcome.
+          # Classify the outcome. Every job is scanned, including the ones that
+          # gate the rest: a job that fails leaves its dependents "skipped"
+          # rather than "failure", so scanning only the downstream ones would
+          # report a broken run as a benign skip.
           failed_jobs=""
           cancelled_jobs=""
-          if [[ "$CHECK_SHOULD_RUN_RESULT" == "failure" ]]; then
-            failed_jobs="check_should_run"
-          else
-            for pair in "build:$BUILD_RESULT" \
-                        "launch_to_msg:$LAUNCH_TO_MSG_RESULT" \
-                        "macos_launch:$MACOS_LAUNCH_RESULT" \
-                        "update_marker:$UPDATE_MARKER_RESULT"; do
-              name="${pair%%:*}"
-              result="${pair##*:}"
-              case "$result" in
-                failure)   failed_jobs="$failed_jobs $name" ;;
-                cancelled) cancelled_jobs="$cancelled_jobs $name" ;;
-              esac
-            done
-          fi
+          for pair in "sync_vendor:$SYNC_VENDOR_RESULT" \
+                      "check_should_run:$CHECK_SHOULD_RUN_RESULT" \
+                      "build:$BUILD_RESULT" \
+                      "launch_to_msg:$LAUNCH_TO_MSG_RESULT" \
+                      "macos_launch:$MACOS_LAUNCH_RESULT" \
+                      "update_marker:$UPDATE_MARKER_RESULT"; do
+            name="${pair%%:*}"
+            result="${pair##*:}"
+            case "$result" in
+              failure)   failed_jobs="$failed_jobs $name" ;;
+              cancelled) cancelled_jobs="$cancelled_jobs $name" ;;
+            esac
+          done
           if [[ -n "$failed_jobs" ]]; then
             emoji=":x:"
             verdict_word="failed"
@@ -1033,7 +1202,11 @@ jobs:
             verdict_word="cancelled"
             detail=" (cancelled:$cancelled_jobs)"
           elif [[ "$SHOULD_RUN" != "true" ]]; then
-            emoji=":fast_forward:"
+            # Reaching here with nothing failed means the marker cache already
+            # holds this exact pair. The emoji answers "is this pair good?",
+            # which a skip does not change, so it stays the success mark and
+            # the verdict word carries the fact that nothing needed rerunning.
+            emoji=":white_check_mark:"
             verdict_word="skipped"
             detail=""
           else
@@ -1041,6 +1214,10 @@ jobs:
             verdict_word="succeeded"
             detail=""
           fi
+          # A run that dies before check_should_run publishes its outputs still
+          # has to say which pair it was about.
+          [[ -z "$MNGR_SHA" ]] && MNGR_SHA="$SYNC_VENDOR_MNGR_SHA"
+          [[ -z "$MNGR_REF" ]] && MNGR_REF="$SYNC_VENDOR_MNGR_REF"
           MNGR_SHORT="${MNGR_SHA:0:12}"
           DEFAULT_WORKSPACE_TEMPLATE_SHORT="${DEFAULT_WORKSPACE_TEMPLATE_SHA:0:12}"
           # Format the e2e per-run metrics line. Each metric is the raw
@@ -1084,8 +1261,9 @@ jobs:
             sep=" | "
           fi
           links_inner+="${sep}<${RUN_URL}|run logs>"
-          links_inner+=" | <https://github.com/imbue-ai/mngr/commit/${MNGR_SHA}|mngr commit>"
-          links_inner+=" | <https://github.com/imbue-ai/default-workspace-template/commit/${DEFAULT_WORKSPACE_TEMPLATE_SHA}|default_workspace_template commit>"
+          # Omit a commit link whose SHA never resolved -- it would 404.
+          [[ -n "$MNGR_SHA" ]] && links_inner+=" | <https://github.com/imbue-ai/mngr/commit/${MNGR_SHA}|mngr commit>"
+          [[ -n "$DEFAULT_WORKSPACE_TEMPLATE_SHA" ]] && links_inner+=" | <https://github.com/imbue-ai/default-workspace-template/commit/${DEFAULT_WORKSPACE_TEMPLATE_SHA}|default_workspace_template commit>"
           links_line="[${links_inner}]"
           # Assemble: verdict line, refs line, metrics line (omitted when
           # empty), links line.
@@ -1093,10 +1271,14 @@ jobs:
             "$emoji" "$verdict_word" "$duration" "$detail" "$TRIGGER")
           # Show "<ref> (<commit>)" when the ref is a name (tag / branch);
           # just the commit when the input was already a raw 40-char SHA.
-          mngr_label="\`${MNGR_SHORT}\`"
-          [[ -n "$MNGR_REF" && ! "$MNGR_REF" =~ ^[0-9a-f]{40}$ ]] && mngr_label="\`${MNGR_REF}\` (\`${MNGR_SHORT}\`)"
-          default_workspace_template_label="\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT}\`"
-          [[ -n "$DEFAULT_WORKSPACE_TEMPLATE_REF" && ! "$DEFAULT_WORKSPACE_TEMPLATE_REF" =~ ^[0-9a-f]{40}$ ]] && default_workspace_template_label="\`${DEFAULT_WORKSPACE_TEMPLATE_REF}\` (\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT}\`)"
+          # `unresolved` rather than empty backticks: a run can fail before a
+          # ref is resolved, and a blank reads as a formatting glitch.
+          mngr_label="\`unresolved\`"
+          [[ -n "$MNGR_SHORT" ]] && mngr_label="\`${MNGR_SHORT}\`"
+          [[ -n "$MNGR_REF" && ! "$MNGR_REF" =~ ^[0-9a-f]{40}$ ]] && mngr_label="\`${MNGR_REF}\`${MNGR_SHORT:+ (\`${MNGR_SHORT}\`)}"
+          default_workspace_template_label="\`unresolved\`"
+          [[ -n "$DEFAULT_WORKSPACE_TEMPLATE_SHORT" ]] && default_workspace_template_label="\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT}\`"
+          [[ -n "$DEFAULT_WORKSPACE_TEMPLATE_REF" && ! "$DEFAULT_WORKSPACE_TEMPLATE_REF" =~ ^[0-9a-f]{40}$ ]] && default_workspace_template_label="\`${DEFAULT_WORKSPACE_TEMPLATE_REF}\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT:+ (\`${DEFAULT_WORKSPACE_TEMPLATE_SHORT}\`)}"
           line2="[_mngr_ ${mngr_label} | _DEFAULT_WORKSPACE_TEMPLATE_ ${default_workspace_template_label}]"
           if [[ -n "$metrics_line" ]]; then
             text=$(printf '%s\n%s\n%s\n%s' "$line1" "$line2" "$metrics_line" "$links_line")

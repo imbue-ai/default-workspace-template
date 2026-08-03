@@ -20,10 +20,9 @@ Two channels, because neither reaches every viewer:
 
 ``POST /api/v1/agents/<primary>/refresh`` (the Minds app, via the gateway)
     Reaches only the desktop app, but does not go through the workspace server
-    at all, so it works while that server is still coming back. It also drops
-    the workspace session's HTTP cache before reloading. This is the channel
-    that actually covers the common case: a user looking at the workspace in
-    the Minds app.
+    at all, so it works while that server is still coming back. This is the
+    channel that actually covers the common case: a user looking at the
+    workspace in the Minds app.
 
 Every outcome is reported on stderr and the exit code is always 0. The change
 has already landed on disk; failing a reveal because the user had the window
@@ -180,7 +179,7 @@ def broadcast_reload(http: HttpClient, base_url: str) -> bool:
 
 
 def request_app_refresh(http: HttpClient, runner: Runner) -> bool:
-    """Ask the Minds app to drop its cache and reload its view of this workspace.
+    """Ask the Minds app to rebuild its view of this workspace.
 
     Returns whether the app accepted the request. Absent gateway env means we are
     not running under a Minds desktop app at all (a bare ``mngr`` workspace, a

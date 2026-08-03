@@ -127,7 +127,7 @@ def make_workspace_probe_client(preauth_cookie: str, probe_timeout_seconds: floa
     of letting the helper construct a one-shot client per call.
 
     The proxy serves TLS (HTTP/2), so cert verification is disabled: these
-    probes dial ``127.0.0.1`` with a ``Host: agent-<hex>.localhost`` header, so
+    probes dial ``127.0.0.1`` with a ``Host: host-<hex>.localhost`` header, so
     hostname verification could never pass, and the cert is a self-signed
     ephemeral one the probe is not positioned to validate anyway. Loopback-only.
     """
@@ -143,7 +143,7 @@ def _probe_once(probe_client: httpx.Client, probe_url: str, host_header: str) ->
     """Issue a single GET through ``probe_client`` and return the status code.
 
     ``probe_url`` targets loopback directly; ``host_header`` carries the
-    ``agent-<hex>.localhost`` vhost the plugin routes on. Sending the subdomain
+    ``host-<hex>.localhost`` vhost the plugin routes on. Sending the subdomain
     as an explicit ``Host`` header rather than in the URL keeps the probe from
     depending on ``*.localhost`` name resolution, which is not available on a
     bare Linux host (only loopback ``localhost`` itself reliably resolves).
@@ -163,11 +163,11 @@ def _probe_once(probe_client: httpx.Client, probe_url: str, host_header: str) ->
 def probe_workspace_through_plugin(
     mngr_forward_port: int,
     preauth_cookie: str,
-    agent_id: AgentId,
+    workspace_host_id: str,
     probe_timeout_seconds: float,
     client: httpx.Client | None = None,
 ) -> int | None:
-    """Issue a single probe through the plugin to the agent's inner web server.
+    """Issue a single probe through the plugin to the workspace's inner web server.
 
     Probes ``/`` (see ``_WORKSPACE_PROBE_PATH``). Returns the HTTP status code
     observed (a 200 means some web server is up and answering on the inner
@@ -176,13 +176,16 @@ def probe_workspace_through_plugin(
     (create attempt flow) and the system-interface-health tracker's background
     probe loop so both paths agree on what "ready" means.
 
+    ``workspace_host_id`` is the mngr host id (``host-<hex>``) the plugin
+    routes workspace origins on.
+
     Pass a pre-constructed ``client`` (via ``make_workspace_probe_client``)
     to reuse the connection pool across a tight poll loop. When omitted, a
     one-shot client is constructed for this single probe -- fine for
     one-off / sporadic callers but wasteful in a loop.
     """
     probe_url = f"{_MNGR_FORWARD_SCHEME}://127.0.0.1:{mngr_forward_port}{_WORKSPACE_PROBE_PATH}"
-    host_header = f"{agent_id}.localhost"
+    host_header = f"{workspace_host_id}.localhost"
     if client is not None:
         return _probe_once(client, probe_url, host_header)
     with make_workspace_probe_client(
@@ -1024,6 +1027,15 @@ def _build_mngr_create_command(
             # inherits the same gateway URL / password / JWT.
             latchkey_host_env_args.extend(["--host-env", f"{key}={value}"])
 
+    # Extra env vars this creating host wants forwarded onto every created workspace host, named (not
+    # valued) in ``MINDS_EXTRA_PASS_HOST_ENV`` (space-separated). ``--pass-host-env`` reads each from
+    # THIS process's env, so the values ride the creating process rather than the command line. The
+    # eval harness sets this on its box to push feature flags into eval workspaces; a normal create
+    # leaves it unset.
+    extra_pass_host_env_args: list[str] = []
+    for name in os.environ.get("MINDS_EXTRA_PASS_HOST_ENV", "").split():
+        extra_pass_host_env_args.extend(["--pass-host-env", name])
+
     color_label_args: list[str] = []
     if color is not None:
         # Pre-normalized by the caller (or the form POST handler) to
@@ -1074,6 +1086,7 @@ def _build_mngr_create_command(
         "--label",
         "user_created=true",
         *latchkey_host_env_args,
+        *extra_pass_host_env_args,
         "--label",
         "is_primary=true",
         *color_label_args,
@@ -1190,6 +1203,13 @@ def _build_mngr_create_command(
             # Same remote shape as vultr/aws: the ``main`` + ``modal`` templates
             # run the provisioning chain over SSH on the freshly-created sandbox.
             mngr_command.extend(["--new-host", "--template", "main", "--template", "modal"])
+            # Optional overlay template stacked on ``modal`` (like ``docker_runsc`` on
+            # ``docker``): any create host may name one via ``MINDS_MODAL_EXTRA_TEMPLATE``.
+            # The eval harness sets it to ``modal_eval`` (shorter sandbox timeout); a
+            # normal create leaves it unset and gets plain ``modal``.
+            extra_modal_template = os.environ.get("MINDS_MODAL_EXTRA_TEMPLATE")
+            if extra_modal_template:
+                mngr_command.extend(["--template", extra_modal_template])
             mngr_command.extend(_remote_host_env_flags())
         case LaunchMode.GCP:
             # Same shape as aws; the address already selects the ``byok-gcp-<slug>``
@@ -1396,7 +1416,7 @@ def run_mngr_create(
     irrelevant.
 
     No Anthropic credentials are involved at create time: workspace Claude
-    auth lives in the env block of the shared CLAUDE_CONFIG_DIR settings.json,
+    auth lives in the env block of the workspace's shared ~/.claude/settings.json,
     written by the in-workspace sign-in modal after the workspace boots.
 
     Returns ``(canonical_agent_id, canonical_host_id)``. Both canonical
@@ -1730,7 +1750,7 @@ class AgentCreator(MutableModel):
         frozen=True,
         description=(
             "Dispatcher for surfacing failures from background tasks (e.g. the detached "
-            "Cloudflare tunnel setup task) to the user as OS notifications."
+            "backup-provisioning task) to the user as OS notifications."
         ),
     )
     lima_image_gate: LimaImageCreateGate | None = Field(
@@ -2168,8 +2188,9 @@ class AgentCreator(MutableModel):
     ) -> None:
         """Flip the pending record to FAILED, downgrading store errors to warnings.
 
-        The in-memory FAILED status is already set by the caller; losing the
-        durable failure snapshot only costs the failed row across restarts.
+        The caller sets the in-memory FAILED status right after this returns;
+        losing the durable failure snapshot only costs the failed row across
+        restarts.
         """
         if self.pending_create_attempt_store is None:
             return
@@ -2453,7 +2474,7 @@ class AgentCreator(MutableModel):
                 # no pre-created scaffolding at all.
 
                 parsed_host = HostName(host_name)
-                log_sink.put("[minds] Creating workspace '{}' (mode: {})...".format(host_name, launch_mode.value))
+                log_sink.put("[minds] Creating machine '{}' (mode: {})...".format(host_name, launch_mode.value))
 
                 # A dead (interrupted / failed) earlier create attempt holding this
                 # same name on this provider is implicitly discarded before the
@@ -2609,7 +2630,7 @@ class AgentCreator(MutableModel):
                     canonical_id, time.monotonic() + ready_timeout_seconds
                 )
                 try:
-                    self._wait_for_workspace_ready(canonical_id, log_sink, ready_timeout_seconds)
+                    self._wait_for_workspace_ready(canonical_id, canonical_host_id, log_sink, ready_timeout_seconds)
                 finally:
                     self.system_interface_health_tracker.end_create_attempt_grace(canonical_id)
 
@@ -2621,13 +2642,13 @@ class AgentCreator(MutableModel):
                 # would land on FastAPI's default ``{"detail":"Not Found"}``
                 # response instead of being bridged into the agent
                 # subdomain. The plugin owns ``/goto/<agent>/``.
-                redirect_url = self._build_redirect_url(canonical_id)
+                redirect_url = self._build_redirect_url(canonical_host_id)
 
                 # Publish the canonical id + DONE atomically so the UI sees
                 # both at once. ``on_created`` runs after publication so any
-                # downstream consumer (e.g. ``OnCreatedCallback``, which kicks
-                # off the Cloudflare tunnel + workspace association) can rely on
-                # the canonical id.
+                # downstream consumer (e.g. ``OnCreatedCallback``, which records
+                # the workspace<->account association) can rely on the
+                # canonical id.
                 with self._lock:
                     self._canonical_agent_ids[cid_str] = canonical_id
                     self._statuses[cid_str] = AgentCreateAttemptStatus.DONE
@@ -2638,7 +2659,7 @@ class AgentCreator(MutableModel):
                     on_created(canonical_id, canonical_host_id)
 
                 # Configure restic backups asynchronously on a detached
-                # thread (mirrors the Cloudflare tunnel-token path): bucket
+                # thread: bucket
                 # create attempt + injection is a multi-second round-trip we don't
                 # want to block the redirect on, and a failure here is
                 # non-fatal to the already-created workspace. Skipped (no
@@ -2662,19 +2683,21 @@ class AgentCreator(MutableModel):
             logger.opt(exception=e).error("Failed to create agent for create attempt {}", create_attempt_id)
             log_sink.put("[minds] ERROR: {}".format(e))
             error_kind = classify_create_attempt_error(repo_source, e)
-            with self._lock:
-                self._statuses[cid_str] = AgentCreateAttemptStatus.FAILED
-                self._errors[cid_str] = str(e)
-                if error_kind is not None:
-                    self._error_kinds[cid_str] = error_kind
             # Snapshot the failure (and the create attempt log's tail) into the
-            # pending-create-attempt record so the failed row survives restarts.
+            # pending-create-attempt record BEFORE publishing the in-memory
+            # FAILED status (mirroring the DONE path): anyone who observes
+            # FAILED can rely on the durable record already being terminal.
             self._mark_pending_create_attempt_failed(
                 cid_str,
                 error=str(e),
                 error_kind=error_kind.value if error_kind is not None else None,
                 log_tail=log_sink.tail_lines(FAILED_CREATE_ATTEMPT_LOG_TAIL_MAX_LINES),
             )
+            with self._lock:
+                self._statuses[cid_str] = AgentCreateAttemptStatus.FAILED
+                self._errors[cid_str] = str(e)
+                if error_kind is not None:
+                    self._error_kinds[cid_str] = error_kind
             self._notify_create_attempts_changed()
         finally:
             log_sink.put(LOG_SENTINEL)
@@ -2880,22 +2903,23 @@ class AgentCreator(MutableModel):
                 agent_display_name=str(agent_id)[:8],
             )
 
-    def _build_redirect_url(self, agent_id: AgentId) -> str:
+    def _build_redirect_url(self, host_id: HostId) -> str:
         """Build the absolute URL the UI should navigate to after the create attempt.
 
-        Always points at the plugin's ``/goto/<agent>/`` route, never minds'
+        Always points at the plugin's ``/goto/<host-id>/`` route, never minds'
         bare origin -- minds doesn't serve ``/goto/`` and would 404. When
         ``mngr_forward_port`` isn't configured (test fixtures, etc.), falls
         back to the relative form so legacy callers that don't set the field
         keep working.
         """
         if self.mngr_forward_port == 0:
-            return f"/goto/{agent_id}/"
-        return f"{_MNGR_FORWARD_SCHEME}://localhost:{self.mngr_forward_port}/goto/{agent_id}/"
+            return f"/goto/{host_id}/"
+        return f"{_MNGR_FORWARD_SCHEME}://localhost:{self.mngr_forward_port}/goto/{host_id}/"
 
     def _wait_for_workspace_ready(
         self,
         agent_id: AgentId,
+        host_id: HostId,
         log_sink: CreateAttemptLogSink,
         # The readiness window for this create: ``workspace_ready_timeout_seconds``
         # normally, or the longer build-in-VM window for an imageless Lima create.
@@ -2903,7 +2927,7 @@ class AgentCreator(MutableModel):
     ) -> None:
         """Poll the agent's system_interface through the plugin until it responds 200.
 
-        Probes the plugin on loopback (with the agent's ``agent-<hex>.localhost``
+        Probes the plugin on loopback (with the workspace's ``host-<hex>.localhost``
         vhost in the ``Host`` header) and the preauth cookie set, treating any
         200 as ready. Other status codes (typically
         503 from the plugin's auto-refresh page when the system_interface
@@ -2917,7 +2941,7 @@ class AgentCreator(MutableModel):
         retry page, which is better than spinning forever in the create attempt UI.
         """
         if self.mngr_forward_port == 0 or not self.mngr_forward_preauth_cookie:
-            logger.debug("Workspace readiness probe disabled (port=0 or empty preauth); skipping")
+            logger.debug("Machine readiness probe disabled (port=0 or empty preauth); skipping")
             return
 
         deadline = time.monotonic() + timeout_seconds
@@ -2933,14 +2957,14 @@ class AgentCreator(MutableModel):
                 status = probe_workspace_through_plugin(
                     mngr_forward_port=self.mngr_forward_port,
                     preauth_cookie=self.mngr_forward_preauth_cookie,
-                    agent_id=agent_id,
+                    workspace_host_id=str(host_id),
                     probe_timeout_seconds=self.workspace_ready_probe_timeout_seconds,
                     client=probe_client,
                 )
                 if status is not None:
                     last_status = status
                     if status == 200:
-                        logger.debug("Workspace ready for {} after {} probe(s)", agent_id, attempt)
+                        logger.debug("Machine ready for {} after {} probe(s)", agent_id, attempt)
                         log_sink.put("[minds] System interface is ready.")
                         # Propagate the success into the shared health tracker,
                         # clearing the suspect flag and probe-failure run that
@@ -2953,12 +2977,12 @@ class AgentCreator(MutableModel):
                         return
                 threading.Event().wait(timeout=self.workspace_ready_poll_interval_seconds)
         logger.warning(
-            "Workspace readiness probe for {} timed out after {:.0f}s (last status={}); publishing redirect anyway",
+            "Machine readiness probe for {} timed out after {:.0f}s (last status={}); publishing redirect anyway",
             agent_id,
             timeout_seconds,
             last_status,
         )
         log_sink.put(
-            "[minds] Warning: workspace did not become ready within "
+            "[minds] Warning: machine did not become ready within "
             f"{timeout_seconds:.0f}s; you may see a retry page on first load."
         )

@@ -1,6 +1,6 @@
 ---
 name: address-pr-comments
-description: Address review comments on a pull request -- apply CLAUDE:/SCULPTOR:-prefixed instructions, and critically evaluate feedback from automated reviewers (Vet, Copilot, or any bot)
+description: Address review comments on a pull request -- apply CLAUDE:/SCULPTOR:-prefixed instructions, and critically evaluate feedback from automated reviewers (Copilot or any bot)
 disable-model-invocation: true
 allowed-tools: Bash(gh:*), Bash(git:*), Glob, Grep, Read, Edit, Write
 argument-hint: [pr-number]
@@ -14,7 +14,7 @@ There are two kinds, and they get different treatment:
 1. **Directed instructions** — comments prefixed with `CLAUDE:` or `SCULPTOR:`
    (case-insensitive). These are a human steering the agent; apply them.
 2. **Automated reviewer feedback** — comments authored by an AI or automated
-   system: Vet, GitHub Copilot, or any bot account. These are suggestions, not
+   system: GitHub Copilot or any bot account. These are suggestions, not
    instructions; validate them critically before acting.
 
 Plain human discussion with neither prefix nor a bot author is out of scope —
@@ -33,7 +33,7 @@ leave it alone.
    - **Automated feedback**: the author is an automated system — `.user.type`
      is `"Bot"`, the login ends in `[bot]` (e.g. `github-actions[bot]`,
      `copilot-pull-request-reviewer[bot]`), or the author is a known automated
-     reviewer such as Vet. Judge by the author, not the wording.
+     reviewer. Judge by the author, not the wording.
 
 3. **For each directed instruction:**
    - Read the referenced file (if it's an inline comment on a specific line)
