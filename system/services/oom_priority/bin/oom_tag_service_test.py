@@ -85,7 +85,7 @@ def test_applies_the_service_band_and_it_survives_the_exec(tmp_path: Path) -> No
         # best-effort no-op, so the end-to-end band check does not apply.
         return
     bindir, out = _fake_command(tmp_path)
-    result = _run(["cloudflared", "fake-service"], bindir)
+    result = _run(["share-gateway", "fake-service"], bindir)
     assert result.returncode == 0, result.stderr
     recorded = out.read_text().splitlines()
-    assert recorded[1] == str(bands.SERVICE_BANDS["cloudflared"])
+    assert recorded[1] == str(bands.SERVICE_BANDS["share-gateway"])

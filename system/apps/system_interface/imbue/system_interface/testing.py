@@ -76,7 +76,7 @@ def build_test_state(
     `MngrMessenger`) repoints the broadcaster too.
 
     Only the collaborators tests actually override are parameters; the agent
-    filters and the service-proxy http client (which no test substitutes) are
+    filters and the local-service http client (which no test substitutes) are
     fixed to their production defaults inline.
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())

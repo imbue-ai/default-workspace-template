@@ -5,11 +5,11 @@ description = "Template repo for a persistent Claude agent"
 requires-python = ">=3.11"
 dependencies = [
     "bootstrap",
-    "cloudflare-tunnel",
     "app-watcher",
     "github-sync",
     "env-converge",
     "host-backup",
+    "share-gateway",
     "tk-command-parsing",
     "imbue-common",
     "tomlkit>=0.12",
@@ -70,11 +70,11 @@ exclude = ["system/apps/terminal"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }
-cloudflare-tunnel = { workspace = true }
 app-watcher = { workspace = true }
 github-sync = { workspace = true }
 env-converge = { workspace = true }
 host-backup = { workspace = true }
+share-gateway = { workspace = true }
 eval-worker = { workspace = true }
 mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
