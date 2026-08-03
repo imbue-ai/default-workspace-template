@@ -144,14 +144,20 @@ def resolve_primary_agent_id(runner: Runner) -> str:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return unresolved(f"{type(exc).__name__}: {exc}")
-    if completed.returncode != 0:
-        return unresolved(f"mngr ls exited {completed.returncode}")
     # ``--ids`` prints one id per line; a workspace has exactly one primary, but
     # take the first line rather than assuming the output is a single token.
+    #
+    # Read stdout whatever the exit code says. ``mngr ls`` prints every agent it
+    # did list, then exits non-zero if *any* provider errored -- with the error
+    # block on stderr, never here. An unconfigured cloud provider is routine, and
+    # gating on the exit code would discard the id sitting right here and disable
+    # the app channel on hosts where nothing is actually wrong.
     for line in (completed.stdout or "").splitlines():
         candidate = line.strip()
         if candidate:
             return candidate
+    if completed.returncode != 0:
+        return unresolved(f"mngr ls exited {completed.returncode} and listed no primary agent")
     return unresolved("mngr ls listed no primary agent")
 
 
