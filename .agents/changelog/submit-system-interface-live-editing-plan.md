@@ -51,7 +51,7 @@ preview tab.
   itself -- which is nearly all of them, since that tab stays open for the whole
   editing pass. Rendering it would make the preview show *itself* (its inner app
   resolves `service:si-preview` against the same live registry, so the panel
-  proxies back to the wrapper framing it, unboundedly). The previewed instance
+  frames the wrapper that frames it, unboundedly). The previewed instance
   refuses that instead, via the new
   `SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES`: that one tab shows a line saying
   it is the preview you are already looking at, and the rest of the layout is

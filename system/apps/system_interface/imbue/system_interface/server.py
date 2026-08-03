@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import queue
@@ -190,6 +191,20 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
+def _inject_self_referential_services_meta_tag(html_content: str, service_names: frozenset[str]) -> str:
+    """Tell the frontend which services resolve back to this instance.
+
+    The shell can only refuse to frame these client-side: every service owns a
+    browser origin the frontend derives itself, so the browser loads it directly
+    and this server never sees the request. Names are sorted for a stable tag
+    and escaped because they come from configuration rather than from the
+    service registry's own validation.
+    """
+    content = html.escape(",".join(sorted(service_names)), quote=True)
+    meta_tag = f'<meta name="system-interface-self-referential-services" content="{content}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -199,6 +214,10 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
+        if config.self_referential_service_names:
+            html_content = _inject_self_referential_services_meta_tag(
+                html_content, config.self_referential_service_names
+            )
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _html_response(html_content)

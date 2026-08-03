@@ -32,15 +32,18 @@ class Config(BaseSettings):
     # FOLLOW so it reads the running observer's event stream instead of fighting
     # it for the lock (which would leave its agent view frozen from boot).
     system_interface_agent_events_mode: AgentEventsMode = AgentEventsMode.OBSERVE
-    # Service names that resolve back to *this* instance, so proxying them would
-    # nest this instance inside itself. The service dispatcher serves a short
-    # explanation for these instead of forwarding. The live-editing preview sets
-    # it to its own two service names: the user's seeded layout legitimately
+    # Service names that resolve back to *this* instance, so framing one would
+    # nest this instance inside itself. Handed to the frontend as a meta tag; a
+    # panel naming one of them shows a short explanation instead of an iframe.
+    # It has to be refused in the frontend rather than here: every service owns a
+    # browser origin the frontend derives itself, so the browser loads it
+    # directly and this server never sees the request. The live-editing preview
+    # sets it to its own two service names: the user's seeded layout legitimately
     # contains the preview tab (it stays open across the whole editing loop), and
-    # rendering that tab would proxy back to the wrapper framing it -- infinitely
-    # nested iframes, each loading a full system interface. Empty by default: the
-    # workspace's own system interface is not reachable as a `/service/` name at
-    # all, so it has nothing to exclude.
+    # rendering that tab would frame the wrapper that frames the preview --
+    # infinitely nested iframes, each loading a full system interface. Empty by
+    # default: the workspace's own system interface is not registered as a
+    # service at all, so no layout can point a panel back at it.
     system_interface_self_referential_services: list[str] | None = None
 
     @field_validator(
@@ -59,7 +62,7 @@ class Config(BaseSettings):
 
     @cached_property
     def self_referential_service_names(self) -> frozenset[str]:
-        """The self-referential service names, as a set for per-request lookup."""
+        """The self-referential service names, deduplicated for the meta tag."""
         return frozenset(self.system_interface_self_referential_services or ())
 
     @cached_property

@@ -45,15 +45,15 @@ as sub-commands:
   (the lead's editing worktree during the live loop, or a worker's work_dir for a
   final pre-merge preview) on a free port and registers it as the `si-preview-app`
   service, then boots a small wrapper page that embeds it in a labeled "preview"
-  frame and registers that as the user-facing `si-preview` service -- so the
-  proxied tab reads as a clearly-marked proposed change rather than a nested clone
-  of the live UI. No fetch, no re-checkout, no rebuild, and without merging or
+  frame and registers that as the user-facing `si-preview` service -- so the tab
+  reads as a clearly-marked proposed change rather than a nested clone of the
+  live UI. No fetch, no re-checkout, no rebuild, and without merging or
   touching the served tree. (For a worker's work_dir, resolve it from
   `mngr ls --include 'name=="<name>"' --format json` -> `agents[0].work_dir`.)
   The preview is launched with both of its own service names marked
   self-referential, so the `si-preview` tab that the copied layout almost always
   contains (it stays open for the whole editing pass) explains itself inside the
-  preview instead of proxying back into the frame around it.
+  preview instead of framing the wrapper that frames it.
 - `preview-refresh --slug <name>` re-boots the preview's inner app on its existing
   port to pick up a backend edit/rebuild during the live loop, without disturbing
   the wrapper frame or the user's tab (a frontend-only round needs no bounce --
@@ -129,19 +129,26 @@ attribute a request to a client via `layout.py context`.
 
 `SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES`
 (`Config.system_interface_self_referential_services`, a comma-separated
-list) names services that resolve back to *this* instance. The service
-dispatcher serves a short explanatory page for them instead of
-forwarding, and refuses the matching WebSocket upgrade.
+list) names services that resolve back to *this* instance. The backend
+hands the list to the shell as a
+`<meta name="system-interface-self-referential-services">` tag, and a
+panel naming one of them renders a short explanation instead of an
+iframe.
+
+The refusal has to happen in the frontend: every service owns a browser
+origin the frontend derives itself (see `frontend/src/origin.ts`), so the
+browser loads it directly and the backend never sees the request.
 
 It is empty for the workspace's own system interface, which is not
-reachable as a `/service/<name>/` at all. Only the live-editing preview
-sets it, to its own `si-preview` / `si-preview-app` names: the layout it
-boots from is a verbatim copy of the user's, which normally contains the
-`si-preview` tab, and rendering that tab inside the preview would proxy
-back to the wrapper framing it -- an unbounded chain of iframes, each
-loading a whole system interface. Refusing at this layer keeps the rest
-of the copied layout exactly as the user has it, which neither dropping
-the layout nor rewriting dockview's serialized grid would.
+registered as a service at all, so no layout can point a panel back at
+it. Only the live-editing preview sets it, to its own `si-preview` /
+`si-preview-app` names: the layout it boots from is a verbatim copy of
+the user's, which normally contains the `si-preview` tab, and rendering
+that tab inside the preview would frame the wrapper that frames it -- an
+unbounded chain of iframes, each loading a whole system interface.
+Refusing at the panel keeps the rest of the copied layout exactly as the
+user has it, which neither dropping the layout nor rewriting dockview's
+serialized grid would.
 
 ## Driving the workspace layout from an agent
 

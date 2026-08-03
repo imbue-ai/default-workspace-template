@@ -106,6 +106,26 @@ def test_find_last_full_state_offset_is_none_before_any_snapshot(tmp_path: Path)
     assert find_last_full_state_offset(get_observe_events_path(tmp_path)) is None
 
 
+def test_seek_ignores_a_half_written_snapshot_and_keeps_the_last_complete_one(tmp_path: Path) -> None:
+    """A snapshot caught mid-append does not move the seek point off the previous one.
+
+    A snapshot big enough to exceed the atomic-append size is routinely observed
+    half-written, so this is the normal case, not corruption. Folding must start
+    at the last COMPLETE snapshot; replaying forward from there reaches the torn
+    line once the writer finishes it.
+    """
+    complete = build_agent_details("complete-snapshot-agent")
+    append_observe_event(tmp_path, make_full_agent_state_event([complete]))
+    events_path = get_observe_events_path(tmp_path)
+    offset_of_complete = find_last_full_state_offset(events_path)
+
+    torn = _serialized_event_line(make_full_agent_state_event([build_agent_details("torn-agent")]))
+    with open(events_path, "a") as handle:
+        handle.write(torn[: len(torn) // 2])
+
+    assert find_last_full_state_offset(events_path) == offset_of_complete
+
+
 def test_follower_forwards_events_appended_after_it_caught_up(tmp_path: Path) -> None:
     agent = build_agent_details("watched")
     append_observe_event(tmp_path, make_full_agent_state_event([agent]))

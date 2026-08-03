@@ -121,14 +121,22 @@ def is_observe_writer_running(events_base_dir: Path) -> bool:
 
 
 def _is_full_state_line(raw_line: bytes) -> bool:
-    """Whether a raw JSONL line is an ``AGENTS_FULL_STATE`` snapshot event."""
+    """Whether a COMPLETE raw JSONL line is an ``AGENTS_FULL_STATE`` snapshot event.
+
+    Callers must not pass the file's half-written tail (see
+    ``find_last_full_state_offset``): a torn line is the one benign way this
+    parse fails, so excluding it up front means a failure here is real
+    corruption and is logged as such.
+    """
     if _FULL_STATE_MARKER not in raw_line:
         return False
     try:
         data = json.loads(raw_line)
-    except json.JSONDecodeError:
-        # A torn or malformed line is simply not a usable snapshot; the writer's
-        # next one will be. Nothing else in this module depends on it parsing.
+    except json.JSONDecodeError as e:
+        # Not fatal -- this line is simply not a usable snapshot, and the
+        # observer's next one will be -- but a complete line that names itself a
+        # snapshot and does not parse means the stream is damaged, so say so.
+        _loguru_logger.warning("Skipping an unparseable agent-events line: {}", e)
         return False
     if not isinstance(data, dict):
         return False
@@ -151,7 +159,13 @@ def find_last_full_state_offset(events_path: Path) -> int | None:
     offset = 0
     with open(events_path, "rb") as handle:
         for raw_line in handle:
-            if _is_full_state_line(raw_line):
+            # Only a newline-terminated line is complete. Iterating a file yields
+            # the writer's half-written tail as a final unterminated "line"; a
+            # snapshot large enough to exceed the atomic-append size hits that
+            # routinely. Skipping it leaves ``last_offset`` on the previous
+            # snapshot, which is where folding should start anyway -- replaying
+            # forward from there reaches this line once the writer finishes it.
+            if raw_line.endswith(b"\n") and _is_full_state_line(raw_line):
                 last_offset = offset
             offset += len(raw_line)
     return last_offset

@@ -11,19 +11,22 @@ them) each resolve their own layout dir.
 
 Added `system_interface_self_referential_services`
 (`SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES`, comma-separated): service names
-that resolve back to the instance handling the request. The service dispatcher
-serves a short explanatory page for them instead of forwarding, and closes the
-matching WebSocket upgrade. Empty for the workspace's own system interface,
-which is not reachable as a `/service/<name>/` at all.
+that resolve back to *this* instance. The backend hands them to the shell as a
+`<meta name="system-interface-self-referential-services">` tag and `IframePanel`
+renders a short explanation instead of an iframe for a panel naming one. The
+refusal lives in the frontend because that is the only place it can: each
+service owns a browser origin the frontend derives itself, so the browser loads
+it directly and the backend never sees the request. Empty for the workspace's
+own system interface, which is not registered as a service at all.
 
 The live-editing preview sets it to its own two service names. Its layout is a
 verbatim copy of the user's, which in the editing loop almost always contains the
 `si-preview` tab (it stays open for the whole pass), and rendering that tab would
-proxy back into the wrapper framing the preview -- an unbounded chain of iframes,
-each loading a whole system interface. Refusing at the dispatcher keeps the rest
-of the copied layout exactly as the user has it; the alternatives were dropping
-the layout (their real tabs vanish) or rewriting dockview's serialized grid by
-hand (a malformed grid renders blank, which is the same symptom).
+frame the wrapper that frames the preview -- an unbounded chain of iframes, each
+loading a whole system interface. Refusing at the panel keeps the rest of the
+copied layout exactly as the user has it; the alternatives were dropping the
+layout (their real tabs vanish) or rewriting dockview's serialized grid by hand
+(a malformed grid renders blank, which is the same symptom).
 
 The README was updated to describe the live-editing flow (edit an isolated
 worktree, build, refresh a labeled preview tab in place, then merge and reveal),
