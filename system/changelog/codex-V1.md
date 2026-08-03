@@ -116,3 +116,6 @@ Added OpenAI Codex CLI support to the workspace image.
 - The index shell's `no-store` header is dropped from this branch. It is unrelated to
   codex, and gabriel's default-workspace-template#349 lands the same header on the same
   function with tests and the refresh motion that actually needs it.
+- The codex watcher warns instead of silently skipping a malformed rollout line, so a
+  corrupt rollout is visible rather than quietly truncated. Satisfies main's new
+  `prevent_silent_decode_error_catch` ratchet, which the old `debug`-level log did not.

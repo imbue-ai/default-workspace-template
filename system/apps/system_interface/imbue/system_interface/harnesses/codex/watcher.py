@@ -277,8 +277,11 @@ class CodexSessionWatcher(AgentSessionWatcher):
     def _adapt_line(self, line: str, line_index: int) -> list[dict[str, Any]]:
         try:
             record = json.loads(line)
-        except json.JSONDecodeError:
-            logger.debug("codex watcher: skipping malformed rollout line")
+        except json.JSONDecodeError as exc:
+            # The rollout is codex-owned state, so a line we cannot parse is real
+            # corruption rather than a shape we should tolerate quietly: warn so it is
+            # visible, and skip the line so the rest of the transcript still renders.
+            logger.warning("codex watcher: skipping malformed rollout line {}: {}", line_index, exc)
             return []
         if not isinstance(record, dict):
             return []
