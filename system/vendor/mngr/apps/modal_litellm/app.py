@@ -29,6 +29,7 @@ import logging
 import os
 import subprocess
 import urllib.parse
+from pathlib import Path
 from typing import Final
 
 import modal
@@ -41,6 +42,8 @@ from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import read_min_containers
 from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
+from imbue.modal_app_kit.image import IMAGE_REQUIREMENTS_FILENAME
+from imbue.modal_app_kit.image import pinned_image
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 
 _DEPLOY_ENV = read_deploy_env()
@@ -162,19 +165,16 @@ def _write_config_file() -> str:
     return config_path
 
 
-# litellm is pinned: the proxy's auth/budget behavior (user-level budgets
-# enforce the per-account monthly LLM spend quota) must not drift under us on
-# a redeploy. Bump deliberately, re-verifying budget enforcement + the price
-# map for the models in LITELLM_CONFIG.
-_LITELLM_VERSION = "1.93.0"
-
-# All build steps (pip installs, prisma codegen) come first and are cached;
-# local source is attached as the single final operation. With the default
-# copy=False it is a container-startup mount, not an image layer, so code
-# changes never invalidate the image cache (Modal enforces the ordering).
+# All build steps (the hash-locked pip install onto the digest-pinned base --
+# see ``imbue.modal_app_kit.image`` -- then prisma codegen) come first and are
+# cached; local source is attached as the single final operation. With the
+# default copy=False it is a container-startup mount, not an image layer, so
+# code changes never invalidate the image cache (Modal enforces the ordering).
+# The pip set (including the deliberately-pinned litellm) lives in this app's
+# ``[dependency-groups] image`` in pyproject.toml, exported to
+# image_requirements.txt.
 image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(f"litellm[proxy]=={_LITELLM_VERSION}", "prisma", "pyyaml", "tenacity")
+    pinned_image(Path(__file__).parent / IMAGE_REQUIREMENTS_FILENAME)
     .run_commands(
         'python -c "import litellm.proxy; import os; print(os.path.dirname(litellm.proxy.__file__))" > /tmp/litellm_proxy_dir.txt',
         "prisma generate --schema $(cat /tmp/litellm_proxy_dir.txt)/schema.prisma",

@@ -26,6 +26,7 @@ them at request time (see ``/version``).
 
 import functools
 import logging
+from pathlib import Path
 
 import modal
 from fastapi import FastAPI
@@ -40,11 +41,12 @@ from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import read_min_containers
 from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
+from imbue.modal_app_kit.image import IMAGE_REQUIREMENTS_FILENAME
+from imbue.modal_app_kit.image import pinned_image
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth_proxy import init_supertokens
 from imbue.remote_service_connector.cloudflare import current_minds_env_name
-from imbue.remote_service_connector.deploy_constants import PIP_INSTALLED_PACKAGES
 from imbue.remote_service_connector.hosts import reconcile_slice_boxes
 from imbue.remote_service_connector.r2.sweep import run_r2_quota_sweep
 from imbue.remote_service_connector.retention import run_backup_retention_reap
@@ -80,20 +82,17 @@ _MIN_CONTAINERS = read_min_containers("MINDS_CONNECTOR_MIN_CONTAINERS")
 # own default scaledown window.
 _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
 
-# All build steps (pip installs) come first and are cached; local source is
+# All build steps (the hash-locked pip install onto the digest-pinned base --
+# see ``imbue.modal_app_kit.image``) come first and are cached; local source is
 # attached as the single final operation. With the default copy=False it is a
 # container-startup mount, not an image layer, so code changes never
 # invalidate the image cache (Modal enforces the ordering). The entrypoint
 # (this file) ships separately via Modal's automatic file mount and is
 # excluded from the package mount by ``shipped_python_source_ignore``.
-image = (
-    modal.Image.debian_slim()
-    .pip_install(*PIP_INSTALLED_PACKAGES)
-    .add_local_python_source(
-        "imbue.remote_service_connector",
-        "imbue.modal_app_kit",
-        ignore=shipped_python_source_ignore,
-    )
+image = pinned_image(Path(__file__).parents[2] / IMAGE_REQUIREMENTS_FILENAME).add_local_python_source(
+    "imbue.remote_service_connector",
+    "imbue.modal_app_kit",
+    ignore=shipped_python_source_ignore,
 )
 app = modal.App(name=f"rsc-{_DEPLOY_ENV}", image=image)
 

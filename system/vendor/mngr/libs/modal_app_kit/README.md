@@ -5,6 +5,7 @@ Shared deploy-time conventions for our Modal apps (`apps/remote_service_connecto
 The library itself is small and stdlib+modal only:
 
 - `deploy.py` -- readers for the deploy-time env vars (`MNGR_DEPLOY_ENV`, `MINDS_DEPLOY_ID`, warm-pool / scaledown knobs), the stamped Modal Secret naming (`<service>-<tier>-<deploy_id>`), and the inline deploy-metadata secret.
+- `image.py` -- the pinned image inputs: the digest-pinned base image, the pinned in-build uv version, and `pinned_image` (the base + hash-locked install every service image starts from). The pure export machinery (the canonical `uv export` command, the pinned-app registry, and paths) lives in `imbue.imbue_common.modal_image_requirements`, because the public mirror's `minds env deploy` preflight needs it and this package is not public.
 - `source_mount.py` -- the rule for which local Python files ship into containers (`shipped_python_source_ignore`).
 - `database.py` -- `direct_database_url` (strips Neon's `-pooler` suffix for schema operations that are unsafe through transaction pooling).
 
@@ -20,7 +21,7 @@ MNGR_DEPLOY_ENV=<tier> MINDS_DEPLOY_ID=<id> uv run modal deploy --name <app> --e
 
 What ends up in the container is exactly three things:
 
-1. **The image**: `debian_slim` + the app's `pip_install` set (plus any build steps like prisma codegen). Built once and cached; rebuilt only when the pip set / build steps change.
+1. **The image**: `pinned_image(...)` -- the digest-pinned `python:3.12-slim-trixie` base plus the app's hash-locked pip set (plus any build steps like prisma codegen). Built once and cached; rebuilt only when the pinned inputs / build steps change, and byte-reproducible when it does (see "Every image input is pinned" below).
 2. **The entrypoint file**: Modal's file-path deploy auto-mounts *only* `app.py`, at `/root/app.py`, imported in-container as top-level module `app`.
 3. **The source mounts**: one trailing `add_local_python_source(...)` call listing the packages the app needs (e.g. `"imbue.remote_service_connector", "imbue.modal_app_kit"`), filtered by `shipped_python_source_ignore`.
 
@@ -52,10 +53,22 @@ Because the container has only the pip set + the shipped packages, **shipped mod
 
 This cannot be prevented structurally, so it is enforced by tests in each app (see `test_project_ratchets.py` in `apps/remote_service_connector` and in this library):
 
-- shipped modules import only stdlib + the pip set (kept in the app's `deploy_constants.py`, the same constant the image `pip_install` uses, so the two cannot drift) + shipped packages;
+- shipped modules import only stdlib + the pip set (the allowed import roots live in the app's `deploy_constants.py`, and a drift test ties them to the pyproject image group the image installs, so the two cannot drift) + shipped packages;
 - no shipped module imports the `app` entrypoint;
 - only the entrypoint imports `modal` (Modal injects its client into containers, but deployment concerns stay in one file);
 - this library stays stdlib+modal only, since it ships into every consumer's container.
+
+### Every image input is pinned
+
+A rebuilt image must be a pure function of the repo state, never of when the build happens to run -- both for reproducibility and so we never silently adopt a just-published (possibly malicious) package release. Three mechanisms, all in `image.py`:
+
+- **The pip set is hash-locked**: each app declares its exact image packages, `==`-pinned, in its own `[dependency-groups] image` (pyproject.toml). The group resolves inside the workspace `uv.lock` -- so unit tests exercise the same package versions the container ships, and the root `[tool.uv] exclude-newer` supply-chain cooldown applies to image packages for free. `just export-image-requirements` renders the group (with transitive pins and sha256 hashes, via the canonical command in `imbue.imbue_common.modal_image_requirements`) to a committed `image_requirements.txt` next to each app, and `pinned_image` installs it with `--require-hashes`, so the build can only ever install the exact reviewed artifacts.
+- **The base is digest-pinned**: `PINNED_BASE_IMAGE` names `python:3.12-slim-trixie` by digest (same base family as the workspace template, same Python minor as the repo). Digest pins freeze security patches too -- bump the digest deliberately during dependency maintenance.
+- **The installer is pinned**: `uv_pip_install(uv_version=...)` so Modal's default uv can't drift under us.
+
+Enforcement: per-app drift tests fail when a committed export no longer matches `uv.lock` (or when the group and the allowed import roots disagree), `minds env deploy` refuses to deploy a stale export, and the `test_prevent_unpinned_modal_pip_install` ratchet flags any new bare-package `pip_install`/`uv_pip_install`.
+
+Known residual gap: the litellm image's `prisma generate` build step downloads Prisma engine binaries (and a Node runtime) from Prisma's CDN. The pinned `prisma` version determines *which* versions are fetched, but the downloads themselves are not hash-verified by us.
 
 ### Module-load env reads are deploy-time configuration
 
@@ -73,9 +86,9 @@ Every Vault-backed secret is pushed as `<service>-<tier>-<deploy_id>` and the ap
 ## Adding a new Modal service
 
 1. Put the entrypoint `app.py` at the root of a regular package (so tests can import the code normally), and keep it Modal-only: image, `modal.App`, secrets, function definitions.
-2. Define the pip set once in a `deploy_constants.py` consumed by both the image and the import-boundary test.
-3. End the image with one `add_local_python_source("<your package>", "imbue.modal_app_kit", ignore=shipped_python_source_ignore)`.
-4. Copy the `test_project_ratchets.py` boundary tests from `apps/remote_service_connector` and adjust the allowed roots.
+2. Declare the ==-pinned pip set in the app's `[dependency-groups] image`, register the package in `IMAGE_PINNED_PACKAGE_NAMES` (`imbue.imbue_common.modal_image_requirements`), run `just export-image-requirements`, and commit the resulting `image_requirements.txt`. Keep the allowed import roots in a `deploy_constants.py` consumed by the import-boundary test.
+3. Start the image with `pinned_image(<path to the committed export>)` and end it with one `add_local_python_source("<your package>", "imbue.modal_app_kit", ignore=shipped_python_source_ignore)`.
+4. Copy the `test_project_ratchets.py` boundary tests and the `image_requirements_drift_test.py` from `apps/remote_service_connector` and adjust the allowed roots.
 5. Read the deploy-time knobs through `imbue.modal_app_kit.deploy`, never `os.environ` directly, so the sentinel/rollback semantics stay uniform.
 
 See also: `specs/split_remote_service_connector_app.md` (the design that established this model and the prototype that validated it).

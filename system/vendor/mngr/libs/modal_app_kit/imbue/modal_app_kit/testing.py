@@ -7,9 +7,16 @@ never reaches a deployed container.
 """
 
 import ast
+import subprocess
 from pathlib import Path
+from typing import Final
 
+from imbue.imbue_common.modal_image_requirements import ImageRequirementsExportError
+from imbue.imbue_common.modal_image_requirements import image_requirements_export_command
+from imbue.imbue_common.modal_image_requirements import image_requirements_path
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
+
+_EXPORT_TIMEOUT_SECONDS: Final[int] = 60
 
 
 def imported_module_names(path: Path) -> set[str]:
@@ -48,3 +55,30 @@ def shipped_module_files(package_dir: Path) -> list[Path]:
         if not shipped_python_source_ignore(relative):
             shipped.append(path)
     return shipped
+
+
+def export_image_requirements(repo_root: Path, package_name: str) -> str:
+    """Render the app's hash-locked image requirements from the committed uv.lock (offline)."""
+    command = image_requirements_export_command(package_name)
+    result = subprocess.run(
+        command,
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=_EXPORT_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        raise ImageRequirementsExportError(
+            f"`{' '.join(command)}` failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def regenerate_image_requirements(repo_root: Path, package_names: tuple[str, ...]) -> list[Path]:
+    """Rewrite each app's committed export from uv.lock; returns the written paths."""
+    written_paths: list[Path] = []
+    for package_name in package_names:
+        export_path = image_requirements_path(repo_root, package_name)
+        export_path.write_text(export_image_requirements(repo_root, package_name))
+        written_paths.append(export_path)
+    return written_paths

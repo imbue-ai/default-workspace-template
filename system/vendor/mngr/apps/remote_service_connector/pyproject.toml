@@ -23,6 +23,22 @@ license-files = [
     "LICENSE",
 ]
 
+# The exact pip set the deployed Modal image installs, ==-pinned so the
+# container is a pure function of this file + uv.lock. Resolved as part of the
+# workspace lock (so unit tests exercise the same versions the image ships)
+# and exported with hashes to image_requirements.txt via
+# `just export-image-requirements`; drift tests keep the export current and
+# aligned with THIRD_PARTY_IMPORT_ROOTS in deploy_constants.py.
+[dependency-groups]
+image = [
+    "fastapi[standard]==0.139.2",
+    "httpx==0.28.1",
+    "paramiko==3.5.1",
+    "psycopg2-binary==2.9.12",
+    "supertokens-python==0.31.3",
+    "tenacity==9.1.4",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
