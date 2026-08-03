@@ -147,17 +147,49 @@ def test_unresolvable_primary_skips_the_app_call_rather_than_guessing() -> None:
     assert http.url_containing("/api/layout/broadcast") is not None
 
 
-def test_primary_lookup_ignores_a_nonzero_exit() -> None:
-    """A discovery error prints to stdout too; only a clean exit is trusted."""
+def test_primary_lookup_uses_an_id_listed_alongside_a_provider_error() -> None:
+    """A partial listing still names the primary, so the app call must still run.
+
+    ``mngr ls`` prints every agent it did list to stdout, then exits non-zero if
+    any provider errored -- with the error block on stderr. An unconfigured cloud
+    provider is routine, so gating on the exit code would disable the app channel
+    on hosts where the id was right there.
+    """
     http = _RecordingHttp({})
 
     refresh_workspace_view.refresh(
-        runner=_StubRunner(stdout="Error: could not reach provider\n", returncode=1),
+        runner=_StubRunner(stdout=f"{_PRIMARY_ID}\n", returncode=1),
         http=http,
         base_url=_BASE_URL,
     )
 
+    assert http.url_containing(f"/agents/{_PRIMARY_ID}/refresh") is not None
+
+
+def test_primary_lookup_skips_the_app_call_when_nothing_was_listed() -> None:
+    """A listing that named no primary is not something to guess around."""
+    http = _RecordingHttp({})
+
+    refresh_workspace_view.refresh(
+        runner=_StubRunner(stdout="", returncode=1), http=http, base_url=_BASE_URL
+    )
+
     assert http.url_containing("/refresh") is None
+
+
+def test_primary_lookup_selects_by_is_primary_alone() -> None:
+    """The query must not re-acquire a ``workspace`` label conjunct.
+
+    The Minds app stopped setting that label on its agents, so a query carrying
+    it matches nothing in any real workspace -- the lookup silently resolves
+    nobody and the app channel goes dark. Nothing else pins this argv.
+    """
+    http = _RecordingHttp({})
+    runner = _StubRunner()
+
+    refresh_workspace_view.refresh(runner=runner, http=http, base_url=_BASE_URL)
+
+    assert runner.commands == [["mngr", "ls", "--include", "has(labels.is_primary)", "--ids"]]
 
 
 def test_a_failed_broadcast_still_refreshes_the_app() -> None:
