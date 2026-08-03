@@ -1,8 +1,9 @@
 /**
  * Informational modal for the per-service Share button.
  *
- * Sharing (Cloudflare tunnels + Access policies) is configured from the
- * Minds desktop app's workspace settings page. The system_interface no
+ * Sharing is configured from the Minds desktop app's workspace settings
+ * page: TLS terminates inside this workspace (the share-gateway service)
+ * and access is granted per email address. The system_interface no
  * longer routes share-button clicks back to minds via request events --
  * this modal just tells the user where to go.
  */
@@ -41,7 +42,7 @@ export const ShareModal: m.Component<ShareModalAttrs> = {
             m(
               "p",
               { style: "margin: 0; color: #666;" },
-              "You'll need to be signed in with an Imbue Cloud account so a Cloudflare tunnel can be created on your behalf.",
+              "Shared traffic is encrypted end-to-end into this workspace, and access is granted per email address.",
             ),
           ]),
           m("div.share-modal-footer", [

@@ -5,6 +5,7 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
 import { parseJsonMessage } from "./ws-json";
@@ -25,6 +26,11 @@ export interface AgentState {
 export interface AppEntry {
   name: string;
   url: string;
+  // The unguessable ``<name>-<rand>`` hostname label this service's public
+  // origin uses (see ``system/scripts/forward_port.py``). Empty for legacy
+  // rows written before labels existed; ``labelForService`` falls back to the
+  // name in that case.
+  label: string;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start
@@ -393,6 +399,18 @@ export function getApps(): AppEntry[] {
   return apps;
 }
 
+/** Resolve a service NAME to the unguessable hostname LABEL its public origin
+ *  uses. Services register a ``<name>-<rand>`` label (see
+ *  ``system/scripts/forward_port.py``); every panel origin is built from that
+ *  label, not the bare name. Falls back to the name itself when the service
+ *  has no known label -- an unregistered service, the ``system_interface``
+ *  shell, or before the app list has loaded -- so origin derivation still
+ *  works. */
+export function labelForService(name: string): string {
+  const app = apps.find((a) => a.name === name);
+  return app?.label || name;
+}
+
 export function getProtoAgents(): ProtoAgent[] {
   return protoAgents;
 }
@@ -451,11 +469,10 @@ export async function fetchTerminalSessions(): Promise<{ terminals: TerminalSess
   }
 }
 
-// The workspace terminal (ttyd) service is proxied at this same-origin path
-// (the service dispatcher adds no base-path prefix). Kept here rather than in
-// the view so the pure URL builder below is unit-testable without importing
+// The workspace terminal (ttyd) service lives on its own derived origin
+// (``http://terminal.<ws-host>/`` locally). The URL builder below is kept
+// here rather than in the view so it is unit-testable without importing
 // dockview-core (which needs a DOM).
-const TERMINAL_SERVICE_URL_PATH = "/service/terminal/";
 
 /** Build the ttyd URL that attaches a tab to a named tmux session via the
  *  ``session`` dispatch key. The ttyd dispatch reads the args positionally:
@@ -471,7 +488,7 @@ export function buildSessionTerminalUrl(sessionName: string, terminalId: string,
   params.append("arg", sessionName);
   params.append("arg", terminalId);
   params.append("arg", workdir);
-  return `${TERMINAL_SERVICE_URL_PATH}?${params.toString()}`;
+  return `${deriveServiceOrigin(labelForService("terminal"))}?${params.toString()}`;
 }
 
 /** Ask the backend to allocate the next free ``terminal-N`` session name. The
