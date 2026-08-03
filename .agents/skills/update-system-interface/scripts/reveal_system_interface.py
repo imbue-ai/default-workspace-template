@@ -430,8 +430,8 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
     Delegates to the shared ``refresh_workspace_view.py`` helper, which fires
     both the in-workspace reload broadcast (reaching browsers we cannot address
     directly, including shared tunnel viewers) and the Minds app's refresh
-    endpoint (which additionally drops the app's HTTP cache and works when the
-    frontend's WebSocket never came back from the restart).
+    endpoint (which works when the frontend's WebSocket never came back from the
+    restart, because it does not go through the workspace server at all).
 
     Best-effort and never fatal: the helper always exits 0 and reports each
     channel on stderr, which we pass through. The change is already on disk and
