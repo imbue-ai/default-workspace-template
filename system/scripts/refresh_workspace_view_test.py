@@ -229,6 +229,25 @@ def test_refresh_is_never_fatal_when_both_channels_fail() -> None:
     assert exit_code == 0
 
 
+def test_an_unexpected_error_is_reported_rather_than_raised() -> None:
+    """The always-exits-0 contract holds for errors the channels do not catch.
+
+    Both channels have escapes outside the exception groups they handle (a
+    malformed gateway URL, non-UTF-8 subprocess output). The update flows tell
+    the agent a non-zero exit is never a reason to stop, so a traceback escaping
+    here would read as a failed reveal for a change already on disk.
+    """
+    http = _RecordingHttp({})
+
+    exit_code = refresh_workspace_view.refresh(
+        runner=_StubRunner(error=ValueError("nonnumeric port")),
+        http=http,
+        base_url=_BASE_URL,
+    )
+
+    assert exit_code == 0
+
+
 def test_missing_gateway_env_skips_the_app_call_but_still_broadcasts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

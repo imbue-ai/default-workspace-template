@@ -233,13 +233,27 @@ def refresh(
     base_url: str | None = None,
 ) -> int:
     """Fire both channels. Always returns 0 -- see the module docstring."""
-    resolved_base = (
-        base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
-    ).rstrip("/")
-    # Independent and unconditional: each reaches viewers the other cannot, and
-    # a failure of one says nothing about the other.
-    broadcast_ok = broadcast_reload(http, resolved_base)
-    app_ok = request_app_refresh(http, runner)
+    try:
+        resolved_base = (
+            base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
+        ).rstrip("/")
+        # Independent and unconditional: each reaches viewers the other cannot,
+        # and a failure of one says nothing about the other.
+        broadcast_ok = broadcast_reload(http, resolved_base)
+        app_ok = request_app_refresh(http, runner)
+    except Exception as exc:
+        # The guarantee the callers are told to rely on, made structural rather
+        # than a bet on which exceptions the two channels happen to raise: both
+        # have escapes outside the errors they catch individually (a malformed
+        # LATCHKEY_GATEWAY raises http.client.InvalidURL, which is not an
+        # OSError; captured ``mngr ls`` output that is not UTF-8 raises
+        # UnicodeDecodeError, which is not a SubprocessError). A traceback here
+        # would read to an agent mid-update as a failed reveal.
+        sys.stderr.write(
+            f"refresh: unexpected failure ({type(exc).__name__}: {exc}); the change "
+            "is on disk but an open view may still be showing the previous build.\n"
+        )
+        return 0
     if broadcast_ok or app_ok:
         sys.stderr.write("refresh: requested a reload of this workspace's view.\n")
     else:
