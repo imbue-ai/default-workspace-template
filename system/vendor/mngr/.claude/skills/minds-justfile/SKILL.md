@@ -78,7 +78,13 @@ destroyable. First register + prep a box with `mngr imbue_cloud admin server
     flags forward to `minds pool create` (e.g. `--mngr-source`).
 - `just list-pool-hosts` -- list `pool_hosts` rows for the activated env.
 - `just list-servers` -- list bare-metal servers with slot accounting for the
-  activated env (no manual DSN export needed).
+  activated env (no manual DSN export needed). The slot columns come from THIS
+  env's `pool_hosts` rows only, so a box shared with another env reads as emptier
+  than it is -- use `just audit-boxes` before concluding you have free slots.
+- `just audit-boxes` -- SSH every bare-metal box for the activated env and report
+  its real occupancy (all envs' slices) plus any cross-tier contamination: a slice
+  stamped for another tier, or an extra key in the lima user's `authorized_keys`.
+  A bake onto such a box refuses; this finds one without a failed bake. Read-only.
 - `just prep-server <server-id>` -- (re-)prep a bare-metal box for slice baking;
   pool SSH key + DSN resolved from the activated tier automatically. Idempotent;
   also how pre-2026-06-27 boxes get the DEFAULT_WORKSPACE_TEMPLATE image cache dir that production

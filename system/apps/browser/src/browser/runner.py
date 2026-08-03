@@ -1,6 +1,7 @@
 """Live-browser fleet web service: spawn headless Chromium, stream it, drive it with browser-use.
 
-Reached through the system_interface proxy at ``/service/browser/``. Serves one
+Served at its own workspace origin (``browser.host-<hex>.localhost`` locally;
+share hostnames follow the same prefix rule). Serves one
 self-contained viewer page (assets/index.html) that renders a streamed browser
 and an "Agent has control" overlay. The page talks over two WebSockets: the media
 plane ``/browsers/{name}/stream`` (pixelflux H.264 pixels + Opus audio out; XTEST
@@ -30,11 +31,8 @@ are all async and run on ONE background asyncio event loop, quarantined behind a
 single :class:`~browser.loop_bridge.AsyncLoopBridge`. Every route handler reaches
 the async world only through ``bridge.run(coro)`` (blocking) or ``bridge.submit``
 (fire-and-forget, returns the in-loop asyncio.Task). This mirrors the proven
-Flask+WS pattern in system/apps/system_interface. ``ROOT_PATH`` is read for informational
-parity but is no longer wired into URL generation: the viewer uses relative URLs,
-so the ``/service/browser/`` proxy prefix needs no server-side awareness (the
-FastAPI ``root_path`` it replaced only emitted prefix-aware URLs the page never
-relied on).
+Flask+WS pattern in system/apps/system_interface. The service owns its origin, so
+the viewer's relative URLs need no prefix or root-path awareness anywhere.
 """
 
 import json
@@ -68,7 +66,6 @@ from browser.session import (
 )
 from browser.wsgi import make_threaded_server
 
-ROOT_PATH = os.environ.get("ROOT_PATH", "")
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
@@ -1083,9 +1080,8 @@ def _exit_on_signal(_signum: int, _frame: FrameType | None) -> None:
 def main() -> None:
     """Build the app, register shutdown, and serve on the threaded HTTP/1.1 server.
 
-    Replaces ``uvicorn.run``. The supervisord command line and ``ROOT_PATH`` env are
-    unchanged; ``ROOT_PATH`` is now only informational (the viewer uses relative URLs,
-    so the proxy prefix needs no server-side awareness).
+    Replaces ``uvicorn.run``. The service is reached at its own workspace origin;
+    the viewer uses relative URLs, so no prefix or root-path awareness is needed.
     """
     app = create_app()
     # Chromium overwrites the inherited oom_score_adj with its own gradation;

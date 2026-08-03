@@ -1,0 +1,1 @@
+The browser service is now served at its own workspace origin (`browser.host-<hex>.localhost` locally) instead of through the system interface's `/service/browser/` proxy. The dead informational `ROOT_PATH` read is removed from the runner (the supervisord command no longer sets it); the viewer's relative URLs need no prefix or root-path awareness anywhere.

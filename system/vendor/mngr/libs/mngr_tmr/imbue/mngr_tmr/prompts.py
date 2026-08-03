@@ -64,7 +64,7 @@ _MAPPER_TEMPLATE = "mapper.j2"
 _REDUCER_TEMPLATE = "reducer.j2"
 
 
-def _resolve_template(default_name: str, template_path: Path | None) -> Template:
+def resolve_template(default_name: str, template_path: Path | None) -> Template:
     """Return the Jinja template to render.
 
     When ``template_path`` is None, use the packaged template named
@@ -92,7 +92,7 @@ def _resolve_template(default_name: str, template_path: Path | None) -> Template
 # so the orchestrator never reads a half-written archive. ``ARCHIVE_SUBDIR``
 # / ``ARCHIVE_FILENAME`` come from the framework so the bash and the
 # orchestrator's polling agree on where to look.
-_PUBLISH_OUTPUTS_SNIPPET = f"""```bash
+PUBLISH_OUTPUTS_SNIPPET = f"""```bash
 ARCHIVE_DIR="$MNGR_AGENT_STATE_DIR/{ARCHIVE_SUBDIR}"
 mkdir -p "$ARCHIVE_DIR"
 
@@ -134,11 +134,11 @@ def build_test_agent_prompt(
     parts = [f"pytest --timeout={TEST_TIMEOUT_SECONDS}", test_node_id, *pytest_flags]
     run_cmd = " ".join(part for part in parts if part)
 
-    template = _resolve_template(_MAPPER_TEMPLATE, template_path)
+    template = resolve_template(_MAPPER_TEMPLATE, template_path)
     return template.render(
         run_cmd=run_cmd,
         outcome_filename=TESTING_AGENT_OUTCOME_FILENAME,
-        publish_snippet=_PUBLISH_OUTPUTS_SNIPPET,
+        publish_snippet=PUBLISH_OUTPUTS_SNIPPET,
         e2e_run_name=e2e_run_name,
         test_timeout_seconds=TEST_TIMEOUT_SECONDS,
     )
@@ -158,12 +158,12 @@ def build_integrator_prompt(
     subdirectories, apply the "should pull" predicate to filter qualifying
     agents, fetch the qualifying bundles into local branches, then cherry-pick.
     """
-    template = _resolve_template(_REDUCER_TEMPLATE, template_path)
+    template = resolve_template(_REDUCER_TEMPLATE, template_path)
     return template.render(
         inputs_dirname=REDUCER_INPUTS_DIRNAME,
         mapper_outcome_filename=TESTING_AGENT_OUTCOME_FILENAME,
         reducer_outcome_filename=INTEGRATOR_OUTCOME_FILENAME,
-        publish_snippet=_PUBLISH_OUTPUTS_SNIPPET,
+        publish_snippet=PUBLISH_OUTPUTS_SNIPPET,
         test_timeout_seconds=TEST_TIMEOUT_SECONDS,
         report_url=report_url,
         is_pull_request_enabled=is_pull_request_enabled,

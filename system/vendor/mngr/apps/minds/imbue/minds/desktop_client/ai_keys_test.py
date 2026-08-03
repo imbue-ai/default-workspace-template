@@ -26,6 +26,7 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import LiteLLMKeyMaterial
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
+from imbue.minds.desktop_client.testing import device_id_for_test
 from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_ACTIVE
 from imbue.minds.desktop_client.workspace_record_store import ReplicaRecord
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
@@ -45,7 +46,7 @@ def _make_record_store(tmp_path: Path) -> WorkspaceRecordStore:
     return WorkspaceRecordStore(
         paths=WorkspacePaths(data_dir=tmp_path),
         cli=None,
-        device_id="device-test",
+        device_id=device_id_for_test("ai-keys"),
         device_label="test-device",
     )
 
@@ -224,42 +225,14 @@ def _build_associated_workspace_client(tmp_path: Path, imbue_cloud_cli: ImbueClo
     )
 
 
-def test_ai_keys_routes_require_authentication(tmp_path: Path) -> None:
+def test_mint_without_a_session_returns_403(tmp_path: Path) -> None:
+    """The legacy mint route rejects unauthenticated requests before reading the body."""
     client = _build_ai_keys_client(tmp_path, is_authenticated=False)
 
-    assert client.get("/settings/ai-keys?workspace=host-abc").status_code == 403
-    assert client.post("/settings/ai-keys/mint", json={"workspace": "host-abc"}).status_code == 403
+    response = client.post("/settings/ai-keys/mint", json={"workspace": "host-abc"})
 
-
-def test_ai_keys_page_without_workspace_explains_how_to_get_there(tmp_path: Path) -> None:
-    client = _build_ai_keys_client(tmp_path)
-
-    response = client.get("/settings/ai-keys")
-
-    assert response.status_code == 200
-    assert "opened from a machine" in response.text
-    assert 'id="mint-key"' not in response.text
-
-
-def test_ai_keys_page_errors_for_unassociated_workspace(tmp_path: Path) -> None:
-    client = _build_ai_keys_client(tmp_path)
-
-    response = client.get("/settings/ai-keys?workspace=host-unknown")
-
-    assert response.status_code == 200
-    assert "no associated Imbue account" in response.text
-    assert 'id="mint-key"' not in response.text
-
-
-def test_ai_keys_page_shows_workspace_and_billed_account(tmp_path: Path) -> None:
-    client = _build_associated_workspace_client(tmp_path, RecordingImbueCloudCli(connector_url=FAKE_CONNECTOR_URL))
-
-    response = client.get("/settings/ai-keys?workspace=host-abc")
-
-    assert response.status_code == 200
-    assert "my-ws" in response.text
-    assert "alice@example.com" in response.text
-    assert 'id="mint-key"' in response.text
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "Not authenticated"
 
 
 def test_mint_requires_workspace_field(tmp_path: Path) -> None:

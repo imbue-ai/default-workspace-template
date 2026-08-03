@@ -153,6 +153,13 @@ class AppEntry(FrozenModel):
 
     name: str = Field(description="App name (e.g., 'web', 'terminal')")
     url: str = Field(description="Local URL where the app is accessible")
+    label: str = Field(
+        default="",
+        description=(
+            "Unguessable ``<name>-<rand>`` hostname label the service's public "
+            "origin uses. Empty for legacy rows written before labels existed."
+        ),
+    )
 
 
 class TerminalSessionInfo(FrozenModel):
