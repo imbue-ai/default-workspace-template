@@ -166,6 +166,15 @@ def _shutdown_desktop_client(state: DesktopClientState, is_externally_managed_cl
     # still-in-flight strands (e.g. a detached tunnel-setup task) to finish.
     root_concurrency_group: ConcurrencyGroup | None = state.root_concurrency_group
     if root_concurrency_group is not None:
+        # Trigger the group's own shutdown event before exiting: the long-lived
+        # watcher strands (system-interface-health-probe, discovery-health-
+        # watchdog) loop on ``is_shutting_down()`` and can only wind down once
+        # this event is set -- without it the exit below always waited out its
+        # full timeout and abandoned them. Triggered here, after the ordered
+        # teardown above, because the group's strand-starting methods raise
+        # once it is shutting down and the steps above may still legitimately
+        # start cleanup work on the group.
+        root_concurrency_group.shutdown()
         logger.info("Exiting root concurrency group...")
         try:
             root_concurrency_group.__exit__(None, None, None)

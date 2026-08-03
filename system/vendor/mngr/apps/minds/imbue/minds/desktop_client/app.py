@@ -3095,7 +3095,10 @@ def _run_system_interface_health_probe_loop(
                     tracker.record_probe_success(aid)
                 else:
                     tracker.record_probe_failure(aid)
-            threading.Event().wait(timeout=_HEALTH_PROBE_INTERVAL_SECONDS)
+            # Sleep on the group's shutdown event (not a throwaway Event) so
+            # the loop wakes immediately when shutdown is triggered instead of
+            # holding the concurrency-group exit for up to a full interval.
+            root_concurrency_group.shutdown_event.wait(timeout=_HEALTH_PROBE_INTERVAL_SECONDS)
 
 
 # How often the discovery-health watchdog re-reads the resolver's snapshot
@@ -3145,4 +3148,7 @@ def _run_discovery_health_watchdog_loop(
     while not root_concurrency_group.is_shutting_down():
         last_event_at, _ = backend_resolver.get_freshness_timestamps()
         watchdog.evaluate(last_event_at)
-        threading.Event().wait(timeout=_DISCOVERY_WATCHDOG_POLL_INTERVAL_SECONDS)
+        # Sleep on the group's shutdown event (not a throwaway Event) so the
+        # loop wakes immediately when shutdown is triggered instead of holding
+        # the concurrency-group exit for up to a full interval.
+        root_concurrency_group.shutdown_event.wait(timeout=_DISCOVERY_WATCHDOG_POLL_INTERVAL_SECONDS)

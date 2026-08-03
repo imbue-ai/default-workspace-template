@@ -1807,3 +1807,34 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
   transition: opacity 300ms ease;
   opacity: 0;
 }
+
+/*
+ * Electron window drag regions (ChromeShell.jinja parity). The titlebar is
+ * the window's drag handle on frameless (Linux) and hiddenInset (macOS)
+ * windows; its buttons opt back out so they stay clickable.
+ *
+ * The titlebar rule is also load-bearing beyond dragging: every Electron
+ * window loads the shell.html splash first, whose body is one full-window
+ * ``-webkit-app-region: drag``. Chromium only recomputes the window's
+ * draggable regions when the current document declares app-region rules, so
+ * a document with none keeps the splash's full-window drag region -- which
+ * swallows every mouse event (no clicks, no hover cursors, no selection).
+ * The html/body no-drag guarantees every SPA document declares regions even
+ * if a future page renders without the titlebar.
+ */
+html,
+body {
+  -webkit-app-region: no-drag;
+}
+#minds-titlebar {
+  -webkit-app-region: drag;
+}
+#minds-titlebar button {
+  -webkit-app-region: no-drag;
+}
+/* The workspace-switcher backdrop paints above the titlebar (z-200 vs
+ * z-100), so it must subtract the titlebar strip's drag region or clicks
+ * there would drag the window instead of dismissing the popover. */
+#sidebar-backdrop {
+  -webkit-app-region: no-drag;
+}
