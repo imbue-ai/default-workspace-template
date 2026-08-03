@@ -1,0 +1,1 @@
+The workspace "+" menu no longer hides a service named `web`. That filter targeted the deleted placeholder example server, and would have hidden a legitimate user-built service that happened to use the name.

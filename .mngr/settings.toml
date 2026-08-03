@@ -349,7 +349,7 @@ type = "main"
 # bootstrap is the only extra_window now. It runs first-boot setup (git config,
 # initial chat agent) and then launches
 # supervisord, which runs every background service (system_interface, web,
-# cloudflared, app-watcher, host-backup, terminal, and the one-shot
+# share-gateway, app-watcher, host-backup, terminal, and the one-shot
 # deferred-install -- see system/supervisord.conf; the opt-in github-sync service is
 # added by its skill). The old git_auth_setup window is gone (the git config
 # it performed now runs inside bootstrap), and terminal is a supervisord

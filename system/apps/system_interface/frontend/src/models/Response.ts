@@ -167,6 +167,18 @@ interface EventsResponse {
 
 const BACKFILL_PAGE_SIZE = 50;
 
+// Hard cap on every transcript fetch. A request that never settles (e.g. a
+// proxy holding the connection through a tunnel outage) would otherwise pin
+// the panel's single-fetch-at-a-time guard forever, freezing all paging until
+// a full page reload. Matches the forwarding proxy's own 30s timeout.
+const EVENTS_REQUEST_TIMEOUT_MS = 30_000;
+
+/** m.request config hook applying the transcript-fetch timeout. */
+function applyEventsRequestTimeout(xhr: XMLHttpRequest): XMLHttpRequest {
+  xhr.timeout = EVENTS_REQUEST_TIMEOUT_MS;
+  return xhr;
+}
+
 // Upper bound on events held client-side per agent. Far above any viewport
 // window; bounds JS memory for an arbitrarily long conversation while leaving
 // generous scrollback resident. Eviction (see evictOldEvents) only trims the
@@ -301,6 +313,16 @@ class TranscriptStore {
    */
   prepend(olderEvents: TranscriptEvent[], offset?: number, total?: number): boolean {
     return this.#commit(() => {
+      // Contiguity guard: a server page carries the global index of its first
+      // event, and a *current* backfill response always ends exactly where the
+      // window starts (it was fetched with before=<window's first event>). A
+      // page that does not reach the window start is stale -- issued against a
+      // window that has since been replaced (e.g. a reconnect snapshot landed
+      // while it was in flight). Gluing it on would corrupt the window's
+      // offset arithmetic permanently, so discard it instead.
+      if (offset !== undefined && (offset > this.#firstOffset || offset + olderEvents.length < this.#firstOffset)) {
+        return false;
+      }
       const deduped = olderEvents.filter((e) => !this.#byId.has(e.event_id));
       if (deduped.length === 0) {
         return false;
@@ -388,6 +410,15 @@ class TranscriptStore {
   reconcileTotalAtTail(total: number): void {
     this.#commit(() => {
       this.#total = total;
+      // The server just said "nothing exists after your last event": the held
+      // window IS the live tail. If the bookkeeping still thinks the window
+      // falls short of `total` (events were missed during an outage, so the
+      // held count undercounts the range), shift the believed window start so
+      // the end lines up with the tail. The discrepancy moves above the
+      // window, where backfill can genuinely re-fetch it. Without this,
+      // hasMoreAfter sticks true forever: forward paging refires with no
+      // possible progress and append() drops every future live event.
+      this.#firstOffset = Math.max(0, total - this.#events.length);
       return true;
     });
   }
@@ -522,6 +553,7 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId },
+      config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
     // A snapshot reload (initial load or reconnect) may already contain the
@@ -545,6 +577,7 @@ export async function fetchWindowAtOffset(agentId: string, offset: number): Prom
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId, offset: String(Math.max(0, offset)), limit: String(BACKFILL_PAGE_SIZE) },
+      config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
   } catch (error) {
@@ -566,7 +599,17 @@ export async function fetchBackfillEvents(agentId: string): Promise<void> {
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId, before: firstEventId, limit: String(BACKFILL_PAGE_SIZE) },
+      config: applyEventsRequestTimeout,
     });
+    // Staleness fence: if the window changed while this page was in flight
+    // (a reconnect snapshot or a jump replaced it), the response was issued
+    // against coordinates that no longer exist -- applying it would corrupt
+    // the window arithmetic. Discard; the next scroll retries with a
+    // current cursor.
+    if (getFirstEventId(agentId) !== firstEventId) {
+      console.warn(`[si-transcript] discarding stale backfill page for agent ${agentId} (window changed)`);
+      return;
+    }
     if (result.events.length > 0) {
       prependEvents(agentId, result.events, result.offset, result.total);
     } else {
@@ -595,7 +638,15 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId, after: lastEventId, limit: String(BACKFILL_PAGE_SIZE) },
+      config: applyEventsRequestTimeout,
     });
+    // Staleness fence, mirroring fetchBackfillEvents: discard the page if the
+    // window's tail moved while it was in flight (live append or a snapshot
+    // reset) -- the next maybePage refires against the current cursor.
+    if (getLastEventId(agentId) !== lastEventId) {
+      console.warn(`[si-transcript] discarding stale forward page for agent ${agentId} (window changed)`);
+      return;
+    }
     if (result.events.length > 0) {
       appendForwardEvents(agentId, result.events, result.total);
     } else if (result.total !== undefined) {

@@ -1,0 +1,23 @@
+[project]
+name = "share-gateway"
+version = "0.1.0"
+description = "In-workspace sharing gateway: TLS termination, grants enforcement, and the frpc relay tunnel for shared workspaces"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=42",
+    "flask>=3.0",
+    "httpx>=0.27",
+    "pyjwt>=2.8",
+    "werkzeug>=3.0",
+]
+
+[project.scripts]
+share-gateway = "share_gateway.runner:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/share_gateway"]
