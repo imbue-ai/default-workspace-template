@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+from http.client import InvalidURL
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -32,16 +33,28 @@ _BASE_URL = "http://127.0.0.1:8000"
 
 
 class _RecordingHttp(refresh_workspace_view.HttpClient):
-    """Records every POST and answers each URL from a caller-supplied status map."""
+    """Records every POST and answers each URL from a caller-supplied status map.
 
-    def __init__(self, status_by_url_fragment: dict[str, int | None]) -> None:
+    ``error_by_url_fragment`` raises instead of answering, standing in for the
+    escapes ``post_json``'s own ``except`` clauses do not cover.
+    """
+
+    def __init__(
+        self,
+        status_by_url_fragment: dict[str, int | None],
+        error_by_url_fragment: dict[str, Exception] | None = None,
+    ) -> None:
         self._status_by_url_fragment = status_by_url_fragment
+        self._error_by_url_fragment = error_by_url_fragment or {}
         self.posts: list[tuple[str, dict, dict]] = []
 
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
     ) -> int | None:
         self.posts.append((url, payload, headers))
+        for fragment, error in self._error_by_url_fragment.items():
+            if fragment in url:
+                raise error
         for fragment, status in self._status_by_url_fragment.items():
             if fragment in url:
                 return status
@@ -246,6 +259,28 @@ def test_an_unexpected_error_is_reported_rather_than_raised() -> None:
     )
 
     assert exit_code == 0
+
+
+def test_an_unexpected_broadcast_error_still_refreshes_the_app() -> None:
+    """The escape guard is per-channel, so the first channel cannot cancel the second.
+
+    The broadcast runs first, and a malformed ``MINDS_WORKSPACE_SERVER_URL``
+    raises ``http.client.InvalidURL`` -- an ``HTTPException``, not an
+    ``OSError``, so ``post_json`` does not catch it. Guarding both channels
+    together would swallow that *and* skip the app call, taking out the one
+    channel that reaches the common case (a user watching in the Minds app)
+    while still exiting 0, so the caller reads it as a routine miss.
+    """
+    http = _RecordingHttp(
+        {}, {"/api/layout/broadcast": InvalidURL("nonnumeric port: 'notaport'")}
+    )
+
+    exit_code = refresh_workspace_view.refresh(
+        runner=_StubRunner(), http=http, base_url=_BASE_URL
+    )
+
+    assert exit_code == 0
+    assert http.url_containing(f"/agents/{_PRIMARY_ID}/refresh") is not None
 
 
 def test_missing_gateway_env_skips_the_app_call_but_still_broadcasts(
