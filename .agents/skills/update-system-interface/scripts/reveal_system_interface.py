@@ -196,9 +196,9 @@ _PRIMARY_AGENT_LABEL = "is_primary"
 # open across the whole editing pass, so any re-``preview`` copies a layout that
 # has it. Rendering it would make the preview show *itself*: the inner app
 # resolves ``service:si-preview`` against the same live app registry, so the panel
-# proxies back to the wrapper that frames it, and each nested iframe loads another
-# full system interface. Telling the previewed instance that those two service
-# names resolve to itself makes it serve a one-line explanation in that tab
+# frames the wrapper that frames it, and each nested iframe loads another full
+# system interface. Telling the previewed instance that those two service names
+# resolve to itself makes its shell render a one-line explanation in that tab
 # instead. That keeps the rest of the layout exactly as the user has it, which
 # neither dropping the layout (their real tabs vanish) nor editing dockview's
 # serialized grid by hand (fragile, and a malformed grid renders blank) manages.

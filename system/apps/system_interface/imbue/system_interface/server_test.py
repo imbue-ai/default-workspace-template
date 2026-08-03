@@ -1100,6 +1100,42 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         assert "system-interface-hostname" in response.text
 
 
+def test_index_hands_the_self_referential_services_to_the_frontend(tmp_path: Path) -> None:
+    """The configured names reach the shell, which is the only place that can refuse them.
+
+    Each service owns a browser origin the frontend derives itself, so a panel
+    naming one of these never reaches this server -- the meta tag is the whole
+    delivery mechanism for the refusal.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+    config = Config(system_interface_self_referential_services=["si-preview", "si-preview-app"])
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state(config=config)).test_client()
+        response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert '<meta name="system-interface-self-referential-services" content="si-preview,si-preview-app">' in (
+        response.text
+    )
+
+
+def test_index_omits_the_self_referential_meta_tag_when_none_are_configured(tmp_path: Path) -> None:
+    """The workspace's own system interface registers no services, so it has nothing to exclude."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert "system-interface-self-referential-services" not in response.text
+
+
 def test_random_name_endpoint(client: FlaskClient) -> None:
     """The random name endpoint returns a non-empty name."""
     response = client.get("/api/random-name")
