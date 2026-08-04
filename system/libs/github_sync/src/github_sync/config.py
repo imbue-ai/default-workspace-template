@@ -19,12 +19,9 @@ CONFIG_PATH = Path("data/system/github_sync.toml")
 GITHUB_URL_PREFIX = "https://github.com/"
 
 # Env vars injected by mngr_latchkey's prepare_agent_latchkey for every agent.
-# The secondary gateway (remote VPS hosts only) keeps working when the user's
-# own machine -- which runs the primary gateway -- is offline.
+# There is exactly one gateway; when it is unreachable there is no fallback.
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
-ENV_GATEWAY_SECONDARY = "LATCHKEY_GATEWAY_SECONDARY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
-ENV_GATEWAY_PERMISSIONS_OVERRIDE = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 
 
 class GithubSyncError(Exception):
@@ -85,24 +82,13 @@ def parse_owner_and_name(repo_url: str) -> tuple[str, str]:
 
 
 def get_gateway_url() -> str | None:
-    """The primary latchkey gateway URL (no trailing slash), or None if unset."""
+    """The latchkey gateway URL (no trailing slash), or None if unset."""
     value = os.environ.get(ENV_GATEWAY, "").rstrip("/")
-    return value or None
-
-
-def get_secondary_gateway_url() -> str | None:
-    """The per-VPS backup gateway URL (no trailing slash), or None if unset."""
-    value = os.environ.get(ENV_GATEWAY_SECONDARY, "").rstrip("/")
     return value or None
 
 
 def get_gateway_password() -> str | None:
     value = os.environ.get(ENV_GATEWAY_PASSWORD, "")
-    return value or None
-
-
-def get_gateway_permissions_override() -> str | None:
-    value = os.environ.get(ENV_GATEWAY_PERMISSIONS_OVERRIDE, "")
     return value or None
 
 

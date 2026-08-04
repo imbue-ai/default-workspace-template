@@ -487,16 +487,12 @@ def _fetch_user_timezone() -> str:
     """
     gateway = os.environ.get("LATCHKEY_GATEWAY", "")
     password = os.environ.get("LATCHKEY_GATEWAY_PASSWORD", "")
-    permissions = os.environ.get("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "")
-    if not gateway or not password or not permissions:
+    if not gateway or not password:
         logger.debug("Latchkey gateway env not fully set; skipping timezone fetch")
         return ""
     request = urllib.request.Request(
         f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/timezone",
-        headers={
-            "X-Latchkey-Gateway-Password": password,
-            "X-Latchkey-Gateway-Permissions-Override": permissions,
-        },
+        headers={"X-Latchkey-Gateway-Password": password},
     )
     try:
         timezone_name = _request_timezone(request)
