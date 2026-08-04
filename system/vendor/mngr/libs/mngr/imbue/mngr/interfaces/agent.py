@@ -88,26 +88,6 @@ class AgentInterface(MutableModel, ABC, Generic[AgentConfigT]):
         """
         ...
 
-    def build_extra_agent_args(self, options: CreateAgentOptions) -> tuple[str, ...]:
-        """Return extra argv this agent type derives from harness-neutral create options.
-
-        ``assemble_command`` receives only ``agent_args``, never the full
-        ``CreateAgentOptions``, so this is the seam where an agent type turns a
-        harness-neutral option into its own launch flags. The result is appended to
-        ``agent_args`` by ``Host.create_agent_state`` before assembly.
-
-        Defaults to no extra args: an agent type that consumes an option some other
-        way (e.g. at provision time, by writing a config file) inherits this
-        unchanged. ``mngr_claude`` overrides it to emit ``--append-system-prompt``;
-        ``mngr_codex`` folds the same value into its developer instructions during
-        provisioning instead, so it does not override.
-        """
-        return ()
-
-    # =========================================================================
-    # Certified Field Getters/Setters
-    # =========================================================================
-
     @abstractmethod
     def get_command(self) -> CommandString:
         """Return the command used to start this agent."""

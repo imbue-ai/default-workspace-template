@@ -16,3 +16,8 @@ resolved from `.agents/output-styles/` in the work dir.
 
 Known limit: a style that suppresses a harness's built-in prompt cannot behave identically here,
 because `developer_instructions` can only append.
+
+`output_style` and `append_system_prompt` are settings of the codex agent type rather than
+create options. Codex has no output-style concept, so the style file's body is used verbatim
+and the prompt blocks follow it, all concatenated into `developer_instructions` in the
+per-agent `config.toml`.

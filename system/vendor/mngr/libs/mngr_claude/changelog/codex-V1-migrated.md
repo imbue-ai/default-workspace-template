@@ -11,3 +11,10 @@ that launches silently unstyled.
 `--append-system-prompt` becomes claude's `--append-system-prompt` launch flag, emitted through
 the new `build_extra_agent_args` hook. Create templates that previously spelled this out as
 `agent_args = ["--append-system-prompt", "..."]` can use the harness-neutral option instead.
+
+`output_style` and `append_system_prompt` are settings of the claude agent type rather than
+create options. The style name still becomes the `outputStyle` setting, validated at
+provision against the directory claude itself reads. The prompt blocks are joined into ONE
+`--append-system-prompt` flag: claude's flag is last-wins (verified against 2.1.220), so
+passing it per block would deliver only the final one and silently drop every role stacked
+before it.

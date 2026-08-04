@@ -98,6 +98,8 @@ from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import TransferMode
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.utils.git_utils import find_git_source_path
@@ -248,8 +250,32 @@ def _resolve_adopt_session(adopt_session_arg: str, mngr_ctx: MngrContext) -> tup
     return adopt_session_arg, match.parent
 
 
+# Separator between stacked `append_system_prompt` blocks. Blank line, so each role's
+# block reads as its own paragraph in the assembled prompt.
+APPEND_SYSTEM_PROMPT_SEPARATOR: Final[str] = "\n\n"
+
+
 class ClaudeAgentConfig(AgentTypeConfig):
     """Config for the claude agent type."""
+
+    # --- role behaviour, set by a create template and applied by this harness ---
+    #
+    # Both are harness-neutral *intent*: a role states them once and each harness applies
+    # them its own way. They live on the harness subclasses rather than AgentTypeConfig so
+    # a harness that cannot honour them has no field to route to -- the create then fails
+    # naming the template, instead of launching an agent that quietly ignores its role.
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of an output style to launch with, matched against the `name:` "
+        "frontmatter of a file in the work dir's output-style directory. Scalar: the last "
+        "template in the stack to set it wins.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="Blocks to append to the agent's system prompt, in stack order. Aggregate: "
+        "write `append_system_prompt__extend = [...]` in a template so stacked roles each "
+        "contribute a block instead of the last one replacing the rest.",
+    )
 
     command: CommandString = Field(
         default=CommandString("claude"),
@@ -1881,12 +1907,12 @@ class ClaudeCoreAgent(
         broken link or a misspelled name into a failed create instead of an agent that
         launches silently unstyled.
         """
-        if options.output_style is None:
+        if self.agent_config.output_style is None:
             return {}
         styles_dir = Path(self.work_dir) / CLAUDE_OUTPUT_STYLES_DIR
         # Raises UserInputError, listing what is available, when the name has no match.
-        resolve_output_style(options.output_style, read_output_style_files(host, styles_dir))
-        return {OUTPUT_STYLE_SETTING_KEY: str(options.output_style)}
+        resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+        return {OUTPUT_STYLE_SETTING_KEY: str(self.agent_config.output_style)}
 
     def _configure_agent_hooks(
         self, host: OnlineHostInterface, mngr_ctx: MngrContext, options: CreateAgentOptions
@@ -2815,16 +2841,21 @@ class ClaudeAgent(
         script_path = "$MNGR_AGENT_STATE_DIR/commands/claude_background_tasks.sh"
         return f"( {script_path} {shlex.quote(session_name)} {shlex.quote(primary_window_name)} ) &"
 
-    def build_extra_agent_args(self, options: CreateAgentOptions) -> tuple[str, ...]:
-        """Turn the harness-neutral ``append_system_prompt`` into claude's own flag.
+    def _build_append_system_prompt_args(self) -> tuple[str, ...]:
+        """Turn this agent type's ``append_system_prompt`` blocks into claude's own flag.
 
-        ``output_style`` is deliberately absent: claude takes it as the ``outputStyle``
-        setting written during provisioning (see ``_build_output_style_settings``), not
-        as a launch flag.
+        Joined into ONE flag rather than repeated: claude's ``--append-system-prompt`` is
+        last-wins, verified against claude 2.1.220, so passing the flag per block would
+        deliver only the final one and silently drop every role stacked before it.
+
+        ``output_style`` is deliberately absent here: claude takes it as the ``outputStyle``
+        setting written during provisioning (see ``_build_output_style_settings``), not as a
+        launch flag.
         """
-        if options.append_system_prompt is None:
+        blocks = self.agent_config.append_system_prompt
+        if not blocks:
             return ()
-        return ("--append-system-prompt", str(options.append_system_prompt))
+        return ("--append-system-prompt", APPEND_SYSTEM_PROMPT_SEPARATOR.join(str(block) for block in blocks))
 
     def assemble_command(
         self,
@@ -2885,6 +2916,10 @@ class ClaudeAgent(
         # (Claude is last-wins) -- the accepted, documented limitation of that mode.
         cli_args = self.agent_config.cli_args
         all_extra_args = cli_args + quote_agent_args(agent_args)
+        # Role-contributed system-prompt blocks, joined into a single flag (see
+        # _build_append_system_prompt_args). Quoted here rather than in the builder so the
+        # builder stays a plain value function.
+        all_extra_args = all_extra_args + quote_agent_args(self._build_append_system_prompt_args())
         # Claude appends & unions repeated --disallowed-tools flags.
         if self.agent_config.auto_disable_questions:
             all_extra_args = all_extra_args + ("--disallowed-tools", "AskUserQuestion")

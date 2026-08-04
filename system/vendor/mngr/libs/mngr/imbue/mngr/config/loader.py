@@ -22,6 +22,7 @@ from imbue.mngr.config.agent_alias_registry import normalize_agent_type_name
 from imbue.mngr.config.agent_alias_registry import unregister_agent_alias
 from imbue.mngr.config.agent_config_registry import get_agent_config_class
 from imbue.mngr.config.agent_config_registry import is_agent_config_registered
+from imbue.mngr.config.agent_config_registry import list_registered_agent_config_types
 from imbue.mngr.config.consts import PROFILES_DIRNAME
 from imbue.mngr.config.consts import ROOT_CONFIG_FILENAME
 from imbue.mngr.config.data_types import AgentTypeConfig
@@ -1054,6 +1055,21 @@ def _parse_commands(raw_commands: dict[str, dict[str, Any]]) -> dict[str, Comman
     return commands
 
 
+def _agent_type_setting_names() -> frozenset[str]:
+    """Every field name declared by any registered agent-type config class.
+
+    The union across harnesses, because a template is parsed before any type is resolved.
+    Narrowing to the selected type happens in ``apply_create_template``, which is what makes
+    a role stacked onto a harness that cannot honour its settings fail there rather than
+    launching an agent that ignores them.
+    """
+    return frozenset(
+        field
+        for agent_type in list_registered_agent_config_types()
+        for field in get_agent_config_class(agent_type).model_fields
+    )
+
+
 def _parse_create_templates(raw_templates: dict[str, dict[str, Any]]) -> dict[CreateTemplateName, CreateTemplate]:
     """Parse create templates from config.
 
@@ -1078,7 +1094,12 @@ def _parse_create_templates(raw_templates: dict[str, dict[str, Any]]) -> dict[Cr
         # strip it before checking against the CreateCliOptions schema).
         for field in raw_options.keys():
             base_field = bare_key(field) if is_extend_key(field) else field
-            if base_field not in CreateCliOptions.model_fields:
+            # A key that is not a create option may still be a setting of the agent type the
+            # create resolves to -- how a role states harness behaviour (`output_style`,
+            # `append_system_prompt`) without naming a harness. The resolved type is not known
+            # at load time, so accept a field any registered agent type declares and let
+            # `apply_create_template` reject it against the type actually selected.
+            if base_field not in CreateCliOptions.model_fields and base_field not in _agent_type_setting_names():
                 raise ConfigParseError(
                     f"Unknown field '{field}' in create_templates.{template_name}. Valid fields: {sorted(CreateCliOptions.model_fields.keys())}"
                 )

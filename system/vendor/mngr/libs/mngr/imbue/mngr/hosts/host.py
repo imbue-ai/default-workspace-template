@@ -2633,12 +2633,11 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
             )
 
             # Extra argv the agent type derives from harness-neutral create options
-            # (e.g. claude turning `output_style`/`append_system_prompt` into its own
             # flags). Agent types that consume those options at provision time instead
             # return nothing here. Appended after the user's own `agent_args`.
             command = agent.assemble_command(
                 host=self,
-                agent_args=options.agent_args + agent.build_extra_agent_args(options),
+                agent_args=options.agent_args,
                 command_override=options.command,
                 initial_message=options.initial_message,
             )

@@ -137,6 +137,8 @@ from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.utils.git_utils import find_git_source_path
 from imbue.mngr_codex import resources as _codex_resources
@@ -223,6 +225,25 @@ def _load_codex_resource_script(filename: str) -> str:
 
 class CodexAgentConfig(AgentTypeConfig):
     """Config for the codex agent type."""
+
+    # --- role behaviour, set by a create template and applied by this harness ---
+    #
+    # Both are harness-neutral *intent*: a role states them once and each harness applies
+    # them its own way. They live on the harness subclasses rather than AgentTypeConfig so
+    # a harness that cannot honour them has no field to route to -- the create then fails
+    # naming the template, instead of launching an agent that quietly ignores its role.
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of an output style to launch with, matched against the `name:` "
+        "frontmatter of a file in the work dir's output-style directory. Scalar: the last "
+        "template in the stack to set it wins.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="Blocks to append to the agent's system prompt, in stack order. Aggregate: "
+        "write `append_system_prompt__extend = [...]` in a template so stacked roles each "
+        "contribute a block instead of the last one replacing the rest.",
+    )
 
     command: CommandString = Field(
         default=CommandString("codex"),
@@ -605,25 +626,26 @@ class CodexAgent(
                 concurrency_group,
             )
 
-    def _build_developer_instructions(self, host: OnlineHostInterface, options: CreateAgentOptions) -> str | None:
-        """Join the create-time system-prompt additions into one blob, or None if there are none.
+    def _build_developer_instructions(self, host: OnlineHostInterface) -> str | None:
+        """Join this agent type's system-prompt additions into one blob, or None if there are none.
 
-        Codex has no output-style concept, so ``--output-style`` reaches it as instruction
+        Codex has no output-style concept, so ``output_style`` reaches it as instruction
         text rather than a named setting: the style file's body is used **verbatim**,
         frontmatter block included, so a style reads identically whichever agent type runs
-        it. ``--append-system-prompt`` follows it.
+        it. The ``append_system_prompt`` blocks follow, in stack order.
 
         The style directory read here is ``.agents/output-styles`` -- the source of truth
         where styles are authored. (Claude validates against its own ``.claude/output-styles``
         instead, since that is the path it will read; the two are the same files.)
         """
         blocks: list[str] = []
-        if options.output_style is not None:
+        if self.agent_config.output_style is not None:
             styles_dir = get_shared_output_styles_dir(Path(self.work_dir))
             # Raises UserInputError, listing what is available, when the name has no match.
-            blocks.append(resolve_output_style(options.output_style, read_output_style_files(host, styles_dir)))
-        if options.append_system_prompt is not None:
-            blocks.append(str(options.append_system_prompt))
+            blocks.append(
+                resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+            )
+        blocks.extend(str(prompt) for prompt in self.agent_config.append_system_prompt)
         if not blocks:
             return None
         return DEVELOPER_INSTRUCTIONS_SEPARATOR.join(blocks)
@@ -657,7 +679,7 @@ class CodexAgent(
             trusted_projects=[canonical_work_dir],
             config_overrides=self.agent_config.config_overrides,
             log_dir=str(get_codex_tui_log_dir(codex_home)),
-            developer_instructions=self._build_developer_instructions(host, options),
+            developer_instructions=self._build_developer_instructions(host),
         )
         config_path = get_codex_config_path(codex_home)
         with log_span("Writing per-agent codex config to {}", config_path):

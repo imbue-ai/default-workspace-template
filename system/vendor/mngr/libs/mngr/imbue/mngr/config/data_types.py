@@ -749,8 +749,6 @@ class CreateCliOptions(CommonCliOptions):
     agent_args: tuple[str, ...]
     template: tuple[str, ...]
     type: str | None
-    output_style: str | None
-    append_system_prompt: str | None
     reuse: bool
     connect: bool
     foreground: bool

@@ -663,10 +663,16 @@ def test_apply_create_template_skips_none_values(mngr_test_prefix: str) -> None:
     assert result["name"] == "from-template"
 
 
-def test_apply_create_template_skips_unknown_params(mngr_test_prefix: str) -> None:
-    """apply_create_template should skip template params not in the original params dict."""
+def test_apply_create_template_rejects_a_key_that_is_neither_option_nor_agent_type_setting(
+    mngr_test_prefix: str,
+) -> None:
+    """A template key that names nothing raises instead of being silently dropped.
+
+    Silently dropping it is what let a typo -- or a role stacked onto a harness that cannot
+    honour it -- produce an agent that quietly ignored part of its configuration.
+    """
     ctx = _make_click_context(
-        params={"template": ("mytemplate",), "name": "default"},
+        params={"template": ("mytemplate",), "name": "default", "type": "claude", "setting": ()},
     )
     config = MngrConfig(
         prefix=mngr_test_prefix,
@@ -674,8 +680,52 @@ def test_apply_create_template_skips_unknown_params(mngr_test_prefix: str) -> No
             CreateTemplateName("mytemplate"): CreateTemplate(options={"nonexistent_param": "value"}),
         },
     )
+    with pytest.raises(UserInputError, match="nonexistent_param"):
+        apply_create_template(ctx, ctx.params.copy(), config)
+
+
+def test_apply_create_template_routes_an_agent_type_setting_to_the_resolved_type(
+    mngr_test_prefix: str,
+) -> None:
+    """A role's `output_style` lands on whichever agent type the stack resolved to.
+
+    This is what lets a role state harness behaviour once without naming a harness:
+    `-t codex -t chat` and `-t claude -t chat` route the same template key to different
+    agent types.
+    """
+    config = MngrConfig(
+        prefix=mngr_test_prefix,
+        create_templates={
+            CreateTemplateName("chat"): CreateTemplate(options={"output_style": "Engineering Subordinate"}),
+        },
+    )
+    for agent_type in ("claude", "codex"):
+        ctx = _make_click_context(
+            params={"template": ("chat",), "name": "n", "type": agent_type, "setting": ()},
+        )
+        result = apply_create_template(ctx, ctx.params.copy(), config)
+        assert result["setting"] == (f'agent_types.{agent_type}.output_style="Engineering Subordinate"',)
+
+
+def test_apply_create_template_accumulates_append_system_prompt_across_stacked_roles(
+    mngr_test_prefix: str,
+) -> None:
+    """Two stacked roles each contribute a prompt block rather than the last one winning."""
+    config = MngrConfig(
+        prefix=mngr_test_prefix,
+        create_templates={
+            CreateTemplateName("worker"): CreateTemplate(options={"append_system_prompt__extend": ["first"]}),
+            CreateTemplateName("subskill"): CreateTemplate(options={"append_system_prompt__extend": ["second"]}),
+        },
+    )
+    ctx = _make_click_context(
+        params={"template": ("worker", "subskill"), "name": "n", "type": "claude", "setting": ()},
+    )
     result = apply_create_template(ctx, ctx.params.copy(), config)
-    assert "nonexistent_param" not in result
+    assert result["setting"] == (
+        'agent_types.claude.append_system_prompt__extend=["first"]',
+        'agent_types.claude.append_system_prompt__extend=["second"]',
+    )
 
 
 # =============================================================================

@@ -12,3 +12,13 @@ Each agent type decides how to apply the two values. Types that turn them into l
 so through a new optional `build_extra_agent_args` hook (default: no extra args), since
 `assemble_command` sees only `agent_args`; types that consume them at provision time, by writing
 a config file, override nothing.
+
+A create template may now set a field on the agent type the create resolves to, not just a
+`mngr create` option. A role writes `output_style = "..."` or
+`append_system_prompt__extend = [...]` once and it lands on whichever type the template
+stack selected, so no role names a harness. Keys are routed after every template applies
+(a harness template is what sets the type) and compiled into settings entries, reusing the
+existing template-contributed-settings fold. A key that is neither an option nor a field on
+that type now RAISES, naming the template, the type and which types do support it --
+previously it was silently dropped, so a typo or a role stacked onto a harness that could
+not honour it produced an agent that quietly ignored part of its configuration.

@@ -101,10 +101,8 @@ from imbue.mngr.primitives import LOCAL_PROVIDER_NAME
 from imbue.mngr.primitives import LogLevel
 from imbue.mngr.primitives import NewAgentLocation
 from imbue.mngr.primitives import OutputFormat
-from imbue.mngr.primitives import OutputStyleName
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import SnapshotName
-from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import TmuxHeight
 from imbue.mngr.primitives import TmuxWidth
 from imbue.mngr.primitives import TmuxWindowSize
@@ -417,19 +415,6 @@ class _CreateCommand(click.Command):
     "--type",
     default=None,
     help="Which type of agent to run",
-)
-@optgroup.option(
-    "--output-style",
-    default=None,
-    help="Name of an output style to launch the agent with, matched against the `name:` "
-    "frontmatter of a file in the agent type's output-style directory. Each agent type "
-    "applies it its own way; types with no output-style concept fold the style body into "
-    "their system prompt instead",
-)
-@optgroup.option(
-    "--append-system-prompt",
-    default=None,
-    help="Text to append to the agent's system prompt",
 )
 # FOLLOWUP: hmm... I wonder if the name of this should be changed to something more like "window" to be more closely aligned with the tmux primitive it actually creates...
 #  more generally, we probably need to do a pass at refining *all* of these option names...
@@ -1726,8 +1711,6 @@ def _parse_agent_opts(
         name=parsed_agent_name,
         additional_commands=tuple(NamedCommand.from_string(c) for c in opts.extra_window),
         agent_args=resolved_agent_args,
-        output_style=OutputStyleName(opts.output_style) if opts.output_style else None,
-        append_system_prompt=SystemPromptText(opts.append_system_prompt) if opts.append_system_prompt else None,
         target_path=target_path,
         worktree_base_folder=parsed_worktree_base_folder,
         transfer_mode=transfer_mode,
