@@ -88,6 +88,10 @@ class AgentInterface(MutableModel, ABC, Generic[AgentConfigT]):
         """
         ...
 
+    # =========================================================================
+    # Certified Field Getters/Setters
+    # =========================================================================
+
     @abstractmethod
     def get_command(self) -> CommandString:
         """Return the command used to start this agent."""

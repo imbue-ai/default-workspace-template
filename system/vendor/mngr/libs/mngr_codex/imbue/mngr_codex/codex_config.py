@@ -399,8 +399,8 @@ def build_codex_config(
     4. ``config_overrides`` -- the per-agent-type blob, merged last (shallow) so
        it wins; covers anything not surfaced as a typed knob.
 
-    ``developer_instructions`` carries the per-create system-prompt additions
-    (mngr's ``--output-style`` body and ``--append-system-prompt``, already
+    ``developer_instructions`` carries the role-contributed system-prompt additions
+    (the ``output_style`` body and the ``append_system_prompt`` blocks, already
     joined by the caller). Codex has no output-style concept, so a style reaches
     it through this key instead. It *appends* to codex's built-in instructions --
     unlike ``model_instructions_file``, which replaces them -- which is why a

@@ -1,7 +1,7 @@
 """Resolution of output-style names against style files.
 
 An *output style* is a markdown file whose YAML frontmatter carries a `name:` --
-the human-readable label users pass to `mngr create --output-style`. The label,
+the human-readable label a create template names in `output_style`. The label,
 not the filename, is the identifier, so resolving one means reading the
 frontmatter of every candidate file and matching on that field.
 

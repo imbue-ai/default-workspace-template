@@ -876,7 +876,7 @@ def apply_create_template(
                 updated_params[param_name] = template_value
 
     if pending_agent_type_keys:
-        updated_params = _route_template_keys_to_agent_type(updated_params, config, pending_agent_type_keys)
+        updated_params = _route_template_keys_to_agent_type(updated_params, pending_agent_type_keys)
 
     return updated_params
 
@@ -893,7 +893,6 @@ def _agent_config_fields(agent_type: str) -> frozenset[str]:
 
 def _route_template_keys_to_agent_type(
     params: dict[str, Any],
-    config: MngrConfig,
     pending: list[tuple[str, str, Any]],
 ) -> dict[str, Any]:
     """Route template keys that are not create options to the resolved agent type's config.

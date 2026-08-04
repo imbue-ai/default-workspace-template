@@ -591,7 +591,7 @@ _MANAGED_SETTINGS_SHELL_PATH: Final[str] = f"$MNGR_AGENT_STATE_DIR/{'/'.join(MAN
 MANAGED_SETTINGS_LAUNCH_ARG: Final[str] = f'--settings "{_MANAGED_SETTINGS_SHELL_PATH}"'
 
 # Where claude itself looks for output styles, relative to the work_dir. mngr validates
-# --output-style against this exact path -- the one claude will read -- so a name that
+# `output_style` against this exact path -- the one claude will read -- so a name that
 # resolves here is guaranteed to resolve for claude too.
 CLAUDE_OUTPUT_STYLES_DIR: Final[str] = ".claude/output-styles"
 
@@ -733,8 +733,8 @@ def _build_settings_json(
     data = apply_settings_patch(
         data, config.settings_overrides, allow_narrowing=allow_narrowing, base_description=base_description
     )
-    # Applied last so a per-create option (currently only --output-style) wins over a
-    # settings_overrides value for the same key, matching CLI-beats-config elsewhere.
+    # Applied last so a resolved agent-type setting (currently only `output_style`) wins
+    # over a settings_overrides value for the same key.
     if extra_settings:
         data.update(extra_settings)
     return json.dumps(data, indent=2) + "\n"
@@ -1897,8 +1897,8 @@ class ClaudeCoreAgent(
 
         return transfers
 
-    def _build_output_style_settings(self, host: OnlineHostInterface, options: CreateAgentOptions) -> dict[str, Any]:
-        """Return the ``outputStyle`` settings patch for ``options``, or ``{}`` if unset.
+    def _build_output_style_settings(self, host: OnlineHostInterface) -> dict[str, Any]:
+        """Return the ``outputStyle`` settings patch for this agent type, or ``{}`` if unset.
 
         Claude resolves the style file itself at launch, so mngr only needs to pass the
         name -- but it validates first, against ``.claude/output-styles/`` in the work_dir:
@@ -1914,9 +1914,7 @@ class ClaudeCoreAgent(
         resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
         return {OUTPUT_STYLE_SETTING_KEY: str(self.agent_config.output_style)}
 
-    def _configure_agent_hooks(
-        self, host: OnlineHostInterface, mngr_ctx: MngrContext, options: CreateAgentOptions
-    ) -> None:
+    def _configure_agent_hooks(self, host: OnlineHostInterface, mngr_ctx: MngrContext) -> None:
         """Write mngr's hooks (and the user's settings_overrides) to the managed settings file.
 
         This is the ``use_env_config_dir``-mode channel only. In that mode there
@@ -1951,11 +1949,11 @@ class ClaudeCoreAgent(
             allow_narrowing=mngr_ctx.config.allow_settings_key_assignment_narrowing,
             base_description="mngr's managed Claude hooks",
         )
-        # Folded on last so a per-create --output-style wins over a settings_overrides
-        # outputStyle, matching how CLI beats config everywhere else. Merged into the
-        # resolved dict rather than layered as config, so it cannot disturb the model /
-        # fastMode / skipDangerousModePermissionPrompt keys already resolved above.
-        settings.update(self._build_output_style_settings(host, options))
+        # Folded on last so a role's `output_style` wins over a settings_overrides
+        # outputStyle. Merged into the resolved dict rather than layered as config, so it
+        # cannot disturb the model / fastMode / skipDangerousModePermissionPrompt keys
+        # already resolved above.
+        settings.update(self._build_output_style_settings(host))
 
         settings_path = get_managed_settings_path(self._get_agent_dir())
         # The plugin/claude/ parent may not exist yet (in use_env_config_dir
@@ -2061,7 +2059,7 @@ class ClaudeCoreAgent(
             is_unattended=self.is_unattended_enabled(),
             allow_narrowing=mngr_ctx.config.allow_settings_key_assignment_narrowing,
             # Same fold as the shared-mode path in _configure_agent_hooks.
-            extra_settings=self._build_output_style_settings(host, options),
+            extra_settings=self._build_output_style_settings(host),
         )
 
         generated_files: dict[Path, str] = {
@@ -2239,7 +2237,7 @@ class ClaudeCoreAgent(
             # resolved predicate (not the deprecated use_env_config_dir alias) so it
             # also fires when shared mode is set via isolate_local_config_dir=False.
             if not self._is_isolated_config_dir():
-                self._configure_agent_hooks(host, mngr_ctx, options)
+                self._configure_agent_hooks(host, mngr_ctx)
 
             # should be done by now, just wanted to do in parallel for latency reasons
             provision_backgroun_script_thread.join(60.0)

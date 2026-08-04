@@ -600,7 +600,7 @@ class CodexAgent(
         canonical_work_dir = self._resolve_canonical_path(host, self.work_dir)
         self._ensure_source_repo_trusted(host, user_codex_home, mngr_ctx)
         self.reconcile_installed_version(host, mngr_ctx)
-        self._provision_codex_home(host, user_codex_home, canonical_work_dir, options)
+        self._provision_codex_home(host, user_codex_home, canonical_work_dir)
         with mngr_ctx.concurrency_group.make_concurrency_group("codex_provisioning") as concurrency_group:
             provision_raw_transcript_scripts(self, host, self._get_agent_dir(), concurrency_group)
             maybe_provision_common_transcript_scripts(self, host, self._get_agent_dir(), concurrency_group)
@@ -655,7 +655,6 @@ class CodexAgent(
         host: OnlineHostInterface,
         user_codex_home: Path,
         canonical_work_dir: str,
-        options: CreateAgentOptions,
     ) -> None:
         """Write the mngr-owned per-agent ``CODEX_HOME`` tree (idempotent each provision).
 
