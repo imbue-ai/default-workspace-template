@@ -7,11 +7,33 @@ requires-python = ">=3.12"
 dependencies = [
     "litellm[proxy]>=1.83",
     "modal>=1.4.3",
+    "modal-app-kit",
     "prisma>=0.15",
     "pyyaml>=6.0",
     "tenacity>=8.0",
 ]
 license = {text = "MIT"}
+
+# The exact pip set the deployed Modal image installs, ==-pinned so the
+# container is a pure function of this file + uv.lock. Resolved as part of the
+# workspace lock (so unit tests exercise the same versions the image ships)
+# and exported with hashes to image_requirements.txt via
+# `just export-image-requirements`; drift tests keep the export current.
+#
+# litellm is pinned deliberately: the proxy's auth/budget behavior (user-level
+# budgets enforce the per-account monthly LLM spend quota) must not drift
+# under us on a redeploy. Bump only on purpose, re-verifying budget
+# enforcement + the price map for the models in LITELLM_CONFIG (app.py).
+[dependency-groups]
+image = [
+    "litellm[proxy]==1.93.0",
+    "prisma==0.15.0",
+    "pyyaml==6.0.3",
+    "tenacity==9.1.4",
+]
+
+[tool.uv.sources]
+modal-app-kit = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

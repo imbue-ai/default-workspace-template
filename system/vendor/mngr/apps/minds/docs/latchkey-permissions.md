@@ -5,10 +5,18 @@ Minds-managed agents access third-party services (Slack, GitHub, Google Drive,
 describes how the desktop client surfaces permission decisions to the user
 and how the agent receives the answer.
 
+Every workspace sees exactly one gateway at the same loopback URL. Local
+workspaces use the desktop-resident gateway. Remote workspaces use the
+VPS-resident gateway for third-party calls; its bundled forwarding extension
+proxies `/permissions`, `/permission-requests`, and `/minds-api-proxy` requests
+back to the desktop gateway over an SSH tunnel. This keeps the permission queue,
+permissions files, and Minds API on the user's computer without requiring a
+second gateway URL or a different agent skill.
+
 ## End-to-end flow
 
 1. **Agent makes a call.** The agent issues an HTTP request to the
-   minds-managed shared `latchkey gateway` (or to `latchkey curl`
+   workspace's minds-managed `latchkey gateway` (or to `latchkey curl`
    directly). The agent's environment carries the gateway URL, a shared
    password (sent in `X-Latchkey-Gateway-Password`) and a permissions
    override JWT (sent in `X-Latchkey-Gateway-Permissions-Override`) that
@@ -127,16 +135,15 @@ latchkey 2.8.0 features:
   hard-coded sentinel path and SHA-256-hashes the resulting JWT. That
   way the password is stable across desktop-client restarts without
   minds having to persist it in plaintext anywhere.
-* **Per-agent permission overrides.** When an agent is created, minds
-  allocates an opaque
-  `~/.minds/latchkey/permissions/<uuid>.json` handle, materializes it
-  with empty `rules` (deny-all baseline), and mints a
-  permissions-override JWT pointing at that path via
-  `latchkey gateway create-jwt`. The JWT is injected into the agent's
-  environment as `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE` *at*
-  `mngr create` *time*, so the agent's first ever `latchkey` call
-  already carries it in the
-  `X-Latchkey-Gateway-Permissions-Override` header.
+* **Per-agent permissions.** When an agent is created, minds allocates an
+  opaque `~/.minds/latchkey/permissions/<uuid>.json` handle and materializes it
+  with the deny-by-default baseline. For a desktop-gateway workspace, minds
+  mints a permissions-override JWT pointing at that handle and injects it as
+  `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE` at `mngr create` time. For a
+  VPS-gateway workspace, the environment omits that override: native requests
+  use the VPS gateway's synchronized default `~/.latchkey/permissions.json`.
+  Its desktop-forwarding extension holds a separate desktop-target JWT and
+  replaces the override header only on requests it forwards.
 
   After `mngr create` returns the canonical agent id, minds replaces
   the opaque file with a symlink pointing at
@@ -224,12 +231,12 @@ Minds exposes a cross-workspace management API (`/api/v1/workspaces/...`)
 that lets an agent in one workspace act on *other* workspaces -- listing,
 reading detail/version/backups, creating, destroying, starting/stopping,
 exporting and managing backups, establishing SSH access, updating settings,
-recovering (health check / restart), and managing service sharing. It is
+and recovering (health check / restart). It is
 reached through the same `minds-api-proxy` extension and gated by a single
 `minds-workspaces` detent scope with one named permission per verb
 (`minds-workspaces-read`, `-create`, `-destroy`, `-lifecycle`,
-`-backups-export`, `-backups-manage`, `-ssh`, `-update`, `-recover`,
-`-sharing`). Nothing is
+`-backups-export`, `-backups-manage`, `-ssh`, `-update`,
+`-recover`). Nothing is
 pre-granted, so an agent's first cross-workspace call gets a 403 until the
 user approves; the scope and verb schemas are not part of the agent baseline
 at all -- they arrive, fully self-described, with the grant (see below).
@@ -248,7 +255,7 @@ The verbs split on a **target axis**:
   workspace (listing does not leak per-target data, and create takes no
   target).
 * `destroy`, `lifecycle`, `backups-export`, `backups-manage`, `ssh`,
-  `update`, `recover`, and `sharing` are *target-scoped*.
+  `update`, and `recover` are *target-scoped*.
   A "selected" grant for one of these verbs mints a **uniquely-named
   per-target permission schema** (`minds-workspaces-<verb>-<target_id>`)
   whose path pins that single workspace; an "all workspaces" grant uses

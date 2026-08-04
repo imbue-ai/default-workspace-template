@@ -886,7 +886,6 @@ Assembled on clean DEFAULT_WORKSPACE_TEMPLATE base <BASE_REF> (provenance link o
     && test "$(git rev-list --count "$SNAPSHOT_COMMIT")" -gt 1 \
     && git \
     -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
-    -c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" \
     push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo_name>.git" "${SNAPSHOT_COMMIT}:refs/heads/main" )
 ```
 

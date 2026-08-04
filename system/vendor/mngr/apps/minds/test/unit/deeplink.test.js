@@ -42,8 +42,9 @@ test('git_url only', () => {
     gitUrl: 'https://github.com/imbue-ai/example',
     branch: '',
   });
-  // A repo-carrying link is an Inspiration link: it targets the Create from
-  // Inspiration page rather than the plain create form.
+  // A repo-carrying link is an Inspiration link: the target is the Create
+  // from Inspiration page, which offers both creating a new machine and
+  // adding the Inspiration to an existing one.
   assert.equal(deeplinkTargetPath(url), '/create/inspiration?git_url=https%3A%2F%2Fgithub.com%2Fimbue-ai%2Fexample');
 });
 
@@ -71,6 +72,24 @@ test('git_url containing its own query survives the decode/re-encode round trip'
   const url = 'minds://create?git_url=https%3A%2F%2Fhost%2Frepo.git%3Ftoken%3Dabc';
   assert.equal(parseDeeplink(url).gitUrl, 'https://host/repo.git?token=abc');
   assert.equal(deeplinkTargetPath(url), '/create/inspiration?git_url=https%3A%2F%2Fhost%2Frepo.git%3Ftoken%3Dabc');
+});
+
+test('target allowlist property: output is null or a fixed create path', () => {
+  const inputs = [
+    'minds://create?git_url=x&branch=y',
+    'minds://create?git_url=javascript%3Aalert(1)',
+    'minds://create/../../etc/passwd?git_url=x',
+    'minds://create',
+    'minds://elsewhere',
+    null,
+  ];
+  for (const input of inputs) {
+    const out = deeplinkTargetPath(input);
+    assert.ok(
+      out === null || out === '/create' || out.startsWith('/create?') || out.startsWith('/create/inspiration?'),
+      `unexpected: ${out}`
+    );
+  }
 });
 
 test('branch with slash and space is re-encoded', () => {

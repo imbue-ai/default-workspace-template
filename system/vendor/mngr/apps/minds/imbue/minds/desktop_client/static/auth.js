@@ -1,33 +1,29 @@
 // Sign-up / sign-in tab handling + OAuth polling. Tab switches via
 // data-show-tab, OAuth via data-oauth. Keeps markup JS-free.
 (function () {
-  // Where to land after a successful sign-in. When the page carries a
-  // ``return_to`` query param (e.g. the create page sent a signed-out user
-  // here to enable the remote preset), forward it to /post-login so the
-  // server returns them there; /post-login re-validates it as a safe path.
-  function postLoginUrl() {
-    var returnTo = new URLSearchParams(window.location.search).get('return_to');
-    return returnTo ? '/post-login?return_to=' + encodeURIComponent(returnTo) : '/post-login';
-  }
-
   // How to perform a post-auth navigation. The standalone auth page just
   // navigates this page (window.location). When this form is hosted in the
-  // create screen's sign-in modal -- its own WebContentsView in the desktop
-  // client's overlay layer -- the host page sets ``window.MINDS_AUTH_NAV`` to
-  // route the navigation to the content view *behind* the modal and dismiss the
-  // overlay; reloading this page would only reload the overlay.
+  // create screen's sign-in modal -- an overlay-layer iframe in the chrome
+  // shell -- the host page sets ``window.MINDS_AUTH_NAV`` to route the
+  // navigation to the shell *behind* the modal and dismiss the overlay;
+  // reloading this page would only reload the overlay.
   function authNavigate(url) {
     if (typeof window.MINDS_AUTH_NAV === 'function') window.MINDS_AUTH_NAV(url);
     else window.location.href = url;
   }
 
-  // What to do after a successful sign-in / OAuth. The sign-in modal sets
-  // ``window.MINDS_AUTH_RETURN_TO`` to the create screen so the user lands back
-  // there signed in (and clicks "Create" again); the standalone auth page has
-  // no such hint and goes through /post-login (which may carry its own
-  // ?return_to=).
+  // What to do after a successful sign-in / OAuth. Always land via
+  // /post-login so the server decides the destination in one hop: the
+  // consent gate first when it is still unanswered, then the return path.
+  // (Navigating the shell straight to the return path let the
+  // welcome screen and the consent gate fight over it after the modal
+  // closed -- a flash of welcome, then consent, then the destination.)
+  // The sign-in modal sets ``window.MINDS_AUTH_RETURN_TO`` (the create
+  // screen) as the return path; the standalone auth page carries its own
+  // ?return_to= query param.
   function onAuthSuccess() {
-    authNavigate(window.MINDS_AUTH_RETURN_TO || postLoginUrl());
+    var rt = window.MINDS_AUTH_RETURN_TO || new URLSearchParams(window.location.search).get('return_to');
+    authNavigate('/post-login' + (rt ? '?return_to=' + encodeURIComponent(rt) : ''));
   }
 
   // Where to return after an email-verification round-trip (sign-up, or
@@ -43,9 +39,33 @@
     return window.MINDS_AUTH_RETURN_TO || null;
   }
 
-  function goToCheckEmail() {
+  // Shared outcome of a successful /auth/api/signup or /auth/api/signin
+  // response. Paid-listed accounts are auto-verified server-side and sign in
+  // directly; everyone else must verify before the account activates. The
+  // "Signing you in..." status box keeps the (shell-held) modal meaningful
+  // while the destination page loads behind it.
+  function completeAuthOk(data) {
+    if (data.needsEmailVerification) {
+      goToCheckEmail(data.email);
+    } else {
+      oauthSetMessage('Signing you in...', OAUTH_STATUS_CLASS);
+      onAuthSuccess();
+    }
+  }
+
+  function goToCheckEmail(email) {
+    var params = new URLSearchParams();
+    // The pending account is deliberately invisible to the server's account
+    // list until it verifies, so the page must be told whose inbox to watch.
+    if (email) params.set('email', email);
     var rt = verificationReturnTo();
-    authNavigate('/auth/check-email' + (rt ? '?return_to=' + encodeURIComponent(rt) : ''));
+    if (rt) params.set('return_to', rt);
+    // Verification must win over a queued modal-restore detour: restoring the
+    // workspace-options panel here would cover the check-email page and the
+    // account would never finish signing in.
+    window.MINDS_AUTH_CAN_RESTORE = false;
+    var qs = params.toString();
+    authNavigate('/auth/check-email' + (qs ? '?' + qs : ''));
   }
 
   function showTab(tab) {
@@ -118,7 +138,7 @@
       });
       var data = await res.json();
       if (data.status === 'OK') {
-        goToCheckEmail();
+        completeAuthOk(data);
       } else if (data.status === 'EMAIL_ALREADY_EXISTS' || data.status === 'FIELD_ERROR') {
         showError('signup', data.message);
       } else {
@@ -149,8 +169,7 @@
       });
       var data = await res.json();
       if (data.status === 'OK') {
-        if (data.needsEmailVerification) goToCheckEmail();
-        else onAuthSuccess();
+        completeAuthOk(data);
       } else if (data.status === 'WRONG_CREDENTIALS') {
         showSigninCredentialsError(data.message);
       } else {
@@ -230,15 +249,13 @@
   // Sign-in just completed in the external browser, which stole OS focus. Ask
   // the shell to bring the whole Minds app to the front (stealing focus back
   // from the browser) so the user lands in Minds instead of having to alt-tab.
-  // On the standalone /auth page (content view) there is no window.minds bridge,
-  // so we post an allowlisted message the content-relay preload forwards; in the
-  // sign-in modal (overlay view) the bridge is present.
+  // Every auth surface runs under the assembled shell bridge now (a hub page,
+  // or a modal iframe resolving the parent's bridge); in a plain browser the
+  // call is a harmless no-op.
   function bringMindsToFront() {
     try {
       if (window.minds && typeof window.minds.bringAppToFront === 'function') {
         window.minds.bringAppToFront();
-      } else {
-        window.postMessage({ type: 'minds:bring-app-to-front' }, '*');
       }
     } catch (e) { /* best-effort; never block sign-in on it */ }
   }
