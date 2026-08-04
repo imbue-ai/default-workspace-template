@@ -35,7 +35,7 @@ import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { apiUrl, getPrimaryAgentId } from "../base-path";
+import { apiUrl, getPrimaryAgentId, isCodexEnabled, isSillyModelsEnabled } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
@@ -191,7 +191,8 @@ interface PanelParams {
 
 // Modal state
 let showNewChatModal = false;
-let showNewAgentModal = false;
+let showNewCodexModal = false;
+let sillyModalMode: "silly-claude" | "silly-codex" | null = null;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
 // pre-filled with the name the user typed and the daemon's reason, so the user
@@ -794,6 +795,40 @@ function buildDropdownItems(
     },
   });
 
+  // New codex agent -- the same `chat` role as the entry above, stacked on the
+  // `codex` harness template instead of `claude`, in the primary's work_dir.
+  // Gated behind FEATURE_FLAG_ENABLE_CODEX (delivered via meta tag) so codex can
+  // be dark-launched; hidden unless the host explicitly enables it.
+  if (isCodexEnabled()) {
+    items.push({
+      label: "New Codex Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewCodexModal = true;
+        m.redraw();
+      },
+    });
+  }
+
+  if (isSillyModelsEnabled()) {
+  items.push({
+    label: "New Silly Claude",
+    action: () => {
+      newTabTargetGroup = targetGroup ?? null;
+      sillyModalMode = "silly-claude";
+      m.redraw();
+    },
+  });
+  items.push({
+    label: "New Silly Codex",
+    action: () => {
+      newTabTargetGroup = targetGroup ?? null;
+      sillyModalMode = "silly-codex";
+      m.redraw();
+    },
+  });
+  }
+
   // New terminal -- allocates a fresh named tmux session anchored at the
   // primary agent's work_dir.
   items.push({
@@ -821,16 +856,6 @@ function buildDropdownItems(
       showNewBrowserModal = true;
       m.redraw();
     },
-  });
-
-  items.push({
-    label: "New agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewAgentModal = true;
-      m.redraw();
-    },
-    dividerAfter: true,
   });
 
   // --- Named-layout section ---
@@ -2901,17 +2926,33 @@ export const DockviewWorkspace: m.Component = {
             })
           : null,
 
-        showNewAgentModal
+        showNewCodexModal
           ? m(CreateAgentModal, {
-              mode: "worktree",
+              mode: "codex",
               onCreated(newAgentId: string, newAgentName: string) {
-                showNewAgentModal = false;
+                showNewCodexModal = false;
                 const targetGroup = newTabTargetGroup;
                 newTabTargetGroup = null;
                 focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
               },
               onCancel() {
-                showNewAgentModal = false;
+                showNewCodexModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        sillyModalMode
+          ? m(CreateAgentModal, {
+              mode: sillyModalMode,
+              onCreated(newAgentId: string, newAgentName: string) {
+                sillyModalMode = null;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                sillyModalMode = null;
                 newTabTargetGroup = null;
               },
             })

@@ -16,6 +16,12 @@ export interface AgentState {
   state: string;
   labels: Record<string, string>;
   work_dir: string | null;
+  // The agent's harness ("claude", "codex", ...), from the backend. Carried for
+  // debugging and as the seam a future per-harness message detector would key on (see
+  // message-classification.ts, whose table is Claude Code's). NOTHING in the frontend
+  // reads it today: every harness difference is resolved backend-side, tool calls
+  // arrive pre-labelled, and activity arrives as an already-derived state.
+  harness?: string;
   // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the
   // system interface has no per-agent activity tracking available (e.g.
   // remote agents whose state directory is not present on this host,
@@ -49,7 +55,7 @@ export interface TerminalSessionInfo {
 export interface ProtoAgent {
   agent_id: string;
   name: string;
-  creation_type: "worktree" | "chat";
+  creation_type: "chat";
   parent_agent_id: string | null;
 }
 
@@ -274,7 +280,7 @@ function handleEvent(event: WsEvent): void {
       protoAgents.push({
         agent_id: event.agent_id,
         name: event.name,
-        creation_type: event.creation_type as "worktree" | "chat",
+        creation_type: event.creation_type as "chat",
         parent_agent_id: event.parent_agent_id,
       });
       break;

@@ -1032,6 +1032,32 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         assert "system-interface-hostname" in response.text
 
 
+def test_index_enable_codex_meta_tag_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The codex feature flag is injected and defaults to off (button hidden)."""
+    monkeypatch.delenv("FEATURE_FLAG_ENABLE_CODEX", raising=False)
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(build_test_state()).test_client().get("/")
+        assert response.status_code == 200
+        assert '<meta name="system-interface-enable-codex" content="false">' in response.text
+
+
+def test_index_enable_codex_meta_tag_on_when_flag_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting FEATURE_FLAG_ENABLE_CODEX to a truthy value flips the injected flag on."""
+    monkeypatch.setenv("FEATURE_FLAG_ENABLE_CODEX", "1")
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(build_test_state()).test_client().get("/")
+        assert response.status_code == 200
+        assert '<meta name="system-interface-enable-codex" content="true">' in response.text
+
+
 def test_random_name_endpoint(client: FlaskClient) -> None:
     """The random name endpoint returns a non-empty name."""
     response = client.get("/api/random-name")
@@ -1053,16 +1079,6 @@ def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> 
     assert response.status_code == 400
 
 
-def test_create_worktree_agent_missing_agent(client: FlaskClient) -> None:
-    """Creating a worktree agent with an unknown selected agent returns 400."""
-    response = client.post(
-        "/api/agents/create-worktree",
-        json={"name": "test-worktree", "selected_agent_id": "nonexistent"},
-    )
-    assert response.status_code == 400
-
-
-@pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     """The WebSocket endpoint sends agents_updated and apps_updated on connect."""
     with serve_app(app) as served:
@@ -1560,7 +1576,8 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
         # synchronously. Assert before ``stop()``, which clears these
         # caches alongside the marker watchers.
         with manager._lock:
-            assert manager._has_unmatched_tool_use_by_agent[agent_id] is True
+            tracker = manager._activity_tracker_by_agent[agent_id]
+            assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.TOOL_RUNNING
             assert manager._activity_state_by_agent[agent_id] == ActivityState.TOOL_RUNNING
     finally:
         manager.stop()

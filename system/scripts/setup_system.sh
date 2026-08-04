@@ -35,6 +35,7 @@ fi
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
+: "${CODEX_VERSION:=0.146.0}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
@@ -214,6 +215,11 @@ fi
 apt-get update
 apt-get install -y --no-install-recommends nodejs npm
 rm -rf /var/lib/apt/lists/*
+
+# Codex CLI (pinned; npm-installed, needs Node.js above). Keep in sync with
+# agent_types.codex.version in .mngr/settings.toml.
+npm install -g "@openai/codex@${CODEX_VERSION}"
+command -v codex >/dev/null
 
 # apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the
 # environment record under ~/.mngr/plugin/env-converge re-captures from dpkg's

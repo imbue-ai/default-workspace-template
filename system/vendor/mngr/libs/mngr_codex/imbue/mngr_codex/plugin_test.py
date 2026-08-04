@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from typing import cast
 
@@ -28,6 +29,7 @@ from imbue.mngr.errors import AgentInstallationError
 from imbue.mngr.errors import PluginMngrError
 from imbue.mngr.errors import UserInputError
 from imbue.mngr.interfaces.data_types import CommandResult
+from imbue.mngr.interfaces.data_types import FileType
 from imbue.mngr.interfaces.host import CreateAgentOptions
 from imbue.mngr.interfaces.host import HostLocation
 from imbue.mngr.interfaces.host import OnlineHostInterface
@@ -38,6 +40,8 @@ from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
@@ -101,12 +105,15 @@ def test_codex_agent_subclasses_interactive_tui_agent() -> None:
 
 
 def test_codex_agent_advertises_tui_ready_indicator() -> None:
-    """The ready indicator is a fixed header string that renders with the input composer.
+    """The ready indicator is the pinned composer prompt glyph, mirroring claude's ``❯``.
 
     codex has no pre-input readiness hook (SessionStart fires lazily on the first
-    prompt), so this banner poll is the readiness signal.
+    prompt), so readiness screen-scrapes. The prompt is scraped (not the ``/model to
+    change`` header) because the header scrolls out of the visible pane once a turn
+    renders enough output, intermittently hanging the next send; the prompt is pinned
+    at the bottom and never scrolls off.
     """
-    assert CodexAgent.TUI_READY_INDICATOR == "/model to change"
+    assert CodexAgent.TUI_READY_INDICATOR == "›"
 
 
 def test_codex_agent_implements_submission_evidence_probes() -> None:
@@ -1368,3 +1375,50 @@ def test_on_before_create_fails_fast_on_a_bad_adopt_id(local_provider: LocalProv
     args = _on_before_create_args(local_provider, adopt_session=("not-a-real-session-id",))
     with pytest.raises(UserInputError):
         on_before_create(args, local_provider.mngr_ctx)
+
+
+class _StyleReadingHost:
+    """Minimal host exposing only what ``read_output_style_files`` touches."""
+
+    def __init__(self, styles_dir: Path, style_body: str) -> None:
+        self._styles_dir = styles_dir
+        self._style_body = style_body
+
+    def path_exists(self, path: Path) -> bool:
+        return path == self._styles_dir
+
+    def list_directory(self, path: Path, recursive: bool = False) -> list[Any]:
+        return [SimpleNamespace(path="engineering-subordinate.md", file_type=FileType.FILE)]
+
+    def read_text_file(self, path: Path) -> str:
+        return self._style_body
+
+
+def test_a_style_and_every_stacked_prompt_reach_codex_developer_instructions(tmp_path: Path) -> None:
+    """Codex has no output-style concept, so the style body and the prompts share one channel.
+
+    Each stacked role's block comes first in order, then the style body verbatim (frontmatter
+    included, so a style reads identically whichever harness runs it). Three sentinels, so a
+    dropped or reordered piece is visible rather than inferred.
+    """
+    styles_dir = tmp_path / ".agents" / "output-styles"
+    style_body = "---\nname: Engineering Subordinate\n---\nSENTINEL_C"
+    agent = CodexAgent.model_construct(
+        agent_config=CodexAgentConfig(
+            output_style=OutputStyleName("Engineering Subordinate"),
+            append_system_prompt=(SystemPromptText("SENTINEL_A"), SystemPromptText("SENTINEL_B")),
+        ),
+        work_dir=str(tmp_path),
+    )
+    instructions = agent._build_developer_instructions(cast(Any, _StyleReadingHost(styles_dir, style_body)))
+
+    assert instructions is not None
+    for sentinel in ("SENTINEL_A", "SENTINEL_B", "SENTINEL_C"):
+        assert sentinel in instructions, f"{sentinel} missing from developer_instructions"
+    # Roles in stack order, style last.
+    assert instructions.index("SENTINEL_A") < instructions.index("SENTINEL_B") < instructions.index("SENTINEL_C")
+
+
+def test_codex_developer_instructions_is_none_when_no_role_contributed_anything() -> None:
+    agent = CodexAgent.model_construct(agent_config=CodexAgentConfig(), work_dir="/nonexistent")
+    assert agent._build_developer_instructions(cast(Any, object())) is None

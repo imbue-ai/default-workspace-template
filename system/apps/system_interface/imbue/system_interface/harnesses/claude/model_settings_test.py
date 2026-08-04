@@ -3,11 +3,11 @@
 import json
 from pathlib import Path
 
-from imbue.system_interface.model_settings import DEFAULT_MODEL_ID
-from imbue.system_interface.model_settings import base_alias
-from imbue.system_interface.model_settings import is_valid_model_id
-from imbue.system_interface.model_settings import read_model_from_settings
-from imbue.system_interface.model_settings import supports_fast_mode
+from imbue.system_interface.harnesses.claude.model_settings import DEFAULT_MODEL_ID
+from imbue.system_interface.harnesses.claude.model_settings import base_alias
+from imbue.system_interface.harnesses.claude.model_settings import is_valid_model_id
+from imbue.system_interface.harnesses.claude.model_settings import read_model_from_settings
+from imbue.system_interface.harnesses.claude.model_settings import supports_fast_mode
 
 
 def test_catalog_ids_are_accepted_and_others_rejected() -> None:

@@ -1,3 +1,4 @@
+import json
 import string
 import sys
 import uuid
@@ -21,7 +22,11 @@ from imbue.concurrency_group.errors import ProcessError
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
+from imbue.mngr.config.agent_alias_registry import normalize_agent_type_name
+from imbue.mngr.config.agent_config_registry import get_agent_config_class
+from imbue.mngr.config.agent_config_registry import list_registered_agent_config_types
 from imbue.mngr.config.data_types import CommonCliOptions
+from imbue.mngr.config.data_types import CreateCliOptions
 from imbue.mngr.config.data_types import CreateTemplateName
 from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.config.data_types import MngrContext
@@ -788,6 +793,17 @@ def apply_create_template(
     # Start with existing params
     updated_params = params.copy()
 
+    # Template keys that are not create options, gathered for the agent-type routing
+    # pass below. ``known_option_names`` is the command's real option set, so a key absent
+    # from this particular params dict is not mistaken for a non-option.
+    pending_agent_type_keys: list[tuple[str, str, Any]] = []
+    # The DECLARED create-option schema, not the click context: a caller may build a
+    # context whose command carries no params (tests do), and mistaking a real option for a
+    # role key would route it at an agent type that has no such setting.
+    known_option_names = (
+        set(CreateCliOptions.model_fields) | {param.name for param in ctx.command.params if param.name} | set(params)
+    )
+
     # Apply each template in order
     for template_name in template_names:
         try:
@@ -818,6 +834,15 @@ def apply_create_template(
             is_extend = is_extend_key(raw_key)
             param_name = bare_key(raw_key) if is_extend else raw_key
             if param_name not in params:
+                if param_name in known_option_names:
+                    # A real create option that this params dict simply does not carry
+                    # (synthetic contexts in tests). Nothing to merge against.
+                    continue
+                # Not a create option at all. It may still be a field on the agent type
+                # this create resolves to -- a role setting harness behaviour
+                # (output_style, append_system_prompt). Defer: the type is only final once
+                # every template has been applied, since a harness template is what sets it.
+                pending_agent_type_keys.append((template_name, raw_key, template_value))
                 continue
 
             existing_value = updated_params[param_name]
@@ -850,7 +875,87 @@ def apply_create_template(
             else:
                 updated_params[param_name] = template_value
 
+    if pending_agent_type_keys:
+        updated_params = _route_template_keys_to_agent_type(updated_params, pending_agent_type_keys)
+
     return updated_params
+
+
+def _agent_config_fields(agent_type: str) -> frozenset[str]:
+    """Field names on ``agent_type``'s config class.
+
+    ``get_agent_config_class`` falls back to the base ``AgentTypeConfig`` for a type with no
+    registered class, so an unregistered type simply reports the base fields -- which is the
+    right answer here: it genuinely does not carry a harness's own settings.
+    """
+    return frozenset(get_agent_config_class(str(normalize_agent_type_name(agent_type))).model_fields)
+
+
+def _route_template_keys_to_agent_type(
+    params: dict[str, Any],
+    pending: list[tuple[str, str, Any]],
+) -> dict[str, Any]:
+    """Route template keys that are not create options to the resolved agent type's config.
+
+    A role states harness behaviour once -- ``output_style = "..."`` or
+    ``append_system_prompt__extend = [...]`` -- and it has to land on whichever agent type
+    the stack resolved to, so no role ever names a harness. Each such key is compiled into
+    a ``--setting`` entry (``agent_types.<type>.<key>=<json>``) and appended to
+    ``params["setting"]``; the existing template-contributed-settings pass folds those into
+    the config, so this reuses the pipe rather than adding a second one. The operator suffix
+    is carried through untouched, which is what makes ``__extend`` accumulate across a stack.
+
+    A key that is neither a create option nor a field on that type's config raises. That is
+    deliberate and it is the point of routing at all: the previous behaviour silently
+    dropped anything unrecognised, so a typo -- or a role stacked onto a harness that cannot
+    honour it -- produced an agent that quietly ignored its role.
+    """
+    agent_type = params.get("type")
+    if not agent_type:
+        # No type is resolvable here: the config default is applied later in the pipeline,
+        # and a create with no type at all is rejected by the type resolver with a better
+        # message than this pass could give. Leave the keys untouched for that layer.
+        return params
+
+    known_fields = _agent_config_fields(str(agent_type))
+    # Accumulate per field BEFORE emitting, because each `--setting` entry extends the
+    # base config independently: two entries carrying `field__extend` would each extend the
+    # empty base and the later one would simply win, silently dropping the earlier role's
+    # contribution. Combining here means one entry per field, whose value already holds
+    # every stacked role's blocks in order.
+    combined: dict[str, Any] = {}
+    for template_name, raw_key, template_value in pending:
+        field_name = bare_key(raw_key) if is_extend_key(raw_key) else raw_key
+        if field_name not in known_fields:
+            supported = sorted(
+                type_name
+                for type_name in list_registered_agent_config_types()
+                if field_name in _agent_config_fields(type_name)
+            )
+            message = (
+                f"Template '{template_name}' sets '{raw_key}', which is neither a `mngr create` "
+                f"option nor a setting of agent type '{agent_type}'."
+            )
+            if supported:
+                message += f" Supported by: {', '.join(supported)}."
+            raise UserInputError(message)
+        if is_extend_key(raw_key):
+            # The SAME extend algebra a real option gets (`env__extend` and friends), so an
+            # agent-type setting stacks identically -- no second implementation to drift.
+            combined[raw_key] = _apply_template_extend(
+                combined.get(raw_key, ()),
+                template_value,
+                template_name=template_name,
+                param_name=field_name,
+            )
+        else:
+            # Bare key: assign-by-default, so the last role wins -- matching a scalar option.
+            combined[raw_key] = template_value
+
+    settings = list(params.get("setting", ()))
+    settings.extend(f"agent_types.{agent_type}.{key}={json.dumps(value)}" for key, value in combined.items())
+    params["setting"] = tuple(settings)
+    return params
 
 
 def _apply_template_extend(

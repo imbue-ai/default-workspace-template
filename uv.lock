@@ -511,17 +511,17 @@ name = "browser-use-core"
 version = "0.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "beautifulsoup4", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "cdp-use", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "curl-cffi", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "fetch-use", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "lxml", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "pandas", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "pillow", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "pypdf", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "requests", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "tabulate", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "websocket-client", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "beautifulsoup4" },
+    { name = "cdp-use" },
+    { name = "curl-cffi" },
+    { name = "fetch-use" },
+    { name = "lxml" },
+    { name = "pandas" },
+    { name = "pillow" },
+    { name = "pypdf" },
+    { name = "requests" },
+    { name = "tabulate" },
+    { name = "websocket-client" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e3/ec/ab55e6127ed9dcafef3a5c030c992f0dc9ed2751f8505e2b849ffdc1f7e3/browser_use_core-0.13.1-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:5963365bef99d621a2ee678ade53458f032a17290d0b5810ceec6fd46f6d03ee", size = 25267945, upload-time = "2026-06-10T00:48:53.763Z" },
@@ -952,9 +952,9 @@ name = "curl-cffi"
 version = "0.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "certifi", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "cffi", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "rich", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "certifi" },
+    { name = "cffi" },
+    { name = "rich" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/48/5b/89fcfebd3e5e85134147ac99e9f2b2271165fd4d71984fc65da5f17819b7/curl_cffi-0.15.0.tar.gz", hash = "sha256:ea0c67652bf6893d34ee0f82c944f37e488f6147e9421bef1771cc6545b02ded", size = 196437, upload-time = "2026-04-03T11:12:31.525Z" }
 wheels = [
@@ -1011,6 +1011,7 @@ dependencies = [
 dev = [
     { name = "imbue-mngr" },
     { name = "imbue-mngr-claude" },
+    { name = "imbue-mngr-codex" },
     { name = "import-linter" },
     { name = "inline-snapshot" },
     { name = "mngr-cli-contract" },
@@ -1043,6 +1044,7 @@ requires-dist = [
 dev = [
     { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
     { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
+    { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "inline-snapshot", specifier = ">=0.31" },
     { name = "mngr-cli-contract", editable = "system/libs/mngr_cli_contract" },
@@ -1858,6 +1860,7 @@ dependencies = [
     { name = "pygtail" },
     { name = "pyinfra" },
     { name = "python-dotenv" },
+    { name = "python-frontmatter" },
     { name = "requests" },
     { name = "resource-guards" },
     { name = "rich" },
@@ -1888,6 +1891,7 @@ requires-dist = [
     { name = "pygtail", specifier = ">=0.14.0" },
     { name = "pyinfra", specifier = ">=3.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "python-frontmatter", specifier = ">=1.1.0" },
     { name = "requests", specifier = ">=2.26" },
     { name = "resource-guards", editable = "system/vendor/mngr/libs/resource_guards" },
     { name = "rich", specifier = ">=13.0" },
@@ -1917,6 +1921,17 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "imbue-mngr-modal", editable = "system/vendor/mngr/libs/mngr_modal" }]
+
+[[package]]
+name = "imbue-mngr-codex"
+version = "0.1.4"
+source = { editable = "system/vendor/mngr/libs/mngr_codex" }
+dependencies = [
+    { name = "imbue-mngr" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" }]
 
 [[package]]
 name = "import-linter"
@@ -2613,9 +2628,9 @@ name = "pandas"
 version = "3.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "python-dateutil", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
-    { name = "tzdata", marker = "(platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
+    { name = "numpy" },
+    { name = "python-dateutil" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/4f/5f3422a2afec5ffc46308b79e53291365a93748b498ac2e58bead0197916/pandas-3.0.5.tar.gz", hash = "sha256:dca3734d6ab7c906e6730f0788b0a1dbb9f2467731f9711f77995c8e9d62d712", size = 4658219, upload-time = "2026-07-22T22:19:28.819Z" }
 wheels = [
@@ -6104,6 +6119,18 @@ wheels = [
 ]
 
 [[package]]
+name = "python-frontmatter"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/e8/79cbe69864d44f3b48e70ebee0a872a7d5a4e7150c9f8577ed7a5beefff0/python_frontmatter-1.3.0.tar.gz", hash = "sha256:acc73e477a568dc2a25c9e130c6c68ae8daa8c204c8f7e813db47d6a7280dcf2", size = 8322, upload-time = "2026-05-20T19:21:44.164Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/a3/17c284b4f4d8ad50f0f9ba70ad8fcc35c777aeafcdbbffdd91bbdc5ab379/python_frontmatter-1.3.0-py3-none-any.whl", hash = "sha256:9f7dd9260bec99044219159a329f64f039087f9d1a2124c9442556f2fe6f82ec", size = 10562, upload-time = "2026-05-20T19:21:43.323Z" },
+]
+
+[[package]]
 name = "python-multipart"
 version = "0.0.32"
 source = { registry = "https://pypi.org/simple" }
@@ -6698,6 +6725,7 @@ dependencies = [
     { name = "imbue-common" },
     { name = "imbue-mngr" },
     { name = "imbue-mngr-claude" },
+    { name = "imbue-mngr-codex" },
     { name = "oom-priority" },
     { name = "pexpect" },
     { name = "pluggy" },
@@ -6733,6 +6761,7 @@ requires-dist = [
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
     { name = "imbue-mngr-claude", editable = "system/vendor/mngr/libs/mngr_claude" },
+    { name = "imbue-mngr-codex", editable = "system/vendor/mngr/libs/mngr_codex" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pexpect", specifier = ">=4.9" },
     { name = "pluggy", specifier = ">=1.5" },
