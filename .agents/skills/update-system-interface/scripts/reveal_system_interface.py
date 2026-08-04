@@ -14,24 +14,39 @@ What it does, given the pre-merge revision (``--rollback-to``):
 1. Refuse to run on a dirty tree (so a rollback can never clobber unrelated work).
 2. Classify what changed since the known-good revision (frontend src / frontend
    manifest / backend src / backend manifest).
-3. Refresh dependencies only if a manifest changed (``npm ci`` / ``uv tool
+3. Snapshot the built ``static/`` bundle. Both destructive steps below delete
+   before they produce (``npm ci`` removes ``node_modules``; the build empties
+   the bundle directory), so without a copy taken first, a failure part-way
+   leaves nothing to serve and recovery has only the failed build to retry.
+4. Refresh dependencies only if a manifest changed (``npm ci`` / ``uv tool
    install -e system/apps/system_interface --reinstall``). A plain restart does NOT
    re-resolve the editable tool's dependencies, so a backend dependency add
    would otherwise crash the service on restart.
-4. For a backend change, *pre-flight* the merged code on a throwaway port before
+5. For a backend change, *pre-flight* the merged code on a throwaway port before
    touching the live service -- if it cannot boot, the live service is never
    restarted and we go straight to rollback (the UI never went down).
-5. Build the frontend bundle, restart the backend, and tell open browsers to
-   reload, as applicable.
-6. Probe the live service's loopback endpoint until healthy (with a deadline).
-7. On ANY failure, restore the served tree to the known-good revision (as a
-   forward revert commit) and re-probe to *confirm* the UI is back. The live
-   backend is restarted during recovery only if the failed reveal had already
-   restarted it (a failed post-restart health check); when the failure happened
-   before the live restart (pre-flight, dependency refresh, frontend build) the
-   live service is still serving known-good code and is left untouched, so the
-   UI never blips. Only then does the script exit -- reporting what happened via
-   its exit code and stderr.
+6. Build the frontend bundle, restart the backend, and tell open browsers to
+   reload, as applicable. A build that exits 0 without writing a bundle counts
+   as a failure, not a success.
+7. Probe the live service's loopback endpoint until healthy (with a deadline),
+   and confirm the app shell really is the built app and that its module script
+   serves as JavaScript. The backend endpoint alone cannot see either failure:
+   the placeholder page and an unserved ``/assets`` path are both HTTP 200s to
+   it. This is scoped to a *regression* -- the same probe runs before the reveal
+   too, and only a frontend that was serving beforehand has to be serving after.
+   A workspace that arrived already broken gets the finding reported instead,
+   because rolling an unrelated change back would not fix it.
+8. On ANY failure, restore the served tree to the known-good revision (as a
+   forward revert commit), put the snapshotted bundle back, and re-probe to
+   *confirm* the UI is back. Restoring the snapshot needs neither ``npm`` nor a
+   registry, so a broken build environment can no longer take the UI down with
+   it; a rebuild is attempted only when there was no bundle to snapshot. The
+   live backend is restarted during recovery only if the failed reveal had
+   already restarted it (a failed post-restart health check); when the failure
+   happened before the live restart (pre-flight, dependency refresh, frontend
+   build) the live service is still serving known-good code and is left
+   untouched, so the UI never blips. Only then does the script exit -- reporting
+   what happened via its exit code and stderr.
 
 Run via bare ``python3`` (standard library only), like ``forward_port.py`` and
 ``reload_system_interface``'s predecessor -- it orchestrates the environment, so
@@ -81,9 +96,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -107,9 +125,20 @@ FRONTEND_DIR = f"{APP_DIR}/frontend"
 # will not build for it (see ``preview``): a work_dir without this bundle is a
 # worker that skipped its build, and the preview refuses it rather than boot the
 # backend's "Frontend not built" placeholder.
-FRONTEND_BUILD_INDEX = f"{APP_DIR}/imbue/system_interface/static/index.html"
+STATIC_DIR = f"{APP_DIR}/imbue/system_interface/static"
+FRONTEND_BUILD_INDEX = f"{STATIC_DIR}/index.html"
 TOOL_NAME = "system-interface"
 RELOAD_OP = "reload_system_interface"
+
+# Header the backend stamps on the app shell: ``false`` on the "not built"
+# placeholder, ``true`` on the real app. Checked rather than string-matching the
+# placeholder's markup, so the probe does not silently stop working when that
+# page is restyled.
+FRONTEND_BUILT_HEADER = "x-frontend-built"
+# The hashed module script the built index.html loads. Its presence is what
+# distinguishes the real app shell from the placeholder even on a backend too
+# old to send the header above.
+_ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 
 # Pre-merge preview: the deterministic boot + teardown of a previewable instance
 # is the shared ``serve_isolated_instance.py`` motion that every service flow
@@ -217,6 +246,20 @@ class Runner:
         return subprocess.run(list(argv), **kwargs)
 
 
+@dataclass(frozen=True)
+class FetchedPage:
+    """A fetched response body plus the headers the frontend probe reads."""
+
+    status: int
+    body: str
+    # Lower-cased header names, so callers need not care about the wire casing.
+    headers: dict[str, str]
+
+    @property
+    def content_type(self) -> str:
+        return self.headers.get("content-type", "")
+
+
 class HttpClient:
     """Indirection over the loopback HTTP calls (health probe + reload broadcast)."""
 
@@ -227,6 +270,23 @@ class HttpClient:
                 return int(response.status)
         except urllib.error.HTTPError as exc:
             return int(exc.code)
+        except (urllib.error.URLError, OSError):
+            return None
+
+    def get_page(self, url: str, timeout: float) -> FetchedPage | None:
+        """Fetch a GET with its body and headers, or ``None`` if unreachable.
+
+        Used by the frontend probe, which has to look at what came back rather
+        than only whether something did: the "frontend not built" placeholder is
+        a perfectly healthy HTTP 200.
+        """
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                headers = {key.lower(): value for key, value in response.headers.items()}
+                return FetchedPage(status=int(response.status), body=body, headers=headers)
+        except urllib.error.HTTPError as exc:
+            return FetchedPage(status=int(exc.code), body="", headers={})
         except (urllib.error.URLError, OSError):
             return None
 
@@ -293,7 +353,14 @@ def classify_changes(paths: Sequence[str]) -> ChangeSet:
             f"{FRONTEND_DIR}/package-lock.json",
         ):
             frontend_manifest = True
-        elif path.startswith(f"{FRONTEND_DIR}/src/"):
+        elif path.startswith(f"{FRONTEND_DIR}/"):
+            # Everything else under frontend/ counts, not just src/: index.html,
+            # vite.config.ts, tsconfig.json and the public assets all change the
+            # emitted bundle. Enumerating only src/ made those classify as no
+            # change at all, so the reveal reported "nothing to reveal" and left
+            # the merged tree serving a stale bundle. A tooling-only config
+            # (eslint, prettier) costs a redundant rebuild here, which is far
+            # cheaper than a missed one.
             frontend_src = True
         elif path == f"{APP_DIR}/pyproject.toml" or path == "uv.lock":
             backend_manifest = True
@@ -429,6 +496,93 @@ def _preflight_ok(
         spawned.terminate()
 
 
+def snapshot_bundle(repo_root: Path) -> Path | None:
+    """Copy the built bundle somewhere safe before anything can destroy it.
+
+    Both destructive steps of a reveal delete before they produce -- ``npm ci``
+    removes ``node_modules`` first and the build empties the bundle directory
+    first -- so a failure part-way leaves the workspace with no UI at all. Until
+    this existed, recovery held only a *recipe* for the known-good bundle (re-run
+    the very build that just failed) and not a copy of it, which is exactly how a
+    failed reveal could end with the served tree restored but nothing to serve.
+
+    Returns ``None`` when there is no bundle yet, which is not an error: a
+    workspace that never built one has nothing to lose.
+    """
+    bundle = repo_root / STATIC_DIR
+    if not (bundle / "index.html").exists():
+        return None
+    # Deliberately outside the repo: a stray directory inside it would dirty the
+    # tree and trip the next reveal's clean-tree precondition.
+    snapshot_root = Path(tempfile.mkdtemp(prefix="system-interface-bundle-"))
+    saved = snapshot_root / "static"
+    shutil.copytree(bundle, saved)
+    return saved
+
+
+def restore_bundle(saved: Path, repo_root: Path) -> None:
+    """Put a snapshotted bundle back, replacing whatever is there now."""
+    bundle = repo_root / STATIC_DIR
+    if bundle.exists():
+        shutil.rmtree(bundle)
+    shutil.copytree(saved, bundle)
+
+
+def _discard_snapshot(saved: Path | None) -> None:
+    if saved is not None:
+        shutil.rmtree(saved.parent, ignore_errors=True)
+
+
+def _assert_bundle_built(repo_root: Path, *, live_service_restarted: bool) -> None:
+    """Raise unless the build actually left a servable bundle behind.
+
+    A build tool that empties its output directory and then exits 0 without
+    writing (killed mid-run, a plugin that swallowed its own error) passes an
+    exit-code check while leaving nothing to serve. Treating that as success is
+    what turns a bad build into a blank UI.
+    """
+    index = repo_root / FRONTEND_BUILD_INDEX
+    if not index.exists():
+        raise RevealFailed(
+            f"the frontend build reported success but wrote no bundle ({index} is missing)",
+            live_service_restarted=live_service_restarted,
+        )
+
+
+def describe_frontend_failure(http: HttpClient, base_url: str) -> str | None:
+    """Return why the live UI is not serving a working frontend, or ``None``.
+
+    The backend health endpoint cannot answer this: ``/api/agents`` is happy
+    while the bundle is missing, and the placeholder page the user gets instead
+    is itself an HTTP 200. So this asks the two questions a browser would --
+    is this the real app shell, and does its module script actually load as
+    JavaScript -- which together cover both the missing-bundle state and the
+    blank screen an unserved ``/assets`` path produces.
+    """
+    shell = http.get_page(f"{base_url}{SERVE_PATH}", timeout=10.0)
+    if shell is None:
+        return "the live service did not answer a request for the app shell"
+    if shell.status != 200:
+        return f"the app shell returned HTTP {shell.status}"
+    if shell.headers.get(FRONTEND_BUILT_HEADER) == "false":
+        return "the live service is serving the 'frontend not built' placeholder -- the compiled bundle is missing"
+    match = _ASSET_REFERENCE_PATTERN.search(shell.body)
+    if match is None:
+        return "the app shell loads no bundled script, so it is not the built app"
+    asset_url = f"{base_url}/assets/{match.group(1)}"
+    asset = http.get_page(asset_url, timeout=10.0)
+    if asset is None:
+        return f"the live service did not answer a request for the bundled script {asset_url}"
+    if asset.status != 200:
+        return f"the bundled script {asset_url} returned HTTP {asset.status}"
+    if "javascript" not in asset.content_type:
+        return (
+            f"the bundled script {asset_url} came back as '{asset.content_type}' rather than JavaScript, "
+            "so the browser will refuse it and render a blank page"
+        )
+    return None
+
+
 def _broadcast_reload(http: HttpClient, base_url: str) -> None:
     """Tell open browsers to reload the whole UI. Best-effort: a no-op when no
     browser is connected, and never fatal on its own."""
@@ -466,6 +620,7 @@ def _apply_reveal(
     http: HttpClient,
     spawner: Spawner,
     sleeper: Callable[[float], None],
+    is_frontend_expected: bool,
 ) -> None:
     """Refresh deps, build, restart, and reload as applicable. Raises
     :class:`RevealFailed` the moment any step does not end healthy."""
@@ -474,6 +629,7 @@ def _apply_reveal(
         _run_checked(
             runner, ["npm", "run", "build"], repo_root / FRONTEND_DIR, "npm run build"
         )
+        _assert_bundle_built(repo_root, live_service_restarted=False)
     if changes.backend:
         if not _preflight_ok(repo_root, http, spawner, sleeper):
             # Live service was never restarted, so it is still serving known-good
@@ -501,6 +657,22 @@ def _apply_reveal(
                 "backend did not become healthy after restart",
                 live_service_restarted=True,
             )
+    # Confirm the user would actually see the app, not just that the backend
+    # answers. Scoped to a *regression*: only a frontend that was serving before
+    # this reveal has to be serving after it. A workspace that arrived already
+    # broken gets the finding reported rather than a rollback, because rolling
+    # an unrelated change back would not fix it and would lose the change.
+    frontend_failure = describe_frontend_failure(http, base_url)
+    if frontend_failure is not None:
+        if is_frontend_expected:
+            raise RevealFailed(
+                f"the live UI stopped serving a working frontend: {frontend_failure}",
+                live_service_restarted=changes.backend,
+            )
+        sys.stderr.write(
+            f"warning: the live UI is not serving a working frontend, and was not before this "
+            f"reveal either, so it was not rolled back for it: {frontend_failure}\n"
+        )
     if changes.frontend:
         _broadcast_reload(http, base_url)
 
@@ -514,8 +686,8 @@ def _restore_tree(
     """Restore every changed path to its ``rollback_to`` state, staged for commit.
 
     Added-since paths are removed; modified/deleted paths are checked out from
-    the known-good revision. Build output is gitignored and untouched here -- the
-    recovery rebuild regenerates it.
+    the known-good revision. Build output is gitignored so it never appears here;
+    :func:`restore_bundle` puts that back from the pre-reveal snapshot.
     """
     for status, path in name_status:
         if status.startswith("A"):
@@ -559,6 +731,8 @@ def _recover_running_state(
     http: HttpClient,
     sleeper: Callable[[float], None],
     live_service_restarted: bool,
+    saved_bundle: Path | None,
+    is_frontend_expected: bool,
 ) -> bool:
     """After the tree is restored to known-good, rebuild/restart from it as
     needed and confirm the live UI is healthy. Returns True iff confirmed healthy.
@@ -570,17 +744,38 @@ def _recover_running_state(
     NOT restart -- doing so would needlessly blip a healthy UI. We only restart
     when the failed reveal had actually restarted the service into broken code.
 
+    ``saved_bundle`` is the pre-reveal copy of the built frontend, and it is what
+    makes this recoverable at all. Restoring it needs neither ``npm`` nor a
+    working registry, so the class of failure that motivated the snapshot -- the
+    build environment itself being broken -- can no longer take the UI down: the
+    old rebuild-to-recover path would just re-run the command that had already
+    failed once. A rebuild is only attempted when there is no snapshot, i.e. when
+    there was no bundle to lose in the first place.
+
     Unlike :func:`_apply_reveal`, nothing here raises -- this is the last line of
     defense, so a failed step just means "not recovered" (exit 3)."""
     try:
-        _refresh_dependencies(changes, repo_root, runner)
-        if changes.frontend:
+        # Only the backend's dependencies are refreshed here. ``npm ci`` is
+        # deliberately skipped: it deletes node_modules before installing, and
+        # the restored bundle is already-compiled output that needs neither.
+        if changes.backend_manifest:
             _run_checked(
                 runner,
-                ["npm", "run", "build"],
-                repo_root / FRONTEND_DIR,
-                "npm run build",
+                ["uv", "tool", "install", "-e", APP_DIR, "--reinstall"],
+                repo_root,
+                "uv tool install --reinstall",
             )
+        if changes.frontend:
+            if saved_bundle is not None:
+                restore_bundle(saved_bundle, repo_root)
+            else:
+                _run_checked(
+                    runner,
+                    ["npm", "run", "build"],
+                    repo_root / FRONTEND_DIR,
+                    "npm run build",
+                )
+                _assert_bundle_built(repo_root, live_service_restarted=False)
         if changes.backend:
             if live_service_restarted:
                 _run_checked(
@@ -611,6 +806,15 @@ def _recover_running_state(
     except RevealFailed as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
         return False
+    # "Recovered" has to mean the user can see their UI again, so hold the
+    # rollback to the same frontend standard the reveal itself is held to --
+    # otherwise a rollback that restored the tree but left nothing to serve
+    # would report success and exit 2.
+    if healthy and is_frontend_expected:
+        frontend_failure = describe_frontend_failure(http, base_url)
+        if frontend_failure is not None:
+            sys.stderr.write(f"recovery left the frontend broken: {frontend_failure}\n")
+            return False
     if healthy and changes.frontend:
         _broadcast_reload(http, base_url)
     return healthy
@@ -639,38 +843,60 @@ def reveal(
         )
         return 0
 
+    # Taken before anything destructive runs, and kept until the reveal has
+    # either succeeded or finished recovering.
+    saved_bundle = snapshot_bundle(repo_root)
+    # Whether a working frontend is owed afterwards is decided by what was being
+    # served *before* -- the reveal is answerable for regressions, not for a
+    # workspace that was already broken when it arrived.
+    is_frontend_expected = describe_frontend_failure(http, resolved_base) is None
+
     try:
-        _apply_reveal(changes, repo_root, resolved_base, runner, http, spawner, sleeper)
-    except RevealFailed as exc:
-        sys.stderr.write(
-            f"reveal failed: {exc}\nrolling back to {rollback_to[:12]} and restoring the live UI...\n"
-        )
-        _restore_tree(name_status, rollback_to, repo_root, runner)
-        _commit_rollback(
-            repo_root,
-            runner,
-            rollback_to,
-            f"Reveal failed and was auto-reverted: {exc}",
-        )
-        if _recover_running_state(
-            changes,
-            repo_root,
-            resolved_base,
-            runner,
-            http,
-            sleeper,
-            live_service_restarted=exc.live_service_restarted,
-        ):
-            sys.stderr.write(
-                "rolled back to last-known-good; the live UI is confirmed healthy. "
-                "The requested change did NOT land -- diagnose it before retrying.\n"
+        try:
+            _apply_reveal(
+                changes,
+                repo_root,
+                resolved_base,
+                runner,
+                http,
+                spawner,
+                sleeper,
+                is_frontend_expected,
             )
-            return 2
-        sys.stderr.write(
-            "EMERGENCY: rollback did not restore a healthy UI. The system interface may be down; "
-            "manual intervention is required.\n"
-        )
-        return 3
+        except RevealFailed as exc:
+            sys.stderr.write(
+                f"reveal failed: {exc}\nrolling back to {rollback_to[:12]} and restoring the live UI...\n"
+            )
+            _restore_tree(name_status, rollback_to, repo_root, runner)
+            _commit_rollback(
+                repo_root,
+                runner,
+                rollback_to,
+                f"Reveal failed and was auto-reverted: {exc}",
+            )
+            if _recover_running_state(
+                changes,
+                repo_root,
+                resolved_base,
+                runner,
+                http,
+                sleeper,
+                live_service_restarted=exc.live_service_restarted,
+                saved_bundle=saved_bundle,
+                is_frontend_expected=is_frontend_expected,
+            ):
+                sys.stderr.write(
+                    "rolled back to last-known-good; the live UI is confirmed healthy. "
+                    "The requested change did NOT land -- diagnose it before retrying.\n"
+                )
+                return 2
+            sys.stderr.write(
+                "EMERGENCY: rollback did not restore a healthy UI. The system interface may be down; "
+                "manual intervention is required.\n"
+            )
+            return 3
+    finally:
+        _discard_snapshot(saved_bundle)
 
     sys.stderr.write(
         "revealed: the live system interface is updated and confirmed healthy.\n"

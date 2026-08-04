@@ -66,10 +66,32 @@ if a manifest changed (`npm ci` / `uv tool install -e system/apps/system_interfa
 the editable backend re-imports the merged `.py` (backend). For a backend change
 it pre-flights the merged code on a throwaway port before touching the live
 service, then polls the loopback endpoint to confirm health. If anything fails,
-it restores the tree to `--rollback-to` as a forward revert commit, rebuilds and
-restarts from it, and re-confirms the UI is healthy -- so the served interface
-can never be left broken. The exit code reports the outcome (`0` revealed, `2`
-rolled back, `3` emergency, `1` precondition error).
+it restores the tree to `--rollback-to` as a forward revert commit, restores the
+bundle, restarts from it, and re-confirms the UI is healthy -- so the served
+interface can never be left broken. The exit code reports the outcome (`0`
+revealed, `2` rolled back, `3` emergency, `1` precondition error).
+
+Two properties are load-bearing there. It **snapshots `static/` before anything
+destructive runs**, because both steps delete before they produce (`npm ci`
+removes `node_modules`; the build empties the bundle directory) -- so a rollback
+restores a *copy* rather than re-running the build that just failed, and a broken
+build environment cannot take the UI down with it. And it **checks that the
+frontend actually serves**, not just that the backend answers: the "not built"
+placeholder and an unserved `/assets` path are both HTTP 200s to `/api/agents`,
+so the probe confirms the app shell is the real app and that its module script
+comes back as JavaScript.
+
+## When the bundle is missing
+
+`static/` is gitignored build output, produced at workspace creation
+(`system/scripts/build_workspace.sh`) and by the reveal above. Nothing rebuilds
+it at service start, so a code refresh that replaces the tree can leave the
+backend with nothing to serve. In that state `/` serves a placeholder page that
+offers to rebuild the bundle in place -- `POST /api/frontend-build` starts the
+rebuild on a background thread and `GET /api/frontend-build` reports its
+progress, which is what the page polls before reloading itself. Every app-shell
+response carries an `X-Frontend-Built` header so the placeholder is
+distinguishable from the real app without pattern-matching its markup.
 
 The `reload_system_interface` op it broadcasts goes to the loopback-only
 `/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;

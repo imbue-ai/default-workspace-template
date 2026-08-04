@@ -28,10 +28,12 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.frontend_build import FrontendBuildService
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.server import FRONTEND_BUILT_HEADER
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
@@ -77,18 +79,112 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
         response = test_client.get("/")
         assert response.status_code == 200
         assert "test" in response.text
+        # Both the app and the placeholder are HTTP 200 HTML, so the header is
+        # the only thing that distinguishes them to a health check.
+        assert response.headers[FRONTEND_BUILT_HEADER] == "true"
 
 
-def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: Path) -> None:
-    """When static dir has no index.html, show a helpful message."""
+def test_index_offers_a_rebuild_when_the_bundle_is_missing(tmp_path: Path) -> None:
+    """The placeholder must let the user recover, not just describe the problem.
+
+    A workspace whose bundle was wiped cannot run a build command itself, so a
+    page that only names the fix strands it.
+    """
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
         test_client = create_application(build_test_state()).test_client()
         response = test_client.get("/")
-        assert response.status_code == 200
-        assert "npm run build" in response.text
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert "/api/frontend-build" in response.text
+
+
+def test_index_does_not_offer_a_rebuild_without_frontend_sources(tmp_path: Path) -> None:
+    """An install with no frontend/ cannot rebuild, so it must not pretend to."""
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+    service = FrontendBuildService(static_directory=empty_dir, frontend_directory=tmp_path / "absent")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
+        response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert "/api/frontend-build" not in response.text
+    # The manual fallback is still named, since it is all this install can do.
+    assert "npm run build" in response.text
+
+
+def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:
+    """A missing asset must 404, never come back as the SPA shell.
+
+    The catch-all would answer with index.html as text/html, which the browser
+    refuses as a module script -- a blank screen with no hint of the cause.
+    """
+    empty_dir = tmp_path / "static"
+    empty_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/assets/index-abc123.js")
+
+    assert response.status_code == 404
+    # The app-shell marker is absent, proving the request did not reach the
+    # catch-all and come back as index.html with a 200.
+    assert FRONTEND_BUILT_HEADER not in response.headers
+
+
+def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> None:
+    """The route must survive being constructed before the bundle exists.
+
+    Deciding at construction time whether to register it turned a recoverable
+    state into a stuck one: rebuilding no longer helped until a restart.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        # App built while there is no bundle at all, as it is on a cold start
+        # into a wiped tree.
+        test_client = create_application(build_test_state()).test_client()
+        (static_dir / "assets").mkdir()
+        (static_dir / "assets" / "index-abc123.js").write_text("console.log('app');")
+        response = test_client.get("/assets/index-abc123.js")
+
+    assert response.status_code == 200
+    assert "javascript" in response.headers["Content-Type"]
+
+
+def test_frontend_build_endpoint_reports_whether_the_bundle_exists(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    service = FrontendBuildService(static_directory=static_dir, frontend_directory=tmp_path / "absent")
+    test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
+
+    response = test_client.get("/api/frontend-build")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "is_built": False,
+        "is_repairable": False,
+        "phase": None,
+        "detail": None,
+        "error": None,
+    }
+
+
+def test_starting_a_rebuild_without_sources_is_refused(tmp_path: Path) -> None:
+    service = FrontendBuildService(static_directory=tmp_path / "static", frontend_directory=tmp_path / "absent")
+    test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
+
+    response = test_client.post("/api/frontend-build")
+
+    assert response.status_code == 409
+    assert "cannot rebuild itself" in response.get_json()["detail"]
 
 
 def test_list_agents_endpoint(client: FlaskClient) -> None:

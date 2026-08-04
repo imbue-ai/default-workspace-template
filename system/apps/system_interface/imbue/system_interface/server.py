@@ -50,6 +50,7 @@ from imbue.system_interface.fast_mode_policy import resolve_agent_fast_mode
 from imbue.system_interface.fast_mode_policy import write_fast_mode_setting
 from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
 from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface.frontend_build import FrontendBuildError
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
@@ -98,9 +99,120 @@ logger = _loguru_logger
 
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 
-_FRONTEND_NOT_BUILT_HTML = (
-    "<html><body><p>Frontend not built. Run <code>npm run build</code> in <code>frontend/</code>.</p></body></html>"
-)
+# Stamped on every app-shell response so a caller can tell the real app from
+# the "not built" placeholder, which is otherwise an identical HTTP 200 HTML
+# response. The reveal flow's frontend health check reads it.
+FRONTEND_BUILT_HEADER = "X-Frontend-Built"
+
+# Served in place of the app whenever the compiled bundle is missing. The
+# bundle is gitignored build output, so a code refresh that replaces the tree
+# (or a rebuild that failed partway) can leave the workspace here with no way
+# out; the page therefore offers the repair itself rather than printing a
+# command the user is not in a position to run. ``__ROOT_PATH__`` is
+# substituted with the mount prefix so the polling works behind a proxy.
+_FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Interface not built</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; display: flex;
+         align-items: center; justify-content: center; min-height: 100vh;
+         background: #14161a; color: #e6e8eb; }
+  main { max-width: 34rem; padding: 2rem; }
+  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.75rem; }
+  p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; }
+  button { font: inherit; padding: 0.55rem 1.1rem; border: 0; border-radius: 6px;
+           background: #4c7dfd; color: #fff; cursor: pointer; }
+  button[disabled] { opacity: 0.55; cursor: default; }
+  pre { white-space: pre-wrap; background: #1d2026; border-radius: 6px;
+        padding: 0.75rem; font-size: 0.8rem; color: #d7817a; overflow-x: auto; }
+  #status { margin-top: 1rem; color: #b6bcc4; }
+</style>
+</head>
+<body>
+<main>
+  <h1>This workspace's interface needs to be rebuilt</h1>
+  <p>The compiled interface is missing, so there is nothing to show yet.
+     Rebuilding it leaves your work and your agents untouched.</p>
+  <button id="rebuild">Rebuild the interface</button>
+  <div id="status"></div>
+  <pre id="error" hidden></pre>
+</main>
+<script>
+  const rootPath = "__ROOT_PATH__";
+  const endpoint = rootPath + "/api/frontend-build";
+  const button = document.getElementById("rebuild");
+  const status = document.getElementById("status");
+  const errorBox = document.getElementById("error");
+
+  function render(state) {
+    if (state.phase === "done") {
+      status.textContent = "Rebuilt. Reloading...";
+      window.location.reload();
+      return;
+    }
+    if (state.phase === "failed") {
+      button.disabled = false;
+      button.textContent = "Try again";
+      status.textContent = "The rebuild did not finish.";
+      errorBox.hidden = false;
+      errorBox.textContent = state.error || "";
+      return;
+    }
+    if (state.phase) {
+      button.disabled = true;
+      status.textContent = (state.detail || "Working") + "...";
+      errorBox.hidden = true;
+      window.setTimeout(poll, 2000);
+    }
+  }
+
+  async function poll() {
+    try {
+      const response = await fetch(endpoint);
+      render(await response.json());
+    } catch (e) {
+      status.textContent = "Lost contact with the workspace while rebuilding; retrying...";
+      window.setTimeout(poll, 4000);
+    }
+  }
+
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    status.textContent = "Starting...";
+    errorBox.hidden = true;
+    const response = await fetch(endpoint, { method: "POST" });
+    const state = await response.json();
+    if (!response.ok) {
+      button.disabled = false;
+      status.textContent = state.detail || "Could not start the rebuild.";
+      return;
+    }
+    render(state);
+  });
+
+  // A rebuild may already be running (another tab, or a reload mid-build), so
+  // adopt its progress instead of showing an idle button.
+  poll();
+</script>
+</body>
+</html>
+"""
+
+# Shown instead of the button when the frontend sources are absent, so the page
+# never offers an action it cannot perform.
+_FRONTEND_NOT_REPAIRABLE_HTML = """<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Interface not built</title></head>
+<body>
+<p>Frontend not built, and the frontend sources are not present in this
+installation, so it cannot be rebuilt from here.</p>
+<p>Run <code>npm ci &amp;&amp; npm run build</code> in the app's
+<code>frontend/</code> directory, then restart the system interface.</p>
+</body>
+</html>
+"""
 
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
@@ -149,6 +261,19 @@ def _json_response(content: Any, status_code: int = 200) -> Response:
 
 def _html_response(html_content: str, status_code: int = 200) -> Response:
     return Response(html_content, status=status_code, mimetype="text/html")
+
+
+def _shell_response(html_content: str, *, is_frontend_built: bool) -> Response:
+    """Return an app-shell response, stamped with whether it is the real app.
+
+    Both the app and the not-built placeholder are HTTP 200 HTML, so nothing
+    downstream can tell them apart from the status line alone. The header says
+    which one this is, so a health check does not have to pattern-match markup
+    that is free to change.
+    """
+    response = _html_response(html_content)
+    response.headers[FRONTEND_BUILT_HEADER] = "true" if is_frontend_built else "false"
+    return response
 
 
 def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
@@ -201,8 +326,24 @@ def _index() -> Response:
         html_content = _inject_agent_id_meta_tag(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
-        return _html_response(html_content)
-    return _html_response(_FRONTEND_NOT_BUILT_HTML)
+        return _shell_response(html_content, is_frontend_built=True)
+    return _frontend_not_built_response()
+
+
+def _frontend_not_built_response() -> Response:
+    """Render the placeholder, offering the rebuild when the sources are present."""
+    # Logged with the resolved directory because the usual cause is that the
+    # served tree was replaced under a running service, which is otherwise
+    # invisible from the supervisor logs.
+    _loguru_logger.warning(
+        "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
+    )
+    if not get_state().frontend_build_service.is_repairable:
+        return _shell_response(_FRONTEND_NOT_REPAIRABLE_HTML, is_frontend_built=False)
+    root_path = (request.script_root or "").rstrip("/")
+    return _shell_response(
+        _FRONTEND_NOT_BUILT_HTML_TEMPLATE.replace("__ROOT_PATH__", root_path), is_frontend_built=False
+    )
 
 
 def _index_catch_all(path: str) -> Response:
@@ -225,7 +366,31 @@ def _favicon() -> Response:
 
 def _serve_asset(filename: str) -> Response:
     assets_directory = STATIC_DIRECTORY / "assets"
+    # A missing asset is a plain 404, as for the favicon above. It must never
+    # reach the SPA catch-all, which would answer with index.html as text/html
+    # and leave the browser refusing the module script on a blank page.
+    if not (assets_directory / filename).is_file():
+        return Response(status=404)
     return send_from_directory(assets_directory, filename)
+
+
+def _get_frontend_build_endpoint() -> Response:
+    """Report whether the bundle is present and how any rebuild is going."""
+    return _json_response(get_state().frontend_build_service.current_status().model_dump(mode="json"))
+
+
+def _start_frontend_build_endpoint() -> Response:
+    """Kick off the placeholder page's rebuild and return its starting status."""
+    service = get_state().frontend_build_service
+    try:
+        service.start_background_build()
+    except FrontendBuildError as e:
+        # The only refusals are "nothing to build from" and "already running",
+        # both of which the page shows to the user verbatim.
+        _loguru_logger.warning("Refused to start a frontend rebuild: {}", e)
+        error = ErrorResponse(detail=str(e))
+        return _json_response(error.model_dump(), status_code=409)
+    return _json_response(service.current_status().model_dump(mode="json"), status_code=202)
 
 
 def _discover_with_filters() -> list[AgentInfo]:
@@ -1764,6 +1929,13 @@ def create_application(state: SystemInterfaceState) -> Flask:
 
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
+    application.add_url_rule("/api/frontend-build", view_func=_get_frontend_build_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/frontend-build",
+        view_func=_start_frontend_build_endpoint,
+        methods=["POST"],
+        endpoint="_start_frontend_build",
+    )
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-worktree", view_func=_create_worktree_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
@@ -1845,9 +2017,14 @@ def create_application(state: SystemInterfaceState) -> Flask:
     sock.route("/api/proto-agents/<agent_id>/logs")(_proto_agent_logs_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
 
-    assets_directory = STATIC_DIRECTORY / "assets"
-    if assets_directory.is_dir():
-        application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
+    # Registered unconditionally, even when the bundle is absent at startup: the
+    # directory can appear later (a rebuild), and a route decided at construction
+    # time can never notice. Without the route, asset requests fall through to
+    # the catch-all below and come back as index.html with a text/html type,
+    # which the browser refuses as a module script -- a blank screen instead of
+    # the recoverable placeholder. ``send_from_directory`` 404s on its own when
+    # a file really is missing.
+    application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
 
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
 
