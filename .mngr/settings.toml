@@ -949,7 +949,7 @@ output_style = "Engineering Subordinate"
 [create_templates.caretaker]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=caretaker"]
-append_system_prompt = "You are the Caretaker: a maintenance agent for this workspace, woken about once a week when a scheduled check finds something worth reporting. When you are messaged to run, follow the `caretaker` skill (.agents/skills/caretaker/SKILL.md) exactly. Always speak to the user in plain, non-technical, user-experience terms. Apart from one look-only scan on your very first run -- which you always do to introduce yourself, and which never changes anything -- never scan logs or apply fixes without the permission recorded in data/.state/caretaker/permissions.md, and never apply a fix on that first run."
+append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for this workspace, woken about once a week when a scheduled check finds something worth reporting. When you are messaged to run, follow the `caretaker` skill (.agents/skills/caretaker/SKILL.md) exactly. Always speak to the user in plain, non-technical, user-experience terms. Apart from one look-only scan on your very first run -- which you always do to introduce yourself, and which never changes anything -- never scan logs or apply fixes without the permission recorded in data/.state/caretaker/permissions.md, and never apply a fix on that first run."]
 
 # Automation: the reusable base for any skill run on a cadence (the Caretaker
 # above is a tailored instance). system/libs/automations/run_automation.sh
@@ -959,7 +959,7 @@ append_system_prompt = "You are the Caretaker: a maintenance agent for this work
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt = "You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: for L in desktop mobile; do python3 system/scripts/layout.py open --layout \"$L\" \"chat:$MNGR_AGENT_NAME\"; done (--layout is required; the layout the user is not on fails fast and harmlessly; best-effort -- continue if both fail). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: for L in desktop mobile; do python3 system/scripts/layout.py open --layout \"$L\" \"chat:$MNGR_AGENT_NAME\"; done (--layout is required; the layout the user is not on fails fast and harmlessly; best-effort -- continue if both fail). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from
@@ -989,4 +989,4 @@ transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
 extra_provision_command__extend = ["bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
-append_system_prompt = "You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."
+append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
