@@ -90,6 +90,7 @@ def _build_chat_create_command(
     primary_labels: dict[str, str],
     harness: HarnessType,
     is_fast_mode_enabled: bool,
+    extra_role_templates: tuple[str, ...] = (),
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent on a given harness.
 
@@ -113,6 +114,7 @@ def _build_chat_create_command(
         harness,
         "--template",
         "chat",
+        *[arg for role in extra_role_templates for arg in ("--template", role)],
         # Tags this as a user-created agent so the OOM launch wrapper puts it in the
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
@@ -568,7 +570,12 @@ class AgentManager:
         """Generate a random agent name using mngr's name generator."""
         return str(generate_agent_name(AgentNameStyle.COOLNAME))
 
-    def create_chat_agent(self, name: str, harness: HarnessType = HarnessType.CLAUDE) -> str:
+    def create_chat_agent(
+        self,
+        name: str,
+        harness: HarnessType = HarnessType.CLAUDE,
+        extra_role_templates: tuple[str, ...] = (),
+    ) -> str:
         """Create a chat agent in the primary agent's work dir on the given harness.
 
         Returns the pre-generated agent ID. ``harness`` is also the name of the harness
@@ -591,7 +598,13 @@ class AgentManager:
         decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
         is_fast_mode_enabled = FAST_MODE_BEFORE_DECISION if decision is None else decision
         cmd = _build_chat_create_command(
-            self._mngr_binary, name, agent_id, primary_labels, harness, is_fast_mode_enabled
+            self._mngr_binary,
+            name,
+            agent_id,
+            primary_labels,
+            harness,
+            is_fast_mode_enabled,
+            extra_role_templates,
         )
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)

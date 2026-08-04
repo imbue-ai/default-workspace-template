@@ -35,7 +35,7 @@ import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { apiUrl, getPrimaryAgentId, isCodexEnabled } from "../base-path";
+import { apiUrl, getPrimaryAgentId, isCodexEnabled, isSillyModelsEnabled } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
@@ -192,6 +192,7 @@ interface PanelParams {
 // Modal state
 let showNewChatModal = false;
 let showNewCodexModal = false;
+let sillyModalMode: "silly-claude" | "silly-codex" | null = null;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
 // pre-filled with the name the user typed and the daemon's reason, so the user
@@ -807,6 +808,25 @@ function buildDropdownItems(
         m.redraw();
       },
     });
+  }
+
+  if (isSillyModelsEnabled()) {
+  items.push({
+    label: "New Silly Claude",
+    action: () => {
+      newTabTargetGroup = targetGroup ?? null;
+      sillyModalMode = "silly-claude";
+      m.redraw();
+    },
+  });
+  items.push({
+    label: "New Silly Codex",
+    action: () => {
+      newTabTargetGroup = targetGroup ?? null;
+      sillyModalMode = "silly-codex";
+      m.redraw();
+    },
+  });
   }
 
   // New terminal -- allocates a fresh named tmux session anchored at the
@@ -2917,6 +2937,22 @@ export const DockviewWorkspace: m.Component = {
               },
               onCancel() {
                 showNewCodexModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        sillyModalMode
+          ? m(CreateAgentModal, {
+              mode: sillyModalMode,
+              onCreated(newAgentId: string, newAgentName: string) {
+                sillyModalMode = null;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                sillyModalMode = null;
                 newTabTargetGroup = null;
               },
             })
