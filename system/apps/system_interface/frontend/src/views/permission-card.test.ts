@@ -1,16 +1,58 @@
-import type m from "mithril";
+import m from "mithril";
 import { describe, expect, it, vi } from "vitest";
+import { resetEmbedEndpointForTesting } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import {
   PermissionCard,
-  noteShellPermissionResolution,
+  initShellPermissionResolutions,
   openPermissionRequest,
   parsePermissionRequest,
   renderPermissionCard,
   shellPermissionResolutionFor,
 } from "./permission-card";
+
+/** Stand in a `window` whose parent is the embedding minds chrome, with the
+ *  embed endpoint rebound to it, for the duration of `run`. `run` receives a
+ *  deliver function that plays a message event into that window. */
+function withStubbedEmbedder(parent: object, run: (deliver: (event: unknown) => void) => void): void {
+  const listeners: ((event: unknown) => void)[] = [];
+  resetEmbedEndpointForTesting();
+  vi.stubGlobal("window", {
+    parent,
+    addEventListener: (type: string, handler: (event: unknown) => void) => {
+      if (type === "message") listeners.push(handler);
+    },
+    removeEventListener: () => undefined,
+  });
+  try {
+    run((event) => {
+      for (const listener of [...listeners]) listener(event);
+    });
+  } finally {
+    vi.unstubAllGlobals();
+    resetEmbedEndpointForTesting();
+  }
+}
+
+/** Play one embedder->workspace message into the subscribed cards, through the
+ *  real contract endpoint -- so the source and payload checks the shell's
+ *  messages pass through are the ones exercised here. */
+function deliverFromEmbedder(data: Record<string, unknown>, options: { isFromEmbedder?: boolean } = {}): void {
+  vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+  const parent = {};
+  withStubbedEmbedder(parent, (deliver) => {
+    initShellPermissionResolutions();
+    deliver({
+      // A nested third-party iframe can post here but is not `window.parent`.
+      source: options.isFromEmbedder === false ? {} : parent,
+      origin: "https://host-ab12.localhost",
+      data,
+    });
+  });
+  vi.restoreAllMocks();
+}
 
 function makeToolCall(inputPreview: string): ToolCall {
   return {
@@ -225,12 +267,9 @@ describe("renderPermissionCard", () => {
     const button = findReviewButton(vnode) as { attrs?: { onclick?: (e: Event) => void } } | null;
 
     const postMessage = vi.fn();
-    vi.stubGlobal("window", { parent: { postMessage } });
-    try {
-      button?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    withStubbedEmbedder({ postMessage }, () =>
+      button?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event),
+    );
     expect(postMessage).toHaveBeenCalledWith(
       { type: "minds:open-request-modal", requestId: "885711ec07bf47239d71294e1534330b" },
       "*",
@@ -374,51 +413,51 @@ describe("renderPermissionCard", () => {
 describe("openPermissionRequest", () => {
   it("posts the open-request-modal message to the parent window", () => {
     // The chat UI runs inside an iframe; vitest's node environment has no
-    // `window`, so stand one in with a spy parent.
+    // `window`, so stand one in with a spy parent. The embed endpoint binds to
+    // whatever window exists on first use, so reset it around the stub.
     const postMessage = vi.fn();
-    vi.stubGlobal("window", { parent: { postMessage } });
-    try {
-      openPermissionRequest("req-123");
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    withStubbedEmbedder({ postMessage }, () => openPermissionRequest("req-123"));
     expect(postMessage).toHaveBeenCalledWith({ type: "minds:open-request-modal", requestId: "req-123" }, "*");
   });
 });
 
 describe("shell permission resolutions", () => {
-  it("rejects malformed payloads without recording anything", () => {
-    expect(noteShellPermissionResolution(null)).toBe(false);
-    expect(noteShellPermissionResolution("minds:permission-request-resolved")).toBe(false);
-    expect(noteShellPermissionResolution({ type: "minds:permission-request-resolved" })).toBe(false);
-    expect(
-      noteShellPermissionResolution({ type: "minds:open-request-modal", requestId: "req-a", resolution: "granted" }),
-    ).toBe(false);
-    expect(
-      noteShellPermissionResolution({
-        type: "minds:permission-request-resolved",
-        requestId: "",
-        resolution: "granted",
-      }),
-    ).toBe(false);
-    expect(
-      noteShellPermissionResolution({
-        type: "minds:permission-request-resolved",
-        requestId: "req-a",
-        resolution: "error",
-      }),
-    ).toBe(false);
-    expect(shellPermissionResolutionFor("req-a")).toBeNull();
+  it("rejects an off-shape payload without recording anything", () => {
+    // Delivered through the real contract, so this covers the validation the
+    // shell's messages actually pass through -- not a second copy of it.
+    deliverFromEmbedder({
+      type: "minds:permission-request-resolved",
+      requestId: "req-rejected",
+      resolution: "error",
+    });
+    deliverFromEmbedder({ type: "minds:permission-request-resolved", requestId: "req-rejected" });
+    deliverFromEmbedder({ type: "minds:permission-request-resolved", resolution: "granted" });
+    expect(shellPermissionResolutionFor("req-rejected")).toBeNull();
+
+    // The same delivery with a verdict the contract accepts does record, so
+    // the rejections above are the payloads' doing and not a dead harness.
+    deliverFromEmbedder({
+      type: "minds:permission-request-resolved",
+      requestId: "req-rejected",
+      resolution: "granted",
+    });
+    expect(shellPermissionResolutionFor("req-rejected")).toBe("granted");
   });
 
-  it("records a well-formed verdict", () => {
-    expect(
-      noteShellPermissionResolution({
-        type: "minds:permission-request-resolved",
-        requestId: "req-recorded",
-        resolution: "denied",
-      }),
-    ).toBe(true);
+  it("ignores a resolution from anyone but this page's embedder", () => {
+    deliverFromEmbedder(
+      { type: "minds:permission-request-resolved", requestId: "req-nested", resolution: "granted" },
+      { isFromEmbedder: false },
+    );
+    expect(shellPermissionResolutionFor("req-nested")).toBeNull();
+  });
+
+  it("records the verdict the shell reports", () => {
+    deliverFromEmbedder({
+      type: "minds:permission-request-resolved",
+      requestId: "req-recorded",
+      resolution: "denied",
+    });
     expect(shellPermissionResolutionFor("req-recorded")).toBe("denied");
   });
 
@@ -426,7 +465,7 @@ describe("shell permission resolutions", () => {
     // The shell (the Minds review popup) reported this request granted; the
     // transcript walk hasn't classified a resolution yet (`resolution: null`),
     // but the card should already render the Approved receipt.
-    noteShellPermissionResolution({
+    deliverFromEmbedder({
       type: "minds:permission-request-resolved",
       requestId: "fs-1",
       resolution: "granted",

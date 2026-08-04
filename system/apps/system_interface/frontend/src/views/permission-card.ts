@@ -12,6 +12,9 @@
  */
 
 import m from "mithril";
+import { OPEN_REQUEST_MODAL, PERMISSION_REQUEST_RESOLVED } from "@minds/embed-contract";
+import type { ContractMessage } from "@minds/embed-contract";
+import { sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
@@ -104,33 +107,31 @@ export function parsePermissionRequest(
 
 /**
  * Ask the outer Minds app to open its permission-request modal. The chat UI
- * runs inside an iframe, so we hand the request id to the parent via
- * postMessage rather than rendering the modal ourselves.
+ * runs inside an iframe, so we hand the request id to the embedding chrome
+ * over the embed contract rather than rendering the modal ourselves.
  */
 export function openPermissionRequest(requestId: string): void {
-  window.parent.postMessage({ type: "minds:open-request-modal", requestId }, "*");
+  sendToEmbedder(OPEN_REQUEST_MODAL, { requestId });
 }
 
 // -- Shell-resolved requests --------------------------------------------------
 //
-// When the Minds app's review popup resolves a request, the shell relays
-// `{type:"minds:permission-request-resolved", requestId, resolution}` into this
-// page (the Electron content view's preload re-posts it as a window message).
-// The matching card flips to its verdict immediately instead of waiting for the
+// When the Minds app's review popup resolves a request, the shell sends
+// `minds:permission-request-resolved` over the embed contract, which admits it
+// only from this page's own embedder and only with a well-shaped payload. The
+// matching card flips to its verdict immediately instead of waiting for the
 // resolution message's round trip through the agent transcript; once that
 // message lands, the classified resolution takes over (and agrees with the
 // verdict recorded here).
 const shellResolutions = new Map<string, PermissionResolution>();
 
-/** Record a shell-reported verdict if `data` is a well-formed resolution
- *  message. Returns whether it was (so the listener knows to redraw). */
-export function noteShellPermissionResolution(data: unknown): boolean {
-  if (typeof data !== "object" || data === null) return false;
-  const msg = data as { type?: unknown; requestId?: unknown; resolution?: unknown };
-  if (msg.type !== "minds:permission-request-resolved") return false;
-  if (typeof msg.requestId !== "string" || msg.requestId === "") return false;
-  if (msg.resolution !== "granted" && msg.resolution !== "denied") return false;
-  shellResolutions.set(msg.requestId, msg.resolution);
+/** Record the verdict a resolution message carries. Returns whether one was
+ *  (so the caller knows to redraw). */
+function noteShellPermissionResolution(message: ContractMessage): boolean {
+  const { requestId, resolution } = message;
+  if (typeof requestId !== "string" || requestId === "") return false;
+  if (resolution !== "granted" && resolution !== "denied") return false;
+  shellResolutions.set(requestId, resolution);
   return true;
 }
 
@@ -140,14 +141,10 @@ export function shellPermissionResolutionFor(requestId: string): PermissionResol
   return shellResolutions.get(requestId) ?? null;
 }
 
-/** Install the window listener that feeds shell verdicts into the cards.
- *  Called once at app bootstrap. */
+/** Subscribe the cards to the shell's verdicts. Called once at app bootstrap. */
 export function initShellPermissionResolutions(): void {
-  window.addEventListener("message", (event) => {
-    // Only honour messages posted into this page's own window (which is where
-    // the Electron preload posts), never messages from a nested iframe.
-    if (event.source !== window) return;
-    if (noteShellPermissionResolution(event.data)) m.redraw();
+  setEmbedderMessageHandler(PERMISSION_REQUEST_RESOLVED, (message) => {
+    if (noteShellPermissionResolution(message)) m.redraw();
   });
 }
 
