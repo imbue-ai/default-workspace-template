@@ -207,6 +207,15 @@ def _inject_enable_codex_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
+def _is_silly_models_enabled() -> bool:
+    return os.environ.get("SILLY_MODELS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _inject_enable_silly_models_meta_tag(html_content: str) -> str:
+    meta_tag = f'<meta name="system-interface-enable-silly-models" content="{str(_is_silly_models_enabled()).lower()}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -217,6 +226,7 @@ def _index() -> Response:
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
         html_content = _inject_enable_codex_meta_tag(html_content)
+        html_content = _inject_enable_silly_models_meta_tag(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _html_response(html_content)
@@ -1194,6 +1204,27 @@ def _create_codex_agent() -> Response:
         return _json_response(error.model_dump(), status_code=400)
 
 
+def _create_chat_agent_with_roles(harness: HarnessType, roles: tuple[str, ...]) -> Response:
+    agent_manager: AgentManager = get_state().agent_manager
+    body = request.get_json()
+
+    try:
+        create_request = CreateChatRequest(**body)
+        agent_id = agent_manager.create_chat_agent(create_request.name, harness, roles)
+        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+    except (AgentCreationError, OSError, ValueError) as e:
+        error = ErrorResponse(detail=str(e))
+        return _json_response(error.model_dump(), status_code=400)
+
+
+def _create_silly_claude_agent() -> Response:
+    return _create_chat_agent_with_roles(HarnessType.CLAUDE, ("pirate", "scottish"))
+
+
+def _create_silly_codex_agent() -> Response:
+    return _create_chat_agent_with_roles(HarnessType.CODEX, ("pirate", "scottish"))
+
+
 def _ws_endpoint(websocket: Any) -> None:
     """Unified WebSocket for agent state and app updates."""
     state = get_state()
@@ -1787,6 +1818,12 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-codex", view_func=_create_codex_agent, methods=["POST"])
+    application.add_url_rule(
+        "/api/agents/create-silly-claude", view_func=_create_silly_claude_agent, methods=["POST"]
+    )
+    application.add_url_rule(
+        "/api/agents/create-silly-codex", view_func=_create_silly_codex_agent, methods=["POST"]
+    )
     application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])

@@ -46,6 +46,17 @@ export function getPrimaryAgentId(): string {
   return cachedPrimaryAgentId;
 }
 
+let cachedSillyModelsEnabled: boolean | null = null;
+
+export function isSillyModelsEnabled(): boolean {
+  if (cachedSillyModelsEnabled !== null) {
+    return cachedSillyModelsEnabled;
+  }
+  const metaElement = document.querySelector('meta[name="system-interface-enable-silly-models"]');
+  cachedSillyModelsEnabled = metaElement?.getAttribute("content") === "true";
+  return cachedSillyModelsEnabled;
+}
+
 let cachedCodexEnabled: boolean | null = null;
 
 /**

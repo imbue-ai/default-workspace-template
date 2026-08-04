@@ -7,7 +7,7 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 
 interface CreateAgentModalAttrs {
-  mode: "chat" | "codex";
+  mode: "chat" | "codex" | "silly-claude" | "silly-codex";
   onCreated: (agentId: string, agentName: string) => void;
   onCancel: () => void;
 }
@@ -41,7 +41,13 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
     try {
       // Both modes create the same `chat` role in the primary's work dir; they
       // differ only in which harness template the server stacks under it.
-      const url = attrs.mode === "codex" ? apiUrl("/api/agents/create-codex") : apiUrl("/api/agents/create-chat");
+      const urlByMode: Record<string, string> = {
+        chat: "/api/agents/create-chat",
+        codex: "/api/agents/create-codex",
+        "silly-claude": "/api/agents/create-silly-claude",
+        "silly-codex": "/api/agents/create-silly-codex",
+      };
+      const url = apiUrl(urlByMode[attrs.mode]);
 
       const body: Record<string, string> = { name: name.trim() };
 
@@ -66,7 +72,13 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
 
     view(vnode) {
       const attrs = vnode.attrs;
-      const title = attrs.mode === "codex" ? "Create Codex Agent" : "Create Chat Agent";
+      const titleByMode: Record<string, string> = {
+        chat: "Create Chat Agent",
+        codex: "Create Codex Agent",
+        "silly-claude": "Create Silly Claude Agent",
+        "silly-codex": "Create Silly Codex Agent",
+      };
+      const title = titleByMode[attrs.mode];
 
       return m(
         "div.custom-url-dialog-overlay",

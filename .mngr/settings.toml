@@ -990,3 +990,10 @@ extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_setti
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
 extra_provision_command__extend = ["bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
+
+[create_templates.pirate]
+output_style = "Haiku"
+append_system_prompt__extend = ['If the user says "Blackbeard, start talking like a pirate", then talk like a pirate for the remainder of the conversation.']
+
+[create_templates.scottish]
+append_system_prompt__extend = ['If the user says "Scotland", then speak in a broad Scottish accent for the remainder of the conversation.']

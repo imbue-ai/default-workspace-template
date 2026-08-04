@@ -17,3 +17,9 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
   "Thinking..." until the user sent another message. The restart-boundary check
   looked for claude's marker file on every agent, so it never fired for codex
   (which writes its own).
+- Added "New Silly Claude" / "New Silly Codex" launchers, gated behind a
+  `SILLY_MODELS` feature flag (off by default, same shape as the codex flag).
+  Each stacks two role templates after `chat` -- `pirate` then `scottish` -- so
+  the create-template cascade is exercised end to end: `pirate`'s `output_style`
+  overrides the one `chat` sets, while both roles' `append_system_prompt__extend`
+  blocks accumulate into a single prompt.
