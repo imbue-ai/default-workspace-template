@@ -629,23 +629,24 @@ class CodexAgent(
     def _build_developer_instructions(self, host: OnlineHostInterface) -> str | None:
         """Join this agent type's system-prompt additions into one blob, or None if there are none.
 
-        Codex has no output-style concept, so ``output_style`` reaches it as instruction
+        The ``append_system_prompt`` blocks come first, in stack order, and the style body
+        last. Codex has no output-style concept, so ``output_style`` reaches it as instruction
         text rather than a named setting: the style file's body is used **verbatim**,
         frontmatter block included, so a style reads identically whichever agent type runs
-        it. The ``append_system_prompt`` blocks follow, in stack order.
+        it. Placing it last means it is the nearest instruction to the model, matching how a
+        harness with a real output-style setting applies the style over the prompt.
 
         The style directory read here is ``.agents/output-styles`` -- the source of truth
         where styles are authored. (Claude validates against its own ``.claude/output-styles``
         instead, since that is the path it will read; the two are the same files.)
         """
-        blocks: list[str] = []
+        blocks: list[str] = [str(prompt) for prompt in self.agent_config.append_system_prompt]
         if self.agent_config.output_style is not None:
             styles_dir = get_shared_output_styles_dir(Path(self.work_dir))
             # Raises UserInputError, listing what is available, when the name has no match.
             blocks.append(
                 resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
             )
-        blocks.extend(str(prompt) for prompt in self.agent_config.append_system_prompt)
         if not blocks:
             return None
         return DEVELOPER_INSTRUCTIONS_SEPARATOR.join(blocks)

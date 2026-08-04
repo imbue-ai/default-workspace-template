@@ -12,10 +12,11 @@ create template can set so a role describes codex's behaviour without spelling o
 
 Codex has no output-style concept, so both land in the top-level `developer_instructions` key of
 the per-agent `config.toml` -- the key that appends to codex's built-in instructions (unlike
-`model_instructions_file`, which replaces them). The style file's body goes in verbatim,
-frontmatter block included, so a style reads the same whichever harness runs it, followed by
-each `append_system_prompt` block in stack order. Style names are resolved from
-`.agents/output-styles/` in the work dir.
+`model_instructions_file`, which replaces them). The `append_system_prompt` blocks go in first,
+in stack order, then the style file's body verbatim, frontmatter block included, so a style
+reads the same whichever harness runs it. The style comes last so it is the nearest instruction
+to the model, matching how a harness with a real output-style setting applies the style over the
+prompt. Style names are resolved from `.agents/output-styles/` in the work dir.
 
 Known limit: a style that suppresses a harness's built-in prompt cannot behave identically here,
 because `developer_instructions` can only append.

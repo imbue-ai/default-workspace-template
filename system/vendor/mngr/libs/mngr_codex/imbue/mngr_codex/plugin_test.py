@@ -1397,8 +1397,8 @@ class _StyleReadingHost:
 def test_a_style_and_every_stacked_prompt_reach_codex_developer_instructions(tmp_path: Path) -> None:
     """Codex has no output-style concept, so the style body and the prompts share one channel.
 
-    The style file's body goes in verbatim (frontmatter included, so a style reads identically
-    whichever harness runs it), then each stacked role's block in order. Three sentinels, so a
+    Each stacked role's block comes first in order, then the style body verbatim (frontmatter
+    included, so a style reads identically whichever harness runs it). Three sentinels, so a
     dropped or reordered piece is visible rather than inferred.
     """
     styles_dir = tmp_path / ".agents" / "output-styles"
@@ -1415,8 +1415,8 @@ def test_a_style_and_every_stacked_prompt_reach_codex_developer_instructions(tmp
     assert instructions is not None
     for sentinel in ("SENTINEL_A", "SENTINEL_B", "SENTINEL_C"):
         assert sentinel in instructions, f"{sentinel} missing from developer_instructions"
-    # Style first, then the roles in stack order.
-    assert instructions.index("SENTINEL_C") < instructions.index("SENTINEL_A") < instructions.index("SENTINEL_B")
+    # Roles in stack order, style last.
+    assert instructions.index("SENTINEL_A") < instructions.index("SENTINEL_B") < instructions.index("SENTINEL_C")
 
 
 def test_codex_developer_instructions_is_none_when_no_role_contributed_anything() -> None:
