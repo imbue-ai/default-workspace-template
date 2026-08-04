@@ -10,7 +10,6 @@ from github_sync.config import (
     GithubSyncConfigError,
     get_gateway_password,
     get_gateway_url,
-    get_secondary_gateway_url,
     load_repo_url,
     parse_owner_and_name,
     proxied_url,
@@ -124,8 +123,6 @@ def test_gateway_env_getters_strip_and_default(
     assert get_gateway_url() == "http://127.0.0.1:39000"
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
     assert get_gateway_url() is None
-    monkeypatch.setenv("LATCHKEY_GATEWAY_SECONDARY", "")
-    assert get_secondary_gateway_url() is None
     monkeypatch.delenv("LATCHKEY_GATEWAY_PASSWORD", raising=False)
     assert get_gateway_password() is None
     monkeypatch.setenv("LATCHKEY_GATEWAY_PASSWORD", "pw-123")
