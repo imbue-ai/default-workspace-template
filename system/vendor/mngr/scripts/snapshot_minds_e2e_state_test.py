@@ -101,8 +101,8 @@ def test_offload_discovery_paths_match_marked_test_files() -> None:
     )
 
 
-def test_offload_discovery_filters_pin_repo_root_pytest_config() -> None:
-    """Assert every offload group's discovery filters pin the repo-root pytest config.
+def test_offload_discovery_args_pin_repo_root_pytest_config() -> None:
+    """Assert discovery pins the repo-root pytest config via [framework].discovery_args.
 
     offload passes discovered test ids verbatim as argv to pytest at
     execution time, where the cwd is the repo root (/code/mngr in the
@@ -110,28 +110,41 @@ def test_offload_discovery_filters_pin_repo_root_pytest_config() -> None:
     apps/minds as rootdir (apps/minds/pyproject.toml has a pytest section)
     and emit ids like ``test_snapshot_resume.py::...`` that do NOT resolve
     from the repo root, so every test would error at execution. The
-    ``-c pyproject.toml`` discovery arg in the group filters keeps the ids
-    repo-root-relative; this test fails if that pinning is dropped from any
-    group. Remove both the flag and this test once OFFLOAD-9 gives offload a
-    first-class discovery-args/rootdir knob. (A nested-pytest replay of
-    discovery is not possible here: it
-    would run with PYTEST_CURRENT_TEST set and trip the mngr config loader's
+    ``-c pyproject.toml`` discovery arg keeps the ids repo-root-relative.
+
+    Since offload 0.9.12 (OFFLOAD-9), single-pass discovery honors the
+    framework ``discovery_args`` option, so the pin lives there instead of
+    being smuggled into the group ``filters``. Keeping the group filters pure
+    ``-m`` selectors is what lets offload collect all groups in one pass and
+    tolerate an empty group; a non-selector token like ``-c`` in a filter
+    would force legacy per-group discovery, which fails the whole run when a
+    group matches zero tests. This test fails if the pin is dropped from
+    ``discovery_args`` or if a group filter re-introduces such a token. (A
+    nested-pytest replay of discovery is not possible here: it would run with
+    PYTEST_CURRENT_TEST set and trip the mngr config loader's
     is_allowed_in_pytest guard on the repo's .mngr/settings.toml.)
     """
     config = _read_offload_config()
+    discovery_args = shlex.split(config["framework"].get("discovery_args", ""))
+    config_flag_index = next((index for index, arg in enumerate(discovery_args) if arg == "-c"), None)
+    assert config_flag_index is not None, (
+        "[framework].discovery_args must include `-c pyproject.toml` so discovery emits "
+        "repo-root-relative test ids -- see the [framework] comment in "
+        "offload-modal-minds-snapshot.toml."
+    )
+    assert discovery_args[config_flag_index + 1] == "pyproject.toml", (
+        "[framework].discovery_args must pass the REPO-ROOT pyproject.toml to `-c` "
+        "(relative to the repo root, which is the discovery cwd)."
+    )
     groups = config["groups"]
     assert groups, "offload-modal-minds-snapshot.toml has no [groups]"
     for group_name, group_config in groups.items():
         filter_args = shlex.split(group_config["filters"])
-        config_flag_index = next((index for index, arg in enumerate(filter_args) if arg == "-c"), None)
-        assert config_flag_index is not None, (
-            f"Group {group_name!r} filters must include `-c pyproject.toml` so discovery emits "
-            "repo-root-relative test ids -- see the [framework] comment in "
-            "offload-modal-minds-snapshot.toml."
-        )
-        assert filter_args[config_flag_index + 1] == "pyproject.toml", (
-            f"Group {group_name!r} filters must pass the REPO-ROOT pyproject.toml to `-c` "
-            "(relative to the repo root, which is the discovery cwd)."
+        assert "-c" not in filter_args, (
+            f"Group {group_name!r} filters must stay pure `-m` selectors (found `-c`). The "
+            "repo-root pin belongs in [framework].discovery_args; a non-selector token in a "
+            "group filter disqualifies offload's single-pass discovery and re-introduces the "
+            "empty-group failure mode."
         )
 
 
