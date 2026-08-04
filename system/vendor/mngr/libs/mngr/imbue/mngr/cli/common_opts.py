@@ -26,6 +26,7 @@ from imbue.mngr.config.agent_alias_registry import normalize_agent_type_name
 from imbue.mngr.config.agent_config_registry import get_agent_config_class
 from imbue.mngr.config.agent_config_registry import list_registered_agent_config_types
 from imbue.mngr.config.data_types import CommonCliOptions
+from imbue.mngr.config.data_types import CreateCliOptions
 from imbue.mngr.config.data_types import CreateTemplateName
 from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.config.data_types import MngrContext
@@ -796,7 +797,12 @@ def apply_create_template(
     # pass below. ``known_option_names`` is the command's real option set, so a key absent
     # from this particular params dict is not mistaken for a non-option.
     pending_agent_type_keys: list[tuple[str, str, Any]] = []
-    known_option_names = {param.name for param in ctx.command.params if param.name} | set(params)
+    # The DECLARED create-option schema, not the click context: a caller may build a
+    # context whose command carries no params (tests do), and mistaking a real option for a
+    # role key would route it at an agent type that has no such setting.
+    known_option_names = (
+        set(CreateCliOptions.model_fields) | {param.name for param in ctx.command.params if param.name} | set(params)
+    )
 
     # Apply each template in order
     for template_name in template_names:
