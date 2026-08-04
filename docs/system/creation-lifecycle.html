@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Creation Lifecycle</title>
+<style>
+  :root {
+    --fg-bg: #fdf8f0;      /* foreground lane: warm */
+    --fg-border: #e0cfa8;
+    --bg-bg: #eef3f8;      /* background lane: cool */
+    --bg-border: #b8cbde;
+    --gate-bg: #fff3cd;
+    --gate-border: #d9a62e;
+    --ink: #2b2b2b;
+    --muted: #6b6b6b;
+    --accent: #4a6785;
+    --card: #ffffff;
+    --card-border: #d8d8d8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    margin: 0;
+    background: #fafafa;
+    line-height: 1.45;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 1.7rem; margin: 0 0 4px; }
+  h2 { font-size: 1.15rem; margin: 40px 0 12px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  .subtitle { color: var(--muted); margin: 0 0 20px; font-size: 1rem; }
+  p.intro { max-width: 70ch; }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.85rem; margin: 18px 0 6px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; border: 1px solid; }
+  .swatch.fg { background: var(--fg-bg); border-color: var(--fg-border); }
+  .swatch.bg { background: var(--bg-bg); border-color: var(--bg-border); }
+  .swatch.gate { background: var(--gate-bg); border-color: var(--gate-border); }
+
+  .lane {
+    border: 1.5px solid;
+    border-radius: 10px;
+    padding: 18px 20px 20px;
+    margin: 14px 0;
+  }
+  .lane.fg { background: var(--fg-bg); border-color: var(--fg-border); }
+  .lane.bg { background: var(--bg-bg); border-color: var(--bg-border); }
+  .lane-title { font-weight: 700; font-size: 0.95rem; letter-spacing: 0.04em; text-transform: uppercase; }
+  .lane-sub { color: var(--muted); font-size: 0.85rem; margin: 2px 0 14px; }
+
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    flex: 1 1 200px;
+    min-width: 190px;
+    font-size: 0.88rem;
+  }
+  .card b { display: block; margin-bottom: 3px; font-size: 0.92rem; }
+  .card .tag {
+    display: inline-block; font-size: 0.7rem; font-weight: 600;
+    color: var(--accent); border: 1px solid var(--accent);
+    border-radius: 10px; padding: 0 8px; margin-bottom: 6px;
+  }
+  .card.wide { flex-basis: 100%; }
+  .muted { color: var(--muted); }
+
+  .steps { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+  .step {
+    background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 6px; padding: 7px 11px; font-size: 0.85rem; flex: 1 1 130px;
+  }
+  .step b { display: block; font-size: 0.85rem; }
+  .step small { color: var(--muted); }
+  .arrow { color: var(--muted); font-size: 1.1rem; flex: 0 0 auto; }
+
+  .down-arrow { text-align: center; color: var(--muted); font-size: 1.3rem; line-height: 1; margin: 2px 0; }
+
+  .gate {
+    background: var(--gate-bg); border: 1.5px solid var(--gate-border);
+    border-radius: 8px; padding: 10px 16px; margin: 10px auto;
+    max-width: 640px; text-align: center; font-size: 0.9rem;
+  }
+  .gate b { display: block; }
+  .gate small { color: #7a5c10; }
+
+  .seam {
+    border: 1.5px dashed #999; border-radius: 10px; background: #f4f1ea;
+    padding: 14px 20px; margin: 14px 0; font-size: 0.9rem;
+  }
+  .seam b.title { display: block; font-size: 0.95rem; margin-bottom: 6px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin-top: 10px; }
+  th, td { border: 1px solid #ccc; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; font-size: 0.8rem; }
+  td b { font-size: 0.85rem; }
+
+  .tradeoffs { display: flex; gap: 14px; flex-wrap: wrap; }
+  .tradeoffs .card { flex: 1 1 280px; }
+  .tradeoffs ul { margin: 6px 0 0; padding-left: 18px; }
+  .tradeoffs li { margin: 4px 0; font-size: 0.85rem; }
+
+  .ux { display: flex; gap: 14px; flex-wrap: wrap; }
+  .ux .card { flex: 1 1 380px; }
+  .ux ol { margin: 6px 0 0; padding-left: 20px; }
+  .ux li { margin: 5px 0; font-size: 0.87rem; }
+
+  code {
+    background: #f0eee9; border-radius: 4px; padding: 1px 5px;
+    font-size: 0.82em; font-family: "SF Mono", Menlo, Consolas, monospace;
+  }
+  .lane.fg code { background: #f3e9d5; }
+  .lane.bg code { background: #dde7f0; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>The Creation Lifecycle</h1>
+<p class="subtitle">Live first, ratify at turn-end &mdash; how skills, apps, and services get built, changed, and fixed.</p>
+
+<p class="intro">
+Every piece of real work is split into two halves. The <b>foreground half</b> keeps the
+conversation interactive: confirm the basic shape of the thing fast and cheap, with the user
+reacting to something real. The <b>background half</b> does the expensive, thorough work
+(tests, review gates, polish) in an isolated worker, after the shape is confirmed &mdash; so the
+user is never waiting on hardening, and hardening never targets a shape the user is about to change.
+The two halves meet at an explicit user confirmation.
+</p>
+
+<div class="legend">
+  <span><span class="swatch fg"></span> Foreground &mdash; user watches and steers, minutes</span>
+  <span><span class="swatch bg"></span> Background &mdash; worker on an isolated branch, up to ~90 min</span>
+  <span><span class="swatch gate"></span> Gate &mdash; explicit user confirmation required</span>
+</div>
+
+<h2>1 &middot; Entry points: the seeding skills</h2>
+
+<div class="lane fg">
+  <div class="lane-title">Foreground</div>
+  <div class="lane-sub">The request arrives; a seeding skill runs the interactive foreground flow. Each one later hands its confirmed result to a lead (section 3).</div>
+  <div class="row">
+    <div class="card">
+      <span class="tag">net-new: data</span>
+      <b>fetch-process-show</b>
+      &ldquo;Go get this data, do something to it, show me.&rdquo;
+      Validates auth <i>first</i> (the risk not under your control), then loops a real <code>sample.json</code> covering every data shape.
+    </div>
+    <div class="card">
+      <span class="tag">net-new: web view</span>
+      <b>build-app</b>
+      &ldquo;Build me a page / dashboard / tool.&rdquo;
+      Scaffolds cheaply, then loops a <i>throwaway mock</i> with hard-coded content so the user judges look-and-feel before any real backend exists.
+    </div>
+    <div class="card">
+      <span class="tag">existing creation</span>
+      <b>update-app</b>
+      A change to an app or service that already runs. Owns the <i>live change loop</i>: apply, refresh the user&rsquo;s view, verify &mdash; hardening deferred to turn-end.
+    </div>
+    <div class="card">
+      <span class="tag">no seeding skill</span>
+      <b>Ad-hoc turn work</b>
+      The turn itself is the foreground half: you did something by hand, or worked around a breakage live. If it&rsquo;s repeatable (or broken), it feeds a lead at turn-end.
+    </div>
+  </div>
+</div>
+
+<h2>2 &middot; The foreground loop (interactive delivery)</h2>
+
+<div class="lane fg">
+  <div class="lane-title">Foreground</div>
+  <div class="lane-sub">Optimized for speed of feedback. Everything here is throwaway until confirmed: no production code, no tests, no review gates.</div>
+  <div class="steps">
+    <div class="step"><b>Clarify blockers only</b><small>business terms, zero questions is fine</small></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><b>Fast feasibility pass</b><small>time-boxed, no research project</small></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><b>Small plan, approval</b><small>what they&rsquo;ll see at the end</small></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><b>Validate risky deps</b><small>external APIs, auth &mdash; fail fast</small></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><b>Cheap real prototype, looped</b><small>sample.json / mock UI / live edit; feedback visibly applied each round</small></div>
+  </div>
+  <div class="gate">
+    <b>Gate: explicit confirmation of the shape</b>
+    <small>Nothing is hardened before this. For apps there are two: the mock confirms the UX shape, then the working site confirms real behavior.</small>
+  </div>
+  <div class="row">
+    <div class="card wide">
+      <b>After confirmation, the user is never blocked</b>
+      They keep the confirmed thing (the sample, the usable site, the applied change) and can use it immediately.
+      Follow-up capabilities are delivered <i>one at a time</i>, each with its own feedback gate &mdash; never bundled.
+      Meanwhile the expensive pass is handed off below.
+    </div>
+  </div>
+</div>
+
+<div class="down-arrow">&darr;</div>
+
+<h2>3 &middot; The seam: a lead dispatches a worker</h2>
+
+<div class="seam">
+  <b class="title">Lead skills: crystallize-creation (create) &middot; update-creation (change) &middot; heal-creation (fix)</b>
+  Each seeding flow ends by handing its confirmed result to one of three generic leads:
+  <ul style="margin: 8px 0; font-size: 0.88rem;">
+    <li><b>fetch-process-show</b> &rarr; <b>crystallize-creation</b> (<code>type=skill</code>) &mdash; the confirmed sample plus staged scripts become a tested, script-centric skill.</li>
+    <li><b>build-app</b> &rarr; <b>crystallize-creation</b> (<code>type=app</code>) &mdash; the confirmed working site gets its thorough tests and review gates.</li>
+    <li><b>update-app</b> &rarr; <b>update-creation</b> (or <b>heal-creation</b> if the change fixed a breakage). A system-interface change takes the same path with an extra preview/safe-reveal wrapper.</li>
+    <li><b>Ad-hoc turn work</b> &rarr; <b>crystallize-creation</b> standalone (with the user&rsquo;s go-ahead) if repeatable, or <b>heal-creation</b> if a creation broke and you worked around it.</li>
+  </ul>
+  The lead is still foreground, but brief and mechanical: it packages context so a fresh agent can do the work
+  without the chat history &mdash; opens a tracking ticket, writes a task file
+  (<code>operation</code> &times; <code>type</code>, plus verbatim transcript anchors so the worker finds the right turns),
+  commits pending work, launches the generic <b>harden-worker</b> from committed HEAD on its own branch,
+  and starts a <i>background poll</i> for the worker&rsquo;s reports. Then the conversation moves on.
+  <br><br>
+  <span class="muted">Two knobs shape what happens next:
+  <b>operation</b> (crystallize / update / heal) decides which approval gates the worker raises;
+  <b>type</b> (skill / app / service / system-interface) decides where it works and how the result goes live.
+  For updates, a further toggle: a change already discussed and committed live skips the design gate; an
+  emergent change (hand-work with no design conversation) gets one.</span>
+</div>
+
+<div class="down-arrow">&darr;</div>
+
+<h2>4 &middot; The background harden pass</h2>
+
+<div class="lane bg">
+  <div class="lane-title">Background</div>
+  <div class="lane-sub">Optimized for quality and robustness. Runs on an isolated branch; nothing touches the live, user-facing state until merge.</div>
+  <div class="steps">
+    <div class="step"><b>Reconstruct / reproduce</b><small>crystallize: rebuild the recipe from the transcript; heal: reproduce the incident, find root cause</small></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><b>Build properly</b><small>real implementation, parallelized I/O, partial-failure tolerance, resumable runs</small></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><b>Prove it works</b><small>thorough tests with fixtures, empty/overflow states, bounded disk retention</small></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><b>Review gates</b><small>autofix + architecture gates, fixes judged against intent</small></div>
+    <div class="arrow">&rarr;</div>
+    <div class="step"><b>Report done / stuck</b><small>never &ldquo;done&rdquo; with failing tests or gates</small></div>
+  </div>
+  <div class="gate">
+    <b>Gates surface to the user as notifications, proxied by the lead</b>
+    <small>e.g. skill crystallize: outline approval, then final creation. The lead answers routine ones itself and escalates real decisions &mdash; and never interrupts newer work the user has moved on to.</small>
+  </div>
+  <div class="row">
+    <div class="card wide">
+      <b>Single-flight per creation</b>
+      If another chat already has a harden pass in flight for the same creation, the second request leaves a note
+      on its ticket instead of dispatching a sibling &mdash; one superseding pass covers both changes.
+    </div>
+  </div>
+</div>
+
+<div class="down-arrow">&darr;</div>
+
+<h2>5 &middot; Merge and go-live (per type)</h2>
+
+<table>
+  <tr><th>Type</th><th>Worker gates</th><th>Go-live after merge</th></tr>
+  <tr>
+    <td><b>skill</b></td>
+    <td>Crystallize: outline approval + final creation. Update: design gate only if the change was emergent.</td>
+    <td>Post-crystallize migration: repoint consumers at the installed skill, delete stale scratch, restart caching services.</td>
+  </tr>
+  <tr>
+    <td><b>app</b></td>
+    <td>None for crystallize &mdash; the user already confirmed the live site, so the worker merges straight to done.</td>
+    <td>Refresh the tab so the user sees the merged build.</td>
+  </tr>
+  <tr>
+    <td><b>service</b> (no tab)</td>
+    <td>Same operation gates as apps.</td>
+    <td>Restart the supervised program.</td>
+  </tr>
+  <tr>
+    <td><b>system-interface</b></td>
+    <td>Delegates orchestration to update-creation, but adds a <b>preview before merge</b> on a throwaway instance.</td>
+    <td><b>safe-reveal</b>: record the known-good state, merge, reveal with a rollback path &mdash; the workspace UI must never break in place.</td>
+  </tr>
+</table>
+
+<h2>6 &middot; What buys what: the quality / speed / robustness levers</h2>
+
+<div class="tradeoffs">
+  <div class="card">
+    <b>Speed (foreground)</b>
+    <ul>
+      <li>Everything is throwaway until confirmed &mdash; a wrong guess costs minutes, not a rebuild.</li>
+      <li>Mock with hard-coded content; render the confirmed sample directly rather than waiting for the pipeline.</li>
+      <li>Defaults are declared, not asked: only genuinely uncertain <i>and</i> expensive-to-reverse forks become questions.</li>
+      <li>Architecture is elicited and written down, never built during the interactive phase.</li>
+      <li>Narrowest scope: one user, one use, the data at hand &mdash; no speculative generality.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <b>Quality (the gates)</b>
+    <ul>
+      <li>Every transition is gated on the user confirming something <i>real</i>: a data sample, a mock, a working site, an outline, a final diff.</li>
+      <li>This kills the dominant failure mode: expensively hardening the wrong shape, inside a worker that can&rsquo;t see corrections the user hasn&rsquo;t made yet.</li>
+      <li>Cheap iterations reset the clock &mdash; a change request during the loop costs nothing because no gates or tests have run.</li>
+      <li>Confirmation is explicit, never inferred from silence or a timeout.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <b>Robustness (background)</b>
+    <ul>
+      <li>Isolated branch: live state is untouched until merge; the system interface additionally gets preview + rollback.</li>
+      <li>The bar is &ldquo;genuinely well-tested and clean,&rdquo; not &ldquo;it ran once&rdquo; &mdash; fixtures for anything parsing external data.</li>
+      <li>Pipelines survive partial failure and resume from what already landed; raw payloads are preserved with source references.</li>
+      <li>Every growing store gets a bounded retention policy, covered by a test.</li>
+      <li>Review gates run <i>before</i> the final report, so the user sees one already-reviewed result.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>7 &middot; What the user actually experiences</h2>
+
+<div class="ux">
+  <div class="card">
+    <b>Foreground &mdash; visible, interactive</b>
+    <ol>
+      <li>A couple of plain-language questions at most, then a short plan to nod at.</li>
+      <li>Something real to react to within minutes: a rendered sample, a mock tab, a changed page.</li>
+      <li>Each round of feedback visibly applied before the next look.</li>
+      <li>One explicit &ldquo;yes, that&rsquo;s the shape&rdquo; moment.</li>
+      <li>They keep using the confirmed thing right away; new capabilities arrive one at a time, each asked about first.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <b>Background &mdash; invisible until it matters</b>
+    <ol>
+      <li>The harden pass runs silently; the conversation is free for the next request.</li>
+      <li>Occasionally a notification: approve an outline, or sign off on the final version. Routine calls are made for them.</li>
+      <li>Nothing interrupts newer work they&rsquo;ve moved on to.</li>
+      <li>Success shows up quietly &mdash; a tab refreshes, a skill exists next time it&rsquo;s needed.</li>
+      <li>Failure is honest: a &ldquo;stuck&rdquo; report says what blocked and where the work stands, never a false &ldquo;done.&rdquo;</li>
+    </ol>
+  </div>
+</div>
+
+</main>
+</body>
+</html>
