@@ -4,15 +4,24 @@ Run via: ``uv run pytest .agents/skills/update-system-interface/scripts/reveal_s
 
 The orchestration tests inject a recording ``Runner`` (so no real
 ``git``/``npm``/``uv``/``mngr`` runs), a programmable ``HttpClient`` (so the
-health probe is deterministic), a fake ``Spawner`` (so no throwaway server is
-launched), and a no-op sleeper. We assert on the exact commands the reveal hands
-to subprocess and on the failure-then-rollback control flow -- the part that must
-never regress, because a broken backend takes down the user's whole UI.
+health and frontend probes are deterministic), a fake ``Spawner`` (so no
+throwaway server is launched), and a no-op sleeper. We assert on the exact
+commands the reveal hands to subprocess and on the failure-then-rollback control
+flow -- the part that must never regress, because a broken backend takes down the
+user's whole UI.
+
+They run against a real temporary repo directory rather than a fictional path,
+and the recording runner emulates the build tool's destructive behaviour
+(emptying the bundle directory before writing). That is deliberate: the bundle
+snapshot exists precisely because a build deletes before it produces, so a
+harness that never deletes anything could not tell a working rollback from a
+broken one.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +40,31 @@ _spec.loader.exec_module(reveal_mod)
 _REPO = Path("/repo")
 _ROLLBACK = "abc123def456"
 _LIVE_BASE = "http://test-live"
+_ASSET_NAME = "index-abc123.js"
+
+
+def _write_bundle(repo_root: Path) -> None:
+    """Seed a built frontend bundle, as a successful ``npm run build`` leaves it."""
+    static = repo_root / reveal_mod.STATIC_DIR
+    (static / "assets").mkdir(parents=True, exist_ok=True)
+    (static / "index.html").write_text(
+        f'<!doctype html><html><head><script type="module" src="/assets/{_ASSET_NAME}">'
+        "</script></head><body></body></html>"
+    )
+    (static / "assets" / _ASSET_NAME).write_text("console.log('app');")
+
+
+def _bundle_exists(repo_root: Path) -> bool:
+    return (repo_root / reveal_mod.FRONTEND_BUILD_INDEX).exists()
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """A repo root that already serves a built bundle, as a live workspace does."""
+    repo_root = tmp_path / "repo"
+    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
+    _write_bundle(repo_root)
+    return repo_root
 
 
 @dataclass
@@ -46,9 +80,18 @@ class _RecordingRunner(reveal_mod.Runner):
 
     A response may be a single ``_Result`` or a list consumed in order (the last
     entry repeats) -- used to make a command fail once then succeed on retry.
+
+    When ``repo_root`` is set, ``npm run build`` also *behaves* like the real
+    build tool: it empties the bundle directory first and only writes a new
+    bundle if the canned result is a success. Without that, a test could not
+    distinguish "the rollback restored the UI" from "the UI was never removed".
     """
 
     calls: list[list[str]] = field(default_factory=list)
+    repo_root: Path | None = None
+    # Set False to model a build that exits 0 after emptying its output but
+    # before writing anything -- e.g. one killed part-way through.
+    is_build_output_written: bool = True
     _responses: dict[tuple[str, ...], object] = field(default_factory=dict)
 
     def respond(self, prefix: tuple[str, ...], result: object) -> None:
@@ -57,6 +100,12 @@ class _RecordingRunner(reveal_mod.Runner):
     def run(self, argv: Sequence[str], **kwargs) -> _Result:
         argv_list = list(argv)
         self.calls.append(argv_list)
+        result = self._canned_result(argv_list)
+        if argv_list[:3] == ["npm", "run", "build"] and self.repo_root is not None:
+            self._emulate_build(result.returncode == 0)
+        return result
+
+    def _canned_result(self, argv_list: list[str]) -> _Result:
         for prefix, result in self._responses.items():
             if tuple(argv_list[: len(prefix)]) == prefix:
                 if isinstance(result, list):
@@ -69,6 +118,15 @@ class _RecordingRunner(reveal_mod.Runner):
                 return result
         return _Result()
 
+    def _emulate_build(self, is_successful: bool) -> None:
+        assert self.repo_root is not None
+        static = self.repo_root / reveal_mod.STATIC_DIR
+        # vite's `emptyOutDir: true` -- the output is destroyed before any of the
+        # new output is written, so a failure part-way through leaves nothing.
+        shutil.rmtree(static, ignore_errors=True)
+        if is_successful and self.is_build_output_written:
+            _write_bundle(self.repo_root)
+
     def argvs_starting(self, *prefix: str) -> list[list[str]]:
         return [c for c in self.calls if tuple(c[: len(prefix)]) == prefix]
 
@@ -77,22 +135,60 @@ class _RecordingRunner(reveal_mod.Runner):
 
 
 class _FakeHttp(reveal_mod.HttpClient):
-    """Returns whatever ``responder(url)`` yields for GETs; records POSTs."""
+    """Returns whatever ``responder(url)`` yields for GETs; records POSTs.
 
-    def __init__(self, responder: Callable[[str], int | None]) -> None:
+    ``page_responder`` drives the frontend probe's body/header reads and defaults
+    to a healthy built app shell whose module script serves as JavaScript.
+    """
+
+    def __init__(
+        self,
+        responder: Callable[[str], int | None],
+        page_responder: Callable[[str], reveal_mod.FetchedPage | None] | None = None,
+    ) -> None:
         self._responder = responder
+        self._page_responder = page_responder or _built_app_page
         self.get_urls: list[str] = []
+        self.page_urls: list[str] = []
         self.post_urls: list[str] = []
 
     def get_status(self, url: str, timeout: float) -> int | None:
         self.get_urls.append(url)
         return self._responder(url)
 
+    def get_page(self, url: str, timeout: float) -> reveal_mod.FetchedPage | None:
+        self.page_urls.append(url)
+        return self._page_responder(url)
+
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
     ) -> int | None:
         self.post_urls.append(url)
         return 200
+
+
+def _built_app_page(url: str) -> reveal_mod.FetchedPage:
+    """The real app shell and its module script, both served correctly."""
+    if url.endswith(".js"):
+        return reveal_mod.FetchedPage(
+            status=200,
+            body="console.log('app');",
+            headers={"content-type": "text/javascript"},
+        )
+    return reveal_mod.FetchedPage(
+        status=200,
+        body=f'<!doctype html><script type="module" src="/assets/{_ASSET_NAME}"></script>',
+        headers={"content-type": "text/html", reveal_mod.FRONTEND_BUILT_HEADER: "true"},
+    )
+
+
+def _placeholder_page(url: str) -> reveal_mod.FetchedPage:
+    """What the backend serves when the bundle is missing: a healthy-looking 200."""
+    return reveal_mod.FetchedPage(
+        status=200,
+        body="<!doctype html><p>Frontend not built</p>",
+        headers={"content-type": "text/html", reveal_mod.FRONTEND_BUILT_HEADER: "false"},
+    )
 
 
 @dataclass
@@ -116,8 +212,10 @@ class _FakeSpawner(reveal_mod.Spawner):
         return self.last
 
 
-def _runner_with_diff(name_status: str, *, dirty: bool = False) -> _RecordingRunner:
-    runner = _RecordingRunner()
+def _runner_with_diff(
+    name_status: str, *, dirty: bool = False, repo_root: Path | None = None
+) -> _RecordingRunner:
+    runner = _RecordingRunner(repo_root=repo_root)
     runner.respond(
         ("git", "status", "--porcelain"), _Result(stdout=" M foo\n" if dirty else "")
     )
@@ -125,10 +223,15 @@ def _runner_with_diff(name_status: str, *, dirty: bool = False) -> _RecordingRun
     return runner
 
 
-def _reveal(runner: _RecordingRunner, http: _FakeHttp, spawner: _FakeSpawner) -> int:
+def _reveal(
+    runner: _RecordingRunner,
+    http: _FakeHttp,
+    spawner: _FakeSpawner,
+    repo_root: Path = _REPO,
+) -> int:
     return reveal_mod.reveal(
         _ROLLBACK,
-        _REPO,
+        repo_root,
         runner=runner,
         http=http,
         spawner=spawner,
@@ -185,6 +288,21 @@ def test_classify_ignores_backend_test_files() -> None:
     assert not changes.any
 
 
+def test_classify_counts_frontend_files_outside_src() -> None:
+    # These all change the emitted bundle. Matching only frontend/src/ made them
+    # classify as no change, so the reveal said "nothing to reveal" and left the
+    # merged tree serving a stale bundle.
+    for path in (
+        "system/apps/system_interface/frontend/index.html",
+        "system/apps/system_interface/frontend/vite.config.ts",
+        "system/apps/system_interface/frontend/tsconfig.json",
+        "system/apps/system_interface/frontend/media/favicon.ico",
+    ):
+        changes = reveal_mod.classify_changes([path])
+        assert changes.frontend, path
+        assert changes.any, path
+
+
 def test_classify_ignores_unrelated_paths() -> None:
     changes = reveal_mod.classify_changes(["README.md", "system/vendor/mngr/libs/mngr/x.py"])
     assert not changes.any
@@ -193,12 +311,14 @@ def test_classify_ignores_unrelated_paths() -> None:
 # --- happy paths ------------------------------------------------------------
 
 
-def test_frontend_only_builds_and_broadcasts_without_restart() -> None:
-    runner = _runner_with_diff("M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n")
+def test_frontend_only_builds_and_broadcasts_without_restart(repo: Path) -> None:
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
     http = _FakeHttp(_all_healthy)
     spawner = _FakeSpawner()
 
-    code = _reveal(runner, http, spawner)
+    code = _reveal(runner, http, spawner, repo)
 
     assert code == 0
     assert runner.ran("npm", "run", "build")
@@ -351,19 +471,150 @@ def test_emergency_when_rollback_cannot_restore_health() -> None:
     assert code == 3
 
 
-def test_frontend_build_failure_rolls_back() -> None:
-    runner = _runner_with_diff("M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n")
-    # First build (the reveal) fails; the recovery rebuild from known-good succeeds.
+def test_frontend_build_failure_rolls_back_and_restores_the_bundle(repo: Path) -> None:
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="type error"))
+    http = _FakeHttp(_all_healthy)
+
+    code = _reveal(runner, http, _FakeSpawner(), repo)
+
+    assert code == 2
+    assert runner.ran("git", "checkout", _ROLLBACK)
+    # The failed build emptied the bundle directory; the snapshot put it back.
+    assert _bundle_exists(repo)
+
+
+def test_recovery_restores_the_bundle_without_rebuilding(repo: Path) -> None:
+    # The incident this guards against: the build environment itself is broken,
+    # so re-running the build during recovery -- the old behaviour -- fails the
+    # same way and leaves the workspace with no UI at all. Restoring the
+    # snapshot needs no npm, so the rollback still lands a working frontend.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
     runner.respond(
-        ("npm", "run", "build"), [_Result(returncode=1, stderr="type error"), _Result()]
+        ("npm", "run", "build"), _Result(returncode=1, stderr="npm ERR! ENOTFOUND registry")
     )
     http = _FakeHttp(_all_healthy)
 
-    code = _reveal(runner, http, _FakeSpawner())
+    code = _reveal(runner, http, _FakeSpawner(), repo)
 
-    # First build fails -> rollback -> recovery rebuild (default success) -> healthy serve probe.
     assert code == 2
-    assert runner.ran("git", "checkout", _ROLLBACK)
+    assert _bundle_exists(repo)
+    # One build attempt only: recovery restored rather than retrying the command
+    # that had just failed.
+    assert len(runner.argvs_starting("npm", "run", "build")) == 1
+
+
+def test_recovery_skips_npm_ci_which_would_destroy_node_modules(repo: Path) -> None:
+    # npm ci deletes node_modules before installing, so re-running it while
+    # recovering can only make a broken frontend environment worse -- and the
+    # restored bundle is compiled output that needs neither.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/package.json\n", repo_root=repo
+    )
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="type error"))
+    http = _FakeHttp(_all_healthy)
+
+    code = _reveal(runner, http, _FakeSpawner(), repo)
+
+    assert code == 2
+    assert len(runner.argvs_starting("npm", "ci")) == 1  # the reveal's, not a second one
+    assert _bundle_exists(repo)
+
+
+def test_build_that_writes_no_bundle_is_a_failure_not_a_success(repo: Path) -> None:
+    # A build tool killed after emptying its output directory can still exit 0.
+    # Trusting the exit code alone would report success on an empty bundle and
+    # hand the user a blank page.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+    runner.is_build_output_written = False
+    http = _FakeHttp(_all_healthy)
+
+    code = _reveal(runner, http, _FakeSpawner(), repo)
+
+    # Rolled back rather than revealed; the snapshot restored the old bundle.
+    assert code == 2
+    assert _bundle_exists(repo)
+
+
+def _breaks_after_the_build(
+    runner: _RecordingRunner, broken: Callable[[str], reveal_mod.FetchedPage]
+) -> Callable[[str], reveal_mod.FetchedPage]:
+    """Serve a working frontend until the reveal builds, then the broken one.
+
+    Models a reveal that *regresses* the UI, which is the only case a rollback
+    is the right answer for -- a UI that was already broken beforehand is not
+    something rolling this change back would fix.
+    """
+
+    def responder(url: str) -> reveal_mod.FetchedPage:
+        has_built = any(c[:3] == ["npm", "run", "build"] for c in runner.calls)
+        return broken(url) if has_built else _built_app_page(url)
+
+    return responder
+
+
+def test_a_reveal_that_leaves_the_placeholder_showing_is_rolled_back(repo: Path) -> None:
+    # The state the incident left behind: /api/agents answers fine and the app
+    # shell is an HTTP 200, but what it serves is the "not built" placeholder.
+    # Nothing in the old health check could see this.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+    http = _FakeHttp(_all_healthy, page_responder=_breaks_after_the_build(runner, _placeholder_page))
+
+    code = _reveal(runner, http, _FakeSpawner(), repo)
+
+    # Recovery cannot make the fake serve a good frontend either, so it escalates
+    # rather than reporting a healthy rollback it cannot vouch for.
+    assert code == 3
+    assert http.page_urls  # the frontend was actually probed
+
+
+def test_a_reveal_whose_asset_comes_back_as_html_is_rolled_back(repo: Path) -> None:
+    # The blank-screen mode: the shell is the real app, but its module script
+    # comes back as the SPA fallback HTML, which the browser refuses to execute.
+    def html_for_the_asset(url: str) -> reveal_mod.FetchedPage:
+        if url.endswith(".js"):
+            return reveal_mod.FetchedPage(
+                status=200,
+                body="<!doctype html>",
+                headers={"content-type": "text/html"},
+            )
+        return _built_app_page(url)
+
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+    http = _FakeHttp(_all_healthy, page_responder=_breaks_after_the_build(runner, html_for_the_asset))
+
+    code = _reveal(runner, http, _FakeSpawner(), repo)
+
+    assert code == 3
+
+
+def test_a_frontend_that_was_already_broken_is_reported_not_rolled_back(
+    tmp_path: Path,
+) -> None:
+    # Rolling an unrelated backend change back would not fix a frontend that was
+    # already broken when the reveal started -- it would just lose the change.
+    # The reveal is answerable for regressions only.
+    repo_root = tmp_path / "repo"
+    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n",
+        repo_root=repo_root,
+    )
+    http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+
+    code = _reveal(runner, http, _FakeSpawner(), repo_root)
+
+    assert code == 0
 
 
 # --- preconditions ----------------------------------------------------------

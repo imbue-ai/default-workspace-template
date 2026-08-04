@@ -263,7 +263,13 @@ That single command owns the whole reveal as one deterministic, self-healing
 motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 
 - **Classifies** what the merge changed (frontend source, frontend manifest,
-  backend source, backend manifest).
+  backend source, backend manifest). Anything under `frontend/` counts as a
+  frontend change, not just `frontend/src/` -- `index.html`, the vite and
+  TypeScript configs and the bundled media all change the emitted bundle.
+- **Snapshots the built `static/` bundle** before anything destructive runs.
+  `npm ci` deletes `node_modules` before installing and the build empties the
+  bundle directory before writing, so a failure part-way leaves nothing to
+  serve; the copy is what the rollback restores from.
 - **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
   frontend, `uv tool install -e system/apps/system_interface --reinstall` for the
   backend. This is essential: a plain restart does *not* re-resolve the
@@ -275,11 +281,22 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Reveals**: rebuilds the gitignored `static/` bundle and broadcasts a
   `reload_system_interface` op so open browsers reload into the new assets
   (frontend); restarts the services agent so the editable backend re-imports the
-  merged `.py` (backend).
-- **Verifies** the live service is healthy by polling its loopback endpoint.
+  merged `.py` (backend). A build that exits 0 without producing a bundle counts
+  as a failure.
+- **Verifies** the live service is healthy by polling its loopback endpoint, and
+  that the app shell really is the built app and that its module script serves as
+  JavaScript. The backend endpoint alone cannot see either failure: the "frontend
+  not built" placeholder and an unserved `/assets` path are both HTTP 200s to it.
+  This is scoped to a regression -- the same probe runs beforehand, and only a
+  frontend that was serving then has to be serving after. A workspace that was
+  already broken gets the finding reported on stderr rather than a rollback,
+  since rolling an unrelated change back would not fix it.
 - **Auto-rolls-back on any failure**: restores the tree to `--rollback-to` as a
-  forward revert commit, rebuilds/restarts from it, and re-confirms the UI is
-  healthy.
+  forward revert commit, puts the snapshotted bundle back, restarts if needed,
+  and re-confirms the UI is healthy -- to the same frontend standard, so a
+  rollback cannot report success while serving nothing. Restoring the snapshot
+  needs neither `npm` nor a registry, so a broken build environment cannot take
+  the UI down with it.
 
 Interpret the exit code and report it to the user:
 
