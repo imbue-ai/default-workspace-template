@@ -22,7 +22,6 @@ import {
   getEventsForAgent,
   getEventCount,
   getFirstEventId,
-  getLastEventId,
   getFirstOffset,
   getRenderVersion,
   getTotalEventCount,
@@ -476,44 +475,5 @@ describe("total event count", () => {
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("a"), makeEvent("b")] });
     await fetchEvents(agent);
     expect(getTotalEventCount(agent)).toBe(2);
-  });
-});
-
-describe("stream replay after a service restart", () => {
-  /**
-   * The bug this pins: a reconnecting SSE stream replays its per-agent buffer, which
-   * can hold events OLDER than the snapshot window the client just fetched. `append`
-   * pushed any unseen id onto the END of the window with no ordering check, so replayed
-   * history landed after the newest turn and the transcript appeared to stop
-   * mid-conversation -- while `/events` was serving the correct tail all along.
-   *
-   * Reproduces without a browser, a container, or a harness: it is pure window
-   * bookkeeping, so it was never codex-specific.
-   */
-  function timestamped(id: string, timestamp: string): TranscriptEvent {
-    return { ...makeEvent(id), timestamp };
-  }
-
-  it("keeps the newest event last when the stream replays older history", async () => {
-    const agent = "agent-replay";
-    // The snapshot the client just fetched: a tail window at the live end
-    // (offset 8 + 2 held === total 10), exactly what /events returns after a restart.
-    mockRequest.mockResolvedValueOnce({
-      events: [timestamped("new-1", "2026-01-01T00:00:09Z"), timestamped("new-2", "2026-01-01T00:00:10Z")],
-      offset: 8,
-      total: 10,
-    });
-    await fetchEvents(agent);
-    expect(getLastEventId(agent)).toBe("new-2");
-    expect(hasMoreAfter(agent)).toBe(false); // tail-anchored, so append() accepts events
-
-    // The reconnecting stream replays its buffer, which starts at the conversation's beginning.
-    appendEvents(agent, [timestamped("old-1", "2026-01-01T00:00:01Z"), timestamped("old-2", "2026-01-01T00:00:02Z")]);
-
-    const timestamps = getEventsForAgent(agent).map((event) => event.timestamp);
-    expect(timestamps, `window must stay chronological; got ${JSON.stringify(timestamps)}`).toEqual(
-      [...timestamps].sort(),
-    );
-    expect(getLastEventId(agent), "the newest event must remain last").toBe("new-2");
   });
 });

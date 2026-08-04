@@ -41,7 +41,8 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
     try {
       // Both modes create the same `chat` role in the primary's work dir; they
       // differ only in which harness template the server stacks under it.
-      const url = attrs.mode === "codex" ? apiUrl("/api/agents/create-codex") : apiUrl("/api/agents/create-chat");
+      const url =
+        attrs.mode === "codex" ? apiUrl("/api/agents/create-codex") : apiUrl("/api/agents/create-chat");
 
       const body: Record<string, string> = { name: name.trim() };
 
