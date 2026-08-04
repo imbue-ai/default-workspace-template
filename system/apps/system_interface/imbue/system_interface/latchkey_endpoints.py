@@ -42,9 +42,7 @@ logger = _loguru_logger
 # read them rather than bundle any gateway state of our own.
 _ENV_GATEWAY = "LATCHKEY_GATEWAY"
 _ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
-_ENV_GATEWAY_PERMISSIONS_OVERRIDE = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 _HEADER_PASSWORD = "X-Latchkey-Gateway-Password"
-_HEADER_PERMISSIONS_OVERRIDE = "X-Latchkey-Gateway-Permissions-Override"
 
 # Per-service catalog responses are cached (on the app's ``SystemInterfaceState``)
 # keyed by service name; ``None`` records a 404 so a non-service scope-prefix
@@ -133,7 +131,6 @@ def resolve_scope_info(
     client: httpx.Client,
     base_url: str,
     password: str,
-    permissions_override: str,
     scope: str,
     cache: CatalogCache,
 ) -> LatchkeyScopeInfo | None:
@@ -143,7 +140,7 @@ def resolve_scope_info(
     the entry from the first service whose catalog contains the scope. Propagates
     ``httpx.HTTPError`` from the gateway calls.
     """
-    headers = {_HEADER_PASSWORD: password, _HEADER_PERMISSIONS_OVERRIDE: permissions_override}
+    headers = {_HEADER_PASSWORD: password}
     for service in candidate_services(scope):
         entries = _get_service_catalog(client, base_url, headers, service, cache)
         if entries is None:
@@ -163,8 +160,7 @@ def get_scope_info(scope: str) -> Response:
     """
     base_url = os.environ.get(_ENV_GATEWAY)
     password = os.environ.get(_ENV_GATEWAY_PASSWORD)
-    permissions_override = os.environ.get(_ENV_GATEWAY_PERMISSIONS_OVERRIDE)
-    if not base_url or not password or not permissions_override:
+    if not base_url or not password:
         return _json_response({"detail": "latchkey gateway is not configured"}, status_code=503)
     state = get_state()
     client: httpx.Client = state.latchkey_http_client
@@ -173,7 +169,7 @@ def get_scope_info(scope: str) -> Response:
         # Serialize concurrent resolves so two request threads don't both fetch
         # the same uncached service catalog.
         with state.latchkey_lock:
-            info = resolve_scope_info(client, base_url, password, permissions_override, scope, cache)
+            info = resolve_scope_info(client, base_url, password, scope, cache)
     except httpx.HTTPError as error:
         logger.warning("latchkey gateway request for scope {!r} failed: {}", scope, error)
         return _json_response({"detail": "latchkey gateway request failed"}, status_code=502)
