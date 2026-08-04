@@ -135,11 +135,7 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
  * is the declared extension point -- a harness may emit the kinds it registers, and
  * renderers ignore them.
  */
-export type TranscriptEvent =
-  | UserMessageEvent
-  | AssistantMessageEvent
-  | ToolResultEvent
-  | SpecialTranscriptEvent;
+export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent | SpecialTranscriptEvent;
 
 // For hook compatibility
 export interface ResponseItem {
