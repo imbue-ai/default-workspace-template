@@ -1,0 +1,66 @@
+/**
+ * The workspace's single connection to the embedding minds chrome.
+ *
+ * All postMessage traffic with the embedder flows through the vendored minds
+ * embed contract (see `@minds/embed-contract` and minds'
+ * `docs/embed-contract.md`); this module owns the one workspace-side endpoint
+ * and hands out narrow send/subscribe helpers, so the whole boundary stays
+ * auditable here rather than spread across raw window listeners.
+ *
+ * The page behaves identically embedded (iframe under the minds chrome) and
+ * top-level (a direct share visit): with no embedder, outbound sends simply
+ * have no listener and no embedder message ever arrives.
+ */
+
+import { PERMISSION_REQUEST_RESOLVED, createWorkspaceEndpoint } from "@minds/embed-contract";
+import type { ContractEndpoint, ContractMessage } from "@minds/embed-contract";
+
+type EmbedderMessageHandler = (message: ContractMessage) => void;
+
+// One replaceable handler per embedder->workspace type, registered by the
+// feature that owns it (the permission cards register the resolution relay at
+// boot).
+const handlerByType: Partial<Record<string, EmbedderMessageHandler>> = {};
+
+// Created on first use rather than at import time so importing this module
+// never touches `window` (unit tests run under node and stub it per test).
+let endpoint: ContractEndpoint | null = null;
+
+// A do-nothing endpoint for non-browser contexts: component unit tests run
+// under node without a `window`, and features send/subscribe unconditionally.
+const NULL_ENDPOINT: ContractEndpoint = {
+  send: () => undefined,
+  dispose: () => undefined,
+};
+
+function getEndpoint(): ContractEndpoint {
+  if (endpoint === null) {
+    if (typeof window === "undefined") return NULL_ENDPOINT;
+    endpoint = createWorkspaceEndpoint({
+      handlers: {
+        [PERMISSION_REQUEST_RESOLVED]: (message) => handlerByType[PERMISSION_REQUEST_RESOLVED]?.(message),
+      },
+    });
+  }
+  return endpoint;
+}
+
+/** Send a workspace->embedder contract message (no-op when not embedded). */
+export function sendToEmbedder(type: string, payload?: Record<string, unknown>): void {
+  getEndpoint().send(type, payload);
+}
+
+/** Register the handler for one embedder->workspace type (replaces any prior one). */
+export function setEmbedderMessageHandler(type: string, handler: EmbedderMessageHandler): void {
+  getEndpoint();
+  handlerByType[type] = handler;
+}
+
+/** Tear the endpoint down so the next use rebinds to the current `window`. Test-only. */
+export function resetEmbedEndpointForTesting(): void {
+  if (endpoint !== null) {
+    endpoint.dispose();
+    endpoint = null;
+  }
+  for (const type of Object.keys(handlerByType)) delete handlerByType[type];
+}
