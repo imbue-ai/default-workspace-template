@@ -25,9 +25,13 @@ The two shapes:
   to stdout. Nothing is registered with the workspace UI; the agent curls /
   drives the port directly. ``down`` kills it.
 - **Preview (surface to the user).** Add ``--service-name`` to also register the
-  instance as a proxied service, and ``--preview-service-name`` + ``--preview-title``
-  to wrap it in a labeled "preview" frame (``preview_wrapper_server.py``) the user
-  opens as a tab. ``down`` kills both servers and deregisters both services.
+  instance as a service (served raw at its own browser origin), and
+  ``--preview-service-name`` + ``--preview-title`` to wrap it in a labeled
+  "preview" frame (``preview_wrapper_server.py``) the user opens as a tab.
+  Registered names become hostname labels, so they must be DNS-safe: lowercase
+  letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
+  not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
+  kills both servers and deregisters both services.
 
 The service must read its port (and, when relevant, its data dir) from the
 environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
@@ -238,7 +242,7 @@ def _teardown(
     partial state still fully unwinds and re-runs are no-ops.
 
     Order: kill every detached server (by process group), then deregister every
-    proxied service so the live UI stops routing to a dead port.
+    registered service so the workspace stops routing to a dead port.
     """
     for pid in pids:
         runner.kill_process_group(pid)
@@ -276,8 +280,8 @@ def up(
     Picks a free port, injects it into ``port_env`` (and ``host_env`` when given)
     on top of ``env_overrides`` / ``unset_env``, launches ``command`` from ``cwd``
     detached, and waits for ``health_path`` to serve 200. With ``service_name`` it
-    also registers the instance as a proxied service; with the preview names +
-    title it additionally boots the labeled wrapper frame.
+    also registers the instance as a service (served at its own origin); with the
+    preview names + title it additionally boots the labeled wrapper frame.
 
     On any failure the partial state is torn down and 1 is returned. On success a
     state file records the servers + services so ``down`` can find them later.
@@ -340,7 +344,7 @@ def up(
                 f"(see {inner_log_path})"
             )
 
-        # 2. Register it as a proxied service, if asked.
+        # 2. Register it as a service (own browser origin), if asked.
         if service_name is not None:
             _register_service(
                 runner, repo_root, service_name, inner_port, "forward_port register"
@@ -416,12 +420,16 @@ def up(
         shutil.rmtree(state_dir, ignore_errors=True)
         return 1
 
-    # The user-/agent-facing URL: the wrapper tab when previewing, else the
-    # instance's own loopback port. Emit it on stdout so the caller can capture it.
+    # What the caller needs on stdout: the preview's service name when
+    # previewing (its browser origin is derived from the workspace host, which
+    # is not knowable server-side -- open the tab by service name, e.g. via
+    # layout.py open), else the instance's own loopback URL.
     if preview_requested:
-        sys.stdout.write(f"/service/{preview_service_name}/\n")
+        sys.stdout.write(f"{preview_service_name}\n")
         sys.stderr.write(
-            f"preview up: open the '{preview_service_name}' service tab (serving {cwd} "
+            f"preview up: open the '{preview_service_name}' service tab, e.g. "
+            f"`python3 system/scripts/layout.py open --layout desktop "
+            f"{preview_service_name}` (serving {cwd} "
             f"on port {inner_port}, wrapped on port {wrapper_port}). Run "
             f"'down --name {name}' to tear it down.\n"
         )
@@ -522,8 +530,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     up_parser.add_argument(
         "--service-name",
         default=None,
-        help="Register the instance as this proxied service (needed to surface it "
-        "as a tab). Omit for a bare instance reached directly on its port.",
+        help="Register the instance as a service under this name (needed to "
+        "surface it as a tab; the name becomes a hostname label, so it must be "
+        "DNS-safe: lowercase letters/digits and single hyphens, no underscores, "
+        "not starting with 'host-' or 'agent-'). Omit for a bare instance "
+        "reached directly on its port.",
     )
     up_parser.add_argument(
         "--preview-service-name",

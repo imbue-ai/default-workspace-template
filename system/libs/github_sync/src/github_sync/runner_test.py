@@ -32,7 +32,6 @@ _REPO_URL = "https://github.com/some-user/my-workspace"
 _GATEWAY_ENV = {
     "LATCHKEY_GATEWAY": "http://127.0.0.1:39999",
     "LATCHKEY_GATEWAY_PASSWORD": "gw-password",
-    "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE": "gw-override",
 }
 
 

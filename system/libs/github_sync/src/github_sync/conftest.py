@@ -21,12 +21,7 @@ def isolated_git_and_gateway_env(
     gitconfig = tmp_path / "gitconfig"
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
-    for name in (
-        "LATCHKEY_GATEWAY",
-        "LATCHKEY_GATEWAY_SECONDARY",
-        "LATCHKEY_GATEWAY_PASSWORD",
-        "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE",
-    ):
+    for name in ("LATCHKEY_GATEWAY", "LATCHKEY_GATEWAY_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
     # Steer subprocesses away from any inherited status-file override.
     monkeypatch.setenv(

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
+import { resetEmbedEndpointForTesting } from "../embed";
 import { openPermissionRequest, parsePermissionRequest, renderPermissionCard } from "./permission-card";
 
 function makeToolCall(inputPreview: string): ToolCall {
@@ -205,12 +206,18 @@ describe("renderPermissionCard", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
     const button = findVnode(vnode, (v) => v.tag === "button") as { attrs?: { onclick?: (e: Event) => void } } | null;
 
+    resetEmbedEndpointForTesting();
     const postMessage = vi.fn();
-    vi.stubGlobal("window", { parent: { postMessage } });
+    vi.stubGlobal("window", {
+      parent: { postMessage },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
     try {
       button?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event);
     } finally {
       vi.unstubAllGlobals();
+      resetEmbedEndpointForTesting();
     }
     expect(postMessage).toHaveBeenCalledWith(
       { type: "minds:open-request-modal", requestId: "885711ec07bf47239d71294e1534330b" },
@@ -365,13 +372,20 @@ describe("renderPermissionCard", () => {
 describe("openPermissionRequest", () => {
   it("posts the open-request-modal message to the parent window", () => {
     // The chat UI runs inside an iframe; vitest's node environment has no
-    // `window`, so stand one in with a spy parent.
+    // `window`, so stand one in with a spy parent. The embed endpoint binds
+    // to whatever window exists on first use, so reset it around the stub.
+    resetEmbedEndpointForTesting();
     const postMessage = vi.fn();
-    vi.stubGlobal("window", { parent: { postMessage } });
+    vi.stubGlobal("window", {
+      parent: { postMessage },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
     try {
       openPermissionRequest("req-123");
     } finally {
       vi.unstubAllGlobals();
+      resetEmbedEndpointForTesting();
     }
     expect(postMessage).toHaveBeenCalledWith({ type: "minds:open-request-modal", requestId: "req-123" }, "*");
   });

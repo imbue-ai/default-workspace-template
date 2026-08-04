@@ -17,7 +17,7 @@ from imbue.system_interface.latchkey_endpoints import candidate_services
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import build_test_state
 
-_GATEWAY_ENV = ("LATCHKEY_GATEWAY", "LATCHKEY_GATEWAY_PASSWORD", "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE")
+_GATEWAY_ENV = ("LATCHKEY_GATEWAY", "LATCHKEY_GATEWAY_PASSWORD")
 
 SLACK_CATALOG = [
     {
@@ -61,7 +61,6 @@ def _mock_gateway_client(catalogs: dict[str, list[dict[str, Any]]], calls: list[
 def _configure_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LATCHKEY_GATEWAY", "http://gateway.invalid")
     monkeypatch.setenv("LATCHKEY_GATEWAY_PASSWORD", "secret")
-    monkeypatch.setenv("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "jwt")
 
 
 def test_candidate_services_yields_longest_prefix_first() -> None:
