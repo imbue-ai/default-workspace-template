@@ -129,10 +129,3 @@ Added OpenAI Codex CLI support to the workspace image.
   broadcast bookmark so a read cannot swallow events the live stream owes subscribers.
   Adds `harnesses/codex/watcher_test.py`; codex had no watcher test, which is why this
   shipped.
-- The transcript window no longer seats replayed history after the live tail. A
-  reconnecting event stream replays its per-agent buffer from the start of the
-  conversation, and `TranscriptStore.append` pushed any unseen id onto the end of the
-  window with no ordering check -- so after a services restart the visible end of the
-  chat became an older message while `/events` was serving the correct tail. `append`
-  now rejects unseen events older than where the window ends; the snapshot and backfill
-  already own that range. Harness-agnostic: it needed a busy agent, not a codex one.
