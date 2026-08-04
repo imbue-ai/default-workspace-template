@@ -135,11 +135,7 @@ export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
  * is the declared extension point -- a harness may emit the kinds it registers, and
  * renderers ignore them.
  */
-export type TranscriptEvent =
-  | UserMessageEvent
-  | AssistantMessageEvent
-  | ToolResultEvent
-  | SpecialTranscriptEvent;
+export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent | SpecialTranscriptEvent;
 
 // For hook compatibility
 export interface ResponseItem {
@@ -282,13 +278,19 @@ class TranscriptStore {
    */
   append(newEvents: TranscriptEvent[]): boolean {
     const tailAnchored = !this.hasMoreAfter;
+    // Where the window ends as this batch arrives. A reconnecting stream replays its
+    // per-agent buffer from the start of the conversation, so an unseen event older
+    // than this is history the snapshot and backfill already own -- pushing it would
+    // seat old turns after the newest one and make the transcript look like it stops
+    // mid-conversation while /events was serving the correct tail all along.
+    const tailTimestamp = this.#events.length > 0 ? this.#events[this.#events.length - 1].timestamp : null;
     return this.#commit(() => {
       let added = false;
       let merged = false;
       for (const event of newEvents) {
         const prior = this.#byId.get(event.event_id);
         if (prior === undefined) {
-          if (tailAnchored) {
+          if (tailAnchored && !(tailTimestamp !== null && event.timestamp < tailTimestamp)) {
             this.#events.push(event);
             this.#byId.set(event.event_id, event);
             added = true;
