@@ -9,17 +9,11 @@ last confirmed answer (see runner._refresh_visibility for that policy).
 """
 
 import json
-import os
 import subprocess
 
 from loguru import logger
 
-from github_sync.config import (
-    ENV_GATEWAY,
-    ENV_GATEWAY_PERMISSIONS_OVERRIDE,
-    get_secondary_gateway_url,
-    parse_owner_and_name,
-)
+from github_sync.config import parse_owner_and_name
 
 VISIBILITY_PRIVATE = "private"
 VISIBILITY_PUBLIC = "public"
@@ -50,58 +44,31 @@ def parse_visibility_response(body: str) -> str:
         return VISIBILITY_UNKNOWN
 
 
-def _latchkey_curl_env(is_secondary: bool) -> dict[str, str] | None:
-    """Env for a `latchkey curl` call; None means inherit (primary gateway)."""
-    if not is_secondary:
-        return None
-    secondary_url = get_secondary_gateway_url()
-    if secondary_url is None:
-        return None
-    # Per the latchkey skill: the secondary gateway takes no permissions
-    # override, so it must be cleared alongside the gateway swap.
-    return {
-        **os.environ,
-        ENV_GATEWAY: secondary_url,
-        ENV_GATEWAY_PERMISSIONS_OVERRIDE: "",
-    }
-
-
 def check_repo_visibility(repo_url: str) -> str:
     """Ask GitHub (via latchkey) whether the sync repo is private.
 
-    Tries the primary gateway first, then the secondary (per-VPS) gateway so
-    the check keeps working when the user's machine is offline. Returns
-    UNKNOWN when neither gateway produces a parseable answer.
+    Goes through the one latchkey gateway; there is no fallback gateway, so a
+    call that fails or returns an unparseable body is UNKNOWN and callers
+    retry on the next tick.
     """
     owner, name = parse_owner_and_name(repo_url)
     api_url = f"https://api.github.com/repos/{owner}/{name}"
-    gateway_attempts = [False]
-    if get_secondary_gateway_url() is not None:
-        gateway_attempts.append(True)
-    for is_secondary in gateway_attempts:
-        # latchkey curl injects the GitHub credential server-side; -s keeps
-        # stdout parseable.
-        try:
-            result = subprocess.run(
-                ["latchkey", "curl", "-s", api_url],
-                capture_output=True,
-                text=True,
-                check=False,
-                env=_latchkey_curl_env(is_secondary),
-                timeout=_LATCHKEY_CURL_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired) as e:
-            logger.debug("latchkey curl failed (secondary={}): {}", is_secondary, e)
-            continue
-        if result.returncode != 0:
-            logger.debug(
-                "latchkey curl exited {} (secondary={}): {}",
-                result.returncode,
-                is_secondary,
-                result.stderr.strip(),
-            )
-            continue
-        visibility = parse_visibility_response(result.stdout)
-        if visibility != VISIBILITY_UNKNOWN:
-            return visibility
-    return VISIBILITY_UNKNOWN
+    # latchkey curl injects the GitHub credential server-side; -s keeps
+    # stdout parseable.
+    try:
+        result = subprocess.run(
+            ["latchkey", "curl", "-s", api_url],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_LATCHKEY_CURL_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.debug("latchkey curl failed: {}", e)
+        return VISIBILITY_UNKNOWN
+    if result.returncode != 0:
+        logger.debug(
+            "latchkey curl exited {}: {}", result.returncode, result.stderr.strip()
+        )
+        return VISIBILITY_UNKNOWN
+    return parse_visibility_response(result.stdout)
