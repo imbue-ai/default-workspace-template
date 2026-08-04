@@ -120,3 +120,12 @@ Added OpenAI Codex CLI support to the workspace image.
 - The codex watcher warns instead of silently skipping a malformed rollout line, so a
   corrupt rollout is visible rather than quietly truncated. Satisfies main's new
   `prevent_silent_decode_error_catch` ratchet, which the old `debug`-level log did not.
+- The codex watcher's read methods now refresh from the rollout on every call, where
+  claude's already re-read their session files. Previously they served only what the
+  background thread had parsed, so the first request after a system-interface restart
+  could answer "no transcript" for a rollout sitting on disk -- and the client caches
+  that answer, leaving the chat blank until a page reload while sends still worked and
+  the model still had full context. The read cursor is now separate from the
+  broadcast bookmark so a read cannot swallow events the live stream owes subscribers.
+  Adds `harnesses/codex/watcher_test.py`; codex had no watcher test, which is why this
+  shipped.

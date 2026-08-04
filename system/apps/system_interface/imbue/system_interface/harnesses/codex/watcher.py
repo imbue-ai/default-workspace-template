@@ -82,6 +82,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
     _event_index: dict[str, int]
     _current_path: Path | None
     _byte_offset: int
+    _emitted_count: int
     _partial: str
     _line_index: int
     _tool_name_by_call_id: dict[str, str]
@@ -116,7 +117,14 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # until the first turn writes the marker. Rotation = marker points elsewhere.
         self._current_path = None
         # Bytes of _current_path already consumed; reset only on rotation / re-read.
+        # This is a READ cursor: reads advance it too (see ``_refresh``), so it says
+        # nothing about what subscribers have seen.
         self._byte_offset = 0
+        # How many of _events have been broadcast via ``on_events``. Separate from the
+        # read cursor precisely so a read may advance the latter without the background
+        # thread then skipping those events -- ClaudeSessionWatcher keeps the same split,
+        # which is what lets its read paths refresh from disk on every call.
+        self._emitted_count = 0
         # A trailing partial line (no newline yet) carried to the next read.
         self._partial = ""
         # GLOBAL monotonic line counter for synthetic event ids (event_msg user_message
@@ -182,10 +190,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
             logger.debug("codex watcher: failed to start watchdog on {}: {}", self._sessions_dir, e)
 
     def _run(self) -> None:
-        # Emit whatever already exists on first read (agent may have run before the
-        # UI connected), then poll (woken early by watchdog) for appended lines.
+        # Broadcast whatever already exists on first pass (the agent may have run before
+        # the UI connected), then poll (woken early by watchdog) for appended lines.
         self._maybe_start_observer()
-        self._emit(self._consume_new_lines())
+        self._emit_unsent()
         while not self._stop_event.is_set():
             self._wake_event.wait(timeout=POLL_INTERVAL_SECONDS)
             self._wake_event.clear()
@@ -193,11 +201,31 @@ class CodexSessionWatcher(AgentSessionWatcher):
                 break
             # retry until the transcript dir exists
             self._maybe_start_observer()
-            self._emit(self._consume_new_lines())
+            self._emit_unsent()
 
-    def _emit(self, events: list[dict[str, Any]]) -> None:
-        if events:
-            self._on_events(self._agent_id, events)
+    def _refresh(self) -> None:
+        """Bring the in-memory transcript up to date with the rollout on disk.
+
+        Called by the background loop AND by every read method, mirroring the
+        ``_discover_sessions()`` call at the top of ClaudeSessionWatcher's read paths:
+        a read must never depend on the loop having run, or the first request after a
+        restart answers "no history" for a transcript that is sitting on disk -- and the
+        client caches that answer. Incremental, so a caught-up refresh reads no bytes.
+        """
+        self._consume_new_lines()
+
+    def _emit_unsent(self) -> None:
+        """Refresh, then broadcast every event not yet sent to subscribers.
+
+        Keyed off ``_emitted_count`` rather than off what this read happened to parse,
+        so events a *reader* pulled in are still delivered exactly once.
+        """
+        self._refresh()
+        with self._lock:
+            pending = self._events[self._emitted_count :]
+            self._emitted_count = len(self._events)
+        if pending:
+            self._on_events(self._agent_id, pending)
 
     def _read_active_rollout(self) -> Path | None:
         """The absolute path of the live rollout, per the marker; None until written."""
@@ -295,11 +323,13 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
     def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
         """Return every parsed event in chronological order."""
+        self._refresh()
         with self._lock:
             return list(self._events)
 
     def get_tail_events(self, limit: int, session_id: str | None = None) -> list[dict[str, Any]]:
         """Return the most recent ``limit`` events (chronological order)."""
+        self._refresh()
         if limit <= 0:
             return []
         with self._lock:
@@ -309,6 +339,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
         self, before_event_id: str, limit: int = 50, session_id: str | None = None
     ) -> list[dict[str, Any]]:
         """Return up to ``limit`` events immediately before ``before_event_id``."""
+        self._refresh()
         if limit <= 0:
             return []
         with self._lock:
@@ -322,6 +353,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
         self, after_event_id: str, limit: int = 50, session_id: str | None = None
     ) -> list[dict[str, Any]]:
         """Return up to ``limit`` events immediately after ``after_event_id``."""
+        self._refresh()
         if limit <= 0:
             return []
         with self._lock:
@@ -332,6 +364,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
     def get_events_at_offset(self, offset: int, limit: int, session_id: str | None = None) -> list[dict[str, Any]]:
         """Return up to ``limit`` events starting at global index ``offset`` (clamped)."""
+        self._refresh()
         if limit <= 0:
             return []
         start = max(0, offset)
@@ -340,12 +373,14 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
     def get_event_offset(self, event_id: str, session_id: str | None = None) -> int:
         """Global index of ``event_id``, or -1 if unknown."""
+        self._refresh()
         with self._lock:
             idx = self._event_index.get(event_id)
             return idx if idx is not None else -1
 
     def get_total_event_count(self, session_id: str | None = None) -> int:
         """Total number of events in the transcript."""
+        self._refresh()
         with self._lock:
             return len(self._events)
 
