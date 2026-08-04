@@ -213,6 +213,8 @@ Commit your changes to git after making modifications.
 
 Users make "creations": apps (opened as tabs), skills (a skill run automatically on a schedule is an "automation" -- run via the machinery in `system/libs/automations/`, see the manage-scheduled-tasks skill), data (documents, images, notes), and customizations of any of them. Inspirations are a publishable, reusable, bootable snapshot of the creations a mind has built (one repo can accumulate several); another mind can adapt one into itself.
 
+Before proactively suggesting permissions, sharing, or inspirations, check `data/.state/user_knowledge.toml` (and latchkey's live permission state for permissions -- see the latchkey skill) so you don't re-suggest something the user already knows about or has repeatedly ignored. When you do make one of these suggestions, record it: bump `times_suggested` and set `last_suggested_at` (`YYYY-MM-DD`) under that capability's table in the same file, creating it if absent. Back off after a couple of ignored suggestions rather than repeating it every session.
+
 # Updates
 
 Use the `update-self` skill to pull improvements from the upstream template repo, and the `submit-upstream-changes` skill to push shared changes (skills, scripts, config) back upstream.
