@@ -919,7 +919,12 @@ def _route_template_keys_to_agent_type(
         return params
 
     known_fields = _agent_config_fields(str(agent_type))
-    settings: list[str] = list(params.get("setting", ()))
+    # Accumulate per field BEFORE emitting, because each `--setting` entry extends the
+    # base config independently: two entries carrying `field__extend` would each extend the
+    # empty base and the later one would simply win, silently dropping the earlier role's
+    # contribution. Combining here means one entry per field, whose value already holds
+    # every stacked role's blocks in order.
+    combined: dict[str, Any] = {}
     for template_name, raw_key, template_value in pending:
         field_name = bare_key(raw_key) if is_extend_key(raw_key) else raw_key
         if field_name not in known_fields:
@@ -935,8 +940,21 @@ def _route_template_keys_to_agent_type(
             if supported:
                 message += f" Supported by: {', '.join(supported)}."
             raise UserInputError(message)
-        settings.append(f"agent_types.{agent_type}.{raw_key}={json.dumps(template_value)}")
+        if is_extend_key(raw_key):
+            # The SAME extend algebra a real option gets (`env__extend` and friends), so an
+            # agent-type setting stacks identically -- no second implementation to drift.
+            combined[raw_key] = _apply_template_extend(
+                combined.get(raw_key, ()),
+                template_value,
+                template_name=template_name,
+                param_name=field_name,
+            )
+        else:
+            # Bare key: assign-by-default, so the last role wins -- matching a scalar option.
+            combined[raw_key] = template_value
 
+    settings = list(params.get("setting", ()))
+    settings.extend(f"agent_types.{agent_type}.{key}={json.dumps(value)}" for key, value in combined.items())
     params["setting"] = tuple(settings)
     return params
 

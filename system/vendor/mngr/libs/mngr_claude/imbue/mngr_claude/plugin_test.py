@@ -71,6 +71,7 @@ from imbue.mngr.primitives import ErrorBehavior
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import TransferMode
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.providers.docker.host_store import HostRecord
@@ -7025,3 +7026,30 @@ def test_approve_api_key_no_host_argument_falls_back_to_process_env(monkeypatch:
     approve_api_key_for_claude(data)
     approved = cast(dict[str, list[str]], data["customApiKeyResponses"])["approved"]
     assert key[-20:] in approved
+
+
+def test_stacked_role_prompts_reach_claude_as_one_flag_carrying_every_block() -> None:
+    """Claude gets ONE --append-system-prompt whose value holds every stacked role's block.
+
+    One flag rather than one per block because claude's flag is last-wins (verified against
+    claude 2.1.220): repeating it would deliver only the final block and silently drop every
+    role stacked before it. The sentinels make both blocks' presence checkable.
+    """
+    agent = ClaudeAgent.model_construct(
+        agent_config=ClaudeAgentConfig(
+            append_system_prompt=(SystemPromptText("SENTINEL_A"), SystemPromptText("SENTINEL_B")),
+            check_installation=False,
+        )
+    )
+    args = agent._build_append_system_prompt_args()
+    assert len(args) == 2, f"expected exactly one flag and one value, got {args!r}"
+    flag, value = args
+    assert flag == "--append-system-prompt"
+    assert "SENTINEL_A" in value
+    assert "SENTINEL_B" in value
+    assert value.index("SENTINEL_A") < value.index("SENTINEL_B"), "blocks must keep stack order"
+
+
+def test_claude_emits_no_prompt_flag_when_no_role_contributed_one() -> None:
+    agent = ClaudeAgent.model_construct(agent_config=ClaudeAgentConfig(check_installation=False))
+    assert agent._build_append_system_prompt_args() == ()
