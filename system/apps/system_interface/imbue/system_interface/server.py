@@ -24,7 +24,7 @@ from imbue.concurrency_group.subprocess_utils import run_local_command_modern_ve
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr_claude.claude_config import get_managed_settings_path
-from imbue.system_interface import claude_auth_endpoints
+from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import workspace_layouts
@@ -33,6 +33,7 @@ from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
@@ -42,13 +43,13 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.fast_mode_policy import FastModeSettingsError
-from imbue.system_interface.fast_mode_policy import get_agent_fast_mode_write_path
-from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
-from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
-from imbue.system_interface.fast_mode_policy import resolve_agent_fast_mode
-from imbue.system_interface.fast_mode_policy import write_fast_mode_setting
-from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.fast_mode import FastModeSettingsError
+from imbue.system_interface.harnesses.claude.fast_mode import get_agent_fast_mode_write_path
+from imbue.system_interface.harnesses.claude.fast_mode import get_workspace_fast_mode_decision_path
+from imbue.system_interface.harnesses.claude.fast_mode import read_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.fast_mode import resolve_agent_fast_mode
+from imbue.system_interface.harnesses.claude.fast_mode import write_fast_mode_setting
+from imbue.system_interface.harnesses.claude.fast_mode import write_workspace_fast_mode_decision
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
@@ -62,10 +63,10 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
-from imbue.system_interface.model_settings import MODEL_OPTIONS
-from imbue.system_interface.model_settings import is_valid_model_id
-from imbue.system_interface.model_settings import read_model_from_settings
-from imbue.system_interface.model_settings import supports_fast_mode
+from imbue.system_interface.harnesses.claude.model_settings import MODEL_OPTIONS
+from imbue.system_interface.harnesses.claude.model_settings import is_valid_model_id
+from imbue.system_interface.harnesses.claude.model_settings import read_model_from_settings
+from imbue.system_interface.harnesses.claude.model_settings import supports_fast_mode
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
@@ -75,7 +76,7 @@ from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
-from imbue.system_interface.models import CreateWorktreeRequest
+from imbue.system_interface.models import CreateCodexRequest
 from imbue.system_interface.models import DestroyAgentResponse
 from imbue.system_interface.models import ErrorResponse
 from imbue.system_interface.models import InterruptAgentResponse
@@ -190,6 +191,31 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
+def _is_codex_enabled() -> bool:
+    """Whether the codex harness UI is enabled, from the ``FEATURE_FLAG_ENABLE_CODEX`` env var.
+
+    Off by default: the "New Codex Agent" launcher appears only when this is set to a
+    truthy value (``1``/``true``/``yes``/``on``), so codex can be dark-launched and
+    turned on per host without a rebuild.
+    """
+    return os.environ.get("FEATURE_FLAG_ENABLE_CODEX", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _inject_enable_codex_meta_tag(html_content: str) -> str:
+    """Inject the codex feature flag so the frontend can gate the codex launcher."""
+    meta_tag = f'<meta name="system-interface-enable-codex" content="{str(_is_codex_enabled()).lower()}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
+def _is_silly_models_enabled() -> bool:
+    return os.environ.get("SILLY_MODELS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _inject_enable_silly_models_meta_tag(html_content: str) -> str:
+    meta_tag = f'<meta name="system-interface-enable-silly-models" content="{str(_is_silly_models_enabled()).lower()}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -199,6 +225,8 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
+        html_content = _inject_enable_codex_meta_tag(html_content)
+        html_content = _inject_enable_silly_models_meta_tag(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _html_response(html_content)
@@ -387,9 +415,10 @@ def _send_message_endpoint(agent_id: str) -> Response:
 
     agent_manager: AgentManager = get_state().agent_manager
     success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
+
     if not success:
-        error = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(error.model_dump(), status_code=500)
+        failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
+        return _json_response(failure.model_dump(), status_code=500)
 
     # Record which client (and layout) the message came from, so agents can
     # attribute requests to a client via ``layout.py context``. Legacy callers
@@ -1144,22 +1173,6 @@ def _random_name_endpoint() -> Response:
     return _json_response(RandomNameResponse(name=name).model_dump())
 
 
-def _create_worktree_agent() -> Response:
-    """Create a new worktree agent."""
-    agent_manager: AgentManager = get_state().agent_manager
-    body = request.get_json()
-
-    try:
-        create_request = CreateWorktreeRequest(**body)
-        agent_name = create_request.name
-        selected_agent_id = create_request.selected_agent_id or agent_manager.get_own_agent_id()
-        agent_id = agent_manager.create_worktree_agent(agent_name, selected_agent_id)
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=400)
-
-
 def _create_chat_agent() -> Response:
     """Create a new chat agent in the primary agent's work directory."""
     agent_manager: AgentManager = get_state().agent_manager
@@ -1172,6 +1185,44 @@ def _create_chat_agent() -> Response:
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
         return _json_response(error.model_dump(), status_code=400)
+
+
+def _create_codex_agent() -> Response:
+    """Create a new codex chat agent in the primary agent's work directory.
+
+    Same `chat` role as _create_chat_agent, on the codex harness instead of claude.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    body = request.get_json()
+
+    try:
+        create_request = CreateCodexRequest(**body)
+        agent_id = agent_manager.create_chat_agent(create_request.name, HarnessType.CODEX)
+        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+    except (AgentCreationError, OSError, ValueError) as e:
+        error = ErrorResponse(detail=str(e))
+        return _json_response(error.model_dump(), status_code=400)
+
+
+def _create_chat_agent_with_roles(harness: HarnessType, roles: tuple[str, ...]) -> Response:
+    agent_manager: AgentManager = get_state().agent_manager
+    body = request.get_json()
+
+    try:
+        create_request = CreateChatRequest(**body)
+        agent_id = agent_manager.create_chat_agent(create_request.name, harness, roles)
+        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+    except (AgentCreationError, OSError, ValueError) as e:
+        error = ErrorResponse(detail=str(e))
+        return _json_response(error.model_dump(), status_code=400)
+
+
+def _create_silly_claude_agent() -> Response:
+    return _create_chat_agent_with_roles(HarnessType.CLAUDE, ("pirate", "scottish"))
+
+
+def _create_silly_codex_agent() -> Response:
+    return _create_chat_agent_with_roles(HarnessType.CODEX, ("pirate", "scottish"))
 
 
 def _ws_endpoint(websocket: Any) -> None:
@@ -1765,8 +1816,14 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/create-worktree", view_func=_create_worktree_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/create-codex", view_func=_create_codex_agent, methods=["POST"])
+    application.add_url_rule(
+        "/api/agents/create-silly-claude", view_func=_create_silly_claude_agent, methods=["POST"]
+    )
+    application.add_url_rule(
+        "/api/agents/create-silly-codex", view_func=_create_silly_codex_agent, methods=["POST"]
+    )
     application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])
@@ -1828,7 +1885,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
     application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
-    claude_auth_endpoints.register_routes(application)
+    auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(

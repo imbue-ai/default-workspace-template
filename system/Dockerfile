@@ -10,6 +10,11 @@ ENV PATH="/root/.local/bin:$PATH"
 ARG CLAUDE_CODE_VERSION=2.1.207
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
+# Pin Codex CLI; passed to setup_system.sh. Keep in sync with the default in
+# system/scripts/setup_system.sh. Bump deliberately, not by accident.
+ARG CODEX_VERSION=0.146.0
+ENV CODEX_VERSION=${CODEX_VERSION}
+
 # ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
@@ -73,14 +78,15 @@ COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/app
 
 # system/vendor/mngr path-dependency manifests. The root pyproject.toml's
 # [tool.uv.sources] points imbue-common, imbue-mngr, imbue-mngr-claude,
-# resource-guards, and concurrency-group at system/vendor/mngr/libs/<pkg>; uv
-# needs each pyproject.toml present to resolve the workspace. mngr_modal
-# and mngr_wait are also workspace members whose transitive deps benefit
-# from pre-warming even though only mngr_wait is registered post-COPY
-# (as a mngr plugin, not a tool install).
+# imbue-mngr-codex, resource-guards, and concurrency-group at
+# system/vendor/mngr/libs/<pkg>; uv needs each pyproject.toml present to
+# resolve the workspace. mngr_modal and mngr_wait are also workspace members
+# whose transitive deps benefit from pre-warming even though only mngr_wait
+# is registered post-COPY (as a mngr plugin, not a tool install).
 COPY system/vendor/mngr/libs/imbue_common/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/imbue_common/pyproject.toml
 COPY system/vendor/mngr/libs/mngr/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_claude/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_claude/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_codex/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_codex/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_modal/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_wait/pyproject.toml
 COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml

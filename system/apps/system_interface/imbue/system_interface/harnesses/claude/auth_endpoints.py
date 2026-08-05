@@ -24,7 +24,7 @@ from flask import Response
 from flask import request
 from loguru import logger as _loguru_logger
 
-from imbue.system_interface import claude_auth
+from imbue.system_interface.harnesses.claude import auth
 from imbue.system_interface.app_context import get_state
 from imbue.system_interface.models import ClaudeAuthCredentialsRequest
 from imbue.system_interface.models import ClaudeAuthStatusResponse
@@ -44,7 +44,7 @@ def _json_response(content: object, status_code: int = 200) -> Response:
     return Response(body, status=status_code, mimetype="application/json")
 
 
-def _status_to_response(status: claude_auth.AuthStatus) -> ClaudeAuthStatusResponse:
+def _status_to_response(status: auth.AuthStatus) -> ClaudeAuthStatusResponse:
     # Both models share the same field names and types; validating directly
     # off the AuthStatus dump keeps the conversion automatic so adding a
     # field to one side only needs the matching field added to the other,
@@ -62,20 +62,20 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
 
 def get_status() -> Response:
     """GET /api/claude-auth/status -- current auth state."""
-    service: claude_auth.ClaudeAuthService = get_state().claude_auth_service
+    service: auth.ClaudeAuthService = get_state().claude_auth_service
     try:
         status = service.get_auth_status()
-    except claude_auth.ClaudeAuthError as e:
+    except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
     return _json_response(_status_to_response(status).model_dump())
 
 
 def start_setup_token() -> Response:
     """POST /api/claude-auth/setup-token/start -- spawn `claude setup-token`."""
-    service: claude_auth.ClaudeAuthService = get_state().claude_auth_service
+    service: auth.ClaudeAuthService = get_state().claude_auth_service
     try:
         result = service.start_setup_token()
-    except claude_auth.ClaudeAuthError as e:
+    except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
     return _json_response(
         ClaudeSetupTokenStartResponse(session_id=result.session_id, oauth_url=result.oauth_url).model_dump()
@@ -91,7 +91,7 @@ def poll_setup_token() -> Response:
     starts the background agent restart before returning.
     """
     state = get_state()
-    service: claude_auth.ClaudeAuthService = state.claude_auth_service
+    service: auth.ClaudeAuthService = state.claude_auth_service
     welcome_resender: WelcomeResender = state.welcome_resender
     try:
         body = ClaudeSetupTokenPollRequest.model_validate(request.get_json())
@@ -99,7 +99,7 @@ def poll_setup_token() -> Response:
         return _error_response(f"Invalid request body: {e}")
     try:
         result = service.poll_setup_token(body.session_id, welcome_resender.check_and_resend_welcome)
-    except claude_auth.ClaudeAuthError as e:
+    except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     if not result.is_complete or result.status is None:
         return _json_response(ClaudeSetupTokenPollResponse(is_complete=False).model_dump())
@@ -111,7 +111,7 @@ def poll_setup_token() -> Response:
 def submit_setup_token_code() -> Response:
     """POST /api/claude-auth/setup-token/submit-code -- paste-code fallback."""
     state = get_state()
-    service: claude_auth.ClaudeAuthService = state.claude_auth_service
+    service: auth.ClaudeAuthService = state.claude_auth_service
     welcome_resender: WelcomeResender = state.welcome_resender
     try:
         body = ClaudeSetupTokenSubmitCodeRequest.model_validate(request.get_json())
@@ -121,7 +121,7 @@ def submit_setup_token_code() -> Response:
         status = service.submit_setup_token_code(
             body.session_id, body.code, welcome_resender.check_and_resend_welcome
         )
-    except claude_auth.ClaudeAuthError as e:
+    except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     return _json_response(_status_to_response(status).model_dump())
 
@@ -135,7 +135,7 @@ def submit_credentials() -> Response:
     written or restarted.
     """
     state = get_state()
-    service: claude_auth.ClaudeAuthService = state.claude_auth_service
+    service: auth.ClaudeAuthService = state.claude_auth_service
     welcome_resender: WelcomeResender = state.welcome_resender
     try:
         body = ClaudeAuthCredentialsRequest.model_validate(request.get_json())
@@ -147,27 +147,27 @@ def submit_credentials() -> Response:
         status = service.submit_credentials(
             body.credentials.get_secret_value(), welcome_resender.check_and_resend_welcome
         )
-    except claude_auth.CredentialPasteError as e:
+    except auth.CredentialPasteError as e:
         return _error_response(str(e), status_code=400)
-    except claude_auth.ClaudeAuthError as e:
+    except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
     return _json_response(_status_to_response(status).model_dump())
 
 
 def start_oauth_login() -> Response:
     """POST /api/claude-auth/oauth/start -- spawn `claude auth login --<provider>`."""
-    service: claude_auth.ClaudeAuthService = get_state().claude_auth_service
+    service: auth.ClaudeAuthService = get_state().claude_auth_service
     try:
         body = ClaudeOAuthLoginStartRequest.model_validate(request.get_json())
     except (ValueError, TypeError) as e:
         return _error_response(f"Invalid request body: {e}")
     try:
-        provider = claude_auth.OAuthProvider(body.provider)
+        provider = auth.OAuthProvider(body.provider)
     except ValueError:
         return _error_response(f"Unknown provider: {body.provider!r}")
     try:
         result = service.start_oauth_login(provider)
-    except claude_auth.ClaudeAuthError as e:
+    except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
     return _json_response(
         ClaudeSetupTokenStartResponse(session_id=result.session_id, oauth_url=result.oauth_url).model_dump()
@@ -182,7 +182,7 @@ def poll_oauth_login() -> Response:
     Console return a status whose restart_* fields drive the checklist.
     """
     state = get_state()
-    service: claude_auth.ClaudeAuthService = state.claude_auth_service
+    service: auth.ClaudeAuthService = state.claude_auth_service
     welcome_resender: WelcomeResender = state.welcome_resender
     try:
         body = ClaudeSetupTokenPollRequest.model_validate(request.get_json())
@@ -190,7 +190,7 @@ def poll_oauth_login() -> Response:
         return _error_response(f"Invalid request body: {e}")
     try:
         result = service.poll_oauth_login(body.session_id, welcome_resender.check_and_resend_welcome)
-    except claude_auth.ClaudeAuthError as e:
+    except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     if not result.is_complete or result.status is None:
         return _json_response(ClaudeSetupTokenPollResponse(is_complete=False).model_dump())
@@ -202,7 +202,7 @@ def poll_oauth_login() -> Response:
 def submit_oauth_login_code() -> Response:
     """POST /api/claude-auth/oauth/submit-code -- paste-code path for browser sign-in."""
     state = get_state()
-    service: claude_auth.ClaudeAuthService = state.claude_auth_service
+    service: auth.ClaudeAuthService = state.claude_auth_service
     welcome_resender: WelcomeResender = state.welcome_resender
     try:
         body = ClaudeSetupTokenSubmitCodeRequest.model_validate(request.get_json())
@@ -212,14 +212,14 @@ def submit_oauth_login_code() -> Response:
         status = service.submit_oauth_login_code(
             body.session_id, body.code, welcome_resender.check_and_resend_welcome
         )
-    except claude_auth.ClaudeAuthError as e:
+    except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=400)
     return _json_response(_status_to_response(status).model_dump())
 
 
 def abort_auth_flow() -> Response:
     """POST /api/claude-auth/abort -- drop any in-flight PTY auth session (setup-token or browser sign-in)."""
-    service: claude_auth.ClaudeAuthService = get_state().claude_auth_service
+    service: auth.ClaudeAuthService = get_state().claude_auth_service
     service.abort_auth_flow()
     return _json_response({"status": "ok"})
 

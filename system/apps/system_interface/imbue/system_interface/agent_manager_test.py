@@ -33,8 +33,8 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.agent_manager import _build_observe_command_argv
-from imbue.system_interface.agent_manager import _build_worktree_create_command
 from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
@@ -49,7 +49,7 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 pytestmark = pytest.mark.flaky
 
 
-def _seed_agent(manager: AgentManager, agent_id: str) -> None:
+def _seed_agent(manager: AgentManager, agent_id: str, harness: HarnessType = HarnessType.CLAUDE) -> None:
     """Insert a placeholder ``AgentStateItem`` directly into the tracked map."""
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
@@ -58,6 +58,7 @@ def _seed_agent(manager: AgentManager, agent_id: str) -> None:
             state="RUNNING",
             labels={},
             work_dir=None,
+            harness=harness,
         )
 
 
@@ -270,22 +271,22 @@ def test_create_chat_agent_broadcasts_proto_created(
     assert proto_msg["parent_agent_id"] is None
 
 
-def test_create_worktree_agent_broadcasts_proto_created(
+def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, git_work_dir: Path
 ) -> None:
-    """The proto_agent_created broadcast fires before the creation thread runs."""
+    """Both menu entries make a chat, so creation_type is the role -- never the harness."""
     q = broadcaster.register()
 
     with agent_manager._lock:
-        agent_manager._agents["parent-id"] = AgentStateItem(
-            id="parent-id",
-            name="parent",
+        agent_manager._agents[agent_manager._own_agent_id] = AgentStateItem(
+            id=agent_manager._own_agent_id,
+            name="primary",
             state="RUNNING",
             labels={},
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_worktree_agent("test-worktree", "parent-id")
+    agent_id = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
     agent_manager.stop()
 
     assert isinstance(agent_id, str)
@@ -294,22 +295,22 @@ def test_create_worktree_agent_broadcasts_proto_created(
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["type"] == "proto_agent_created"
-    assert proto_msg["creation_type"] == "worktree"
+    assert proto_msg["creation_type"] == "chat"
     assert proto_msg["parent_agent_id"] is None
 
 
 def test_get_log_queue_for_proto_agent(agent_manager: AgentManager, git_work_dir: Path) -> None:
-    """The log queue is available immediately after create_worktree_agent returns."""
+    """The log queue is available immediately after create_chat_agent returns."""
     with agent_manager._lock:
-        agent_manager._agents["parent-id"] = AgentStateItem(
-            id="parent-id",
-            name="parent",
+        agent_manager._agents[agent_manager._own_agent_id] = AgentStateItem(
+            id=agent_manager._own_agent_id,
+            name="primary",
             state="RUNNING",
             labels={},
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_worktree_agent("test-worktree", "parent-id")
+    agent_id = agent_manager.create_chat_agent("test-chat")
     log_q = agent_manager.get_log_queue(agent_id)
     assert log_q is not None
 
@@ -625,10 +626,19 @@ def test_unknown_observe_event_type_is_ignored(agent_manager: AgentManager) -> N
     assert agent_manager.get_agents() == []
 
 
-def test_create_worktree_raises_for_unknown_agent(agent_manager: AgentManager) -> None:
-    """Creating a worktree for an unknown agent raises."""
+def test_create_chat_raises_when_the_primary_work_dir_is_unknown(agent_manager: AgentManager) -> None:
+    """A chat has nowhere to be created if the primary's work dir cannot be resolved.
+
+    Both the registered agent and the own-work-dir fallback must be absent for the
+    guard to bite, so clear the fallback the fixture provides.
+    """
+    with agent_manager._lock:
+        agent_manager._agents.pop(agent_manager._own_agent_id, None)
+        # Empty is the unset form: it is what the manager starts with when
+        # MNGR_AGENT_WORK_DIR is absent, and the fallback treats it as falsy.
+        agent_manager._own_work_dir = ""
     with pytest.raises(AgentCreationError, match="Cannot determine work directory"):
-        agent_manager.create_worktree_agent("test", "nonexistent")
+        agent_manager.create_chat_agent("test")
 
 
 @pytest.mark.flaky
@@ -761,7 +771,7 @@ def test_run_creation_logs_header_and_completion(agent_manager: AgentManager, tm
     done_event = threading.Event()
 
     def run_and_signal() -> None:
-        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {})
+        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {}, HarnessType.CLAUDE)
         done_event.set()
 
     t = threading.Thread(target=run_and_signal, daemon=True)
@@ -916,28 +926,39 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 
-def test_worktree_create_argv_accepted_by_live_cli() -> None:
-    argv = _build_worktree_create_command(
+def test_chat_create_argv_stacks_harness_then_role() -> None:
+    """The harness/role split is the contract: two -t flags, harness first.
+
+    Order matters -- only the harness template sets `type`, so a role template
+    stacked after it cannot clobber the harness.
+    """
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
-        current_branch="main",
-        new_branch="mngr/demo",
-        parent_labels={"project": "proj"},
+        primary_labels={},
+        harness=HarnessType.CLAUDE,
+        is_fast_mode_enabled=True,
     )
-    assert_mngr_argv_valid(argv)
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == [HarnessType.CLAUDE, "chat"]
 
 
-def test_worktree_create_argv_without_project_label() -> None:
-    argv = _build_worktree_create_command(
+def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
+    """The codex harness reuses the chat role verbatim; only the harness differs."""
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
-        current_branch="main",
-        new_branch="mngr/demo",
-        parent_labels={},
+        primary_labels={"project": "proj"},
+        harness=HarnessType.CODEX,
+        is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == [HarnessType.CODEX, "chat"]
+    # fastMode is a claude setting, so it must not ride a codex create.
+    assert not any("fastMode" in token for token in argv)
 
 
 def test_chat_create_argv_accepted_by_live_cli() -> None:
@@ -946,6 +967,7 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "proj"},
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
@@ -961,6 +983,7 @@ def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={},
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=True,
     )
     disabled_argv = _build_chat_create_command(
@@ -968,6 +991,7 @@ def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={},
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=False,
     )
     assert "agent_types.claude.settings_overrides.fastMode=true" in enabled_argv
@@ -1290,9 +1314,7 @@ def test_update_session_events_no_op_when_not_tracked(agent_manager: AgentManage
     )
     with agent_manager._lock:
         assert "ghost" not in agent_manager._activity_state_by_agent
-        assert "ghost" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "ghost" not in agent_manager._last_event_type_by_agent
-        assert "ghost" not in agent_manager._last_event_timestamp_by_agent
+        assert "ghost" not in agent_manager._activity_tracker_by_agent
 
 
 def test_reset_activity_state_clears_tool_running(
@@ -1339,9 +1361,7 @@ def test_reset_activity_state_no_op_when_not_tracked(agent_manager: AgentManager
     agent_manager.reset_activity_state("ghost")
     with agent_manager._lock:
         assert "ghost" not in agent_manager._activity_state_by_agent
-        assert "ghost" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "ghost" not in agent_manager._last_event_type_by_agent
-        assert "ghost" not in agent_manager._last_event_timestamp_by_agent
+        assert "ghost" not in agent_manager._activity_tracker_by_agent
 
 
 def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -1389,6 +1409,44 @@ def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentMana
         assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
 
 
+def test_codex_stale_transcript_tail_uses_the_codex_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """A codex agent's staleness override reads ``codex_process_started``.
+
+    The codex peer of ``test_stale_transcript_tail_after_restart_shows_idle``.
+    mngr_codex writes ``codex_process_started``, never the claude marker, so a
+    manager that stats a hardcoded ``claude_process_started`` finds nothing,
+    passes ``process_started_at=None``, and disables the override entirely --
+    leaving a codex agent that was killed mid-turn (an unclosed ``turn_started``)
+    pinned on "Thinking..." until the user sends another message.
+    """
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    # A turn opened in the distant past and never closed: the restart killed
+    # codex before it could write task_complete.
+    agent_manager.update_session_events(
+        "agent-1",
+        [{"type": "special", "kind": "turn_started", "timestamp": "2020-01-01T00:00:00.000Z"}],
+    )
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+
+    # The claude marker must NOT rescue a codex agent -- wrong harness, ignored.
+    (state_dir / "claude_process_started").touch()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+
+    # mngr_codex touches its own marker on resume; now the tail reads stale.
+    (state_dir / "codex_process_started").touch()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+        assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
+
+
 def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
@@ -1403,18 +1461,14 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
     with agent_manager._lock:
         assert "agent-1" in agent_manager._activity_tracked_agents
         assert "agent-1" in agent_manager._activity_state_by_agent
-        assert "agent-1" in agent_manager._has_unmatched_tool_use_by_agent
-        assert "agent-1" in agent_manager._last_event_type_by_agent
-        assert "agent-1" in agent_manager._last_event_timestamp_by_agent
+        assert "agent-1" in agent_manager._activity_tracker_by_agent
 
     agent_manager._stop_activity_tracking("agent-1")
 
     with agent_manager._lock:
         assert "agent-1" not in agent_manager._activity_tracked_agents
         assert "agent-1" not in agent_manager._activity_state_by_agent
-        assert "agent-1" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "agent-1" not in agent_manager._last_event_type_by_agent
-        assert "agent-1" not in agent_manager._last_event_timestamp_by_agent
+        assert "agent-1" not in agent_manager._activity_tracker_by_agent
 
 
 def test_agent_removed_event_fires_removal_side_effects(agent_manager: AgentManager, tmp_path: Path) -> None:

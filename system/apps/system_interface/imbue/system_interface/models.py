@@ -2,6 +2,9 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
+from imbue.system_interface.harnesses.harness_type import HarnessType
 
 
 class AgentCreationError(ValueError):
@@ -138,7 +141,14 @@ class AgentStateItem(FrozenModel):
     state: str = Field(description="The agent's lifecycle state")
     labels: dict[str, str] = Field(description="Agent labels (e.g., user_created, chat_parent_id)")
     work_dir: str | None = Field(description="The agent's working directory path")
-    activity_state: str | None = Field(
+    harness: HarnessType = Field(
+        default=DEFAULT_HARNESS,
+        description=(
+            "The agent's harness, narrowed from mngr's ``AgentDetails.type`` in "
+            "``agent_discovery``. Drives activity derivation and caption routing."
+        ),
+    )
+    activity_state: ActivityState | None = Field(
         default=None,
         description=(
             "Per-agent chat activity state value (THINKING / TOOL_RUNNING / "
@@ -170,20 +180,17 @@ class TerminalSessionInfo(FrozenModel):
     cwd: str = Field(description="The session's current working directory (tmux session_path)")
 
 
-class CreateWorktreeRequest(FrozenModel):
-    """Request body for creating a worktree agent."""
-
-    name: str = Field(description="Name for the new worktree agent")
-    selected_agent_id: str = Field(
-        default="",
-        description="ID of the agent whose work dir to create the worktree from",
-    )
-
-
 class CreateChatRequest(FrozenModel):
     """Request body for creating a chat agent."""
 
     name: str = Field(description="Name for the new chat agent")
+
+
+class CreateCodexRequest(FrozenModel):
+    """Request body for creating a codex chat agent (same shape as chat: runs in
+    the primary agent's work dir, just a different harness template)."""
+
+    name: str = Field(description="Name for the new codex agent")
 
 
 class CreateAgentResponse(FrozenModel):

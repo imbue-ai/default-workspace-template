@@ -10,11 +10,12 @@ from pydantic import PrivateAttr
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.claude_auth import ClaudeAuthService
+from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.registry import build_watcher
+from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.session_watcher import AgentSessionWatcher
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -76,6 +77,9 @@ class SystemInterfaceState(MutableModel):
     def get_or_create_watcher(self, agent_info: AgentInfo) -> AgentSessionWatcher:
         """Get the existing session watcher for an agent, or create and start one.
 
+        The watcher comes from the harness registry, keyed on the harness resolved once
+        at discovery, so neither this method nor the server knows which one it got.
+
         Guarded by a lock so two concurrent request threads cannot both build a
         watcher for the same agent under the threaded server.
         """
@@ -104,12 +108,9 @@ class SystemInterfaceState(MutableModel):
                 # read the last event's type.
                 self.agent_manager.update_session_events(agent_id, watcher_holder[0].get_all_events())
 
-            watcher = AgentSessionWatcher(
-                agent_id=agent_info.id,
-                agent_state_dir=agent_info.agent_state_dir,
-                claude_config_dir=agent_info.claude_config_dir,
-                on_events=on_events,
-            )
+            # The harness was resolved once at discovery; the registry turns it into a
+            # watcher, so nothing here knows which harness is running.
+            watcher = build_watcher(agent_info, on_events)
             watcher_holder.append(watcher)
             self.watchers[agent_info.id] = watcher
             watcher.start()
