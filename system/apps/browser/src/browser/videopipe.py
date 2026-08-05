@@ -169,22 +169,49 @@ _RATE_MIN_FPS = 8.0
 _RATE_MAX_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
 _RATE_DECREASE_FACTOR = 0.6
 _RATE_INCREASE_FPS = 3.0
+# A single drop interval is ordinary AIMD probing overshoot -- shave a little and
+# keep hunting near the ceiling. Collapsing on one interval (toward a delivered
+# estimate the drops themselves depressed) is what sawtoothed the rate to the floor
+# (log-verified: climb to ~32fps, one 20-drop burst, slam to 8, repeat).
+_RATE_GENTLE_BACKOFF = 0.85
+# Only converge downward once drops PERSIST this many consecutive intervals -- that
+# is the signal the path genuinely cannot hold the rate, distinct from one overshoot.
+_SUSTAINED_DROP_INTERVALS = 3
+
+# The credit window is sized to sustain this many fps at the measured ack RTT
+# (limit = ref * rtt, so per-row delivery ceiling = limit/rtt = ref). It MUST
+# exceed _RATE_MAX_FPS, or the window caps delivery below the encoder's top rate
+# and the capture rate collapses: measured at the old value of 30 the window
+# pinned at the floor of 2 for a ~55ms viewer (ceiling ~35fps < 60fps encoder),
+# so the encoder chronically outran delivery, overwrote the mailbox, and the AIMD
+# sawtoothed down toward the floor. 66 ~= 60 / 0.9, leaving headroom above the cap.
+_WINDOW_REFERENCE_FPS = 66.0
 
 
-def target_capture_fps(current_fps: float, dropped_in_interval: int, delivered_fps: float) -> float:
-    """Next capture rate from this interval's drop count and delivered rate.
+def target_capture_fps(
+    current_fps: float,
+    dropped_in_interval: int,
+    delivered_fps: float,
+    consecutive_drop_intervals: int,
+) -> float:
+    """Next capture rate from this interval's drops, delivered rate, and how many
+    consecutive intervals have dropped.
 
-    On drops, step toward what the path demonstrably delivered (plus slack)
-    rather than a blind multiplicative cut -- converges in one step instead of
-    sawtoothing; the multiplicative cut remains as the fallback when nothing
-    was delivered at all. Drop-free intervals climb gently (a +10 ramp against
-    a ~20-stripe/s ceiling guaranteed an overshoot drop-burst every ~2s,
-    log-verified). Pure, for tests.
+    A single (or brief) drop interval is ordinary AIMD probing overshoot: shave a
+    little off the current rate and keep hunting near the sustainable ceiling.
+    Collapsing on one interval -- toward a delivered estimate the drops themselves
+    depressed -- is what sawtoothed the rate to the floor (log-verified). Only once
+    drops PERSIST (``_SUSTAINED_DROP_INTERVALS``) does the path genuinely not hold
+    the rate: then converge onto what it actually delivered, with the multiplicative
+    cut as the fallback when nothing got through at all. Drop-free intervals climb
+    gently toward the ceiling. Pure, for tests.
     """
     if dropped_in_interval > 0:
-        if delivered_fps > 0:
-            return max(_RATE_MIN_FPS, min(current_fps, delivered_fps * 1.2))
-        return max(_RATE_MIN_FPS, current_fps * _RATE_DECREASE_FACTOR)
+        if consecutive_drop_intervals >= _SUSTAINED_DROP_INTERVALS:
+            if delivered_fps > 0:
+                return max(_RATE_MIN_FPS, min(current_fps, delivered_fps * 1.1))
+            return max(_RATE_MIN_FPS, current_fps * _RATE_DECREASE_FACTOR)
+        return max(_RATE_MIN_FPS, current_fps * _RATE_GENTLE_BACKOFF)
     return min(_RATE_MAX_FPS, current_fps + _RATE_INCREASE_FPS)
 
 
@@ -337,6 +364,7 @@ class PixelfluxVideoPipe:
         self._applied_fps = _RATE_MAX_FPS        # last value handed to update_framerate
         self._last_retune = 0.0
         self._dropped_at_last_retune = 0
+        self._consecutive_drop_intervals = 0     # how many retune intervals in a row have dropped
         self._acks_since_retune = 0
         self._active_rows_since_retune: set[int] = set()  # rows that acked this interval
         self._rtt_ewma: float | None = None
@@ -643,6 +671,7 @@ class PixelfluxVideoPipe:
         self._last_retune = now
         dropped = self.frames_dropped - self._dropped_at_last_retune
         self._dropped_at_last_retune = self.frames_dropped
+        self._consecutive_drop_intervals = self._consecutive_drop_intervals + 1 if dropped > 0 else 0
         # Per-row delivered rate must divide by the rows that ACTUALLY delivered this
         # interval, not every row that exists. Settled interaction damages ~1 of N stripes;
         # dividing the total acks by len(self._rows) (all N) craters the estimate and the
@@ -652,7 +681,7 @@ class PixelfluxVideoPipe:
         delivered_fps = self._acks_since_retune / interval / active_rows
         self._acks_since_retune = 0
         self._active_rows_since_retune.clear()
-        wanted = target_capture_fps(self._current_fps, dropped, delivered_fps)
+        wanted = target_capture_fps(self._current_fps, dropped, delivered_fps, self._consecutive_drop_intervals)
         if wanted != self._current_fps and self._capture is not None:
             self._current_fps = wanted
             self._apply_framerate_locked()  # clamped by the visibility throttle ceiling
@@ -681,9 +710,9 @@ class PixelfluxVideoPipe:
         # Size the window against a FIXED reference rate, not the live AIMD
         # rate: a high-RTT viewer lowers delivered fps, and a window sized
         # from that shrinks, lowering fps further -- a measured death spiral
-        # to the floor. 30fps is the experience the window should be able to
-        # carry when the encoder has content for it.
-        wanted_limit = max(_CREDIT_LIMIT, min(_CREDIT_LIMIT_MAX, int(30.0 * self._rtt_ewma) + 1))
+        # to the floor. The reference must be able to carry the encoder's top
+        # rate (see _WINDOW_REFERENCE_FPS) or the window itself throttles below it.
+        wanted_limit = max(_CREDIT_LIMIT, min(_CREDIT_LIMIT_MAX, int(_WINDOW_REFERENCE_FPS * self._rtt_ewma) + 1))
         for row in self._rows.values():
             row.window.limit = wanted_limit
         inflation = self._rtt_ewma - self._rtt_min
