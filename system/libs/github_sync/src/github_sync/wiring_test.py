@@ -39,6 +39,24 @@ def test_apply_git_wiring_writes_rewrite_headers_and_hookspath(
     assert _get_all_global("core.hooksPath") == [HOOKS_PATH]
 
 
+def test_apply_git_wiring_adds_permissions_override_header_when_set(
+    isolated_git_and_gateway_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Desktop-hosted gateways deny everything without the override JWT, so
+    when the env var is present the wiring must send it alongside the
+    password header (git sends every extraHeader entry)."""
+    _set_gateway_env(monkeypatch, "http://127.0.0.1:41234")
+    monkeypatch.setenv("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "jwt-xyz")
+
+    assert apply_git_wiring() is True
+
+    headers = _get_all_global("http.http://127.0.0.1:41234/.extraHeader")
+    assert headers == [
+        "X-Latchkey-Gateway-Password: pw-abc",
+        "X-Latchkey-Gateway-Permissions-Override: jwt-xyz",
+    ]
+
+
 def test_apply_git_wiring_fails_without_gateway_env(
     isolated_git_and_gateway_env: Path,
 ) -> None:
