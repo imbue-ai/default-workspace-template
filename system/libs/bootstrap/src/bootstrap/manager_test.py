@@ -152,9 +152,10 @@ def test_build_create_chat_command_includes_welcome_and_template() -> None:
         "my-workspace", {"workspace": "my-workspace"}, True
     )
     assert cmd[:3] == ["mngr", "create", "my-workspace"]
-    # Templates stack harness-then-role: the harness sets `type`, the role must not.
+    # The harness rides `--type claude`; the role rides the lone `--template`.
+    assert cmd[cmd.index("--type") + 1] == "claude"
     templates = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--template"]
-    assert templates == ["claude", "chat"]
+    assert templates == ["chat"]
     assert "--message" in cmd
     assert cmd[cmd.index("--message") + 1] == "/welcome"
     assert "--no-connect" in cmd

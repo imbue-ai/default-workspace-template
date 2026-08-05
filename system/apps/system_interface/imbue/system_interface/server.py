@@ -208,7 +208,7 @@ def _inject_enable_codex_meta_tag(html_content: str) -> str:
 
 
 def _is_silly_models_enabled() -> bool:
-    return os.environ.get("SILLY_MODELS", "").strip().lower() in ("1", "true", "yes", "on")
+    return os.environ.get("FEATURE_FLAG_SILLY_MODELS", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _inject_enable_silly_models_meta_tag(html_content: str) -> str:

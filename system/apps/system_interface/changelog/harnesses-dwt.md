@@ -1,5 +1,11 @@
 Added codex as a peer harness in the workspace chat UI, alongside claude.
 
+- Chat-agent creation now selects the harness with `mngr create --type <harness>`
+  (which resolves `[agent_types.<harness>]` directly) and layers only the `chat` role
+  template on top, instead of stacking a per-harness create template ahead of the role.
+  A harness's create template held nothing but `type`, so it was redundant with `--type`;
+  dropping it removes one config block per harness with no behavior change.
+
 - Codex transcript tool blocks and the live activity caption now describe what
   the code-mode call actually did -- "Running <cmd>", "Editing <file>",
   "Searching the web" -- instead of an opaque "Tool: exec", from a single shared
@@ -18,7 +24,7 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
   looked for claude's marker file on every agent, so it never fired for codex
   (which writes its own).
 - Added "New Silly Claude" / "New Silly Codex" launchers, gated behind a
-  `SILLY_MODELS` feature flag (off by default, same shape as the codex flag).
+  `FEATURE_FLAG_SILLY_MODELS` feature flag (off by default, same shape as the codex flag).
   Each stacks two role templates after `chat` -- `pirate` then `scottish` -- so
   the create-template cascade is exercised end to end: `pirate`'s `output_style`
   overrides the one `chat` sets, while both roles' `append_system_prompt__extend`

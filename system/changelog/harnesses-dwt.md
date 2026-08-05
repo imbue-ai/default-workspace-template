@@ -1,5 +1,11 @@
 Added OpenAI Codex CLI support to the workspace image.
 
+- `.mngr/settings.toml` no longer carries per-harness create templates
+  (`[create_templates.claude]`, `[create_templates.codex]`). Each held only
+  `type = "<harness>"`, which the create path now passes as `--type <harness>`
+  directly, so the blocks were redundant. Harnesses are selected by `--type`; role
+  templates (`chat`, `worker`, ...) still stack on top and never name a harness.
+
 - Bake codex 0.146.0 into the image (CODEX_VERSION). This is the version the codex
   tool-label table and the `code_mode_host` feature check were confirmed against.
 - Ship a repo-committed codex private-instructions channel at .codex/AGENTS.md,

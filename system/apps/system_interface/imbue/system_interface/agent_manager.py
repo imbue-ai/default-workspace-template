@@ -58,8 +58,8 @@ from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
-# The role half of a create template. Templates stack harness-then-role, and every
-# agent the UI creates is the `chat` role -- the harness is the only thing that varies,
+# The role template every UI-created agent gets. The harness is chosen separately via
+# `--type` (see `_build_chat_create_command`); only the role varies in the template list,
 # and it travels as `harness`, not folded into the role name.
 CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 
@@ -94,11 +94,11 @@ def _build_chat_create_command(
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent on a given harness.
 
-    Create templates stack harness-then-role, so every harness shares this one
-    builder: ``harness`` picks the harness create template, and the
-    `chat` role supplies everything else -- the shared work directory and the output
-    style. Adding a harness means passing a different name here, not writing another
-    near-identical builder.
+    The harness is selected with ``--type <harness>`` (which resolves
+    ``[agent_types.<harness>]`` directly), and the `chat` role template supplies
+    everything else -- the shared work directory and the output style. Every harness
+    shares this one builder: adding a harness means passing a different name here, not
+    writing another near-identical builder, and not adding a per-harness create template.
 
     Pure: argv assembly only, so the repo<->mngr CLI contract is testable against the
     live CLI without constructing an ``AgentManager`` or running a subprocess (see
@@ -110,7 +110,7 @@ def _build_chat_create_command(
         name,
         "--id",
         agent_id,
-        "--template",
+        "--type",
         harness,
         "--template",
         "chat",

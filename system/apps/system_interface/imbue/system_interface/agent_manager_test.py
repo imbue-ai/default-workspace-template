@@ -926,11 +926,13 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 
-def test_chat_create_argv_stacks_harness_then_role() -> None:
-    """The harness/role split is the contract: two -t flags, harness first.
+def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None:
+    """The harness/role split is the contract: `--type` picks the harness, the lone
+    `--template` picks the role.
 
-    Order matters -- only the harness template sets `type`, so a role template
-    stacked after it cannot clobber the harness.
+    The harness rides `--type <harness>` (resolving `[agent_types.<harness>]`
+    directly), and the `chat` role template -- which never sets `type` -- cannot
+    clobber it.
     """
     argv = _build_chat_create_command(
         mngr_binary="mngr",
@@ -940,12 +942,13 @@ def test_chat_create_argv_stacks_harness_then_role() -> None:
         harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=True,
     )
+    assert argv[argv.index("--type") + 1] == HarnessType.CLAUDE
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    assert templates == [HarnessType.CLAUDE, "chat"]
+    assert templates == ["chat"]
 
 
 def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
-    """The codex harness reuses the chat role verbatim; only the harness differs."""
+    """The codex harness reuses the chat role verbatim; only the `--type` differs."""
     argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
@@ -955,8 +958,9 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
         is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
+    assert argv[argv.index("--type") + 1] == HarnessType.CODEX
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    assert templates == [HarnessType.CODEX, "chat"]
+    assert templates == ["chat"]
     # fastMode is a claude setting, so it must not ride a codex create.
     assert not any("fastMode" in token for token in argv)
 

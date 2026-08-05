@@ -181,10 +181,11 @@ def _build_create_chat_command(
 
     Mirrors the New Agent button's create path (see
     system/apps/system_interface/.../agent_manager.py:create_chat_agent): the
-    `chat` template, no-connect, and the inherited `project` label when
-    present on the services agent. Adds `--message /welcome`, which used to
-    live on `create_templates.main`. The chat agent belongs to its workspace
-    by virtue of sharing the host; it carries no `workspace` label.
+    harness chosen via `--type claude`, the `chat` role template, no-connect, and
+    the inherited `project` label when present on the services agent. Adds
+    `--message /welcome`, which used to live on `create_templates.main`. The chat
+    agent belongs to its workspace by virtue of sharing the host; it carries no
+    `workspace` label.
     """
     cmd: list[str] = [
         "mngr",
@@ -200,7 +201,7 @@ def _build_create_chat_command(
         # already exists". With --transfer none the chat agent reuses
         # the services agent's /home/user/workspace/ as its work_dir, which is what we
         # want (one workspace == one work_dir, shared across all chats).
-        "--template",
+        "--type",
         "claude",
         "--template",
         "chat",
