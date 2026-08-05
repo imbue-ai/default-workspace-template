@@ -1,0 +1,1 @@
+The composer's Opus entry is now labelled "Opus 5". It selects the `opus[1m]` alias, which Claude Code resolves to whichever Opus is current, so on the new 2.1.220 pin that entry serves Opus 5 -- the old "Opus 4.8" label named a different model than the picker actually selects. Fast mode still applies to it.

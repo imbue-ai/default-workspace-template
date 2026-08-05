@@ -34,7 +34,7 @@ fi
 # CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
-: "${CLAUDE_CODE_VERSION:=2.1.207}"
+: "${CLAUDE_CODE_VERSION:=2.1.220}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"

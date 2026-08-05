@@ -20,7 +20,7 @@ from imbue.system_interface.models import ModelOption
 # standard window. Fast mode is an Opus-only capability (the ``/fast`` command).
 MODEL_OPTIONS: tuple[ModelOption, ...] = (
     ModelOption(id="fable", label="Fable 5", supports_fast_mode=False),
-    ModelOption(id="opus[1m]", label="Opus 4.8", supports_fast_mode=True),
+    ModelOption(id="opus[1m]", label="Opus 5", supports_fast_mode=True),
     ModelOption(id="sonnet", label="Sonnet 5", supports_fast_mode=False),
     ModelOption(id="haiku", label="Haiku 4.5", supports_fast_mode=False),
 )
