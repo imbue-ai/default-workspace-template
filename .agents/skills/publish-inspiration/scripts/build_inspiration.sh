@@ -3,8 +3,9 @@
 # mind was created from, then commit it. Run by the launch-task WORKER the
 # publish-inspiration skill dispatches, from the worker's own git worktree
 # (cwd = worktree repo root); the live mind's /home/user/workspace is never touched. This is
-# v1 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
-# generated manifest records it as `format: v1` in its front-matter.
+# v2 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
+# generated manifest records it as `format: v2` in its front-matter and in the
+# sibling inspiration.toml.
 #
 # The dev `create-new-mind-repo` recipe is NOT available in the VM, so this is
 # self-contained. It does the assembly + secret scan + manifest/thumbnail +
@@ -290,7 +291,7 @@ rsync -a "$STAGE/" "$REPO/"
 #
 # Scanning the STAGE (not the assembled tree) means the scan covers exactly
 # the content overlaid out of the live mind: the selected --include /
-# --data-include paths plus any carried-forward inspiration-*.md/.svg. The
+# --data-include paths. The manifest files are generated after the scan. The
 # clean base is the trusted, public default workspace template -- it cannot
 # contain the user's secrets, and its own test fixtures legitimately hold
 # placeholder token strings (e.g. "sk-ant-test"), so scanning it would only

@@ -25,8 +25,8 @@ worker's worktree.
 > **THE ONE SAFETY REQUIREMENT ABOVE ALL OTHERS -- DO NOT REGENERATE, RE-ASSEMBLE
 > FROM THE PUBLISHED TIP.** An update is NOT a fresh publish. The published repo
 > already holds content that only exists because a human and an agent made it: the
-> finished "What it is" / "How it works" / "Recipe" / "Prerequisites" / "Holes"
-> prose in `inspiration-<slug>.md`, the bespoke `inspiration-<slug>.svg`
+> finished "What it is" / "How it works" / "Prerequisites" / "Requirements"
+> prose in `inspiration.md`, the bespoke `inspiration.svg`
 > thumbnail, the inspiration-specific `/welcome`, and the adopters' "Adaptation
 > history". A naive re-run of `build_inspiration.sh` RESETS to the raw `BASE_REF`
 > and REGENERATES all of that from scratch (FILL-IN placeholders, the generic
@@ -82,10 +82,11 @@ worker's worktree.
 - **The published tip.** The current `main` of the published repo -- the tree the
   update is built ON TOP of, and the parent of the one new commit. Fetched in §2
   and handed to the worker (§3).
-- **The recipe** lives in the published `inspiration-<slug>.md`'s "## Recipe"
-  block (`include` / `data_include` / `exclude` / `modification_rules`). It, not a
-  repo-vs-repo diff, is the durable definition of how the inspiration is derived
-  from its source -- an update re-runs it. §2 reads it out of the fetched tip.
+- **The recipe** lives in the published `inspiration.toml`'s `[recipe]` table
+  (`include` / `data_include` / `exclude` / `modification_rules`) -- or, on a v1
+  tip, in the markdown's `## Recipe` YAML block. It, not a repo-vs-repo diff, is
+  the durable definition of how the inspiration is derived from its source; an
+  update re-runs it. §2 reads it out of the fetched tip.
 - **Slug / repo-name rules** are identical to `publish-inspiration`'s (match
   `^[A-Za-z0-9._-]+$`, no leading `-`); an update never changes the slug or repo.
 
@@ -144,7 +145,7 @@ inspiration snapshot on a template base (`git rev-list --count "$PUBLISHED_TIP"`
 > 1, and its subject begins `inspiration:`):
 
 ```bash
-git show "$PUBLISHED_TIP:inspiration-<slug>.md" | sed -n '1,20p'   # inspect: version: v<n>?
+git show "$PUBLISHED_TIP:inspiration.md" | sed -n '1,20p'   # inspect: version: v<n>?
 ```
 
 If the published manifest's version is HIGHER than the ledger's `n` (someone
@@ -156,10 +157,18 @@ actual published version) before any update. (The shipped ledger records the
 source sha, not the published snapshot sha, so this version-and-shape check is
 the integrity gate in place of a recorded-snapshot-sha comparison.)
 
-**2c. Read the recipe** out of the fetched tip's manifest -- the `include` /
-`data_include` paths, the `exclude` list, and the `modification_rules` -- from the
-"## Recipe" `yaml` block of `inspiration-<slug>.md`. These are the update's
-inputs: the paths whose changes are eligible, and the rules to re-apply.
+**2c. Read the recipe** out of the fetched tip -- the `include` /
+`data_include` paths, the `exclude` list, and the `modification_rules`. These are
+the update's inputs: the paths whose changes are eligible, and the rules to
+re-apply.
+
+- **v2 tip** (`inspiration.toml` present): read the `[recipe]` table. Also note
+  `[environment]` and `[[lineage]]`, which carry through the update untouched
+  unless the delta changes what the code needs installed.
+- **v1 tip** (no TOML): read the markdown's `## Recipe` block and migrate the
+  inspiration to v2 as part of this update -- `references/v1-to-v2-migration.md`
+  has exactly what that moves. Not optional, but it IS a user-visible change to
+  their repo, so state it at §2e's scope gate rather than doing it silently.
 
 **2d. Compute the forward delta -- source side only.** Diff the recorded v(n)
 source sha against the current workspace HEAD, scoped to the recipe's include
@@ -289,11 +298,12 @@ the bundle is pushed to the worker. The task body directs the worker to:
    ```
    Any finding, scanner error, or missing scanner -> fix or report `stuck`; never
    commit around it. This stays the authoritative, hard-failing blocker.
-7. **Update the manifest -- append only, never regenerate.** In
-   `inspiration-<slug>.md`: bump the front-matter `version:` to `v(n+1)` and the
-   "## Recipe" `version:` to `v(n+1)` (and add any newly-included path / new
-   `modification_rule` the user approved). Append ONE entry to the END of the
-   "## Publication history" section:
+7. **Update the manifest -- append only, never regenerate.** Bump the version
+   to `v(n+1)` in BOTH `inspiration.md`'s front matter and `inspiration.toml`'s
+   `[inspiration].version`; add any newly-approved include path or
+   `modification_rule` to the TOML's `[recipe]`; update `[environment]` only if
+   the delta changes what the code needs installed. Append ONE entry to the END
+   of `inspiration.md`'s "## Publication history" section:
    `### v(n+1) (YYYY-MM-DD) -- <one line: what changed since v(n)>` (today's
    date). Newest last; NEVER rewrite an earlier Publication-history entry, and
    NEVER write into "Adaptation history" (that is the adopters' log). Leave the
@@ -301,7 +311,11 @@ the bundle is pushed to the worker. The task body directs the worker to:
 8. **Boot smoke-check** the result -- validate `system/supervisord.conf` via the
    supervisor lib (`ServerOptions().realize()` / `process_config()`), NEVER
    `supervisord -t` (which launches the daemon), the same method
-   `build_inspiration.sh` step 9 uses. If it fails, report `stuck`.
+   `build_inspiration.sh` step 9 uses. If it fails, report `stuck`. Then run
+   `.agents/skills/publish-inspiration/scripts/validate_inspiration.py` (per
+   that skill's §3 step 6), which must exit 0: it catches a markdown/TOML
+   disagreement introduced by the version bump and re-resolves every declared
+   apt package against the pinned mirror.
 9. **Mint ONE clean commit parented on the published tip:**
    ```bash
    git add -A
@@ -352,7 +366,7 @@ not the GitHub permission approval. Present the proposal ONCE, in plain language
 - the **modifications re-applied** (so the user can verify their earlier removals
   still hold in the new version);
 - the **thumbnail** -- state it is unchanged from the published version, and embed
-  it only if the user asked to change it (`![<title> thumbnail]($WT/inspiration-<slug>.svg)`);
+  it only if the user asked to change it (`![<title> thumbnail]($WT/inspiration.svg)`);
 - the **visibility is unchanged** -- an update never changes it. Restate it so the
   user sees it is not silently flipping.
 
@@ -477,19 +491,8 @@ your final message.
 
 ## Invariants preserved (call them out)
 
-- **Bootable-or-nothing.** Every published version, including this update, is the
-  full bootable tree; a failed step publishes nothing.
-- **Preserve the user's customizations.** The update re-assembles from the
-  PUBLISHED TIP and overlays only the approved delta -- the finished manifest
-  prose, "## Recipe", thumbnail, `/welcome`, and adopters' "Adaptation history"
-  are never regenerated. `build_inspiration.sh` is never run for an update.
-- **One atomic post-cleanup commit.** The mint is a single `commit-tree` from the
-  final, scanned, generalized tree, parented on the published tip -- no pre-scan
-  or pre-generalization state ever exists as its own commit, and `merge-base(template, tip)`
-  stays `BASE_REF`.
-- **Private-by-default; visibility never changes on an update**, and the final
-  gate restates it.
-- **The hard secret scan is the authoritative blocker** -- re-run over every
-  overlaid/modified path, hard-failing.
-- **Both chat gates run** -- the §2e scope gate and the §5 final gate; no earlier
-  approval substitutes for either.
+An update keeps every guarantee a first publish makes -- bootable-or-nothing,
+the user's hand-crafted content preserved, one atomic post-cleanup commit,
+private-by-default with visibility unchanged, the hard secret scan, and both
+chat gates. `references/invariants.md` states each one and what specifically
+would break it; read it before the push and name the relevant ones to the user.
