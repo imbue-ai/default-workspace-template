@@ -33,6 +33,7 @@ asserts this module's import set stays within stdlib + pydantic so the
 constraint cannot silently rot.
 """
 
+import re
 import tomllib
 from datetime import date
 from pathlib import Path
@@ -279,6 +280,30 @@ class LineageEntry(FrozenManifestModel):
     )
 
 
+class ManifestOrigin(FrozenManifestModel):
+    """Where THIS COPY of the manifest was obtained from.
+
+    Written by the adopt paths -- `use-inspiration` knows the fetch URL and
+    `FETCH_HEAD`, and a mind created from an inspiration repo knows its parent
+    -- and read by the publish flow, which turns it into the newest
+    `[[lineage]]` entry when a new manifest overrides this one. Without it an
+    override would lose the address of what it replaced, which is the one thing
+    that makes overriding safe.
+
+    Absent in a manifest a mind published itself (nothing was adopted) and in
+    any v1 manifest (the field did not exist), so consumers treat absence as
+    "unknown provenance", never as an error.
+    """
+
+    repo_url: NonEmptyString = Field(
+        description="Git repo URL this copy was fetched from"
+    )
+    commit: CommitHash = Field(description="Exact commit this copy was taken at")
+    adopted_on: date | None = Field(
+        default=None, description="Date this mind adopted it"
+    )
+
+
 class InspirationManifest(FrozenManifestModel):
     """The whole of `inspiration.toml`."""
 
@@ -286,6 +311,10 @@ class InspirationManifest(FrozenManifestModel):
         default=CURRENT_MANIFEST_FORMAT, description="Manifest format version"
     )
     inspiration: InspirationIdentity = Field(description="Identity of this inspiration")
+    origin: ManifestOrigin | None = Field(
+        default=None,
+        description="Where this copy came from; becomes a lineage entry when overridden",
+    )
     recipe: Recipe = Field(
         description="How this inspiration is derived from its source workspace"
     )
@@ -335,6 +364,47 @@ def load_inspiration_manifest(path: Path) -> InspirationManifest:
         return InspirationManifest.model_validate(raw_manifest)
     except ValidationError as e:
         raise InspirationManifestParseError(path, str(e)) from e
+
+
+def lineage_after_override(
+    previous: InspirationManifest | None, used_on: date | None = None
+) -> tuple[LineageEntry, ...]:
+    """The lineage a new manifest inherits when it overrides `previous`.
+
+    The chain is transitive: the predecessor's own lineage comes through first
+    (oldest first), then the predecessor itself. A predecessor with no
+    `[origin]` -- one this mind published rather than adopted, or a v1 manifest
+    from before the field existed -- contributes no link of its own, because
+    there is no address to record; its inherited chain still carries through
+    rather than being dropped.
+    """
+    if previous is None:
+        return ()
+    if previous.origin is None:
+        return previous.lineage
+    return previous.lineage + (
+        LineageEntry(
+            slug=previous.inspiration.slug,
+            repo_url=previous.origin.repo_url,
+            commit=previous.origin.commit,
+            used_on=used_on if used_on is not None else previous.origin.adopted_on,
+        ),
+    )
+
+
+# Markdown HTML comments, including an unterminated trailing one.
+_HTML_COMMENT_PATTERN = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+
+
+def _strip_html_comments(markdown_text: str) -> str:
+    """The markdown with `<!-- ... -->` blocks removed.
+
+    The generated FILL-IN instructions are HTML comments and they quote example
+    `requires_permission:` / `requires_secret:` / `requires_llm:` lines to show
+    the form. Counting those as declarations makes a freshly-generated skeleton
+    look like it declares three prerequisites it does not have.
+    """
+    return _HTML_COMMENT_PATTERN.sub("", markdown_text)
 
 
 def _parse_markdown_front_matter(markdown_text: str) -> dict[str, str]:
@@ -422,7 +492,7 @@ def check_markdown_agreement(
     markdown_permission_count = 0
     markdown_secret_count = 0
     has_markdown_llm_line = False
-    for line in markdown_text.splitlines():
+    for line in _strip_html_comments(markdown_text).splitlines():
         stripped = line.strip().lstrip("-").strip()
         if stripped.startswith("requires_permission:"):
             markdown_permission_count += 1
@@ -464,8 +534,18 @@ def check_unfinished_placeholders(*texts: str) -> tuple[str, ...]:
     return tuple(problems)
 
 
-def validate_inspiration_tree(repo_root: Path) -> tuple[str, ...]:
+def validate_inspiration_tree(
+    repo_root: Path, is_unfinished_allowed: bool = False
+) -> tuple[str, ...]:
     """Every problem with the inspiration published at `repo_root`, or ().
+
+    `is_unfinished_allowed` is for the one caller that runs immediately after
+    generation: `build_inspiration.sh` writes the FILL-IN blocks and the
+    placeholder thumbnail on purpose and then checks that the skeleton it just
+    produced is well-formed, so flagging its own placeholders would fail every
+    publish at step one. Every later run -- the worker's, and the lead's before
+    the push -- leaves it False, which is what actually blocks an unfinished
+    manifest from being published.
 
     Raises InspirationManifestNotFoundError / InspirationManifestParseError when
     the TOML itself is missing or unparseable -- those are failures to even
@@ -491,15 +571,16 @@ def validate_inspiration_tree(repo_root: Path) -> tuple[str, ...]:
         thumbnail_text = thumbnail_path.read_text(encoding="utf-8", errors="replace")
 
     problems.extend(check_env_d_units(manifest))
-    problems.extend(check_unfinished_placeholders(markdown_text, thumbnail_text))
 
-    readme_path = repo_root / "README.md"
-    if readme_path.is_file():
-        problems.extend(
-            check_unfinished_placeholders(
-                readme_path.read_text(encoding="utf-8", errors="replace")
+    if not is_unfinished_allowed:
+        problems.extend(check_unfinished_placeholders(markdown_text, thumbnail_text))
+        readme_path = repo_root / "README.md"
+        if readme_path.is_file():
+            problems.extend(
+                check_unfinished_placeholders(
+                    readme_path.read_text(encoding="utf-8", errors="replace")
+                )
             )
-        )
 
     if not manifest.recipe.include:
         problems.append("the recipe includes no paths, so there is nothing to publish")
