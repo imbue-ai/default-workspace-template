@@ -84,24 +84,13 @@ approved or denied the permission request.
 The gateway natively proxies GitHub's git smart-HTTP endpoints, so plain
 `git` works through latchkey too: point git at the gateway's proxy URL and
 pass the gateway's auth headers (their values are already in this
-environment). This is the CANONICAL form of the command -- the other skills
-that push or fetch through the gateway mirror it exactly; change it here
-first and propagate:
+environment).
 
 ```bash
 git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
     ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
     push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" <refspec>
 ```
-
-Both headers matter. The password only authenticates you to the gateway;
-on desktop-hosted gateways (Docker/Lima/Modal workspaces) authorization
-comes from the permissions-override JWT, and a request without it is
-evaluated against a deny-all default -- so a push missing that header fails
-with 403 even when the `github-git` grant was approved. The
-`${VAR:+...}` guard makes the same command work on remote-VPS gateways,
-which do not set the env var and resolve permissions server-side. Git sends
-every `-c http.extraHeader` given, so the two flags accumulate.
 
 (`clone`, `fetch`, and `ls-remote` take the same proxy URL and headers.) The
 GitHub credential is injected server-side -- no token enters the container.
