@@ -41,11 +41,31 @@ Keep them distinct and never repeat an item across the two. A reader who cannot
 tell "you must fix this" from "you could try this" reads the whole page as a
 list of defects.
 
+## Show the user the rendered page, never raw markdown
+
+The README is a page, so review it as one. Both steps are mandatory; do them
+without being asked.
+
+**Before shipping -- render it and open it in a tab.** Every time you generate
+or change the README:
+
+```bash
+uv run python system/scripts/render_markdown_preview.py <path-to-README.md>
+python3 system/scripts/layout.py open service:markdown-preview
+python3 system/scripts/layout.py refresh service:markdown-preview   # after a re-render
+```
+
+The preview renders it the way GitHub will -- raw HTML, the centered hero, the
+badge, and local images all resolved -- so you can check the layout and the
+graphic, not just the text. It also shows the file's absolute path with a
+one-click Copy path button. Never paste raw markdown into chat and ask the user
+to picture it.
+
 ## Verify the published page
 
-The local file is not the deliverable; the rendered GitHub page is. After the
-push, open the repo's README in the embedded Chromium (drive it with the
-`agentic-browser-fleet` skill) and confirm:
+The local preview only approximates GitHub; the published page is the real
+end-to-end test. After the push, open the repo's README in the embedded
+Chromium (drive it with the `agentic-browser-fleet` skill) and confirm:
 
 - the hero graphic and any screenshots render, with no broken images. This is
   the real check: a relative path that is correct in the source tree can still
