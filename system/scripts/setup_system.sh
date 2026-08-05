@@ -67,11 +67,16 @@ install_downloaded_binary() {
 # pressure before the kernel kills an arbitrary victim; the rest are
 # agent/runtime deps). supervisor provides the system supervisord + supervisorctl
 # that `uv run bootstrap` execs into the foreground.
+# xvfb + xclip (the browser fleet's virtual display and its clipboard bridge)
+# are baked here, NOT deferred to the env.d browser unit: [program:xvfb] execs
+# Xvfb directly at boot, and a binary that static service config promises at
+# every boot must exist in the image. They are a few MB; only the heavy
+# Fortress/Chromium stack stays deferred.
 apt-get update
 apt-get install -y --no-install-recommends \
     bash build-essential ca-certificates cron curl earlyoom fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
-    xxd xmlstarlet
+    xclip xvfb xxd xmlstarlet
 rm -rf /var/lib/apt/lists/*
 
 # The Debian `supervisor` package enables a systemd unit that immediately starts
