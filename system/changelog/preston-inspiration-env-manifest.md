@@ -1,7 +1,8 @@
-Added the design plan for inspiration environment manifests
-(`docs/system/blueprint/inspiration-env-manifest/`): a pydantic-validated
-`inspiration-<slug>.toml` that declares what an inspiration's code needs from
-the environment (apt, npm globals, uv tools, cargo crates, and carried
-`env.d` units), validated against the pinned apt mirror when it is published
-and converged into the adopting mind's environment at that mind's own pinned
-snapshot timestamp.
+Repoints the broken `docs/system/style_guide.md` symlink. It targeted
+`vendor/mngr/style_guide.md`, which resolves relative to `docs/system/` and so
+pointed at a path left stale by the `system/` relayout; it now resolves to the
+real file.
+
+The repo-wide prose ratchets skip symlinks resolving into `system/vendor/`,
+which is what they always intended -- until now that only worked because this
+link was broken.
