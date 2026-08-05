@@ -34,3 +34,10 @@ you care, how to use it, and ideas for making it yours.
 
 Inspirations published in the older format keep working when adopted; the
 publisher's next update migrates them.
+
+Fixed a bug that would have failed every real publish: the manifest validator
+located its schema module by indexing a fixed number of directories up, which
+raised `IndexError` in the shallow temporary directory the assembly script
+actually snapshots it into. It now searches the sibling copy first and then
+walks ancestors. Caught by running the flow in a real workspace container --
+the unit tests passed because they happened to run from a deeply-nested path.

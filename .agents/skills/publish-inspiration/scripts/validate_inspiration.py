@@ -80,19 +80,30 @@ class AptUnavailableError(ValidateInspirationError, OSError):
         )
 
 
-def _load_schema_module(script_path: Path) -> ModuleType:
-    """Load the shared schema module from the snapshot dir or this script's repo.
+def _schema_module_candidates(script_path: Path) -> tuple[Path, ...]:
+    """Where the schema module might be, relative to THIS SCRIPT.
 
-    Both candidates are relative to THIS SCRIPT, never to the tree being
-    validated: the snapshot dir when `build_inspiration.sh` copied the pair out
-    ahead of its reset, otherwise the checkout this script itself lives in. The
-    validated tree is an assembled snapshot and does not necessarily carry a
-    usable copy of the schema.
+    Never relative to the tree being validated: that is an assembled snapshot
+    and does not necessarily carry a usable copy of the schema.
+
+    The sibling comes first -- that is the copy `build_inspiration.sh` snapshots
+    out of the worktree ahead of its reset, and in that mode the script lives in
+    a shallow mktemp dir like `/tmp/tmp.XXXXXX/`. Walking every ancestor for the
+    in-repo path (rather than indexing a fixed number of levels up) is what
+    keeps that case working: a fixed `parents[4]` raises IndexError on a path
+    that shallow, and it did -- failing every real publish while passing tests
+    that happened to run from a deeply-nested directory.
     """
-    candidates = (
-        script_path.parent / f"{_SCHEMA_MODULE_NAME}.py",
-        script_path.parents[4] / _IN_REPO_SCHEMA_PATH,
+    candidates = [script_path.parent / f"{_SCHEMA_MODULE_NAME}.py"]
+    candidates.extend(
+        ancestor / _IN_REPO_SCHEMA_PATH for ancestor in script_path.parents
     )
+    return tuple(candidates)
+
+
+def _load_schema_module(script_path: Path) -> ModuleType:
+    """Load the shared schema module from the snapshot dir or this script's repo."""
+    candidates = _schema_module_candidates(script_path)
     for candidate in candidates:
         if not candidate.is_file():
             continue
