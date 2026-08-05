@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from enum import auto
 from pathlib import Path
 from typing import Annotated
@@ -9,6 +10,7 @@ from pydantic import SerializeAsAny
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 from imbue.mngr.config.data_types import PluginConfig
 from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentName
@@ -97,6 +99,32 @@ class BoardSnapshot(FrozenModel):
     fetch_time_seconds: float = Field(description="Time taken to fetch data")
 
 
+@pure
+def group_entries_by_section(
+    snapshot: BoardSnapshot,
+    section_order: Sequence[BoardSection],
+) -> list[tuple[BoardSection, list[AgentBoardEntry]]]:
+    """Group entries by section in display order.
+
+    Sections are returned in ``section_order``; empty sections are omitted, and
+    entries within a section keep their snapshot order. Entries whose section is
+    not in ``section_order`` are dropped, so the result is what the board shows.
+    """
+    by_section: dict[BoardSection, list[AgentBoardEntry]] = {}
+    for entry in snapshot.entries:
+        by_section.setdefault(entry.section, []).append(entry)
+    return [(section, by_section[section]) for section in section_order if by_section.get(section)]
+
+
+@pure
+def entries_shown_on_board(
+    snapshot: BoardSnapshot,
+    section_order: Sequence[BoardSection],
+) -> tuple[AgentBoardEntry, ...]:
+    """The entries the board renders, in board order (by section, then snapshot order)."""
+    return tuple(entry for _section, entries in group_entries_by_section(snapshot, section_order) for entry in entries)
+
+
 class DataSourceConfig(FrozenModel):
     """Base configuration for a data source (enable/disable only).
 
@@ -122,15 +150,32 @@ class CustomCommand(FrozenModel):
     name: str = Field(description="Display name shown in the status bar")
     command: str = Field(
         default="",
-        description="Shell command to run. MNGR_AGENT_NAME env var is set to the focused agent's name.",
+        description="Shell command to run. MNGR_AGENT_NAME env var is set to the focused agent's name, and "
+        "MNGR_INPUT to the text typed at the prompt (empty when `prompt` is unset).",
+    )
+    prompt: str = Field(
+        default="",
+        description="When non-empty, running the command first opens a one-line input using this text as "
+        "the caption; the submitted text is passed to the command as the MNGR_INPUT env var. Combined with "
+        "`markable`, the input is asked once when x executes and the answer applies to every marked agent.",
     )
     refresh_afterwards: bool = Field(default=False, description="Whether to trigger a board refresh after completion")
     enabled: bool = Field(default=True, description="Whether this command is active")
     markable: bool | str = Field(
         default=False,
-        description="If truthy, pressing the key marks agents for batch execution with x instead of running immediately."
+        description="If set to anything other than false, pressing the key marks agents for batch execution with x"
+        " instead of running immediately."
         " Set to a color name (e.g. 'light red') to customize the mark indicator color.",
     )
+
+    @property
+    def is_markable(self) -> bool:
+        """Whether pressing the key toggles a mark instead of running the command.
+
+        Any ``markable`` other than ``False`` marks; an empty color string marks too,
+        with an empty mark-indicator color.
+        """
+        return self.markable is not False
 
 
 class ActionBuiltinRole(UpperCaseStrEnum):
@@ -145,6 +190,7 @@ class ActionBuiltinRole(UpperCaseStrEnum):
     MUTE = auto()
     UNMARK = auto()
     EXECUTE = auto()
+    SEARCH = auto()
 
 
 class MarkableBuiltinRole(UpperCaseStrEnum):
@@ -160,7 +206,7 @@ class MarkableBuiltinRole(UpperCaseStrEnum):
 
 
 class ActionBuiltinCommand(FrozenModel):
-    """A non-markable kanpan builtin (refresh, mute, unmark, execute).
+    """A non-markable kanpan builtin (refresh, mute, unmark, execute, search).
 
     Constructed only internally in ``tui._BUILTIN_COMMANDS``. The
     ``markable`` field is not modelled here: by construction these are
@@ -217,6 +263,23 @@ class KanpanPluginConfig(PluginConfig):
         "Valid names: PR_MERGED, PR_CLOSED, PR_BEING_REVIEWED, STILL_COOKING, PRS_FAILED, MUTED. "
         "If None, defaults to: PR_MERGED, PR_CLOSED, PR_BEING_REVIEWED, STILL_COOKING, PRS_FAILED, MUTED. "
         "Sections not listed are omitted.",
+    )
+    header_status: str | None = Field(
+        default=None,
+        description="Text shown at the right of the header, e.g. "
+        "'{state == \"RUNNING\"} running / {total}'. Each braced CEL expression renders as the number "
+        "of agents the board is showing that it holds for, counted against the same entry shape "
+        "`--format json` emits (name, state, provider_name, work_dir, branch, is_muted, section, "
+        "fields, cells). That shape is narrower than what --include sees, so an expression naming "
+        "anything else (labels, host, age) matches no agent and stays at zero. '{total}' counts "
+        "every agent; '{{' and '}}' are literal braces. Unset (default) shows nothing.",
+    )
+    batch_concurrency: Annotated[int, Field(ge=1)] = Field(
+        default=4,
+        description="How many marked operations `x` runs at once. Marked agents are independent, so "
+        "they need not wait for each other -- a command that blocks (e.g. `mngr message` waiting on "
+        "an agent to accept) otherwise makes a batch take the sum of its parts. Raise it for more "
+        "overlap, or set 1 to run them strictly one at a time.",
     )
     refresh_interval_seconds: float = Field(
         default=600.0,
