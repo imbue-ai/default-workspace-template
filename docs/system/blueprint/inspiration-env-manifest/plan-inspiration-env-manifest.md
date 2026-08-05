@@ -1,15 +1,15 @@
 # Plan: inspiration environment manifests
 
-> **Give every inspiration a pydantic-validated `inspiration-<slug>.toml` that declares what its code needs from the environment -- apt / npm / uv / cargo packages and the exotic-install units that have no package database -- validated against the mirrored apt universe at publish time, and converged into the adopter's environment at the ADOPTER's pinned snapshot timestamp, so an adopting mind stops discovering an inspiration's system dependencies by running into failures.**
+> **Give every inspiration a pydantic-validated `inspiration.toml` that declares what its code needs from the environment -- apt / npm / uv / cargo packages and the exotic-install units that have no package database -- validated against the mirrored apt universe at publish time, and converged into the adopter's environment at the ADOPTER's pinned snapshot timestamp, so an adopting mind stops discovering an inspiration's system dependencies by running into failures.**
 >
 > ### The gap
-> * An inspiration declares its runtime needs only as prose plus `requires_permission:` / `requires_secret:` / `requires_llm:` lines in `inspiration-<slug>.md`. Those cover *permissions and secrets*. They say nothing about **system packages**: an inspiration whose code shells out to `pdftotext`, or imports a python package installed as a `uv tool`, ships no record of it. The adopter finds out when the app crashes.
+> * An inspiration declares its runtime needs only as prose plus `requires_permission:` / `requires_secret:` / `requires_llm:` lines in `inspiration-<slug>.md` (the v1 format). Those cover *permissions and secrets*. They say nothing about **system packages**: an inspiration whose code shells out to `pdftotext`, or imports a python package installed as a `uv tool`, ships no record of it. The adopter finds out when the app crashes.
 > * Everything machine-readable in the manifest today lives inside markdown -- the Recipe is a fenced **YAML** block (the style guide says never YAML), the prerequisites are hand-written lines matched by grep. Nothing validates either; `build_inspiration.sh` generates placeholders and the only enforcement is a `grep` for un-replaced FILL-IN comments.
 >
 > ### Recommended mechanism
-> * **A sibling `inspiration-<slug>.toml`** carrying the machine-readable manifest: identity, the recipe, a structured mirror of the prerequisites, and a new `[environment]` section shaped to mirror the env-converge record (`apt` names + the publisher's snapshot timestamp as provenance; `npm_global` / `uv_tools` / `cargo` as name -> version maps; carried `env.d` units by path). Prose, holes, and the two append-only history logs stay in the `.md`.
+> * **A sibling `inspiration.toml`** carrying the machine-readable manifest: identity, the recipe, a structured mirror of the requirements, the lineage of what it overrode, and a new `[environment]` section shaped to mirror the env-converge record (`apt` names + the publisher's snapshot timestamp as provenance; `npm_global` / `uv_tools` / `cargo` as name -> version maps; carried `env.d` units by path). Prose and the two append-only history logs stay in the `.md`.
 > * **The schema is one pydantic module owned by `env_converge`**, used by both sides: the publish-time gate validates against it, and the adopt-time convergence reads through it.
-> * **Adoption converges the union** of every `inspiration-*.toml` at the repo root, as a new *declared* source inside `env-converge`, at the adopter's own pinned timestamp. A declaration is a **seed for capture, not a competing source of truth**: it is applied once per `(slug, version)`, after which the host's own record owns those packages and removal stickiness behaves exactly as it does today.
+> * **Adoption converges** the `inspiration.toml` at the repo root, as a new *declared* source inside `env-converge`, at the adopter's own pinned timestamp (the union across several adopted inspirations accrues through the record over time rather than across files). A declaration is a **seed for capture, not a competing source of truth**: it is applied once per `(slug, version)`, after which the host's own record owns those packages and removal stickiness behaves exactly as it does today.
 > * **Publish-time validation resolves every declared apt package** against the pinned mirror at the publisher's timestamp, so an unmirrorable third-party package is rejected at the earliest possible moment rather than at some adopter's first boot.
 >
 > ### Scope note
@@ -65,25 +65,48 @@ Lineage accrues at both moments a manifest is written:
 | Content | Home in v2 | Reason |
 |---|---|---|
 | Recipe (`include` / `data_include` / `exclude` / `modification_rules`) | **`.toml` only**; the `.md`'s `## Recipe` section becomes a one-line pointer | Its only reader is `update-published-inspiration`, which runs in the *publisher's own* mind -- the same mind that just published v2, hence on a v2-aware template. Nothing older reads it, so a strict move is safe. Also retires a YAML block the style guide forbids. |
-| Prerequisites (`requires_permission` / `requires_secret` / `requires_llm`) | **`.md` (unchanged) + structured mirror in `.toml`** | `use-inspiration` reads these, and an adopter may be on an *older* template that knows nothing about the `.toml`. The human-facing lines must keep working verbatim. Validation asserts the two agree one-for-one. |
+| Requirements -- activation half (`requires_*` lines) | **`.md` (unchanged) + structured mirror in `.toml`** | `use-inspiration` reads these, and an adopter may be on an *older* template that knows nothing about the `.toml`. The human-facing lines must keep working verbatim. Validation asserts the two agree one-for-one. |
+| Requirements -- adaptation half | **`.md` prose + `[[requirements.adaptation]]` mirror** | Prose on both sides; nothing to cross-check, so validation leaves it alone. |
 | Front-matter (`title` / `description` / `thumbnail` / `version`) | **`.md` (unchanged) + mirror in `.toml`**, `format: v2` | Same reason: older adopters and the generated README/welcome read the front-matter. Both are written in one pass by the generator, and validation asserts agreement, so drift is not possible in practice and is caught if it happens. |
 | `[environment]` declarations | **`.toml` only** | New; nothing older reads it, and an older adopter simply does not converge it (see compatibility). |
 | Lineage (repo URL + commit per ancestor) | **`.toml`**, mirrored as a "Built on" link list in the `.md` | Machine-readable provenance; the `.md` mirror is what a human follows from the GitHub page. |
-| Prose (`What it is`, `How it works`, `How to adapt it`, `Requirements`) | **`.md` only** | Not machine-readable. |
+| Prose (`What it is`, `How it works`, `How to adapt it`) | **`.md` only** | Not machine-readable. |
 | `Publication history`, `Adaptation history` | **`.md` only** | The two append-only logs; see the note on enforcement. |
 
-### "Holes" becomes "Requirements"
+### One "Requirements" list, replacing Holes AND Prerequisites
 
-The manifest section that lists what an adapter must decide or rewire is renamed from **Holes** to **Requirements** throughout -- the manifest template, all four skills, and the generated prose.
+The manifest had two sections for "things an adopter must deal with":
+**Prerequisites** (activation -- permissions, secrets, LLM access) and **Holes**
+(adaptation -- stubbed integrations, hardcoded accounts). Renaming Holes to
+Requirements, as first planned, put two near-synonyms side by side and left the
+publishing worker responsible for filing each item under the right heading,
+policed only by an instruction not to get it wrong.
 
-This puts it next to the existing **Prerequisites** section, and the two are genuinely different agendas, so the renaming must not blur them. The distinction the skills already draw in prose carries the weight and is kept verbatim wherever both appear:
+**They merge into one `## Requirements` section**, in the markdown and as one
+`[requirements]` table in the TOML.
 
-- **Prerequisites -- the SETUP agenda.** What the adopting agent must *activate* before the thing runs at all: permissions it initiates via latchkey, secrets it wires up, LLM access. Machine-readable `requires_*` lines.
-- **Requirements -- the ADAPTATION agenda.** What the adapter must *decide or rewire* to make it theirs: stubbed integrations, hardcoded accounts or channels, data that was not included. Prose bullets, one per item.
+The distinction that actually matters is preserved -- as the **kind of each
+entry** rather than which section it sits in -- because the two are handled at
+different times by different mechanisms:
 
-Every place the old text said "Holes are your ADAPTATION agenda" keeps saying exactly that with the new noun, and `build_inspiration.sh`'s FILL-IN block keeps its explicit "do NOT list activation requirements here -- those belong in Prerequisites" instruction, which is now doing more work than before and is worth keeping prominent.
+- **Activation** (`[[requirements.permission]]`, `[[requirements.secret]]`,
+  `[requirements.llm]`, and the `requires_` lines that mirror them in the
+  markdown): the adopting agent acts on these FIRST and BY ITSELF, initiating
+  each latchkey request before asking the user anything. They stay
+  machine-readable and cross-checked between the two files, because of a real
+  incident where an adopter was never prompted for a Slack permission the app
+  needed. **This is the property a merge must not lose**, and flattening both
+  kinds into prose would have lost it.
+- **Adaptation** (`[[requirements.adaptation]]`, prose bullets in the markdown):
+  worked through interactively with the user, after activation. Prose on both
+  sides, so it is not cross-checked -- there is nothing to compare one-for-one.
 
-The guiding rule: **move what only new code reads; mirror what old code reads.** That is what keeps "a manifest with no sibling `.toml` keeps working" true in both directions -- an old manifest read by new code, and a new manifest read by old code.
+So "activate everything typed, then walk the adaptation list" is derivable from
+the data instead of from a heading a human had to choose correctly. The merge is
+a net simplification *and* removes a failure mode; it is not a loss of rigour.
+
+`Environment` stays its own section: it is not a decision the adopter makes at
+all, it is what gets installed, and it is converged rather than resolved.
 
 ### Proposed `.toml` shape
 
@@ -285,7 +308,6 @@ Stated explicitly because each exists because of a real incident:
 
 ## Open questions
 
-- **"Requirements" sits next to "Prerequisites".** The rename is what the user asked for and is implemented as such, but the two nouns are near-synonyms in English while naming opposite agendas (adapt vs. activate). The prose distinction is carried everywhere both appear, and the FILL-IN instruction that keeps activation requirements out of the Requirements section is now load-bearing. If the pairing reads badly in practice, "Adaptation requirements" disambiguates at the cost of a longer heading.
 - **The MIT license is stated, not shipped.** §6 tells the user a public inspiration is MIT-licensed; no `LICENSE` file is generated into the snapshot. Enforcing it is a small follow-up, deliberately not folded in here.
 - **No local markdown preview.** The README instructions call for rendering the page and showing the user the rendered result before shipping; the tooling they name does not exist in this repo (see Verification above). Only the post-push live-GitHub check is implemented. Building a preview service would close it.
 - **Append-only enforcement -- deliberately out of scope.** Four logs are documented append-only (`## Inspirations` and `## Adopted inspirations` in `docs/VERSION_HISTORY.md`, `Publication history` / `Adaptation history` in the manifest) and nothing enforces it: the only script that touches `VERSION_HISTORY.md` is `build_inspiration.sh`, and only to `rm -f` it out of the snapshot, leaving `publish-inspiration` §8 step 4's per-slug idempotence test as the single weak check. Enforcement was scoped alongside this work and **the user's decision is to leave it for now**, so nothing here builds it. Recorded so the gap stays known rather than looking closed.

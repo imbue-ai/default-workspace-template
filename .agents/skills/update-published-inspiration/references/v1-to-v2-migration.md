@@ -21,11 +21,17 @@ reads only the markdown, which survives.
 2. Write `inspiration.toml`, lifting the recipe out of the markdown into the
    `[recipe]` table, and mirroring the front matter into `[inspiration]`.
    Add one structured entry per `requires_` line already in the markdown --
-   `[[prerequisites.permission]]`, `[[prerequisites.secret]]`,
-   `[prerequisites.llm]` -- so the two files agree; the validator enforces that.
+   `[[requirements.permission]]`, `[[requirements.secret]]`,
+   `[requirements.llm]` -- so the two files agree; the validator enforces that.
+   A v1 `Holes` bullet becomes a `[[requirements.adaptation]]` entry.
 3. Replace the markdown's `## Recipe` YAML block with a pointer to the TOML.
-4. Rename the `## Holes` heading to `## Requirements`, and update any prose
-   that refers to it. The content does not change -- only the noun.
+4. Merge `## Holes` and `## Prerequisites` into a single `## Requirements`
+   section. The content does not change and nothing is dropped: the
+   `requires_` lines keep their exact form (they are the activation half, and
+   the adopting agent still acts on them first and by itself), and the Holes
+   bullets follow as the adaptation half. v1 kept these apart as two headings
+   with near-synonym names, which made filing each item correctly a human
+   judgement; v2 makes the kind a property of the entry instead.
 5. Set `format: v2` in the markdown front matter.
 6. Leave `[environment]` empty unless the update itself adds a dependency. A v1
    inspiration never declared one, and inventing declarations during a migration

@@ -154,11 +154,10 @@ half), and `inspiration.svg` (the thumbnail). Read the TOML first -- its
 presence is what tells you the format:
 
 - **`inspiration.toml` present (v2).** It is authoritative for the identity,
-  the `[recipe]`, the `[prerequisites]`, the `[environment]` this inspiration
+  the `[recipe]`, the `[requirements]`, the `[environment]` this inspiration
   needs installed, and the `[[lineage]]` of inspirations it was built on. Read
   `inspiration.md` alongside it for the prose: `What it is`, `How it works`,
-  `Prerequisites`, `Environment`, `How to adapt it`, `Requirements`, and
-  `Adaptation history`.
+  `Requirements`, `Environment`, `How to adapt it`, and `Adaptation history`.
 - **No `inspiration.toml` (v1).** An older inspiration: one or more slug-named
   `inspiration-<slug>.md` files and no TOML. Read the markdown exactly as
   before -- front matter (`title`, `description`, `thumbnail`, and optionally
@@ -175,15 +174,25 @@ hand-written prose into a validated schema -- reintroducing the fragility the
 TOML exists to remove -- on someone else's published content. A v1 inspiration
 becomes v2 when its own publisher next updates it.
 
-**Three distinct agendas, and they are not interchangeable:**
+**`Requirements` holds two kinds of entry, handled at different times.** They
+are not interchangeable, and the kind is a property of the entry rather than of
+which section it sits in:
 
-- `Prerequisites` -- the SETUP agenda. Machine-readable `requires_permission:` /
-  `requires_secret:` / `requires_llm:` lines (mirrored in the TOML's
-  `[prerequisites]`) that you ACT ON to activate the app.
-- `Environment` -- what must be INSTALLED. Declared in the TOML's
-  `[environment]`; converged in §3 rather than resolved by hand.
-- `Requirements` -- the ADAPTATION agenda. Design gaps the original author left
-  for the adapter to decide or rewire.
+- **Activation** -- the machine-readable `requires_permission:` /
+  `requires_secret:` / `requires_llm:` lines, mirrored in the TOML as
+  `[[requirements.permission]]`, `[[requirements.secret]]`, and
+  `[requirements.llm]`. You ACT ON these yourself, FIRST, before asking the
+  user anything.
+- **Adaptation** -- the prose bullets, mirrored as
+  `[[requirements.adaptation]]`. Design gaps the original author left for you
+  to work through interactively WITH the user, after activation.
+
+`Environment` is separate and is not a decision at all: it is what must be
+INSTALLED, declared in the TOML's `[environment]` and converged in §3 rather
+than resolved by hand.
+
+(An older v1 manifest splits these across `Prerequisites` and `Holes`; read
+both, and treat `Prerequisites` as the activation half.)
 
 **`[[lineage]]` is provenance, not work.** It records the inspirations this one
 was built on, each with a repo URL and the exact commit it was used at, because
@@ -194,16 +203,16 @@ nothing to adopt there.
 ## 3. Activate first, then ask how to adapt
 
 In chat, in plain language, walk the user through what this inspiration provides
-and what it needs from them — name the `Prerequisites` (do not enumerate file
-paths at the user). Then ask whether they want to run it on the same connectors:
+and what it needs from them — name the activation requirements (do not enumerate
+file paths at the user). Then ask whether they want to run it on the same connectors:
 "This uses Slack to pull in messages — want me to connect it to your Slack now,
 or would you rather it read something else, like email?"
 
 **If they keep the same connectors — set it up BEFORE the adaptation
 conversation:**
 
-1. Initiate every `requires_permission:` line YOURSELF, now, via a latchkey
-   permission request (see the `latchkey` skill: `latchkey curl -XPOST
+1. Initiate every activation requirement YOURSELF, now -- one latchkey
+   permission request per `requires_permission:` line (see the `latchkey` skill: `latchkey curl -XPOST
    http://latchkey-self.invalid/permission-requests`; the request opens the
    approval/login flow in the minds app). Do not merely tell the user a
    permission is needed — send the request so it appears for them to approve.
@@ -241,7 +250,7 @@ Only then ask: "Now — how would you like to adapt it?"
 
 **If they want different connectors** (e.g. email instead of Slack), skip
 activation and go straight to the adaptation conversation — the swap is the
-first adaptation, and its new prerequisites get initiated the same way once
+first adaptation, and its new activation requirements get initiated the same way once
 decided.
 
 ## 4. Resolve requirements interactively

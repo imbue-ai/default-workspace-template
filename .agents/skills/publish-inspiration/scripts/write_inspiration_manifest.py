@@ -6,7 +6,7 @@ machine-readable half of the manifest: identity, the derivation recipe, and the
 lineage inherited from whatever manifest this snapshot overrides.
 
 Everything the publishing worker must still supply -- the recipe's `exclude`
-and `modification_rules`, the structured prerequisites, and the `[environment]`
+and `modification_rules`, the structured `[requirements]`, and the `[environment]`
 declarations -- is emitted as an empty section with a prompting comment. Those
 all have empty defaults, so the generated file is valid TOML the moment it is
 written and `validate_inspiration.py` can gate on it immediately; the forcing
@@ -140,21 +140,35 @@ def render_manifest(
         '# neutral default". Leave [] if there were none.',
         "modification_rules = []",
         "",
-        "# The SETUP agenda: what an adopter must ACTIVATE before this runs at all.",
-        "# Every entry here must have a matching requires_ line in inspiration.md",
-        "# (the adopting agent acts on those), and vice versa.",
+        "# Everything an adopter must deal with before this is really theirs.",
+        "# One list -- but each entry's KIND says how it is handled, because the",
+        "# two are handled at different times by different mechanisms:",
+        "#",
+        "#   permission / secret / llm = ACTIVATION. The adopting agent acts on",
+        "#   these FIRST and BY ITSELF, initiating each latchkey permission",
+        "#   request before asking the user anything. Every one of them must have",
+        "#   a matching requires_ line in inspiration.md and vice versa -- the",
+        "#   validator checks that, because an adopter once never got prompted",
+        "#   for a permission the app needed.",
+        "#",
+        "#   adaptation = worked through INTERACTIVELY with the user afterwards.",
+        "#   Prose on both sides, so it is not cross-checked.",
         "#",
         "# FILL IN, e.g.:",
-        "#   [[prerequisites.permission]]",
+        "#   [[requirements.permission]]",
         '#   scope = "slack-api"',
         '#   permission = "slack-read-all"',
         "#",
-        "#   [[prerequisites.secret]]",
+        "#   [[requirements.secret]]",
         '#   name = "SLACK_SIGNING_SECRET"',
         "#",
-        "#   [prerequisites.llm]",
+        "#   [requirements.llm]",
         '#   method = "keyed"   # keyed (ANTHROPIC_API_KEY) | keyless (claude -p)',
-        "[prerequisites]",
+        "#",
+        "#   [[requirements.adaptation]]",
+        '#   summary = "the digest channel is hardcoded"',
+        '#   resolution = "ask the user which channel to watch"',
+        "[requirements]",
         "",
         "# What the included code needs INSTALLED. apt takes bare names: versions",
         "# are a function of the apt snapshot timestamp, so replaying names at the",

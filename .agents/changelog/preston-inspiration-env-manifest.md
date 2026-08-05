@@ -21,7 +21,14 @@ Publishing now validates the manifest against a pydantic schema and checks that
 every declared apt package resolves in the pinned mirror -- so an unmirrorable
 dependency is caught when it is published rather than when someone adopts it.
 
-The manifest's "Holes" section is now called "Requirements", and the generated
+The manifest's "Holes" and "Prerequisites" sections are now a single
+"Requirements" list. Each entry carries its own kind, so the difference that
+matters is preserved without asking a publisher to pick the right heading:
+permission, secret, and LLM entries are activated automatically by the adopting
+agent before it asks anything, and the rest are worked through with the user
+afterwards.
+
+The generated
 README is a real landing page: a hero graphic, an "Open in Minds" button, why
 you care, how to use it, and ideas for making it yours.
 
