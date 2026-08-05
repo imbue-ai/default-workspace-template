@@ -541,17 +541,38 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 # Start every mngr-managed agent container and relaunch the system-services
 # agent inside it (in its full host+agent env, via the shared in-container
 # start script). Containers are found by the fixed mngr label, so this
-# survives container rebuilds. Runs via minds-autostart.path, which only
-# fires once /mngr-btrfs is populated (the container volumes live on that
-# data disk, which can mount at a highly variable point late in boot --
-# mngr-internal#266), so every step is expected to succeed here; any step
-# that still fails makes the unit fail, so the breakage is visible in
-# systemd instead of being swallowed. `mngr start` is idempotent + flock-
-# serialized, so racing the desktop client is safe.
+# survives container rebuilds. Triggered by minds-autostart.path once the
+# /mngr-btrfs data volume is ready (mngr-internal#266); the wait below makes
+# a premature trigger park until the mount actually exists instead of
+# failing repeatedly (root-fs debris shadowed under the unmounted mountpoint
+# once satisfied the old glob trigger early -- see the field report on
+# default-workspace-template#381). Any step that still fails makes the unit
+# fail, so breakage is visible in systemd instead of being swallowed.
+# `mngr start` is idempotent + flock-serialized, so racing the desktop
+# client is safe.
 set -u
+
+# Wait for the data volume to actually be mounted: generous hard bound, plus
+# a warning when it took suspiciously long. The trigger normally fires only
+# after the mount, so any wait at all here is unusual; on slices lima can
+# take many minutes to mount the disk on boot. Type=oneshot has no start
+# timeout, so systemd will not kill this wait.
+WAITED=0
+until mountpoint -q "$(readlink -f /mngr-btrfs)"; do
+    if [ "$WAITED" -ge 1800 ]; then
+        echo "timed out after ${WAITED}s waiting for /mngr-btrfs to be mounted" >&2
+        exit 1
+    fi
+    sleep 5
+    WAITED=$((WAITED + 5))
+done
+if [ "$WAITED" -gt 60 ]; then
+    echo "warning: waited ${WAITED}s for /mngr-btrfs to be mounted" >&2
+fi
+
 FAILED=0
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
-    docker start "$cid" >/dev/null 2>&1
+    docker start "$cid" >/dev/null
     if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" != "true" ]; then
         echo "agent container $cid did not reach running" >&2
         FAILED=1
@@ -570,6 +591,12 @@ cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 Description=Start the minds system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
+# Never rate-limit starts: while the trigger condition holds, a failing
+# service re-triggers immediately, and hitting the default start limit
+# propagates unit-start-limit-hit to minds-autostart.path -- permanently
+# disabling the watcher (observed on a staging box reboot; see the field
+# report on default-workspace-template#381).
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
@@ -581,24 +608,40 @@ cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 Description=Watch for the mngr data volume and start the minds workspace
 
 [Path]
-# The bare /mngr-btrfs symlink persists (dangling) across reboots, so it must
-# not be the condition; the per-host entries under it live on the data disk
-# and are only visible once it is mounted. The wake-up event is the symlink
-# recreation the provision script performs right after mounting on each boot.
-PathExistsGlob=/mngr-btrfs/*
+# The marker file is created exclusively by this installer, behind a hard
+# mountpoint check, so it can only ever exist on the mounted data volume.
+# The bare /mngr-btrfs symlink persists (dangling) across reboots, and even
+# entries under it cannot be trusted: root-fs debris shadowed beneath the
+# unmounted mountpoint (a stale snapshot-helper request once mkdir'd
+# /mngr-btrfs/snapshots pre-mount) defeated the previous
+# PathExistsGlob=/mngr-btrfs/* condition and fired the service before the
+# volume existed. The wake-up event is the symlink recreation the provision
+# script performs right after mounting on each boot.
+PathExists=/mngr-btrfs/.minds-volume-ready
 Unit=minds-autostart.service
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+# The readiness marker the path unit watches may only ever be created here,
+# behind a hard mount check, so it can never appear on the unmounted root fs
+# (the way shadow debris under the mountpoint defeated the old glob trigger).
+if ! mountpoint -q "$(readlink -f /mngr-btrfs)"; then
+    echo "refusing to install minds-autostart: /mngr-btrfs is not a mounted volume" >&2
+    exit 1
+fi
+touch /mngr-btrfs/.minds-volume-ready
 # The service is only ever triggered by the path unit, so it cannot run before
 # the data volume exists. Remove any direct boot enablement left by the
-# previous installer (a no-op on fresh VMs), then enable + start the watcher --
-# starting it now makes the fix take effect without a reboot: /mngr-btrfs is
-# already populated at install time, so the service fires immediately (safe:
-# `docker start` and `mngr start` are no-ops on a running workspace).
+# previous installer (a no-op on fresh VMs), revive units a past boot may have
+# left dead of a start-rate limit (re-running this installer is the fleet
+# backfill path), then enable + start the watcher -- starting it now makes the
+# fix take effect without a reboot: the marker is already visible at install
+# time, so the service fires immediately (safe: `docker start` and
+# `mngr start` are no-ops on a running workspace).
 rm -f /etc/systemd/system/multi-user.target.wants/minds-autostart.service
 systemctl daemon-reload
+systemctl reset-failed minds-autostart.path minds-autostart.service 2>/dev/null || true
 systemctl enable minds-autostart.path
 systemctl start minds-autostart.path
 """,
@@ -652,17 +695,38 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 # Start every mngr-managed agent container and relaunch the system-services
 # agent inside it (in its full host+agent env, via the shared in-container
 # start script). Containers are found by the fixed mngr label, so this
-# survives container rebuilds. Runs via minds-autostart.path, which only
-# fires once /mngr-btrfs is populated (the container volumes live on that
-# data disk, which can mount at a highly variable point late in boot --
-# mngr-internal#266), so every step is expected to succeed here; any step
-# that still fails makes the unit fail, so the breakage is visible in
-# systemd instead of being swallowed. `mngr start` is idempotent + flock-
-# serialized, so racing the desktop client is safe.
+# survives container rebuilds. Triggered by minds-autostart.path once the
+# /mngr-btrfs data volume is ready (mngr-internal#266); the wait below makes
+# a premature trigger park until the mount actually exists instead of
+# failing repeatedly (root-fs debris shadowed under the unmounted mountpoint
+# once satisfied the old glob trigger early -- see the field report on
+# default-workspace-template#381). Any step that still fails makes the unit
+# fail, so breakage is visible in systemd instead of being swallowed.
+# `mngr start` is idempotent + flock-serialized, so racing the desktop
+# client is safe.
 set -u
+
+# Wait for the data volume to actually be mounted: generous hard bound, plus
+# a warning when it took suspiciously long. The trigger normally fires only
+# after the mount, so any wait at all here is unusual; on slices lima can
+# take many minutes to mount the disk on boot. Type=oneshot has no start
+# timeout, so systemd will not kill this wait.
+WAITED=0
+until mountpoint -q "$(readlink -f /mngr-btrfs)"; do
+    if [ "$WAITED" -ge 1800 ]; then
+        echo "timed out after ${WAITED}s waiting for /mngr-btrfs to be mounted" >&2
+        exit 1
+    fi
+    sleep 5
+    WAITED=$((WAITED + 5))
+done
+if [ "$WAITED" -gt 60 ]; then
+    echo "warning: waited ${WAITED}s for /mngr-btrfs to be mounted" >&2
+fi
+
 FAILED=0
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
-    docker start "$cid" >/dev/null 2>&1
+    docker start "$cid" >/dev/null
     if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" != "true" ]; then
         echo "agent container $cid did not reach running" >&2
         FAILED=1
@@ -681,6 +745,12 @@ cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 Description=Start the minds system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
+# Never rate-limit starts: while the trigger condition holds, a failing
+# service re-triggers immediately, and hitting the default start limit
+# propagates unit-start-limit-hit to minds-autostart.path -- permanently
+# disabling the watcher (observed on a staging box reboot; see the field
+# report on default-workspace-template#381).
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
@@ -692,24 +762,40 @@ cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 Description=Watch for the mngr data volume and start the minds workspace
 
 [Path]
-# The bare /mngr-btrfs symlink persists (dangling) across reboots, so it must
-# not be the condition; the per-host entries under it live on the data disk
-# and are only visible once it is mounted. The wake-up event is the symlink
-# recreation the provision script performs right after mounting on each boot.
-PathExistsGlob=/mngr-btrfs/*
+# The marker file is created exclusively by this installer, behind a hard
+# mountpoint check, so it can only ever exist on the mounted data volume.
+# The bare /mngr-btrfs symlink persists (dangling) across reboots, and even
+# entries under it cannot be trusted: root-fs debris shadowed beneath the
+# unmounted mountpoint (a stale snapshot-helper request once mkdir'd
+# /mngr-btrfs/snapshots pre-mount) defeated the previous
+# PathExistsGlob=/mngr-btrfs/* condition and fired the service before the
+# volume existed. The wake-up event is the symlink recreation the provision
+# script performs right after mounting on each boot.
+PathExists=/mngr-btrfs/.minds-volume-ready
 Unit=minds-autostart.service
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+# The readiness marker the path unit watches may only ever be created here,
+# behind a hard mount check, so it can never appear on the unmounted root fs
+# (the way shadow debris under the mountpoint defeated the old glob trigger).
+if ! mountpoint -q "$(readlink -f /mngr-btrfs)"; then
+    echo "refusing to install minds-autostart: /mngr-btrfs is not a mounted volume" >&2
+    exit 1
+fi
+touch /mngr-btrfs/.minds-volume-ready
 # The service is only ever triggered by the path unit, so it cannot run before
 # the data volume exists. Remove any direct boot enablement left by the
-# previous installer (a no-op on fresh VMs), then enable + start the watcher --
-# starting it now makes the fix take effect without a reboot: /mngr-btrfs is
-# already populated at install time, so the service fires immediately (safe:
-# `docker start` and `mngr start` are no-ops on a running workspace).
+# previous installer (a no-op on fresh VMs), revive units a past boot may have
+# left dead of a start-rate limit (re-running this installer is the fleet
+# backfill path), then enable + start the watcher -- starting it now makes the
+# fix take effect without a reboot: the marker is already visible at install
+# time, so the service fires immediately (safe: `docker start` and
+# `mngr start` are no-ops on a running workspace).
 rm -f /etc/systemd/system/multi-user.target.wants/minds-autostart.service
 systemctl daemon-reload
+systemctl reset-failed minds-autostart.path minds-autostart.service 2>/dev/null || true
 systemctl enable minds-autostart.path
 systemctl start minds-autostart.path
 """,
@@ -753,17 +839,38 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 # Start every mngr-managed agent container and relaunch the system-services
 # agent inside it (in its full host+agent env, via the shared in-container
 # start script). Containers are found by the fixed mngr label, so this
-# survives container rebuilds. Runs via minds-autostart.path, which only
-# fires once /mngr-btrfs is populated (the container volumes live on that
-# data disk, which can mount at a highly variable point late in boot --
-# mngr-internal#266), so every step is expected to succeed here; any step
-# that still fails makes the unit fail, so the breakage is visible in
-# systemd instead of being swallowed. `mngr start` is idempotent + flock-
-# serialized, so racing the desktop client is safe.
+# survives container rebuilds. Triggered by minds-autostart.path once the
+# /mngr-btrfs data volume is ready (mngr-internal#266); the wait below makes
+# a premature trigger park until the mount actually exists instead of
+# failing repeatedly (root-fs debris shadowed under the unmounted mountpoint
+# once satisfied the old glob trigger early -- see the field report on
+# default-workspace-template#381). Any step that still fails makes the unit
+# fail, so breakage is visible in systemd instead of being swallowed.
+# `mngr start` is idempotent + flock-serialized, so racing the desktop
+# client is safe.
 set -u
+
+# Wait for the data volume to actually be mounted: generous hard bound, plus
+# a warning when it took suspiciously long. The trigger normally fires only
+# after the mount, so any wait at all here is unusual; on slices lima can
+# take many minutes to mount the disk on boot. Type=oneshot has no start
+# timeout, so systemd will not kill this wait.
+WAITED=0
+until mountpoint -q "$(readlink -f /mngr-btrfs)"; do
+    if [ "$WAITED" -ge 1800 ]; then
+        echo "timed out after ${WAITED}s waiting for /mngr-btrfs to be mounted" >&2
+        exit 1
+    fi
+    sleep 5
+    WAITED=$((WAITED + 5))
+done
+if [ "$WAITED" -gt 60 ]; then
+    echo "warning: waited ${WAITED}s for /mngr-btrfs to be mounted" >&2
+fi
+
 FAILED=0
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
-    docker start "$cid" >/dev/null 2>&1
+    docker start "$cid" >/dev/null
     if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" != "true" ]; then
         echo "agent container $cid did not reach running" >&2
         FAILED=1
@@ -782,6 +889,12 @@ cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 Description=Start the minds system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
+# Never rate-limit starts: while the trigger condition holds, a failing
+# service re-triggers immediately, and hitting the default start limit
+# propagates unit-start-limit-hit to minds-autostart.path -- permanently
+# disabling the watcher (observed on a staging box reboot; see the field
+# report on default-workspace-template#381).
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
@@ -793,24 +906,40 @@ cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 Description=Watch for the mngr data volume and start the minds workspace
 
 [Path]
-# The bare /mngr-btrfs symlink persists (dangling) across reboots, so it must
-# not be the condition; the per-host entries under it live on the data disk
-# and are only visible once it is mounted. The wake-up event is the symlink
-# recreation the provision script performs right after mounting on each boot.
-PathExistsGlob=/mngr-btrfs/*
+# The marker file is created exclusively by this installer, behind a hard
+# mountpoint check, so it can only ever exist on the mounted data volume.
+# The bare /mngr-btrfs symlink persists (dangling) across reboots, and even
+# entries under it cannot be trusted: root-fs debris shadowed beneath the
+# unmounted mountpoint (a stale snapshot-helper request once mkdir'd
+# /mngr-btrfs/snapshots pre-mount) defeated the previous
+# PathExistsGlob=/mngr-btrfs/* condition and fired the service before the
+# volume existed. The wake-up event is the symlink recreation the provision
+# script performs right after mounting on each boot.
+PathExists=/mngr-btrfs/.minds-volume-ready
 Unit=minds-autostart.service
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+# The readiness marker the path unit watches may only ever be created here,
+# behind a hard mount check, so it can never appear on the unmounted root fs
+# (the way shadow debris under the mountpoint defeated the old glob trigger).
+if ! mountpoint -q "$(readlink -f /mngr-btrfs)"; then
+    echo "refusing to install minds-autostart: /mngr-btrfs is not a mounted volume" >&2
+    exit 1
+fi
+touch /mngr-btrfs/.minds-volume-ready
 # The service is only ever triggered by the path unit, so it cannot run before
 # the data volume exists. Remove any direct boot enablement left by the
-# previous installer (a no-op on fresh VMs), then enable + start the watcher --
-# starting it now makes the fix take effect without a reboot: /mngr-btrfs is
-# already populated at install time, so the service fires immediately (safe:
-# `docker start` and `mngr start` are no-ops on a running workspace).
+# previous installer (a no-op on fresh VMs), revive units a past boot may have
+# left dead of a start-rate limit (re-running this installer is the fleet
+# backfill path), then enable + start the watcher -- starting it now makes the
+# fix take effect without a reboot: the marker is already visible at install
+# time, so the service fires immediately (safe: `docker start` and
+# `mngr start` are no-ops on a running workspace).
 rm -f /etc/systemd/system/multi-user.target.wants/minds-autostart.service
 systemctl daemon-reload
+systemctl reset-failed minds-autostart.path minds-autostart.service 2>/dev/null || true
 systemctl enable minds-autostart.path
 systemctl start minds-autostart.path
 """,
@@ -846,17 +975,38 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 # Start every mngr-managed agent container and relaunch the system-services
 # agent inside it (in its full host+agent env, via the shared in-container
 # start script). Containers are found by the fixed mngr label, so this
-# survives container rebuilds. Runs via minds-autostart.path, which only
-# fires once /mngr-btrfs is populated (the container volumes live on that
-# data disk, which can mount at a highly variable point late in boot --
-# mngr-internal#266), so every step is expected to succeed here; any step
-# that still fails makes the unit fail, so the breakage is visible in
-# systemd instead of being swallowed. `mngr start` is idempotent + flock-
-# serialized, so racing the desktop client is safe.
+# survives container rebuilds. Triggered by minds-autostart.path once the
+# /mngr-btrfs data volume is ready (mngr-internal#266); the wait below makes
+# a premature trigger park until the mount actually exists instead of
+# failing repeatedly (root-fs debris shadowed under the unmounted mountpoint
+# once satisfied the old glob trigger early -- see the field report on
+# default-workspace-template#381). Any step that still fails makes the unit
+# fail, so breakage is visible in systemd instead of being swallowed.
+# `mngr start` is idempotent + flock-serialized, so racing the desktop
+# client is safe.
 set -u
+
+# Wait for the data volume to actually be mounted: generous hard bound, plus
+# a warning when it took suspiciously long. The trigger normally fires only
+# after the mount, so any wait at all here is unusual; on slices lima can
+# take many minutes to mount the disk on boot. Type=oneshot has no start
+# timeout, so systemd will not kill this wait.
+WAITED=0
+until mountpoint -q "$(readlink -f /mngr-btrfs)"; do
+    if [ "$WAITED" -ge 1800 ]; then
+        echo "timed out after ${WAITED}s waiting for /mngr-btrfs to be mounted" >&2
+        exit 1
+    fi
+    sleep 5
+    WAITED=$((WAITED + 5))
+done
+if [ "$WAITED" -gt 60 ]; then
+    echo "warning: waited ${WAITED}s for /mngr-btrfs to be mounted" >&2
+fi
+
 FAILED=0
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
-    docker start "$cid" >/dev/null 2>&1
+    docker start "$cid" >/dev/null
     if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" != "true" ]; then
         echo "agent container $cid did not reach running" >&2
         FAILED=1
@@ -875,6 +1025,12 @@ cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 Description=Start the minds system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
+# Never rate-limit starts: while the trigger condition holds, a failing
+# service re-triggers immediately, and hitting the default start limit
+# propagates unit-start-limit-hit to minds-autostart.path -- permanently
+# disabling the watcher (observed on a staging box reboot; see the field
+# report on default-workspace-template#381).
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
@@ -886,24 +1042,40 @@ cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 Description=Watch for the mngr data volume and start the minds workspace
 
 [Path]
-# The bare /mngr-btrfs symlink persists (dangling) across reboots, so it must
-# not be the condition; the per-host entries under it live on the data disk
-# and are only visible once it is mounted. The wake-up event is the symlink
-# recreation the provision script performs right after mounting on each boot.
-PathExistsGlob=/mngr-btrfs/*
+# The marker file is created exclusively by this installer, behind a hard
+# mountpoint check, so it can only ever exist on the mounted data volume.
+# The bare /mngr-btrfs symlink persists (dangling) across reboots, and even
+# entries under it cannot be trusted: root-fs debris shadowed beneath the
+# unmounted mountpoint (a stale snapshot-helper request once mkdir'd
+# /mngr-btrfs/snapshots pre-mount) defeated the previous
+# PathExistsGlob=/mngr-btrfs/* condition and fired the service before the
+# volume existed. The wake-up event is the symlink recreation the provision
+# script performs right after mounting on each boot.
+PathExists=/mngr-btrfs/.minds-volume-ready
 Unit=minds-autostart.service
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+# The readiness marker the path unit watches may only ever be created here,
+# behind a hard mount check, so it can never appear on the unmounted root fs
+# (the way shadow debris under the mountpoint defeated the old glob trigger).
+if ! mountpoint -q "$(readlink -f /mngr-btrfs)"; then
+    echo "refusing to install minds-autostart: /mngr-btrfs is not a mounted volume" >&2
+    exit 1
+fi
+touch /mngr-btrfs/.minds-volume-ready
 # The service is only ever triggered by the path unit, so it cannot run before
 # the data volume exists. Remove any direct boot enablement left by the
-# previous installer (a no-op on fresh VMs), then enable + start the watcher --
-# starting it now makes the fix take effect without a reboot: /mngr-btrfs is
-# already populated at install time, so the service fires immediately (safe:
-# `docker start` and `mngr start` are no-ops on a running workspace).
+# previous installer (a no-op on fresh VMs), revive units a past boot may have
+# left dead of a start-rate limit (re-running this installer is the fleet
+# backfill path), then enable + start the watcher -- starting it now makes the
+# fix take effect without a reboot: the marker is already visible at install
+# time, so the service fires immediately (safe: `docker start` and
+# `mngr start` are no-ops on a running workspace).
 rm -f /etc/systemd/system/multi-user.target.wants/minds-autostart.service
 systemctl daemon-reload
+systemctl reset-failed minds-autostart.path minds-autostart.service 2>/dev/null || true
 systemctl enable minds-autostart.path
 systemctl start minds-autostart.path
 """,
@@ -939,17 +1111,38 @@ cat > /usr/local/sbin/minds-outer-autostart.sh <<'BOOT'
 # Start every mngr-managed agent container and relaunch the system-services
 # agent inside it (in its full host+agent env, via the shared in-container
 # start script). Containers are found by the fixed mngr label, so this
-# survives container rebuilds. Runs via minds-autostart.path, which only
-# fires once /mngr-btrfs is populated (the container volumes live on that
-# data disk, which can mount at a highly variable point late in boot --
-# mngr-internal#266), so every step is expected to succeed here; any step
-# that still fails makes the unit fail, so the breakage is visible in
-# systemd instead of being swallowed. `mngr start` is idempotent + flock-
-# serialized, so racing the desktop client is safe.
+# survives container rebuilds. Triggered by minds-autostart.path once the
+# /mngr-btrfs data volume is ready (mngr-internal#266); the wait below makes
+# a premature trigger park until the mount actually exists instead of
+# failing repeatedly (root-fs debris shadowed under the unmounted mountpoint
+# once satisfied the old glob trigger early -- see the field report on
+# default-workspace-template#381). Any step that still fails makes the unit
+# fail, so breakage is visible in systemd instead of being swallowed.
+# `mngr start` is idempotent + flock-serialized, so racing the desktop
+# client is safe.
 set -u
+
+# Wait for the data volume to actually be mounted: generous hard bound, plus
+# a warning when it took suspiciously long. The trigger normally fires only
+# after the mount, so any wait at all here is unusual; on slices lima can
+# take many minutes to mount the disk on boot. Type=oneshot has no start
+# timeout, so systemd will not kill this wait.
+WAITED=0
+until mountpoint -q "$(readlink -f /mngr-btrfs)"; do
+    if [ "$WAITED" -ge 1800 ]; then
+        echo "timed out after ${WAITED}s waiting for /mngr-btrfs to be mounted" >&2
+        exit 1
+    fi
+    sleep 5
+    WAITED=$((WAITED + 5))
+done
+if [ "$WAITED" -gt 60 ]; then
+    echo "warning: waited ${WAITED}s for /mngr-btrfs to be mounted" >&2
+fi
+
 FAILED=0
 for cid in $(docker ps -aq --filter "label=com.imbue.mngr.host-id"); do
-    docker start "$cid" >/dev/null 2>&1
+    docker start "$cid" >/dev/null
     if [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" != "true" ]; then
         echo "agent container $cid did not reach running" >&2
         FAILED=1
@@ -968,6 +1161,12 @@ cat > /etc/systemd/system/minds-autostart.service <<'UNIT'
 Description=Start the minds system-services agent once the data volume is up
 After=docker.service
 Requires=docker.service
+# Never rate-limit starts: while the trigger condition holds, a failing
+# service re-triggers immediately, and hitting the default start limit
+# propagates unit-start-limit-hit to minds-autostart.path -- permanently
+# disabling the watcher (observed on a staging box reboot; see the field
+# report on default-workspace-template#381).
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
@@ -979,24 +1178,40 @@ cat > /etc/systemd/system/minds-autostart.path <<'UNIT'
 Description=Watch for the mngr data volume and start the minds workspace
 
 [Path]
-# The bare /mngr-btrfs symlink persists (dangling) across reboots, so it must
-# not be the condition; the per-host entries under it live on the data disk
-# and are only visible once it is mounted. The wake-up event is the symlink
-# recreation the provision script performs right after mounting on each boot.
-PathExistsGlob=/mngr-btrfs/*
+# The marker file is created exclusively by this installer, behind a hard
+# mountpoint check, so it can only ever exist on the mounted data volume.
+# The bare /mngr-btrfs symlink persists (dangling) across reboots, and even
+# entries under it cannot be trusted: root-fs debris shadowed beneath the
+# unmounted mountpoint (a stale snapshot-helper request once mkdir'd
+# /mngr-btrfs/snapshots pre-mount) defeated the previous
+# PathExistsGlob=/mngr-btrfs/* condition and fired the service before the
+# volume existed. The wake-up event is the symlink recreation the provision
+# script performs right after mounting on each boot.
+PathExists=/mngr-btrfs/.minds-volume-ready
 Unit=minds-autostart.service
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+# The readiness marker the path unit watches may only ever be created here,
+# behind a hard mount check, so it can never appear on the unmounted root fs
+# (the way shadow debris under the mountpoint defeated the old glob trigger).
+if ! mountpoint -q "$(readlink -f /mngr-btrfs)"; then
+    echo "refusing to install minds-autostart: /mngr-btrfs is not a mounted volume" >&2
+    exit 1
+fi
+touch /mngr-btrfs/.minds-volume-ready
 # The service is only ever triggered by the path unit, so it cannot run before
 # the data volume exists. Remove any direct boot enablement left by the
-# previous installer (a no-op on fresh VMs), then enable + start the watcher --
-# starting it now makes the fix take effect without a reboot: /mngr-btrfs is
-# already populated at install time, so the service fires immediately (safe:
-# `docker start` and `mngr start` are no-ops on a running workspace).
+# previous installer (a no-op on fresh VMs), revive units a past boot may have
+# left dead of a start-rate limit (re-running this installer is the fleet
+# backfill path), then enable + start the watcher -- starting it now makes the
+# fix take effect without a reboot: the marker is already visible at install
+# time, so the service fires immediately (safe: `docker start` and
+# `mngr start` are no-ops on a running workspace).
 rm -f /etc/systemd/system/multi-user.target.wants/minds-autostart.service
 systemctl daemon-reload
+systemctl reset-failed minds-autostart.path minds-autostart.service 2>/dev/null || true
 systemctl enable minds-autostart.path
 systemctl start minds-autostart.path
 """,
