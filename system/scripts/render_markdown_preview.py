@@ -22,14 +22,25 @@ Writes into ``data/.state/markdown-preview/``: ``index.html`` plus a
 ``source.json`` naming the markdown file, which the server reads to know which
 directory to serve assets from.
 
+**Rendering is what brings the tab into existence.** The preview service is not
+autostarted -- a registered service is a panel in the user's workspace, and a
+previewer that is idle most of the time has no business sitting in front of
+them empty. This script starts it once there is something to show, and
+``--close`` stops it again (the server withdraws its port on the way out, which
+is what removes the tab).
+
 Usage:
     uv run python system/scripts/render_markdown_preview.py <path-to-markdown>
+    uv run python system/scripts/render_markdown_preview.py --close
 """
 
 import argparse
 import html
 import json
+import shutil
+import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from markdown_it import MarkdownIt
@@ -38,6 +49,11 @@ from markdown_it import MarkdownIt
 PREVIEW_STATE_DIR = Path("data/.state/markdown-preview")
 RENDERED_PAGE_NAME = "index.html"
 SOURCE_RECORD_NAME = "source.json"
+
+# The supervisord program that serves the rendered page. Started on demand from
+# here rather than at boot; see the module docstring.
+SERVICE_NAME = "markdown-preview"
+_SUPERVISORCTL_TIMEOUT_SECONDS = 30.0
 
 # `js-default` rather than `commonmark`: it enables tables (GitHub renders them,
 # CommonMark does not) without pulling in mdit_py_plugins or linkify-it-py,
@@ -166,15 +182,68 @@ def write_preview(source_path: Path, state_dir: Path) -> Path:
     return page_path
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run_supervisorctl(action: str) -> tuple[bool, str]:
+    """Run one supervisorctl action against the preview service.
+
+    Returns (ok, message). Never raises: outside a workspace container there is
+    no supervisord, and the render itself is still useful there -- the caller
+    just gets told the tab could not be opened.
+    """
+    if shutil.which("supervisorctl") is None:
+        return False, "supervisorctl not found (not running inside a workspace)"
+    completed = subprocess.run(
+        ["supervisorctl", action, SERVICE_NAME],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_SUPERVISORCTL_TIMEOUT_SECONDS,
+    )
+    output = (completed.stdout + completed.stderr).strip()
+    # `start` on an already-running program and `stop` on an already-stopped one
+    # both exit non-zero, and both mean the requested state already holds.
+    if "already started" in output or "not running" in output:
+        return True, output
+    return completed.returncode == 0, output
+
+
+def main(
+    argv: list[str] | None = None,
+    run_supervisorctl: Callable[[str], tuple[bool, str]] = _run_supervisorctl,
+) -> int:
+    """Render a markdown file (and raise its tab), or close the preview.
+
+    `run_supervisorctl` is injected so the tests can drive the lifecycle
+    without a supervisord.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("markdown_path", help="The markdown file to render")
+    parser.add_argument(
+        "markdown_path",
+        nargs="?",
+        help="The markdown file to render",
+    )
+    parser.add_argument(
+        "--close",
+        action="store_true",
+        help="Stop the preview service and remove its tab; renders nothing",
+    )
     parser.add_argument(
         "--state-dir",
         default=str(PREVIEW_STATE_DIR),
         help=f"Where to write the rendered page (default: {PREVIEW_STATE_DIR})",
     )
     args = parser.parse_args(argv)
+
+    if args.close:
+        ok, message = run_supervisorctl("stop")
+        print(
+            f"render_markdown_preview: preview closed{f' ({message})' if message else ''}"
+            if ok
+            else f"render_markdown_preview: could not close the preview: {message}"
+        )
+        return 0 if ok else 1
+
+    if args.markdown_path is None:
+        parser.error("a markdown file is required (or pass --close)")
 
     source_path = Path(args.markdown_path).resolve()
     if not source_path.is_file():
@@ -186,9 +255,20 @@ def main(argv: list[str] | None = None) -> int:
 
     page_path = write_preview(source_path, Path(args.state_dir))
     print(f"render_markdown_preview: rendered {source_path} -> {page_path}")
-    print(
-        "Open it with: python3 system/scripts/layout.py open service:markdown-preview"
-    )
+
+    started, message = run_supervisorctl("start")
+    if started:
+        print(
+            "render_markdown_preview: preview service is up. Open it with:\n"
+            "  python3 system/scripts/layout.py open service:markdown-preview --layout <layout>\n"
+            "Close it when you are done (this removes the tab):\n"
+            "  uv run python system/scripts/render_markdown_preview.py --close"
+        )
+    else:
+        print(
+            f"render_markdown_preview: rendered, but could not start the preview service: {message}",
+            file=sys.stderr,
+        )
     return 0
 
 
