@@ -899,34 +899,23 @@ pass_host_env__extend = ["MNGR_PREFIX"]
 # code is already present so default-workspace-template-seed is a no-op. Same as the vultr/ovh
 # templates.
 post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-seed"]
-## and these templates are for sub-agents created within the sandbox
+## and these templates are for sub-agents created within the sandbox.
 ##
-## They come in two orthogonal kinds, stacked left to right at create time:
+## The harness (which agent binary runs) is chosen at create time with
+## `--type <harness>`, which resolves the matching `[agent_types.<harness>]` block
+## directly -- there is no per-harness create template. A ROLE template says what the
+## agent is *for* (where it works, what it is told, what its environment holds) and
+## never sets `type`, so the same role runs under any harness:
 ##
-##   mngr create <name> -t <harness> -t <role>
+##   mngr create <name> --type <harness> -t <role>
 ##
-## A HARNESS template sets `type` and nothing else -- it picks which agent binary
-## runs. A ROLE template says what the agent is *for* (where it works, what it is
-## told, what its environment holds) and never sets `type`, so the same role runs
-## under any harness. Keeping the two apart is what stops the template list from
-## growing as the product of harnesses and roles: adding a harness costs one
-## template, not one per role.
+## Keeping the harness on `--type` and the purpose in a role template is what stops
+## the template list from growing as the product of harnesses and roles: adding a
+## harness costs one `[agent_types.<harness>]` block, not one template per role.
 ##
 ## Aggregate keys in a role use `__extend`, never a bare assign: templates stack,
 ## and a bare assign over a key an earlier template in the stack contributed to is
 ## rejected by the settings narrowing guard.
-
-## --- harnesses ---
-
-# Claude Code. `[commands.create] type` already defaults to this, so `-t claude`
-# is redundant in practice -- but spelling it out keeps every create site
-# symmetric with the codex one and survives a change to that default.
-[create_templates.claude]
-type = "claude"
-
-# OpenAI Codex CLI. See [agent_types.codex] for the model/sandbox posture.
-[create_templates.codex]
-type = "codex"
 
 ## --- roles ---
 

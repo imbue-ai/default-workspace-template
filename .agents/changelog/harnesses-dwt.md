@@ -12,4 +12,4 @@ Codex agents are now told not to use their built-in `create_goal` / `get_goal` /
 tools, alongside the existing `update_plan` ban. All four write to stores the user cannot see,
 competing with the `tk` records that drive the chat progress view.
 
-Added a `Haiku` output style, used by the `pirate` role behind the `SILLY_MODELS` flag.
+Added a `Haiku` output style, used by the `pirate` role behind the `FEATURE_FLAG_SILLY_MODELS` flag.
