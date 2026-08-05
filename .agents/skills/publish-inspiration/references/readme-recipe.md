@@ -51,7 +51,7 @@ or change the README:
 
 ```bash
 uv run python system/scripts/render_markdown_preview.py <path-to-README.md>
-python3 system/scripts/layout.py open service:markdown-preview
+python3 system/scripts/layout.py open service:markdown-preview --layout <layout>
 python3 system/scripts/layout.py refresh service:markdown-preview   # after a re-render
 ```
 
@@ -60,6 +60,18 @@ badge, and local images all resolved -- so you can check the layout and the
 graphic, not just the text. It also shows the file's absolute path with a
 one-click Copy path button. Never paste raw markdown into chat and ask the user
 to picture it.
+
+**Close it when you are done.** The preview is not a permanent fixture of the
+user's workspace -- it exists because you rendered something, and it should go
+away when that is over:
+
+```bash
+uv run python system/scripts/render_markdown_preview.py --close
+```
+
+That stops the service, which withdraws its port and takes the tab with it.
+(This is also why the first command above is what starts it: the service is
+never autostarted, so nothing appears until there is something to look at.)
 
 ## Verify the published page
 

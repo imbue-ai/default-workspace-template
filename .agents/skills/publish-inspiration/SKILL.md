@@ -457,13 +457,20 @@ worktree to a clean template base and deletes gitignored state -- including
 
    ```bash
    uv run python system/scripts/render_markdown_preview.py README.md
-   python3 system/scripts/layout.py open service:markdown-preview
+   python3 system/scripts/layout.py open service:markdown-preview --layout <layout>
    ```
 
    It renders the way GitHub will, with the hero and any local images resolved,
    so a broken image path or a mangled layout shows up here rather than on the
    published page. Re-render and `layout.py refresh service:markdown-preview`
-   after each fix.
+   after each fix, then close it when the README is right:
+
+   ```bash
+   uv run python system/scripts/render_markdown_preview.py --close
+   ```
+
+   Closing removes the tab. Leave it open and the user keeps a preview panel
+   they did not ask for.
 
 4. **Design the thumbnail.** `inspiration.svg` at the repo root is a
    generic placeholder the script generated -- it must never be published.

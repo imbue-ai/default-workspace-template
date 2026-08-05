@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
 
+import pytest
 from render_markdown_preview import (
     RENDERED_PAGE_NAME,
     SOURCE_RECORD_NAME,
     build_page,
+    main,
     render_markdown,
     write_preview,
 )
@@ -94,3 +96,74 @@ def test_rendering_twice_replaces_the_previous_preview(tmp_path: Path) -> None:
     page = (state_dir / RENDERED_PAGE_NAME).read_text()
     assert "<h1>Second</h1>" in page
     assert "<h1>First</h1>" not in page
+
+
+# --- the tab only exists while a preview does ---
+
+
+def _recording_runner(calls: list[str], result: tuple[bool, str] = (True, "")):
+    def run(action: str) -> tuple[bool, str]:
+        calls.append(action)
+        return result
+
+    return run
+
+
+def test_rendering_starts_the_preview_service(tmp_path: Path) -> None:
+    """A tab appears because a render happened, not because the box booted.
+
+    The service is not autostarted: a registered service is a panel in the
+    user's workspace, and a previewer that is idle almost all the time would
+    sit there empty forever.
+    """
+    calls: list[str] = []
+    source = tmp_path / "README.md"
+    source.write_text("# Hi\n")
+
+    exit_code = main(
+        [str(source), "--state-dir", str(tmp_path / "state")],
+        run_supervisorctl=_recording_runner(calls),
+    )
+
+    assert exit_code == 0
+    assert calls == ["start"]
+    assert (tmp_path / "state" / RENDERED_PAGE_NAME).is_file()
+
+
+def test_close_stops_the_service_and_renders_nothing(tmp_path: Path) -> None:
+    # Stopping is what removes the tab: the server withdraws its port as it
+    # exits, so the panel goes with it instead of lingering on a dead origin.
+    calls: list[str] = []
+
+    exit_code = main(
+        ["--close", "--state-dir", str(tmp_path / "state")],
+        run_supervisorctl=_recording_runner(calls),
+    )
+
+    assert exit_code == 0
+    assert calls == ["stop"]
+    assert not (tmp_path / "state" / RENDERED_PAGE_NAME).exists()
+
+
+def test_a_render_still_succeeds_when_there_is_no_supervisord(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Outside a workspace container there is no supervisord, and the rendered
+    # file is still useful -- so this reports the problem rather than failing
+    # the render.
+    source = tmp_path / "README.md"
+    source.write_text("# Hi\n")
+
+    exit_code = main(
+        [str(source), "--state-dir", str(tmp_path / "state")],
+        run_supervisorctl=_recording_runner([], (False, "supervisorctl not found")),
+    )
+
+    assert exit_code == 0
+    assert (tmp_path / "state" / RENDERED_PAGE_NAME).is_file()
+    assert "could not start the preview service" in capsys.readouterr().err
+
+
+def test_no_arguments_is_a_usage_error() -> None:
+    with pytest.raises(SystemExit):
+        main([])
