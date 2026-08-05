@@ -25,7 +25,7 @@ worker's worktree.
 > **THE ONE SAFETY REQUIREMENT ABOVE ALL OTHERS -- DO NOT REGENERATE, RE-ASSEMBLE
 > FROM THE PUBLISHED TIP.** An update is NOT a fresh publish. The published repo
 > already holds content that only exists because a human and an agent made it: the
-> finished "What it is" / "How it works" / "Prerequisites" / "Requirements"
+> finished "What it is" / "How it works" / "Requirements"
 > prose in `inspiration.md`, the bespoke `inspiration.svg`
 > thumbnail, the inspiration-specific `/welcome`, and the adopters' "Adaptation
 > history". A naive re-run of `build_inspiration.sh` RESETS to the raw `BASE_REF`

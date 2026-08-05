@@ -4,7 +4,8 @@ An inspiration publishes three files at its repo root: `inspiration.md` (prose,
 requirements, and the two append-only history logs), `inspiration.svg` (the
 thumbnail / README hero), and `inspiration.toml` -- this schema. The TOML is
 authoritative for everything machine-readable: identity, the derivation recipe,
-the activation prerequisites, the environment an adopter must converge, and the
+the requirements an adopter must activate or adapt, the environment they must
+converge, and the
 lineage of inspirations this one was built on.
 
 There is exactly one manifest per repo. A newly published or newly adopted
@@ -193,22 +194,63 @@ class LlmRequirement(FrozenManifestModel):
     )
 
 
-class Prerequisites(FrozenManifestModel):
-    """The SETUP agenda: what must be ACTIVATED before the inspiration runs.
+class AdaptationRequirement(FrozenManifestModel):
+    """One thing the adapter must DECIDE or REWIRE to make this theirs.
 
-    Distinct from the markdown's Requirements section, which is the ADAPTATION
-    agenda -- what an adapter must decide or rewire to make it theirs.
+    Prose rather than machine-readable, because it is worked through
+    interactively with the user: a stubbed integration, a hardcoded account or
+    channel, data that was deliberately not included.
+    """
+
+    summary: NonEmptyString = Field(description="What is missing or hardcoded")
+    resolution: str = Field(
+        default="", description="What a working replacement looks like"
+    )
+
+
+class Requirements(FrozenManifestModel):
+    """Everything an adopter must deal with before this is really theirs.
+
+    One list, deliberately -- an earlier split into "Prerequisites" and
+    "Requirements" put two near-synonyms next to each other and made the
+    publishing worker responsible for filing each item under the right heading,
+    policed only by an instruction not to get it wrong.
+
+    The distinction that actually matters is preserved, as the KIND of each
+    item rather than which section it sits in, because the two are handled at
+    different times by different mechanisms:
+
+    - `permission`, `secret`, and `llm` are ACTIVATION requirements. The
+      adopting agent acts on them FIRST and BY ITSELF -- it initiates each
+      latchkey permission request before asking the user anything. They are
+      machine-readable precisely because of a real incident where an adopter
+      was never prompted for a Slack permission the app needed.
+    - `adaptation` entries are worked through INTERACTIVELY afterwards, one at
+      a time, with the user.
+
+    So "activate everything typed, then walk the adaptation list" is derivable
+    from the data instead of from a heading a human had to choose correctly.
     """
 
     permission: tuple[PermissionRequirement, ...] = Field(
-        default=(), description="Latchkey permissions the adopting agent initiates"
+        default=(),
+        description="ACTIVATION: latchkey permissions the adopting agent initiates itself, first",
     )
     secret: tuple[SecretRequirement, ...] = Field(
-        default=(), description="Secrets the adopter must supply"
+        default=(), description="ACTIVATION: secrets the adopter must supply"
     )
     llm: LlmRequirement | None = Field(
-        default=None, description="Present whenever the included code calls an LLM"
+        default=None,
+        description="ACTIVATION: present whenever the included code calls an LLM",
     )
+    adaptation: tuple[AdaptationRequirement, ...] = Field(
+        default=(),
+        description="ADAPTATION: design gaps resolved interactively with the user, after activation",
+    )
+
+    def has_activation_requirements(self) -> bool:
+        """Whether anything must be activated before the inspiration runs."""
+        return bool(self.permission or self.secret or self.llm is not None)
 
 
 class EnvironmentDeclaration(FrozenManifestModel):
@@ -318,8 +360,9 @@ class InspirationManifest(FrozenManifestModel):
     recipe: Recipe = Field(
         description="How this inspiration is derived from its source workspace"
     )
-    prerequisites: Prerequisites = Field(
-        default_factory=Prerequisites, description="The activation (SETUP) agenda"
+    requirements: Requirements = Field(
+        default_factory=Requirements,
+        description="Everything an adopter must activate or adapt",
     )
     environment: EnvironmentDeclaration = Field(
         default_factory=EnvironmentDeclaration,
@@ -402,7 +445,7 @@ def _strip_html_comments(markdown_text: str) -> str:
     The generated FILL-IN instructions are HTML comments and they quote example
     `requires_permission:` / `requires_secret:` / `requires_llm:` lines to show
     the form. Counting those as declarations makes a freshly-generated skeleton
-    look like it declares three prerequisites it does not have.
+    look like it declares three activation requirements it does not have.
     """
     return _HTML_COMMENT_PATTERN.sub("", markdown_text)
 
@@ -464,10 +507,12 @@ def check_markdown_agreement(
 ) -> tuple[str, ...]:
     """Problems where `inspiration.md` and `inspiration.toml` disagree.
 
-    The markdown keeps a human-readable front matter and Prerequisites list --
+    The markdown keeps a human-readable front matter and `requires_` lines --
     both of which an adopter on an older template still reads -- while the TOML
     is authoritative. They are generated together, so any disagreement means
-    one of them was hand-edited afterwards.
+    one of them was hand-edited afterwards. Only the ACTIVATION requirements are
+    cross-checked: the adaptation entries are prose in both files by design, so
+    there is nothing to compare one-for-one.
     """
     problems: list[str] = []
     front_matter = _parse_markdown_front_matter(markdown_text)
@@ -486,8 +531,7 @@ def check_markdown_agreement(
             )
 
     declared_permissions = {
-        f"{item.scope} / {item.permission}"
-        for item in manifest.prerequisites.permission
+        f"{item.scope} / {item.permission}" for item in manifest.requirements.permission
     }
     markdown_permission_count = 0
     markdown_secret_count = 0
@@ -505,12 +549,12 @@ def check_markdown_agreement(
             f"inspiration.md lists {markdown_permission_count} requires_permission line(s) but "
             f"inspiration.toml declares {len(declared_permissions)}"
         )
-    if markdown_secret_count != len(manifest.prerequisites.secret):
+    if markdown_secret_count != len(manifest.requirements.secret):
         problems.append(
             f"inspiration.md lists {markdown_secret_count} requires_secret line(s) but "
-            f"inspiration.toml declares {len(manifest.prerequisites.secret)}"
+            f"inspiration.toml declares {len(manifest.requirements.secret)}"
         )
-    if has_markdown_llm_line != (manifest.prerequisites.llm is not None):
+    if has_markdown_llm_line != (manifest.requirements.llm is not None):
         problems.append(
             "inspiration.md and inspiration.toml disagree about whether this inspiration needs LLM access"
         )

@@ -8,7 +8,7 @@ description: Publish a clean, shareable snapshot of the apps/features this mind 
 Version: v2 (inspirations flow). This versions the publish/adopt flow and the
 manifest format. v2 publishes ONE slug-free `inspiration.md` + `inspiration.toml`
 + `inspiration.svg` per repo, overriding any previous manifest rather than
-accumulating beside it, with the machine-readable half (recipe, prerequisites,
+accumulating beside it, with the machine-readable half (recipe, requirements,
 and the environment an adopter must install) in the TOML. v1 -- slug-named
 `inspiration-<slug>.md` with a YAML recipe block inside it and no TOML -- is
 still READ by the adopt paths, but nothing writes it any more.
@@ -358,15 +358,16 @@ worktree to a clean template base and deletes gitignored state -- including
 
 3. **Flesh out the manifest.** `inspiration.md` at the repo root has
    `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
-   "How it works," "Prerequisites," "Environment," "Requirements," and "Publication
+   "How it works," "Requirements," "Environment," and "Publication
    history" -- generated placeholders, not real content. Replace EVERY block
    with real, specific content. "Publication history" is this inspiration's
    changelog: replace its FILL-IN with the first entry `### v1 (YYYY-MM-DD) --
    <one line: what this first version publishes>` using today's date; later
    updates append `### v2 (date) -- what changed`. It is the PUBLISHER's log --
    never write into "Adaptation history", which is the adopters' log.
-   "Prerequisites" is the strictest: one machine-readable line per activation
-   requirement in the exact `requires_permission:` / `requires_secret:` forms
+   "Requirements" is the strictest, and it holds two kinds of entry. The
+   ACTIVATION half is one machine-readable line per requirement, in the exact
+   `requires_permission:` / `requires_secret:` forms
    the template shows, derived from the included code (inspect every service
    the app reaches through `latchkey curl` and name the real latchkey scope
    and permission schema, e.g. `slack-api / slack-read-all`). These lines are
@@ -377,13 +378,17 @@ worktree to a clean template base and deletes gitignored state -- including
    inspiration's user would need to give for the app to work"; it must be
    complete and accurate, because the lead surfaces it back to the publishing
    user for confirmation in §6 and a gap you leave here is exactly what that
-   confirmation is checking for. "Requirements" is the
-   adaptation agenda only -- design gaps, stubbed integrations, hardcoded
-   accounts -- never activation requirements. If a section genuinely has
-   nothing to add, say so explicitly in prose; never leave a placeholder
-   comment in place and never leave a section blank.
+   confirmation is checking for. The ADAPTATION half is prose bullets in the
+   same section -- design gaps, stubbed integrations, hardcoded accounts --
+   worked through interactively rather than acted on automatically. Both kinds
+   live under one heading, and each entry's kind decides how it is handled, so
+   there is no longer a wrong heading to file something under -- but you DO
+   have to use the `requires_` line form for anything that must be activated,
+   or it will not be. If a section genuinely has nothing to add, say so
+   explicitly in prose; never leave a placeholder comment in place and never
+   leave a section blank.
 
-   **LLM access is a first-class prerequisite.** If any included code calls an
+   **LLM access is a first-class activation requirement.** If any included code calls an
    LLM (Claude) -- an AI-driven service, an AI integration, a scripted model
    step -- record that dependency explicitly, because HOW a mind reaches Claude
    is per-environment and differs between the publisher and the adopter. This
@@ -391,7 +396,7 @@ worktree to a clean template base and deletes gitignored state -- including
    (`ANTHROPIC_API_KEY` set -> `litellm`, pay-per-token API) or a KEYLESS path
    (`claude -p` -> the subscription credit pool), chosen by whether
    `ANTHROPIC_API_KEY` is present. The adopter's mind may use the OTHER method
-   than the one this code was written against. So add a Prerequisites line naming
+   than the one this code was written against. So add a `requires_llm:` line naming
    the LLM dependency and the method it was built for, e.g. `requires_llm: calls
    Claude via the keyed litellm path (ANTHROPIC_API_KEY); an adopter on the
    keyless subscription path must switch the model calls per use-ai-integration`.
@@ -413,10 +418,13 @@ worktree to a clean template base and deletes gitignored state -- including
      (`replace the hardcoded team Slack channel with a neutral default`, never
      the channel name itself). The whole point of a modification is that the
      value does not ship; restating it here would publish it.
-   - `[prerequisites]` -- one `[[prerequisites.permission]]` per
-     `requires_permission:` line you wrote, one `[[prerequisites.secret]]` per
-     `requires_secret:`, and a `[prerequisites.llm]` table if there is a
-     `requires_llm:` line. One-for-one with the markdown, both directions.
+   - `[requirements]` -- one `[[requirements.permission]]` per
+     `requires_permission:` line you wrote, one `[[requirements.secret]]` per
+     `requires_secret:`, and a `[requirements.llm]` table if there is a
+     `requires_llm:` line. One-for-one with the markdown, both directions --
+     that is the half the validator cross-checks. Mirror the adaptation
+     bullets as `[[requirements.adaptation]]` entries too; those are prose on
+     both sides, so they are not compared.
    - `[environment]` -- what the included code needs INSTALLED beyond the stock
      template. Derive it from the CODE, not from whatever happens to be
      installed on this machine: every binary it shells out to, every global
@@ -654,16 +662,16 @@ mechanism. Present the proposal to the user ONCE, in plain language:
 - a short recap of the **published-version modifications** that were applied
   (or that there were none), so the user can verify their requested removals
   and changes actually happened;
-- the **permissions and secrets an adopter must grant** -- the set the
-  manifest's "Prerequisites" lists (the worker derived these from the code in
+- the **permissions and secrets an adopter must grant** -- the activation
+  requirements the manifest lists (the worker derived these from the code in
   §3), stated plainly rather than as `requires_` lines, e.g. "For this to work,
   whoever adopts it will need to connect/grant: <X>, <Y>. Do those look right and
   complete?". This is "what the inspiration's user would need to give for the app
   to work", and the publisher's reply is part of the go-ahead: if they say a
-  permission or secret is missing or wrong, fix the manifest's "Prerequisites" in
+  permission or secret is missing or wrong, fix the manifest's "Requirements" in
   `$WT` (and re-commit per the commit step below) BEFORE proceeding to §7/§8 -- a
   missing or inaccurate line silently breaks adoption, since it is exactly what
-  the adopting agent initiates during setup. If Prerequisites says there are
+  the adopting agent initiates during setup. If there are
   none, state that too, so the user can confirm the app really needs nothing;
 - the **thumbnail** the sub-agent designed -- EMBED it in the chat message
   as a markdown image so the user actually sees what will represent their
@@ -707,8 +715,9 @@ If the user asks to abort, stop here and leave the assembled commit intact
   stripped).
 
 **Commit before §8's push.** Write any confirmed title/description edits into
-`inspiration.md`'s front-matter (any Prerequisites the publisher flagged
-as missing or wrong into its "Prerequisites" section, and any thumbnail edits
+`inspiration.md`'s front-matter (any activation requirement the publisher
+flagged as missing or wrong into its "Requirements" section AND the matching
+`[requirements]` entry in `inspiration.toml`, and any thumbnail edits
 into the `.svg`), and COMMIT that change with cwd = `$WT` before proceeding to
 §7/§8.
 Never push first and fix up the manifest or thumbnail with a second

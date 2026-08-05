@@ -46,8 +46,9 @@ set -euo pipefail
 #
 # v2 is the split format: one slug-free inspiration.md/.toml/.svg per repo
 # (overriding rather than accumulating, with a [[lineage]] chain recording what
-# was superseded), the recipe and prerequisites moved into the TOML, an
-# [environment] declaration, and "Holes" renamed to "Requirements". v1 is the
+# was superseded), the recipe and requirements moved into the TOML, an
+# [environment] declaration, and Holes + Prerequisites merged into one
+# Requirements list whose entries carry their own kind. v1 is the
 # original: slug-named inspiration-<slug>.md with a YAML recipe block inside it
 # and no TOML at all. Adopters still read v1 -- absence of inspiration.toml is
 # what identifies it -- but nothing writes v1 any more.
@@ -432,18 +433,24 @@ source workspace.
 
 The recipe is machine-read, so it lives in the sibling
 [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}) -- its \`[recipe]\` table -- along with
-the structured prerequisites and the environment this inspiration needs
+the structured requirements and the environment this inspiration needs
 installed. That file is authoritative for all of it; this one holds the prose.
 
-## Prerequisites
+## Requirements
 
-Activation requirements: what the adopting agent must SET UP -- and must
-INITIATE ITSELF during setup, before asking how to adapt -- for this
-inspiration to run against the new user's own accounts/data. One line per
-requirement, in this machine-readable form (greppable by \`requires_\`):
+Everything the adopting mind must deal with before this inspiration is really
+theirs. Two kinds of entry, handled at different times:
+
+- **Activation** -- what must be SET UP before anything runs, in the
+  machine-readable \`requires_\` forms below. The adopting agent acts on these
+  ITSELF, first, before asking anything.
+- **Adaptation** -- what must be DECIDED or REWIRED, in prose. Worked through
+  interactively with the user, after activation.
 
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with one line per requirement, using exactly these forms:
+with both kinds of entry.
+
+ACTIVATION -- one line each, using exactly these forms (greppable by \`requires_\`):
 
 - requires_permission: <latchkey scope> / <permission schema> (user-approved;
   the adopting agent initiates this via a latchkey permission request during
@@ -462,15 +469,27 @@ calls through \`latchkey curl\`, and whether any code calls an LLM). Example:
 - requires_llm: calls Claude via the keyed litellm path (ANTHROPIC_API_KEY set);
   an adopter on the keyless subscription path must switch the model calls per
   use-ai-integration
-If nothing is required, write exactly: "No prerequisites -- runs with no
-external permissions or secrets."
 
-EVERY line you write here must also be declared in \`${MANIFEST_TOML}\`'s
-\`[prerequisites]\` -- one \`[[prerequisites.permission]]\` per
-requires_permission, one \`[[prerequisites.secret]]\` per requires_secret, a
-\`[prerequisites.llm]\` table if there is a requires_llm line. The validator
-compares the two and fails the publish if they disagree, because this list is
-what the adopting agent acts on and the TOML is what tooling reads. -->
+These lines are what the ADOPTING agent acts on during setup, so a vague or
+missing one silently breaks adoption -- a real incident: an adopter was never
+prompted for a Slack permission the app needed. They are also what the lead
+surfaces back to the publishing user for confirmation, so the list must be
+complete and accurate. EVERY line must have its counterpart in
+\`${MANIFEST_TOML}\`'s \`[requirements]\` (\`[[requirements.permission]]\`,
+\`[[requirements.secret]]\`, \`[requirements.llm]\`); the validator compares
+them and fails the publish if they disagree.
+
+ADAPTATION -- one bullet each, in plain prose: every gap the adapter must
+decide or rewire (stubbed integrations, hardcoded accounts/channels/ids, data
+that was not included, anything that will not work out of the box). For each,
+say what is missing and what a working replacement looks like. Mirror them as
+\`[[requirements.adaptation]]\` entries in the TOML.
+
+Do not repeat the README's "Ideas for making it yours" here -- those are
+optional invitations, these are things that must be resolved.
+
+If there is genuinely nothing of either kind, write exactly: "No requirements --
+runs as published, with no external permissions or secrets." -->
 
 ## Environment
 
@@ -497,12 +516,13 @@ exactly: "Nothing extra -- runs on the stock workspace environment." -->
 Instructions for the NEXT agent -- the one adapting this inspiration into a
 new mind. This is the \`use-inspiration\` skill's template path; in short:
 
-1. Read this entire file first, especially "Prerequisites" and "Requirements"
-   below -- Prerequisites are your SETUP agenda (what to ACTIVATE before
-   anything runs), Requirements are your ADAPTATION agenda (what to DECIDE or
-   REWIRE to make it theirs). Two different jobs; do not merge them.
+1. Read this entire file first, especially "Requirements" below. It holds two
+   kinds of entry and they are handled at different times: the machine-readable
+   \`requires_\` lines are ACTIVATION (set them up before anything runs), and
+   the prose bullets are ADAPTATION (decide or rewire them afterwards).
 2. Present the inspiration to the user in plain, non-technical language: what
-   it is, what it does, and what it needs from them (name the Prerequisites).
+   it is, what it does, and what it needs from them (name the activation
+   requirements).
 3. Ask whether they want to use the same connectors (e.g. their own Slack).
    If YES: ACTIVATE FIRST -- initiate every \`requires_permission\` line NOW
    via a latchkey permission request (see the \`latchkey\` skill; the request
@@ -518,23 +538,6 @@ new mind. This is the \`use-inspiration\` skill's template path; in short:
    and resolve the obvious ones yourself.
 6. When done, append a dated entry to "Adaptation history" below (never
    rewrite earlier entries) and commit.
-
-## Requirements
-
-<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with one bullet per requirement: every ADAPTATION gap the adapter must decide
-or rewire -- stubbed integrations, hardcoded accounts/channels/ids, data that
-was not included, anything that will not work out of the box. For each, say
-what is missing and what a working replacement looks like.
-
-Do NOT list activation requirements here (permissions, tokens, accounts) --
-those belong in "Prerequisites" above. The two sections sit next to each other
-and their names are near-synonyms, so keep the split sharp: Prerequisites is
-what to ACTIVATE before anything runs, Requirements is what to DECIDE or
-REWIRE afterwards. And do not repeat the README's "Ideas for making it yours"
-here -- those are optional invitations, these are things that must be resolved.
-
-If there are genuinely none, say so explicitly. -->
 
 ## Publication history
 
@@ -608,8 +611,8 @@ waiting to be asked:
 2. Immediately read \`${MANIFEST}\` at the repo root (reading the
    manifest in the first turn is required).
 3. In plain, non-technical language, present what the inspiration is and
-   what it needs from the user -- name the manifest's "Prerequisites" (the
-   connectors/permissions it runs on). Then ask whether they want to hook it
+   what it needs from the user -- name the manifest's activation requirements
+   (the connectors/permissions it runs on). Then ask whether they want to hook it
    up to their own accounts now (e.g. "Want me to connect this to your own
    Slack?"). End your first response on THAT question. This is the
    \`use-inspiration\` skill's template path; the manifest's "How to adapt
@@ -689,8 +692,8 @@ snapshot of what a mind built, ready to adapt into your own. It is NOT the
 generic workspace template -- it is this specific project.
 
 [\`${MANIFEST}\`](${MANIFEST}) is the full manifest -- what it is, how it
-works, the prerequisites it needs, and what to adapt -- with the
-machine-readable half (recipe, prerequisites, and the environment it needs
+works, what it needs to run, and what to adapt -- with the
+machine-readable half (recipe, requirements, and the environment it needs
 installed) in [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}).
 README_EOF
 
@@ -817,11 +820,11 @@ echo "  boot smoke-check: passed"
 echo "  manifest validation: passed (skeleton)"
 echo "  NEXT, before reporting done:"
 echo "    1. ${MANIFEST} has <!-- FILL-IN (publishing agent): ... --> blocks in 'What it is',"
-echo "       'How it works', 'Prerequisites', 'Environment', 'Requirements', and"
+echo "       'How it works', 'Requirements', 'Environment', and"
 echo "       'Publication history' (the v1 entry). Replace ALL of them with real content, or"
 echo "       explicit 'none' prose."
 echo "    2. ${MANIFEST_TOML} has FILL-IN comments for the recipe's exclude and"
-echo "       modification_rules, the [prerequisites] tables, and the [environment] table."
+echo "       modification_rules, the [requirements] tables, and the [environment] table."
 echo "       Every requires_ line you write in ${MANIFEST} MUST have its counterpart here --"
 echo "       validation compares them and fails the publish if they disagree."
 echo "    3. README.md has FILL-IN blocks for 'Why you care', 'How to use it', and 'Ideas for"

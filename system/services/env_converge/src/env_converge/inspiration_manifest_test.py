@@ -13,6 +13,7 @@ from env_converge.inspiration_manifest import (
     InspirationManifest,
     InspirationManifestNotFoundError,
     InspirationManifestParseError,
+    Requirements,
     check_env_d_units,
     check_markdown_agreement,
     check_unfinished_placeholders,
@@ -77,8 +78,8 @@ def test_a_minimal_manifest_loads_with_the_documented_defaults(tmp_path: Path) -
     # most inspirations declare no environment at all, and that must stay the
     # cheap case.
     assert manifest.recipe.exclude == ()
-    assert manifest.prerequisites.permission == ()
-    assert manifest.prerequisites.llm is None
+    assert manifest.requirements.permission == ()
+    assert manifest.requirements.llm is None
     assert manifest.lineage == ()
     assert manifest.environment.is_empty()
 
@@ -87,14 +88,14 @@ def test_the_full_environment_and_lineage_shape_round_trips(tmp_path: Path) -> N
     manifest = _manifest(
         _MINIMAL_TOML
         + """
-[prerequisites.llm]
+[requirements.llm]
 method = "keyed"
 
-[[prerequisites.permission]]
+[[requirements.permission]]
 scope = "slack-api"
 permission = "slack-read-all"
 
-[[prerequisites.secret]]
+[[requirements.secret]]
 name = "SLACK_SIGNING_SECRET"
 
 [environment]
@@ -126,8 +127,8 @@ used_on = "2026-08-04"
     assert manifest.environment.uv_tools == {"yt-dlp": "2026.7.1"}
     assert manifest.environment.cargo_crates == {"fd-find": "9.0.0"}
     assert not manifest.environment.is_empty()
-    assert manifest.prerequisites.llm is not None
-    assert manifest.prerequisites.llm.method == "keyed"
+    assert manifest.requirements.llm is not None
+    assert manifest.requirements.llm.method == "keyed"
     assert manifest.lineage[0].commit == "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
     assert manifest.lineage[0].used_on is not None
     assert manifest.lineage[0].used_on.year == 2026
@@ -319,7 +320,7 @@ def test_a_prerequisite_present_in_only_one_file_is_caught(tmp_path: Path) -> No
     # means either a silently-missed setup step or a lie about what is needed.
     manifest = _manifest(
         _MINIMAL_TOML
-        + '\n[[prerequisites.permission]]\nscope = "slack-api"\npermission = "slack-read-all"\n',
+        + '\n[[requirements.permission]]\nscope = "slack-api"\npermission = "slack-read-all"\n',
         tmp_path,
     )
 
@@ -343,7 +344,7 @@ def test_example_requires_lines_inside_fill_in_comments_are_not_counted(
 ) -> None:
     # The generated FILL-IN instructions quote example requires_ lines to show
     # the form. Counting those made a freshly-generated skeleton -- which
-    # declares nothing yet -- look like it declared three prerequisites, so
+    # declares nothing yet -- look like it declared three of them, so
     # build_inspiration.sh failed its own validation gate on every publish.
     # Caught by running the assembly script end to end, not by the unit tests.
     manifest = _manifest(_MINIMAL_TOML, tmp_path)
@@ -365,12 +366,14 @@ def test_example_requires_lines_inside_fill_in_comments_are_not_counted(
     assert check_markdown_agreement(manifest, markdown) == ()
 
 
-def test_declared_prerequisites_matching_the_markdown_pass(tmp_path: Path) -> None:
+def test_declared_activation_requirements_matching_the_markdown_pass(
+    tmp_path: Path,
+) -> None:
     manifest = _manifest(
         _MINIMAL_TOML
-        + '\n[prerequisites.llm]\nmethod = "keyed"\n'
-        + '\n[[prerequisites.permission]]\nscope = "slack-api"\npermission = "slack-read-all"\n'
-        + '\n[[prerequisites.secret]]\nname = "SLACK_SIGNING_SECRET"\n',
+        + '\n[requirements.llm]\nmethod = "keyed"\n'
+        + '\n[[requirements.permission]]\nscope = "slack-api"\npermission = "slack-read-all"\n'
+        + '\n[[requirements.secret]]\nname = "SLACK_SIGNING_SECRET"\n',
         tmp_path,
     )
 
@@ -472,3 +475,45 @@ def test_the_schema_module_imports_only_stdlib_and_pydantic() -> None:
     assert imported_roots <= allowed, (
         f"non-stdlib, non-pydantic imports would break the publish-time gate: {imported_roots - allowed}"
     )
+
+
+def test_activation_and_adaptation_requirements_coexist_in_one_table(
+    tmp_path: Path,
+) -> None:
+    # The merge that removed the Prerequisites/Requirements split: both kinds of
+    # item live under [requirements], and which is which is a property of the
+    # entry rather than of the heading a human filed it under.
+    manifest = _manifest(
+        _MINIMAL_TOML
+        + """
+[[requirements.permission]]
+scope = "slack-api"
+permission = "slack-read-all"
+
+[[requirements.adaptation]]
+summary = "the digest channel is hardcoded"
+resolution = "ask the user which channel to watch"
+""",
+        tmp_path,
+    )
+
+    assert manifest.requirements.has_activation_requirements()
+    assert len(manifest.requirements.adaptation) == 1
+    assert manifest.requirements.adaptation[0].summary.startswith("the digest")
+
+    # Only the activation half is cross-checked against the markdown; the
+    # adaptation entries are prose on both sides, so there is nothing to compare
+    # one-for-one and their presence must not make the files "disagree".
+    markdown = (
+        _MINIMAL_MARKDOWN + "\n- requires_permission: slack-api / slack-read-all\n"
+    )
+    assert check_markdown_agreement(manifest, markdown) == ()
+
+
+def test_an_inspiration_needing_no_activation_says_so() -> None:
+    # use-inspiration branches on this: nothing to initiate means it can go
+    # straight to the adaptation conversation instead of opening approval flows.
+    assert not Requirements().has_activation_requirements()
+    assert not Requirements(
+        adaptation=({"summary": "swap the data source"},)
+    ).has_activation_requirements()

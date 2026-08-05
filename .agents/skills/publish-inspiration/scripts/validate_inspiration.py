@@ -4,7 +4,8 @@
 Checks, in one command:
 
   - `inspiration.toml` parses and satisfies the schema;
-  - `inspiration.md` and `inspiration.toml` agree (front matter, prerequisites);
+  - `inspiration.md` and `inspiration.toml` agree (front matter, and the
+    activation half of the requirements);
   - the thumbnail exists and is not still the generated placeholder;
   - no `<!-- FILL-IN (publishing agent)` block was left unreplaced anywhere;
   - every declared env.d unit is well-named and actually ships in the snapshot;
