@@ -48,8 +48,8 @@ resources.
 
 Readiness: codex's ``SessionStart`` hook fires *lazily* (on the first prompt,
 not at TUI launch -- openai/codex issue #15269), so there is no pre-input
-sentinel; readiness uses the ``InteractiveTuiAgent`` banner poll on a stable
-header string (``TUI_READY_INDICATOR``).
+sentinel; readiness polls for the pinned composer prompt glyph in the visible
+pane (``TUI_READY_INDICATOR``), the same way ``mngr_claude`` polls for ``❯``.
 
 Hook trust: codex requires command hooks to be trusted before they run. mngr
 passes ``--dangerously-bypass-hook-trust`` so its own lifecycle hooks run
@@ -93,6 +93,8 @@ from imbue.mngr.agents.common_transcript import provision_raw_transcript_scripts
 from imbue.mngr.agents.common_transcript import provision_scripts_to_commands_dir
 from imbue.mngr.agents.installation import ensure_cli_installed
 from imbue.mngr.agents.installation import verify_pinned_cli_version
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.agents.tui_agent import InteractiveTuiAgent
 from imbue.mngr.agents.tui_utils import SubmissionConfirmationPolicy
 from imbue.mngr.agents.tui_utils import SubmissionEvidenceProbe
@@ -135,6 +137,8 @@ from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.utils.git_utils import find_git_source_path
 from imbue.mngr_codex import resources as _codex_resources
@@ -143,12 +147,15 @@ from imbue.mngr_codex.codex_config import BACKGROUND_TASKS_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import CLEAR_ACTIVE_MARKER_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import COMMON_TRANSCRIPT_CONVERT_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import COMMON_TRANSCRIPT_SCRIPT_NAME
+from imbue.mngr_codex.codex_config import DEVELOPER_INSTRUCTIONS_SEPARATOR
 from imbue.mngr_codex.codex_config import MARKER_LOCK_DIRNAME
 from imbue.mngr_codex.codex_config import MARKER_STATE_LIB_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import PERMISSIONS_WAITING_FILENAME
+from imbue.mngr_codex.codex_config import PROCESS_STARTED_MARKER_FILENAME
 from imbue.mngr_codex.codex_config import RAW_TRANSCRIPT_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import ROOT_ACTIVE_FILENAME
 from imbue.mngr_codex.codex_config import ROOT_SESSION_FILENAME
+from imbue.mngr_codex.codex_config import RUST_LOG_VALUE
 from imbue.mngr_codex.codex_config import SESSIONS_RELATIVE_PATH
 from imbue.mngr_codex.codex_config import SET_ACTIVE_MARKER_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import SUBAGENTS_DIRNAME
@@ -159,10 +166,14 @@ from imbue.mngr_codex.codex_config import build_codex_hooks_config
 from imbue.mngr_codex.codex_config import extract_latest_codex_version
 from imbue.mngr_codex.codex_config import get_codex_auth_path
 from imbue.mngr_codex.codex_config import get_codex_config_path
+from imbue.mngr_codex.codex_config import get_codex_global_instructions_path
 from imbue.mngr_codex.codex_config import get_codex_home
 from imbue.mngr_codex.codex_config import get_codex_hooks_path
 from imbue.mngr_codex.codex_config import get_codex_personality_migration_path
+from imbue.mngr_codex.codex_config import get_codex_tui_log_dir
 from imbue.mngr_codex.codex_config import get_codex_version_cache_path
+from imbue.mngr_codex.codex_config import get_repo_codex_instructions_path
+from imbue.mngr_codex.codex_config import get_shared_output_styles_dir
 from imbue.mngr_codex.codex_config import is_codex_update_available
 from imbue.mngr_codex.codex_config import is_project_trusted
 from imbue.mngr_codex.codex_config import merge_project_trust
@@ -214,6 +225,25 @@ def _load_codex_resource_script(filename: str) -> str:
 
 class CodexAgentConfig(AgentTypeConfig):
     """Config for the codex agent type."""
+
+    # --- role behaviour, set by a create template and applied by this harness ---
+    #
+    # Both are harness-neutral *intent*: a role states them once and each harness applies
+    # them its own way. They live on the harness subclasses rather than AgentTypeConfig so
+    # a harness that cannot honour them has no field to route to -- the create then fails
+    # naming the template, instead of launching an agent that quietly ignores its role.
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of an output style to launch with, matched against the `name:` "
+        "frontmatter of a file in the work dir's output-style directory. Scalar: the last "
+        "template in the stack to set it wins.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="Blocks to append to the agent's system prompt, in stack order. Aggregate: "
+        "write `append_system_prompt__extend = [...]` in a template so stacked roles each "
+        "contribute a block instead of the last one replacing the rest.",
+    )
 
     command: CommandString = Field(
         default=CommandString("codex"),
@@ -362,14 +392,23 @@ class CodexAgent(
     acceptable -- not a replacement.
     """
 
-    # Stable substring of codex's header box, which renders together with the
-    # input composer once the TUI is ready to receive keystrokes (verified live
-    # against codex 0.138.0). codex has no pre-input readiness hook -- its
-    # ``SessionStart`` fires lazily on the first prompt (openai/codex #15269) --
-    # so this banner poll is the readiness signal. There is no OAuth splash delay
-    # (auth is a file), so the header box is a safe indicator: it appears only
-    # with the rendered, ready composer.
-    TUI_READY_INDICATOR: ClassVar[str] = "/model to change"
+    # The composer prompt glyph, pinned at the bottom input line whenever the TUI is
+    # rendered -- codex's exact analogue of claude's ``❯`` (see mngr_claude), and used
+    # the same way: a plain substring the readiness poll looks for in the *visible*
+    # pane. codex has no pre-input readiness hook (its ``SessionStart`` fires lazily on
+    # the first prompt, openai/codex #15269), so we screen-scrape; the prompt is the
+    # right thing to scrape because it renders only with the live composer, sits at the
+    # bottom, and never scrolls away. The former indicator -- the ``/model to change``
+    # header box -- lives at the *top* and scrolls out of the visible pane once a turn
+    # renders enough output, so the readiness poll (which captures the visible pane,
+    # no scrollback) intermittently failed after any substantial turn and hung the next
+    # send at "Sending…/Queued…" until the timeout. The prompt has no such content
+    # dependence: verified live on codex 0.145.0 that it is present in the visible pane
+    # idle, mid-turn, and after output has scrolled the header off. (A capture including
+    # scrollback would "find" the header, but that reintroduces the exact race this
+    # check exists to prevent -- the stale header sits in scrollback during a resume
+    # replay, before the composer is drawn.)
+    TUI_READY_INDICATOR: ClassVar[str] = "›"
 
     def get_expected_process_name(self) -> str:
         # The codex CLI is a single Rust binary; ps/tmux show the literal name.
@@ -587,12 +626,44 @@ class CodexAgent(
                 concurrency_group,
             )
 
-    def _provision_codex_home(self, host: OnlineHostInterface, user_codex_home: Path, canonical_work_dir: str) -> None:
+    def _build_developer_instructions(self, host: OnlineHostInterface) -> str | None:
+        """Join this agent type's system-prompt additions into one blob, or None if there are none.
+
+        The ``append_system_prompt`` blocks come first, in stack order, and the style body
+        last. Codex has no output-style concept, so ``output_style`` reaches it as instruction
+        text rather than a named setting: the style file's body is used **verbatim**,
+        frontmatter block included, so a style reads identically whichever agent type runs
+        it. Placing it last means it is the nearest instruction to the model, matching how a
+        harness with a real output-style setting applies the style over the prompt.
+
+        The style directory read here is ``.agents/output-styles`` -- the source of truth
+        where styles are authored. (Claude validates against its own ``.claude/output-styles``
+        instead, since that is the path it will read; the two are the same files.)
+        """
+        blocks: list[str] = [str(prompt) for prompt in self.agent_config.append_system_prompt]
+        if self.agent_config.output_style is not None:
+            styles_dir = get_shared_output_styles_dir(Path(self.work_dir))
+            # Raises UserInputError, listing what is available, when the name has no match.
+            blocks.append(
+                resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+            )
+        if not blocks:
+            return None
+        return DEVELOPER_INSTRUCTIONS_SEPARATOR.join(blocks)
+
+    def _provision_codex_home(
+        self,
+        host: OnlineHostInterface,
+        user_codex_home: Path,
+        canonical_work_dir: str,
+    ) -> None:
         """Write the mngr-owned per-agent ``CODEX_HOME`` tree (idempotent each provision).
 
         Provisions the auth.json symlink, config.toml (model/sandbox/approval +
         the credential-store pin + the trusted work-dir + notice suppressors +
-        overrides), hooks.json, and the personality-migration NUX-skip marker.
+        overrides), hooks.json, the personality-migration NUX-skip marker, and --
+        when the repo commits one at ``<work_dir>/.codex/AGENTS.md`` -- codex's
+        global ``AGENTS.md`` (its private system-prompt delta).
         ``host.write_text_file`` creates intermediate dirs; codex-owned
         ``sessions/`` is left intact across re-provision.
         """
@@ -607,6 +678,8 @@ class CodexAgent(
             approval_policy=approval_policy,
             trusted_projects=[canonical_work_dir],
             config_overrides=self.agent_config.config_overrides,
+            log_dir=str(get_codex_tui_log_dir(codex_home)),
+            developer_instructions=self._build_developer_instructions(host),
         )
         config_path = get_codex_config_path(codex_home)
         with log_span("Writing per-agent codex config to {}", config_path):
@@ -615,6 +688,16 @@ class CodexAgent(
         hooks_path = get_codex_hooks_path(codex_home)
         with log_span("Installing codex hooks at {}", hooks_path):
             host.write_text_file(hooks_path, serialize_codex_hooks(build_codex_hooks_config()))
+
+        # Codex's private system-prompt delta: if the repo commits codex-only
+        # instructions at <work_dir>/.codex/AGENTS.md, copy them into
+        # CODEX_HOME/AGENTS.md so codex concatenates them ahead of the shared
+        # project-root AGENTS.md. Absent source -> nothing to inject (never blocks).
+        repo_codex_instructions_path = get_repo_codex_instructions_path(Path(canonical_work_dir))
+        if host.path_exists(repo_codex_instructions_path):
+            global_instructions_path = get_codex_global_instructions_path(codex_home)
+            with log_span("Installing codex global instructions at {}", global_instructions_path):
+                host.write_text_file(global_instructions_path, host.read_text_file(repo_codex_instructions_path))
 
         # Empty marker: codex skips the personality-migration prompt when it exists.
         host.write_text_file(get_codex_personality_migration_path(codex_home), "")
@@ -927,9 +1010,13 @@ class CodexAgent(
         extra_str = (" " + " ".join(extra_args)) if extra_args else ""
 
         background_cmd = self._build_background_tasks_command()
-        mkdir_cmd = f"mkdir -p {shlex.quote(str(codex_home))}"
+        # Make the TUI-log dir too, so codex's file layer can open the heartbeat log.
+        mkdir_cmd = f"mkdir -p {shlex.quote(str(get_codex_tui_log_dir(codex_home)))}"
         cd_cmd = f"cd {shlex.quote(str(self.work_dir))}"
-        home_prefix = f"env CODEX_HOME={shlex.quote(str(codex_home))}"
+        # RUST_LOG=...,codex_otel=info makes codex write `codex.sse_event` delta lines
+        # into the TUI log (log_dir is set in config.toml); the system_interface tails
+        # those to drive "Thinking...". CODEX_HOME points codex at the per-agent home.
+        home_prefix = f"env CODEX_HOME={shlex.quote(str(codex_home))} RUST_LOG={shlex.quote(RUST_LOG_VALUE)}"
 
         # Resume the root conversation via `codex resume <id>`, shell-evaluated
         # because the stored command is replayed on each restart. `set --` / "$@"
@@ -956,10 +1043,16 @@ class CodexAgent(
             f'rm -rf "{state}/{ACTIVE_MARKER_FILENAME}" "{state}/{ROOT_ACTIVE_FILENAME}" '
             f'"{state}/{SUBAGENTS_DIRNAME}" "{state}/{MARKER_LOCK_DIRNAME}" 2>/dev/null || true'
         )
+        # Stamp the process-start boundary on every launch/resume. The system_interface
+        # activity tracker compares transcript timestamps against this marker's mtime to
+        # ignore a tail left over from a turn a prior process abandoned mid-flight (which
+        # would otherwise pin "Running.../Thinking..." forever after a restart). Mirrors
+        # mngr_claude's `claude_process_started`. `|| true` so it can't block the launch.
+        process_started_cmd = f'touch "{state}/{PROCESS_STARTED_MARKER_FILENAME}" 2>/dev/null || true'
 
         return CommandString(
             f"{background_cmd} {mkdir_cmd} && {cd_cmd} "
-            f'&& {{ {reset_marker_cmd}; {resume_prelude}; {codex_invocation} "$@"{extra_str} ; }}'
+            f'&& {{ {reset_marker_cmd}; {process_started_cmd}; {resume_prelude}; {codex_invocation} "$@"{extra_str} ; }}'
         )
 
     def on_after_provisioning(
