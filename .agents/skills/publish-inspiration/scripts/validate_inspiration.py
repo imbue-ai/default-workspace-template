@@ -150,6 +150,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip apt resolution only (for schema-only checks off a Debian host)",
     )
+    parser.add_argument(
+        "--allow-unfinished",
+        action="store_true",
+        help=(
+            "Permit FILL-IN blocks and the placeholder thumbnail. Only for the "
+            "check build_inspiration.sh runs on the skeleton it just generated; "
+            "never for the worker's or the lead's pre-push run."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve()
@@ -164,7 +173,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        problems = list(schema.validate_inspiration_tree(repo_root))
+        problems = list(
+            schema.validate_inspiration_tree(
+                repo_root, is_unfinished_allowed=args.allow_unfinished
+            )
+        )
     except schema.InspirationManifestError as e:
         print(f"validate_inspiration: {e}", file=sys.stderr)
         return 1

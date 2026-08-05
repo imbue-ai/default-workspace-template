@@ -338,6 +338,33 @@ def test_an_llm_dependency_in_only_one_file_is_caught(tmp_path: Path) -> None:
     assert any("LLM access" in problem for problem in problems)
 
 
+def test_example_requires_lines_inside_fill_in_comments_are_not_counted(
+    tmp_path: Path,
+) -> None:
+    # The generated FILL-IN instructions quote example requires_ lines to show
+    # the form. Counting those made a freshly-generated skeleton -- which
+    # declares nothing yet -- look like it declared three prerequisites, so
+    # build_inspiration.sh failed its own validation gate on every publish.
+    # Caught by running the assembly script end to end, not by the unit tests.
+    manifest = _manifest(_MINIMAL_TOML, tmp_path)
+
+    markdown = (
+        _MINIMAL_MARKDOWN
+        + """
+## Prerequisites
+
+<!-- FILL-IN (publishing agent): replace this with one line per requirement:
+
+- requires_permission: <latchkey scope> / <permission schema>
+- requires_secret: <ENV_VAR or config key>
+- requires_llm: <how the code reaches Claude>
+-->
+"""
+    )
+
+    assert check_markdown_agreement(manifest, markdown) == ()
+
+
 def test_declared_prerequisites_matching_the_markdown_pass(tmp_path: Path) -> None:
     manifest = _manifest(
         _MINIMAL_TOML
