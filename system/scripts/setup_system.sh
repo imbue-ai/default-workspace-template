@@ -252,6 +252,21 @@ if command -v systemctl >/dev/null 2>&1 && systemctl is-active ssh >/dev/null 2>
     systemctl reload ssh
 fi
 
+# sshd only reads its configuration at startup, and on providers that start sshd
+# before this script runs (Modal: mngr provisions SSH, then runs setup) the
+# listener is already up with the stock config. Without a reload it keeps
+# resolving AuthorizedKeysFile against the passwd home, which the home move has
+# just repointed at /home/user, so every later connection fails to authenticate.
+# SIGHUP makes sshd re-exec and re-read the config; established sessions are
+# unaffected. No-op when sshd is not running (image builds, Lima provisioning).
+#
+# This used to work by accident: the workspace's apt phase reinstalled
+# openssh-server, which restarted sshd and picked the file up as a side effect.
+_sshd_pid="$(pgrep -o -x sshd 2>/dev/null || true)"
+if [ -n "$_sshd_pid" ]; then
+    kill -HUP "$_sshd_pid"
+fi
+
 # Pre-seed github.com SSH host keys so git operations don't block on interactive
 # host-key confirmation. Idempotent: only added when absent.
 mkdir -p /root/.ssh
