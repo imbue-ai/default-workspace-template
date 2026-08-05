@@ -251,7 +251,12 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
 }
 
 export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEvent | null): m.Vnode {
-  const headerText = `Tool: ${toolCall.tool_name}`;
+  // The harness's parser already worked out what this call should read as -- for
+  // codex that means unwrapping an `exec` whose real operation is buried in a JS
+  // argument, which is not something this view should have to know. The raw input
+  // stays in the block body below (preserve-raw). Falls back to the tool name for
+  // events parsed before the labels existed.
+  const headerText = toolCall.header_label || `Tool: ${toolCall.tool_name}`;
   const inputText = toolCall.input_preview || "";
   const outputText = toolResult?.output || "";
   const isError = toolResult?.is_error === true;

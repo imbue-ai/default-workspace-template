@@ -190,9 +190,12 @@ _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 # holds credentials frozen from process start: every claude-parented type in
 # .mngr/settings.toml (a test asserts this set matches the settings file, so
 # a new claude-derived type cannot silently dodge auth-change restarts the
-# way `chat` briefly did when it split off from `claude`). The `main`
-# services agent is deliberately absent: its window 0 sleeps forever and
-# restarting it would tear down supervisord and every background service.
+# way `chat` briefly did when it split off from `claude`). Since roles moved
+# to create templates, a new claude role resolves to the `claude` type itself;
+# `chat` and `worker` are here for agents created before that, whose persisted
+# type is still one of those names. The `main` services agent is deliberately
+# absent: its window 0 sleeps forever and restarting it would tear down
+# supervisord and every background service.
 CLAUDE_BINARY_AGENT_TYPES: Final[frozenset[str]] = frozenset(("claude", "chat", "worker"))
 _AGENT_STATE_RUNNING: Final[str] = "RUNNING"
 _AGENT_STATE_WAITING: Final[str] = "WAITING"
