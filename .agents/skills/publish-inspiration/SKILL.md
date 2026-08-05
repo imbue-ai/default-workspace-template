@@ -452,6 +452,19 @@ worktree to a clean template base and deletes gitignored state -- including
    and the "Open in Minds" button carries a placeholder repo URL the LEAD
    substitutes once the repo exists -- leave that alone.
 
+   **Render it and look at it before you report done.** The README is a page,
+   so review it as one rather than reading the markdown source:
+
+   ```bash
+   uv run python system/scripts/render_markdown_preview.py README.md
+   python3 system/scripts/layout.py open service:markdown-preview
+   ```
+
+   It renders the way GitHub will, with the hero and any local images resolved,
+   so a broken image path or a mangled layout shows up here rather than on the
+   published page. Re-render and `layout.py refresh service:markdown-preview`
+   after each fix.
+
 4. **Design the thumbnail.** `inspiration.svg` at the repo root is a
    generic placeholder the script generated -- it must never be published.
    Replace its entire contents with a bespoke SVG you design for THIS app: a
