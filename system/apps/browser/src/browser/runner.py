@@ -830,43 +830,49 @@ def cast_socket(ws: Any, browser_id: str) -> None:
     if not mediastream.cast_slots.reserve(browser_id):
         ws.close(1013)  # per-browser cast cap reached; retryable
         return
-    # Register + seed the initial control/tabs sync atomically on the loop, so no
-    # live frame can interleave ahead of the state the viewer needs first. The lifecycle
-    # is captured in the same on-loop step so the initializing banner below is consistent
-    # with the seed.
-    client_queue, lifecycle = bridge.run(session.register_cast_queue_with_lifecycle(), timeout=_ROUTE_TIMEOUT)
-    if not _init_done.is_set() and lifecycle != "running":
-        # The fleet is still restoring AND this browser isn't up yet: tell the viewer, so
-        # it shows a banner and clears it on the first live frame/control once this browser
-        # is up. A viewer joining an already-running browser is NOT told initializing
-        # (finding [3-runner]) -- its seed already carries lifecycle=running and the live
-        # page is streaming, so an initializing banner would be a false "still starting".
-        # put_nowait is safe: the queue is fresh with at most a few seed messages and its
-        # maxsize is far larger (finding [8]).
-        client_queue.put_nowait(json.dumps({"type": "initializing"}))
-    stop_event = threading.Event()
-    inbound = threading.Thread(
-        target=_cast_inbound_pump,
-        kwargs={"ws": ws, "session": session, "stop_event": stop_event},
-        name=f"browser-cast-inbound-{browser_id}",
-        daemon=True,
-    )
-    inbound.start()
+    # The reserved slot MUST be released on every exit -- including a failure in the
+    # register/seed/thread-start setup below. Guard the whole post-reserve body so an
+    # exception there can't leak the slot (8 leaks -> the browser can never be cast again
+    # until restart); the inner try owns the queue/thread cleanup once they exist.
     try:
-        while not stop_event.is_set():
-            try:
-                message = client_queue.get(timeout=_CAST_OUTBOUND_POLL_SECONDS)
-            except queue.Empty:
-                continue
-            if message is None:
-                break  # shutdown sentinel
-            ws.send(message)
-    except ConnectionClosed:
-        pass
+        # Register + seed the initial control/tabs sync atomically on the loop, so no
+        # live frame can interleave ahead of the state the viewer needs first. The lifecycle
+        # is captured in the same on-loop step so the initializing banner below is consistent
+        # with the seed.
+        client_queue, lifecycle = bridge.run(session.register_cast_queue_with_lifecycle(), timeout=_ROUTE_TIMEOUT)
+        if not _init_done.is_set() and lifecycle != "running":
+            # The fleet is still restoring AND this browser isn't up yet: tell the viewer, so
+            # it shows a banner and clears it on the first live frame/control once this browser
+            # is up. A viewer joining an already-running browser is NOT told initializing
+            # (finding [3-runner]) -- its seed already carries lifecycle=running and the live
+            # page is streaming, so an initializing banner would be a false "still starting".
+            # put_nowait is safe: the queue is fresh with at most a few seed messages and its
+            # maxsize is far larger (finding [8]).
+            client_queue.put_nowait(json.dumps({"type": "initializing"}))
+        stop_event = threading.Event()
+        inbound = threading.Thread(
+            target=_cast_inbound_pump,
+            kwargs={"ws": ws, "session": session, "stop_event": stop_event},
+            name=f"browser-cast-inbound-{browser_id}",
+            daemon=True,
+        )
+        inbound.start()
+        try:
+            while not stop_event.is_set():
+                try:
+                    message = client_queue.get(timeout=_CAST_OUTBOUND_POLL_SECONDS)
+                except queue.Empty:
+                    continue
+                if message is None:
+                    break  # shutdown sentinel
+                ws.send(message)
+        except ConnectionClosed:
+            pass
+        finally:
+            stop_event.set()
+            inbound.join(timeout=5)
+            bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
     finally:
-        stop_event.set()
-        inbound.join(timeout=5)
-        bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
         mediastream.cast_slots.release(browser_id)
 
 

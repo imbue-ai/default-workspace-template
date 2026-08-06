@@ -228,8 +228,18 @@
 
   function setControl(state) {
     lastControlState = state;
+    const prevOwner = controlOwner;
     controlOwner = state.owner;
     const agentDriving = state.owner === "agent";
+    if (prevOwner === "agent" && state.owner === "human") {
+      // Control just came back to us. While the agent held it, any resize we sent only
+      // moved the capture crop -- the server gates the real Chromium window reshape on
+      // human control -- so the page never reflowed to the size we picked. Re-assert the
+      // pane size now that input is ours, so the window reshapes and the page reflows
+      // without waiting for a fresh manual resize (the belt would otherwise dedup it).
+      lastSentSize = "";
+      sendPaneSize();
+    }
     const humanPinned = state.owner === "human" && !!state.human_pinned;
     if (agentDriving) {
       handoffReason = null; handoffAgent = null;
@@ -902,10 +912,28 @@ registerProcessor('pb', PB);`;
   };
 
   // ---- /cast: control/ownership only (no pixels, no tabs, no input) ----
+  // A wedged (half-open) /cast socket delivers no onclose, so a lost control-change
+  // message would strand this viewer thinking an agent still holds control -- input dead
+  // forever even after it's ours. Key a watchdog on the server's existing 10s keepalive
+  // ping: >28s of total silence means the backend->client direction is dead; force-close
+  // so onclose -> scheduleReconnect -> the daemon re-seeds the true control state. Only
+  // trip once "running" (no ping source exists during init/restore), and scope the timer
+  // to its own socket so it never closes a newer one.
+  const _CAST_SILENCE_MS = 28000;
   function connect(id) {
     browserId = id;
-    castWs = new WebSocket(wsUrl("browsers/" + id + "/cast"));
-    castWs.onmessage = (ev) => {
+    const ws = new WebSocket(wsUrl("browsers/" + id + "/cast"));
+    castWs = ws;
+    let watchdog = null;
+    function bumpWatchdog() {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        if (lifecycle === "running") { try { ws.close(); } catch (_) {} }
+        else { bumpWatchdog(); }  // still launching: no pings yet, just re-arm
+      }, _CAST_SILENCE_MS);
+    }
+    ws.onmessage = (ev) => {
+      bumpWatchdog();  // any inbound frame (ping included) proves the link is alive
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "crashed") showCrashed();
       else if (crashed) return;
@@ -930,7 +958,8 @@ registerProcessor('pb', PB);`;
       }
       // frame / tabs messages no longer exist on /cast (pixels ride /stream); ping ignored.
     };
-    castWs.onclose = (ev) => {
+    ws.onclose = (ev) => {
+      clearTimeout(watchdog);
       if (ev.code === 1008) {
         closedForGood = true;
         overlay.classList.remove("show");
@@ -944,7 +973,8 @@ registerProcessor('pb', PB);`;
       initOverlay.classList.add("show");
       scheduleReconnect();
     };
-    castWs.onerror = () => { try { castWs.close(); } catch (_) {} };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+    bumpWatchdog();  // arm on connect so a socket that never speaks is caught too
   }
   function scheduleReconnect() {
     if (reconnectTimer || browserId === null || closedForGood) return;
