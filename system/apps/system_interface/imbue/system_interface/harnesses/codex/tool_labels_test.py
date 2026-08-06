@@ -1,5 +1,6 @@
 import pytest
 
+from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 
 
@@ -161,3 +162,20 @@ def test_a_long_command_is_shortened() -> None:
     assert caption_label.startswith("Running ")
     assert caption_label.endswith("…")
     assert len(caption_label) < 100
+
+
+def test_keeps_full_tool_input_for_patch_and_tk() -> None:
+    """The diff view (patch body) and the step timeline (tk command) need the whole
+    input, so those are exempt from the preview cap; ordinary calls are not."""
+    # apply_patch body -- kept whole for the diff.
+    assert keeps_full_tool_input("exec", "await tools.apply_patch(`*** Begin Patch\n*** Update File: a.py`)") is True
+    # a patch front-loaded into a variable shows no visible call but carries the header.
+    assert keeps_full_tool_input("exec", "*** Begin Patch\n*** Add File: b.py\n+x\n*** End Patch") is True
+    # a tk lifecycle command -- kept whole for the step plan.
+    assert keeps_full_tool_input("exec", 'await tools.exec_command({"cmd":"tk create --step foo"})') is True
+    # an ordinary command is truncatable.
+    assert keeps_full_tool_input("exec", 'await tools.exec_command({"cmd":"rg --files"})') is False
+    # a tk mention inside another command's argument is not a lifecycle call.
+    assert keeps_full_tool_input("exec", 'await tools.exec_command({"cmd":"echo run tk close s1 later"})') is False
+    # non-exec tools are never exempt.
+    assert keeps_full_tool_input("wait", "anything") is False
