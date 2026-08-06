@@ -1,5 +1,9 @@
 Added codex as a peer harness in the workspace chat UI, alongside claude.
 
+- Depends on three more mngr harness plugins (`imbue-mngr-opencode`,
+  `imbue-mngr-pi-coding`, `imbue-mngr-antigravity`), installed with the
+  system-interface tool so `uv run mngr` parses their agent-type config. This is the
+  install groundwork only; the chat UI does not yet expose these harnesses.
 - Chat-agent creation now selects the harness with `mngr create --type <harness>`
   (which resolves `[agent_types.<harness>]` directly) and layers only the `chat` role
   template on top, instead of stacking a per-harness create template ahead of the role.

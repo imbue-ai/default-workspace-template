@@ -15,6 +15,17 @@ ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 ARG CODEX_VERSION=0.146.0
 ENV CODEX_VERSION=${CODEX_VERSION}
 
+# Pin Node.js (installed from a nodejs.org release tarball, not apt -- pi needs
+# Node 22+). Pin OpenCode + Pi CLIs. All passed to setup_system.sh; keep in sync
+# with the defaults there. Bump deliberately, not by accident. (Antigravity has no
+# version pin here -- it is locked inside system/scripts/agy_install-1.1.10.sh.)
+ARG NODE_VERSION=22.23.2
+ENV NODE_VERSION=${NODE_VERSION}
+ARG OPENCODE_VERSION=1.18.14
+ENV OPENCODE_VERSION=${OPENCODE_VERSION}
+ARG PI_VERSION=0.83.0
+ENV PI_VERSION=${PI_VERSION}
+
 # ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
@@ -47,7 +58,11 @@ RUN chmod +x /usr/local/bin/default-workspace-template-write-apt-sources \
 COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-system
 COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
-RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners && default-workspace-template-setup-system
+# The version-locked Antigravity installer, baked beside setup_system so it can run
+# it during this early layer (before the repo is COPY'd in). setup_system resolves
+# it by this renamed path in a docker build, or by its repo path under Lima/Modal.
+COPY system/scripts/agy_install-1.1.10.sh /usr/local/bin/default-workspace-template-install-agy
+RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners /usr/local/bin/default-workspace-template-install-agy && default-workspace-template-setup-system
 
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
@@ -78,7 +93,8 @@ COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/app
 
 # system/vendor/mngr path-dependency manifests. The root pyproject.toml's
 # [tool.uv.sources] points imbue-common, imbue-mngr, imbue-mngr-claude,
-# imbue-mngr-codex, resource-guards, and concurrency-group at
+# imbue-mngr-codex, imbue-mngr-opencode, imbue-mngr-pi-coding,
+# imbue-mngr-antigravity, resource-guards, and concurrency-group at
 # system/vendor/mngr/libs/<pkg>; uv needs each pyproject.toml present to
 # resolve the workspace. mngr_modal and mngr_wait are also workspace members
 # whose transitive deps benefit from pre-warming even though only mngr_wait
@@ -87,6 +103,9 @@ COPY system/vendor/mngr/libs/imbue_common/pyproject.toml /home/user/workspace/sy
 COPY system/vendor/mngr/libs/mngr/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_claude/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_claude/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_codex/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_codex/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_opencode/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_opencode/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_antigravity/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_antigravity/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_modal/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_wait/pyproject.toml
 COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml
