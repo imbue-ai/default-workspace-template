@@ -359,7 +359,10 @@
     url.protocol = (url.protocol === "https:") ? "wss:" : "ws:";
     // Pane size up front, IN the connect URL, so the first frame is already pane-sized
     // (no flash, no resize round-trip; a post-connect r, would race the socket open).
-    const rect = canvas.getBoundingClientRect();
+    // Measure #stage (the plain flex container that always fills the pane), NOT the
+    // canvas -- the canvas is object-fit:contain over a bitmap, so before layout / when
+    // the capture is small its box can read small and lock the capture at the floor.
+    const rect = stage.getBoundingClientRect();
     const initW = Math.max(320, (Math.round(rect.width) || window.innerWidth) & ~1);
     const initH = Math.max(240, (Math.round(rect.height) || window.innerHeight) & ~1);
     url.searchParams.set("w", initW);
@@ -490,7 +493,7 @@
   // committed once the socket is OPEN so a dropped send retries; verbatim sizing).
   function sendPaneSize() {
     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
-    const rect = canvas.getBoundingClientRect();
+    const rect = stage.getBoundingClientRect();
     // Skip ONLY a collapsed pane (a display:none dockview tab reads a 0x0 box): reporting that
     // clamps to the 320x240 minimum and poisons the capture region. A REAL size is always
     // reported -- even if the app tab is momentarily backgrounded (document.hidden) -- so a
@@ -518,7 +521,7 @@
   // isn't a non-active dockview tab (display:none -> the canvas box is 0x0, read reliably).
   function paneVisible() {
     if (document.hidden) return false;
-    const r = canvas.getBoundingClientRect();
+    const r = stage.getBoundingClientRect();
     return r.width > 4 && r.height > 4;  // display:none / detached pane -> 0x0
   }
   function sendStream(msg) { if (streamWs && streamWs.readyState === WebSocket.OPEN) streamWs.send(msg); }
@@ -544,6 +547,12 @@
   document.addEventListener("visibilitychange", onVisibilityTransition);
   new IntersectionObserver(onVisibilityTransition, { threshold: [0, 0.01] }).observe(stage);
   setInterval(onVisibilityTransition, 1500);  // belt: catches a display:none<->visible flip the observer missed
+  // Belt for sizing: unconditionally re-assert the true pane size on a cadence. The
+  // ResizeObserver/visibility re-report can miss on a fresh reconnect (it runs before the
+  // pane has laid out, then never fires again since the pane doesn't change), leaving the
+  // capture stuck at the floor until a manual resize re-triggers a send. sendPaneSize dedups
+  // on lastSentSize and skips a collapsed (<5px) pane, so this is a no-op once correct.
+  setInterval(sendPaneSize, 1500);
   // Genuine attention (click/key/wheel/focus this pane) claims the active stream immediately.
   for (const ev of ["pointerdown", "keydown", "wheel", "focus"]) canvas.addEventListener(ev, claimActive, true);
   window.addEventListener("focus", () => { if (paneVisible()) claimActive(); });
