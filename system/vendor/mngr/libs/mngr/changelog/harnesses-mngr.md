@@ -24,3 +24,11 @@ stacked onto a harness that could not honour it -- produced an agent that quietl
 of its configuration. The two role fields live on the harness config subclasses rather than on
 the base `AgentTypeConfig`, so a harness with no support for them has no field to route to and
 the create fails naming the template instead of launching a misconfigured agent.
+
+Stacking create templates that declare conflicting base `type`s is now rejected up front,
+rather than silently letting the last template win. A create resolves to exactly one base
+type, so a stack like `-t worker -t codex` (a claude role plus a codex one) is an ambiguous,
+always-wrong request and now fails naming the conflicting templates. Aliases are normalised
+first (so two names for the same base do not conflict), templates that leave `type` unset
+never participate, and an explicit `--type` on the command line still overrides every
+template's type (it is authoritative), so only the templates-decide-the-type case is guarded.

@@ -21,6 +21,7 @@ import pytest
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.ratchet_testing.ratchets import assert_posix_compatible
 from imbue.mngr.agents.tui_agent import InteractiveTuiAgent
+from imbue.mngr.agents.tui_utils import SubmissionConfirmationPolicy
 from imbue.mngr.api.preservation import get_local_preserved_agent_dir
 from imbue.mngr.api.testing import FakeHost
 from imbue.mngr.config.data_types import MngrContext
@@ -50,6 +51,7 @@ from imbue.mngr.utils.testing import cleanup_tmux_session
 from imbue.mngr_codex.codex_config import ACTIVE_MARKER_FILENAME
 from imbue.mngr_codex.codex_config import CLEAR_ACTIVE_MARKER_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import PERMISSIONS_WAITING_FILENAME
+from imbue.mngr_codex.codex_config import QUEUED_INPUT_RELATIVE_PATH
 from imbue.mngr_codex.codex_config import ROOT_SESSION_FILENAME
 from imbue.mngr_codex.codex_config import SET_ACTIVE_MARKER_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import get_codex_auth_path
@@ -118,6 +120,18 @@ def test_codex_agent_advertises_tui_ready_indicator() -> None:
 
 def test_codex_agent_implements_submission_evidence_probes() -> None:
     assert "_build_submission_evidence_probes" not in CodexAgent.__abstractmethods__
+
+
+def test_submission_evidence_probes_cover_started_and_queued(codex_agent: CodexAgent) -> None:
+    """A started message trips the active marker; a message queued while a turn runs
+    (no UserPromptSubmit fires, so the marker stays put) trips the queued-input sidecar.
+    Both probes are returned so either path confirms the send."""
+    probes = list(codex_agent._build_submission_evidence_probes("hello", SubmissionConfirmationPolicy.STRICT))
+    assert [probe.name for probe in probes] == ["active-marker", "queued-input"]
+    queued = next(probe for probe in probes if probe.name == "queued-input")
+    assert QUEUED_INPUT_RELATIVE_PATH in queued.poll_command
+    marker = next(probe for probe in probes if probe.name == "active-marker")
+    assert "/active" in marker.poll_command
 
 
 def test_register_agent_type_returns_codex_class_and_config() -> None:

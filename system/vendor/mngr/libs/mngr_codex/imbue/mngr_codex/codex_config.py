@@ -75,6 +75,13 @@ CODEX_HOME_RELATIVE_PATH: tuple[str, ...] = ("plugin", "codex", "home")
 # of the auth symlink and config, so targeting it specifically excludes those.
 SESSIONS_RELATIVE_PATH: str = Path(*CODEX_HOME_RELATIVE_PATH, "sessions").as_posix()
 
+# The queued-input sidecar the patched codex binary appends to the instant a message
+# is queued (submitted while a turn is running), as a POSIX rel-path under the agent
+# state dir. It is the only per-submission evidence a *queued* message leaves -- the
+# ``active`` marker does not advance until the message actually opens a turn, which for
+# a queued message is not until the running turn ends.
+QUEUED_INPUT_RELATIVE_PATH: str = Path(*CODEX_HOME_RELATIVE_PATH, "queued_input.jsonl").as_posix()
+
 _CONFIG_FILENAME: str = "config.toml"
 _AUTH_FILENAME: str = "auth.json"
 _HOOKS_FILENAME: str = "hooks.json"

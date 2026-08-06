@@ -152,6 +152,7 @@ from imbue.mngr_codex.codex_config import MARKER_LOCK_DIRNAME
 from imbue.mngr_codex.codex_config import MARKER_STATE_LIB_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import PERMISSIONS_WAITING_FILENAME
 from imbue.mngr_codex.codex_config import PROCESS_STARTED_MARKER_FILENAME
+from imbue.mngr_codex.codex_config import QUEUED_INPUT_RELATIVE_PATH
 from imbue.mngr_codex.codex_config import RAW_TRANSCRIPT_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import ROOT_ACTIVE_FILENAME
 from imbue.mngr_codex.codex_config import ROOT_SESSION_FILENAME
@@ -434,7 +435,8 @@ class CodexAgent(
     def _build_submission_evidence_probes(
         self, message: str, policy: SubmissionConfirmationPolicy
     ) -> Sequence[SubmissionEvidenceProbe]:
-        """Confirm submission via the ``active`` marker advancing past its pre-Enter state.
+        """Confirm submission via the ``active`` marker advancing, OR the queued-input
+        sidecar advancing when the message is queued rather than started.
 
         codex's UserPromptSubmit hook (set_active_marker.sh) sets the ``active``
         marker the moment a prompt opens a turn, so the marker appearing (or its
@@ -442,17 +444,31 @@ class CodexAgent(
         same timing as the tmux wait-for signal the hook also fires (which mngr
         no longer trusts: an unconsumed signal latches on the tmux server and
         would instantly false-confirm a later send). The marker also confirms
-        that the agent reads as RUNNING by the time the send returns. codex
-        records no enqueue-style event (its raw transcript is the rollout
-        JSONL), so the marker is the only per-submission evidence, for slash
-        commands and normal messages alike; it exists on agents created by
-        older mngr versions too.
+        that the agent reads as RUNNING by the time the send returns.
+
+        But a message submitted *while a turn is running* is queued, not started:
+        no ``UserPromptSubmit`` fires for it, so the ``active`` marker does not
+        advance until the running turn ends -- which can be minutes. The patched
+        codex binary records that case the instant it happens, appending a line to
+        the queued-input sidecar, so a second probe on that file's mtime confirms a
+        queued submission immediately. The probes are OR-ed (the poll loop exits on
+        the first that differs from its baseline): a started message trips the
+        marker, a queued one trips the sidecar. The sidecar is absent on agents
+        built with an older codex binary, in which case that probe simply never
+        fires and the marker remains the sole evidence, exactly as before.
         """
         env_command_prefix = self.host.build_source_env_prefix(self)
         active_marker_token_command = (
             f"{env_command_prefix} {{ " + build_file_mtime_token_command('"$MNGR_AGENT_STATE_DIR/active"') + " ; }"
         )
-        return [build_changed_token_probe("active-marker", active_marker_token_command)]
+        queued_input_path = f'"$MNGR_AGENT_STATE_DIR/{QUEUED_INPUT_RELATIVE_PATH}"'
+        queued_input_token_command = (
+            f"{env_command_prefix} {{ " + build_file_mtime_token_command(queued_input_path) + " ; }"
+        )
+        return [
+            build_changed_token_probe("active-marker", active_marker_token_command),
+            build_changed_token_probe("queued-input", queued_input_token_command),
+        ]
 
     @property
     def is_common_transcript_enabled(self) -> bool:

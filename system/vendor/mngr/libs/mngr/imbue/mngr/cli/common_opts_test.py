@@ -368,14 +368,33 @@ def test_apply_create_template_multiple_templates_stack(mngr_test_prefix: str) -
 
 
 def test_apply_create_template_later_template_overrides_earlier(mngr_test_prefix: str) -> None:
-    """apply_create_template should let later templates override earlier ones for the same key."""
+    """apply_create_template should let later templates override earlier ones for the same
+    key (shown with a non-type scalar; conflicting `type` is rejected -- see
+    test_apply_create_template_conflicting_base_types_raise)."""
     ctx = _make_click_context(
         params={
             "template": ("first", "second"),
-            "type": None,
+            "snapshot": None,
         },
     )
 
+    config = MngrConfig(
+        prefix=mngr_test_prefix,
+        create_templates={
+            CreateTemplateName("first"): CreateTemplate(options={"snapshot": "snap-a"}),
+            CreateTemplateName("second"): CreateTemplate(options={"snapshot": "snap-b"}),
+        },
+    )
+
+    result = apply_create_template(ctx, ctx.params.copy(), config)
+
+    assert result["snapshot"] == "snap-b"
+
+
+def test_apply_create_template_conflicting_base_types_raise(mngr_test_prefix: str) -> None:
+    """Stacking two templates that declare different base types is rejected -- a create
+    resolves to exactly one -- rather than silently letting the last win."""
+    ctx = _make_click_context(params={"template": ("first", "second"), "type": None})
     config = MngrConfig(
         prefix=mngr_test_prefix,
         create_templates={
@@ -383,10 +402,24 @@ def test_apply_create_template_later_template_overrides_earlier(mngr_test_prefix
             CreateTemplateName("second"): CreateTemplate(options={"type": "claude"}),
         },
     )
+    with pytest.raises(UserInputError, match="Conflicting base types"):
+        apply_create_template(ctx, ctx.params.copy(), config)
 
+
+def test_apply_create_template_same_type_across_templates_is_ok(mngr_test_prefix: str) -> None:
+    """Two templates declaring the SAME base type (and a role template leaving it unset)
+    do not conflict."""
+    ctx = _make_click_context(params={"template": ("a", "b", "role"), "type": None, "snapshot": None})
+    config = MngrConfig(
+        prefix=mngr_test_prefix,
+        create_templates={
+            CreateTemplateName("a"): CreateTemplate(options={"type": "codex"}),
+            CreateTemplateName("b"): CreateTemplate(options={"type": "codex"}),
+            CreateTemplateName("role"): CreateTemplate(options={"snapshot": "snap"}),
+        },
+    )
     result = apply_create_template(ctx, ctx.params.copy(), config)
-
-    assert result["type"] == "claude"
+    assert result["type"] == "codex"
 
 
 def test_apply_create_template_cli_args_override_all_templates(mngr_test_prefix: str) -> None:

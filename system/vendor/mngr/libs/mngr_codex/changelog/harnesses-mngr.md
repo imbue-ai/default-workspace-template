@@ -20,3 +20,11 @@ prompt. Style names are resolved from `.agents/output-styles/` in the work dir.
 
 Known limit: a style that suppresses a harness's built-in prompt cannot behave identically here,
 because `developer_instructions` can only append.
+
+A message submitted to a codex agent while a turn is running is now confirmed as accepted the
+instant it is queued, rather than hanging until the running turn ends. codex queues such a
+message without firing `UserPromptSubmit`, so the `active` marker -- the previous sole evidence
+of submission -- does not advance until the turn finishes. Send confirmation now also watches the
+queued-input sidecar the patched codex binary appends to on every enqueue, so a queued message
+confirms immediately (the two probes are OR-ed; a started message still trips the marker). Agents
+on an older codex binary without the sidecar are unaffected: that probe simply never fires.

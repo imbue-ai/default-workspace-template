@@ -756,6 +756,49 @@ def restore_cli_list_values(params: dict[str, Any], cli_list_values: dict[str, t
     return updated_params
 
 
+def _reject_conflicting_template_types(ctx: click.Context, template_names: Sequence[str], config: MngrConfig) -> None:
+    """Raise if the stacked templates declare more than one distinct base ``type``.
+
+    A create resolves to exactly one base type. Because a template's ``type`` is
+    assign-by-default (see ``apply_create_template``), stacking two templates that each
+    declare a different type would silently let the last one win -- so a stack like
+    ``-t worker -t codex`` where ``worker`` is a claude role and ``codex`` a codex one is
+    an ambiguous, always-wrong request. Aliases are normalised first, so two names for the
+    same base (``agy`` / ``antigravity``) do NOT conflict. Only templates that explicitly
+    set ``type`` participate; a role template that leaves it unset inherits the resolved
+    type and never conflicts. Invalid/unknown template names are left for
+    ``apply_create_template``'s own per-name errors.
+
+    Skipped when ``--type`` is supplied on the command line: an explicit type is
+    authoritative and overrides every template's type (the positional-vs-``--type`` guard
+    in the create command already covers that axis), so the templates are not the ones
+    deciding the base type.
+    """
+    if ctx.get_parameter_source("type") not in (None, ParameterSource.DEFAULT):
+        return
+
+    declared: list[tuple[str, str]] = []
+    for template_name in template_names:
+        try:
+            template_key = CreateTemplateName(template_name)
+        except ParseSpecError:
+            continue
+        template = config.create_templates.get(template_key)
+        if template is None:
+            continue
+        raw_type = template.options.get("type")
+        if isinstance(raw_type, str) and raw_type:
+            declared.append((template_name, str(normalize_agent_type_name(raw_type))))
+
+    if len({base_type for _, base_type in declared}) > 1:
+        detail = ", ".join(f"'{name}' -> {base_type}" for name, base_type in declared)
+        raise UserInputError(
+            f"Conflicting base types from stacked templates ({detail}). A create resolves to "
+            "exactly one base type: use templates that agree on it, or one type-setting "
+            "template plus role templates that leave `type` unset."
+        )
+
+
 def apply_create_template(
     ctx: click.Context,
     params: dict[str, Any],
@@ -789,6 +832,12 @@ def apply_create_template(
     template_names = params.get("template", ())
     if not template_names:
         return params
+
+    # Stacked templates must resolve to ONE base type. Two templates each declaring a
+    # different `type` is always a mistake -- the assign-by-default merge below would
+    # silently let the last win -- so reject it before applying anything, alongside the
+    # positional-vs-`--type` guard the create command already enforces.
+    _reject_conflicting_template_types(ctx, template_names, config)
 
     # Start with existing params
     updated_params = params.copy()
