@@ -72,6 +72,8 @@ the function -- ``Tool: create_goal`` -- making the leak visible instead of dres
 
 import re
 
+from tk_command_parsing.parser import parse_command
+
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.harnesses.tool_labels import GENERIC_CAPTION
 from imbue.system_interface.harnesses.tool_labels import basename
@@ -204,6 +206,45 @@ def _code_mode_labels(js: str) -> tuple[str, str]:
     target = _target_for_function(function_name, js)
     caption = f"{verb} {target}" if target is not None else f"{verb}…"
     return f"Tool: {noun}", caption
+
+
+# tk lifecycle verbs whose command must survive input truncation (mirrors the claude
+# parser's set): a batched `tk create --step` plan and a long `tk close` summary feed the
+# chat progress view, so clipping them mid-body would truncate the plan.
+_TK_LIFECYCLE_VERBS = frozenset({"create", "start", "close"})
+
+
+@pure
+def keeps_full_tool_input(tool_name: str, raw_input: str) -> bool:
+    """True when a codex tool call's input must NOT be truncated for display.
+
+    Two cases, both carried inside the code-mode ``exec`` program:
+    - a patch body (``tools.apply_patch``): the diff view renders it whole, so a
+      mid-body cut would truncate the diff;
+    - a tk lifecycle command (``tools.exec_command`` running ``tk create|start|close``):
+      the step timeline reads its ``--step`` titles / close summaries.
+
+    tk recognition uses the shared ``tk_command_parsing`` shlex parser (as the claude
+    parser does), so a ``tk close`` merely mentioned inside another command's quoted
+    argument is not mistaken for a real lifecycle call.
+    """
+    if tool_name != CODE_MODE_TOOL_NAME:
+        return False
+    call_match = _CODE_MODE_CALL_RE.search(raw_input)
+    function_name = call_match.group(1) if call_match is not None else None
+    if function_name == APPLY_PATCH_FUNCTION_NAME:
+        return True
+    # An apply_patch that front-loads its body into a variable shows no visible call but
+    # carries the patch header (same case _code_mode_labels handles) -- treat it as a patch.
+    if function_name is None and _APPLY_PATCH_HEADER_RE.search(raw_input) is not None:
+        return True
+    if function_name == "exec_command":
+        cmd = _js_string_argument(raw_input, "cmd")
+        if cmd is not None:
+            parsed = parse_command(cmd)
+            if parsed is not None and any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments):
+                return True
+    return False
 
 
 @pure

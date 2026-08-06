@@ -170,6 +170,73 @@ def test_function_call_and_output_link_by_call_id() -> None:
     assert out["tool_name"] == "shell"
 
 
+def test_failed_script_output_sets_is_error() -> None:
+    """A code-mode script failure (output starts with 'Script failed') flags is_error;
+    a normal output does not."""
+    name_map = {"c1": "exec"}
+    failed = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output",
+            "call_id": "c1",
+            "output": "Script failed: ReferenceError: x is not defined",
+        },
+    }
+    ok = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": "done"},
+    }
+    assert parse_lines(failed, 1, name_map)[0]["is_error"] is True
+    assert parse_lines(ok, 2, name_map)[0]["is_error"] is False
+
+
+def test_labels_read_untruncated_input() -> None:
+    """A patch whose apply_patch call sits past the 200-char preview still labels as the
+    edit it is (labelled off the raw input, not the clipped preview), and its body is
+    kept whole for the diff view."""
+    # A comment prefix that pushes the apply_patch call + header past the 200-char preview.
+    prefix = "// " + "x" * 250 + "\n"
+    js = f"{prefix}await tools.apply_patch(`*** Begin Patch\n*** Add File: newfile.py\n+print(1)\n*** End Patch`);"
+    call = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "function_call", "call_id": "c1", "name": "exec", "arguments": js},
+    }
+    tc = parse_lines(call, 1, {})[0]["tool_calls"][0]
+    # Labelled off the raw body: Add File -> Write/Creating (a truncated preview would
+    # have shown neither call nor header, falling to the generic "Tool: Code").
+    assert tc["header_label"] == "Tool: Write"
+    # Patch body kept whole.
+    assert tc["input_preview"] == js
+
+
+def test_tk_command_preview_is_kept_whole() -> None:
+    """A tk lifecycle command survives truncation so the step timeline reads the whole plan."""
+    js = 'await tools.exec_command({"cmd":"tk start wor-step-abc"})' + "x" * 300
+    call = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "function_call", "call_id": "c1", "name": "exec", "arguments": js},
+    }
+    tc = parse_lines(call, 1, {})[0]["tool_calls"][0]
+    assert tc["input_preview"] == js
+
+
+def test_ordinary_input_is_still_truncated() -> None:
+    """A normal (non-tk, non-patch) exec input_preview is still capped."""
+    js = 'await tools.exec_command({"cmd":"echo ' + "a" * 500 + '"})'
+    call = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "function_call", "call_id": "c1", "name": "exec", "arguments": js},
+    }
+    tc = parse_lines(call, 1, {})[0]["tool_calls"][0]
+    assert tc["input_preview"].endswith("...")
+    assert len(tc["input_preview"]) == 203
+
+
 def test_non_conversation_lines_are_dropped() -> None:
     assert parse_lines({"timestamp": "t", "type": "session_meta", "payload": {"type": "x"}}, 0, {}) == []
     assert parse_lines({"timestamp": "t", "type": "turn_context", "payload": {}}, 0, {}) == []

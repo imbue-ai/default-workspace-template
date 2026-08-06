@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
@@ -102,33 +103,50 @@ def _stringify_output(output: Any) -> str:
     return text
 
 
-def _tool_call_input_preview(payload: dict[str, Any]) -> str:
-    """``function_call`` carries ``arguments`` (a JSON string); ``custom_tool_call``
-    carries ``input`` (raw text, e.g. an apply_patch body)."""
+def _tool_call_raw_input(payload: dict[str, Any]) -> str:
+    """The tool call's raw, untruncated input. ``function_call`` carries ``arguments``
+    (a JSON string); ``custom_tool_call`` carries ``input`` (raw text, e.g. an
+    apply_patch body)."""
     raw = payload.get("arguments")
     if raw is None:
         raw = payload.get("input")
-    text = "" if raw is None else str(raw)
-    if len(text) > MAX_TOOL_INPUT_PREVIEW_LENGTH:
-        return text[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
-    return text
+    return "" if raw is None else str(raw)
 
 
-def _labelled_tool_call(call_id: str, tool_name: str, input_preview: str) -> dict[str, str]:
+def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[str, str]:
     """A tool call carrying its own human labels.
 
     Labelled here, where the harness is known, so the frontend renders a string
-    rather than having to understand that a codex ``exec`` hides its real
-    operation in a JavaScript argument.
+    rather than having to understand that a codex ``exec`` hides its real operation
+    in a JavaScript argument.
+
+    Labels come from the RAW input, not the truncated preview: the operation often
+    lives past the 200-char cap (an apply_patch that front-loads its body into a
+    variable, a long exec_command), so labelling the clipped string would read off
+    the wrong part -- see the same problem noted in ``codex/tool_labels``. The stored
+    ``input_preview`` is still truncated for display, EXCEPT for the tk and patch
+    bodies the timeline/diff view need whole (see :func:`_input_preview`).
     """
-    header_label, caption_label = tool_labels(tool_name, input_preview)
+    header_label, caption_label = tool_labels(tool_name, raw_input)
     return {
         "tool_call_id": call_id,
         "tool_name": tool_name,
-        "input_preview": input_preview,
+        "input_preview": _input_preview(tool_name, raw_input),
         "header_label": header_label,
         "caption_label": caption_label,
     }
+
+
+def _input_preview(tool_name: str, raw_input: str) -> str:
+    """The stored ``input_preview``: the raw input, truncated to the shared cap -- but
+    left whole for a tk command or a patch body, which the step timeline and the diff
+    view render in full (a mid-body cut would truncate the plan or the diff). Matches
+    the claude parser's tk exemption; ``keeps_full_tool_input`` owns the recognition."""
+    if keeps_full_tool_input(tool_name, raw_input):
+        return raw_input
+    if len(raw_input) > MAX_TOOL_INPUT_PREVIEW_LENGTH:
+        return raw_input[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
+    return raw_input
 
 
 def _assistant_event(timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, str]]) -> dict[str, Any]:
@@ -321,13 +339,14 @@ def parse_lines(
                 timestamp,
                 event_id,
                 text="",
-                tool_calls=[_labelled_tool_call(call_id, tool_name, _tool_call_input_preview(payload))],
+                tool_calls=[_labelled_tool_call(call_id, tool_name, _tool_call_raw_input(payload))],
             )
         ]
 
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
         event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
+        output = _stringify_output(payload.get("output"))
         return [
             {
                 "timestamp": timestamp,
@@ -336,8 +355,10 @@ def parse_lines(
                 "source": _SOURCE,
                 "tool_call_id": call_id,
                 "tool_name": tool_name_by_call_id.get(call_id, ""),
-                "output": _stringify_output(payload.get("output")),
-                "is_error": False,
+                "output": output,
+                # A failed code-mode script writes output starting with "Script failed";
+                # flag it so the UI renders the result as an error, not a clean success.
+                "is_error": output.startswith("Script failed"),
                 "message_uuid": event_id,
             }
         ]
