@@ -669,7 +669,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // transcript. Only an idle fast-mode chat in a workspace that has not
     // answered reaches that walk, and it raises the modal on the first render
     // that does, so the window is the one the user is about to close.
-    maybePromptForFastMode(agentId, events, agentIsIdle);
+    //
+    // Gated to Claude: the grace-period prompt is a Claude billing concept (run
+    // fast for a while, then ask whether to keep paying). Other harnesses have
+    // their own notion of "fast" and their own billing, so it is not fired for
+    // every agent whose model merely reports fast=true.
+    if (agent?.harness === "claude") {
+      maybePromptForFastMode(agentId, events, agentIsIdle);
+    }
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the

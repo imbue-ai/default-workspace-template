@@ -29,7 +29,9 @@ const mocks = vi.hoisted(() => {
       );
     },
   } as unknown as Document;
-  return { sendMessage: vi.fn(async () => {}), listeners };
+  // The composer gates its Claude-only interceptions on the agent's harness, so the
+  // tests drive it through this mutable holder (reset to "claude" in beforeEach).
+  return { sendMessage: vi.fn(async () => {}), listeners, agent: { harness: "claude" as string | undefined } };
 });
 
 vi.mock("../models/Response", () => ({
@@ -67,7 +69,7 @@ vi.mock("../models/HarnessCatalog", () => ({
   ensureHarnessCatalogs: vi.fn(),
   getHarnessCatalog: () => null,
 }));
-vi.mock("../models/AgentManager", () => ({ getAgentById: () => undefined }));
+vi.mock("../models/AgentManager", () => ({ getAgentById: () => mocks.agent }));
 vi.mock("../models/ClaudeAuth", () => ({ openLoginModal: vi.fn() }));
 vi.mock("./ActivityIndicator", () => ({ isWorkingActivityState: () => false }));
 vi.mock("./icons", () => ({ icon: () => "", stopIcon: () => "" }));
@@ -126,6 +128,7 @@ async function typeAndSend(component: m.Component<{ agentId: string | null }>, a
 describe("MessageInput send guard", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
+    mocks.agent.harness = "claude";
     localStorage.clear();
   });
 
@@ -185,6 +188,21 @@ describe("MessageInput send guard", () => {
     const registered = (mocks.listeners.get("keydown") ?? []).length;
     (overlay?.attrs?.onremove as (() => void) | undefined)?.();
     expect((mocks.listeners.get("keydown") ?? []).length).toBe(registered - 1);
+  });
+
+  it("sends /status to a non-Claude agent instead of declining it", async () => {
+    // The declined-command list is a fact about Claude Code's terminal; for another
+    // harness /status is just text, so it goes through with no notice.
+    mocks.agent.harness = "codex";
+    const after = await typeAndSend(MessageInput(), "agent-1", "/status");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/status");
+    expect(renderedText(after)).not.toContain("can't be sent from chat");
+  });
+
+  it("sends /login to a non-Claude agent instead of opening the Claude auth modal", async () => {
+    mocks.agent.harness = "codex";
+    await typeAndSend(MessageInput(), "agent-1", "/login");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/login");
   });
 
   it("does not carry the notice over to another agent", async () => {

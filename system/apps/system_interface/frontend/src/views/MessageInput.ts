@@ -21,6 +21,7 @@ import {
 import { describeRequestError } from "../models/request-error";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
+import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { icon, stopIcon } from "./icons";
 
@@ -156,13 +157,20 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         if (!agentId) {
           return;
         }
+        // The auth intercepts (/login, /logout) and the declined-command notice are
+        // facts about Claude Code's terminal, not about the chat, so they only apply
+        // when a Claude agent is on the other end. For any other harness these are
+        // just ordinary text -- its own slash commands are its own -- so we let them
+        // send. (When a harness needs its own composer guard, this becomes a
+        // per-harness lookup; see claudeSlashCommands.ts.)
+        const isClaude = getAgentById(agentId)?.harness === "claude";
         const trimmedCommand = messageText.trim().toLowerCase();
-        if (trimmedCommand === "/login" || trimmedCommand === "/logout") {
+        if (isClaude && (trimmedCommand === "/login" || trimmedCommand === "/logout")) {
           interceptedAuthCommand = trimmedCommand;
           m.redraw();
           return;
         }
-        const declined = findDeclinedSlashCommand(messageText);
+        const declined = isClaude ? findDeclinedSlashCommand(messageText) : null;
         if (declined !== null) {
           declinedSlashCommand = declined;
           m.redraw();
