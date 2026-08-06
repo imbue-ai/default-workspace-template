@@ -22,6 +22,11 @@ GITHUB_URL_PREFIX = "https://github.com/"
 # There is exactly one gateway; when it is unreachable there is no fallback.
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
+# Only set for desktop-hosted gateways (Docker/Lima/Modal workspaces), where
+# it carries the JWT that authorizes requests against the agent's real
+# permission file; without it those gateways evaluate against a deny-all
+# default. Remote-VPS gateways resolve permissions server-side and omit it.
+ENV_GATEWAY_PERMISSIONS_OVERRIDE = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 
 
 class GithubSyncError(Exception):
@@ -89,6 +94,11 @@ def get_gateway_url() -> str | None:
 
 def get_gateway_password() -> str | None:
     value = os.environ.get(ENV_GATEWAY_PASSWORD, "")
+    return value or None
+
+
+def get_gateway_permissions_override() -> str | None:
+    value = os.environ.get(ENV_GATEWAY_PERMISSIONS_OVERRIDE, "")
     return value or None
 
 
