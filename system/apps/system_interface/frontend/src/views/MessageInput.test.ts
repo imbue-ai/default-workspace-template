@@ -59,12 +59,15 @@ vi.mock("../models/PendingMessages", () => ({
 }));
 vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 vi.mock("../models/ModelSettings", () => ({
-  fetchModelSettings: vi.fn(),
-  getModelSettings: () => null,
-  getSelectedOption: () => null,
-  setFastMode: vi.fn(),
-  setModel: vi.fn(),
+  effectiveChoice: () => null,
+  isPickInFlight: () => false,
+  setModelChoice: vi.fn(),
 }));
+vi.mock("../models/HarnessCatalog", () => ({
+  ensureHarnessCatalogs: vi.fn(),
+  getHarnessCatalog: () => null,
+}));
+vi.mock("../models/AgentManager", () => ({ getAgentById: () => undefined }));
 vi.mock("../models/ClaudeAuth", () => ({ openLoginModal: vi.fn() }));
 vi.mock("./ActivityIndicator", () => ({ isWorkingActivityState: () => false }));
 vi.mock("./icons", () => ({ icon: () => "", stopIcon: () => "" }));

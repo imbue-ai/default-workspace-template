@@ -22,9 +22,15 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
+from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
+from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
+from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
+from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.model import HarnessCatalog
+from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
@@ -39,6 +45,12 @@ class HarnessSpec(FrozenModel):
     name: HarnessType
     watcher_class: type[AgentSessionWatcher]
     tracker_class: type[HarnessActivityTracker]
+    # The model resolver class -- a true peer of watcher_class/tracker_class, so it
+    # sits flat here and AgentManager calls ``.build(agent_info)`` on it the same way.
+    resolver_class: type[HarnessModelResolver]
+    # The static, serializable per-harness model catalog: the model-bar's compile-time
+    # half, served verbatim by ``GET /api/harnesses``.
+    catalog: HarnessCatalog
     # The special-event kinds this harness may emit. A parser emitting a kind outside its
     # own declaration is a bug; an empty set is the honest statement that a harness's
     # transcript carries no markers, not an omission.
@@ -50,6 +62,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         name=HarnessType.CLAUDE,
         watcher_class=ClaudeSessionWatcher,
         tracker_class=ClaudeActivityTracker,
+        resolver_class=ClaudeModelResolver,
+        catalog=CLAUDE_CATALOG,
         # Claude Code's transcript has no turn boundaries; activity is inferred from an
         # unmatched tool_use plus the transcript tail.
         special_kinds=frozenset(),
@@ -58,6 +72,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         name=HarnessType.CODEX,
         watcher_class=CodexSessionWatcher,
         tracker_class=CodexActivityTracker,
+        resolver_class=CodexModelResolver,
+        catalog=CODEX_CATALOG,
         special_kinds=frozenset(
             {
                 SpecialEventKind.TURN_STARTED,
@@ -82,3 +98,13 @@ def build_watcher(agent_info: AgentInfo, on_events: OnEventsCallback) -> AgentSe
 def build_tracker(harness: HarnessType) -> HarnessActivityTracker:
     """Build the activity tracker for ``harness``."""
     return get_harness_spec(harness).tracker_class.build()
+
+
+def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
+    """Build the model resolver for ``agent_info``'s harness."""
+    return get_harness_spec(agent_info.harness).resolver_class.build(agent_info)
+
+
+def get_catalog(harness: HarnessType) -> HarnessCatalog:
+    """The static model catalog for ``harness``."""
+    return get_harness_spec(harness).catalog

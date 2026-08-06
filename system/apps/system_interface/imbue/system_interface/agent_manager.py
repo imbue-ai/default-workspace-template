@@ -25,6 +25,7 @@ from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import AgentRemovedEvent
@@ -43,15 +44,23 @@ from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
+from imbue.system_interface.harnesses.model import HarnessModelResolver
+from imbue.system_interface.harnesses.model import ModelChoice
+from imbue.system_interface.harnesses.model import ModelChoiceSource
+from imbue.system_interface.harnesses.model import match_option
+from imbue.system_interface.harnesses.model import merge_identities
+from imbue.system_interface.harnesses.path_watch import PathWatcher
+from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import build_tracker
+from imbue.system_interface.harnesses.registry import get_catalog
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
-from imbue.system_interface.harnesses.claude.fast_mode import FAST_MODE_BEFORE_DECISION
-from imbue.system_interface.harnesses.claude.fast_mode import get_workspace_fast_mode_decision_path
-from imbue.system_interface.harnesses.claude.fast_mode import read_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.launch_defaults import FAST_MODE_BEFORE_DECISION
+from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
+from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
@@ -320,6 +329,14 @@ class AgentManager:
     # see :mod:`harness_activity`.
     _activity_tracker_by_agent: dict[str, HarnessActivityTracker]
     _activity_state_by_agent: dict[str, ActivityState]
+    # Per-agent model resolver (built from the agent's harness), the last computed
+    # model choice, and the filesystem watcher that re-derives it when the agent's
+    # settings/rollout changes. Parallel to the activity trio, but the resolver is
+    # built independent of the local state dir (a remote agent still shows its GUESS),
+    # and only the live watch needs the state dir.
+    _model_resolver_by_agent: dict[str, HarnessModelResolver]
+    _model_choice_by_agent: dict[str, ModelChoice]
+    _model_watcher_by_agent: dict[str, PathWatcher]
     # Assist chats whose tab we have already auto-opened (or that existed at
     # startup, seeded by ``_initial_discover`` so we never auto-open them). Lets
     # both discovery paths -- the per-agent delta and the full snapshot -- open
@@ -372,6 +389,9 @@ class AgentManager:
         manager._activity_tracked_agents = set()
         manager._activity_tracker_by_agent = {}
         manager._activity_state_by_agent = {}
+        manager._model_resolver_by_agent = {}
+        manager._model_choice_by_agent = {}
+        manager._model_watcher_by_agent = {}
         manager._auto_opened_assist_ids = set()
         # Built last: its ``list_chat_agent_ids`` callback reads ``_agents`` /
         # ``_lock``, which are set above.
@@ -409,9 +429,17 @@ class AgentManager:
         self._app_observers.clear()
 
         with self._lock:
+            model_watchers = list(self._model_watcher_by_agent.values())
+            self._model_watcher_by_agent.clear()
+        for watcher in model_watchers:
+            watcher.stop()
+
+        with self._lock:
             self._activity_tracked_agents.clear()
             self._activity_tracker_by_agent.clear()
             self._activity_state_by_agent.clear()
+            self._model_resolver_by_agent.clear()
+            self._model_choice_by_agent.clear()
 
     @property
     def broadcaster(self) -> WebSocketBroadcaster:
@@ -511,6 +539,7 @@ class AgentManager:
 
         self._stop_app_watcher(agent_id)
         self._stop_activity_tracking(agent_id)
+        self._stop_model_tracking(agent_id)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def get_apps(self) -> list[AppEntry]:
@@ -548,6 +577,7 @@ class AgentManager:
                     "work_dir": a.work_dir,
                     "harness": a.harness,
                     "activity_state": a.activity_state,
+                    "model_choice": a.model_choice.model_dump() if a.model_choice else None,
                 }
                 for a in self._agents.values()
             ]
@@ -750,6 +780,7 @@ class AgentManager:
 
         if success:
             self._ensure_activity_tracking(agent_id)
+            self._ensure_model_tracking(agent_id)
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
 
@@ -777,6 +808,7 @@ class AgentManager:
                 if agent_info.id == self._own_agent_id and agent_info.work_dir:
                     self._start_app_watcher(agent_info.id, Path(agent_info.work_dir))
                 self._ensure_activity_tracking(agent_info.id)
+                self._ensure_model_tracking(agent_info.id)
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Initial agent discovery failed")
 
@@ -802,9 +834,11 @@ class AgentManager:
 
             for agent_id in new_ids:
                 self._ensure_activity_tracking(agent_id)
+                self._ensure_model_tracking(agent_id)
             for agent_id in old_ids - new_ids:
                 self._stop_app_watcher(agent_id)
                 self._stop_activity_tracking(agent_id)
+                self._stop_model_tracking(agent_id)
 
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
@@ -974,23 +1008,21 @@ class AgentManager:
             new_matches[agent_id] = _build_agent_match(agent)
 
         with self._lock:
-            # Rebuilding ``_agents`` wholesale drops the per-agent ``activity_state``
-            # (the observe payload carries no such field). Re-apply the cached value
-            # so the broadcast below does not blank the indicator for agents that are
-            # already tracked; the recompute pass just below then re-derives it from
-            # the (possibly changed) lifecycle state.
+            # Rebuilding ``_agents`` wholesale drops the per-agent derived fields
+            # (the observe payload carries neither ``activity_state`` nor
+            # ``model_choice``). Re-apply the cached values via ``model_copy`` so the
+            # broadcast below does not blank them for already-tracked agents; the
+            # recompute passes just below then re-derive from current disk/lifecycle.
             for agent_id, agent_state in new_agents.items():
+                updates: list[tuple[str, Any]] = []
                 cached_state = self._activity_state_by_agent.get(agent_id)
                 if cached_state is not None:
-                    new_agents[agent_id] = AgentStateItem(
-                        id=agent_state.id,
-                        name=agent_state.name,
-                        state=agent_state.state,
-                        labels=agent_state.labels,
-                        work_dir=agent_state.work_dir,
-                        harness=agent_state.harness,
-                        activity_state=cached_state,
-                    )
+                    updates.append(to_update(agent_state.field_ref().activity_state, cached_state))
+                cached_choice = self._model_choice_by_agent.get(agent_id)
+                if cached_choice is not None:
+                    updates.append(to_update(agent_state.field_ref().model_choice, cached_choice))
+                if updates:
+                    new_agents[agent_id] = agent_state.model_copy_update(*updates)
             self._agents = new_agents
             self._match_by_agent_id = new_matches
 
@@ -1001,10 +1033,12 @@ class AgentManager:
             if agent_id == self._own_agent_id and added_agent_state.work_dir:
                 self._start_app_watcher(agent_id, Path(added_agent_state.work_dir))
             self._ensure_activity_tracking(agent_id)
+            self._ensure_model_tracking(agent_id)
 
         for agent_id in removed_agent_ids:
             self._stop_app_watcher(agent_id)
             self._stop_activity_tracking(agent_id)
+            self._stop_model_tracking(agent_id)
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
@@ -1142,6 +1176,94 @@ class AgentManager:
             self._activity_tracker_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
 
+    def _ensure_model_tracking(self, agent_id: str) -> None:
+        """Build the agent's model resolver and, when its state dir exists, watch it.
+
+        The resolver is built even for a remote or not-yet-materialised agent, so the
+        composer shows its launch GUESS immediately; only the live watch -- which
+        reflects on-disk changes -- needs the local state dir, so it starts (and is
+        retried on later calls) once that dir is present. Idempotent.
+        """
+        agent_info = self.get_agent_info_by_id(agent_id)
+        if agent_info is None:
+            return
+        with self._lock:
+            if agent_id not in self._model_resolver_by_agent:
+                self._model_resolver_by_agent[agent_id] = build_resolver(agent_info)
+            resolver = self._model_resolver_by_agent[agent_id]
+            needs_watcher = agent_id not in self._model_watcher_by_agent
+        self._recompute_model_choice(agent_id, broadcast_on_change=False)
+        if needs_watcher and self._get_agent_state_dir(agent_id).exists():
+            new_watcher = PathWatcher.build(
+                resolver.watched_paths(),
+                lambda: self._recompute_model_choice(agent_id, broadcast_on_change=True),
+            )
+            with self._lock:
+                already_watched = agent_id in self._model_watcher_by_agent
+                if not already_watched:
+                    self._model_watcher_by_agent[agent_id] = new_watcher
+            if not already_watched:
+                new_watcher.start()
+
+    def _stop_model_tracking(self, agent_id: str) -> None:
+        """Stop the model watcher and clear the cached resolver + choice for an agent."""
+        with self._lock:
+            watcher = self._model_watcher_by_agent.pop(agent_id, None)
+            self._model_resolver_by_agent.pop(agent_id, None)
+            self._model_choice_by_agent.pop(agent_id, None)
+        if watcher is not None:
+            watcher.stop()
+
+    def _recompute_model_choice(self, agent_id: str, *, broadcast_on_change: bool, force: bool = False) -> None:
+        """Recompute an agent's model choice from its resolver, then cache/broadcast it.
+
+        Mirrors ``_recompute_activity_state``: the disk read runs outside the lock,
+        the no-op guard suppresses an unchanged broadcast, and ``model_copy`` updates
+        only the ``model_choice`` slot. ``force`` bypasses the no-op guard so the
+        switch endpoint can push one authoritative choice even when the switch left
+        the derived value unchanged -- otherwise an optimistic pending pick that
+        resolves to the same value would never be superseded on the frontend.
+        """
+        with self._lock:
+            resolver = self._model_resolver_by_agent.get(agent_id)
+        if resolver is None:
+            return
+        # Disk reads (settings.json / rollout) stay outside the lock.
+        live = resolver.read_live()
+        guess = resolver.guess_from_launch()
+        identity = merge_identities(live, guess)
+        source = ModelChoiceSource.LIVE if live is not None else ModelChoiceSource.GUESS
+        with self._lock:
+            if agent_id not in self._model_resolver_by_agent:
+                return
+            agent_state = self._agents.get(agent_id)
+            if agent_state is None:
+                return
+            matched = match_option(identity, get_catalog(agent_state.harness).options)
+            choice = ModelChoice(identity=identity, source=source, matched=matched)
+            old_choice = self._model_choice_by_agent.get(agent_id)
+            if not force and old_choice == choice and agent_state.model_choice == choice:
+                return
+            self._model_choice_by_agent[agent_id] = choice
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().model_choice, choice)
+            )
+        if broadcast_on_change:
+            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def get_model_resolver(self, agent_id: str) -> HarnessModelResolver | None:
+        """The model resolver for ``agent_id``, or None when the agent is not tracked."""
+        with self._lock:
+            return self._model_resolver_by_agent.get(agent_id)
+
+    def refresh_model_choice(self, agent_id: str) -> None:
+        """Force one authoritative model-choice broadcast (bypassing the no-op guard).
+
+        Called after a switch so the optimistic frontend reconciles even when the
+        switch left the derived value unchanged.
+        """
+        self._recompute_model_choice(agent_id, broadcast_on_change=True, force=True)
+
     def _read_process_started_at(self, agent_id: str, marker_filename: str) -> float | None:
         """Return the mtime of the agent's ``*_process_started`` marker, or None.
 
@@ -1194,14 +1316,10 @@ class AgentManager:
             if old_state == new_state and agent_state.activity_state == new_state.value:
                 return
             self._activity_state_by_agent[agent_id] = new_state
-            self._agents[agent_id] = AgentStateItem(
-                id=agent_state.id,
-                name=agent_state.name,
-                state=agent_state.state,
-                labels=agent_state.labels,
-                work_dir=agent_state.work_dir,
-                harness=agent_state.harness,
-                activity_state=new_state,
+            # Update just this slot so any cached ``model_choice`` stays intact --
+            # each derived field updates its own field without knowing the others'.
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().activity_state, new_state)
             )
 
         if broadcast_on_change:

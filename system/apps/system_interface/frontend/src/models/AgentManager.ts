@@ -8,6 +8,7 @@ import { apiUrl } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
+import type { ModelChoice } from "./ModelSettings";
 import { parseJsonMessage } from "./ws-json";
 
 export interface AgentState {
@@ -27,6 +28,10 @@ export interface AgentState {
   // remote agents whose state directory is not present on this host,
   // proto-agents, non-Claude agent types).
   activity_state?: string | null;
+  // The agent's live model/effort/fast selection plus the catalog option it
+  // matched, pushed by the backend beside activity_state. Null when no model
+  // resolution is available. Drives the composer's model bar.
+  model_choice?: ModelChoice | null;
 }
 
 export interface AppEntry {
