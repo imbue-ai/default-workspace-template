@@ -382,10 +382,13 @@ def _parse_assistant_message(
 
     joined_text = "\n".join(text_parts)
     # A model API error surfaces as a synthetic assistant message (e.g. "API Error:
-    # 529 Overloaded"). Classify it so the frontend can style it as an error and,
-    # for a provider-side failure (5xx / overloaded), add a "not Minds' fault" note.
-    # Auth failures are flagged separately (is_auth_error) and are not reclassified.
-    api_error_kind = classify_api_error(joined_text)
+    # 529 Overloaded"). Classify it so the frontend can style it as an error and, for a
+    # provider-side failure (5xx / overloaded), add a "not Minds' fault" note. Gated on
+    # the synthetic model: only Claude Code's own framework-generated notices carry these
+    # forms, so a REAL assistant message that merely quotes "API Error: 500" or an error
+    # JSON (routine in a coding chat) is not mistaken for an outage. Auth failures are
+    # flagged separately (is_auth_error) and are not reclassified here.
+    api_error_kind = classify_api_error(joined_text) if model == _SYNTHETIC_MODEL else None
     event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "assistant_message",

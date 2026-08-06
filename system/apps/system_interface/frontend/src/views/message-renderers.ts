@@ -134,14 +134,36 @@ export function countSubagentCards(toolCalls: ToolCall[] | undefined): number {
   return count;
 }
 
+/** A cheap content fingerprint of the tool_results this message resolves, so the memo
+ *  below repaints when a result is SUPERSEDED in place (same tool_call_id, new content) --
+ *  e.g. a codex interrupt's synthetic "Interrupted." result is later replaced by the real
+ *  one. Result-presence counting alone misses this (both are "present"). */
+function resolvedResultSignature(
+  toolCalls: ToolCall[] | undefined,
+  toolResults: Map<string, ToolResultEvent>,
+): string {
+  if (!toolCalls) {
+    return "";
+  }
+  return toolCalls
+    .map((tc) => {
+      const result = toolResults.get(tc.tool_call_id);
+      return result
+        ? `${tc.tool_call_id}:${result.is_error}:${result.output.length}:${result.output.slice(0, 64)}`
+        : "-";
+    })
+    .join("|");
+}
+
 export function StableAssistantMessage(): m.Component<{
   event: AssistantMessageEvent;
   toolResults: Map<string, ToolResultEvent>;
   agentId: string;
 }> {
-  let renderedEventId: string | null = null;
+  let renderedEvent: AssistantMessageEvent | null = null;
   let renderedToolResultCount = 0;
   let renderedSubagentCardCount = 0;
+  let renderedResultSignature = "";
   return {
     onbeforeupdate(vnode) {
       const { event, toolResults } = vnode.attrs;
@@ -151,19 +173,26 @@ export function StableAssistantMessage(): m.Component<{
       // subagent's linkage lands. Repaint when that count grows so the plain
       // tool-call block upgrades to the rich card.
       const currentSubagentCardCount = countSubagentCards(event.tool_calls);
+      const currentResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       return (
-        event.event_id !== renderedEventId ||
+        // A supersession replaces the event object in the store (new reference), so a
+        // reference change catches an assistant-message text/tool_calls rewrite; the
+        // result signature catches a tool_result rewrite. Both are needed since the
+        // presence counts alone do not move when content is replaced in place.
+        event !== renderedEvent ||
         currentToolResultCount !== renderedToolResultCount ||
-        currentSubagentCardCount !== renderedSubagentCardCount
+        currentSubagentCardCount !== renderedSubagentCardCount ||
+        currentResultSignature !== renderedResultSignature
       );
     },
     view(vnode) {
       const event = vnode.attrs.event;
       const toolResults = vnode.attrs.toolResults;
       const agentId = vnode.attrs.agentId;
-      renderedEventId = event.event_id;
+      renderedEvent = event;
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
+      renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
 
       return m("div", renderAssistantMessageChildren(event, toolResults, agentId));
     },
