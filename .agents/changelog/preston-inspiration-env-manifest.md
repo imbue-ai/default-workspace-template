@@ -41,3 +41,16 @@ raised `IndexError` in the shallow temporary directory the assembly script
 actually snapshots it into. It now searches the sibling copy first and then
 walks ancestors. Caught by running the flow in a real workspace container --
 the unit tests passed because they happened to run from a deeply-nested path.
+
+When publishing an inspiration, the agent now renders the generated README into
+a preview tab and asks you whether it reads like a good description of what you
+built -- before anything is pushed. If it does not, it rewrites and shows you
+again. You review the page as a page, not as raw markdown in chat.
+
+Publishing now starts by asking where it should go: it explains that the code
+goes on your own account on a code-hosting platform, asks whether you have a
+GitHub account, and either gets you connected or points you at the free signup
+-- before it spends your time on the interview and a full assembly. Preferring
+a different platform is a fine answer; the agent will tell you it has to work
+out that platform's git authentication first rather than promising a publish it
+cannot finish.

@@ -43,34 +43,60 @@ list of defects.
 
 ## Show the user the rendered page, never raw markdown
 
-The README is a page, so review it as one. Both steps are mandatory; do them
-without being asked.
+The README is a page, so the user reviews it as one. This happens at the
+publish flow's §6 confirmation gate and is driven by the LEAD -- never by the
+assembly worker, whose worktree is background work and whose output the user
+has not asked to see yet.
 
-**Before shipping -- render it and open it in a tab.** Every time you generate
-or change the README:
+**Render it before you send the confirmation message**, so the page is already
+on screen when they read your question:
 
 ```bash
-uv run python system/scripts/render_markdown_preview.py <path-to-README.md>
-python3 system/scripts/layout.py open service:markdown-preview --layout <layout>
-python3 system/scripts/layout.py refresh service:markdown-preview   # after a re-render
+uv run --project /home/user/workspace python \
+    /home/user/workspace/system/scripts/render_markdown_preview.py "$WT/README.md"
+python3 /home/user/workspace/system/scripts/layout.py open service:markdown-preview --layout <layout>
 ```
 
-The preview renders it the way GitHub will -- raw HTML, the centered hero, the
-badge, and local images all resolved -- so you can check the layout and the
-graphic, not just the text. It also shows the file's absolute path with a
-one-click Copy path button. Never paste raw markdown into chat and ask the user
-to picture it.
+Two details that are load-bearing:
 
-**Close it when you are done.** The preview is not a permanent fixture of the
-user's workspace -- it exists because you rendered something, and it should go
-away when that is over:
+- **`--project /home/user/workspace`** keeps this compatible with the skill's
+  CWD invariant. cwd stays `$WT`, which has no virtualenv at all -- the
+  assembly's `git clean -fdxq` removed it -- while the interpreter and the
+  preview service come from the workspace, which is where the supervisord
+  program actually lives.
+- **Pass `$WT/README.md` as an absolute path.** The server serves the previewed
+  file's own directory, so this is what makes the relative hero image resolve.
+  Render a copy from somewhere else and you get a broken image that is your
+  fault, not the README's.
+
+Then ask whether it reads like a good description of what they built. Name what
+you want judged: whether "Why you care" frames the problem the way they would,
+whether "How to use it" matches how they actually use the thing, and whether
+the "Ideas for making it yours" are ones they would want an adopter to try.
+
+**If they say no, rewrite and show them again** -- that is the entire point of
+asking. Edit `$WT/README.md`, re-render with the same command, and refresh:
 
 ```bash
-uv run python system/scripts/render_markdown_preview.py --close
+python3 /home/user/workspace/system/scripts/layout.py refresh service:markdown-preview --layout <layout>
+```
+
+Keep the generated structure. Their objection is almost always about the WORDS,
+not the shape, and the hero, the Open in Minds call-to-action, and its
+`MINDS_INSPIRATION_REPO_URL` placeholder must all survive any rewrite -- the
+lead substitutes that placeholder in §7 and §8 blocks the push if it is
+missing. Loop until they are happy.
+
+**Close it when the review is over**, so they are not left with a panel they
+did not ask for:
+
+```bash
+uv run --project /home/user/workspace python \
+    /home/user/workspace/system/scripts/render_markdown_preview.py --close
 ```
 
 That stops the service, which withdraws its port and takes the tab with it.
-(This is also why the first command above is what starts it: the service is
+(The same reason the render command above is what starts it: the service is
 never autostarted, so nothing appears until there is something to look at.)
 
 ## Verify the published page
