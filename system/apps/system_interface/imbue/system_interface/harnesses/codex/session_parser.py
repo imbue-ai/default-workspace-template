@@ -238,6 +238,50 @@ def _user_message_events(timestamp: str, text: str | None) -> list[dict[str, Any
     ]
 
 
+# A message the user submits while a turn is running is held in codex's TUI queue and
+# does not reach the rollout until the turn ends. The patched codex binary records it
+# the instant it is queued as one line in ``$CODEX_HOME/queued_input.jsonl`` (a sidecar,
+# not the rollout), which lets the UI show it as a queued bubble immediately -- the same
+# role Claude Code's ``queued_command`` attachment plays.
+QUEUED_INPUT_RECORD_TYPE = "queued_input"
+
+
+def normalize_user_content(content: str) -> str:
+    """Whitespace-normalise a user message for matching a queued placeholder to the real
+    turn it drains into. Mirrors the frontend's ``normalizeContentForMatch`` so the two
+    agree on what counts as the same message."""
+    return " ".join(content.split())
+
+
+def queued_input_event(record: dict[str, Any]) -> dict[str, Any] | None:
+    """The queued user-bubble event for one ``queued_input`` sidecar line, or None when the
+    line is not a valid queued record (wrong type, missing id, or blank content).
+
+    The event id is codex's own ``queued_id`` -- a stable correlation id assigned at
+    enqueue -- so the drained rollout turn can supersede this placeholder in place rather
+    than rendering a second bubble (see ``CodexSessionWatcher._dedup_queued_turn``).
+    """
+    if record.get("type") != QUEUED_INPUT_RECORD_TYPE:
+        return None
+    queued_id = record.get("queued_id")
+    content = record.get("content")
+    if not isinstance(queued_id, str) or not queued_id:
+        return None
+    if not isinstance(content, str) or not content.strip():
+        return None
+    timestamp = record.get("timestamp")
+    event_id = f"codex-queued-{queued_id}"
+    return {
+        "timestamp": timestamp if isinstance(timestamp, str) else "",
+        "type": "user_message",
+        "event_id": event_id,
+        "source": SOURCE,
+        "role": "user",
+        "content": content,
+        "message_uuid": event_id,
+    }
+
+
 def parse_lines(
     record: dict[str, Any],
     line_index: int,

@@ -48,7 +48,9 @@ from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.codex.session_parser import SOURCE as _SOURCE
+from imbue.system_interface.harnesses.codex.session_parser import normalize_user_content
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
+from imbue.system_interface.harnesses.codex.session_parser import queued_input_event
 
 logger = _loguru_logger
 
@@ -67,6 +69,11 @@ logger = _loguru_logger
 # mirroring claude_session_parser's reimplement-don't-import stance.
 _MARKER_RELATIVE = Path("codex_transcript_path")
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
+# The queued-input sidecar the patched codex binary appends to on every enqueue, a
+# sibling of ``sessions/`` under CODEX_HOME. Watched alongside the rollout so a message
+# queued mid-turn surfaces as a bubble immediately, rather than only when it drains into
+# the rollout at the end of the running turn.
+_QUEUED_INPUT_RELATIVE = Path("plugin") / "codex" / "home" / "queued_input.jsonl"
 
 
 def read_marker_rollout_path(marker_path: Path) -> Path | None:
@@ -119,6 +126,16 @@ class CodexSessionWatcher(AgentSessionWatcher):
     _partial: bytes
     _line_index: int
     _tool_name_by_call_id: dict[str, str]
+    # The queued-input sidecar and its own byte cursor + trailing-partial, read exactly
+    # like the rollout but from a separate file. ``_queued_id_by_content`` maps a queued
+    # message's normalised content to the placeholder event id it was emitted under, so
+    # the real rollout turn (which carries no queued_id) supersedes the placeholder in
+    # place instead of double-rendering. Kept for the whole session -- never popped -- so
+    # a resume that re-serialises the drained turn still dedups against it.
+    _queued_input_path: Path
+    _queued_offset: int
+    _queued_partial: bytes
+    _queued_id_by_content: dict[str, str]
     # The shared watch loop: a recursive watchdog on the sessions dir plus the poll
     # safety net, invoking _emit_unsent once at start and on every wake. Replaces the
     # bespoke thread/observer/poll block this watcher used to hand-roll.
@@ -135,6 +152,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # so it follows rotation), and the sessions dir we watchdog.
         self._marker_path = agent_state_dir / _MARKER_RELATIVE
         self._sessions_dir = codex_sessions_dir(agent_state_dir)
+        self._queued_input_path = agent_state_dir / _QUEUED_INPUT_RELATIVE
         self._on_events = on_events
 
         # Guards the in-memory transcript mirror and the tail cursor. Held across
@@ -172,6 +190,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # from the earlier function_call. Persists across files (a resume re-serialises
         # the calls, but keeping the map is harmless and covers output-only cases).
         self._tool_name_by_call_id = {}
+        # Queued-input sidecar cursor + dedup map (see the attribute docs above).
+        self._queued_offset = 0
+        self._queued_partial = b""
+        self._queued_id_by_content = {}
 
         self._path_watcher = None
         return self
@@ -185,7 +207,11 @@ class CodexSessionWatcher(AgentSessionWatcher):
         broadcast whatever already exists, since the agent may have run before the UI
         connected -- and again on every filesystem wake or poll timeout.
         """
-        self._path_watcher = PathWatcher.build((self._sessions_dir,), self._emit_unsent)
+        # Watch CODEX_HOME (the parent of ``sessions/``) recursively: this catches every
+        # rollout append as before AND the queued-input sidecar's appends, both of which
+        # feed the transcript. The sidecar is a sibling of ``sessions/``, not under it, so
+        # watching only the sessions dir would miss it.
+        self._path_watcher = PathWatcher.build((self._sessions_dir.parent,), self._emit_unsent)
         self._path_watcher.start()
 
     def stop(self) -> None:
@@ -236,6 +262,9 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
         new_events: list[dict[str, Any]] = []
         with self._lock:
+            # Read the queued-input sidecar first, so a message's placeholder exists before
+            # the rollout turn it later drains into is deduped against it.
+            self._consume_queued_input(new_events)
             if target != self._current_path:
                 # First resolution or rotation (resume -> new rollout). Tail the new
                 # file from its start. Keep _line_index (global -> ids stay unique
@@ -285,6 +314,9 @@ class CodexSessionWatcher(AgentSessionWatcher):
                 if not stripped:
                     continue
                 for event in self._adapt_line(stripped, idx):
+                    # If this rollout turn is the drained form of a still-queued message,
+                    # re-key it onto that placeholder's id so it supersedes it in place.
+                    self._dedup_queued_turn(event)
                     self._ingest_event(event, new_events)
                     # A user interrupt (turn_aborted) leaves any in-flight tool call with
                     # no result -- codex never persists one -- so its card would spin
@@ -296,6 +328,72 @@ class CodexSessionWatcher(AgentSessionWatcher):
                             self._ingest_event(synthetic, new_events)
 
         return new_events
+
+    def _consume_queued_input(self, new_events: list[dict[str, Any]]) -> None:
+        """Read new lines from the queued-input sidecar and ingest each as a placeholder
+        user bubble. Records content -> placeholder-id so the drained rollout turn
+        supersedes it. Must hold ``_lock``.
+
+        The sidecar is append-only and TUI-owned (never rotated/truncated by core), so the
+        cursor only ever moves forward; a shrink (unexpected) re-reads from the start, and
+        id-based dedup collapses any re-emitted placeholder.
+        """
+        path = self._queued_input_path
+        try:
+            size = path.stat().st_size
+        except OSError:
+            # No sidecar yet (agent has queued nothing, or an older binary): nothing to do.
+            return
+        if size < self._queued_offset:
+            self._queued_offset = 0
+            self._queued_partial = b""
+        if size == self._queued_offset and not self._queued_partial:
+            return
+        try:
+            with path.open("rb") as f:
+                f.seek(self._queued_offset)
+                raw = f.read()
+        except OSError:
+            logger.debug("codex watcher: failed to read queued-input sidecar {}", path)
+            return
+        self._queued_offset += len(raw)
+        byte_lines = (self._queued_partial + raw).split(b"\n")
+        self._queued_partial = byte_lines.pop()
+        for byte_line in byte_lines:
+            stripped = byte_line.decode("utf-8", errors="replace").strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                logger.warning("codex watcher: skipping malformed queued-input line: {}", exc)
+                continue
+            if not isinstance(record, dict):
+                continue
+            event = queued_input_event(record)
+            if event is None:
+                continue
+            self._queued_id_by_content[normalize_user_content(event["content"])] = event["event_id"]
+            self._ingest_event(event, new_events)
+
+    def _dedup_queued_turn(self, event: dict[str, Any]) -> None:
+        """Re-key a rollout ``user_message`` onto its queued placeholder's id when it is the
+        drained form of a message we already showed as queued.
+
+        The drained turn carries no ``queued_id``, so the match is by normalised content --
+        the same brittleness the frontend's content reconcile has, and the reason the
+        placeholder uses codex's ``queued_id`` in the first place. Mutating the id in place
+        lets ``_ingest_event`` supersede the placeholder rather than append a second bubble.
+        """
+        if event.get("type") != "user_message":
+            return
+        content = event.get("content")
+        if not isinstance(content, str):
+            return
+        placeholder_id = self._queued_id_by_content.get(normalize_user_content(content))
+        if placeholder_id is not None and placeholder_id != event["event_id"]:
+            event["event_id"] = placeholder_id
+            event["message_uuid"] = placeholder_id
 
     def _ingest_event(self, event: dict[str, Any], new_events: list[dict[str, Any]]) -> None:
         """Add one parsed event to the view: append a new id, supersede a changed one in
