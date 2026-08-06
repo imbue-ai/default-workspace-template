@@ -30,6 +30,17 @@
 //      which `mngr transcript` reads. Emitting straight from the structured
 //      events avoids re-parsing pi's tree-structured session JSONL.
 //
+//   4. Model/effort state. pi carries no static per-agent model config file (its
+//      model comes from launch args / pi settings, its effort from the thinking
+//      level), so the chat model bar cannot read the selection off disk the way it
+//      reads claude's settings.json or codex's config.toml. Instead this extension
+//      writes `$MNGR_AGENT_STATE_DIR/pi_model_state.json`
+//      (`{provider, model, thinking_level}`) from the pi-resolved values: on
+//      `session_start` (which fires at TUI startup, before the first prompt, so the
+//      pre-turn-1 selection is available immediately) and again on `model_select` /
+//      `thinking_level_select` as the user switches. The system-interface pi harness
+//      reads this file for the model bar.
+//
 // Design rules:
 //   * Every handler body is wrapped so a bug here can never disrupt pi's loop.
 //   * All filesystem work is synchronous (node's *Sync calls), so ordering is
@@ -104,8 +115,17 @@ interface MessageEndEvent {
 interface SessionManager {
   getSessionFile?: () => string | undefined;
 }
+interface PiModel {
+  provider?: string;
+  id?: string;
+}
 interface ExtensionContext {
   sessionManager?: SessionManager;
+  // Active model and its current effective thinking level (pi's effort axis). pi
+  // passes these on the ctx to every handler; read to record the live model/effort
+  // for the chat model bar.
+  model?: PiModel;
+  thinkingLevel?: string;
 }
 
 // pi's ExtensionAPI -- `on` plus `sendUserMessage` (used to inject input without
@@ -121,6 +141,10 @@ interface PiApi {
 const ACTIVE_MARKER_NAME = "active";
 const SESSION_STARTED_SENTINEL_NAME = "pi_session_started";
 const SESSION_FILE_NAME = "pi_session_file";
+// The live model + thinking level (pi's effort axis), written for the chat model
+// bar to read before turn 1 and across switches. Kept in sync with the pi harness
+// resolver on the system-interface side (harnesses/pi/model.py).
+const MODEL_STATE_NAME = "pi_model_state.json";
 // mngr appends one JSON-encoded message string per line here; we inject each new
 // line into the live session via pi.sendUserMessage (no tmux keystrokes). Kept
 // in sync with _INBOX_FILE_NAME in plugin.py.
@@ -260,6 +284,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   const markerPath = join(stateDir, ACTIVE_MARKER_NAME);
   const sentinelPath = join(stateDir, SESSION_STARTED_SENTINEL_NAME);
   const sessionFilePath = join(stateDir, SESSION_FILE_NAME);
+  const modelStatePath = join(stateDir, MODEL_STATE_NAME);
   const rawPath = join(stateDir, "logs", `${agentType}_transcript`, "events.jsonl");
   const commonPath = join(stateDir, "events", agentType, "common_transcript", "events.jsonl");
   const commonSource = `${agentType}/common_transcript`;
@@ -300,6 +325,25 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     if (file) {
       writeFileSync(sessionFilePath, file);
     }
+  };
+
+  // Record the live model + thinking level (pi's effort axis) for the chat model
+  // bar. Called on session_start -- which fires at TUI startup, before the first
+  // prompt -- so the pre-turn-1 selection is available immediately, and on
+  // model_select / thinking_level_select as the user switches. The changed axis is
+  // taken from the event (ctx.model / ctx.thinkingLevel may not have updated yet at
+  // the instant the event fires); the untouched axis comes from ctx. Nothing is
+  // written until at least one field resolves, so a prior state is never blanked.
+  const recordModelState = (ctx: ExtensionContext, override?: { model?: PiModel; thinkingLevel?: string }): void => {
+    const model = override?.model ?? ctx.model;
+    const thinkingLevel = override?.thinkingLevel ?? ctx.thinkingLevel;
+    const provider = typeof model?.provider === "string" ? model.provider : "";
+    const modelId = typeof model?.id === "string" ? model.id : "";
+    const thinking = typeof thinkingLevel === "string" ? thinkingLevel : "";
+    if (!provider && !modelId && !thinking) {
+      return;
+    }
+    writeFileSync(modelStatePath, JSON.stringify({ provider, model: modelId, thinking_level: thinking }));
   };
 
   // Input injection. mngr delivers messages by appending one JSON-encoded string
@@ -360,12 +404,31 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       mkdirSync(dirname(sentinelPath), { recursive: true });
       writeFileSync(sentinelPath, "1");
       recordSessionFile(ctx);
+      // Pre-turn-1 model/effort: session_start fires before the first prompt, so the
+      // launch selection is on disk immediately for the chat model bar.
+      recordModelState(ctx);
     });
   });
 
   pi.on("session_switch", (_event, ctx) => {
     safe("session_switch", () => {
       recordSessionFile(ctx);
+    });
+  });
+
+  // pi's model + thinking-level (effort) selectors. model_select fires on the
+  // /model command, Ctrl+P cycling, or session restore; thinking_level_select on any
+  // thinking change. Recording both keeps pi_model_state.json live so the chat model
+  // bar (ON_CHANGE) reflects a terminal-side switch.
+  pi.on("model_select", (event, ctx) => {
+    safe("model_select", () => {
+      recordModelState(ctx, { model: event?.model });
+    });
+  });
+
+  pi.on("thinking_level_select", (event, ctx) => {
+    safe("thinking_level_select", () => {
+      recordModelState(ctx, { thinkingLevel: event?.level });
     });
   });
 

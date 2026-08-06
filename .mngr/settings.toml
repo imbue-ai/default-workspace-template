@@ -207,6 +207,49 @@ check_installation = false
 #   so they never appear in the transcript.
 config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
 
+# the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
+# is its own base type (registered by the vendored imbue-mngr-opencode plugin via
+# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. The
+# opencode binary is baked into the image (system/scripts/setup_system.sh,
+# OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
+# provision.
+#
+# No model is pinned (unlike agent_types.codex's gpt-5.6-sol). OpenCode is a
+# many-provider, many-auth harness: its model is a `provider/model` slug that comes
+# from the user's own opencode.json (synced from ~/.config/opencode by the plugin)
+# or the authenticated provider's default -- forcing a slug here could name a
+# provider the user has not authenticated. The chat model bar reads the live
+# model/variant off the transcript instead (see the system_interface opencode
+# harness). "Effort" for opencode is its variant system
+# (provider.<p>.models.<m>.variants.<name>), which is likewise user-config-driven,
+# so it is not pinned here either.
+#
+# auto_allow_permissions injects a wildcard permission-allow into the per-agent
+# opencode.json so the container agent runs unattended, matching
+# agent_types.codex's auto_allow_permissions posture.
+[agent_types.opencode]
+auto_allow_permissions = true
+check_installation = false
+
+# the "pi-coding" agent type -- Pi coding CLI as a peer harness (short alias `pi`).
+# Registered by the vendored imbue-mngr-pi-coding plugin; the pi binary is baked
+# into the image (system/scripts/setup_system.sh, PI_VERSION), so check_installation
+# is off.
+#
+# No model is pinned, for the same reason as opencode: pi is many-provider,
+# many-auth. Its model (`provider/model`) and effort (thinking level: off..max)
+# come from the user's pi settings / launch args, not an mngr-forced slug; the chat
+# model bar reads the live values via the pi lifecycle extension.
+#
+# auto_allow_permissions MUST be true -- pi has no approval gate and its config
+# validator rejects false. auto_dismiss_dialogs adds pi's `--approve` (trust
+# project-local files for the run) so an unattended agent is not blocked on the
+# first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs.
+[agent_types.pi-coding]
+auto_allow_permissions = true
+auto_dismiss_dialogs = true
+check_installation = false
+
 # --- Provider configurations ---
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers

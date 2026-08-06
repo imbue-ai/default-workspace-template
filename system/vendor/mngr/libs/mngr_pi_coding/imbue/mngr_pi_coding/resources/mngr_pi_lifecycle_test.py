@@ -36,7 +36,11 @@ const handlers = {};
 const mod = await import("./mngr_pi_lifecycle.ts");
 mod.default({ on: (name, handler) => { (handlers[name] ||= []).push(handler); } });
 for (const ev of events) {
-  const ctx = { sessionManager: { getSessionId: () => ev.sessionId, getSessionFile: () => ev.sessionFile } };
+  const ctx = {
+    sessionManager: { getSessionId: () => ev.sessionId, getSessionFile: () => ev.sessionFile },
+    model: ev.model,
+    thinkingLevel: ev.thinkingLevel,
+  };
   for (const handler of (handlers[ev.event] || [])) {
     await handler(ev.payload || {}, ctx);
   }
@@ -126,6 +130,65 @@ def test_in_memory_session_does_not_clobber_recorded_file(tmp_path: Path) -> Non
         ],
     )
     assert (state / "pi_session_file").read_text() == "/s/s1.jsonl"
+
+
+_MODEL_STATE = Path("pi_model_state.json")
+
+
+def test_model_state_written_on_session_start(tmp_path: Path) -> None:
+    """Pre-turn-1: session_start fires before the first prompt, so the launch model +
+    thinking level land on disk immediately for the chat model bar."""
+    state = _run_extension(
+        tmp_path,
+        [
+            {
+                "event": "session_start",
+                "sessionId": "s1",
+                "sessionFile": "/s/s1.jsonl",
+                "model": {"provider": "anthropic", "id": "claude-opus-4-8"},
+                "thinkingLevel": "high",
+            }
+        ],
+    )
+    assert json.loads((state / _MODEL_STATE).read_text()) == {
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "thinking_level": "high",
+    }
+
+
+def test_model_state_tracks_model_and_thinking_switches(tmp_path: Path) -> None:
+    """model_select / thinking_level_select keep the state live. The changed axis comes
+    from the event; the untouched one from ctx (which may lag the event)."""
+    state = _run_extension(
+        tmp_path,
+        [
+            {
+                "event": "session_start",
+                "sessionId": "s1",
+                "sessionFile": "/s/s1.jsonl",
+                "model": {"provider": "anthropic", "id": "claude-opus-4-8"},
+                "thinkingLevel": "high",
+            },
+            # /model switch: event carries the new model, ctx still reports the thinking level.
+            {
+                "event": "model_select",
+                "payload": {"model": {"provider": "openai", "id": "gpt-5.2"}},
+                "thinkingLevel": "high",
+            },
+            # thinking change: event carries the new level, ctx still reports the model.
+            {
+                "event": "thinking_level_select",
+                "payload": {"level": "low"},
+                "model": {"provider": "openai", "id": "gpt-5.2"},
+            },
+        ],
+    )
+    assert json.loads((state / _MODEL_STATE).read_text()) == {
+        "provider": "openai",
+        "model": "gpt-5.2",
+        "thinking_level": "low",
+    }
 
 
 def test_marker_set_on_agent_start_and_cleared_on_agent_end(tmp_path: Path) -> None:

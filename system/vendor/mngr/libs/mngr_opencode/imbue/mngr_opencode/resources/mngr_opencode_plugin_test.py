@@ -89,6 +89,7 @@ def _run_plugin(tmp_path: Path, events: list[dict[str, Any]]) -> Path:
 
 
 _COMMON_TRANSCRIPT = Path("events") / "opencode" / "common_transcript" / "events.jsonl"
+_MODEL_STATE = Path("opencode_model_state.json")
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -167,6 +168,49 @@ def test_user_and_assistant_text_captured(tmp_path: Path) -> None:
     assert by_type["assistant_message"]["tool_calls"][0]["tool_name"] == "bash"
     assert by_type["tool_result"]["output"] == "hi"
     assert by_type["tool_result"]["is_error"] is False
+
+
+def test_model_state_written_from_assistant_message(tmp_path: Path) -> None:
+    """The live model + variant (opencode's effort axis) is surfaced from each assistant
+    message.updated for the chat model bar; a user message.updated no-ops (no model on it)."""
+    events = [
+        {"type": "session.created", "properties": {"info": {"id": "ses_root"}}},
+        {
+            "type": "message.updated",
+            "properties": {"info": {"id": "m1", "role": "user", "sessionID": "ses_root", "time": {"created": 1000}}},
+        },
+        {
+            "type": "message.updated",
+            "properties": {
+                "info": {
+                    "id": "m2",
+                    "role": "assistant",
+                    "sessionID": "ses_root",
+                    "time": {"created": 2000},
+                    "providerID": "anthropic",
+                    "modelID": "claude-sonnet-4-5",
+                    "variant": "high",
+                    "finish": "stop",
+                }
+            },
+        },
+    ]
+    state = _run_plugin(tmp_path, events)
+    assert json.loads((state / _MODEL_STATE).read_text()) == {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5",
+        "variant": "high",
+    }
+
+
+def test_model_state_absent_variant_records_empty(tmp_path: Path) -> None:
+    """A model with no variant selected records variant as "" (the base profile)."""
+    state = _run_plugin(tmp_path, _TURN_EVENTS)
+    assert json.loads((state / _MODEL_STATE).read_text()) == {
+        "provider": "opencode",
+        "model": "deepseek-v4-flash-free",
+        "variant": "",
+    }
 
 
 # Permission events: the running opencode server (verified against the 1.16.2
