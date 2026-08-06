@@ -91,6 +91,16 @@ export interface AssistantMessageEvent extends BaseTranscriptEvent {
   } | null;
   // True when the text matches a known Claude auth-error pattern.
   is_auth_error: boolean;
+  // True when the text is a model API error (e.g. "API Error: 529 Overloaded"),
+  // stamped by the backend so the frontend can style it as an error. Harness-
+  // agnostic: any harness that surfaces a provider error stamps these same fields.
+  is_api_error: boolean;
+  // The normalized error kind ("overloaded", "rate_limit", "api_error", ...), or
+  // null when this is not an API error. Carried for wording; not required to render.
+  api_error_kind: string | null;
+  // True when the API error is the model provider's fault (a 5xx / overloaded)
+  // rather than our request -- these get the "not Minds' fault" note.
+  is_provider_fault: boolean;
 }
 
 /**

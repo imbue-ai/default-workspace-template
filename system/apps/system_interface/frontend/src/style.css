@@ -1191,6 +1191,22 @@ body {
   color: #dc2626;
 }
 
+/* ── Model API error (e.g. "API Error: 529 Overloaded") ── */
+/* Light-red tint on the failure text; a grey note below when it's the model
+   provider's fault (a 5xx / overloaded) rather than our request. */
+.message-api-error {
+  border-radius: 6px;
+  padding: 0.5em 0.75em;
+  background: rgba(220, 38, 38, 0.08);
+  color: #dc2626;
+}
+
+.message-api-error-note {
+  margin-top: 0.4em;
+  font-size: 0.85em;
+  color: rgba(120, 120, 120, 0.95);
+}
+
 /* ── Sub-agent link card ── */
 .subagent-card {
   margin-top: 0.75em;

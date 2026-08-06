@@ -70,6 +70,9 @@ function assistantWithAgentToolCall(
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 

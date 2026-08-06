@@ -15,6 +15,8 @@ from loguru import logger as _loguru_logger
 from tk_command_parsing.parser import parse_command
 
 from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
+from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
 
 logger = _loguru_logger
@@ -380,6 +382,11 @@ def _parse_assistant_message(
         }
 
     joined_text = "\n".join(text_parts)
+    # A model API error surfaces as a synthetic assistant message (e.g. "API Error:
+    # 529 Overloaded"). Classify it so the frontend can style it as an error and,
+    # for a provider-side failure (5xx / overloaded), add a "not Minds' fault" note.
+    # Auth failures are flagged separately (is_auth_error) and are not reclassified.
+    api_error_kind = classify_api_error(joined_text)
     event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "assistant_message",
@@ -393,6 +400,9 @@ def _parse_assistant_message(
         "usage": usage,
         "message_uuid": uuid,
         "is_auth_error": is_auth_error_text(joined_text),
+        "is_api_error": api_error_kind is not None,
+        "api_error_kind": api_error_kind,
+        "is_provider_fault": is_provider_fault(api_error_kind),
     }
     if session_id is not None:
         event["session_id"] = session_id

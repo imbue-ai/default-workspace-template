@@ -71,6 +71,9 @@ function assistantMsg(id: string, text: string): AssistantMessageEvent {
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
     timestamp: "2026-01-01T00:00:00Z",
   };
 }
