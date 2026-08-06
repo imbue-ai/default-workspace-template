@@ -5,18 +5,6 @@
 type = "claude"
 connect = false
 ensure_clean = false
-# Converge the venv for EVERY agent, whatever its role or harness. A fresh git
-# worktree carries no .venv (gitignored), so a worker's first `uv run` would
-# otherwise cold-build one mid-task -- lazily, with root-closure scope rather than
-# --all-packages, racing whatever the agent is already doing (intermittent
-# ModuleNotFoundError, e.g. imbue_common). Chat agents share the services agent's
-# work_dir and so are covered by the bootstrap's boot-time converge in principle,
-# but have still hit missing-package failures in practice, so they get it too.
-# Set here rather than per template because it is a property of this workspace,
-# not of any one role: the config layer resolves before templates, so it runs
-# ahead of a template's own provision commands (e.g. worker's skill install).
-# uv's baked warm cache makes this hardlink-fast when there is nothing to do.
-extra_provision_command__extend = ["uv sync --all-packages"]
 pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
 host_env__extend = [
     "IS_SANDBOX=1",
@@ -1001,3 +989,13 @@ parent_type = "claude"
 
 [agent_types.worker]
 parent_type = "claude"
+# Converge the venv for worker agents. A fresh git worktree carries no .venv
+# (gitignored), so a worker's first `uv run` would otherwise cold-build one
+# mid-task -- lazily, with root-closure scope rather than --all-packages, racing
+# whatever the agent is already doing (intermittent ModuleNotFoundError, e.g.
+# imbue_common). Scoped to the worker role: chat/main agents share the services
+# agent's work_dir and its boot-time converge. At agent-type level this resolves
+# ahead of the create template's own provision commands (the worker skill
+# install), so deps are ready first. uv's warm cache makes this hardlink-fast
+# when there is nothing to do.
+extra_provision_command__extend = ["uv sync --all-packages"]
