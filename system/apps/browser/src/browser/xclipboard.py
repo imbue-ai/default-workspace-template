@@ -24,6 +24,7 @@ import subprocess
 import threading
 
 import Xlib.display
+import Xlib.error
 from loguru import logger
 from Xlib.ext import xfixes
 
@@ -138,7 +139,11 @@ class ClipboardMonitor:
         except Exception as error:  # noqa: BLE001  (a monitor thread crash must not be silent)
             logger.warning("clipboard monitor loop ended ({})", error)
         finally:
-            with contextlib.suppress(OSError):
+            # close() flushes, which re-raises a connection that the server already
+            # dropped (Xvfb/browser teardown) -- an Xlib.error.ConnectionClosedError, which
+            # is NOT an OSError, so it must be suppressed explicitly or it escapes this
+            # finally and kills the thread with a traceback on every browser shutdown.
+            with contextlib.suppress(OSError, Xlib.error.ConnectionClosedError):
                 disp.close()
 
     def _handle_change(self) -> None:
