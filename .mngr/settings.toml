@@ -213,7 +213,11 @@ check_installation = false
 #   they close that hole (`code_mode_only` implies `code_mode`; it is Stage::UnderDevelopment,
 #   which only warns -- the suppress flag silences that). `code_mode_host` picks where the JS
 #   runs (standalone host vs embedded V8), unrelated to whether code mode is on.
-config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true } }
+# - features.goals = false, and tools.{update_plan, experimental_request_user_input,
+#   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
+#   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
+#   so they never appear in the transcript.
+config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
 
 # --- Provider configurations ---
 
