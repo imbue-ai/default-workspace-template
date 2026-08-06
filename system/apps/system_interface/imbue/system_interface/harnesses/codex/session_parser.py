@@ -52,6 +52,8 @@ import hashlib
 from typing import Any
 
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
+from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
+from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 
@@ -65,10 +67,6 @@ _SOURCE = "codex/common_transcript"
 # placeholder ``claude_session_parser`` uses when the model is absent, keeping the
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
-
-_MAX_INPUT_PREVIEW_LENGTH = 200
-_MAX_OUTPUT_LENGTH = 2000
-
 
 def _join_output_text(content: Any) -> str:
     """Join the ``text`` of ``content`` blocks whose ``type`` is ``output_text``."""
@@ -99,8 +97,8 @@ def _stringify_output(output: Any) -> str:
         text = "".join(parts)
     else:
         text = "" if output is None else str(output)
-    if len(text) > _MAX_OUTPUT_LENGTH:
-        return text[:_MAX_OUTPUT_LENGTH] + "..."
+    if len(text) > MAX_TOOL_OUTPUT_LENGTH:
+        return text[:MAX_TOOL_OUTPUT_LENGTH] + "..."
     return text
 
 
@@ -111,8 +109,8 @@ def _tool_call_input_preview(payload: dict[str, Any]) -> str:
     if raw is None:
         raw = payload.get("input")
     text = "" if raw is None else str(raw)
-    if len(text) > _MAX_INPUT_PREVIEW_LENGTH:
-        return text[:_MAX_INPUT_PREVIEW_LENGTH] + "..."
+    if len(text) > MAX_TOOL_INPUT_PREVIEW_LENGTH:
+        return text[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
     return text
 
 

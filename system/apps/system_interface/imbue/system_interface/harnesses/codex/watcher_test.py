@@ -9,8 +9,11 @@ now does the same, without the thread ever running.
 """
 
 import json
+import threading
+import time
 from pathlib import Path
 from typing import Any
+from typing import Callable
 
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
@@ -33,9 +36,20 @@ def _write_rollout(agent_state_dir: Path, lines: list[dict[str, Any]]) -> Path:
     return rollout
 
 
-def _build_watcher(agent_state_dir: Path) -> tuple[CodexSessionWatcher, list[dict[str, Any]]]:
-    """A watcher over ``agent_state_dir``, never started, plus the events it broadcasts."""
+def _build_watcher(
+    agent_state_dir: Path, on_broadcast: threading.Event | None = None
+) -> tuple[CodexSessionWatcher, list[dict[str, Any]]]:
+    """A watcher over ``agent_state_dir``, never started, plus the events it broadcasts.
+
+    ``on_broadcast`` (optional) is set on every broadcast, so a started-watcher test can
+    wait on the real fan-out signal instead of polling with a sleep."""
     broadcast: list[dict[str, Any]] = []
+
+    def on_events(_agent_id: str, events: list[dict[str, Any]]) -> None:
+        broadcast.extend(events)
+        if on_broadcast is not None:
+            on_broadcast.set()
+
     agent_info = AgentInfo(
         id="agent-test",
         name="test",
@@ -44,7 +58,7 @@ def _build_watcher(agent_state_dir: Path) -> tuple[CodexSessionWatcher, list[dic
         claude_config_dir=agent_state_dir / "unused",
         harness=HarnessType.CODEX,
     )
-    watcher = CodexSessionWatcher.build(agent_info, lambda _agent_id, events: broadcast.extend(events))
+    watcher = CodexSessionWatcher.build(agent_info, on_events)
     return watcher, broadcast
 
 
@@ -101,3 +115,42 @@ def test_missing_marker_reads_empty_rather_than_raising(tmp_path: Path) -> None:
     watcher, _ = _build_watcher(tmp_path)
     assert watcher.get_total_event_count() == 0
     assert watcher.get_tail_events(50) == []
+
+
+def _wait_for(broadcast_signal: threading.Event, predicate: Callable[[], bool], timeout: float = 5.0) -> None:
+    """Wait until ``predicate`` holds, woken by the watcher's own broadcast signal.
+
+    Uses the fan-out ``Event`` rather than a sleep-poll: each broadcast sets it, we
+    re-check the predicate, and clear. The watch loop wakes on a watchdog event or its
+    poll safety-net, so the end state is reached within a few seconds regardless."""
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        broadcast_signal.wait(timeout=remaining)
+        broadcast_signal.clear()
+
+
+def test_start_tails_the_rollout_via_the_shared_watcher(tmp_path: Path) -> None:
+    """The started watcher broadcasts existing content and picks up an appended line.
+
+    This is the path the shared ``PathWatcher`` now drives (it replaced the watcher's
+    own thread/observer/poll loop): ``start`` emits whatever is already on disk, then a
+    later append reaches the broadcast via the watch loop.
+    """
+    broadcast_signal = threading.Event()
+    rollout = _write_rollout(tmp_path, [_user_line("first", "2026-08-03T00:00:01Z")])
+    watcher, broadcast = _build_watcher(tmp_path, broadcast_signal)
+    watcher.start()
+    try:
+        _wait_for(broadcast_signal, lambda: [event["content"] for event in broadcast] == ["first"])
+        assert [event["content"] for event in broadcast] == ["first"]
+
+        with rollout.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_user_line("second", "2026-08-03T00:00:02Z")) + "\n")
+
+        _wait_for(broadcast_signal, lambda: [event["content"] for event in broadcast] == ["first", "second"])
+        assert [event["content"] for event in broadcast] == ["first", "second"]
+    finally:
+        watcher.stop()

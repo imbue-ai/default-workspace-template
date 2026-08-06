@@ -25,6 +25,7 @@ from abc import abstractmethod
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -45,6 +46,23 @@ class EffortLevel(StrEnum):
     XHIGH = "xhigh"
     MAX = "max"
     ULTRA = "ultra"
+
+
+def parse_effort_level(value: Any) -> EffortLevel | None:
+    """Narrow a raw on-disk effort value to an :class:`EffortLevel`, or ``None``.
+
+    Shared by every harness's resolver: the value comes from a different settings
+    key per harness (claude's ``effortLevel``, codex's ``reasoning_effort``), but
+    the narrowing is the same -- it only maps a string onto the shared enum and
+    never consults any catalog's declared effort *set*, so there is nothing
+    harness-specific to duplicate.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        return EffortLevel(value)
+    except ValueError:
+        return None
 
 
 class EffortChoice(FrozenModel):
