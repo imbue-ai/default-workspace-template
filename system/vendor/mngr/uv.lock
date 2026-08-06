@@ -3620,6 +3620,11 @@ dependencies = [
     { name = "wsgidav" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "imbue-mngr-behaviors" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1" },
@@ -3659,6 +3664,9 @@ requires-dist = [
     { name = "werkzeug", specifier = ">=3.0" },
     { name = "wsgidav", specifier = ">=4.3" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "imbue-mngr-behaviors", editable = "libs/mngr_behaviors" }]
 
 [[package]]
 name = "mngr-minds-eval"
