@@ -122,13 +122,15 @@ export interface SectionView {
   trailing_reply: AssistantMessageEvent[];
 }
 
-/** Detects a `tk`/`ticket` lifecycle invocation at the START of a Bash tool
- *  call's command, so a pure tk call (the enforced shape for `tk start`/`close`,
- *  and the batched literal-id `tk create --step ...` form) is hidden from the
- *  rendered output. A command that merely mentions a tk verb later (e.g.
+/** Detects a `tk`/`ticket` lifecycle invocation at the START of a tool call's
+ *  command, so a pure tk call (the enforced shape for `tk start`/`close`, and the
+ *  batched literal-id `tk create --step ...` form) is hidden from the rendered
+ *  output. Covers both harnesses' command shapes: claude's Bash carries the command
+ *  under `"command"`, codex's code-mode `exec` under the `"cmd"` key of its inner
+ *  `tools.exec_command({...})`. A command that merely mentions a tk verb later (e.g.
  *  `git commit -m "tk close ..."`) is NOT misclassified. `super` is the
  *  plugin-bypassing form. */
-const TK_LIFECYCLE_RE = /"command"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
+const TK_LIFECYCLE_RE = /"(?:command|cmd)"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
 
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see system/vendor/tk/ticket). Global so a batched
@@ -169,10 +171,11 @@ function isStepId(id: string): boolean {
 }
 
 /** True when a tool call is a tk lifecycle command (consumed as a structural
- *  marker, not rendered as work). Restricted to Bash calls whose command
- *  begins with the tk verb (see TK_LIFECYCLE_RE). */
+ *  marker, not rendered as work). Restricted to the harnesses' shell tools --
+ *  claude's `Bash` and codex's code-mode `exec` -- whose command begins with the
+ *  tk verb (see TK_LIFECYCLE_RE). */
 function isTkLifecycleCall(tc: ToolCall): boolean {
-  return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
+  return (tc.tool_name === "Bash" || tc.tool_name === "exec") && TK_LIFECYCLE_RE.test(tc.input_preview);
 }
 
 /** True when an assistant message issues a permission request. */

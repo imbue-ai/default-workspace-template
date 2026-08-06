@@ -67,6 +67,21 @@ function tkMsg(ts: string, command: string, callId: string, id = `a-${callId}`):
   };
 }
 
+/** The codex form of a tk lifecycle command: a code-mode `exec` call whose
+ *  input_preview is the JS program invoking `tools.exec_command({cmd})`. */
+function codexTkMsg(ts: string, command: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
+  return {
+    ...tkMsg(ts, command, callId, id),
+    tool_calls: [
+      {
+        tool_call_id: callId,
+        tool_name: "exec",
+        input_preview: `await tools.exec_command(${JSON.stringify({ cmd: command })});`,
+      },
+    ],
+  };
+}
+
 /** A permission-request message: a Bash latchkey POST to the reserved host,
  *  optionally carrying explanatory prose alongside the call. */
 function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`): AssistantMessageEvent {
@@ -262,6 +277,21 @@ describe("decoration from the transcript", () => {
     ];
     const sections = run(events);
     const steps = stepItems(sections[0].items);
+    expect(steps[0].events).toHaveLength(0);
+    expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
+  });
+
+  it("hides a codex exec tk call the same way as a claude Bash one", () => {
+    // Codex runs tk through code-mode exec (tool_name "exec", command under "cmd");
+    // it must be consumed as a step marker, not rendered as a raw tool card.
+    const events = [
+      userMsg("t0", "go"),
+      codexTkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+    ];
+    const sections = run(events);
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
     expect(steps[0].events).toHaveLength(0);
     expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
   });
