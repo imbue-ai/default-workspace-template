@@ -471,19 +471,20 @@ def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
     assert response.status_code == 404
 
 
-def test_set_model_on_readonly_harness_returns_409(tmp_path: Path) -> None:
-    """A display-only harness (codex v1) does not switch: the endpoint returns 409."""
+def test_set_model_switches_codex_via_slash_model(tmp_path: Path) -> None:
+    """Codex switching (ON_CHANGE) applies model + effort with one /model command."""
     agent_id = "agent-00000000000000000000000000000007"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.post(
-            f"/api/agents/{agent_id}/model", json={"model_id": "gpt-5.6-sol", "effort": "high", "fast": True}
+            f"/api/agents/{agent_id}/model",
+            json={"model_id": "gpt-5.6-sol", "effort": "high", "fast": False, "axes": ["model", "effort"]},
         )
 
-    assert response.status_code == 409
-    assert messenger.sent == []
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "/model gpt-5.6-sol high")]
 
 
 def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
