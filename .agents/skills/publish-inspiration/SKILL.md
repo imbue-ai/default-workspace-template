@@ -96,6 +96,50 @@ and then creates the repo and pushes -- directly from the worker's worktree.
   `git fetch`/`git pull` upstream. Pass it to `build_inspiration.sh` as
   `--base-ref`.
 
+## 0. Somewhere to publish TO (ask first, before anything else)
+
+Settle this before the scope questions in §1. Publishing puts the code on an
+account the USER owns, so if they have not got one, everything after this --
+the interview, a full assembly, a bespoke thumbnail -- is time spent on a
+publish with nowhere to go. Ask before spending it.
+
+Open with what publishing actually means, in their terms:
+
+> To publish, we'll post the code for your template on your own account on a
+> code-hosting platform such as GitHub. Do you have a GitHub account?
+
+Then, by their answer:
+
+- **They have one.** Ask them to connect it, and initiate the GitHub
+  permission request now (§7 has the exact latchkey calls; it re-probes before
+  the push, so requesting early is safe and never duplicates a grant). Doing it
+  here means the approval is waiting for them in minds while assembly runs,
+  instead of stalling the publish at the end.
+- **They do not.** Point them at <https://github.com/signup> -- a free account
+  is enough for this -- and wait for them to tell you it exists before going on
+  to §1. Do not start assembling on the assumption that they will get around
+  to it.
+- **They would rather use something else** (GitLab, Codeberg, a self-hosted
+  forge). That is a legitimate answer, not a problem -- but say plainly that
+  you will need to work out how to authenticate that platform with git first,
+  and that you have not done it yet. Do the research BEFORE promising a
+  publish, because three things in this flow are GitHub-shaped and each needs
+  a replacement:
+
+  - **auth** -- §7 requests the latchkey `github-rest-api` and `github-git`
+    scopes, and the push goes through the gateway's GitHub proxy;
+  - **repo creation** -- §8 step 1 POSTs to `api.github.com/user/repos`, and
+    step 1b/3 PATCH settings and set the `minds-inspiration` topic;
+  - **the README** -- the generated "Open in Minds" button and its copyable
+    `/use-inspiration` line both hardcode a `https://github.com/` prefix
+    around the repo placeholder, so both need rewriting for another host. The
+    trampoline itself takes any git URL, so only the prefix is wrong.
+
+  If you cannot find a way to authenticate their platform, say so and offer
+  GitHub as the path that works today, rather than half-publishing.
+
+Everything from §1 on assumes this is settled.
+
 ## 1. Setup Q&A and the scope gate (live in chat)
 
 Ask the user, in plain language. Never enumerate files at them:
@@ -452,25 +496,11 @@ worktree to a clean template base and deletes gitignored state -- including
    and the "Open in Minds" button carries a placeholder repo URL the LEAD
    substitutes once the repo exists -- leave that alone.
 
-   **Render it and look at it before you report done.** The README is a page,
-   so review it as one rather than reading the markdown source:
-
-   ```bash
-   uv run python system/scripts/render_markdown_preview.py README.md
-   python3 system/scripts/layout.py open service:markdown-preview --layout <layout>
-   ```
-
-   It renders the way GitHub will, with the hero and any local images resolved,
-   so a broken image path or a mangled layout shows up here rather than on the
-   published page. Re-render and `layout.py refresh service:markdown-preview`
-   after each fix, then close it when the README is right:
-
-   ```bash
-   uv run python system/scripts/render_markdown_preview.py --close
-   ```
-
-   Closing removes the tab. Leave it open and the user keeps a preview panel
-   they did not ask for.
+   Do NOT render a preview yourself. The preview tab lives in the USER's
+   workspace and belongs to the lead's conversation; a background worker
+   opening it would surface half-finished work in front of the user
+   unannounced. The lead renders the finished README and asks the user about
+   it at §6. Your checks are the validator and the greps in step 6.
 
 4. **Design the thumbnail.** `inspiration.svg` at the repo root is a
    generic placeholder the script generated -- it must never be published.
@@ -702,7 +732,17 @@ mechanism. Present the proposal to the user ONCE, in plain language:
   ```
 
   (substitute the real absolute worktree path), and note you can adjust it if
-  they'd like.
+  they'd like;
+- the **README, rendered** -- the repo's landing page, and the thing that
+  decides whether anyone boots this at all, so the user must SEE it rather than
+  be told about it. **Render it into the preview tab BEFORE you send the
+  confirmation message** (exact commands in `references/readme-recipe.md`), so
+  it is already on screen when they read your question. Then ASK, in as many
+  words: **does this read like a good description of what you built?** Name
+  what they should judge -- whether "Why you care" frames it right, whether
+  "How to use it" matches how they actually use it, and whether the "Ideas for
+  making it yours" are ones they would want someone to try. Never paste raw
+  markdown into chat instead: a page reviewed as source is not reviewed.
 
 Then END YOUR TURN and WAIT. **This is a hard gate, exactly like §1's:** §8
 (create the repo + push) may only run after an explicit go-ahead in the
@@ -726,6 +766,13 @@ If the user asks to abort, stop here and leave the assembled commit intact
 
 - Validate an edited repo name against `^[A-Za-z0-9._-]+$` (no leading `-`)
   before using it.
+- **If the user says the README does not describe it well, rewrite it and show
+  them again** -- edit `$WT/README.md`, re-render, refresh the tab, and loop
+  until they are happy (see `references/readme-recipe.md`). Keep the generated
+  structure; their objection is almost always about the WORDS, not the shape,
+  and the Open in Minds call-to-action and its placeholder repo URL must
+  survive any rewrite. A go-ahead given while they are still unhappy with the
+  README is not a go-ahead for the README.
 - If the user asks for thumbnail changes, YOU edit
   `$WT/inspiration.svg`, keeping the same safety rules the worker
   followed: mock data only, no `<script>`, no `on*=` attributes, no
@@ -737,9 +784,12 @@ If the user asks to abort, stop here and leave the assembled commit intact
 **Commit before §8's push.** Write any confirmed title/description edits into
 `inspiration.md`'s front-matter (any activation requirement the publisher
 flagged as missing or wrong into its "Requirements" section AND the matching
-`[requirements]` entry in `inspiration.toml`, and any thumbnail edits
-into the `.svg`), and COMMIT that change with cwd = `$WT` before proceeding to
-§7/§8.
+`[requirements]` entry in `inspiration.toml`, any thumbnail edits into the
+`.svg`, and any README rewrites into `README.md`), and COMMIT that change with
+cwd = `$WT` before proceeding to §7/§8.
+
+**Then close the preview** (`render_markdown_preview.py --close`), so the user
+is not left with a panel they did not ask for once the review is over.
 Never push first and fix up the manifest or thumbnail with a second
 commit-and-re-push. This commit -- like everything else in this skill after
 assembly -- happens IN `$WT`, never `/home/user/workspace`.
@@ -747,7 +797,10 @@ assembly -- happens IN `$WT`, never `/home/user/workspace`.
 ## 7. Ensure GitHub access (latchkey -- do NOT use the gh CLI)
 
 GitHub access goes through **latchkey's github permissioning**, exactly like
-every other connector in this template (see the `latchkey` skill). Do NOT use
+every other connector in this template (see the `latchkey` skill). If §0 already
+asked the user to connect their account, the probes below simply find the grant
+in place and this section is a no-op -- it always probes before requesting, so
+running it after an early request never duplicates anything. Do NOT use
 the `gh` CLI anywhere in this flow -- no `gh auth`, no `gh repo` -- and do not
 run browser/device login flows. Latchkey keeps the credential outside the
 container and injects it per-request; the user approves once in the minds app.

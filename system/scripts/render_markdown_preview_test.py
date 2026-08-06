@@ -167,3 +167,18 @@ def test_a_render_still_succeeds_when_there_is_no_supervisord(
 def test_no_arguments_is_a_usage_error() -> None:
     with pytest.raises(SystemExit):
         main([])
+
+
+def test_the_default_state_dir_does_not_depend_on_the_callers_cwd() -> None:
+    """The renderer is run from wherever the work is; the server reads one place.
+
+    The publish flow renders an assembled README from the worker's worktree
+    while the service serves the workspace's state dir. A cwd-relative default
+    wrote the page next to the caller, so re-rendering silently did nothing and
+    the tab kept showing a stale page -- which looks exactly like a render that
+    worked.
+    """
+    from render_markdown_preview import PREVIEW_STATE_DIR
+
+    assert PREVIEW_STATE_DIR.is_absolute()
+    assert PREVIEW_STATE_DIR.parts[-3:] == ("data", ".state", "markdown-preview")
