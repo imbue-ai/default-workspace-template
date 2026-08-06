@@ -75,7 +75,7 @@ For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": 
 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
 
-After posting, wait for a system message indicating whether the user
+After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.
 
 
