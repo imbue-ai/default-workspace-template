@@ -146,10 +146,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         ]);
       }
 
-      // Always interactive for a switchable harness -- a pending pick never disables
-      // the bar. Each click sets a new optimistic value and enqueues its send; the
-      // pushed live choice (or the pending timeout) reconciles.
+      // Interactive for any switchable harness -- a pending pick never disables the
+      // bar. `optimistic` (only an EAGER harness moves the chip on click) governs
+      // whether a pick shows immediately or waits for the pushed live choice: EAGER
+      // (claude) is optimistic; ON_CHANGE (codex) reconciles from the rollout only.
       const interactive = catalog.switch_mode !== "read_only";
+      const optimistic = catalog.switch_mode === "eager_then_reconcile";
       const currentEffort = choice.identity.effort;
       const currentFast = choice.identity.fast;
 
@@ -175,7 +177,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             effort: clampEffort(option, currentEffort),
             fast: option.supports_fast ? currentFast : false,
           };
-          setModelChoice(agentId, nextIdentity, option, changedAxes(choice.identity, nextIdentity));
+          setModelChoice(agentId, nextIdentity, option, changedAxes(choice.identity, nextIdentity), optimistic);
         },
       });
 
@@ -192,7 +194,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               tooltip: "Select reasoning effort",
               onPick: (level) => {
                 const nextIdentity: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                setModelChoice(agentId, nextIdentity, matched, changedAxes(choice.identity, nextIdentity));
+                setModelChoice(agentId, nextIdentity, matched, changedAxes(choice.identity, nextIdentity), optimistic);
               },
             })
           : null;
@@ -213,7 +215,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                   effort: currentEffort,
                   fast: !currentFast,
                 };
-                setModelChoice(agentId, nextIdentity, matched, changedAxes(choice.identity, nextIdentity));
+                setModelChoice(agentId, nextIdentity, matched, changedAxes(choice.identity, nextIdentity), optimistic);
               },
             },
             m.trust(icon("zap", { size: 16 })),

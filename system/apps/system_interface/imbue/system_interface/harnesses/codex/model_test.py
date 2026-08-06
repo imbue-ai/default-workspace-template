@@ -67,13 +67,52 @@ def test_read_live_non_priority_tier_is_not_fast(tmp_path: Path) -> None:
     assert live.fast is False
 
 
-def test_switch_is_unavailable_read_only(tmp_path: Path) -> None:
+def test_switch_model_and_effort_send_one_model_command(tmp_path: Path) -> None:
+    # Codex applies model + effort together, so a model change sends one
+    # `/model <model> <effort>` -- not a separate /effort.
     resolver = CodexModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
     result = resolver.switch(
-        ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.HIGH, fast=True),
-        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT, ModelAxis.FAST}),
+        ModelIdentity(model_id="gpt-5.6-terra", effort=EffortLevel.HIGH, fast=False),
+        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
         lambda line: sent.append(line) or True,
     )
-    assert not result.ok
+    assert result.ok
+    assert sent == ["/model gpt-5.6-terra high"]
+
+
+def test_switch_effort_only_still_goes_through_model(tmp_path: Path) -> None:
+    # Effort has no standalone codex command; it rides /model with the current model.
+    resolver = CodexModelResolver.build(_agent_info(tmp_path))
+    sent: list[str] = []
+    result = resolver.switch(
+        ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.XHIGH, fast=False),
+        frozenset({ModelAxis.EFFORT}),
+        lambda line: sent.append(line) or True,
+    )
+    assert result.ok
+    assert sent == ["/model gpt-5.6-sol xhigh"]
+
+
+def test_switch_fast_toggle_sends_only_fast(tmp_path: Path) -> None:
+    resolver = CodexModelResolver.build(_agent_info(tmp_path))
+    sent: list[str] = []
+    result = resolver.switch(
+        ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.MEDIUM, fast=True),
+        frozenset({ModelAxis.FAST}),
+        lambda line: sent.append(line) or True,
+    )
+    assert result.ok
+    assert sent == ["/fast on"]
+
+
+def test_switch_with_no_axes_sends_nothing(tmp_path: Path) -> None:
+    resolver = CodexModelResolver.build(_agent_info(tmp_path))
+    sent: list[str] = []
+    result = resolver.switch(
+        ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.MEDIUM, fast=False),
+        frozenset(),
+        lambda line: sent.append(line) or True,
+    )
+    assert result.ok
     assert sent == []

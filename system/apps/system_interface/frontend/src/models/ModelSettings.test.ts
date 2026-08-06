@@ -137,6 +137,24 @@ describe("effectiveChoice", () => {
     expect(options.body).toEqual({ model_id: "opus[1m]", effort: "high", fast: true, axes: ["effort", "fast"] });
   });
 
+  it("on-change (optimistic=false) posts but holds no overlay -- the chip follows live", async () => {
+    setModelChoice("a9", { model_id: "opus[1m]", effort: "high", fast: false }, OPUS, ["effort"], false);
+    // No optimistic overlay: the bar reflects live, not the pick.
+    const shown = effectiveChoice("a9", live("opus[1m]", "medium", false, OPUS));
+    expect(shown?.identity.effort).toBe("medium");
+    expect(shown?.isPending).toBe(false);
+    await flush();
+    // ...but the switch was still POSTed.
+    const call = mockRequest.mock.calls.find((args) => (args[0] as RequestOptions).method === "POST");
+    expect(call).toBeDefined();
+    expect((call![0] as RequestOptions).body).toEqual({
+      model_id: "opus[1m]",
+      effort: "high",
+      fast: false,
+      axes: ["effort"],
+    });
+  });
+
   it("applies rapid picks in click order", async () => {
     setModelChoice("a5", { model_id: "sonnet", effort: "medium", fast: false }, SONNET, ["model"]);
     setModelChoice("a5", { model_id: "opus[1m]", effort: "medium", fast: false }, OPUS, ["model"]);

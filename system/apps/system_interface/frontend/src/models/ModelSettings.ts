@@ -103,16 +103,25 @@ export function changedAxes(prev: ModelIdentity, next: ModelIdentity): string[] 
   return axes;
 }
 
-/** Apply the `axes` a click changed: show the pick optimistically, then POST it.
- *  `axes` names which of model/effort/fast to actually send (see changedAxes). */
+/** Apply the `axes` a click changed, then POST it. `axes` names which of
+ *  model/effort/fast to actually send (see changedAxes).
+ *
+ *  `optimistic` follows the harness's switch mode: an EAGER harness (claude) shows
+ *  the pick immediately and reconciles from the pushed live choice; an ON_CHANGE
+ *  harness (codex) does NOT move the chip on click -- the switch goes through the
+ *  agent's CLI and the chip follows the rollout truth once it lands, so there is no
+ *  overlay to hold or time out. */
 export function setModelChoice(
   agentId: string,
   identity: ModelIdentity,
   option: CatalogModelOption,
   axes: string[],
+  optimistic = true,
 ): void {
-  pendingByAgent.set(agentId, { identity, option });
-  m.redraw();
+  if (optimistic) {
+    pendingByAgent.set(agentId, { identity, option });
+    m.redraw();
+  }
 
   const previous = applyChainByAgent.get(agentId) ?? Promise.resolve();
   const next = previous.then(
@@ -124,7 +133,9 @@ export function setModelChoice(
     if (applyChainByAgent.get(agentId) === next) {
       applyChainByAgent.delete(agentId);
     }
-    schedulePendingTimeout(agentId, identity);
+    if (optimistic) {
+      schedulePendingTimeout(agentId, identity);
+    }
   });
 }
 

@@ -64,7 +64,12 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
         ModelOption(id="gpt-5.2", label="GPT-5.2", efforts=_CODEX_EFFORTS, supports_fast=True),
     ),
     default_model_id="gpt-5.6-sol",
-    switch_mode=SwitchMode.READ_ONLY,
+    # ON_CHANGE (not EAGER): codex applies a switch through its CLI and records it to
+    # the rollout, which the watcher reconciles into the chip. We do not move the chip
+    # optimistically -- it follows the rollout truth once the command lands. The patched
+    # codex binary (see setup_system.sh) makes /model <model> [effort] apply inline; the
+    # unpatched binary silently ignored it, which is why this used to be READ_ONLY.
+    switch_mode=SwitchMode.ON_CHANGE,
     icon_svg=(Path(__file__).parent / "icon.svg").read_text(),
 )
 
@@ -144,10 +149,22 @@ class CodexModelResolver(HarnessModelResolver):
     def switch(
         self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
     ) -> SwitchResult:
-        # Read-only v1: sending /model would open codex's picker modal and wedge the
-        # pane. Flip CODEX_CATALOG.switch_mode and send here once the one-shot patch
-        # lands; `axes` is ignored until then.
-        return SwitchResult(ok=False, detail="Codex model switching is not available yet")
+        # Codex applies model and effort together via one command -- `/model <model>
+        # [effort]` -- so any change to either axis is one send (the patched binary
+        # applies it inline; see setup_system.sh). Fast (service_tier=priority) is codex's
+        # separate /fast toggle. Only the axes the click changed are sent (see the shared
+        # `switch` contract); ON_CHANGE means we do not echo an optimistic value -- the
+        # rollout's thread_settings reconcile the chip once the command lands.
+        if ModelAxis.MODEL in axes or ModelAxis.EFFORT in axes:
+            command = f"/model {identity.model_id}"
+            if identity.effort is not None:
+                command = f"{command} {identity.effort.value}"
+            if not send(command):
+                return SwitchResult(ok=False, detail="Failed to deliver /model to the agent")
+        if ModelAxis.FAST in axes:
+            if not send("/fast on" if identity.fast else "/fast off"):
+                return SwitchResult(ok=False, detail="Failed to deliver /fast to the agent")
+        return SwitchResult(ok=True)
 
     def _read_config(self) -> dict[str, Any]:
         """The agent's codex ``config.toml`` as a dict; empty when absent/malformed."""
