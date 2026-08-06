@@ -299,6 +299,11 @@ the bundle is pushed to the worker. The task body directs the worker to:
    ```
    Any finding, scanner error, or missing scanner -> fix or report `stuck`; never
    commit around it. This stays the authoritative, hard-failing blocker.
+   Front matter is YAML: any value you write containing a `"`, a `: `, or a
+   leading `#`/`&`/`*`/`%` must be double-quoted with inner quotes escaped
+   (`title: "The \"Daily\" Digest: v2"`), matching what `build_inspiration.sh`
+   emits -- otherwise the validator's front-matter/TOML comparison fails.
+
 7. **Update the manifest -- append only, never regenerate.** Bump the version
    to `v(n+1)` in BOTH `inspiration.md`'s front matter and `inspiration.toml`'s
    `[inspiration].version`; add any newly-approved include path or

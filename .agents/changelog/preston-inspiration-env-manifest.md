@@ -54,3 +54,10 @@ GitHub account, and either gets you connected or points you at the free signup
 a different platform is a fine answer; the agent will tell you it has to work
 out that platform's git authentication first rather than promising a publish it
 cannot finish.
+
+Titles and descriptions with quotes or colons no longer break a publish. The
+manifest's front matter is YAML and those fields are your own words, so a title
+like `The "Daily" Digest: v2` produced a file no YAML parser would read -- and
+the same went for the generated welcome skill in the published inspiration,
+which would have failed to load at all. Both are now emitted as quoted YAML
+scalars, and the skills say to do the same for any hand-edit.

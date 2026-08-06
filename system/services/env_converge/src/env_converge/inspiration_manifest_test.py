@@ -1,4 +1,5 @@
 import ast
+import json
 import sys
 from pathlib import Path
 
@@ -517,3 +518,68 @@ def test_an_inspiration_needing_no_activation_says_so() -> None:
     assert not Requirements(
         adaptation=({"summary": "swap the data source"},)
     ).has_activation_requirements()
+
+
+# --- front matter is YAML, and titles are the user's own words ---
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        pytest.param('The "Daily" Digest', id="embedded_quotes"),
+        pytest.param("Notes: the sequel", id="colon_space"),
+        pytest.param('"Leading" quote', id="leading_quote"),
+        pytest.param("#hashtag start", id="leading_hash"),
+        pytest.param("100", id="looks_like_a_number"),
+        pytest.param("true", id="looks_like_a_bool"),
+        pytest.param("back\\slash", id="backslash"),
+    ],
+)
+def test_a_quoted_front_matter_title_matches_the_toml(
+    title: str, tmp_path: Path
+) -> None:
+    """Generated front matter is double-quoted, so parsing must unquote it.
+
+    These are all values a user could legitimately type as a title. Emitted
+    bare, each one changes how YAML reads the line -- and the front-matter/TOML
+    comparison would then report a disagreement that does not exist and fail
+    the publish.
+    """
+    manifest = _manifest(
+        _MINIMAL_TOML.replace('title = "Slack Inbox"', f"title = {json.dumps(title)}"),
+        tmp_path,
+    )
+    markdown = (
+        "---\n"
+        f"title: {json.dumps(title)}\n"
+        'description: "A daily digest."\n'
+        'thumbnail: "inspiration.svg"\n'
+        "format: v2\n"
+        "---\n\n# Heading\n"
+    )
+
+    assert check_markdown_agreement(manifest, markdown) == ()
+
+
+def test_a_single_quoted_scalar_is_also_understood(tmp_path: Path) -> None:
+    # YAML's other quoting style, with its doubled-quote escape.
+    manifest = _manifest(
+        _MINIMAL_TOML.replace('title = "Slack Inbox"', 'title = "Bob\'s Digest"'),
+        tmp_path,
+    )
+    markdown = (
+        "---\n"
+        "title: 'Bob''s Digest'\n"
+        "description: 'A daily digest.'\n"
+        "thumbnail: 'inspiration.svg'\n"
+        "---\n\n# Heading\n"
+    )
+
+    assert check_markdown_agreement(manifest, markdown) == ()
+
+
+def test_an_unquoted_plain_title_still_works(tmp_path: Path) -> None:
+    # The common case must not regress: most titles need no quoting at all.
+    manifest = _manifest(_MINIMAL_TOML, tmp_path)
+
+    assert check_markdown_agreement(manifest, _MINIMAL_MARKDOWN) == ()

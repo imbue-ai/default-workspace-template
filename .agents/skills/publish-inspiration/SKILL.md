@@ -449,6 +449,11 @@ worktree to a clean template base and deletes gitignored state -- including
    dependency implicit: the adopter must know the app needs LLM access and be
    able to wire in their own method (subscription or litellm).
 
+   If you edit the manifest's front matter, remember it is YAML: quote any
+   value containing a `"`, a `: `, or a leading `#`/`&`/`*`/`%`, escaping inner
+   quotes (`title: "The \"Daily\" Digest: v2"`). The generator already does;
+   a hand-edit that does not will fail validation.
+
    **The machine-readable half lives in `inspiration.toml`.** Fill it in at the
    same time, from the same knowledge -- the validator compares the two files and
    the publish fails if they disagree:
@@ -780,6 +785,22 @@ If the user asks to abort, stop here and leave the assembled commit intact
   markup in chat, never write it into the file verbatim -- apply the same
   rules first (strip anything that violates them, and tell the user what you
   stripped).
+
+**Front matter is YAML -- quote any value that is not a plain word.** The
+manifest's `title:` and `description:` are the USER's words, so they routinely
+contain characters that change how YAML parses the line: a `"`, a `: `, a
+leading `#`/`&`/`*`/`%`, or something that looks like a number or a bool.
+`title: The "Daily" Digest: v2` is not the string you meant, and may not parse
+at all. Wrap the value in double quotes and backslash-escape any inner double
+quote:
+
+```yaml
+title: "The \"Daily\" Digest: v2"
+```
+
+`build_inspiration.sh` emits generated front matter this way already; a
+hand-edit must match it, or the validator's front-matter/TOML comparison fails
+the publish.
 
 **Commit before §8's push.** Write any confirmed title/description edits into
 `inspiration.md`'s front-matter (any activation requirement the publisher

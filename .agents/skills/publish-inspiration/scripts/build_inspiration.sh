@@ -346,6 +346,19 @@ if [ -z "$manifest_description" ]; then
     manifest_description="A shareable snapshot of ${TITLE}."
 fi
 
+# The manifest's front matter is YAML, and title/description are the user's own
+# words -- a title like `The "Daily" Digest: v2` breaks a bare scalar (a leading
+# quote, or a `: `, changes how YAML parses the line). Emit every interpolated
+# value as a double-quoted scalar instead: JSON string syntax is a valid subset
+# of YAML's double-quoted style, so json.dumps does the escaping correctly.
+# Bare python3 is fine here -- json is stdlib in every version, unlike tomllib.
+yaml_scalar() {
+    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+title_yaml="$(yaml_scalar "$TITLE")"
+description_yaml="$(yaml_scalar "$manifest_description")"
+thumbnail_yaml="$(yaml_scalar "$THUMBNAIL")"
+
 # The RECIPE now lives in inspiration.toml, not in this markdown. It is
 # machine-read (only the publisher's own update flow reads it, and that flow
 # always runs on a template new enough to know the TOML), it was the last YAML
@@ -383,9 +396,9 @@ fi
 
 cat > "$MANIFEST" <<MANIFEST_EOF
 ---
-title: ${TITLE}
-description: ${manifest_description}
-thumbnail: ${THUMBNAIL}
+title: ${title_yaml}
+description: ${description_yaml}
+thumbnail: ${thumbnail_yaml}
 version: ${INSPIRATION_VERSION}
 format: ${INSPIRATION_FLOW_VERSION}
 ---
@@ -584,12 +597,13 @@ THUMB_EOF
 # entirely within the snapshot it publishes. Deterministic full-file write,
 # never an LLM freeform edit; idempotent across accumulated publishes (each
 # publish regenerates it targeting the newly-published slug, the latest).
+welcome_description_yaml="$(yaml_scalar "Greet the user when a new project starts. This mind was created from the ${TITLE} inspiration, so the welcome introduces that inspiration and immediately starts the adaptation conversation.")"
 WELCOME_FILE=".agents/skills/welcome/SKILL.md"
 mkdir -p "$(dirname "$WELCOME_FILE")"
 cat > "$WELCOME_FILE" <<WELCOME_EOF
 ---
 name: welcome
-description: Greet the user when a new project starts. This mind was created from the "${TITLE}" inspiration, so the welcome introduces that inspiration and immediately starts the adaptation conversation.
+description: ${welcome_description_yaml}
 ---
 
 # Welcome the user (inspiration: ${TITLE})
