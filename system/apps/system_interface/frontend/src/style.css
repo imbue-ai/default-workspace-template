@@ -669,6 +669,30 @@ body {
 }
 
 /* ── Model selector ── */
+.model-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.model-bar-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  padding: 0 4px;
+}
+
+.model-bar-shrug {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 6px;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+
 .model-selector-wrapper {
   position: relative;
   display: inline-block;

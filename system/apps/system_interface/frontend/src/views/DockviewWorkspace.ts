@@ -811,22 +811,22 @@ function buildDropdownItems(
   }
 
   if (isSillyModelsEnabled()) {
-  items.push({
-    label: "New Silly Claude",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      sillyModalMode = "silly-claude";
-      m.redraw();
-    },
-  });
-  items.push({
-    label: "New Silly Codex",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      sillyModalMode = "silly-codex";
-      m.redraw();
-    },
-  });
+    items.push({
+      label: "New Silly Claude",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        sillyModalMode = "silly-claude";
+        m.redraw();
+      },
+    });
+    items.push({
+      label: "New Silly Codex",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        sillyModalMode = "silly-codex";
+        m.redraw();
+      },
+    });
   }
 
   // New terminal -- allocates a fresh named tmux session anchored at the

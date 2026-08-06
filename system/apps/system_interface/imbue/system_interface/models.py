@@ -5,6 +5,8 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.model import EffortLevel
+from imbue.system_interface.harnesses.model import ModelChoice
 
 
 class AgentCreationError(ValueError):
@@ -48,35 +50,16 @@ class SendMessageResponse(FrozenModel):
     status: str = Field(description="Status of the send operation")
 
 
-class ModelOption(FrozenModel):
-    """A selectable Claude Code model shown in the composer model picker."""
+class SetModelChoiceRequest(FrozenModel):
+    """Request body for POST /api/agents/{id}/model.
 
-    id: str = Field(description="Value sent to Claude Code's /model command (e.g. 'opus[1m]', 'sonnet')")
-    label: str = Field(description="Human-readable model name shown in the picker")
-    supports_fast_mode: bool = Field(description="Whether fast mode applies to this model (Opus only)")
+    One shape covering all three axes. ``effort`` is omitted for a model with no
+    effort axis, and defaults to None; ``fast`` is the intended fast state.
+    """
 
-
-class ModelSettingsResponse(FrozenModel):
-    """Response from GET /api/agents/{id}/model-settings."""
-
-    model: str = Field(description="The agent's currently configured model (raw settings.json value, e.g. 'opus[1m]')")
-    fast_mode: bool = Field(description="Whether fast mode is currently enabled for the agent")
-    fast_mode_supported: bool = Field(
-        description="Whether the current model supports fast mode (drives the toggle's visibility)"
-    )
-    options: tuple[ModelOption, ...] = Field(description="The selectable models, in display order")
-
-
-class SetModelRequest(FrozenModel):
-    """Request body for POST /api/agents/{id}/model."""
-
-    model: str = Field(description="Model id to switch to; must be one of the catalog option ids")
-
-
-class SetFastModeRequest(FrozenModel):
-    """Request body for POST /api/agents/{id}/fast."""
-
-    enabled: bool = Field(description="True to enable fast mode, False to disable it")
+    model_id: str = Field(description="Model id to switch to; must be one of the harness catalog option ids")
+    effort: EffortLevel | None = Field(default=None, description="Reasoning effort to set; None for a no-effort model")
+    fast: bool = Field(default=False, description="Whether fast mode should be on")
 
 
 class WorkspaceFastModeResponse(FrozenModel):
@@ -154,6 +137,14 @@ class AgentStateItem(FrozenModel):
             "Per-agent chat activity state value (THINKING / TOOL_RUNNING / "
             "IDLE), or None when no activity tracking is available for this "
             "agent."
+        ),
+    )
+    model_choice: ModelChoice | None = Field(
+        default=None,
+        description=(
+            "The agent's live model/effort/fast selection plus the catalog option "
+            "it matched, or None when no model resolution is available for this "
+            "agent. Twin of ``activity_state``; drives the composer's model bar."
         ),
     )
 

@@ -68,6 +68,29 @@ _MARKER_RELATIVE = Path("codex_transcript_path")
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
 
 
+def read_marker_rollout_path(marker_path: Path) -> Path | None:
+    """The absolute rollout path recorded in a codex marker file, or None when the
+    marker is absent/empty (the agent has not taken a turn yet)."""
+    try:
+        raw = marker_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    return Path(raw) if raw else None
+
+
+def resolve_active_rollout_path(agent_state_dir: Path) -> Path | None:
+    """The live rollout for a codex agent, per its marker. Shared by the watcher and
+    the model resolver so the marker-read lives in one place (they keep separate read
+    cursors over the file itself, by design)."""
+    return read_marker_rollout_path(agent_state_dir / _MARKER_RELATIVE)
+
+
+def codex_sessions_dir(agent_state_dir: Path) -> Path:
+    """The stable dir every rollout (across rotation) lives under -- what a recursive
+    watch targets."""
+    return agent_state_dir / _SESSIONS_RELATIVE
+
+
 class CodexSessionWatcher(AgentSessionWatcher):
     """Watches a codex agent's raw rollout file and emits parsed UI events."""
 
@@ -101,7 +124,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # Marker file holding the active rollout's absolute path (rewritten each turn,
         # so it follows rotation), and the sessions dir we watchdog.
         self._marker_path = agent_state_dir / _MARKER_RELATIVE
-        self._sessions_dir = agent_state_dir / _SESSIONS_RELATIVE
+        self._sessions_dir = codex_sessions_dir(agent_state_dir)
         self._on_events = on_events
 
         # Guards the in-memory transcript mirror and the tail cursor. Held across
@@ -229,12 +252,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
     def _read_active_rollout(self) -> Path | None:
         """The absolute path of the live rollout, per the marker; None until written."""
-        try:
-            raw = self._marker_path.read_text(encoding="utf-8", errors="replace").strip()
-        except OSError:
-            # no marker yet (agent hasn't taken a turn) -- normal
-            return None
-        return Path(raw) if raw else None
+        return read_marker_rollout_path(self._marker_path)
 
     def _consume_new_lines(self) -> list[dict[str, Any]]:
         """Read bytes appended to the live rollout since the last cursor, following

@@ -20,7 +20,6 @@ from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
-from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -36,6 +35,8 @@ from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
@@ -373,93 +374,87 @@ def test_send_message_success() -> None:
     assert messenger.sent == [(agent_id, "hello")]
 
 
-def _model_settings_agent_info(agent_id: str, tmp_path: Path, settings: dict[str, Any] | None) -> AgentInfo:
-    """An AgentInfo whose claude_config_dir holds a settings.json (or none, when settings is None)."""
+def _model_agent_info(agent_id: str, tmp_path: Path, harness: HarnessType = HarnessType.CLAUDE) -> AgentInfo:
+    """An AgentInfo with real (empty) config/state dirs for the given harness."""
     config_dir = tmp_path / "claude_config"
     config_dir.mkdir(exist_ok=True)
-    if settings is not None:
-        (config_dir / "settings.json").write_text(json.dumps(settings))
+    (tmp_path / "state").mkdir(exist_ok=True)
     return AgentInfo(
         id=agent_id,
         name="test-agent",
         state="RUNNING",
         agent_state_dir=tmp_path / "state",
         claude_config_dir=config_dir,
+        harness=harness,
     )
 
 
-def test_get_model_settings_reflects_settings_json(client: FlaskClient, tmp_path: Path) -> None:
-    """The endpoint returns the agent's stored model + fast mode and the catalog."""
-    agent_id = "agent-00000000000000000000000000000002"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]", "fastMode": True})
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/model-settings")
-
-    assert response.status_code == 200
-    data = response.get_json()
-    assert data["model"] == "opus[1m]"
-    assert data["fast_mode"] is True
-    # Opus supports fast mode, so the toggle is offered.
-    assert data["fast_mode_supported"] is True
-    option_ids = [option["id"] for option in data["options"]]
-    assert option_ids == ["fable", "opus[1m]", "sonnet", "haiku"]
-
-
-def test_get_model_settings_non_opus_hides_fast_toggle(client: FlaskClient, tmp_path: Path) -> None:
-    """A non-Opus model reports fast mode unsupported (frontend hides the toggle)."""
-    agent_id = "agent-00000000000000000000000000000003"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "sonnet"})
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/model-settings")
-
-    data = response.get_json()
-    assert data["model"] == "sonnet"
-    assert data["fast_mode"] is False
-    assert data["fast_mode_supported"] is False
-
-
-def test_get_model_settings_unknown_agent_returns_404(client: FlaskClient) -> None:
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
-        response = client.get("/api/agents/nonexistent/model-settings")
-    assert response.status_code == 404
-
-
-def test_set_model_sends_slash_command() -> None:
-    """POSTing a model switch sends the running agent a `/model <id>` command."""
-    agent_id = "agent-00000000000000000000000000000004"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
+def _manager_with_resolver(agent_info: AgentInfo) -> tuple[AgentManager, RecordingMngrMessenger]:
+    """A manager whose model resolver for ``agent_info`` is pre-built, so the switch
+    endpoint can reach it without full agent discovery."""
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager._model_resolver_by_agent[agent_info.id] = build_resolver(agent_info)
+    return manager, messenger
+
+
+def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
+    """The catalog endpoint serves each harness's static model catalog."""
+    response = client.get("/api/harnesses")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "claude" in data
+    claude = data["claude"]
+    assert [option["id"] for option in claude["options"]] == ["opus[1m]", "fable", "sonnet", "haiku"]
+    assert claude["default_model_id"] == "opus[1m]"
+    assert claude["switch_mode"] == "eager_then_reconcile"
+    assert claude["icon_svg"].startswith("<svg")
+
+
+def test_get_harnesses_excludes_codex_without_the_flag(client: FlaskClient) -> None:
+    """Codex only appears when its feature flag is on, like the rest of its UI."""
+    response = client.get("/api/harnesses")
+    assert "codex" not in response.get_json()
+
+
+def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
+    """A claude switch sends /model, /effort, and /fast in order, then reports ok."""
+    agent_id = "agent-00000000000000000000000000000004"
+    agent_info = _model_agent_info(agent_id, tmp_path)
+    manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/model", json={"model": "sonnet"})
+        response = client.post(
+            f"/api/agents/{agent_id}/model", json={"model_id": "sonnet", "effort": "high", "fast": False}
+        )
 
     assert response.status_code == 200
-    assert response.get_json()["status"] == "ok"
-    assert messenger.sent == [(agent_id, "/model sonnet")]
+    assert messenger.sent == [(agent_id, "/model sonnet"), (agent_id, "/effort high"), (agent_id, "/fast off")]
 
 
-def test_set_model_rejects_unknown_model() -> None:
+def test_set_model_rejects_unknown_model(tmp_path: Path) -> None:
     """An id outside the catalog is a 400 and no command is sent."""
     agent_id = "agent-00000000000000000000000000000005"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
-    messenger = RecordingMngrMessenger()
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    agent_info = _model_agent_info(agent_id, tmp_path)
+    manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/model", json={"model": "gpt-4"})
+        response = client.post(f"/api/agents/{agent_id}/model", json={"model_id": "gpt-4", "effort": "high"})
+
+    assert response.status_code == 400
+    assert messenger.sent == []
+
+
+def test_set_model_rejects_fast_on_a_model_without_fast(tmp_path: Path) -> None:
+    """Fast on a model that does not support it is a 400 and no command is sent."""
+    agent_id = "agent-00000000000000000000000000000006"
+    agent_info = _model_agent_info(agent_id, tmp_path)
+    manager, messenger = _manager_with_resolver(agent_info)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.post(
+            f"/api/agents/{agent_id}/model", json={"model_id": "sonnet", "effort": "medium", "fast": True}
+        )
 
     assert response.status_code == 400
     assert messenger.sent == []
@@ -467,93 +462,23 @@ def test_set_model_rejects_unknown_model() -> None:
 
 def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
     with patch("imbue.system_interface.server._find_agent", return_value=None):
-        response = client.post("/api/agents/nonexistent/model", json={"model": "sonnet"})
+        response = client.post("/api/agents/nonexistent/model", json={"model_id": "sonnet", "effort": "high"})
     assert response.status_code == 404
 
 
-def test_set_fast_mode_sends_on_and_off(tmp_path: Path) -> None:
-    """POSTing fast mode sends the running agent a `/fast on` or `/fast off` command."""
-    agent_id = "agent-00000000000000000000000000000006"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
-    messenger = RecordingMngrMessenger()
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+def test_set_model_on_readonly_harness_returns_409(tmp_path: Path) -> None:
+    """A display-only harness (codex v1) does not switch: the endpoint returns 409."""
+    agent_id = "agent-00000000000000000000000000000007"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        on = client.post(f"/api/agents/{agent_id}/fast", json={"enabled": True})
-        off = client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False})
+        response = client.post(
+            f"/api/agents/{agent_id}/model", json={"model_id": "gpt-5.6-sol", "effort": "high", "fast": True}
+        )
 
-    assert on.status_code == 200
-    assert off.status_code == 200
-    assert messenger.sent == [(agent_id, "/fast on"), (agent_id, "/fast off")]
-
-
-def test_set_fast_mode_unknown_agent_returns_404(client: FlaskClient) -> None:
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
-        response = client.post("/api/agents/nonexistent/fast", json={"enabled": True})
-    assert response.status_code == 404
-
-
-def test_model_settings_prefers_managed_settings_over_user_settings(client: FlaskClient, tmp_path: Path) -> None:
-    """mngr passes the managed file via --settings, which Claude layers above the
-    shared user settings -- so a freshly launched agent reports the provisioned
-    value, not the stale one the shared config happens to carry."""
-    agent_id = "agent-00000000000000000000000000000020"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
-    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
-    managed_path.parent.mkdir(parents=True, exist_ok=True)
-    managed_path.write_text(json.dumps({"fastMode": True}))
-
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/model-settings")
-
-    # The user settings file has no fastMode key at all, which on its own reads as
-    # off; the managed overlay is what makes this agent fast.
-    assert response.get_json()["fast_mode"] is True
-
-
-def test_setting_fast_mode_records_it_where_the_next_launch_reads_it(tmp_path: Path) -> None:
-    """`/fast off` deletes the key instead of writing false, so the toggle is written
-    into the agent's own launch settings -- which is both what the picker reads back
-    and what the agent comes back with if it restarts."""
-    agent_id = "agent-00000000000000000000000000000021"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
-    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
-    managed_path.parent.mkdir(parents=True, exist_ok=True)
-    # The agent was provisioned fast, and mngr's hooks share the file.
-    managed_path.write_text(json.dumps({"hooks": {"SessionStart": ["mark-active"]}, "fastMode": True}))
-
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is True
-        assert client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False}).status_code == 200
-        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is False
-
-    # On disk, so a restart of this service or of the agent reports the same thing --
-    # and mngr's hooks are still there.
-    assert json.loads(managed_path.read_text()) == {
-        "hooks": {"SessionStart": ["mark-active"]},
-        "fastMode": False,
-    }
-
-
-def test_setting_fast_mode_reports_settings_it_cannot_record(tmp_path: Path) -> None:
-    """The running session took the command but the change will not outlive it, so
-    the caller is told rather than shown a success it cannot rely on."""
-    agent_id = "agent-00000000000000000000000000000022"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
-    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
-    managed_path.parent.mkdir(parents=True, exist_ok=True)
-    managed_path.write_text("{not valid json")
-
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False})
-
-    assert response.status_code == 500
-    # Whatever mngr had in there is untouched rather than replaced.
-    assert managed_path.read_text() == "{not valid json"
+    assert response.status_code == 409
+    assert messenger.sent == []
 
 
 def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
