@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.activity_state import has_unmatched_tool_use
+from imbue.system_interface.activity_state import is_non_turn_tail_event
 from imbue.system_interface.activity_state import is_transcript_tail_stale
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
@@ -77,6 +78,28 @@ def test_has_unmatched_tool_use(events: list[dict[str, Any]], expected: bool) ->
 )
 def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> None:
     assert last_event_type(events) == expected
+
+
+@pytest.mark.parametrize(
+    "event, expected",
+    [
+        # The composer bar's slash commands and their confirmations are not turns,
+        # so a transcript that ends on one must not pin the indicator on "Thinking".
+        pytest.param({"type": "user_message", "content": "/model sonnet"}, True, id="model_command"),
+        pytest.param({"type": "user_message", "content": "/effort xhigh"}, True, id="effort_command"),
+        pytest.param({"type": "user_message", "content": "/fast on"}, True, id="fast_command"),
+        pytest.param(
+            {"type": "user_message", "content": "<local-command-stdout>Set effort level to xhigh</local-command-stdout>"},
+            True,
+            id="effort_stdout",
+        ),
+        pytest.param({"type": "user_message", "is_meta": True, "content": "resume marker"}, True, id="is_meta"),
+        pytest.param({"type": "user_message", "content": "a real question"}, False, id="real_prompt"),
+        pytest.param({"type": "assistant_message"}, False, id="not_a_user_message"),
+    ],
+)
+def test_is_non_turn_tail_event(event: dict[str, Any], expected: bool) -> None:
+    assert is_non_turn_tail_event(event) is expected
 
 
 @pytest.mark.parametrize(

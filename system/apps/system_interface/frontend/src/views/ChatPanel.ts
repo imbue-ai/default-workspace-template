@@ -879,7 +879,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     m(
                       "button",
                       { type: "button", class: "composer-under-bar-action", onclick: () => openLoginModal() },
-                      "Harness auth",
+                      "Agent auth",
                     ),
                   ]),
                 ]),
