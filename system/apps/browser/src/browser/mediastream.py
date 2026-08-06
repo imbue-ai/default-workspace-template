@@ -438,22 +438,28 @@ def serve_stream(ws: Any, browser_id: str, display: str, session: Any) -> None:
             want_active = conn.active.is_set()
             if want_active and pipe.is_paused:
                 pipe.resume()
-                if audio_device and audio_pipe is None:
-                    candidate = AudioPipe(audio_device, pipe.condition)
-                    try:
-                        candidate.start()
-                        audio_pipe = candidate
-                    except AudioPipeError as error:
-                        logger.warning("audio pipe unavailable on resume for {} ({})", browser_id, error)
                 ws.send("active")  # viewer clears its paused overlay
                 last_send = time.monotonic()
             elif not want_active and not pipe.is_paused:
                 pipe.pause()
-                if audio_pipe is not None:
-                    audio_pipe.stop()
-                    audio_pipe = None
                 ws.send("paused")  # viewer shows its paused overlay over the frozen frame
                 last_send = time.monotonic()
+            # Audio follows the active state DIRECTLY, not the video pause->resume
+            # transition above: the video pipe starts unpaused (videopipe._paused=False), so
+            # a viewer that claims active on connect (the normal single-viewer case) makes
+            # ``want_active`` true without the pipe ever having been paused -- the resume
+            # branch never fires. Gating audio on that transition left such a viewer silent.
+            # Reconcile it against ``want_active`` on its own so it starts whenever active.
+            if want_active and audio_device and audio_pipe is None:
+                candidate = AudioPipe(audio_device, pipe.condition)
+                try:
+                    candidate.start()
+                    audio_pipe = candidate
+                except AudioPipeError as error:
+                    logger.warning("audio pipe unavailable for {} ({})", browser_id, error)
+            elif not want_active and audio_pipe is not None:
+                audio_pipe.stop()
+                audio_pipe = None
             if pipe.is_paused:
                 # Nothing to encode; block for a conductor wakeup and send NO heartbeat
                 # (0 bandwidth -- the WS ping keeps the socket alive).
