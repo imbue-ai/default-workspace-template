@@ -8,7 +8,7 @@ vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 vi.mock("./AgentManager", () => ({ getAgentById: mockGetAgentById }));
 
-import { effectiveChoice, getAgentFastMode, setFastMode, setModelChoice } from "./ModelSettings";
+import { changedAxes, effectiveChoice, getAgentFastMode, setFastMode, setModelChoice } from "./ModelSettings";
 import type { ModelChoice } from "./ModelSettings";
 import type { CatalogModelOption } from "./HarnessCatalog";
 
@@ -54,6 +54,46 @@ beforeEach(() => {
   mockGetAgentById.mockReturnValue(undefined);
 });
 
+describe("changedAxes", () => {
+  it("reports only the effort axis when just effort changed", () => {
+    expect(
+      changedAxes(
+        { model_id: "opus[1m]", effort: "xhigh", fast: false },
+        { model_id: "opus[1m]", effort: "medium", fast: false },
+      ),
+    ).toEqual(["effort"]);
+  });
+
+  it("counts a value going back to where it started as a change (the medium->xhigh->medium bug)", () => {
+    // The baseline is what the user was looking at (xhigh), not disk -- so picking
+    // medium again is a real change and gets sent.
+    expect(
+      changedAxes(
+        { model_id: "opus[1m]", effort: "xhigh", fast: false },
+        { model_id: "opus[1m]", effort: "medium", fast: false },
+      ),
+    ).toContain("effort");
+  });
+
+  it("ignores a model variant suffix", () => {
+    expect(
+      changedAxes(
+        { model_id: "opus", effort: "high", fast: false },
+        { model_id: "opus[1m]", effort: "high", fast: false },
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports model and fast together when a model switch drops fast", () => {
+    expect(
+      changedAxes(
+        { model_id: "opus[1m]", effort: "high", fast: true },
+        { model_id: "sonnet", effort: "high", fast: false },
+      ),
+    ).toEqual(["model", "fast"]);
+  });
+});
+
 describe("effectiveChoice", () => {
   it("returns the live choice when nothing is pending", () => {
     const choice = effectiveChoice("a1", live("opus[1m]", "medium", true, OPUS));
@@ -69,7 +109,7 @@ describe("effectiveChoice", () => {
   });
 
   it("reflects an optimistic pick immediately and holds it until the matching live arrives", async () => {
-    setModelChoice("a3", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
+    setModelChoice("a3", { model_id: "sonnet", effort: "medium", fast: false }, SONNET, ["model"]);
 
     // While pending, the bar shows the pick even though the live value is still opus.
     const pending = effectiveChoice("a3", live("opus[1m]", "medium", true, OPUS));
@@ -88,18 +128,18 @@ describe("effectiveChoice", () => {
   });
 
   it("posts the pick to the model endpoint", async () => {
-    setModelChoice("a4", { model_id: "opus[1m]", effort: "high", fast: true }, OPUS);
+    setModelChoice("a4", { model_id: "opus[1m]", effort: "high", fast: true }, OPUS, ["effort", "fast"]);
     await flush();
     const call = mockRequest.mock.calls.find((args) => (args[0] as RequestOptions).method === "POST");
     expect(call).toBeDefined();
     const options = call![0] as RequestOptions;
     expect(options.url).toBe("/api/agents/:agentId/model");
-    expect(options.body).toEqual({ model_id: "opus[1m]", effort: "high", fast: true });
+    expect(options.body).toEqual({ model_id: "opus[1m]", effort: "high", fast: true, axes: ["effort", "fast"] });
   });
 
   it("applies rapid picks in click order", async () => {
-    setModelChoice("a5", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
-    setModelChoice("a5", { model_id: "opus[1m]", effort: "medium", fast: false }, OPUS);
+    setModelChoice("a5", { model_id: "sonnet", effort: "medium", fast: false }, SONNET, ["model"]);
+    setModelChoice("a5", { model_id: "opus[1m]", effort: "medium", fast: false }, OPUS, ["model"]);
     await flush();
     const models = mockRequest.mock.calls
       .map((args) => args[0] as RequestOptions)
@@ -120,7 +160,12 @@ describe("fast mode helpers", () => {
     setFastMode("a7", true);
     await flush();
     const call = mockRequest.mock.calls.find((args) => (args[0] as RequestOptions).method === "POST");
-    expect((call![0] as RequestOptions).body).toEqual({ model_id: "opus[1m]", effort: "high", fast: true });
+    expect((call![0] as RequestOptions).body).toEqual({
+      model_id: "opus[1m]",
+      effort: "high",
+      fast: true,
+      axes: ["fast"],
+    });
   });
 
   it("setFastMode is a no-op for a model that does not support fast", async () => {

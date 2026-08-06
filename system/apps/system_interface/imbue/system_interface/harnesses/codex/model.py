@@ -35,6 +35,7 @@ from imbue.system_interface.harnesses.model import EffortChoice
 from imbue.system_interface.harnesses.model import EffortLevel
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
+from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import SwitchMode
@@ -149,9 +150,12 @@ class CodexModelResolver(HarnessModelResolver):
         # rotation) writes under it, so any thread-settings append wakes the recompute.
         return (codex_sessions_dir(self._state_dir),)
 
-    def switch(self, identity: ModelIdentity, send: Callable[[str], bool]) -> SwitchResult:
+    def switch(
+        self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
+    ) -> SwitchResult:
         # Read-only v1: sending /model would open codex's picker modal and wedge the
-        # pane. Flip CODEX_CATALOG.switch_mode and send here once the one-shot patch lands.
+        # pane. Flip CODEX_CATALOG.switch_mode and send here once the one-shot patch
+        # lands; `axes` is ignored until then.
         return SwitchResult(ok=False, detail="Codex model switching is not available yet")
 
     def _read_config(self) -> dict[str, Any]:

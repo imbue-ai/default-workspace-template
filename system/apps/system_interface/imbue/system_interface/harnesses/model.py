@@ -84,6 +84,22 @@ class ModelIdentity(FrozenModel):
     fast: bool
 
 
+class ModelAxis(StrEnum):
+    """One of the three independently-switchable axes of a model selection.
+
+    The frontend sends exactly the axes a single click changed -- diffed against
+    the value the user was looking at (the optimistic overlay), not against disk.
+    A ``switch`` then applies only those axes, so re-picking the value you started
+    on (medium -> xhigh -> medium) still sends ``/effort medium`` rather than being
+    suppressed by a disk read that has not caught up yet, and an untouched axis is
+    never re-issued.
+    """
+
+    MODEL = "model"
+    EFFORT = "effort"
+    FAST = "fast"
+
+
 class ModelChoiceSource(StrEnum):
     """Where a :class:`ModelChoice` came from. The backend emits only these two;
     the frontend adds a local ``pending`` for an optimistic pick."""
@@ -241,9 +257,17 @@ class HarnessModelResolver(ABC):
         """
 
     @abstractmethod
-    def switch(self, identity: ModelIdentity, send: Callable[[str], bool]) -> SwitchResult:
-        """Apply ``identity``. The harness decides how -- it may validate first,
-        then send one or many pane commands via ``send`` (bound by the endpoint to
-        this agent). A display-only (:attr:`SwitchMode.READ_ONLY`) harness sends
-        nothing and returns ``ok=False`` with a detail the endpoint maps to 409.
+    def switch(
+        self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
+    ) -> SwitchResult:
+        """Apply the ``axes`` of ``identity`` the caller says a click changed.
+
+        ``axes`` is which of model/effort/fast to actually send -- computed on the
+        frontend against the value the user saw, so the harness applies exactly
+        those and never re-issues an untouched axis (and never suppresses a change
+        just because disk has not caught up). The harness decides how -- it may
+        validate first, then send one or many pane commands via ``send`` (bound by
+        the endpoint to this agent). A display-only (:attr:`SwitchMode.READ_ONLY`)
+        harness sends nothing and returns ``ok=False`` with a detail the endpoint
+        maps to 409.
         """
