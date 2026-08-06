@@ -290,6 +290,15 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
  * Render the children (text + tool calls) of an assistant message.
  * Used by both the stable (memoized) and simple assistant message renderers.
  */
+/** The grey note shown under a provider-fault API error: the failure is the model
+ *  provider's, not ours. Wording nudged by kind; every harness's provider faults
+ *  land here since they stamp the same is_provider_fault flag. */
+function providerFaultNote(kind: string | null): string {
+  const cause =
+    kind === "api_error" ? "the model provider's servers hit an error" : "the model provider's servers are overloaded";
+  return `This isn't Minds' fault -- ${cause}. Try again in a moment.`;
+}
+
 export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
@@ -301,7 +310,18 @@ export function renderAssistantMessageChildren(
 
   const children: m.Children[] = [];
   if (textContent) {
-    children.push(m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }));
+    if (event.is_api_error) {
+      // A model API error: render the failure text in light red, and for a
+      // provider-side fault (5xx / overloaded) add a grey "not Minds' fault" note.
+      children.push(
+        m("div.message-api-error", [
+          m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }),
+          event.is_provider_fault ? m("div.message-api-error-note", providerFaultNote(event.api_error_kind)) : null,
+        ]),
+      );
+    } else {
+      children.push(m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }));
+    }
   }
   for (const toolCall of toolCalls) {
     // Render the rich card as soon as we have the Agent call's description (from the tool

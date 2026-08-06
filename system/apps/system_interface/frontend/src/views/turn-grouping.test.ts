@@ -22,6 +22,9 @@ function assistantText(ts: string, text: string, id = `a-${ts}`): AssistantMessa
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -38,6 +41,9 @@ function workMsg(ts: string, toolName: string, callId: string, id = `a-${callId}
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -55,6 +61,9 @@ function tkMsg(ts: string, command: string, callId: string, id = `a-${callId}`):
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -80,6 +89,9 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -625,6 +637,9 @@ describe("audit regressions", () => {
       stop_reason: null,
       usage: null,
       is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
     };
     const events = [
       userMsg("t0", "go"),
