@@ -83,12 +83,12 @@ approved or denied the permission request.
 
 The gateway natively proxies GitHub's git smart-HTTP endpoints, so plain
 `git` works through latchkey too: point git at the gateway's proxy URL and
-pass the gateway's two auth headers (both values are already in this
-environment):
+pass the gateway's auth headers (their values are already in this
+environment).
 
 ```bash
 git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
-    -c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" \
+    ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
     push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" <refspec>
 ```
 
@@ -147,16 +147,13 @@ When the existing credentials are expired or invalid, there are currently two wa
 - By disconnecting and reconnecting the account on the "Connectors" settings page (tell the user to do that if there are more than one account configured for the given service).
 
 
-## Secondary gateway
+## When the gateway is unreachable
 
-By default, most of the commands above are actually routed through a gateway that runs on the user's computer.
-For `latchkey curl` calls specifically, when the user's computer is offline, you would typically get "Exit code 7".
-Sometimes, there's a secondary Latchkey gateway available running in the cloud that you can use instead.
-To do that, repeat your call with the following env var overrides:
-    - `LATCHKEY_GATEWAY=$LATCHKEY_GATEWAY_SECONDARY`
-    - `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE=""`
-If you're still not able to connect, it means the secondary gateway hasn't actually been configured.
-Permission management, or any other commands other than `latchkey curl`, are not supported by the secondary gateway.
+Every command above is routed through the Latchkey gateway at
+`$LATCHKEY_GATEWAY`. If it cannot be reached, treat it as
+a transient outage. It usually helps if the user restarts the
+Minds app. Requests to /permissions and /permission-requests are
+routed to the user's computer so they will fail if it's offline.
 
 
 ## Notes
