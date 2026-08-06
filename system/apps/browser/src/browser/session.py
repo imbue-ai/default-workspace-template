@@ -331,8 +331,10 @@ _TASK_MAX_SECONDS = float(os.environ.get("BROWSER_TASK_MAX_SECONDS", "900"))
 # ownership is bound to the long run), a lease has no live connection to detect a
 # dead/wandered-off owner, so it auto-releases after this many seconds with no
 # command (the keepalive loop sweeps it). The human take-control is the instant
-# escape hatch; this TTL is the backstop. Env-tunable.
-_LEASE_IDLE_TTL = float(os.environ.get("BROWSER_LEASE_IDLE_TTL", "90"))
+# escape hatch; this TTL is the backstop. Env-tunable. Kept at 60s (was 90s): short
+# enough that a browser a done agent forgot to release frees up promptly for the human,
+# long enough not to yank the lease out from under an agent still thinking between commands.
+_LEASE_IDLE_TTL = float(os.environ.get("BROWSER_LEASE_IDLE_TTL", "60"))
 
 # A human take-control is STICKY: it blocks agents until the human explicitly hands
 # back ("Return to agent"). There is no idle/grace yield -- a human who grabs a
@@ -989,7 +991,14 @@ class LiveBrowser(MutableModel):
                 continue
             dead_polls = 0
             changed = await self._sweep_unclaimed_grant() or await self._sweep_idle_lease()
-            if not changed and self.controller == "agent":
+            # Re-broadcast the full control state every tick regardless of owner (not just
+            # while agent-owned): the one-shot control frame for a control change can be lost
+            # (a half-open socket, or evicted by the drop-oldest cast queue), which strands a
+            # human viewer thinking an agent still holds control -- input suppressed forever
+            # even though it's theirs. Re-asserting the live state converges any live-but-
+            # desynced client within a tick. setControl is idempotent, so re-sending an
+            # unchanged human-owned state is a no-op on the viewer.
+            if not changed:
                 self._broadcast(self._control_message())
 
     async def _sweep_idle_lease(self) -> bool:
