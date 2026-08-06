@@ -1,5 +1,19 @@
 Added OpenAI Codex CLI support to the workspace image.
 
+- Installed three more coding-agent CLIs into the image so they can run as peer
+  harnesses: OpenCode (`opencode` 1.18.14, standalone binary, symlinked onto PATH),
+  Pi (`pi` 0.83.0, npm) and Antigravity (`agy` 1.1.10). Antigravity ships via a new
+  version-locked installer, `system/scripts/agy_install-1.1.10.sh` (a pinned fork of
+  Google's bootstrapper -- upstream always pulls latest), baked beside `setup_system.sh`
+  in the image. Their mngr plugins are registered in `build_workspace.sh` (tool
+  `--with-editable` + `mngr plugin add`), with pinned versions as `Dockerfile` ARGs.
+- Node.js is now a pinned, sha256-verified nodejs.org tarball (Node 22 LTS) installed
+  to `/usr/local`, replacing the trixie apt `nodejs` (Node 20). Pi's bundled `undici`
+  calls a `worker_threads` API absent on Node 20 and crashes at import, so Node 22 is
+  required; codex/opencode/the frontend build are unaffected.
+- `.mngr/settings.toml`'s codex block now inlines its `config_overrides` on the
+  agent-type block instead of a separate `[...config_overrides.features]` table (same
+  resolved config, one place to read).
 - `.mngr/settings.toml` no longer carries per-harness create templates
   (`[create_templates.claude]`, `[create_templates.codex]`). Each held only
   `type = "<harness>"`, which the create path now passes as `--type <harness>`

@@ -34,8 +34,11 @@ fi
 # CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
+: "${NODE_VERSION:=22.23.2}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${CODEX_VERSION:=0.146.0}"
+: "${OPENCODE_VERSION:=1.18.14}"
+: "${PI_VERSION:=0.83.0}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
@@ -209,17 +212,55 @@ if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
     exit 1
 fi
 
-# Node.js from trixie main (pinned by the snapshot timestamp like every other
-# apt package; trixie ships the nodejs 20.x line). npm is its own package on
-# Debian, unlike the NodeSource builds that bundled it.
-apt-get update
-apt-get install -y --no-install-recommends nodejs npm
-rm -rf /var/lib/apt/lists/*
+# Node.js as a pinned, sha256-verified nodejs.org release tarball (installed to
+# /usr/local so node/npm/npx land on PATH). NOT the trixie apt nodejs (20.x): the
+# pi CLI ships an `undici` that calls `worker_threads.markAsUncloneable`, which is
+# absent on Node 20 and crashes pi at import -- so we pin Node 22 LTS. Installs like
+# gh/caddy/restic above: fixed version, checksummed download. Keep NODE_VERSION in
+# sync with the Dockerfile ARG.
+node_arch="$(uname -m)"
+case "${node_arch}" in
+    x86_64) node_goarch="x64"; node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" ;;
+    aarch64) node_goarch="arm64"; node_sha256="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30" ;;
+    *) echo "Unsupported architecture for node: ${node_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_goarch}.tar.gz" -o /tmp/node.tar.gz
+echo "${node_sha256}  /tmp/node.tar.gz" | sha256sum -c -
+# --strip-components=1 lands bin/node, bin/npm, bin/npx, lib/node_modules under /usr/local.
+tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1
+rm /tmp/node.tar.gz
+command -v node npm >/dev/null
 
 # Codex CLI (pinned; npm-installed, needs Node.js above). Keep in sync with
 # agent_types.codex.version in .mngr/settings.toml.
 npm install -g "@openai/codex@${CODEX_VERSION}"
 command -v codex >/dev/null
+
+# OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
+# VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the
+# binary into /usr/local/bin like the other downloaded tools.
+curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash
+ln -sf "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode
+opencode --version >/dev/null
+
+# Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
+# in sync with agent_types.pi-coding.version in .mngr/settings.toml.
+npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
+command -v pi >/dev/null
+
+# Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
+# installer -- the upstream installer always pulls the latest build, so we pin the
+# 1.1.10 release URL + sha512 in that script. Reachable two ways depending on how we
+# were invoked (mirrors the secret-scanner dual-name resolution below): in a Dockerfile
+# build it is baked beside this script as default-workspace-template-install-agy; run
+# straight from the repo (Lima/Modal) it is its sibling agy_install-1.1.10.sh.
+agy_installer_dir="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$agy_installer_dir/agy_install-1.1.10.sh" ]; then
+    bash "$agy_installer_dir/agy_install-1.1.10.sh"
+else
+    bash "$agy_installer_dir/default-workspace-template-install-agy"
+fi
+command -v agy >/dev/null && agy --version >/dev/null
 
 # apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the
 # environment record under ~/.mngr/plugin/env-converge re-captures from dpkg's

@@ -199,25 +199,21 @@ model = "gpt-5.6-sol"
 model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 check_installation = false
-
-# Disable codex's built-in memory system. It is off by default, but pin it off so it never
-# writes to $CODEX_HOME/memories/ -- a per-agent, non-runtime-backed silo that would compete
-# with the shared runtime/memory/ we use. (features.memories is the master switch; false wins
-# regardless of any [memories] settings.)
-[agent_types.codex.config_overrides.features]
-memories = false
-# Pin the tool surface to code mode (`tools.<fn>({...})`), the schema our tool labels parse.
-# What actually selects the surface is the model's `tool_mode`, and that comes from the remote
-# /models catalog (300s TTL, remote replaces the bundled record) -- so a server-side change, or
-# a value this pinned build does not recognize, deserializes to None and silently drops us to
-# direct tool calls. `effective_tool_mode` falls back to these flags exactly when `tool_mode`
-# is None, so this is the one setting that closes that hole. `code_mode_only` implies
-# `code_mode`. It is Stage::UnderDevelopment, which only warns; the second line silences that.
-code_mode_only = true
-suppress_unstable_features_warning = true
-# Where the JS runs (standalone host vs embedded V8). Unrelated to whether code mode is on --
-# this was previously here under the mistaken belief that it pinned the surface.
-code_mode_host = true
+# config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
+# [features] keys, not mngr fields -- kept here on the agent-type block for one place to read.
+# - memories = false: disable codex's built-in memory system so it never writes to
+#   $CODEX_HOME/memories/ -- a per-agent, non-runtime-backed silo that would compete with the
+#   shared runtime/memory/. features.memories is the master switch; false wins regardless of
+#   any [memories] settings.
+# - code_mode_only / code_mode_host / suppress_unstable_features_warning: pin the tool surface
+#   to code mode (`tools.<fn>({...})`, the schema our tool labels parse). The surface normally
+#   comes from the model's `tool_mode` in the remote /models catalog (300s TTL); a server-side
+#   change or an unrecognized value deserializes to None and silently drops us to direct tool
+#   calls. `effective_tool_mode` falls back to these flags exactly when `tool_mode` is None, so
+#   they close that hole (`code_mode_only` implies `code_mode`; it is Stage::UnderDevelopment,
+#   which only warns -- the suppress flag silences that). `code_mode_host` picks where the JS
+#   runs (standalone host vs embedded V8), unrelated to whether code mode is on.
+config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true } }
 
 # --- Provider configurations ---
 
