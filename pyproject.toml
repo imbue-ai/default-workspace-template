@@ -13,6 +13,10 @@ dependencies = [
     "tk-command-parsing",
     "imbue-common",
     "tomlkit>=0.12",
+    # Renders the markdown-preview service's pages. Available transitively via
+    # rich today, but this repo uses it directly, so it is declared rather than
+    # inherited -- a transitive dep can vanish on any upstream bump.
+    "markdown-it-py>=3",
     "playwright==1.58.0",
     "litellm>=1.88.1",
     "browser",

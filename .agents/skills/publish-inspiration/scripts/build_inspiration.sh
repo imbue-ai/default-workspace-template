@@ -3,8 +3,9 @@
 # mind was created from, then commit it. Run by the launch-task WORKER the
 # publish-inspiration skill dispatches, from the worker's own git worktree
 # (cwd = worktree repo root); the live mind's /home/user/workspace is never touched. This is
-# v1 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
-# generated manifest records it as `format: v1` in its front-matter.
+# v2 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
+# generated manifest records it as `format: v2` in its front-matter and in the
+# sibling inspiration.toml.
 #
 # The dev `create-new-mind-repo` recipe is NOT available in the VM, so this is
 # self-contained. It does the assembly + secret scan + manifest/thumbnail +
@@ -35,13 +36,23 @@
 # Exit codes: 0 = success; 1 = secret scan hit OR a required scanner was
 # missing/errored; 2 = usage error; 3 = nothing to publish beyond the base;
 # 4 = boot smoke-check failed; 5 = --base-ref does not resolve to a bootable
-# template tree.
+# template tree; 6 = the generated manifest failed validation, or a declared
+# apt package does not resolve in the pinned snapshot mirror.
 
 set -euo pipefail
 
 # Version of the inspirations flow (and of the manifest format this script
 # writes into the generated manifest's `format:` front-matter key).
-INSPIRATION_FLOW_VERSION="v1"
+#
+# v2 is the split format: one slug-free inspiration.md/.toml/.svg per repo
+# (overriding rather than accumulating, with a [[lineage]] chain recording what
+# was superseded), the recipe and requirements moved into the TOML, an
+# [environment] declaration, and Holes + Prerequisites merged into one
+# Requirements list whose entries carry their own kind. v1 is the
+# original: slug-named inspiration-<slug>.md with a YAML recipe block inside it
+# and no TOML at all. Adopters still read v1 -- absence of inspiration.toml is
+# what identifies it -- but nothing writes v1 any more.
+INSPIRATION_FLOW_VERSION="v2"
 
 # The published version of THIS inspiration (front-matter `version:`), distinct
 # from the flow/manifest-format version above. A first publish is always v1; a
@@ -127,8 +138,22 @@ fi
 REPO="$(git rev-parse --show-toplevel)"
 cd "$REPO"
 
-MANIFEST="inspiration-${SLUG}.md"
-THUMBNAIL="inspiration-${SLUG}.svg"
+# One inspiration per repo: the manifest files carry no slug and a new publish
+# OVERRIDES whatever was here rather than accumulating beside it. What survives
+# an override is the [[lineage]] chain in the TOML -- each predecessor's repo
+# URL and commit -- so a superseded manifest stays retrievable in the repo where
+# it is authoritative. The slug is still the identity (it names the repo and
+# keys the version ledger); it just no longer names any file.
+MANIFEST="inspiration.md"
+MANIFEST_TOML="inspiration.toml"
+THUMBNAIL="inspiration.svg"
+
+# Substituted by the lead in publish-inspiration §7 once the owner and repo name
+# are both known -- the README's "Open in Minds" button and its copyable
+# fallback both need the repo URL, which does not exist when this script runs.
+# §8's pre-push gate greps for any leftover, exactly as it does for the
+# placeholder thumbnail.
+REPO_URL_PLACEHOLDER="MINDS_INSPIRATION_REPO_URL"
 
 # --- 0. validate that BASE_REF is a real, bootable default workspace template tree ---------
 
@@ -181,6 +206,36 @@ for scan_file in scan_secrets.sh betterleaks.toml; do
     cp "$SCRIPT_DIR/$scan_file" "$SCAN_TOOLS_DIR/"
 done
 
+# Same problem, same fix, for the manifest tooling: the reset would remove these
+# from the worktree (and takes .venv with it, which is why the validator runs
+# under `uv run --no-project` against a snapshotted copy of the schema module
+# rather than importing it from the workspace).
+for tool_file in write_inspiration_manifest.py validate_inspiration.py; do
+    if [ ! -f "$SCRIPT_DIR/$tool_file" ]; then
+        echo "build_inspiration.sh: $SCRIPT_DIR/$tool_file is missing (required to generate and validate the manifest); aborting before touching the worktree" >&2
+        exit 1
+    fi
+    cp "$SCRIPT_DIR/$tool_file" "$SCAN_TOOLS_DIR/"
+done
+SCHEMA_MODULE="$REPO/system/services/env_converge/src/env_converge/inspiration_manifest.py"
+if [ ! -f "$SCHEMA_MODULE" ]; then
+    echo "build_inspiration.sh: $SCHEMA_MODULE is missing (the manifest schema; no fallback exists); aborting before touching the worktree" >&2
+    exit 1
+fi
+cp "$SCHEMA_MODULE" "$SCAN_TOOLS_DIR/"
+
+# Stage the manifest this publish will OVERRIDE, before the reset removes it.
+# Its identity plus [origin] become the newest lineage entry, and its own
+# lineage carries through ahead of that. Any v1 slug-named manifests are NOT
+# carried forward -- superseding them is the point -- but a v1 manifest has no
+# [origin], so it contributes no link and the lead records it by hand if it
+# matters.
+PREVIOUS_MANIFEST_TOML=""
+if [ -f "$MANIFEST_TOML" ]; then
+    PREVIOUS_MANIFEST_TOML="$SCAN_TOOLS_DIR/previous-inspiration.toml"
+    cp "$MANIFEST_TOML" "$PREVIOUS_MANIFEST_TOML"
+fi
+
 stage_one() {
     # Stage a single repo-root-relative path if it exists in the live worktree.
     local rel="$1"
@@ -198,12 +253,10 @@ for rel in "${DATA_INCLUDE_PATHS[@]}"; do
     stage_one "$rel"
 done
 
-# Carry forward any existing accumulated inspirations (manifest + sibling svg).
-shopt -s nullglob
-for existing in inspiration-*.md inspiration-*.svg; do
-    rsync -aR "$existing" "$STAGE/"
-done
-shopt -u nullglob
+# Nothing to carry forward: a publish OVERRIDES the previous manifest rather
+# than accumulating beside it, and the reset in step 2 drops the old files with
+# everything else. The predecessor's address survives as a [[lineage]] entry
+# (staged above), which is what makes the override non-destructive.
 
 # --- 2. clean base = the DEFAULT_WORKSPACE_TEMPLATE version the mind was based on --------------------
 
@@ -239,7 +292,7 @@ rsync -a "$STAGE/" "$REPO/"
 #
 # Scanning the STAGE (not the assembled tree) means the scan covers exactly
 # the content overlaid out of the live mind: the selected --include /
-# --data-include paths plus any carried-forward inspiration-*.md/.svg. The
+# --data-include paths. The manifest files are generated after the scan. The
 # clean base is the trusted, public default workspace template -- it cannot
 # contain the user's secrets, and its own test fixtures legitimately hold
 # placeholder token strings (e.g. "sk-ant-test"), so scanning it would only
@@ -293,31 +346,59 @@ if [ -z "$manifest_description" ]; then
     manifest_description="A shareable snapshot of ${TITLE}."
 fi
 
-# The RECIPE: how this inspiration is derived from its source workspace, so a
-# later update can re-run it instead of diffing two repos. The include sets are
-# known here; the exclusions and the published-version modification RULES are
-# not (the lead resolved them with the user), so they are FILL-IN lines the
-# worker replaces -- caught by the same `<!-- FILL-IN (publishing agent)` gate
-# as every other placeholder. RULES only, never the removed values: the point of
-# a modification is that the value does not ship.
-recipe_include_block="include:"$'\n'
+# The manifest's front matter is YAML, and title/description are the user's own
+# words -- a title like `The "Daily" Digest: v2` breaks a bare scalar (a leading
+# quote, or a `: `, changes how YAML parses the line). Emit every interpolated
+# value as a double-quoted scalar instead: JSON string syntax is a valid subset
+# of YAML's double-quoted style, so json.dumps does the escaping correctly.
+# Bare python3 is fine here -- json is stdlib in every version, unlike tomllib.
+yaml_scalar() {
+    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+title_yaml="$(yaml_scalar "$TITLE")"
+description_yaml="$(yaml_scalar "$manifest_description")"
+thumbnail_yaml="$(yaml_scalar "$THUMBNAIL")"
+
+# The RECIPE now lives in inspiration.toml, not in this markdown. It is
+# machine-read (only the publisher's own update flow reads it, and that flow
+# always runs on a template new enough to know the TOML), it was the last YAML
+# in the repo, and it is exactly the kind of structured data the split exists to
+# get out of prose. Generate it with the manifest writer below.
+manifest_toml_args=(
+    --slug "$SLUG"
+    --title "$TITLE"
+    --version "$INSPIRATION_VERSION"
+    --format "$INSPIRATION_FLOW_VERSION"
+    --thumbnail "$THUMBNAIL"
+    --output "$MANIFEST_TOML"
+)
 for rel in "${INCLUDE_PATHS[@]}"; do
-    recipe_include_block+="  - ${rel}"$'\n'
+    manifest_toml_args+=(--include "$rel")
 done
-if [ "${#DATA_INCLUDE_PATHS[@]}" -gt 0 ]; then
-    recipe_include_block+="data_include:"$'\n'
-    for rel in "${DATA_INCLUDE_PATHS[@]}"; do
-        recipe_include_block+="  - ${rel}"$'\n'
-    done
-else
-    recipe_include_block+="data_include: []"$'\n'
+for rel in "${DATA_INCLUDE_PATHS[@]}"; do
+    manifest_toml_args+=(--data-include "$rel")
+done
+if [ -n "$PREVIOUS_MANIFEST_TOML" ]; then
+    manifest_toml_args+=(--previous-manifest "$PREVIOUS_MANIFEST_TOML")
+fi
+manifest_toml_args+=(--description "$manifest_description")
+
+# `uv run --no-project` (no workspace resolution, so none of the cold-base
+# fragility the smoke check warns about) rather than a bare python3: the writer
+# reads the previous manifest with tomllib, which is 3.11+, and the host's
+# python3 is not guaranteed to be that new. uv supplies a managed interpreter,
+# which makes this work the same everywhere instead of failing only on older
+# machines.
+if ! uv run --no-project python "$SCAN_TOOLS_DIR/write_inspiration_manifest.py" "${manifest_toml_args[@]}"; then
+    echo "build_inspiration.sh: could not generate ${MANIFEST_TOML}" >&2
+    exit 6
 fi
 
 cat > "$MANIFEST" <<MANIFEST_EOF
 ---
-title: ${TITLE}
-description: ${manifest_description}
-thumbnail: ${THUMBNAIL}
+title: ${title_yaml}
+description: ${description_yaml}
+thumbnail: ${thumbnail_yaml}
 version: ${INSPIRATION_VERSION}
 format: ${INSPIRATION_FLOW_VERSION}
 ---
@@ -356,37 +437,33 @@ services that connect them. -->
 
 ## Recipe
 
-This inspiration is version \`${INSPIRATION_VERSION}\` (front-matter \`version:\`).
-It is not a fork of the workspace it came from -- it is DERIVED from it by the
-recipe below: include these paths, leave these out, apply these
-published-version rules. An update re-runs the recipe against the current
-workspace and publishes the result as the next version, so anything excluded
-here stays excluded even though it still exists in the source workspace. This
-block is the durable home of that recipe -- a later update reads it back from
-here.
+This inspiration is version \`${INSPIRATION_VERSION}\`. It is not a fork of the
+workspace it came from -- it is DERIVED from it by a recipe: include these
+paths, leave these out, apply these published-version rules. An update re-runs
+the recipe against the current workspace and publishes the result as the next
+version, so anything excluded stays excluded even though it still exists in the
+source workspace.
 
-\`\`\`yaml
-version: ${INSPIRATION_VERSION}
-${recipe_include_block}exclude:
-<!-- FILL-IN (publishing agent): replace this line with one \`  - <path or feature>\`
-entry per deliberate exclusion (paths not included, and features stripped out of
-an included path), or with the single line \`  []\` if nothing was excluded. -->
-modification_rules:
-<!-- FILL-IN (publishing agent): replace this line with one \`  - <rule>\` entry per
-published-version modification, stated as a RULE and never the removed value
-(e.g. \`  - replace the hardcoded team Slack channel with a neutral default\`),
-or with the single line \`  []\` if there were none. -->
-\`\`\`
+The recipe is machine-read, so it lives in the sibling
+[\`${MANIFEST_TOML}\`](${MANIFEST_TOML}) -- its \`[recipe]\` table -- along with
+the structured requirements and the environment this inspiration needs
+installed. That file is authoritative for all of it; this one holds the prose.
 
-## Prerequisites
+## Requirements
 
-Activation requirements: what the adopting agent must SET UP -- and must
-INITIATE ITSELF during setup, before asking how to adapt -- for this
-inspiration to run against the new user's own accounts/data. One line per
-requirement, in this machine-readable form (greppable by \`requires_\`):
+Everything the adopting mind must deal with before this inspiration is really
+theirs. Two kinds of entry, handled at different times:
+
+- **Activation** -- what must be SET UP before anything runs, in the
+  machine-readable \`requires_\` forms below. The adopting agent acts on these
+  ITSELF, first, before asking anything.
+- **Adaptation** -- what must be DECIDED or REWIRED, in prose. Worked through
+  interactively with the user, after activation.
 
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with one line per requirement, using exactly these forms:
+with both kinds of entry.
+
+ACTIVATION -- one line each, using exactly these forms (greppable by \`requires_\`):
 
 - requires_permission: <latchkey scope> / <permission schema> (user-approved;
   the adopting agent initiates this via a latchkey permission request during
@@ -405,19 +482,60 @@ calls through \`latchkey curl\`, and whether any code calls an LLM). Example:
 - requires_llm: calls Claude via the keyed litellm path (ANTHROPIC_API_KEY set);
   an adopter on the keyless subscription path must switch the model calls per
   use-ai-integration
-If nothing is required, write exactly: "No prerequisites -- runs with no
-external permissions or secrets." -->
+
+These lines are what the ADOPTING agent acts on during setup, so a vague or
+missing one silently breaks adoption -- a real incident: an adopter was never
+prompted for a Slack permission the app needed. They are also what the lead
+surfaces back to the publishing user for confirmation, so the list must be
+complete and accurate. EVERY line must have its counterpart in
+\`${MANIFEST_TOML}\`'s \`[requirements]\` (\`[[requirements.permission]]\`,
+\`[[requirements.secret]]\`, \`[requirements.llm]\`); the validator compares
+them and fails the publish if they disagree.
+
+ADAPTATION -- one bullet each, in plain prose: every gap the adapter must
+decide or rewire (stubbed integrations, hardcoded accounts/channels/ids, data
+that was not included, anything that will not work out of the box). For each,
+say what is missing and what a working replacement looks like. Mirror them as
+\`[[requirements.adaptation]]\` entries in the TOML.
+
+Do not repeat the README's "Ideas for making it yours" here -- those are
+optional invitations, these are things that must be resolved.
+
+If there is genuinely nothing of either kind, write exactly: "No requirements --
+runs as published, with no external permissions or secrets." -->
+
+## Environment
+
+What this inspiration needs INSTALLED, beyond what the template already has.
+Declared in \`${MANIFEST_TOML}\`'s \`[environment]\` table; an adopting mind
+converges it at ITS OWN pinned apt snapshot timestamp, so package versions come
+out consistent with the rest of that mind's environment rather than frozen to
+whatever this publisher happened to have.
+
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
+with a plain-language summary of what gets installed and why -- one line per
+thing, naming what needs it (e.g. "poppler-utils: the digest renders PDF
+attachments to text"). Fill in the matching entries in ${MANIFEST_TOML}'s
+[environment] table at the same time; that table is what actually installs
+anything, and this prose is what a human reads.
+
+Derive it from the included code, not from what happens to be installed on this
+machine: every binary the code shells out to, every global npm/uv/cargo tool it
+invokes. If it needs nothing beyond the template's own environment, write
+exactly: "Nothing extra -- runs on the stock workspace environment." -->
 
 ## How to adapt it
 
 Instructions for the NEXT agent -- the one adapting this inspiration into a
 new mind. This is the \`use-inspiration\` skill's template path; in short:
 
-1. Read this entire file first, especially "Prerequisites" and "Holes"
-   below -- Prerequisites are your SETUP agenda, Holes are your ADAPTATION
-   agenda.
+1. Read this entire file first, especially "Requirements" below. It holds two
+   kinds of entry and they are handled at different times: the machine-readable
+   \`requires_\` lines are ACTIVATION (set them up before anything runs), and
+   the prose bullets are ADAPTATION (decide or rewire them afterwards).
 2. Present the inspiration to the user in plain, non-technical language: what
-   it is, what it does, and what it needs from them (name the Prerequisites).
+   it is, what it does, and what it needs from them (name the activation
+   requirements).
 3. Ask whether they want to use the same connectors (e.g. their own Slack).
    If YES: ACTIVATE FIRST -- initiate every \`requires_permission\` line NOW
    via a latchkey permission request (see the \`latchkey\` skill; the request
@@ -428,21 +546,11 @@ new mind. This is the \`use-inspiration\` skill's template path; in short:
    200. Then tell them it is live and to take a look.
 4. Only AFTER that (or immediately, if they chose different connectors -- the
    swap is then the first adaptation) ask: "How do you want to adapt it?"
-5. Work through each hole interactively, one at a time. Translate each into
-   plain language, ask for a decision only when you genuinely need one, and
-   resolve the obvious ones yourself.
+5. Work through each requirement interactively, one at a time. Translate each
+   into plain language, ask for a decision only when you genuinely need one,
+   and resolve the obvious ones yourself.
 6. When done, append a dated entry to "Adaptation history" below (never
    rewrite earlier entries) and commit.
-
-## Holes
-
-<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with one bullet per hole: every ADAPTATION gap the adapter must decide or
-rewire -- stubbed integrations, hardcoded accounts/channels/ids, data that was
-not included, anything that will not work out of the box. For each, say what
-is missing and what a working replacement looks like. Do NOT list activation
-requirements here (permissions, tokens, accounts) -- those belong in
-"Prerequisites" above. If there are genuinely no holes, say so explicitly. -->
 
 ## Publication history
 
@@ -489,12 +597,13 @@ THUMB_EOF
 # entirely within the snapshot it publishes. Deterministic full-file write,
 # never an LLM freeform edit; idempotent across accumulated publishes (each
 # publish regenerates it targeting the newly-published slug, the latest).
+welcome_description_yaml="$(yaml_scalar "Greet the user when a new project starts. This mind was created from the ${TITLE} inspiration, so the welcome introduces that inspiration and immediately starts the adaptation conversation.")"
 WELCOME_FILE=".agents/skills/welcome/SKILL.md"
 mkdir -p "$(dirname "$WELCOME_FILE")"
 cat > "$WELCOME_FILE" <<WELCOME_EOF
 ---
 name: welcome
-description: Greet the user when a new project starts. This mind was created from the "${TITLE}" inspiration, so the welcome introduces that inspiration and immediately starts the adaptation conversation.
+description: ${welcome_description_yaml}
 ---
 
 # Welcome the user (inspiration: ${TITLE})
@@ -505,7 +614,7 @@ another mind built:
 - Title: ${TITLE}
 - Slug: \`${SLUG}\`
 - Description: ${manifest_description}
-- Manifest: \`inspiration-${SLUG}.md\` (at the repo root)
+- Manifest: \`${MANIFEST}\` (at the repo root, with \`${MANIFEST_TOML}\` beside it)
 
 Do ALL of the following in your FIRST response, in the same turn, without
 waiting to be asked:
@@ -513,11 +622,11 @@ waiting to be asked:
 1. Open with a short CUSTOM welcome that names **${TITLE}** and gives the
    one-line description above. Do NOT use a generic "Welcome to Minds"
    greeting and do NOT offer a generic suggestions list.
-2. Immediately read \`inspiration-${SLUG}.md\` at the repo root (reading the
+2. Immediately read \`${MANIFEST}\` at the repo root (reading the
    manifest in the first turn is required).
 3. In plain, non-technical language, present what the inspiration is and
-   what it needs from the user -- name the manifest's "Prerequisites" (the
-   connectors/permissions it runs on). Then ask whether they want to hook it
+   what it needs from the user -- name the manifest's activation requirements
+   (the connectors/permissions it runs on). Then ask whether they want to hook it
    up to their own accounts now (e.g. "Want me to connect this to your own
    Slack?"). End your first response on THAT question. This is the
    \`use-inspiration\` skill's template path; the manifest's "How to adapt
@@ -527,66 +636,79 @@ waiting to be asked:
    service is not), invite them to take a look -- and only then ask how they
    want to adapt it.
 
-If this repo has accumulated several \`inspiration-*.md\` manifests, the one
-named above is the latest; treat the others as reference (they were likely
-already adapted upstream).
+This repo holds exactly one inspiration. If \`${MANIFEST_TOML}\` lists
+\`[[lineage]]\` entries, those are the inspirations this one was built on --
+each with the repo URL and commit it was taken at, so you can go read any of
+them at the exact state that was used. They are provenance, not something to
+adapt here.
 WELCOME_EOF
 
 # --- 8.5 overwrite README.md to describe the inspiration ---------------------
 
 # The clean base's README describes the generic default-workspace-template.
-# That is wrong for a published inspiration: the repo's landing page (what a
-# human sees on GitHub) must describe THIS specific inspiration, not the
-# template. Overwrite it, mirroring the manifest: a title, the one-line
-# description, and a FILL-IN overview the worker completes (a GitHub-flavored
-# version of the manifest's "What it is"). Deterministic full-file write;
-# idempotent across accumulated publishes (regenerated each publish, titled by
-# the latest inspiration, listing ALL manifests in the repo).
-
-# List every inspiration manifest in the assembled tree (the new one from step
-# 6 plus any carried forward in step 1), titled from each manifest's
-# front-matter, marking the one just published.
-inspirations_list=""
-shopt -s nullglob
-for m in inspiration-*.md; do
-    m_slug="${m#inspiration-}"
-    m_slug="${m_slug%.md}"
-    m_title="$(sed -n 's/^title: //p' "$m" | head -1)"
-    [ -n "$m_title" ] || m_title="$m_slug"
-    if [ "$m_slug" = "$SLUG" ]; then
-        inspirations_list+="- **${m_title}** -- [\`${m}\`](${m}) (published now)"$'\n'
-    else
-        inspirations_list+="- ${m_title} -- [\`${m}\`](${m})"$'\n'
-    fi
-done
-shopt -u nullglob
+# That is wrong for a published inspiration: the repo's landing page -- the
+# thing that decides whether a person boots this at all -- must sell THIS
+# project. The structure below is the house recipe: hero graphic, the "Open in
+# Minds" call-to-action, why you care, how to use it, ideas for making it
+# yours. Deterministic full-file write, regenerated on every publish.
+#
+# The call-to-action points at the HTTPS trampoline rather than a bare
+# minds:// URL, which GitHub renders dead. Both it and the copyable fallback
+# need the repo URL, which does not exist yet (the repo name is confirmed in
+# §6 and the owner comes back from the create call in §8), so both carry
+# ${REPO_URL_PLACEHOLDER} for the lead to substitute before the push.
 
 cat > README.md <<README_EOF
+<p align="center">
+  <img alt="${TITLE}" src="${THUMBNAIL}" width="480">
+</p>
+
 # ${TITLE}
+
+<p align="center">
+  <a href="https://boweiliu.github.io/open-in-minds/?git_url=https://github.com/${REPO_URL_PLACEHOLDER}"><img alt="Open in Minds" height="64" src="https://img.shields.io/badge/Open%20in%20Minds-D8D1C0?style=for-the-badge"></a>
+</p>
+
+Didn't work? Create a Minds workspace and paste this to your agent:
+\`/use-inspiration https://github.com/${REPO_URL_PLACEHOLDER}\`
+
+## Why you care
 
 ${manifest_description}
 
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with a short overview (2-4 sentences) of what this inspiration is and does --
-a GitHub-landing-page version of the manifest's "What it is". Write for a
-human browsing the repo who has never seen the original mind. -->
+with one or two plain sentences on the PROBLEM this solves -- why someone
+would want it, not how it is built. Write for a human browsing GitHub who has
+never seen the original mind. -->
+
+## How to use it
+
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
+with how someone actually USES this once it is running: the commands,
+endpoints, screens, or workflow it exposes. This is the heart of the page, so
+give it the room it needs -- but default to concise and readable; a short list
+or a couple of worked examples beats a wall of prose. -->
+
+## Ideas for making it yours
+
+<!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
+with three to five CONCRETE changes someone could make after adopting this
+(e.g. "point it at a different channel", "swap the daily digest for a weekly
+one", "add a second source alongside Slack"). These are optional invitations
+that show the thing is a starting point -- NOT the manifest's "Requirements",
+which are the things that must be resolved. Do not repeat items across the
+two. -->
+
+## What this is
 
 This repository is a published **minds inspiration**: a clean, bootable
-snapshot of the apps and features a mind built, ready to adapt into your own.
-It is NOT the generic workspace template -- it is this specific project.
+snapshot of what a mind built, ready to adapt into your own. It is NOT the
+generic workspace template -- it is this specific project.
 
-## Use it
-
-- **Create a new mind from it:** point a new minds workspace at this repo's
-  URL. On first boot the mind reads the inspiration and helps you connect your
-  own accounts and adapt it.
-- **Bring it into an existing mind:** run \`/use-inspiration <this repo's URL>\`.
-
-## What's inside
-
-${inspirations_list}
-Each \`inspiration-<slug>.md\` is the full manifest for that inspiration: what
-it is, how it works, the prerequisites it needs, and how to adapt it.
+[\`${MANIFEST}\`](${MANIFEST}) is the full manifest -- what it is, how it
+works, what it needs to run, and what to adapt -- with the
+machine-readable half (recipe, requirements, and the environment it needs
+installed) in [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}).
 README_EOF
 
 # --- 8.6 remove the version history so it never ships in an inspiration ------
@@ -655,6 +777,26 @@ if [ "$smoke_ok" -ne 1 ]; then
     exit 4
 fi
 
+# --- 9.5 validate the generated manifest -------------------------------------
+
+# Schema + cross-file agreement, from the snapshotted validator and its schema
+# module. The apt-resolution half is skipped HERE and only here: this run sees
+# the freshly-generated skeleton, whose [environment] is still empty, so there
+# is nothing to resolve yet. The worker re-runs this command WITHOUT
+# --skip-apt-check once it has filled the declarations in (that is the run that
+# rejects an unmirrorable package), and the lead runs it again before the push.
+#
+# `uv run --no-project` resolves no workspace project at all -- the same reason
+# the smoke check above avoids plain `uv run`, and what makes this ~1s on a
+# cold base rather than a full environment build that can fail on something
+# unrelated.
+if ! uv run --no-project --with 'pydantic>=2' python \
+    "$SCAN_TOOLS_DIR/validate_inspiration.py" "$REPO" \
+    --skip-apt-check --allow-unfinished; then
+    echo "build_inspiration.sh: the generated ${MANIFEST_TOML} did not validate (see above)" >&2
+    exit 6
+fi
+
 # --- 10. single commit, parented on BASE_REF (never on the mind's HEAD) ------
 
 # The snapshot commit's parent is BASE_REF, NOT the branch's previous HEAD.
@@ -685,14 +827,26 @@ if [ "${#DATA_INCLUDE_PATHS[@]}" -gt 0 ]; then
         echo "    - ${rel}"
     done
 fi
-echo "  manifest:  ${MANIFEST}"
+echo "  manifest:  ${MANIFEST} (prose) + ${MANIFEST_TOML} (machine-readable)"
 echo "  thumbnail: ${THUMBNAIL}"
 echo "  readme:    README.md (regenerated to describe this inspiration)"
 echo "  boot smoke-check: passed"
-echo "  NEXT: ${MANIFEST} still has <!-- FILL-IN (publishing agent): ... --> placeholders in"
-echo "  'What it is', 'How it works', 'Recipe' (exclude + modification_rules), 'Prerequisites',"
-echo "  'Holes', and 'Publication history' (the v1 changelog entry); README.md has one FILL-IN"
-echo "  (its overview); and ${THUMBNAIL}"
-echo "  is a generic placeholder (marker comment inside). Replace ALL FILL-INs with real content"
-echo "  (or explicit 'none' prose) AND replace the placeholder with a bespoke SVG for this app,"
-echo "  then commit and self-check before reporting done."
+echo "  manifest validation: passed (skeleton)"
+echo "  NEXT, before reporting done:"
+echo "    1. ${MANIFEST} has <!-- FILL-IN (publishing agent): ... --> blocks in 'What it is',"
+echo "       'How it works', 'Requirements', 'Environment', and"
+echo "       'Publication history' (the v1 entry). Replace ALL of them with real content, or"
+echo "       explicit 'none' prose."
+echo "    2. ${MANIFEST_TOML} has FILL-IN comments for the recipe's exclude and"
+echo "       modification_rules, the [requirements] tables, and the [environment] table."
+echo "       Every requires_ line you write in ${MANIFEST} MUST have its counterpart here --"
+echo "       validation compares them and fails the publish if they disagree."
+echo "    3. README.md has FILL-IN blocks for 'Why you care', 'How to use it', and 'Ideas for"
+echo "       making it yours'."
+echo "    4. ${THUMBNAIL} is a generic placeholder (marker comment inside). Replace the whole"
+echo "       file with a bespoke SVG for this app; it is also the README's hero graphic."
+echo "    5. Re-run the validator with NO --skip-apt-check and NO --allow-unfinished:"
+echo "         uv run --no-project --with 'pydantic>=2' python \\"
+echo "             .agents/skills/publish-inspiration/scripts/validate_inspiration.py ."
+echo "       That run is the one that rejects an apt package which does not resolve in the"
+echo "       pinned mirror, and any placeholder you left behind. Then commit."

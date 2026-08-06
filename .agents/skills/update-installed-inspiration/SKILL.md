@@ -36,7 +36,7 @@ telling the user you cannot vouch for the code, not certifying it is safe.
 ## 1. Identify the adopted inspiration and the newer version
 
 - **Find the manifest.** The inspiration this mind adopted lives at the repo root
-  as `inspiration-<slug>.md` (plus its `inspiration-<slug>.svg` thumbnail). Read
+  as `inspiration.md` (plus its `inspiration.svg` thumbnail). Read
   its front-matter and its "Adaptation history" to see what this mind adopted and
   what it has already changed. If several manifests are present, confirm with the
   user which inspiration they mean.
@@ -99,7 +99,7 @@ git worktree add -q "$WT" HEAD
 **Check the merge went well, in the worktree:**
 
 - **CRITICAL -- preserve this mind's own adaptations.** Merge conflicts mark
-  exactly where the newer version and this mind's OWN customizations (the holes it
+  exactly where the newer version and this mind's OWN customizations (the requirements it
   filled, the connectors it wired, the local edits it made after adopting)
   disagree. They are HOLES, not a hard failure, and they must NEVER be resolved
   mechanically or with a blanket "take theirs" -- doing so would silently throw
@@ -142,9 +142,26 @@ this mind's adaptations are carried through the merge you resolved. This path do
 not touch `system/config/parent.toml` -- provenance is read-only reference; there is no upstream
 fetch or pull here.
 
-## 3. Fill any holes interactively
+## 2b. Re-converge the environment
 
-Work through each hole with the user, one at a time. A hole is any merge conflict
+A newer version can declare packages the version you were on did not. After the
+merge lands, re-run convergence so the update's new dependencies are actually
+installed before you start resolving requirements against them:
+
+```bash
+uv run env-converge run --phase slow
+```
+
+Exit 3 means something declared could not be installed -- surface it to the user
+the same way `use-inspiration` §3 does, distinguishing a package that does not
+resolve at this mind's pinned timestamp (offer `uv run env-converge upgrade`)
+from cargo crates with no rust installed (an upgrade will not help; rust has to
+be installed first). A v1 inspiration declares no environment, so this step is a
+no-op for one.
+
+## 3. Resolve any requirements interactively
+
+Work through each requirement with the user, one at a time. A requirement is any merge conflict
 from §2 (where the update and this mind's adaptation collided) plus anything the
 newer version's manifest flags as newly missing or stubbed. Translate each into
 non-technical terms, ask the user how they want it resolved when you are unsure --
@@ -203,7 +220,7 @@ like the `## Workspace` and `## Inspirations` lines.
 
 Commit the update per the repo's git conventions (a plain local commit; when the
 user has enabled GitHub sync, the post-commit hook handles any push). This is one
-commit for the adaptation work -- the merged-in tree, the resolved holes, the
+commit for the adaptation work -- the merged-in tree, the resolved requirements, the
 updated manifest with its new "Adaptation history" entry, and
 `docs/VERSION_HISTORY.md`.
 

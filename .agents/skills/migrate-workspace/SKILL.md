@@ -382,7 +382,7 @@ staging, the encoded-project-dir detail, and why the primary is excluded.
 **Branches.** Fetch every `mngr/<name>` branch regardless of state, so no commits
 are lost, and carry the merged/unmerged classification into your report.
 
-**Inspirations.** The source's `inspiration-*.md` manifests and their `.svg`
+**Inspirations.** The source's `inspiration.md` manifests and their `.svg`
 thumbnails come over as ordinary user content, and the old ledger's
 `## Inspirations` and `## Adopted inspirations` entries are **merged into** this
 workspace's `docs/VERSION_HISTORY.md` -- append-only, existing lines copied
