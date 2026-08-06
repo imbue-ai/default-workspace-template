@@ -15,14 +15,21 @@ Sourcing rule (confirmed against codex ``policy.rs`` + real rollouts):
 ``response_item`` lines are the canonical
 conversation state; ``event_msg`` lines are a derived live-display stream. We build
 the body from ``response_item`` -- **except** two things taken from ``event_msg``:
-(1) user bubbles, from ``user_message`` (the clean human-typed prompt); and (2) the
-``turn_aborted`` marker (a user interrupt), used to clear a stuck activity dot.
-``response_item`` role=user is the *model-facing*
-user role: the human prompt PLUS
-injected ``AGENTS.md`` / ``<environment_context>`` / ``<turn_aborted>`` /
-``<subagent_notification>`` content, which we do not want as chat bubbles. Everything
-else in ``event_msg`` (``agent_message`` display echoes, ``token_count``, ``task_*``)
-is skipped in this core cut.
+(1) user bubbles, the clean human-typed prompt; and (2) the ``turn_aborted`` marker
+(a user interrupt), used to clear a stuck activity dot. We take the user bubble from
+the display stream rather than the canonical one because ``response_item`` role=user
+is the *model-facing* user role: the human prompt PLUS injected ``AGENTS.md`` /
+``<environment_context>`` / ``<turn_aborted>`` / ``<subagent_notification>`` content
+with no field marking which is which, so it cannot be shown as-is. The display stream
+labels the human turn explicitly, which is the clean signal.
+
+Codex has emitted that human turn under two shapes across versions: older codex as
+``event_msg`` ``user_message``; newer codex folds every display echo into
+``event_msg`` ``item_completed`` with a typed ``item`` (``UserMessage`` for the human
+turn, plus ``AgentMessage`` / ``CommandExecution`` / ``Reasoning`` display duplicates
+of the canonical ``response_item`` lines). We accept both user-turn shapes and ignore
+the rest of ``item_completed`` (already covered by ``response_item``). Everything else
+in ``event_msg`` (``agent_message`` echoes, ``token_count``) is skipped in this core cut.
 
 Lossy by design for this first cut -- all deferred to later slices: ``usage``
 (``token_count`` -> Phase 2, and coarse), ``is_auth_error`` (lives in codex's
@@ -161,6 +168,44 @@ def _stable_user_event_id(timestamp: str, content: str) -> str:
     return f"codex-user-{digest}"
 
 
+def _item_content_text(content: Any) -> str | None:
+    """Join the text of an ``item_completed`` item's ``content`` blocks, or None.
+
+    The new item schema carries the human prompt as ``content: [{type, text}, ...]``.
+    We take any block's ``text`` (a user turn is a single text block in practice).
+    """
+    if not isinstance(content, list):
+        return None
+    text = "".join(
+        block.get("text", "") for block in content if isinstance(block, dict) and isinstance(block.get("text"), str)
+    )
+    return text or None
+
+
+def _user_message_events(timestamp: str, text: str | None) -> list[dict[str, Any]]:
+    """The single user-bubble event for a human prompt, or ``[]`` when there is no text.
+
+    Both the old ``event_msg`` ``user_message`` and the new ``item_completed``
+    ``UserMessage`` forms route here, sharing one content-derived event id (see
+    :func:`_stable_user_event_id`) so a rollout that somehow carried both dedups to one
+    bubble.
+    """
+    if not text:
+        return []
+    event_id = _stable_user_event_id(timestamp, text)
+    return [
+        {
+            "timestamp": timestamp,
+            "type": "user_message",
+            "event_id": event_id,
+            "source": _SOURCE,
+            "role": "user",
+            "content": text,
+            "message_uuid": event_id,
+        }
+    ]
+
+
 def parse_lines(
     record: dict[str, Any],
     line_index: int,
@@ -183,21 +228,24 @@ def parse_lines(
 
     # --- event_msg: the clean human prompt + the turn-abort marker ---
     if outer == "event_msg":
+        # The clean human prompt. Older codex emitted it as ``user_message``; newer
+        # codex folds every display echo into ``item_completed`` carrying a typed
+        # ``item``, so the human turn is now ``item_completed`` with
+        # ``item.type == "UserMessage"``. We handle both forms: they do not co-occur
+        # in a given codex version, and both derive the same content-based event id,
+        # so a transitional rollout that carried both would still dedup to one bubble.
+        # (Only the user bubble ever came from this display stream -- assistant text
+        # and tool calls are sourced from the canonical ``response_item`` lines, which
+        # this codex version left unchanged, so nothing else here needs to move.)
         if payload_type == "user_message":
             text = payload.get("message")
-            if isinstance(text, str) and text:
-                event_id = _stable_user_event_id(timestamp, text)
-                return [
-                    {
-                        "timestamp": timestamp,
-                        "type": "user_message",
-                        "event_id": event_id,
-                        "source": _SOURCE,
-                        "role": "user",
-                        "content": text,
-                        "message_uuid": event_id,
-                    }
-                ]
+            return _user_message_events(timestamp, text if isinstance(text, str) else None)
+        if payload_type == "item_completed":
+            item = payload.get("item")
+            if isinstance(item, dict) and item.get("type") == "UserMessage":
+                return _user_message_events(timestamp, _item_content_text(item.get("content")))
+            # Other item_completed items (AgentMessage, CommandExecution, Reasoning)
+            # are display duplicates of the response_item lines we already parse; skip.
             return []
         # A user interrupt aborts the turn. Codex does NOT persist the synthetic
         # aborted tool output, so an in-flight tool call would otherwise stay

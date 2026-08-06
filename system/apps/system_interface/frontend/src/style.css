@@ -265,26 +265,47 @@ body {
   border: none;
 }
 
-.chat-agent-terminal-link {
-  margin-top: 6px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--color-text-faint);
+/* The row below the chat input: model bar on the left, agent-terminal + harness-auth
+   actions right-aligned. Shares the model bar's font; no background of its own; text
+   kept at the visible secondary color (not the old faint links). */
+.composer-under-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 0 4px;
+  max-width: calc(var(--width-message-column) + 2 * var(--radius-composer));
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
 }
 
-.chat-agent-terminal-link button {
-  color: inherit;
+.composer-under-bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.composer-under-bar-action {
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
   background: none;
   border: none;
-  padding: 0;
-  font: inherit;
+  border-radius: 8px;
   cursor: pointer;
-  opacity: 0.7;
+  white-space: nowrap;
+  transition:
+    color 120ms,
+    background 120ms;
 }
 
-.chat-agent-terminal-link button:hover {
-  opacity: 1;
-  text-decoration: underline;
+.composer-under-bar-action:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
 }
 
 .message-input {

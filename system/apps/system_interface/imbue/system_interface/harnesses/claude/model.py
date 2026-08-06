@@ -37,6 +37,7 @@ from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
+from imbue.system_interface.harnesses.model import base_alias
 
 # Every Claude model offers the same efforts: low..max shown, ultra (ultracode)
 # declared-but-hidden. Shared so the four options do not each re-list them.
@@ -213,20 +214,27 @@ class ClaudeModelResolver(HarnessModelResolver):
         return (self._settings_path, self._managed_path)
 
     def switch(self, identity: ModelIdentity, send: Callable[[str], bool]) -> SwitchResult:
-        # Model, effort, and fast are three distinct Claude Code commands, sent in
-        # order. Each mutates settings.json, and the watch fires a fresh recompute.
-        if not send(f"/model {identity.model_id}"):
-            return SwitchResult(ok=False, detail="Failed to deliver /model to the agent")
-        if identity.effort is not None and not send(f"/effort {identity.effort.value}"):
-            return SwitchResult(ok=False, detail="Failed to deliver /effort to the agent")
-        if not send("/fast on" if identity.fast else "/fast off"):
-            return SwitchResult(ok=False, detail="Failed to deliver /fast to the agent")
-        # Claude Code leaves no durable record of fast off, so record it into the
-        # agent's launch settings -- that is what a restart comes back with.
-        write_path = _get_agent_fast_mode_write_path(self._config_dir, self._state_dir)
-        try:
-            _write_fast_mode_setting(write_path, identity.fast)
-        except (FastModeSettingsError, OSError) as e:
-            logger.opt(exception=e).error("Failed to record fast mode at {}", write_path)
-            return SwitchResult(ok=False, detail="Applied the change but could not record fast mode")
+        # Model, effort, and fast are three distinct Claude Code commands. Send only
+        # the axes that actually differ from the current state, so a fast toggle does
+        # not also re-issue /model and /effort (each would otherwise fire a redundant
+        # settings write and recompute). Each command sent mutates settings.json, and
+        # the watch fires a fresh recompute.
+        current = self.read_live() or self.guess_from_launch()
+        if base_alias(current.model_id) != base_alias(identity.model_id):
+            if not send(f"/model {identity.model_id}"):
+                return SwitchResult(ok=False, detail="Failed to deliver /model to the agent")
+        if identity.effort is not None and identity.effort != current.effort:
+            if not send(f"/effort {identity.effort.value}"):
+                return SwitchResult(ok=False, detail="Failed to deliver /effort to the agent")
+        if identity.fast != current.fast:
+            if not send("/fast on" if identity.fast else "/fast off"):
+                return SwitchResult(ok=False, detail="Failed to deliver /fast to the agent")
+            # Claude Code leaves no durable record of fast off, so record it into the
+            # agent's launch settings -- that is what a restart comes back with.
+            write_path = _get_agent_fast_mode_write_path(self._config_dir, self._state_dir)
+            try:
+                _write_fast_mode_setting(write_path, identity.fast)
+            except (FastModeSettingsError, OSError) as e:
+                logger.opt(exception=e).error("Failed to record fast mode at {}", write_path)
+                return SwitchResult(ok=False, detail="Applied the change but could not record fast mode")
         return SwitchResult(ok=True)

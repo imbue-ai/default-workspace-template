@@ -418,7 +418,12 @@ def test_get_harnesses_excludes_codex_without_the_flag(client: FlaskClient) -> N
 
 
 def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
-    """A claude switch sends /model, /effort, and /fast in order, then reports ok."""
+    """A claude switch sends only the axes that changed from the current state.
+
+    The agent has no settings yet, so current == the launch default (opus[1m], medium,
+    fast off); switching to sonnet/high with fast still off sends /model + /effort but
+    not /fast.
+    """
     agent_id = "agent-00000000000000000000000000000004"
     agent_info = _model_agent_info(agent_id, tmp_path)
     manager, messenger = _manager_with_resolver(agent_info)
@@ -429,7 +434,7 @@ def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 200
-    assert messenger.sent == [(agent_id, "/model sonnet"), (agent_id, "/effort high"), (agent_id, "/fast off")]
+    assert messenger.sent == [(agent_id, "/model sonnet"), (agent_id, "/effort high")]
 
 
 def test_set_model_rejects_unknown_model(tmp_path: Path) -> None:

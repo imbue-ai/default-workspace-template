@@ -55,7 +55,8 @@ def test_read_live_leaves_effort_none_before_first_effort(tmp_path: Path) -> Non
     assert live.effort is None
 
 
-def test_switch_sends_the_three_commands_and_records_fast(tmp_path: Path) -> None:
+def test_switch_sends_only_the_axes_that_changed(tmp_path: Path) -> None:
+    # No settings yet, so current == the launch default (opus[1m], medium, fast off).
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
 
@@ -63,10 +64,24 @@ def test_switch_sends_the_three_commands_and_records_fast(tmp_path: Path) -> Non
         sent.append(line)
         return True
 
+    # Switch model + effort but keep fast off: /fast must NOT be re-sent.
     result = resolver.switch(ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False), send)
 
     assert result.ok
-    assert sent == ["/model sonnet", "/effort high", "/fast off"]
+    assert sent == ["/model sonnet", "/effort high"]
+
+
+def test_switch_fast_toggle_sends_only_fast(tmp_path: Path) -> None:
+    # Current == default (opus[1m], medium, fast off). Toggling only fast on must
+    # send just /fast on -- not re-issue /model or /effort.
+    resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
+    sent: list[str] = []
+    result = resolver.switch(
+        ModelIdentity(model_id="opus[1m]", effort=EffortLevel.MEDIUM, fast=True),
+        lambda line: sent.append(line) or True,
+    )
+    assert result.ok
+    assert sent == ["/fast on"]
 
 
 def test_switch_reports_a_failed_send(tmp_path: Path) -> None:
