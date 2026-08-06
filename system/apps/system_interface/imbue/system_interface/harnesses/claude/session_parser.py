@@ -18,11 +18,10 @@ from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_
 from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
 from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
+from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
+from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 
 logger = _loguru_logger
-
-_MAX_INPUT_PREVIEW_LENGTH = 200
-_MAX_OUTPUT_LENGTH = 2000
 
 # tk lifecycle commands print machine-readable decoration on stdout that the
 # chat progress view reads back from the transcript: `Updated <id> -> <status>`
@@ -212,10 +211,10 @@ def _truncate_tool_output(content: str) -> str:
     that fall past the cut, appended after the truncation marker. This preserves
     the progress view's step structure and decoration even when a tk command's
     output is pushed past the limit."""
-    if len(content) <= _MAX_OUTPUT_LENGTH:
+    if len(content) <= MAX_TOOL_OUTPUT_LENGTH:
         return content
-    head = content[:_MAX_OUTPUT_LENGTH]
-    preserved = [m.group(0) for m in _TK_OUTPUT_DECORATION_PATTERN.finditer(content) if m.end() > _MAX_OUTPUT_LENGTH]
+    head = content[:MAX_TOOL_OUTPUT_LENGTH]
+    preserved = [m.group(0) for m in _TK_OUTPUT_DECORATION_PATTERN.finditer(content) if m.end() > MAX_TOOL_OUTPUT_LENGTH]
     if preserved:
         return head + "...\n" + "\n".join(preserved)
     return head + "..."
@@ -342,8 +341,8 @@ def _parse_assistant_message(
             tool_name: str = block.get("name", "")
             tool_input = block.get("input", {})
             input_preview = json.dumps(tool_input, separators=(",", ":"))
-            if len(input_preview) > _MAX_INPUT_PREVIEW_LENGTH and not _is_tk_lifecycle_call(tool_name, tool_input):
-                input_preview = input_preview[:_MAX_INPUT_PREVIEW_LENGTH] + "..."
+            if len(input_preview) > MAX_TOOL_INPUT_PREVIEW_LENGTH and not _is_tk_lifecycle_call(tool_name, tool_input):
+                input_preview = input_preview[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
 
             if call_id and tool_name:
                 tool_name_by_call_id[call_id] = tool_name

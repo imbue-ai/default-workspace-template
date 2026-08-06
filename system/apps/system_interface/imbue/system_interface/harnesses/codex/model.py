@@ -40,6 +40,7 @@ from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
+from imbue.system_interface.harnesses.model import parse_effort_level
 
 # Codex efforts: low..xhigh shown; max/ultra declared-but-hidden (valid + matchable,
 # never offered). Shared across the catalog's models.
@@ -68,16 +69,6 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
 )
 
 
-def _parse_effort(value: Any) -> EffortLevel | None:
-    """Narrow a raw ``reasoning_effort`` value to an :class:`EffortLevel`, or None."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return EffortLevel(value)
-    except ValueError:
-        return None
-
-
 def _thread_settings_from_line(line: str) -> dict[str, Any] | None:
     """The ``thread_settings`` dict from a ``thread_settings_applied`` rollout line,
     or None for any other line (or unparseable JSON)."""
@@ -101,7 +92,7 @@ def _identity_from_thread_settings(settings: dict[str, Any] | None) -> ModelIden
     model = settings.get("model")
     if not isinstance(model, str) or not model:
         return None
-    effort = _parse_effort(settings.get("reasoning_effort"))
+    effort = parse_effort_level(settings.get("reasoning_effort"))
     # ``priority`` is codex's fast tier; anything else (``default``, absent) is off.
     fast = settings.get("service_tier") == "priority"
     return ModelIdentity(model_id=model, effort=effort, fast=fast)
@@ -133,7 +124,7 @@ class CodexModelResolver(HarnessModelResolver):
         config = self._read_config()
         model = config.get("model")
         model_id = model if isinstance(model, str) and model else CODEX_CATALOG.default_model_id
-        effort = _parse_effort(config.get("model_reasoning_effort")) or _DEFAULT_EFFORT
+        effort = parse_effort_level(config.get("model_reasoning_effort")) or _DEFAULT_EFFORT
         # config.toml carries no service tier; a fresh agent is not on the fast tier.
         return ModelIdentity(model_id=model_id, effort=effort, fast=False)
 

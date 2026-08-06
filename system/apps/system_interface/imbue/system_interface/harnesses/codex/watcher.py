@@ -40,14 +40,12 @@ from typing import Any
 from typing import Callable
 
 from loguru import logger as _loguru_logger
-from watchdog.observers import Observer
 
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
-from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
-from imbue.system_interface.watcher_common import WakeOnChangeHandler
 
 logger = _loguru_logger
 
@@ -109,10 +107,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
     _partial: str
     _line_index: int
     _tool_name_by_call_id: dict[str, str]
-    _stop_event: threading.Event
-    _wake_event: threading.Event
-    _thread: threading.Thread | None
-    _observer: Any
+    # The shared watch loop: a recursive watchdog on the sessions dir plus the poll
+    # safety net, invoking _emit_unsent once at start and on every wake. Replaces the
+    # bespoke thread/observer/poll block this watcher used to hand-roll.
+    _path_watcher: PathWatcher | None
 
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "CodexSessionWatcher":
@@ -161,70 +159,25 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # the calls, but keeping the map is harmless and covers output-only cases).
         self._tool_name_by_call_id = {}
 
-        self._stop_event = threading.Event()
-        self._wake_event = threading.Event()
-        self._thread = None
-        # Watchdog observer on the transcript dir, so an append wakes the loop
-        # immediately instead of waiting out the poll interval. Started lazily once
-        # the dir exists (see _maybe_start_observer).
-        self._observer = None
+        self._path_watcher = None
         return self
 
     def start(self) -> None:
-        """Start tailing the transcript in a background thread."""
-        self._thread = threading.Thread(target=self._run, daemon=True, name=f"codex-watcher-{self._agent_id}")
-        self._thread.start()
+        """Start tailing the transcript in a background thread.
+
+        The watch loop is the shared :class:`PathWatcher` on the stable sessions dir
+        (watched recursively, so appends to whichever rollout is live wake it without
+        re-scheduling on rotation). It calls ``_emit_unsent`` once at start -- to
+        broadcast whatever already exists, since the agent may have run before the UI
+        connected -- and again on every filesystem wake or poll timeout.
+        """
+        self._path_watcher = PathWatcher.build((self._sessions_dir,), self._emit_unsent)
+        self._path_watcher.start()
 
     def stop(self) -> None:
         """Stop tailing."""
-        self._stop_event.set()
-        self._wake_event.set()
-        if self._observer is not None:
-            self._observer.stop()
-            self._observer.join(timeout=5.0)
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)
-
-    # --- background loop ---------------------------------------------------
-
-    def _maybe_start_observer(self) -> None:
-        """Watch the transcript dir so an append wakes the loop immediately.
-
-        No-op if already watching or the dir does not exist yet -- the transcript
-        dir is created by mngr_codex's stream_transcript.sh on the agent's first
-        turn, so until then the poll interval covers the gap and this is retried
-        each loop. Watching the transcript dir (not the whole state dir) keeps us
-        off the noisy per-agent sqlite/log writes elsewhere. The 1s poll remains a
-        safety net if watchdog misses an event.
-        """
-        if self._observer is not None:
-            return
-        if not self._sessions_dir.is_dir():
-            return
-        try:
-            observer = Observer()
-            # Recursive: rollouts live under sessions/YYYY/MM/DD/ and rotate across
-            # days/sessions, so watching the stable sessions root catches every
-            # rollout's appends without re-scheduling on rotation.
-            observer.schedule(WakeOnChangeHandler(self._wake_event), str(self._sessions_dir), recursive=True)
-            observer.start()
-            self._observer = observer
-        except OSError as e:
-            logger.debug("codex watcher: failed to start watchdog on {}: {}", self._sessions_dir, e)
-
-    def _run(self) -> None:
-        # Broadcast whatever already exists on first pass (the agent may have run before
-        # the UI connected), then poll (woken early by watchdog) for appended lines.
-        self._maybe_start_observer()
-        self._emit_unsent()
-        while not self._stop_event.is_set():
-            self._wake_event.wait(timeout=POLL_INTERVAL_SECONDS)
-            self._wake_event.clear()
-            if self._stop_event.is_set():
-                break
-            # retry until the transcript dir exists
-            self._maybe_start_observer()
-            self._emit_unsent()
+        if self._path_watcher is not None:
+            self._path_watcher.stop()
 
     def _refresh(self) -> None:
         """Bring the in-memory transcript up to date with the rollout on disk.

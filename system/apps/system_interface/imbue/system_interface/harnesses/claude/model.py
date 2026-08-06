@@ -38,6 +38,7 @@ from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
+from imbue.system_interface.harnesses.model import parse_effort_level
 
 # Every Claude model offers the same efforts: low..max shown, ultra (ultracode)
 # declared-but-hidden. Shared so the four options do not each re-list them.
@@ -164,16 +165,6 @@ def _write_fast_mode_setting(settings_path: Path, is_enabled: bool) -> None:
     atomic_write(settings_path, json.dumps(settings))
 
 
-def _parse_effort(value: Any) -> EffortLevel | None:
-    """Narrow a raw ``effortLevel`` settings value to an :class:`EffortLevel`, or None."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return EffortLevel(value)
-    except ValueError:
-        return None
-
-
 class ClaudeModelResolver(HarnessModelResolver):
     """Reads and switches a Claude agent's model/effort/fast selection."""
 
@@ -195,7 +186,7 @@ class ClaudeModelResolver(HarnessModelResolver):
         data = read_json_dict(self._settings_path)
         model = data.get("model")
         model_id = model if isinstance(model, str) and model else CLAUDE_CATALOG.default_model_id
-        effort = _parse_effort(data.get("effortLevel")) or _DEFAULT_EFFORT
+        effort = parse_effort_level(data.get("effortLevel")) or _DEFAULT_EFFORT
         fast = _resolve_agent_fast_mode(self._settings_path, self._managed_path)
         return ModelIdentity(model_id=model_id, effort=effort, fast=fast)
 
@@ -206,7 +197,7 @@ class ClaudeModelResolver(HarnessModelResolver):
             # settings.json has no model yet -> nothing live; fall back to the guess.
             return None
         # effortLevel may be absent until the first /effort; None then.
-        effort = _parse_effort(data.get("effortLevel"))
+        effort = parse_effort_level(data.get("effortLevel"))
         fast = _resolve_agent_fast_mode(self._settings_path, self._managed_path)
         return ModelIdentity(model_id=model, effort=effort, fast=fast)
 
