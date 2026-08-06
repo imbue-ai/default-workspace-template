@@ -18,6 +18,14 @@ has an authoritative signal.
 it may emit via ``HarnessSpec.special_kinds``. A harness emitting a kind outside its own
 declaration is a bug its tests should catch. The frontend mirrors this enum, so an
 undeclared kind is a type error there rather than an event silently dropped on the floor.
+
+Event-id rule (the spine): every event's ``event_id`` MUST be derived from the harness's
+own STABLE identity -- claude's message UUID, codex's message id / call_id / ``turn_id``,
+pi's entry id, opencode's ``prt_`` -- never a physical line/counter position. A stable id
+lets the store dedup a re-serialised copy, supersede an updated one in place (rather than
+appending a duplicate), and re-materialise a rotated rollout without duplicating; a counter
+gives a re-added entry a new id and makes those impossible. A harness synthesises an id from
+content only where the source truly carries none, and does so position-independently.
 """
 
 from enum import StrEnum
