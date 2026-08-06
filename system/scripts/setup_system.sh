@@ -37,6 +37,7 @@ fi
 : "${NODE_VERSION:=22.23.2}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${CODEX_VERSION:=0.146.0}"
+: "${CODEX_PATCH_RELEASE:=v0.146.0-modelargs}"
 : "${OPENCODE_VERSION:=1.18.14}"
 : "${PI_VERSION:=0.83.0}"
 : "${MODAL_VERSION:=1.4.2}"
@@ -235,6 +236,34 @@ command -v node npm >/dev/null
 # agent_types.codex.version in .mngr/settings.toml.
 npm install -g "@openai/codex@${CODEX_VERSION}"
 command -v codex >/dev/null
+
+# Replace the binary npm just vendored with a patched build that supports
+# `/model <model> [effort]`; upstream makes that a silent no-op that looks like
+# it worked (openai/codex#32212). npm still performs the install above -- we
+# overwrite exactly one file inside it. The codex-code-mode-host binary beside
+# it embeds V8 and is left alone, which is what keeps this patch cheap to carry.
+codex_patch_arch="$(dpkg --print-architecture)"
+case "${codex_patch_arch}" in
+    arm64) codex_patch_sha256="beb197c0c4f11e9a91f5bd83abeb42cb4159f23d06909ec4b0b057cf8187c084" ;;
+    amd64) codex_patch_sha256="0b60ea44d0ede489293b4c1b00684a6774c1185eb7c90dd607e1d5fc3209d7f6" ;;
+    *) echo "Unsupported architecture for patched codex: ${codex_patch_arch}" >&2; exit 1 ;;
+esac
+# npm nests the platform subpackage, and the exact path differs between npm
+# versions, so locate it rather than hardcoding it. Refuse ambiguity instead of
+# picking one and patching the wrong install.
+codex_vendored="$(find /usr/local/lib/node_modules/@openai -type f -path '*/vendor/*/bin/codex')"
+if [ "$(printf '%s\n' "${codex_vendored}" | grep -c .)" != "1" ]; then
+    echo "Expected exactly one vendored codex binary, found: ${codex_vendored:-none}" >&2
+    exit 1
+fi
+# Same download-then-rename(2) dance as install_downloaded_binary (see its
+# comment re: ETXTBSY on a live re-provision), with a checksum in the middle.
+codex_patch_tmp="$(mktemp "${codex_vendored}.XXXXXX")"
+curl -fsSL "https://github.com/minhtrinh-imbue/codex-slash-model/releases/download/${CODEX_PATCH_RELEASE}/codex-linux-${codex_patch_arch}" -o "${codex_patch_tmp}"
+echo "${codex_patch_sha256}  ${codex_patch_tmp}" | sha256sum -c -
+chmod 0755 "${codex_patch_tmp}"
+mv -f "${codex_patch_tmp}" "${codex_vendored}"
+codex --version
 
 # OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
 # VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the
