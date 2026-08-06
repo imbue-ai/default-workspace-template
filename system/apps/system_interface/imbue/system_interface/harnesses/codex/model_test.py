@@ -9,6 +9,7 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import EffortLevel
+from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 
 
@@ -71,6 +72,7 @@ def test_switch_is_unavailable_read_only(tmp_path: Path) -> None:
     sent: list[str] = []
     result = resolver.switch(
         ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.HIGH, fast=True),
+        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT, ModelAxis.FAST}),
         lambda line: sent.append(line) or True,
     )
     assert not result.ok

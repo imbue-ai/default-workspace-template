@@ -15,7 +15,7 @@ import m from "mithril";
 import { getAgentById } from "../models/AgentManager";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
-import { effectiveChoice, setModelChoice } from "../models/ModelSettings";
+import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
 import { icon } from "./icons";
 
@@ -175,7 +175,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             effort: clampEffort(option, currentEffort),
             fast: option.supports_fast ? currentFast : false,
           };
-          setModelChoice(agentId, nextIdentity, option);
+          setModelChoice(agentId, nextIdentity, option, changedAxes(choice.identity, nextIdentity));
         },
       });
 
@@ -192,7 +192,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               tooltip: "Select reasoning effort",
               onPick: (level) => {
                 const nextIdentity: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                setModelChoice(agentId, nextIdentity, matched);
+                setModelChoice(agentId, nextIdentity, matched, changedAxes(choice.identity, nextIdentity));
               },
             })
           : null;
@@ -213,7 +213,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                   effort: currentEffort,
                   fast: !currentFast,
                 };
-                setModelChoice(agentId, nextIdentity, matched);
+                setModelChoice(agentId, nextIdentity, matched, changedAxes(choice.identity, nextIdentity));
               },
             },
             m.trust(icon("zap", { size: 16 })),

@@ -489,7 +489,9 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
         return _agent_not_found_response(agent_id)
 
     identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
-    result = resolver.switch(identity, lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line))
+    result = resolver.switch(
+        identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
+    )
     if not result.ok:
         status_code = 409 if catalog.switch_mode == SwitchMode.READ_ONLY else 500
         detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"

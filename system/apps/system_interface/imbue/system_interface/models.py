@@ -6,6 +6,7 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import EffortLevel
+from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelChoice
 
 
@@ -60,6 +61,10 @@ class SetModelChoiceRequest(FrozenModel):
     model_id: str = Field(description="Model id to switch to; must be one of the harness catalog option ids")
     effort: EffortLevel | None = Field(default=None, description="Reasoning effort to set; None for a no-effort model")
     fast: bool = Field(default=False, description="Whether fast mode should be on")
+    axes: tuple[ModelAxis, ...] = Field(
+        default=(),
+        description="Which axes this click changed (against the value the user saw); the switch applies only these",
+    )
 
 
 class WorkspaceFastModeResponse(FrozenModel):

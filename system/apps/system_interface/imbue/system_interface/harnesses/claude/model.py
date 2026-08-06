@@ -33,11 +33,11 @@ from imbue.system_interface.harnesses.model import EffortChoice
 from imbue.system_interface.harnesses.model import EffortLevel
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
+from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
-from imbue.system_interface.harnesses.model import base_alias
 
 # Every Claude model offers the same efforts: low..max shown, ultra (ultracode)
 # declared-but-hidden. Shared so the four options do not each re-list them.
@@ -213,20 +213,24 @@ class ClaudeModelResolver(HarnessModelResolver):
     def watched_paths(self) -> tuple[Path, ...]:
         return (self._settings_path, self._managed_path)
 
-    def switch(self, identity: ModelIdentity, send: Callable[[str], bool]) -> SwitchResult:
+    def switch(
+        self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
+    ) -> SwitchResult:
         # Model, effort, and fast are three distinct Claude Code commands. Send only
-        # the axes that actually differ from the current state, so a fast toggle does
-        # not also re-issue /model and /effort (each would otherwise fire a redundant
-        # settings write and recompute). Each command sent mutates settings.json, and
-        # the watch fires a fresh recompute.
-        current = self.read_live() or self.guess_from_launch()
-        if base_alias(current.model_id) != base_alias(identity.model_id):
+        # the axes the click actually changed -- the frontend computes that against
+        # the value the user saw (the optimistic overlay), so a fast toggle does not
+        # re-issue /model and /effort, AND re-picking the value you started on
+        # (medium -> xhigh -> medium) still sends /effort medium. Diffing here against
+        # settings.json instead would drop that second change whenever disk had not
+        # yet reflected the first. Each command sent mutates settings.json, and the
+        # watch fires a fresh recompute.
+        if ModelAxis.MODEL in axes:
             if not send(f"/model {identity.model_id}"):
                 return SwitchResult(ok=False, detail="Failed to deliver /model to the agent")
-        if identity.effort is not None and identity.effort != current.effort:
+        if ModelAxis.EFFORT in axes and identity.effort is not None:
             if not send(f"/effort {identity.effort.value}"):
                 return SwitchResult(ok=False, detail="Failed to deliver /effort to the agent")
-        if identity.fast != current.fast:
+        if ModelAxis.FAST in axes:
             if not send("/fast on" if identity.fast else "/fast off"):
                 return SwitchResult(ok=False, detail="Failed to deliver /fast to the agent")
             # Claude Code leaves no durable record of fast off, so record it into the

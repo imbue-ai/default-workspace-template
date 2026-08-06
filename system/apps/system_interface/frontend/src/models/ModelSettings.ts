@@ -83,15 +83,41 @@ export function effectiveChoice(agentId: string, liveChoice: ModelChoice | null 
   return { identity: liveChoice.identity, matched: liveChoice.matched, isPending: false };
 }
 
-/** Apply a full model/effort/fast selection: show it optimistically, then POST it. */
-export function setModelChoice(agentId: string, identity: ModelIdentity, option: CatalogModelOption): void {
+/** Which axes differ between the value the user was looking at (`prev`) and the
+ *  one they just picked (`next`). Sent to the backend so it applies only those --
+ *  computed here, against the optimistic overlay, so re-picking the value you
+ *  started on (medium -> xhigh -> medium) still sends /effort medium rather than
+ *  being suppressed by a disk read that has not caught up. Model uses baseAlias so
+ *  a variant suffix (opus vs opus[1m]) is not counted as a change. */
+export function changedAxes(prev: ModelIdentity, next: ModelIdentity): string[] {
+  const axes: string[] = [];
+  if (baseAlias(prev.model_id) !== baseAlias(next.model_id)) {
+    axes.push("model");
+  }
+  if ((prev.effort ?? null) !== (next.effort ?? null)) {
+    axes.push("effort");
+  }
+  if (prev.fast !== next.fast) {
+    axes.push("fast");
+  }
+  return axes;
+}
+
+/** Apply the `axes` a click changed: show the pick optimistically, then POST it.
+ *  `axes` names which of model/effort/fast to actually send (see changedAxes). */
+export function setModelChoice(
+  agentId: string,
+  identity: ModelIdentity,
+  option: CatalogModelOption,
+  axes: string[],
+): void {
   pendingByAgent.set(agentId, { identity, option });
   m.redraw();
 
   const previous = applyChainByAgent.get(agentId) ?? Promise.resolve();
   const next = previous.then(
-    () => postModelChoice(agentId, identity),
-    () => postModelChoice(agentId, identity),
+    () => postModelChoice(agentId, identity, axes),
+    () => postModelChoice(agentId, identity, axes),
   );
   applyChainByAgent.set(agentId, next);
   void next.then(() => {
@@ -102,13 +128,13 @@ export function setModelChoice(agentId: string, identity: ModelIdentity, option:
   });
 }
 
-async function postModelChoice(agentId: string, identity: ModelIdentity): Promise<void> {
+async function postModelChoice(agentId: string, identity: ModelIdentity, axes: string[]): Promise<void> {
   try {
     await m.request({
       method: "POST",
       url: apiUrl("/api/agents/:agentId/model"),
       params: { agentId },
-      body: { model_id: identity.model_id, effort: identity.effort, fast: identity.fast },
+      body: { model_id: identity.model_id, effort: identity.effort, fast: identity.fast, axes },
     });
   } catch (error) {
     // The pushed live choice (or the timeout) reconciles the display back to truth.
@@ -144,9 +170,6 @@ export function setFastMode(agentId: string, enabled: boolean): void {
   if (!choice || choice.matched === null || !choice.matched.supports_fast) {
     return;
   }
-  setModelChoice(
-    agentId,
-    { model_id: choice.matched.id, effort: choice.identity.effort, fast: enabled },
-    choice.matched,
-  );
+  const next = { model_id: choice.matched.id, effort: choice.identity.effort, fast: enabled };
+  setModelChoice(agentId, next, choice.matched, changedAxes(choice.identity, next));
 }

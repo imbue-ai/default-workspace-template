@@ -6,6 +6,7 @@ from pathlib import Path
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.model import EffortLevel
+from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 
 
@@ -55,8 +56,8 @@ def test_read_live_leaves_effort_none_before_first_effort(tmp_path: Path) -> Non
     assert live.effort is None
 
 
-def test_switch_sends_only_the_axes_that_changed(tmp_path: Path) -> None:
-    # No settings yet, so current == the launch default (opus[1m], medium, fast off).
+def test_switch_sends_only_the_axes_it_is_told(tmp_path: Path) -> None:
+    # Told model + effort changed but not fast: /fast must NOT be sent.
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
 
@@ -64,28 +65,64 @@ def test_switch_sends_only_the_axes_that_changed(tmp_path: Path) -> None:
         sent.append(line)
         return True
 
-    # Switch model + effort but keep fast off: /fast must NOT be re-sent.
-    result = resolver.switch(ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False), send)
+    result = resolver.switch(
+        ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False),
+        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
+        send,
+    )
 
     assert result.ok
     assert sent == ["/model sonnet", "/effort high"]
 
 
 def test_switch_fast_toggle_sends_only_fast(tmp_path: Path) -> None:
-    # Current == default (opus[1m], medium, fast off). Toggling only fast on must
-    # send just /fast on -- not re-issue /model or /effort.
+    # Only the fast axis changed: send just /fast on, not /model or /effort.
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
     result = resolver.switch(
         ModelIdentity(model_id="opus[1m]", effort=EffortLevel.MEDIUM, fast=True),
+        frozenset({ModelAxis.FAST}),
         lambda line: sent.append(line) or True,
     )
     assert result.ok
     assert sent == ["/fast on"]
 
 
+def test_switch_reissues_a_value_the_agent_is_already_on(tmp_path: Path) -> None:
+    # The reported bug: settings.json already says effort=medium, but the effort
+    # axis is in the change set (the user went medium -> xhigh -> medium faster than
+    # disk reconciled). The switch must still send /effort medium -- it applies the
+    # axes it is told, never suppressing on a disk read.
+    resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
+    _write_settings(tmp_path, {"model": "opus[1m]", "effortLevel": "medium"})
+    sent: list[str] = []
+    result = resolver.switch(
+        ModelIdentity(model_id="opus[1m]", effort=EffortLevel.MEDIUM, fast=False),
+        frozenset({ModelAxis.EFFORT}),
+        lambda line: sent.append(line) or True,
+    )
+    assert result.ok
+    assert sent == ["/effort medium"]
+
+
+def test_switch_with_no_axes_sends_nothing(tmp_path: Path) -> None:
+    resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
+    sent: list[str] = []
+    result = resolver.switch(
+        ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False),
+        frozenset(),
+        lambda line: sent.append(line) or True,
+    )
+    assert result.ok
+    assert sent == []
+
+
 def test_switch_reports_a_failed_send(tmp_path: Path) -> None:
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
-    result = resolver.switch(ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False), lambda _line: False)
+    result = resolver.switch(
+        ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False),
+        frozenset({ModelAxis.MODEL}),
+        lambda _line: False,
+    )
     assert not result.ok
     assert result.detail is not None

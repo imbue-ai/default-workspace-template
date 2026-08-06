@@ -418,11 +418,10 @@ def test_get_harnesses_excludes_codex_without_the_flag(client: FlaskClient) -> N
 
 
 def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
-    """A claude switch sends only the axes that changed from the current state.
+    """A claude switch sends exactly the axes the client says a click changed.
 
-    The agent has no settings yet, so current == the launch default (opus[1m], medium,
-    fast off); switching to sonnet/high with fast still off sends /model + /effort but
-    not /fast.
+    The client reports model + effort changed (not fast), so the endpoint sends
+    /model + /effort and not /fast.
     """
     agent_id = "agent-00000000000000000000000000000004"
     agent_info = _model_agent_info(agent_id, tmp_path)
@@ -430,7 +429,8 @@ def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.post(
-            f"/api/agents/{agent_id}/model", json={"model_id": "sonnet", "effort": "high", "fast": False}
+            f"/api/agents/{agent_id}/model",
+            json={"model_id": "sonnet", "effort": "high", "fast": False, "axes": ["model", "effort"]},
         )
 
     assert response.status_code == 200
