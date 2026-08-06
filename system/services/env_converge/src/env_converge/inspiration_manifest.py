@@ -450,6 +450,37 @@ def _strip_html_comments(markdown_text: str) -> str:
     return _HTML_COMMENT_PATTERN.sub("", markdown_text)
 
 
+def _parse_front_matter_scalar(raw_value: str) -> str:
+    """One YAML scalar from a front-matter line, unquoted if it was quoted.
+
+    Front-matter values are the user's own words -- a title like
+    `The "Daily" Digest: v2` has to be emitted double-quoted or YAML reads it
+    as something else entirely. Parsing has to undo exactly that, or every
+    generated manifest would look like it disagreed with its TOML.
+
+    Only the flat scalar forms front matter actually uses are handled: a
+    double-quoted string with backslash escapes, a single-quoted string with
+    YAML's doubled-quote escape, or a plain scalar.
+    """
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        body = value[1:-1]
+        result: list[str] = []
+        is_escaped = False
+        for character in body:
+            if is_escaped:
+                result.append({"n": "\n", "t": "\t"}.get(character, character))
+                is_escaped = False
+            elif character == "\\":
+                is_escaped = True
+            else:
+                result.append(character)
+        return "".join(result)
+    if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+        return value[1:-1].replace("''", "'")
+    return value
+
+
 def _parse_markdown_front_matter(markdown_text: str) -> dict[str, str]:
     """The `key: value` pairs of a leading `---`-delimited front-matter block."""
     lines = markdown_text.splitlines()
@@ -461,7 +492,7 @@ def _parse_markdown_front_matter(markdown_text: str) -> dict[str, str]:
             break
         key, separator, value = line.partition(":")
         if separator:
-            front_matter[key.strip()] = value.strip()
+            front_matter[key.strip()] = _parse_front_matter_scalar(value)
     return front_matter
 
 
