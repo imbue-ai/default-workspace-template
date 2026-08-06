@@ -19,11 +19,6 @@ import {
   removePendingMessage,
 } from "../models/PendingMessages";
 import { describeRequestError } from "../models/request-error";
-import { effectiveChoice, isPickInFlight, setModelChoice } from "../models/ModelSettings";
-import type { ModelIdentity } from "../models/ModelSettings";
-import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
-import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
-import { getAgentById } from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
 import { isWorkingActivityState } from "./ActivityIndicator";
@@ -62,24 +57,6 @@ function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
 // Compatibility export
 export function setSelectedModelId(_modelId: string): void {}
 
-/** The effort to carry when switching to `option`: keep the current one if the new
- *  model declares it, else the model's first shown (or first declared) effort. Null
- *  when the model has no effort axis. */
-function clampEffort(option: CatalogModelOption, currentEffort: string | null): string | null {
-  if (option.efforts.length === 0) {
-    return null;
-  }
-  if (currentEffort !== null && option.efforts.some((effort) => effort.level === currentEffort)) {
-    return currentEffort;
-  }
-  const shown = option.efforts.filter((effort) => effort.in_picker);
-  return (shown[0] ?? option.efforts[0]).level;
-}
-
-function capitalizeEffort(level: string): string {
-  return level.length === 0 ? level : level[0].toUpperCase() + level.slice(1);
-}
-
 export function MessageInput(): m.Component<{ agentId: string | null }> {
   let messageText = "";
   let currentAgentId: string | null = null;
@@ -96,10 +73,6 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   let declinedSlashCommand: string | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isInterruptInFlight = false;
-  // Which model-bar dropdown is open (the model picker, the effort picker, or
-  // none), and the bar element used to detect an outside click closing it.
-  let openModelBarDropdown: "model" | "effort" | null = null;
-  let modelBarElement: HTMLElement | null = null;
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
@@ -113,198 +86,6 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       declinedSlashCommand = null;
       m.redraw();
     }
-  }
-
-  // Stable reference (defined once for the component's life) so the dropdown's
-  // add/removeEventListener pair to the same function -- a per-render closure
-  // would leak a listener each time the dropdown reopens.
-  function handleModelOutsideMousedown(event: MouseEvent): void {
-    if (modelBarElement !== null && !modelBarElement.contains(event.target as Node)) {
-      openModelBarDropdown = null;
-      m.redraw();
-    }
-  }
-
-  // The model bar lives in the composer toolbar: [Logo][Model][Effort][Fast].
-  // Everything it shows is data -- the static per-harness catalog (logo, options,
-  // efforts, switch mode) from HarnessCatalog.ts, plus the agent's live model_choice
-  // pushed onto the agents store. Which slots show is decided purely by the matched
-  // catalog option (effort iff the model declares efforts; fast iff it supports fast);
-  // the switch mode only decides whether the shown slots are interactive. A pick is
-  // applied optimistically and reconciled from the pushed live choice (ModelSettings.ts).
-
-  // A dropdown slot (the model picker or the effort picker), styled like the old
-  // model selector. `openModelBarDropdown` names which one is open, if any.
-  function renderModelBarDropdown(opts: {
-    kind: "model" | "effort";
-    triggerLabel: string;
-    header: string;
-    items: { id: string; label: string }[];
-    selectedId: string | null;
-    interactive: boolean;
-    tooltip: string;
-    onPick: (id: string) => void;
-  }): m.Vnode {
-    const isOpen = openModelBarDropdown === opts.kind;
-    return m("div", { class: "model-selector-wrapper" }, [
-      m(
-        "button",
-        {
-          type: "button",
-          class: "model-selector-trigger",
-          disabled: !opts.interactive,
-          "data-tooltip": opts.tooltip,
-          onclick: (event: MouseEvent) => {
-            event.stopPropagation();
-            openModelBarDropdown = isOpen ? null : opts.kind;
-          },
-        },
-        [
-          m("span", { class: "model-selector-label" }, opts.triggerLabel),
-          m("span", { class: "model-selector-chevron" }, m.trust(icon("chevron-down", { size: 12 }))),
-        ],
-      ),
-      isOpen && opts.interactive
-        ? m(
-            "div",
-            {
-              class: "model-selector-dropdown",
-              oncreate: () => document.addEventListener("mousedown", handleModelOutsideMousedown),
-              onremove: () => document.removeEventListener("mousedown", handleModelOutsideMousedown),
-            },
-            [
-              m("div", { class: "model-selector-dropdown-header" }, opts.header),
-              m(
-                "ul",
-                { class: "model-selector-dropdown-list" },
-                opts.items.map((item) =>
-                  m(
-                    "li",
-                    {
-                      key: item.id,
-                      class:
-                        "model-selector-option" +
-                        (opts.selectedId === item.id ? " model-selector-option--selected" : ""),
-                      onclick: () => {
-                        openModelBarDropdown = null;
-                        if (opts.selectedId !== item.id) {
-                          opts.onPick(item.id);
-                        }
-                      },
-                    },
-                    item.label,
-                  ),
-                ),
-              ),
-            ],
-          )
-        : null,
-    ]);
-  }
-
-  function renderModelBar(agentId: string): m.Vnode | null {
-    const agent = getAgentById(agentId);
-    const catalog: HarnessCatalog | null = getHarnessCatalog(agent?.harness);
-    if (catalog === null) {
-      // No catalog (feature-flagged off, or catalogs not loaded yet): no bar.
-      return null;
-    }
-    const logo = m("span", { class: "model-bar-logo", "aria-hidden": "true" }, m.trust(catalog.icon_svg));
-
-    const choice = effectiveChoice(agentId, agent?.model_choice);
-    if (choice === null) {
-      // The live selection has not resolved yet; show the logo alone.
-      return m("div", { class: "model-bar" }, logo);
-    }
-    const matched = choice.matched;
-    if (matched === null) {
-      // The current combo matches no catalog option: a shrug, no model/effort/fast.
-      return m("div", { class: "model-bar" }, [
-        logo,
-        m("span", { class: "model-bar-shrug", "data-tooltip": "Unrecognized model" }, "\u{1F937}"),
-      ]);
-    }
-
-    const interactive = catalog.switch_mode !== "read_only" && !isPickInFlight(agentId);
-    const currentEffort = choice.identity.effort;
-    const currentFast = choice.identity.fast;
-
-    const modelSlot = renderModelBarDropdown({
-      kind: "model",
-      triggerLabel: matched.label,
-      header: "Model",
-      items: catalog.options
-        .filter((option) => option.in_picker)
-        .map((option) => ({ id: option.id, label: option.label })),
-      selectedId: matched.id,
-      interactive,
-      tooltip: "Select model",
-      onPick: (modelId) => {
-        const option = catalog.options.find((candidate) => candidate.id === modelId);
-        if (option === undefined) {
-          return;
-        }
-        // Clamp effort into the new model's declared set, and drop fast if the new
-        // model does not support it (the backend validates the same).
-        const nextIdentity: ModelIdentity = {
-          model_id: option.id,
-          effort: clampEffort(option, currentEffort),
-          fast: option.supports_fast ? currentFast : false,
-        };
-        setModelChoice(agentId, nextIdentity, option);
-      },
-    });
-
-    const shownEfforts = matched.efforts.filter((effort) => effort.in_picker);
-    const effortSlot =
-      matched.efforts.length > 0
-        ? renderModelBarDropdown({
-            kind: "effort",
-            triggerLabel: currentEffort === null ? "Effort" : capitalizeEffort(currentEffort),
-            header: "Effort",
-            items: shownEfforts.map((effort) => ({ id: effort.level, label: capitalizeEffort(effort.level) })),
-            selectedId: currentEffort,
-            interactive,
-            tooltip: "Select reasoning effort",
-            onPick: (level) => {
-              const nextIdentity: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-              setModelChoice(agentId, nextIdentity, matched);
-            },
-          })
-        : null;
-
-    const fastSlot = matched.supports_fast
-      ? m(
-          "button",
-          {
-            type: "button",
-            class: `fast-toggle${currentFast ? " fast-toggle--on" : ""}`,
-            disabled: !interactive,
-            "data-tooltip": currentFast ? "Disable fast mode" : "Enable fast mode",
-            "aria-label": currentFast ? "Disable fast mode" : "Enable fast mode",
-            "aria-pressed": currentFast ? "true" : "false",
-            onclick: () => {
-              const nextIdentity: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
-              setModelChoice(agentId, nextIdentity, matched);
-            },
-          },
-          m.trust(icon("zap", { size: 16 })),
-        )
-      : null;
-
-    return m(
-      "div",
-      {
-        class: "model-bar",
-        oncreate: (barVnode: m.VnodeDOM) => {
-          modelBarElement = barVnode.dom as HTMLElement;
-        },
-        onremove: () => {
-          modelBarElement = null;
-        },
-      },
-      [logo, modelSlot, effortSlot, fastSlot],
-    );
   }
 
   function renderComposerAttachment(agentId: string, attachment: ComposerAttachment): m.Vnode {
@@ -366,13 +147,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         currentAgentId = agentId;
         messageText = localStorage.getItem(messageTextKey(agentId)) ?? "";
         isInterruptInFlight = false;
-        openModelBarDropdown = null;
         // The notice names a command typed for the previous agent, so it must not follow the user
         // to the next one.
         declinedSlashCommand = null;
-        // Load the static per-harness model catalogs once; the live selection
-        // rides the agents store, so there is nothing per-agent to fetch.
-        void ensureHarnessCatalogs();
       }
 
       async function handleSend(): Promise<void> {
@@ -679,7 +456,6 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               onpaste: handlePaste,
             }),
             m("div", { class: "message-input-toolbar" }, [
-              renderModelBar(agentId),
               m(
                 "button",
                 {

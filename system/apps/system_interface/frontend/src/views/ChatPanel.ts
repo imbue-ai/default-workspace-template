@@ -42,6 +42,7 @@ import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
+import { ModelBar } from "./ModelBar";
 import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
@@ -858,26 +859,29 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       events: getEventsForAgent(agentId),
                     }),
                 m(MessageInput, { agentId }),
-                m("div", { class: "chat-agent-terminal-link" }, [
-                  m(
-                    "button",
-                    {
-                      type: "button",
-                      onclick: () => openAgentTerminalTab(agentId),
-                    },
-                    "Open agent terminal",
-                  ),
-                  m("span", { class: "chat-agent-terminal-link-sep" }, " · "),
-                  // Persistent entry to the Claude sign-in modal so the user
-                  // can switch auth modes without waiting for an auth error.
-                  m(
-                    "button",
-                    {
-                      type: "button",
-                      onclick: () => openLoginModal(),
-                    },
-                    "Agent auth",
-                  ),
+                // Below the chat input: the model bar on the left, the agent-terminal
+                // and harness-auth actions right-aligned. One row, shared font, no
+                // background of its own.
+                m("div", { class: "composer-under-bar" }, [
+                  m(ModelBar, { agentId }),
+                  m("div", { class: "composer-under-bar-actions" }, [
+                    m(
+                      "button",
+                      {
+                        type: "button",
+                        class: "composer-under-bar-action",
+                        onclick: () => openAgentTerminalTab(agentId),
+                      },
+                      "Open agent terminal",
+                    ),
+                    // Persistent entry to the sign-in modal so the user can switch
+                    // auth modes without waiting for an auth error.
+                    m(
+                      "button",
+                      { type: "button", class: "composer-under-bar-action", onclick: () => openLoginModal() },
+                      "Harness auth",
+                    ),
+                  ]),
                 ]),
               ]),
         ],

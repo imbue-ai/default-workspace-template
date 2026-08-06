@@ -15,6 +15,28 @@ def _user_line(text: str, timestamp: str = "2026-07-19T10:00:00.123Z") -> dict:
     return {"timestamp": timestamp, "type": "event_msg", "payload": {"type": "user_message", "message": text}}
 
 
+def _item_user_line(text: str, timestamp: str = "2026-07-19T10:00:00.123Z") -> dict:
+    """A new-schema user turn: ``event_msg`` / ``item_completed`` with a ``UserMessage``
+    item. Shape taken from a real codex rollout after the item-model upgrade."""
+    return {
+        "timestamp": timestamp,
+        "type": "event_msg",
+        "payload": {
+            "type": "item_completed",
+            "item": {"type": "UserMessage", "id": "u1", "content": [{"type": "text", "text": text}]},
+        },
+    }
+
+
+def _item_line(item_type: str) -> dict:
+    """A non-user item_completed line (a display duplicate of a response_item)."""
+    return {
+        "timestamp": "2026-07-19T10:00:00.123Z",
+        "type": "event_msg",
+        "payload": {"type": "item_completed", "item": {"type": item_type, "content": [{"type": "Text", "text": "x"}]}},
+    }
+
+
 def test_user_bubble_id_is_stable_across_line_index() -> None:
     """The same user message re-read at a different physical line (e.g. a rollout
     compressed then re-materialised, repointing the marker and forcing a re-read from
@@ -43,6 +65,36 @@ def test_user_bubble_id_differs_for_distinct_sends() -> None:
 
 def test_empty_user_message_is_skipped() -> None:
     assert parse_lines(_user_line(""), 0, {}) == []
+
+
+def test_new_schema_item_completed_user_message_renders() -> None:
+    """After the codex item-model upgrade the human turn arrives as
+    ``item_completed`` / ``UserMessage``; it must render as the same user bubble the
+    old ``user_message`` form produced."""
+    events = parse_lines(_item_user_line("how we doin'"), 5, {})
+    assert len(events) == 1
+    assert events[0]["type"] == "user_message"
+    assert events[0]["content"] == "how we doin'"
+
+
+def test_old_and_new_user_forms_share_one_event_id() -> None:
+    """Both user-turn shapes derive the same content-based id, so a rollout that
+    somehow carried both dedups to a single bubble rather than showing it twice."""
+    old = parse_lines(_user_line("how we doin'"), 5, {})[0]["event_id"]
+    new = parse_lines(_item_user_line("how we doin'"), 9, {})[0]["event_id"]
+    assert old == new
+
+
+def test_empty_item_user_message_is_skipped() -> None:
+    assert parse_lines(_item_user_line(""), 0, {}) == []
+
+
+def test_non_user_item_completed_is_dropped() -> None:
+    """Agent/command/reasoning items are display duplicates of response_item lines we
+    already parse, so they must not double-render."""
+    assert parse_lines(_item_line("AgentMessage"), 1, {}) == []
+    assert parse_lines(_item_line("CommandExecution"), 2, {}) == []
+    assert parse_lines(_item_line("Reasoning"), 3, {}) == []
 
 
 def test_turn_aborted_emits_marker() -> None:
