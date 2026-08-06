@@ -683,6 +683,36 @@ def test_synthetic_api_error_message_is_still_shown() -> None:
     assert events[0]["text"] == error_text
 
 
+def test_api_error_flagged_only_on_synthetic_messages() -> None:
+    """A synthetic API-error notice is flagged (so the frontend styles it as an error);
+    a REAL assistant message that merely quotes 'API Error: 500' is NOT flagged -- a
+    coding chat discussing errors must not be painted as a provider outage."""
+    synthetic = json.dumps(
+        {
+            "type": "assistant",
+            "uuid": "uuid-s",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {
+                "role": "assistant",
+                "model": "<synthetic>",
+                "content": [{"type": "text", "text": "API Error: 529 Overloaded"}],
+                "stop_reason": "stop_sequence",
+                "usage": {},
+            },
+        }
+    )
+    real = _make_assistant_line(
+        "uuid-r", "2026-01-01T00:00:03Z", "The server sometimes returns `API Error: 500` on retry."
+    )
+    synthetic_event = parse_lines([synthetic])[0]
+    assert synthetic_event["is_api_error"] is True
+    assert synthetic_event["is_provider_fault"] is True
+
+    real_event = parse_lines([real])[0]
+    assert real_event["is_api_error"] is False
+    assert real_event["is_provider_fault"] is False
+
+
 def test_tool_output_preserves_tk_transition_past_truncation() -> None:
     """A tk transition line (`Updated <id> -> <status>`) that falls past the
     output truncation limit is preserved, so the progress view never loses a

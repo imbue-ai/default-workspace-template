@@ -971,7 +971,16 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-extra_provision_command__extend = ["bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
+# Converge the venv for worker agents, ahead of the skill install so deps are ready
+# first. A fresh git worktree (transfer = "git-worktree" above) carries no .venv
+# (gitignored), so a worker's first `uv run` would otherwise cold-build one mid-task --
+# lazily, with root-closure scope rather than --all-packages, racing whatever the agent
+# is doing (intermittent ModuleNotFoundError, e.g. imbue_common). Scoped to the worker
+# role: a `-t worker` create resolves to type `claude` and applies THIS template, so the
+# sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
+# agents whose persisted type is already worker). Chat/main agents share the services
+# agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
+extra_provision_command__extend = ["uv sync --all-packages", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 [create_templates.pirate]
@@ -989,13 +998,3 @@ parent_type = "claude"
 
 [agent_types.worker]
 parent_type = "claude"
-# Converge the venv for worker agents. A fresh git worktree carries no .venv
-# (gitignored), so a worker's first `uv run` would otherwise cold-build one
-# mid-task -- lazily, with root-closure scope rather than --all-packages, racing
-# whatever the agent is already doing (intermittent ModuleNotFoundError, e.g.
-# imbue_common). Scoped to the worker role: chat/main agents share the services
-# agent's work_dir and its boot-time converge. At agent-type level this resolves
-# ahead of the create template's own provision commands (the worker skill
-# install), so deps are ready first. uv's warm cache makes this hardlink-fast
-# when there is nothing to do.
-extra_provision_command__extend = ["uv sync --all-packages"]

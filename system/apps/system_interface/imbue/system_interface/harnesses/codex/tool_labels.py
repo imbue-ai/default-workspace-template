@@ -132,10 +132,39 @@ def _js_string_argument(js: str, *keys: str) -> str | None:
     carries its per-mode queries.
     """
     for key in keys:
-        match = re.search(rf'["\']?{re.escape(key)}["\']?\s*:\s*"([^"]*)"', js)
+        # The value pattern allows escaped chars (``\\.``) so a value containing an escaped
+        # quote -- e.g. codex serialising ``cmd: "tk create --step \"Title\""`` -- is captured
+        # WHOLE, not clipped at the first ``\"``. (A bare ``[^"]*`` stopped there, defeating the
+        # tk-command / apply_patch recognition and mangling the exec caption.)
+        match = re.search(rf'["\']?{re.escape(key)}["\']?\s*:\s*"((?:\\.|[^"\\])*)"', js)
         if match:
-            return match.group(1)
+            return _unescape_js_string(match.group(1))
     return None
+
+
+# The JS/JSON string escapes worth undoing when reading a captured value (``\"`` -> ``"``,
+# ``\\`` -> ``\``, and the common whitespace escapes). An unknown escape keeps the char after
+# the backslash, which is harmless for the command/caption use.
+_JS_UNESCAPES: dict[str, str] = {'"': '"', "\\": "\\", "/": "/", "n": "\n", "t": "\t", "r": "\r"}
+
+
+@pure
+def _unescape_js_string(value: str) -> str:
+    """Undo the JS/JSON string escapes in a captured value, without a decode that can raise
+    (so an odd value degrades gracefully rather than being swallowed as an error)."""
+    if "\\" not in value:
+        return value
+    out: list[str] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "\\" and index + 1 < len(value):
+            out.append(_JS_UNESCAPES.get(value[index + 1], value[index + 1]))
+            index += 2
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
 
 
 @pure

@@ -179,3 +179,17 @@ def test_keeps_full_tool_input_for_patch_and_tk() -> None:
     assert keeps_full_tool_input("exec", 'await tools.exec_command({"cmd":"echo run tk close s1 later"})') is False
     # non-exec tools are never exempt.
     assert keeps_full_tool_input("wait", "anything") is False
+
+
+def test_keeps_full_tool_input_handles_escaped_quotes_in_cmd() -> None:
+    """codex serialises a tk command's quoted title with escaped quotes; the exemption
+    must still recognise it (a bare value regex clipped at the first \\" and failed)."""
+    js = 'await tools.exec_command({"cmd":"tk create --step \\"Fix the parser\\""})'
+    assert keeps_full_tool_input("exec", js) is True
+
+
+def test_exec_caption_unescapes_the_command() -> None:
+    """The exec caption reads the real (unescaped) command, not the raw \\"-laden JS."""
+    _, caption = tool_labels("exec", 'await tools.exec_command({"cmd":"tk start \\"s1\\""})')
+    assert caption.startswith("Running tk start")
+    assert "\\" not in caption
