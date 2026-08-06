@@ -62,7 +62,7 @@ from imbue.system_interface.harnesses.events import SpecialEventKind
 # label ``claude_session_parser`` stamps -- "common" here means the normalized/common
 # event *form*, not the on-disk common-transcript file (which we do NOT read).
 # Nothing in the pipeline branches on this string.
-_SOURCE = "codex/common_transcript"
+SOURCE = "codex/common_transcript"
 
 # Codex rollout messages never carry a per-message model slug, so surface the same
 # placeholder ``claude_session_parser`` uses when the model is absent, keeping the
@@ -154,7 +154,7 @@ def _assistant_event(timestamp: str, event_id: str, *, text: str, tool_calls: li
         "timestamp": timestamp,
         "type": "assistant_message",
         "event_id": event_id,
-        "source": _SOURCE,
+        "source": SOURCE,
         "role": "assistant",
         "model": _UNKNOWN_MODEL,
         "text": text,
@@ -198,6 +198,22 @@ def _item_content_text(content: Any) -> str | None:
     return text or None
 
 
+def _marker_event_id(payload: dict[str, Any], payload_type: str, line_index: int) -> str:
+    """The event id for a turn-lifecycle marker, keyed on codex's own ``turn_id``.
+
+    The spine's rule: an ``event_id`` must be the harness's own STABLE id, never a
+    physical counter (a counter changes when a rollout is re-materialised from byte 0,
+    duplicating the marker, and makes truncation/supersession inexpressible). Codex's
+    ``task_started`` / ``task_complete`` / ``turn_aborted`` carry a ``turn_id`` (the
+    started/complete pair share one, so the ``payload_type`` suffix keeps them
+    distinct). Falls back to the line index only if a marker ever arrives without one.
+    """
+    turn_id = payload.get("turn_id")
+    if isinstance(turn_id, str) and turn_id:
+        return f"codex-turn-{turn_id}-{payload_type}"
+    return f"codex-{line_index}-{payload_type}"
+
+
 def _user_message_events(timestamp: str, text: str | None) -> list[dict[str, Any]]:
     """The single user-bubble event for a human prompt, or ``[]`` when there is no text.
 
@@ -214,7 +230,7 @@ def _user_message_events(timestamp: str, text: str | None) -> list[dict[str, Any
             "timestamp": timestamp,
             "type": "user_message",
             "event_id": event_id,
-            "source": _SOURCE,
+            "source": SOURCE,
             "role": "user",
             "content": text,
             "message_uuid": event_id,
@@ -269,14 +285,14 @@ def parse_lines(
         # turn_aborted marker; the activity layer treats it as resolving every
         # still-open tool call (see ``activity_state.pending_tool_call``).
         if payload_type == "turn_aborted":
-            event_id = f"codex-{line_index}-turn_aborted"
+            event_id = _marker_event_id(payload, "turn_aborted", line_index)
             return [
                 {
                     "timestamp": timestamp,
                     "type": SPECIAL_EVENT_TYPE,
                     "kind": SpecialEventKind.TURN_ABORTED.value,
                     "event_id": event_id,
-                    "source": _SOURCE,
+                    "source": SOURCE,
                     "message_uuid": event_id,
                 }
             ]
@@ -292,14 +308,14 @@ def parse_lines(
                 if payload_type == "task_started"
                 else SpecialEventKind.TURN_COMPLETED
             )
-            event_id = f"codex-{line_index}-{payload_type}"
+            event_id = _marker_event_id(payload, payload_type, line_index)
             return [
                 {
                     "timestamp": timestamp,
                     "type": SPECIAL_EVENT_TYPE,
                     "kind": kind.value,
                     "event_id": event_id,
-                    "source": _SOURCE,
+                    "source": SOURCE,
                     "message_uuid": event_id,
                 }
             ]
@@ -352,7 +368,7 @@ def parse_lines(
                 "timestamp": timestamp,
                 "type": "tool_result",
                 "event_id": event_id,
-                "source": _SOURCE,
+                "source": SOURCE,
                 "tool_call_id": call_id,
                 "tool_name": tool_name_by_call_id.get(call_id, ""),
                 "output": output,

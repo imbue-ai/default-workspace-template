@@ -42,9 +42,12 @@ from typing import Callable
 from loguru import logger as _loguru_logger
 
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
+from imbue.system_interface.harnesses.codex.session_parser import SOURCE as _SOURCE
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
 
 logger = _loguru_logger
@@ -101,10 +104,19 @@ class CodexSessionWatcher(AgentSessionWatcher):
     _lock: threading.Lock
     _events: list[dict[str, Any]]
     _event_index: dict[str, int]
+    # Already-emitted events that a later rollout line superseded (same id, new
+    # content), keyed by id so repeated supersessions collapse to the latest. Drained
+    # by _emit_unsent, which re-broadcasts them so the client upgrades the held copy in
+    # place. A supersession of a not-yet-emitted event needs no entry -- the normal tail
+    # broadcast already carries its latest content.
+    _superseded_pending: dict[str, dict[str, Any]]
     _current_path: Path | None
     _byte_offset: int
     _emitted_count: int
-    _partial: str
+    # A trailing partial line carried across reads as RAW BYTES (not str): a multi-byte
+    # UTF-8 character split across a read boundary must be completed before decoding, or
+    # decoding the fragment corrupts/drops the character.
+    _partial: bytes
     _line_index: int
     _tool_name_by_call_id: dict[str, str]
     # The shared watch loop: a recursive watchdog on the sessions dir plus the poll
@@ -132,8 +144,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
         self._lock = threading.Lock()
         # Adapted UI events, in append (chronological) order.
         self._events = []
-        # event_id -> index into _events, for O(1) offset lookup + dedup.
+        # event_id -> index into _events, for O(1) offset lookup + dedup/supersede.
         self._event_index = {}
+        # Already-emitted events a later line superseded, awaiting re-broadcast.
+        self._superseded_pending = {}
         # The rollout file currently being tailed (resolved from the marker); None
         # until the first turn writes the marker. Rotation = marker points elsewhere.
         self._current_path = None
@@ -146,8 +160,8 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # thread then skipping those events -- ClaudeSessionWatcher keeps the same split,
         # which is what lets its read paths refresh from disk on every call.
         self._emitted_count = 0
-        # A trailing partial line (no newline yet) carried to the next read.
-        self._partial = ""
+        # A trailing partial line (no newline yet) carried to the next read, as bytes.
+        self._partial = b""
         # GLOBAL monotonic line counter for synthetic event ids (event_msg user_message
         # has no codex id). Never reset -- keeps ids unique ACROSS rollout files so a
         # resume's line 5 can't collide with the prior file's line 5. (id-based events
@@ -198,10 +212,16 @@ class CodexSessionWatcher(AgentSessionWatcher):
         """
         self._refresh()
         with self._lock:
-            pending = self._events[self._emitted_count :]
+            # New tail events (delivered once), plus any already-emitted events a line
+            # superseded since the last emit -- re-broadcast so the client upgrades its
+            # held copy in place (order does not matter: the client keys the upgrade on
+            # event_id, not position).
+            pending = self._superseded_pending
+            self._superseded_pending = {}
+            to_send = list(pending.values()) + self._events[self._emitted_count :]
             self._emitted_count = len(self._events)
-        if pending:
-            self._on_events(self._agent_id, pending)
+        if to_send:
+            self._on_events(self._agent_id, to_send)
 
     def _read_active_rollout(self) -> Path | None:
         """The absolute path of the live rollout, per the marker; None until written."""
@@ -224,7 +244,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
                 # what we already emitted and the accumulated transcript survives.
                 self._current_path = target
                 self._byte_offset = 0
-                self._partial = ""
+                self._partial = b""
 
             try:
                 size = target.stat().st_size
@@ -236,7 +256,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
             # start -- id-based dedup drops the re-emitted assistant/tool events.
             if size < self._byte_offset:
                 self._byte_offset = 0
-                self._partial = ""
+                self._partial = b""
             if size == self._byte_offset and not self._partial:
                 return []
 
@@ -249,29 +269,85 @@ class CodexSessionWatcher(AgentSessionWatcher):
                 return []
             self._byte_offset += len(raw)
 
-            data = self._partial + raw.decode("utf-8", errors="replace")
-            lines = data.split("\n")
-            # The final element is the trailing (possibly empty) partial line; carry
-            # it forward so a half-written record is completed on the next read.
-            self._partial = lines.pop()
+            # Split on the newline BYTE and carry the trailing partial forward as bytes,
+            # then decode each COMPLETE line: a `\n` never falls inside a UTF-8 character,
+            # so a whole line always decodes cleanly, and a character split across the read
+            # boundary is completed (as bytes) before it is ever decoded.
+            byte_lines = (self._partial + raw).split(b"\n")
+            self._partial = byte_lines.pop()
 
-            for line in lines:
+            for byte_line in byte_lines:
                 # Every physical line consumes an index (even blanks/skips) so a
                 # given line always maps to the same id across the run.
                 idx = self._line_index
                 self._line_index += 1
-                stripped = line.strip()
+                stripped = byte_line.decode("utf-8", errors="replace").strip()
                 if not stripped:
                     continue
                 for event in self._adapt_line(stripped, idx):
-                    event_id = event["event_id"]
-                    if event_id in self._event_index:
-                        continue
-                    self._event_index[event_id] = len(self._events)
-                    self._events.append(event)
-                    new_events.append(event)
+                    self._ingest_event(event, new_events)
+                    # A user interrupt (turn_aborted) leaves any in-flight tool call with
+                    # no result -- codex never persists one -- so its card would spin
+                    # forever. Synthesise a terminal "Interrupted." result for every open
+                    # call, keyed on the id a real result would use so a real one (if codex
+                    # ever writes it) supersedes this via the same path.
+                    if event.get("type") == SPECIAL_EVENT_TYPE and event.get("kind") == SpecialEventKind.TURN_ABORTED:
+                        for synthetic in self._interrupt_results(event.get("timestamp", "")):
+                            self._ingest_event(synthetic, new_events)
 
         return new_events
+
+    def _ingest_event(self, event: dict[str, Any], new_events: list[dict[str, Any]]) -> None:
+        """Add one parsed event to the view: append a new id, supersede a changed one in
+        place (re-broadcasting an already-emitted change), drop an identical duplicate."""
+        event_id = event["event_id"]
+        existing_idx = self._event_index.get(event_id)
+        if existing_idx is not None:
+            # Supersession: codex re-serialises an event (same id) with updated content --
+            # replace the stored copy in place so the view holds the latest, not the stale
+            # first. An identical re-serialisation is a pure duplicate and is dropped. A
+            # re-broadcast lets the client upgrade its held copy; only an ALREADY-EMITTED
+            # supersession needs one (a not-yet-emitted event is carried latest by the tail).
+            if self._events[existing_idx] != event:
+                self._events[existing_idx] = event
+                new_events.append(event)
+                if existing_idx < self._emitted_count:
+                    self._superseded_pending[event_id] = event
+            return
+        self._event_index[event_id] = len(self._events)
+        self._events.append(event)
+        new_events.append(event)
+
+    def _interrupt_results(self, timestamp: str) -> list[dict[str, Any]]:
+        """Synthetic terminal tool_results for every tool call still open (no result) in
+        the accumulated view -- what an interrupt leaves behind. Each is keyed on the same
+        ``codex-result-<call_id>`` id a real result would carry, so a real result written
+        later supersedes it rather than duplicating."""
+        matched = {e.get("tool_call_id") for e in self._events if e.get("type") == "tool_result"}
+        results: list[dict[str, Any]] = []
+        for event in self._events:
+            if event.get("type") != "assistant_message":
+                continue
+            for tool_call in event.get("tool_calls") or ():
+                call_id = tool_call.get("tool_call_id")
+                if not call_id or call_id in matched:
+                    continue
+                # Record it so a call appearing twice yields a single synthetic.
+                matched.add(call_id)
+                results.append(
+                    {
+                        "timestamp": timestamp,
+                        "type": "tool_result",
+                        "event_id": f"codex-result-{call_id}",
+                        "source": _SOURCE,
+                        "tool_call_id": call_id,
+                        "tool_name": self._tool_name_by_call_id.get(call_id, ""),
+                        "output": "Interrupted.",
+                        "is_error": True,
+                        "message_uuid": f"codex-result-{call_id}",
+                    }
+                )
+        return results
 
     def _adapt_line(self, line: str, line_index: int) -> list[dict[str, Any]]:
         try:

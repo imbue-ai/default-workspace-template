@@ -170,6 +170,25 @@ def test_function_call_and_output_link_by_call_id() -> None:
     assert out["tool_name"] == "shell"
 
 
+def test_turn_markers_key_on_turn_id() -> None:
+    """Turn-lifecycle marker ids derive from codex's stable turn_id, not the line index,
+    so they survive a rollout re-materialisation (started/complete share the turn_id, kept
+    distinct by the payload-type suffix)."""
+    started = {"timestamp": "t", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "tid1"}}
+    complete = {"timestamp": "t", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "tid1"}}
+    aborted = {"timestamp": "t", "type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "tid1"}}
+    assert parse_lines(started, 5, {})[0]["event_id"] == "codex-turn-tid1-task_started"
+    assert parse_lines(complete, 9, {})[0]["event_id"] == "codex-turn-tid1-task_complete"
+    assert parse_lines(aborted, 2, {})[0]["event_id"] == "codex-turn-tid1-turn_aborted"
+    # Position-independent: the same turn re-read at a different line keeps its id.
+    assert parse_lines(started, 999, {})[0]["event_id"] == "codex-turn-tid1-task_started"
+
+
+def test_marker_without_turn_id_falls_back_to_line_index() -> None:
+    started = {"timestamp": "t", "type": "event_msg", "payload": {"type": "task_started"}}
+    assert parse_lines(started, 7, {})[0]["event_id"] == "codex-7-task_started"
+
+
 def test_failed_script_output_sets_is_error() -> None:
     """A code-mode script failure (output starts with 'Script failed') flags is_error;
     a normal output does not."""

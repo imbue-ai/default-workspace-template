@@ -300,7 +300,18 @@ class TranscriptStore {
             added = true;
           }
         } else if (mergeLateSubagentMetadata(prior, event)) {
+          // The narrow claude case: late subagent linkage merges onto the held call.
           merged = true;
+        } else if (JSON.stringify(prior) !== JSON.stringify(event)) {
+          // A general supersession: the backend re-broadcast an already-held event with
+          // updated content (codex re-serialises an event under the same id). Replace it
+          // in place -- position unchanged -- so the held view reflects the latest.
+          const index = this.#events.indexOf(prior);
+          if (index !== -1) {
+            this.#events[index] = event;
+            this.#byId.set(event.event_id, event);
+            merged = true;
+          }
         }
       }
       if (added) {
