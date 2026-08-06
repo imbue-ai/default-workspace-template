@@ -19,12 +19,14 @@ from loguru import logger
 from github_sync.config import (
     GITHUB_URL_PREFIX,
     get_gateway_password,
+    get_gateway_permissions_override,
     get_gateway_url,
     proxied_url,
 )
 
 HOOKS_PATH = "/home/user/workspace/system/libs/github_sync/git_hooks"
 PASSWORD_HEADER = "X-Latchkey-Gateway-Password"
+PERMISSIONS_OVERRIDE_HEADER = "X-Latchkey-Gateway-Permissions-Override"
 
 
 def _git_config(*args: str) -> subprocess.CompletedProcess[str]:
@@ -75,7 +77,9 @@ def _remove_gateway_entries(kept_gateway_url: str | None) -> None:
         else None
     )
     for key, value in _list_global_config(r"http\..*\.extraheader"):
-        is_gateway_header = value.startswith(PASSWORD_HEADER)
+        is_gateway_header = value.startswith(
+            (PASSWORD_HEADER, PERMISSIONS_OVERRIDE_HEADER)
+        )
         if is_gateway_header and key.lower() != (kept_header_key or "").lower():
             _git_config("--unset-all", key)
 
@@ -98,15 +102,23 @@ def apply_git_wiring() -> bool:
     _remove_gateway_entries(gateway_url)
 
     header_key = f"http.{gateway_url}/.extraHeader"
-    config_steps = (
+    config_steps: list[tuple[str, ...]] = [
         (
             "--replace-all",
             f"url.{proxied_url(gateway_url, GITHUB_URL_PREFIX)}.insteadOf",
             GITHUB_URL_PREFIX,
         ),
         ("--replace-all", header_key, f"{PASSWORD_HEADER}: {password}"),
-        ("--replace-all", "core.hooksPath", HOOKS_PATH),
-    )
+    ]
+    # Desktop-hosted gateways authorize via this per-agent JWT and deny
+    # everything without it; VPS gateways omit the env var and need only the
+    # password header. Git sends every extraHeader entry, so both apply.
+    permissions_override = get_gateway_permissions_override()
+    if permissions_override:
+        config_steps.append(
+            ("--add", header_key, f"{PERMISSIONS_OVERRIDE_HEADER}: {permissions_override}")
+        )
+    config_steps.append(("--replace-all", "core.hooksPath", HOOKS_PATH))
     for argv in config_steps:
         result = _git_config(*argv)
         if result.returncode != 0:
