@@ -93,47 +93,53 @@ function matchBrowserFleet(content: string): UserMessageClass | null {
   return m ? { kind: UserMessageKind.SystemChip, label: "Browser fleet", body: m[1].trim() } : null;
 }
 
-// The composer's model picker and fast-mode toggle drive Claude Code by sending
-// it `/model ...` and `/fast ...` slash commands (see MessageInput.ts +
-// ModelSettings.ts). Claude Code records each as a normalized command line
-// (rebuilt by the backend's _normalize_slash_command) plus a raw
-// `<local-command-stdout>` confirmation; neither is a conversational turn, so
-// both are hidden. The picker/toggle already reflect the resulting state, so
-// hiding these -- whether sent by the control or typed in the terminal -- keeps
-// the chat clean without losing anything the user needs.
-const MODEL_FAST_COMMAND_RE = /^\/(model|fast)\b/;
+// The composer's model bar drives Claude Code by sending it `/model ...`,
+// `/effort ...`, and `/fast ...` slash commands (see ModelBar.ts + ModelSettings.ts).
+// Claude Code records each as a normalized command line (rebuilt by the backend's
+// _normalize_slash_command) plus a raw `<local-command-stdout>` confirmation;
+// neither is a conversational turn, so both are hidden. The bar already reflects the
+// resulting state, so hiding these -- whether sent by the control or typed in the
+// terminal -- keeps the chat clean without losing anything the user needs.
+const COMPOSER_COMMAND_RE = /^\/(model|fast|effort)\b/;
 
-/** A `/model` or `/fast` slash command the picker/toggle (or the user) sent. */
-function matchModelFastCommand(content: string): UserMessageClass | null {
-  return MODEL_FAST_COMMAND_RE.test(content.trim())
+/** A `/model`, `/effort`, or `/fast` slash command the bar (or the user) sent. */
+function matchComposerCommand(content: string): UserMessageClass | null {
+  return COMPOSER_COMMAND_RE.test(content.trim())
     ? { kind: UserMessageKind.Hidden, label: null, body: content }
     : null;
 }
 
 const LOCAL_COMMAND_STDOUT_OPEN = "<local-command-stdout>";
-// The confirmation lines Claude Code prints for the two commands the composer
-// sends ("Set model to ...", "Fast mode ON/OFF"). Scoped to those so other local
-// command outputs are unaffected.
-const MODEL_FAST_STDOUT_RE = /Set model to|Fast mode/;
+// The confirmation lines Claude Code prints for the commands the composer sends
+// ("Set model to ...", "Set effort level to ...", "Fast mode ON/OFF"). Scoped to
+// those so other local command outputs are unaffected.
+const COMPOSER_STDOUT_RE = /Set model to|Set effort level to|Fast mode/;
 
-/** The `<local-command-stdout>` confirmation Claude Code emits after a `/model`
- *  or `/fast` command. */
-function matchModelFastCommandOutput(content: string): UserMessageClass | null {
+/** The `<local-command-stdout>` confirmation Claude Code emits after a `/model`,
+ *  `/effort`, or `/fast` command. */
+function matchComposerCommandOutput(content: string): UserMessageClass | null {
   const trimmed = content.trimStart();
-  return trimmed.startsWith(LOCAL_COMMAND_STDOUT_OPEN) && MODEL_FAST_STDOUT_RE.test(content)
+  return trimmed.startsWith(LOCAL_COMMAND_STDOUT_OPEN) && COMPOSER_STDOUT_RE.test(content)
     ? { kind: UserMessageKind.Hidden, label: null, body: content }
     : null;
 }
 
-/** Claude Code's detector table, most-specific first. */
-const CLAUDE_USER_MESSAGE_DETECTORS: Array<(content: string) => UserMessageClass | null> = [
+/**
+ * The one shared detector list, most-specific first. NOT per-harness: every
+ * harness's sentinels live in this same list, because they are distinctive enough
+ * (a `/welcome`, a `Stop hook feedback:` header, a `/model` command, a browser-fleet
+ * tag) never to collide across harnesses. Adding a harness = append ITS detectors
+ * here; nothing gates on which harness produced the message. Detectors that only
+ * some harnesses emit simply never fire for the others.
+ */
+const USER_MESSAGE_DETECTORS: Array<(content: string) => UserMessageClass | null> = [
   matchWelcome,
   matchSkillExpansion,
   matchStopHook,
   matchTaskNotification,
   matchBrowserFleet,
-  matchModelFastCommand,
-  matchModelFastCommandOutput,
+  matchComposerCommand,
+  matchComposerCommandOutput,
 ];
 
 /**
@@ -152,7 +158,7 @@ const CLAUDE_USER_MESSAGE_DETECTORS: Array<(content: string) => UserMessageClass
  *   3. else -> UserPrompt (a genuine human turn).
  */
 export function classifyUserMessage(content: string, isMeta = false): UserMessageClass {
-  for (const detect of CLAUDE_USER_MESSAGE_DETECTORS) {
+  for (const detect of USER_MESSAGE_DETECTORS) {
     const result = detect(content);
     if (result !== null) {
       return result;

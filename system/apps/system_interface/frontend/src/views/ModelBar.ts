@@ -15,7 +15,7 @@ import m from "mithril";
 import { getAgentById } from "../models/AgentManager";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
-import { effectiveChoice, isPickInFlight, setModelChoice } from "../models/ModelSettings";
+import { effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
 import { icon } from "./icons";
 
@@ -146,7 +146,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         ]);
       }
 
-      const interactive = catalog.switch_mode !== "read_only" && !isPickInFlight(agentId);
+      // Always interactive for a switchable harness -- a pending pick never disables
+      // the bar. Each click sets a new optimistic value and enqueues its send; the
+      // pushed live choice (or the pending timeout) reconciles.
+      const interactive = catalog.switch_mode !== "read_only";
       const currentEffort = choice.identity.effort;
       const currentFast = choice.identity.fast;
 

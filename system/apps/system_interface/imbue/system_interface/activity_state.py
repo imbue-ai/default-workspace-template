@@ -15,6 +15,7 @@ current process is left over from a turn this process never ran and must not sho
 """
 
 import re
+from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from enum import auto
@@ -60,44 +61,57 @@ def has_unmatched_tool_use(events: Sequence[dict[str, Any]]) -> bool:
     return bool(pending - matched)
 
 
-# The composer's model picker / fast-mode toggle drive Claude Code by sending it
-# `/model ...` and `/fast ...` slash commands (see server.py). Claude Code handles
-# each locally -- it records a normalized command line plus a raw
-# `<local-command-stdout>` confirmation, and NEVER produces a model reply. Neither
-# line is a genuine conversational turn, so a transcript that ends on one is not
-# "the user spoke and Claude is thinking". Recognized here mirroring the frontend
-# detectors in message-classification.ts (matchModelFastCommand /
-# matchModelFastCommandOutput) so the two stay in agreement.
-_MODEL_FAST_COMMAND_RE = re.compile(r"^/(model|fast)\b")
+# A model bar drives its harness by sending model/effort/fast slash commands (see
+# server.py). The harness handles each locally -- recording a normalized command line
+# plus a raw `<local-command-stdout>` confirmation, and NEVER a model reply -- so a
+# transcript ending on one is not "the user spoke and the agent is thinking". The
+# regexes below recognise a claude harness's form (`/model`, `/effort`, `/fast` and
+# their "Set model to ..." / "Set effort level to ..." / "Fast mode ..." confirmations);
+# they mirror the frontend detectors in message-classification.ts so the two agree.
+_COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
 _LOCAL_COMMAND_STDOUT_MARKER = "<local-command-stdout>"
-_MODEL_FAST_STDOUT_RE = re.compile(r"Set model to|Fast mode")
+_COMPOSER_STDOUT_RE = re.compile(r"Set model to|Set effort level to|Fast mode")
+
+
+def _is_framework_injected(event: dict[str, Any]) -> bool:
+    """A message the harness itself flags as framework-injected and model-only (a
+    resume-continuation marker, a ``<local-command-caveat>`` wrapper, an image
+    coordinate note, ...). A harness stamps ``is_meta`` on these in its parser; a
+    harness that has no such concept simply never sets it."""
+    return bool(event.get("is_meta"))
+
+
+def _is_model_bar_command(event: dict[str, Any]) -> bool:
+    """A model-bar slash command or its ``<local-command-stdout>`` confirmation. Not
+    flagged ``is_meta`` by the harness, so matched by content."""
+    if event.get("type") != "user_message":
+        return False
+    content = event.get("content")
+    text = content.strip() if isinstance(content, str) else ""
+    if _COMPOSER_COMMAND_RE.match(text):
+        return True
+    return text.startswith(_LOCAL_COMMAND_STDOUT_MARKER) and _COMPOSER_STDOUT_RE.search(text) is not None
+
+
+# The one shared list of "this tail is not a real turn" signals. Any harness's
+# markers slot in here; nothing gates on which harness produced the event (the
+# markers are distinctive enough not to collide), mirroring the frontend's shared
+# detector list. A signal only some harnesses emit simply never fires for the rest.
+_NON_TURN_TAIL_SIGNALS: tuple[Callable[[dict[str, Any]], bool], ...] = (
+    _is_framework_injected,
+    _is_model_bar_command,
+)
 
 
 @pure
 def is_non_turn_tail_event(event: dict[str, Any]) -> bool:
     """True for a trailing transcript event that is NOT a genuine turn awaiting a reply.
 
-    Two families qualify:
-
-    - ``isMeta`` framework injections (the resume-continuation marker, the
-      ``<local-command-caveat>`` wrapper, image-coordinate notes, ...): Claude
-      flags these itself and never acts on them.
-    - the ``/model`` / ``/fast`` slash command the composer's model picker sends,
-      and its ``<local-command-stdout>`` confirmation. These are NOT flagged
-      ``isMeta`` by Claude (only the caveat wrapper is), so they must be matched
-      by content -- otherwise a picker change leaves the indicator stuck on
-      "Thinking..." because the command line / confirmation is the transcript tail
-      yet no model reply is ever coming.
+    A tail matching any :data:`_NON_TURN_TAIL_SIGNALS` (a framework injection, a
+    model-bar command / confirmation, ...) must not pin the indicator on
+    "Thinking...", since no model reply is coming for it.
     """
-    if event.get("is_meta"):
-        return True
-    if event.get("type") != "user_message":
-        return False
-    content = event.get("content")
-    text = content.strip() if isinstance(content, str) else ""
-    if _MODEL_FAST_COMMAND_RE.match(text):
-        return True
-    return text.startswith(_LOCAL_COMMAND_STDOUT_MARKER) and _MODEL_FAST_STDOUT_RE.search(text) is not None
+    return any(signal(event) for signal in _NON_TURN_TAIL_SIGNALS)
 
 
 @pure
@@ -105,8 +119,8 @@ def last_event_type(events: Sequence[dict[str, Any]]) -> str | None:
     """Return the ``type`` of the last genuine-turn transcript event, or ``None``.
 
     Trailing non-turn events (see :func:`is_non_turn_tail_event`) are skipped so
-    they cannot drive the THINKING fallback: a picker-sent ``/model`` / ``/fast``
-    command and its confirmation, or an ``isMeta`` framework injection, leave the
+    they cannot drive the THINKING fallback: a bar-sent ``/model`` / ``/effort`` /
+    ``/fast`` command and its confirmation, or an ``isMeta`` framework injection, leave the
     indicator on whatever the last real turn was rather than pinning it to
     "Thinking...". Returns ``None`` for an empty transcript or one that is entirely
     non-turn events.

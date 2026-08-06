@@ -8,7 +8,7 @@ vi.mock("mithril", () => ({ default: { request: mockRequest, redraw: vi.fn() } }
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 vi.mock("./AgentManager", () => ({ getAgentById: mockGetAgentById }));
 
-import { effectiveChoice, getAgentFastMode, isPickInFlight, setFastMode, setModelChoice } from "./ModelSettings";
+import { effectiveChoice, getAgentFastMode, setFastMode, setModelChoice } from "./ModelSettings";
 import type { ModelChoice } from "./ModelSettings";
 import type { CatalogModelOption } from "./HarnessCatalog";
 
@@ -70,7 +70,6 @@ describe("effectiveChoice", () => {
 
   it("reflects an optimistic pick immediately and holds it until the matching live arrives", async () => {
     setModelChoice("a3", { model_id: "sonnet", effort: "medium", fast: false }, SONNET);
-    expect(isPickInFlight("a3")).toBe(true);
 
     // While pending, the bar shows the pick even though the live value is still opus.
     const pending = effectiveChoice("a3", live("opus[1m]", "medium", true, OPUS));
@@ -83,7 +82,8 @@ describe("effectiveChoice", () => {
     // The matching live choice clears the overlay.
     const settled = effectiveChoice("a3", live("sonnet", "medium", false, SONNET));
     expect(settled?.isPending).toBe(false);
-    expect(isPickInFlight("a3")).toBe(false);
+    // Pending is cleared: a fresh render now reflects live, not the overlay.
+    expect(effectiveChoice("a3", live("sonnet", "medium", false, SONNET))?.isPending).toBe(false);
     await flush();
   });
 

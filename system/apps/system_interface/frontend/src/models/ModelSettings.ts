@@ -41,9 +41,11 @@ interface PendingPick {
 const pendingByAgent = new Map<string, PendingPick>();
 const applyChainByAgent = new Map<string, Promise<void>>();
 
-// How long an optimistic pick is held before reverting to the live truth, if no
-// matching live choice ever arrives (e.g. a switch the harness refused).
-const PENDING_TIMEOUT_MS = 8000;
+// How long an optimistic pick is held before it is forcefully reset to the live
+// truth, if no matching live choice ever arrives (e.g. a switch the harness
+// refused, or a stuck in-flight send). Generous, because the bar stays fully
+// interactive meanwhile -- this is only the last-resort self-heal.
+const PENDING_TIMEOUT_MS = 5 * 60 * 1000;
 
 function identityEquals(a: ModelIdentity, b: ModelIdentity): boolean {
   return (
@@ -79,11 +81,6 @@ export function effectiveChoice(agentId: string, liveChoice: ModelChoice | null 
     return null;
   }
   return { identity: liveChoice.identity, matched: liveChoice.matched, isPending: false };
-}
-
-/** True while an optimistic pick is being applied for the agent (bar disabled). */
-export function isPickInFlight(agentId: string): boolean {
-  return pendingByAgent.has(agentId);
 }
 
 /** Apply a full model/effort/fast selection: show it optimistically, then POST it. */

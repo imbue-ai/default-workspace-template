@@ -82,20 +82,27 @@ describe("classifyUserMessage", () => {
     expect(classifyUserMessage("tell me about <task-notification> handling").kind).toBe(UserMessageKind.UserPrompt);
   });
 
-  it("hides the /model and /fast slash commands the composer picker/toggle send", () => {
+  it("hides the /model, /effort, and /fast slash commands the composer bar sends", () => {
     // The backend normalizes the transcript's <command-name> expansion back to
     // the typed command, which is what reaches the classifier.
     expect(classifyUserMessage("/model opus[1m]").kind).toBe(UserMessageKind.Hidden);
     expect(classifyUserMessage("/model sonnet").kind).toBe(UserMessageKind.Hidden);
+    expect(classifyUserMessage("/effort xhigh").kind).toBe(UserMessageKind.Hidden);
+    expect(classifyUserMessage("/effort medium").kind).toBe(UserMessageKind.Hidden);
     expect(classifyUserMessage("/fast on").kind).toBe(UserMessageKind.Hidden);
     expect(classifyUserMessage("/fast off").kind).toBe(UserMessageKind.Hidden);
     // Bare invocation (no args) is hidden too.
     expect(classifyUserMessage("/fast").kind).toBe(UserMessageKind.Hidden);
   });
 
-  it("hides the <local-command-stdout> confirmation for /model and /fast", () => {
+  it("hides the <local-command-stdout> confirmation for /model, /effort, and /fast", () => {
     expect(
       classifyUserMessage("<local-command-stdout>Set model to Opus 4.8 (1M context)</local-command-stdout>").kind,
+    ).toBe(UserMessageKind.Hidden);
+    expect(
+      classifyUserMessage(
+        "<local-command-stdout>Set effort level to xhigh (saved as your default)</local-command-stdout>",
+      ).kind,
     ).toBe(UserMessageKind.Hidden);
     expect(classifyUserMessage("<local-command-stdout>Fast mode ON</local-command-stdout>").kind).toBe(
       UserMessageKind.Hidden,
