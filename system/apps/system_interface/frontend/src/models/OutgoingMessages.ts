@@ -3,30 +3,26 @@
  * shown at the very tail of the transcript the instant the user sends, before the
  * harness-sourced state (a queued bubble, or the committed turn) catches up.
  *
- * This is the ONE place the frontend paints optimistic state. Removal is
- * ARRIVAL-DRIVEN, not timed: the backend's own updates route through
- * ``noteBackendArrivals`` (a live transcript ``user_message`` arriving, or a new
- * queued-snapshot entry), and each genuinely-new arrival drops the oldest
- * "Sending…" bubble. So the optimistic bubble disappears exactly as the real one
- * appears -- no overlap where both share the screen. Correlation is positional
- * (oldest-first) + arrival-id dedup; there is NO content matching.
+ * This is the ONE place the frontend paints optimistic state, and it only ever
+ * shows "Sending…". Removal is ARRIVAL-DRIVEN, not timed: the backend's own
+ * updates route through ``noteBackendArrivals`` (a live transcript ``user_message``
+ * arriving, or a new queued-snapshot entry), and each genuinely-new arrival drops
+ * the oldest bubble, so the optimistic bubble disappears exactly as the real one
+ * appears -- no overlap. Correlation is positional (oldest-first) + arrival-id
+ * dedup; there is NO content matching.
  *
- * Terminal states: a POST rejection flips a bubble to a persistent "Failed to
- * send" (until the next send); a delivered bubble that somehow never sees an
- * arrival is swept by an anti-strand fallback timer. It dies on reload; it never
- * gates real state.
+ * A send FAILURE is NOT rendered here: the caller drops the bubble
+ * (``dropOutgoing``) and handles failure the original way -- a popup plus
+ * restoring the text to the composer. A delivered bubble that somehow never sees
+ * an arrival is swept by an anti-strand fallback timer. It dies on reload; it
+ * never gates real state.
  */
 import m from "mithril";
-
-export type OutgoingStatus = "sending" | "failed";
 
 export interface OutgoingMessage {
   id: string;
   /** The text the user typed (shown verbatim), not the attachment-expanded form. */
   content: string;
-  status: OutgoingStatus;
-  /** Present only when status === "failed". */
-  error?: string;
 }
 
 // Anti-strand fallback: if a delivered send never produces an observable arrival,
@@ -51,10 +47,10 @@ function clearFallback(id: string): void {
 }
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
- *  so the caller can resolve or fail it when the send POST settles. */
+ *  so the caller can resolve it (on success) or drop it (on failure). */
 export function addOutgoing(agentId: string, content: string): string {
   const id = `outgoing-${nextId++}`;
-  (byAgent[agentId] ??= []).push({ id, content, status: "sending" });
+  (byAgent[agentId] ??= []).push({ id, content });
   m.redraw();
   return id;
 }
@@ -63,7 +59,9 @@ export function getOutgoingMessages(agentId: string): OutgoingMessage[] {
   return byAgent[agentId] ?? [];
 }
 
-function removeOutgoing(agentId: string, id: string): void {
+/** Remove a specific bubble -- used by the send-failure path (the message did not
+ *  send; its text is returned to the composer by the caller). */
+export function dropOutgoing(agentId: string, id: string): void {
   const list = byAgent[agentId];
   if (list === undefined) {
     return;
@@ -81,49 +79,15 @@ function removeOutgoing(agentId: string, id: string): void {
  *  fast path is still ``noteBackendArrivals``. */
 export function resolveOutgoing(agentId: string, id: string): void {
   clearFallback(id);
-  fallbackTimers[id] = setTimeout(() => {
-    const entry = byAgent[agentId]?.find((candidate) => candidate.id === id);
-    if (entry !== undefined && entry.status === "sending") {
-      removeOutgoing(agentId, id);
-    }
-  }, FALLBACK_MS);
+  fallbackTimers[id] = setTimeout(() => dropOutgoing(agentId, id), FALLBACK_MS);
 }
 
-/** The send POST rejected: the message was NOT accepted. Flip to a persistent
- *  "failed" state (cancelling any fallback) so the user plainly sees it. */
-export function failOutgoing(agentId: string, id: string, error: string): void {
-  const entry = byAgent[agentId]?.find((candidate) => candidate.id === id);
-  if (entry !== undefined) {
-    entry.status = "failed";
-    entry.error = error;
-    clearFallback(id);
-    m.redraw();
-  }
-}
-
-/** Drop any failed entries for an agent -- called when the user sends again, so a
- *  fresh attempt clears the stale failure. */
-export function clearFailedOutgoing(agentId: string): void {
+function removeOldest(agentId: string): void {
   const list = byAgent[agentId];
-  if (list === undefined) {
+  if (list === undefined || list.length === 0) {
     return;
   }
-  const next = list.filter((entry) => entry.status !== "failed");
-  if (next.length !== list.length) {
-    byAgent[agentId] = next;
-    m.redraw();
-  }
-}
-
-function removeOldestSending(agentId: string): void {
-  const list = byAgent[agentId];
-  if (list === undefined) {
-    return;
-  }
-  const oldest = list.find((entry) => entry.status === "sending");
-  if (oldest !== undefined) {
-    removeOutgoing(agentId, oldest.id);
-  }
+  dropOutgoing(agentId, list[0].id);
 }
 
 /**
@@ -147,8 +111,8 @@ export function noteBackendArrivals(agentId: string, ids: readonly string[]): vo
       continue;
     }
     // Record every arrival id (so a re-stream/re-push cannot drop a later bubble),
-    // and drop the oldest "Sending…" bubble -- a no-op when there are none.
+    // and drop the oldest bubble -- a no-op when there are none.
     seen.add(id);
-    removeOldestSending(agentId);
+    removeOldest(agentId);
   }
 }
