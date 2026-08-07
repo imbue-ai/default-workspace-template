@@ -26,6 +26,9 @@ class HarnessType(StrEnum):
     # The mngr agent type is ``opencode``; this value MUST match it so ``parse_harness``
     # resolves an opencode agent here and not the default.
     OPENCODE = "opencode"
+    # The mngr agent type is ``antigravity`` (``agy`` is only an alias); this value MUST
+    # match it so ``parse_harness`` resolves an antigravity agent here and not the default.
+    ANTIGRAVITY = "antigravity"
 
 
 # What an agent whose mngr type is not a harness is treated as. Such agents still get a
