@@ -82,10 +82,15 @@ watcher can't observe. Bridge it with one base-watcher hook:
   hooks.
 - **`AntigravitySessionWatcher.note_sent_message`** → `self._queue_tracker.enqueue(...)` then
   push the (debounced) snapshot via the registered callback.
-- **The send endpoint** (`server` `POST /api/agents/:id/message`) already resolves both the
-  agent and the watcher; on a successful `send_message_to_agent`, call
-  `watcher.note_sent_message(content, now_iso)`. (No-op for non-agy harnesses, whose watchers
-  keep the default.)
+- **The send endpoint** (`server` `POST /api/agents/:id/message`) calls
+  `watcher.note_sent_message(content, now_iso)` **BEFORE** attempting the send
+  (write-ahead, pi's ordering: mngr writes `pi_inbox` before injecting). An idle agy
+  commits the turn to its db within one watcher poll, so an enqueue that waited for send
+  confirmation can lose the race to its own drain -- `leave` pops nothing, then the late
+  enqueue strands a bubble nothing will ever pop (observed live). The hook returns a
+  token; a FAILED send calls `retract_sent_message(token)` to un-park exactly that entry
+  (compensation; a crash between the two leaves a ghost the idle backstop sweeps). No-op
+  returning None for non-agy harnesses, whose watchers keep the default.
 
 leave / idle / snapshot need **no** new wiring — they use the existing base hooks the watcher
 already overrides: the antigravity watcher, on each newly-ingested `user_message` event

@@ -289,15 +289,27 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     # (``note_sent_message``, called by the send endpoint); leaves come from drained
     # ``user_message``s in the scan above. Debounce discipline mirrors the pi watcher.
 
-    def note_sent_message(self, content: str, timestamp: str) -> None:
-        """The UI sent ``content``: park it in the outbox until it drains into the transcript."""
+    def note_sent_message(self, content: str, timestamp: str) -> str | None:
+        """Park ``content`` in the outbox BEFORE it is sent (write-ahead; see the tracker).
+
+        Returns the queued id so the endpoint can retract on a failed send. The entry
+        stays parked until its drain pops it (or the idle backstop sweeps it).
+        """
         with self._lock:
-            self._queue_tracker.enqueue(content, timestamp)
+            queued_id = self._queue_tracker.enqueue(content, timestamp)
             snapshot = self._queue_tracker.snapshot()
         self._push_queue_snapshot_debounced(snapshot)
         # Wake the loop so the debounce window is re-evaluated on schedule even if no
         # filesystem event arrives (the send itself does not touch agy's db).
         self._wake.set()
+        return queued_id
+
+    def retract_sent_message(self, token: str) -> None:
+        """The send failed: un-park exactly that entry and push the corrected snapshot."""
+        with self._lock:
+            self._queue_tracker.retract(token)
+            snapshot = self._queue_tracker.snapshot()
+        self._push_queue_snapshot_debounced(snapshot)
 
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback
