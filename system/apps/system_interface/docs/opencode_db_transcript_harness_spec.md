@@ -287,10 +287,10 @@ origin is legible; the frontend keys on `type`, not `source`).
   { "timestamp": iso(message.time_created), "type":"assistant_message",
     "event_id": f"{message.id}-assistant", "source": SOURCE, "role":"assistant",
     "model": f"{provider_id}/{model_id}" if both else None,
-    "text": joined text parts (skip synthetic),
+    "text": joined text parts (skip synthetic; drop `reasoning` parts — pi drops thinking too),
     "tool_calls": tool_calls,
     "stop_reason": message.finish,          # opencode's finish reason ("stop", ...)
-    "usage": None,                          # Q6: tokens live on message.data.tokens
+    "usage": _usage(message.tokens),        # emit it — pi's parser emits usage (see below)
     "message_uuid": message.id }
   ```
   Each `tool_call` (labelled here, where the harness is known — the events.py contract):
@@ -310,6 +310,12 @@ origin is legible; the frontend keys on `type`, not `source`).
     "output": truncate(output, 2000),       # MAX_TOOL_OUTPUT_LENGTH
     "is_error": status=="error", "message_uuid": part.id }
   ```
+
+`_usage(tokens)` maps `message.data.tokens` (`{input, output, cache:{read,write}}`) onto the
+common `{input_tokens, output_tokens, cache_read_tokens, cache_write_tokens}` shape, exactly
+as pi's `_usage` does — so opencode is at pi parity here, not a stripped-down variant. Drop
+`reasoning` parts (thinking): pi's parser explicitly drops thinking blocks and never renders
+them, so opencode matches.
 
 Timestamp helper: opencode stores ms epoch integers; render ISO-8601 `...Z` (mirror the
 plugin's `_isoFromMs`) so it sorts/compares against the other harnesses' string timestamps.
@@ -462,41 +468,50 @@ heuristic for v1 — zero new plugin surface, and it already exists.
 
 ---
 
-## Resolved (verified against a live opencode 1.18.15)
+## Scope: match pi's harness, nothing more
 
-- **Subagents — DISABLED (was Q3).** The transcript is the single root session; filter every
-  read on `message.session_id == root`, no `parent_id` walk, `get_subagent_metadata` → `None`.
-- **Tool input field names — VERIFIED (was "unknown target mapping").** See the §5 table:
-  captured from a real agent's `opencode.db` for the common tools, and from the binary's tool
-  schemas for the rest. Notably `bash` has **no** `description` field (caption uses `command`).
-- **MCP tool naming — VERIFIED (was Q7).** `<server>_<toolname>` (underscore; `default` →
-  bare `<server>`), confirmed in opencode's registration code and its docs. Does not match the
-  shared `mcp_caption`; falls to `Tool: <id>` + generic caption. Do not try to re-split it.
-- **Part types — ENUMERATED.** `text`, `reasoning`, `tool`, `patch`, `step-start`,
-  `step-finish` (all observed live). Only `text` + `tool` become events; `patch` (a post-edit
-  summary with no `callID`) is skipped, so `edit`/`write` never double-counts.
+pi's harness is the target shape. That collapses almost every earlier "question" into "do what
+pi does" — settled below — leaving exactly one real decision (the queued-message surface).
 
-## Open questions (carry into build)
+**Settled by pi parity + the live probe (no longer open):**
 
-- **Q1 — cursor settle vs simplicity.** The `time_updated` watermark + "advance past leading
-  settled run" bounds re-reads to the live turn. Is the conservative fallback (never advance
-  past the oldest unsettled message) enough, or is the leading-run tracking worth it for a
-  very long, mostly-settled transcript? (Antigravity does the leading-run version.)
-- **Q2 — activity model.** Claude-style heuristic (recommended, zero plugin work) vs a
-  codex-style turn latch fed by new plugin `special` events.
-- **Q4 — reasoning parts.** opencode emits `reasoning` parts (thinking; shape
-  `{type:"reasoning", text, time}`). The plugin drops them; antigravity surfaces them as an
-  optional `thinking` key on `assistant_message`. Recommend v1 parity (drop), add `thinking`
-  as an enhancement.
-- **Q5 — queued messages.** opencode has a `session_input` table (queue: `prompt`,
-  `delivery`, `admitted_seq`, `promoted_seq`) that could power the queued-message snapshot
-  like codex's sidecar. v1 inherits the base no-op; wire later if the shoulder-tap surface is
-  wanted for opencode.
-- **Q6 — usage/tokens.** `message.data.tokens` and `session` token columns exist; emit
-  `usage` on `assistant_message` (input/output/cache) if the model-bar/cost UI wants it.
-- **Q8 — schema drift.** opencode self-upgrades; the `data` JSON shapes and even columns can
-  move (`opencode_config.py` already documents `project_directory` drift). The
-  `session`/`message`/`part` + JSON-`data` + `ses_`/`msg_`/`prt_` shape is stable across
-  targeted versions, but the reader must degrade (skip a row it can't parse) rather than
-  crash, and the fixture should be re-confirmed when `OPENCODE_VERSION` moves.
+- **File set = pi's.** `watcher.py`, `session_parser.py`, `tool_labels.py`, `activity.py`
+  (already exists), `model.py` (already done), + `db_reader.py` (opencode's analogue of pi's
+  "read the native file" step — pi inlines it since JSONL is trivial; opencode needs a thin
+  SQLite reader). Optionally `queue_tracker.py` — the one open item.
+- **Activity = claude-style lifecycle+tail** — pi's `activity.py` is exactly this, and
+  opencode's already is too. No plugin `special` events, no turn latch. (was Q2)
+- **Reasoning/thinking = dropped** — pi's parser drops thinking blocks and never renders them;
+  opencode drops `reasoning` parts. (was Q4)
+- **Usage = emitted** — pi's parser maps `usage` onto the common token shape; opencode maps
+  `message.data.tokens` the same way. (was Q6)
+- **Subagents = off** — pi has no subagents (`get_subagent_metadata` → `None`,
+  `is_main_session_event` → `True`); opencode runs with subagents disabled and matches. (was Q3)
+- **Tool fields + MCP naming = verified** — §5, from the live probe + opencode's docs. `bash`
+  has no `description` (caption uses `command`, like pi's bash); MCP tools are `<server>_<tool>`
+  and fall to the generic label.
+
+**Implementation notes (my call, not user-facing questions):**
+
+- **DB-tail cursor.** pi's native file is append-only, so pi never faced in-place row mutation;
+  opencode's `message`/`part` rows DO mutate as a turn streams. This is the one place opencode
+  can't literally copy pi and instead copies **antigravity** (which tails a live SQLite store
+  the same way): a `time_updated` watermark that advances only past settled messages, with
+  codex-style content-supersession dedup on stable `msg_`/`prt_` ids. Decided; §3.
+- **Schema drift.** opencode self-upgrades; the reader degrades (skip an unparseable row)
+  rather than crash, and the fixture is re-confirmed when `OPENCODE_VERSION` moves.
+
+## The one open question
+
+- **Q5 — queued messages (the shoulder-tap surface).** pi's harness DOES populate it (a
+  `queue_tracker.py` fed by mngr's `pi_inbox` ledger; codex and claude have it too). So strict
+  pi parity means opencode gets one. opencode's native equivalent is the **`session_input`
+  table** in `opencode.db` (columns `prompt`, `delivery`, `admitted_seq`, `promoted_seq`): a
+  row with `promoted_seq IS NULL` is a parked prompt (enqueue), and it leaves when
+  `promoted_seq` is set / it drains into a `user` message — the same enqueue/leave shape pi
+  gets from its inbox, readable from the DB we are already tailing (no plugin change). **Two
+  options:** (a) include a `queue_tracker.py` that tails `session_input` in v1 (true pi
+  parity), or (b) ship the transcript first with the base no-op queue and add it as a
+  fast-follow. Recommend (a) if "match pi" is literal, since the ledger is right there in the
+  same db; (b) if the transcript is the priority and the shoulder-tap can lag.
 ```
