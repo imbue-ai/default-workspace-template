@@ -8,6 +8,7 @@ without a session are bounced to the accounts broker and land back on
 workspace session cookie.
 """
 
+import json
 import secrets
 import threading
 import time
@@ -31,12 +32,16 @@ from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
-from share_gateway.session_cookie import SESSION_LIFETIME_SECONDS
 from share_gateway.session_cookie import mint_session_cookie_value
+from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
 from share_gateway.session_cookie import verify_session_cookie_value
 
 _PENDING_LOGIN_TTL_SECONDS = 600.0
+
+# The workspace shell service name; used to report backend readiness in the
+# authenticated /_health detail.
+_SYSTEM_INTERFACE_SERVICE_NAME = "system_interface"
 
 # The workspace shell service; its label origin is the safe post-login landing
 # spot when a visitor's ``next`` cannot be honored (the bare domain no longer
@@ -123,9 +128,25 @@ def build_gateway_app(
     app = Flask(__name__)
     workspace_domain = materials.workspace_domain
     auth_origin = f"https://{auth_label}.{workspace_domain}"
+    chrome_origin = materials.chrome_origin
 
     def _forbidden() -> Response:
         return Response(_FORBIDDEN_PAGE, status=403, mimetype="text/html")
+
+    def _apply_health_cors(response: Response) -> Response:
+        """Echo the hosted-chrome origin so it can probe /_health with credentials.
+
+        Only the configured chrome origin is allowed, and only for the health
+        probe; every other cross-origin fetch is left to the browser's default
+        (no header = blocked). Credentialed CORS forbids the ``*`` wildcard, so
+        the exact origin is echoed and ``Vary: Origin`` keeps caches honest.
+        """
+        request_origin = request.headers.get("Origin", "")
+        if chrome_origin and request_origin == chrome_origin:
+            response.headers["Access-Control-Allow-Origin"] = chrome_origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Vary"] = "Origin"
+        return response
 
     # Denials are the traffic worth seeing (scanner probes, revoked visitors,
     # unknown hostnames); allowed requests stay unlogged. The client address
@@ -137,6 +158,31 @@ def build_gateway_app(
     @app.get("/_auth/healthz")
     def healthz() -> Response:
         return Response("ok", status=200, mimetype="text/plain")
+
+    @app.route("/_health", methods=["GET", "OPTIONS"])
+    def health() -> Response:
+        # Reachable at every workspace origin (routed site-wide in caddy) so the
+        # hosted chrome can probe a workspace it has an origin for. A CORS
+        # preflight is answered outright.
+        if request.method == "OPTIONS":
+            preflight = Response(status=204)
+            preflight.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            return _apply_health_cors(preflight)
+        session_value = request.cookies.get(SESSION_COOKIE_NAME, "")
+        identity = verify_session_cookie_value(signing_secret, session_value, workspace_domain)
+        if identity is None:
+            # Bare liveness: the gateway (hence the tunnel) is up. No detail
+            # without a session -- the workspace host id is a capability, but
+            # backend/service state is not leaked to an unauthenticated probe.
+            return _apply_health_cors(Response(status=204))
+        label_to_name = get_label_to_name()
+        is_backend_registered = _SYSTEM_INTERFACE_SERVICE_NAME in label_to_name.values()
+        detail = {
+            "gateway": "ok",
+            "backend": "ok" if is_backend_registered else "starting",
+            "owner": identity.is_owner,
+        }
+        return _apply_health_cors(app.response_class(response=_json_body(detail), mimetype="application/json"))
 
     @app.get("/_auth/loading")
     def loading() -> Response:
@@ -166,8 +212,8 @@ def build_gateway_app(
 
         cookie_header = request.headers.get("Cookie", "")
         session_value = request.cookies.get(SESSION_COOKIE_NAME, "")
-        email = verify_session_cookie_value(signing_secret, session_value, workspace_domain)
-        if email is None:
+        identity = verify_session_cookie_value(signing_secret, session_value, workspace_domain)
+        if identity is None:
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
                 nonce = pending_logins.mint()
@@ -189,20 +235,30 @@ def build_gateway_app(
             _log_denied("no session on a non-HTML request", host)
             return Response("authentication required", status=401, mimetype="text/plain")
 
-        # Re-check the grants file on every request so revocation is instant.
-        # A malformed or missing grants file fails closed.
-        try:
-            grants = load_grants(grants_path)
-        except GrantsError:
-            _log_denied("grants file is missing or malformed (failing closed)", host)
-            return _forbidden()
-        if not grants.allows(email, service_name):
-            _log_denied("session email is not granted this service", host)
-            return _forbidden()
+        # The owner reaches every origin of their own workspace regardless of
+        # the grants file (the broker vouched for ownership by user id). A
+        # non-owner is re-checked against the grants file on every request so
+        # revocation is instant; a malformed or missing grants file fails closed.
+        if not identity.is_owner:
+            try:
+                grants = load_grants(grants_path)
+            except GrantsError:
+                _log_denied("grants file is missing or malformed (failing closed)", host)
+                return _forbidden()
+            if not grants.allows(identity.email, service_name):
+                _log_denied("session email is not granted this service", host)
+                return _forbidden()
 
+        # Expose the owner flag so caddy can copy it to backends that gate on
+        # ownership (the owner-exec service). The header is authoritative
+        # because it is set by the gateway after verifying the signed session,
+        # and caddy strips any inbound copy before the forward_auth subrequest.
         return Response(
             status=200,
-            headers={"X-Share-Filtered-Cookie": strip_session_cookie(cookie_header)},
+            headers={
+                "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
+                "X-Share-Owner": "true" if identity.is_owner else "false",
+            },
         )
 
     @app.get("/_auth/callback")
@@ -213,7 +269,7 @@ def build_gateway_app(
         if not token or not state or not pending_logins.consume(state):
             return _forbidden()
         try:
-            email = verify_handoff_token(
+            handoff = verify_handoff_token(
                 token=token,
                 expected_nonce=state,
                 workspace_domain=workspace_domain,
@@ -226,7 +282,10 @@ def build_gateway_app(
             grants = load_grants(grants_path)
         except GrantsError:
             return _forbidden()
-        if not grants.allows_any(email):
+        # The owner always has access regardless of the grants file (the broker
+        # vouched for ownership by user id, so an owner never needs an explicit
+        # grant to reach their own workspace). Non-owners still need a grant.
+        if not handoff.is_owner and not grants.allows_any(handoff.email):
             return _forbidden()
 
         # Bounce onward to the origin the visitor was reaching, but only if it
@@ -244,16 +303,15 @@ def build_gateway_app(
                 redirect_target = next_url
 
         response = Response(status=302, headers={"Location": redirect_target})
-        response.set_cookie(
-            SESSION_COOKIE_NAME,
-            mint_session_cookie_value(signing_secret, email, workspace_domain),
-            max_age=SESSION_LIFETIME_SECONDS,
-            domain=workspace_domain,
-            path="/",
-            secure=True,
-            httponly=True,
-            samesite="Lax",
+        set_session_cookie(
+            response,
+            mint_session_cookie_value(signing_secret, handoff.email, workspace_domain, handoff.is_owner),
+            workspace_domain,
         )
         return response
 
     return app
+
+
+def _json_body(payload: dict[str, object]) -> str:
+    return json.dumps(payload)
