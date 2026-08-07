@@ -189,19 +189,23 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
-def _is_codex_enabled() -> bool:
-    """Whether the codex harness UI is enabled, from the ``FEATURE_FLAG_ENABLE_CODEX`` env var.
+def _are_other_harnesses_enabled() -> bool:
+    """Whether the non-claude harness launchers are enabled, from ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``.
 
-    Off by default: the "New Codex Agent" launcher appears only when this is set to a
-    truthy value (``1``/``true``/``yes``/``on``), so codex can be dark-launched and
-    turned on per host without a rebuild.
+    Off by default: the "New Codex/Pi/Opencode/Antigravity Agent" launchers appear only
+    when this is set to a truthy value (``1``/``true``/``yes``/``on``), so every alt
+    harness can be dark-launched and turned on per host without a rebuild. Claude is the
+    workspace default and is never gated by this flag.
     """
-    return os.environ.get("FEATURE_FLAG_ENABLE_CODEX", "").strip().lower() in ("1", "true", "yes", "on")
+    return os.environ.get("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def _inject_enable_codex_meta_tag(html_content: str) -> str:
-    """Inject the codex feature flag so the frontend can gate the codex launcher."""
-    meta_tag = f'<meta name="system-interface-enable-codex" content="{str(_is_codex_enabled()).lower()}">'
+def _inject_enable_other_harnesses_meta_tag(html_content: str) -> str:
+    """Inject the alt-harness feature flag so the frontend can gate the non-claude launchers."""
+    meta_tag = (
+        f'<meta name="system-interface-enable-other-harnesses" '
+        f'content="{str(_are_other_harnesses_enabled()).lower()}">'
+    )
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
@@ -223,7 +227,7 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
-        html_content = _inject_enable_codex_meta_tag(html_content)
+        html_content = _inject_enable_other_harnesses_meta_tag(html_content)
         html_content = _inject_enable_silly_models_meta_tag(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
@@ -441,11 +445,12 @@ def _get_harnesses_endpoint() -> Response:
 
     One response covers every harness (each catalog dumped verbatim: options,
     default model, switch mode, logo); the frontend keys in by an agent's harness.
-    Codex is included only when its feature flag is on, matching the rest of the UI.
+    The non-claude harnesses are included only when their feature flag is on, matching
+    the rest of the UI.
     """
     catalogs: dict[str, Any] = {}
     for harness in HARNESS_SPECS:
-        if harness == HarnessType.CODEX and not _is_codex_enabled():
+        if harness != HarnessType.CLAUDE and not _are_other_harnesses_enabled():
             continue
         # A parsed catalog (pi/opencode) reads data files; a bad/absent one must be
         # skipped, not 500 the endpoint for every other harness.

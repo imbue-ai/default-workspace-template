@@ -413,10 +413,23 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     assert claude["icon_svg"].startswith("<svg")
 
 
-def test_get_harnesses_excludes_codex_without_the_flag(client: FlaskClient) -> None:
-    """Codex only appears when its feature flag is on, like the rest of its UI."""
-    response = client.get("/api/harnesses")
-    assert "codex" not in response.get_json()
+def test_get_harnesses_excludes_alt_harnesses_without_the_flag(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only claude appears without the alt-harness flag, like the rest of its UI."""
+    monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
+    data = client.get("/api/harnesses").get_json()
+    assert set(data) == {"claude"}
+
+
+def test_get_harnesses_includes_alt_harnesses_with_the_flag(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every alt harness appears once the flag is on."""
+    monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
+    data = client.get("/api/harnesses").get_json()
+    assert "claude" in data
+    assert "codex" in data
 
 
 def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
@@ -1117,9 +1130,9 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         assert "system-interface-hostname" in response.text
 
 
-def test_index_enable_codex_meta_tag_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The codex feature flag is injected and defaults to off (button hidden)."""
-    monkeypatch.delenv("FEATURE_FLAG_ENABLE_CODEX", raising=False)
+def test_index_enable_other_harnesses_meta_tag_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The alt-harness feature flag is injected and defaults to off (buttons hidden)."""
+    monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
     static_dir = tmp_path / "static"
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
@@ -1127,12 +1140,12 @@ def test_index_enable_codex_meta_tag_off_by_default(tmp_path: Path, monkeypatch:
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
         response = create_application(build_test_state()).test_client().get("/")
         assert response.status_code == 200
-        assert '<meta name="system-interface-enable-codex" content="false">' in response.text
+        assert '<meta name="system-interface-enable-other-harnesses" content="false">' in response.text
 
 
-def test_index_enable_codex_meta_tag_on_when_flag_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Setting FEATURE_FLAG_ENABLE_CODEX to a truthy value flips the injected flag on."""
-    monkeypatch.setenv("FEATURE_FLAG_ENABLE_CODEX", "1")
+def test_index_enable_other_harnesses_meta_tag_on_when_flag_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting FEATURE_FLAG_ENABLE_OTHER_HARNESSES to a truthy value flips the injected flag on."""
+    monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
     static_dir = tmp_path / "static"
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
@@ -1140,7 +1153,7 @@ def test_index_enable_codex_meta_tag_on_when_flag_set(tmp_path: Path, monkeypatc
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
         response = create_application(build_test_state()).test_client().get("/")
         assert response.status_code == 200
-        assert '<meta name="system-interface-enable-codex" content="true">' in response.text
+        assert '<meta name="system-interface-enable-other-harnesses" content="true">' in response.text
 
 
 def test_random_name_endpoint(client: FlaskClient) -> None:

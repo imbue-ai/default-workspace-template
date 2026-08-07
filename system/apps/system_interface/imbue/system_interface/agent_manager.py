@@ -48,6 +48,7 @@ from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.auth_check import find_unauthenticated_harness_reason
 from imbue.system_interface.harnesses.claude.launch_defaults import FAST_MODE_BEFORE_DECISION
 from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
 from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
@@ -626,7 +627,15 @@ class AgentManager:
         Returns the pre-generated agent ID. ``harness`` is also the name of the harness
         create template it stacks; the `chat` role template supplies everything else, so a
         new harness needs no new method here.
+
+        An alt harness authenticates through its own CLI; if that CLI is signed out, refuse
+        the create up front (raising ``AgentCreationError``) rather than launch a chat that
+        can never take a turn. Claude is not gated -- its auth is the shared workspace login.
         """
+        unauthenticated_reason = find_unauthenticated_harness_reason(harness)
+        if unauthenticated_reason is not None:
+            raise AgentCreationError(unauthenticated_reason)
+
         agent_id = str(AgentId())
 
         with self._lock:
