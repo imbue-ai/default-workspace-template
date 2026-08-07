@@ -112,3 +112,10 @@ class AgentSessionWatcher(ABC):
     def notify_idle(self) -> list[dict[str, Any]]:
         """Apply the working->IDLE backstop and return the resulting snapshot (empty by default)."""
         return []
+
+    def note_sent_message(self, content: str, timestamp: str) -> None:
+        """The UI sent ``content`` to this agent (called by the send endpoint on success).
+
+        No-op by default. A harness whose enqueue source is the send itself (antigravity
+        has no on-disk enqueue ledger) overrides this to feed its queue populator.
+        """

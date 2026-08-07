@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from typing import Callable
@@ -30,11 +31,20 @@ from watchdog.observers import Observer
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.antigravity.agy_transcript import TruncatedError
 from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
+from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
+from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
+from imbue.system_interface.harnesses.session_watcher import QueueSnapshotCallback
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.watcher_common import WakeOnChangeHandler
+
+# The live queue snapshot is only pushed once it has been STABLE for this long (same value
+# and rationale as pi's): a message sent to an idle agent enqueues and drains within the
+# window, so it never flickers as "queued". Explicit flush / idle-backstop transitions
+# bypass the debounce.
+_QUEUE_DEBOUNCE_SECONDS: float = 2.0
 
 # agy's per-agent conversation store + the capture-hook file listing this agent's
 # conversation ids, both relative to the mngr agent state dir.
@@ -59,6 +69,15 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
     _stopping: threading.Event
     _thread: threading.Thread | None
     _observer: Any
+    # Queue: the send-sourced outbox populator (see queue_tracker), its snapshot sink, the
+    # last snapshot pushed, and the debounce state (the snapshot waiting out the stability
+    # window + the monotonic time it first appeared; ``_now`` injectable in tests).
+    _queue_tracker: AntigravityQueueTracker
+    _queue_snapshot_callback: QueueSnapshotCallback | None
+    _last_queue_snapshot: list[dict[str, str]]
+    _pending_queue_snapshot: list[dict[str, str]]
+    _pending_queue_since: float
+    _now: Callable[[], float]
 
     @classmethod
     def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "AntigravitySessionWatcher":
@@ -76,6 +95,12 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
         self._observer: Any = None
+        self._queue_tracker = AntigravityQueueTracker.build(ANTIGRAVITY_CATALOG.queue_behavior)
+        self._queue_snapshot_callback = None
+        self._last_queue_snapshot = []
+        self._pending_queue_snapshot = []
+        self._pending_queue_since = 0.0
+        self._now = time.monotonic
         return self
 
     # --- paths ---------------------------------------------------------------------------
@@ -140,8 +165,12 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 return
             with self._lock:
                 pending = self._collect_new_events()
+                snapshot = self._queue_tracker.snapshot()
             if pending:
                 self._on_events(self._agent_id, pending)
+            # Re-evaluated every cycle (the poll timeout guarantees a tick even with no
+            # filesystem events), so the debounce window closes without further activity.
+            self._push_queue_snapshot_debounced(snapshot)
 
     # --- scanning ------------------------------------------------------------------------
 
@@ -173,6 +202,12 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
                 self._index_by_id[event_id] = len(self._events)
                 self._events.append(event)
                 pending.append(event)
+                # A newly-ingested user turn is a drained queue entry (or a coalesced run
+                # of them): the populator pops the front-run it verbatim-matches. A turn
+                # we never enqueued (typed straight into agy's terminal, or the prime-time
+                # backlog scan before any send) matches nothing and pops nothing.
+                if event.get("type") == "user_message":
+                    self._queue_tracker.leave(str(event.get("content", "")))
             # Advance the cursor only through the unbroken leading run of terminal rows, so a
             # still-running row (and anything after it) is re-scanned until it settles.
             if decoded.is_terminal and idx == terminal_prefix_end + 1:
@@ -240,3 +275,67 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         return True
+
+    # --- queued messages (the shoulder-tap surface) ----------------------------------------
+    # agy has no on-disk enqueue ledger, so the enqueue source is the UI's own send
+    # (``note_sent_message``, called by the send endpoint); leaves come from drained
+    # ``user_message``s in the scan above. Debounce discipline mirrors the pi watcher.
+
+    def note_sent_message(self, content: str, timestamp: str) -> None:
+        """The UI sent ``content``: park it in the outbox until it drains into the transcript."""
+        with self._lock:
+            self._queue_tracker.enqueue(content, timestamp)
+            snapshot = self._queue_tracker.snapshot()
+        self._push_queue_snapshot_debounced(snapshot)
+        # Wake the loop so the debounce window is re-evaluated on schedule even if no
+        # filesystem event arrives (the send itself does not touch agy's db).
+        self._wake.set()
+
+    def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
+        self._queue_snapshot_callback = callback
+
+    def get_queued_messages(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return list(self._queue_tracker.snapshot())
+
+    def get_queued_block(self) -> str:
+        with self._lock:
+            return self._queue_tracker.concatenated_block()
+
+    def clear_queue(self) -> None:
+        """Drop the tracked queue (a flush restart handed the block back)."""
+        with self._lock:
+            self._queue_tracker.clear()
+            snapshot = self._queue_tracker.snapshot()
+        self._push_queue_snapshot(snapshot)
+
+    def notify_idle(self) -> list[dict[str, Any]]:
+        """Apply the working->IDLE backstop and return the resulting (empty) snapshot."""
+        with self._lock:
+            self._queue_tracker.on_idle()
+            snapshot = self._queue_tracker.snapshot()
+        # An authoritative transition: settle the debounce window immediately (the manager
+        # broadcasts the returned value).
+        self._last_queue_snapshot = snapshot
+        self._pending_queue_snapshot = snapshot
+        self._pending_queue_since = self._now()
+        return snapshot
+
+    def _push_queue_snapshot_debounced(self, snapshot: list[dict[str, str]]) -> None:
+        """Push ``snapshot`` only once it has held stable for the debounce window (see pi)."""
+        now = self._now()
+        if snapshot != self._pending_queue_snapshot:
+            self._pending_queue_snapshot = snapshot
+            self._pending_queue_since = now
+        if now - self._pending_queue_since >= _QUEUE_DEBOUNCE_SECONDS:
+            self._push_queue_snapshot(snapshot)
+
+    def _push_queue_snapshot(self, snapshot: list[dict[str, str]]) -> None:
+        """Push ``snapshot`` to the sink iff it differs from the last one pushed."""
+        self._pending_queue_snapshot = snapshot
+        self._pending_queue_since = self._now()
+        if snapshot == self._last_queue_snapshot:
+            return
+        self._last_queue_snapshot = snapshot
+        if self._queue_snapshot_callback is not None:
+            self._queue_snapshot_callback(snapshot)
