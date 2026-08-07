@@ -153,6 +153,14 @@ _INBOX_FILE_NAME: str = "pi_inbox"
 # (RUNNING vs WAITING). Kept in sync with ACTIVE_MARKER_NAME in mngr_pi_lifecycle.ts.
 _ACTIVE_MARKER_NAME: str = "active"
 
+# Process-start boundary marker, touched on every launch/resume. The system_interface
+# activity tracker compares transcript timestamps against this marker's mtime to ignore a
+# tail left over from a turn a prior process abandoned mid-flight (which would otherwise pin
+# "Thinking..." forever after a restart). Mirrors mngr_claude's `claude_process_started` /
+# mngr_codex's `codex_process_started`; kept in sync with the pi harness's
+# HarnessActivityTracker.marker_filename on the system-interface side.
+_PROCESS_STARTED_MARKER_NAME: str = "pi_process_started"
+
 # After inboxing a message, wait up to this long for the turn to start (the
 # ``active`` marker to appear) as delivery confirmation. Covers the extension's
 # poll interval plus pi accepting the injected message.
@@ -640,14 +648,23 @@ class PiCodingAgent(
         invocation = f"{base_command} -e {shlex.quote(str(self._get_lifecycle_extension_path()))}"
         if self.agent_config.auto_dismiss_dialogs:
             invocation = f"{invocation} {_PI_APPROVE_FLAG}"
+        # Stamp the process-start boundary and clear a stale `active` marker on every
+        # launch/resume, so the system_interface activity tracker ignores a tail left by a
+        # turn a prior process abandoned mid-flight, and a crash-stale `active` never reads
+        # RUNNING before the first post-launch turn. Mirrors mngr_codex's launch prelude;
+        # `|| true` so a stray failure can't block the launch. The extension re-creates
+        # `active` on the next `agent_start`.
+        active_marker = shlex.quote(str(self._get_agent_dir() / _ACTIVE_MARKER_NAME))
+        process_started_marker = shlex.quote(str(self._get_agent_dir() / _PROCESS_STARTED_MARKER_NAME))
+        marker_prelude = f"rm -f {active_marker} 2>/dev/null || true; touch {process_started_marker} 2>/dev/null || true"
         if not self.agent_config.resume_session:
-            return CommandString(invocation)
+            return CommandString(f"{marker_prelude}; {invocation}")
         quoted_session_file = shlex.quote(str(self._get_agent_dir() / _SESSION_FILE_NAME))
         resume_prelude = (
             f"__mngr_pi_sess=$(cat {quoted_session_file} 2>/dev/null || true); set --; "
             'if [ -n "$__mngr_pi_sess" ] && [ -f "$__mngr_pi_sess" ]; then set -- --session "$__mngr_pi_sess"; fi'
         )
-        return CommandString(f'{resume_prelude}; {invocation} "$@"')
+        return CommandString(f'{marker_prelude}; {resume_prelude}; {invocation} "$@"')
 
     def wait_for_ready_signal(
         self, is_readiness_awaited: bool, start_action: Callable[[], None], timeout: float | None = None

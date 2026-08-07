@@ -252,6 +252,31 @@ describe("decoration from the transcript", () => {
     expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
   });
 
+  // pi's shell tool is lowercase `bash` (not claude's `Bash` / codex's `exec`); its tk
+  // lifecycle calls must still be recognised as step markers, or the pi step timeline
+  // would render nothing.
+  it("recognises a lowercase pi `bash` tk call as a step marker", () => {
+    const piTk = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
+      ...tkMsg(ts, command, callId),
+      tool_calls: [{ tool_call_id: callId, tool_name: "bash", input_preview: JSON.stringify({ command }) }],
+    });
+    const events = [
+      userMsg("t0", "go"),
+      piTk("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Fix it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      piTk("t3", "tk close s1", "t2"),
+      result("t3", "t2", closeOut("s1", "Fix it", "Fixed the bug")),
+    ];
+    const steps = stepItems(run(events)[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].title).toBe("Fix it");
+    expect(steps[0].summary).toBe("Fixed the bug");
+    // The tk calls are consumed as markers, so only the real Edit work is inside the step.
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+  });
+
   it("reads a pending step's title from its `Created` line", () => {
     const events = [
       userMsg("t0", "go"),

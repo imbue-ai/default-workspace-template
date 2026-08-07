@@ -41,7 +41,7 @@ from imbue.system_interface.harnesses.opencode.watcher import OpenCodePlaceholde
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import get_catalog as get_pi_catalog
-from imbue.system_interface.harnesses.pi_coding.watcher import PiPlaceholderSessionWatcher
+from imbue.system_interface.harnesses.pi_coding.watcher import PiSessionWatcher
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
@@ -99,9 +99,10 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
-        # First cut: the model bar is wired, the transcript is not -- so a placeholder
-        # watcher (empty transcript) and claude-style activity. The real watcher lands next.
-        watcher_class=PiPlaceholderSessionWatcher,
+        # Tails pi's native session JSONL (via the pi_session_file marker) and populates the
+        # queue from mngr's pi_inbox. pi's transcript carries no turn markers (like claude),
+        # so activity is the lifecycle-plus-tail heuristic.
+        watcher_class=PiSessionWatcher,
         tracker_class=PiActivityTracker,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,

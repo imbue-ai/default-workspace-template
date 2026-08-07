@@ -584,6 +584,15 @@ def test_assemble_command_loads_extension_and_resumes(pi_agent: PiCodingAgent, t
     assert pi_agent.get_expected_process_name() == "pi"
 
 
+def test_assemble_command_stamps_process_started_and_clears_active(pi_agent: PiCodingAgent, tmp_path: Path) -> None:
+    # Every launch/resume stamps the process-start boundary (so the activity tracker can
+    # ignore a stale mid-turn tail) and clears a crash-stale `active` marker.
+    command = str(pi_agent.assemble_command(_fake_host(tmp_path), (), None))
+    assert "pi_process_started" in command
+    assert "touch " in command
+    assert "/active" in command
+
+
 def test_assemble_command_omits_resume_when_disabled(pi_agent: PiCodingAgent, tmp_path: Path) -> None:
     object.__setattr__(pi_agent, "agent_config", PiCodingAgentConfig(resume_session=False))
     host = _fake_host(tmp_path)

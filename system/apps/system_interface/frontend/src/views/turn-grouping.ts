@@ -175,7 +175,10 @@ function isStepId(id: string): boolean {
  *  claude's `Bash` and codex's code-mode `exec` -- whose command begins with the
  *  tk verb (see TK_LIFECYCLE_RE). */
 function isTkLifecycleCall(tc: ToolCall): boolean {
-  return (tc.tool_name === "Bash" || tc.tool_name === "exec") && TK_LIFECYCLE_RE.test(tc.input_preview);
+  return (
+    (tc.tool_name === "Bash" || tc.tool_name === "exec" || tc.tool_name === "bash") &&
+    TK_LIFECYCLE_RE.test(tc.input_preview)
+  );
 }
 
 /** True when an assistant message issues a permission request. */
@@ -187,7 +190,9 @@ function hasPermissionRequest(e: AssistantMessageEvent): boolean {
  *  input_preview is not parseable -- e.g. a truncated non-tk command). tk
  *  lifecycle inputs are exempt from input truncation, so they parse cleanly. */
 function tkCommand(tc: ToolCall): string | null {
-  if (tc.tool_name !== "Bash") return null;
+  // claude's `Bash` and pi's `bash` both carry the command under the "command" key;
+  // codex's `exec` is handled via its own tk-input path, not here.
+  if (tc.tool_name !== "Bash" && tc.tool_name !== "bash") return null;
   try {
     const obj = JSON.parse(tc.input_preview) as { command?: unknown };
     return typeof obj.command === "string" ? obj.command : null;
