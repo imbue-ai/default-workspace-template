@@ -7,6 +7,7 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import { reportMessaged } from "./activityReporter";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
+import { noteBackendArrivals } from "./OutgoingMessages";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -532,6 +533,15 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
 export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): void {
   if (storeFor(agentId).append(newEvents)) {
     m.redraw();
+  }
+  // Route live user-message arrivals through the optimistic-send layer so a
+  // "Sending…" bubble drops the instant its real message lands in the transcript
+  // (no overlap). Deduped by event_id in noteBackendArrivals, so a re-streamed
+  // event is harmless. Only the live tail feeds this -- paging/backfill of old
+  // history goes through the other append paths and must not drop live bubbles.
+  const userEventIds = newEvents.filter((event) => event.type === "user_message").map((event) => event.event_id);
+  if (userEventIds.length > 0) {
+    noteBackendArrivals(agentId, userEventIds);
   }
 }
 

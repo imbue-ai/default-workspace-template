@@ -9,6 +9,7 @@ import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
 import type { ModelChoice } from "./ModelSettings";
+import { noteBackendArrivals } from "./OutgoingMessages";
 import { parseJsonMessage } from "./ws-json";
 
 export interface AgentState {
@@ -298,6 +299,13 @@ function handleEvent(event: WsEvent): void {
           for (const listener of agentActivityListeners) {
             listener(agent.id, previous, current);
           }
+        }
+        // Route a newly-queued message through the optimistic-send layer so its
+        // "Sending…" bubble drops the instant it becomes a real queued entry
+        // (no overlap). Deduped by queued_id, so re-pushed snapshots are harmless.
+        const queuedIds = (agent.queued_messages ?? []).map((queued) => queued.queued_id);
+        if (queuedIds.length > 0) {
+          noteBackendArrivals(agent.id, queuedIds);
         }
       }
       break;
