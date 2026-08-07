@@ -101,18 +101,41 @@ describe("renderQueuedMessages", () => {
     expect(mocks.flushQueue).toHaveBeenCalledWith("agent-1");
   });
 
-  it("disables the shoulder-tap button while the flush is in flight", async () => {
-    mocks.queued = [queuedMessage("q1", "hi")];
-    let resolveFlush: () => void = () => {};
-    mocks.flushQueue.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFlush = resolve)));
+  it("freezes the queued group while the flush restarts (no blip), then releases when it settles", async () => {
+    // Uses its own agent id so the module-level freeze state cannot collide with
+    // other tests' agents; fake timers drive the settle release deterministically.
+    vi.useFakeTimers();
+    try {
+      const agent = "agent-freeze";
+      mocks.queued = [queuedMessage("q1", "hi")];
+      let resolveFlush: () => void = () => {};
+      mocks.flushQueue.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFlush = resolve)));
 
-    const button = findByClass(renderQueuedMessages("agent-1"), "queued-action--flush");
-    const pending = (button?.attrs?.onclick as () => Promise<void>)();
+      const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
+      const pending = (button?.attrs?.onclick as () => Promise<void>)();
 
-    expect(findByClass(renderQueuedMessages("agent-1"), "queued-action--flush")?.attrs?.disabled).toBe(true);
+      // In flight: the group is frozen -- the captured message is still shown and
+      // the shoulder-tap button is replaced by the frozen header + countdown.
+      const duringFlight = renderQueuedMessages(agent);
+      expect(findByClass(duringFlight, "queued-group--frozen")).toBeTruthy();
+      expect(findByClass(duringFlight, "queued-action--flush")).toBeUndefined();
+      expect(renderedText(duringFlight)).toContain("hi");
 
-    resolveFlush();
-    await pending;
-    expect(findByClass(renderQueuedMessages("agent-1"), "queued-action--flush")?.attrs?.disabled).toBe(false);
+      // The fix: even when the backend snapshot empties during the restart, the
+      // frozen group holds the messages rather than blipping them out.
+      mocks.queued = [];
+      expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
+      expect(renderedText(renderQueuedMessages(agent))).toContain("hi");
+
+      resolveFlush();
+      await pending;
+      // Settles a beat later, then the freeze releases; with the queue now drained
+      // into the transcript, the group is gone (clean handoff, no blip).
+      vi.advanceTimersByTime(1000);
+      expect(renderQueuedMessages(agent)).toEqual([]);
+      expect(mocks.flushQueue).toHaveBeenCalledWith(agent);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

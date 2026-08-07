@@ -48,6 +48,7 @@ import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { renderQueuedMessages } from "./QueuedMessageView";
+import { renderOutgoingMessages } from "./OutgoingMessageView";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -645,17 +646,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     if (events.length === 0) {
       // No transcript yet -- but a message the user just sent may already be
-      // queued (the harness parked it), so render the queued group rather than
-      // hiding it behind the empty-state placeholder.
-      const queuedNodes = renderQueuedMessages(agentId);
-      if (queuedNodes.length === 0) {
+      // queued (the harness parked it) or still in flight (an optimistic
+      // "Sending…" bubble), so render those rather than the empty-state placeholder.
+      const tailNodes = [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)];
+      if (tailNodes.length === 0) {
         return m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
           m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
         );
       }
-      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, queuedNodes)]);
+      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, tailNodes)]);
     }
 
     const agent = getAgentById(agentId);
@@ -746,6 +747,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       m("div", { class: MESSAGE_LIST_CLASS }, [
         ...renderTranscriptSegments(rows, segments),
         ...renderQueuedMessages(agentId),
+        ...renderOutgoingMessages(agentId),
       ]),
     ]);
   }
