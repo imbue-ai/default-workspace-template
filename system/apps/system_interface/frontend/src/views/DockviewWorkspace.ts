@@ -24,11 +24,6 @@ import { LayoutDialog, type LayoutDialogMode } from "./LayoutDialog";
 import { ShareModal } from "./ShareModal";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
 import { attachHoverTooltip } from "./hoverTooltip";
-import {
-  addActivityOverlayListener,
-  getEffectiveActivityState,
-  removeActivityOverlayListener,
-} from "../models/PendingMessages";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
@@ -424,11 +419,8 @@ function createCustomTab(options: { id: string; name: string }): {
         //
         // The lifecycle RUNNING/WAITING split comes only from the backend's
         // lifecycle poll and lags a sent message, so the color is resolved through
-        // ``effectiveLifecycleState`` against the prompt activity signal
-        // (transcript-derived, plus the optimistic forced-THINKING the send
-        // applies). That makes the dot turn green the instant a message is sent,
-        // in step with the activity indicator -- hence the second listener below
-        // on the activity overlay, since an optimistic send is not a WS update.
+        // ``effectiveLifecycleState`` against the backend-derived prompt activity
+        // signal, which updates promptly over the agents WebSocket.
         const processDot = document.createElement("span");
         processDot.className = "dv-tab-process-dot";
         const processDotTooltip = attachHoverTooltip(processDot);
@@ -439,7 +431,7 @@ function createCustomTab(options: { id: string; name: string }): {
             processDotTooltip.setText(null);
             return;
           }
-          const effective = effectiveLifecycleState(state, getEffectiveActivityState(chatAgentId));
+          const effective = effectiveLifecycleState(state, getAgentById(chatAgentId)?.activity_state ?? null);
           processDot.style.display = "";
           // ``data-liveness`` drives the color (the primary signal). Several
           // lifecycle states share a color (DONE/STOPPED/REPLACED/UNKNOWN are
@@ -455,9 +447,7 @@ function createCustomTab(options: { id: string; name: string }): {
         element.insertBefore(processDot, element.firstChild);
         const processDotListener: AgentsUpdatedListener = () => updateProcessDot();
         addAgentsUpdatedListener(processDotListener);
-        addActivityOverlayListener(updateProcessDot);
         disposables.push({ dispose: () => removeAgentsUpdatedListener(processDotListener) });
-        disposables.push({ dispose: () => removeActivityOverlayListener(updateProcessDot) });
         disposables.push(processDotTooltip);
 
         const destroyBtn = createTabActionButton(

@@ -32,6 +32,21 @@ export interface AgentState {
   // matched, pushed by the backend beside activity_state. Null when no model
   // resolution is available. Drives the composer's model bar.
   model_choice?: ModelChoice | null;
+  // Full snapshot of the messages currently parked in the agent's harness queue,
+  // in enqueue order, pushed by the backend beside activity_state. The chat panel
+  // renders the queued group from this; it is replaced wholesale on each push and
+  // the frontend holds no queued state of its own. Absent/empty when nothing is
+  // queued. Mirrors the backend ``QueuedMessageState`` (models.py) -- keep in step.
+  queued_messages?: QueuedMessage[];
+}
+
+/** One message currently parked in an agent's harness queue (the wire shape of
+ *  the backend ``QueuedMessageState``). The frontend renders these verbatim and
+ *  keys the bubble on ``queued_id``; it never derives or reconciles them. */
+export interface QueuedMessage {
+  queued_id: string;
+  content: string;
+  timestamp: string;
 }
 
 export interface AppEntry {
@@ -400,6 +415,13 @@ export function getAgents(): AgentState[] {
 
 export function getAgentById(id: string): AgentState | undefined {
   return agents.find((a) => a.id === id);
+}
+
+/** The full snapshot of an agent's currently-queued messages, in enqueue order.
+ *  Empty when nothing is queued (or the agent is unknown). The single source of
+ *  queued state -- the frontend never invents or reconciles it. */
+export function getQueuedMessagesForAgent(agentId: string): QueuedMessage[] {
+  return getAgentById(agentId)?.queued_messages ?? [];
 }
 
 export function removeAgentLocally(agentId: string): void {

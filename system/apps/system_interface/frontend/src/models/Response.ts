@@ -7,7 +7,6 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import { reportMessaged } from "./activityReporter";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
-import { reconcilePendingMessages } from "./PendingMessages";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -532,9 +531,6 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
 
 export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): void {
   if (storeFor(agentId).append(newEvents)) {
-    // A live transcript event may be the real counterpart of an optimistic
-    // message the user just sent; drop any such bubble now that it has landed.
-    reconcilePendingMessages(agentId, getEventsForAgent(agentId));
     m.redraw();
   }
 }
@@ -573,9 +569,6 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
-    // A snapshot reload (initial load or reconnect) may already contain the
-    // real counterpart of an optimistic message; reconcile against it too.
-    reconcilePendingMessages(agentId, result.events);
     return result.events;
   } catch (error) {
     const requestError = error as { code?: number; message?: string };
@@ -703,6 +696,27 @@ export async function interruptAgent(agentId: string): Promise<void> {
   await m.request({
     method: "POST",
     url: apiUrl("/api/agents/:agentId/interrupt"),
+    params: { agentId },
+  });
+}
+
+/** Shoulder tap: restart the agent and resend the whole queue as one combined
+ *  turn. Fire-and-forget -- the next WS snapshot (empty group) plus the new
+ *  committed turn reflect the result; nothing is painted locally. */
+export async function flushQueue(agentId: string): Promise<void> {
+  await m.request({
+    method: "POST",
+    url: apiUrl("/api/agents/:agentId/flush-queue"),
+    params: { agentId },
+  });
+}
+
+/** Interrupt to composer: restart the agent and get the queued messages back as
+ *  one concatenated block to drop into the composer, unsent. */
+export async function drainToComposer(agentId: string): Promise<{ block: string }> {
+  return await m.request<{ block: string }>({
+    method: "POST",
+    url: apiUrl("/api/agents/:agentId/drain-to-composer"),
     params: { agentId },
   });
 }

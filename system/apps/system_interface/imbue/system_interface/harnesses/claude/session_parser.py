@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import json
 import re
+from enum import auto
 from typing import Any
 
 from loguru import logger as _loguru_logger
+from pydantic import Field
 from tk_command_parsing.parser import parse_command
 
+from imbue.imbue_common.enums import UpperCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_text
 from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
 from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
@@ -572,3 +576,99 @@ def _parse_queued_command_attachment(
         event["session_id"] = session_id
     existing_event_ids.add(event_id)
     new_events.append((timestamp, event))
+
+
+# Queued-message ledger parsing (conservation-law model). Claude Code records the
+# live queue as out-of-band ``queue-operation`` records that carry no ``uuid`` and
+# so are dropped by ``parse_lines`` at the DAG guard. They obey a conservation
+# law: ``enqueue = dequeue + remove + popAll`` -- every parked message leaves the
+# queue through exactly one dequeue/remove/popAll record. In the real Minds flow
+# EVERY message is delivered via mngr (typed into the TUI), so a mid-turn message
+# commits as a ``dequeue`` whose ``promptSource`` is "typed" (NOT "queued"), and
+# slash commands / task-notifications also leave via dequeue/remove -- none of
+# which the user record or the ``queued_command`` attachment reliably marks. So
+# resolution keys off the ledger's LEAVE ops ONLY (one record = one leave), never
+# ``promptSource`` or the attachment. ``parse_queue_signals`` therefore recognizes
+# ONLY the four ``queue-operation`` ops. The ``queued_command`` attachment and the
+# ``promptSource:"queued"`` user record are still parsed by ``parse_lines`` for the
+# TRANSCRIPT render -- that is unrelated and unchanged.
+
+_QUEUE_OPERATION_TYPE = "queue-operation"
+_ENQUEUE_OPERATION = "enqueue"
+# The three ops through which a parked message leaves the queue. Each such record
+# is one leave -- popAll emits one record per flushed message, so a per-record pop
+# is correct and uniform (no special "clear all").
+_LEAVE_OPERATIONS = frozenset({"dequeue", "remove", "popAll"})
+# Background-task completion notices ride the same queue as user messages, but
+# they are framework-generated and must never surface. An enqueue whose content
+# starts with this marker (or is blank) is added as a PHANTOM slot: it occupies a
+# FIFO position so leaves stay aligned, but it is filtered from the snapshot.
+TASK_NOTIFICATION_CONTENT_PREFIX = "<task-notification>"
+
+
+class QueueSignalKind(UpperCaseStrEnum):
+    """The queue-ledger transitions the tracker acts on.
+
+    Exactly the two the conservation law needs: a message entering the queue, and
+    a message leaving it (via any of dequeue / remove / popAll).
+    """
+
+    # A message was parked in the queue (``queue-operation/enqueue``).
+    ENQUEUE = auto()
+    # A parked message left the queue (``queue-operation`` dequeue / remove / popAll).
+    LEAVE = auto()
+
+
+class QueueSignal(FrozenModel):
+    """One recognized queue-ledger transition from a raw session line."""
+
+    kind: QueueSignalKind = Field(description="Whether this line parked a message or drained one")
+    session_id: str = Field(description="The record's session id; a change means a new session file")
+    # Carried only for ENQUEUE (the enqueue timestamp/content, used to mint the id
+    # and decide phantom-ness). Empty for LEAVE.
+    timestamp: str = Field(default="", description="Enqueue timestamp; empty for a LEAVE")
+    content: str = Field(default="", description="Enqueued message text; empty for a LEAVE")
+
+
+def _record_session_id(raw: dict[str, Any]) -> str:
+    """The session id on a raw record (``sessionId`` preferred, ``session_id`` fallback)."""
+    session_id = raw.get("sessionId") or raw.get("session_id")
+    return session_id if isinstance(session_id, str) else ""
+
+
+def parse_queue_signals(line: str) -> QueueSignal | None:
+    """Recognize a single raw session line as a queue-ledger transition, or None.
+
+    Returns an ENQUEUE for a ``queue-operation/enqueue``, a LEAVE for a
+    ``queue-operation`` dequeue / remove / popAll, and ``None`` for every other
+    line (including all ``user`` records and ``attachment`` records -- those are
+    handled by the transcript parse, not the queue tracker).
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        raw = json.loads(line)
+    except json.JSONDecodeError as e:
+        # A corrupt line in the session JSONL stream: fall back to "no signal" but
+        # surface it (a genuinely malformed complete line means on-disk corruption
+        # worth noticing, not routine input).
+        logger.warning("Skipping non-JSON line for queue signals: {}", e)
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    if raw.get("type") != _QUEUE_OPERATION_TYPE:
+        return None
+    operation = raw.get("operation")
+    if operation == _ENQUEUE_OPERATION:
+        content = raw.get("content", "")
+        return QueueSignal(
+            kind=QueueSignalKind.ENQUEUE,
+            session_id=_record_session_id(raw),
+            timestamp=raw.get("timestamp", ""),
+            content=content if isinstance(content, str) else "",
+        )
+    if operation in _LEAVE_OPERATIONS:
+        return QueueSignal(kind=QueueSignalKind.LEAVE, session_id=_record_session_id(raw))
+    return None

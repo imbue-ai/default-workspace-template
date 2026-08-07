@@ -75,7 +75,9 @@ from typing import Callable
 from loguru import logger as _loguru_logger
 from watchdog.observers import Observer
 
+from imbue.system_interface.harnesses.claude.queue_tracker import ClaudeQueueTracker
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
+from imbue.system_interface.harnesses.claude.session_parser import parse_queue_signals
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
@@ -304,6 +306,18 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         # locator -> position index so any event can be located and re-resolved.
         self._body_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._locator_ref_by_id: dict[str, tuple[SessionFileState, int]] = {}
+
+        # The queued-message populator (the only harness-specific queue code) and
+        # the last snapshot broadcast to the agent manager. Both are guarded by
+        # ``_lock``: the tracker is fed under the lock in the forward-consume loop
+        # (a cheap in-memory mutation, like the locator index), and the poll loop
+        # compares against ``_last_broadcast_queue_snapshot`` to decide whether to
+        # push a fresh snapshot -- so a snapshot change an HTTP read produced (by
+        # advancing a file's byte offset) is still broadcast on the next poll. The
+        # callback is set once before ``start`` and read without the lock.
+        self._queue_tracker = ClaudeQueueTracker.build()
+        self._last_broadcast_queue_snapshot: list[dict[str, str]] = []
+        self._queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None = None
 
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
@@ -712,6 +726,11 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                 state.byte_offset_consumed = 0
                 state.locators = []
                 state.emitted_count = 0
+                # A rewritten main-session file is re-read from the start below, so
+                # the queue populator must re-derive from scratch too; otherwise
+                # re-feeding the same enqueues would double the pending set.
+                if state.session_id in self._main_session_ids:
+                    self._queue_tracker.reset()
 
             if current_size == state.byte_offset_consumed and current_mtime == state.last_mtime:
                 if mark_all_emitted:
@@ -734,12 +753,22 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                     state.emitted_count = len(state.locators)
                 return
 
+            # Queue signals ride the main session's ledger, never a subagent's, so
+            # only main-session lines feed the populator. Computed once per refresh.
+            is_main_session = state.session_id in self._main_session_ids
             for byte_offset, byte_len, line_bytes in _iter_line_spans(complete, state.byte_offset_consumed):
                 try:
                     decoded_line = line_bytes.decode("utf-8")
                 except UnicodeDecodeError as e:
                     logger.warning("UTF-8 decode error in session file {}: {}", state.file_path, e)
                     continue
+                # Feed the queued-message populator in the same forward-consume
+                # pass. queue-operation records carry no uuid, so parse_lines drops
+                # them; this recognizes exactly the lines that move the live queue.
+                if is_main_session:
+                    queue_signal = parse_queue_signals(decoded_line)
+                    if queue_signal is not None:
+                        self._queue_tracker.consume(queue_signal)
                 line_events = parse_lines(
                     decoded_line.splitlines(),
                     existing_event_ids=self._existing_event_ids,
@@ -839,6 +868,10 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         self._discover_sessions()
         self._setup_watchers()
         self._prime_caches()
+        # Priming replays the whole backlog into the queue populator (self-
+        # correcting), so push the re-derived live queued snapshot once before the
+        # poll loop -- e.g. a message genuinely queued when the backend restarted.
+        self._broadcast_queue_snapshot_if_changed()
 
         while not self._stop_event.is_set():
             self._wake_event.wait(timeout=POLL_INTERVAL_SECONDS)
@@ -1124,6 +1157,59 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                 self._enrich_subagent_metadata(pending_events)
                 self._cache_unlinked_agent_parents(pending_events)
                 self._on_events(self._agent_id, pending_events)
+
+        # Queue-operation lines produce no transcript events, so a pure-enqueue
+        # cycle broadcasts nothing above; push the live queued snapshot here if it
+        # moved (including a change an HTTP read fed into the tracker).
+        self._broadcast_queue_snapshot_if_changed()
+
+    def set_queue_snapshot_callback(self, callback: Callable[[list[dict[str, Any]]], None]) -> None:
+        """Register the sink the watcher pushes each new queued-message snapshot to."""
+        self._queue_snapshot_callback = callback
+
+    def get_queued_messages(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return self._queue_tracker.snapshot()
+
+    def get_queued_block(self) -> str:
+        with self._lock:
+            return self._queue_tracker.concatenated_block()
+
+    def clear_queue(self) -> None:
+        """Drop the queued set (a flush restart invalidated it) and push the empty snapshot."""
+        with self._lock:
+            self._queue_tracker.clear()
+        self._broadcast_queue_snapshot_if_changed()
+
+    def notify_idle(self) -> list[dict[str, Any]]:
+        """Apply the working->IDLE backstop and return the resulting (empty) snapshot.
+
+        The caller (the agent manager, on a working->IDLE transition) folds the
+        returned snapshot into the same broadcast that carries the IDLE activity
+        state, so this does not push a broadcast of its own -- it only records the
+        cleared snapshot as broadcast so the poll loop does not re-push it.
+        """
+        with self._lock:
+            self._queue_tracker.on_idle()
+            snapshot = self._queue_tracker.snapshot()
+            self._last_broadcast_queue_snapshot = snapshot
+        return snapshot
+
+    def _broadcast_queue_snapshot_if_changed(self) -> None:
+        """Push the live queued snapshot to the registered sink when it has changed.
+
+        The snapshot read and the last-broadcast comparison run under the lock; the
+        callback fan-out runs outside it, matching the ``on_events`` fan-out rule.
+        """
+        callback = self._queue_snapshot_callback
+        if callback is None:
+            return
+        with self._lock:
+            snapshot = self._queue_tracker.snapshot()
+            if snapshot == self._last_broadcast_queue_snapshot:
+                return
+            self._last_broadcast_queue_snapshot = snapshot
+        callback(snapshot)
 
     def _cache_unlinked_agent_parents(self, events: list[dict[str, Any]]) -> None:
         """Remember assistant messages whose Agent tool_calls aren't enriched yet.
