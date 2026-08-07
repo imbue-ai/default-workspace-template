@@ -39,6 +39,7 @@ from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -1473,6 +1474,128 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
         assert "agent-1" not in agent_manager._activity_tracked_agents
         assert "agent-1" not in agent_manager._activity_state_by_agent
         assert "agent-1" not in agent_manager._activity_tracker_by_agent
+
+
+def test_update_queued_messages_caches_broadcasts_and_serializes(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A fresh queued snapshot from the watcher is cached, broadcast, and serialized."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    listener = broadcaster.register()
+    try:
+        snapshot = [{"queued_id": "q1", "content": "hello", "timestamp": "2026-08-07T00:00:01.000Z"}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == (
+                QueuedMessageState(queued_id="q1", content="hello", timestamp="2026-08-07T00:00:01.000Z"),
+            )
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        agents = latest["agents"]
+        assert isinstance(agents, list)
+        assert agents[0]["queued_messages"] == snapshot
+        assert agent_manager.get_agents_serialized()[0]["queued_messages"] == snapshot
+    finally:
+        agent_manager.stop()
+
+
+def test_update_queued_messages_no_op_when_not_tracked(agent_manager: AgentManager) -> None:
+    """Pushing a queued snapshot for an untracked agent leaves no cache residue."""
+    agent_manager.update_queued_messages("ghost", [{"queued_id": "q", "content": "x", "timestamp": "t"}])
+    with agent_manager._lock:
+        assert "ghost" not in agent_manager._queued_messages_by_agent
+
+
+def test_working_to_idle_drains_the_queue_via_the_registered_handler(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A working->IDLE transition invokes the watcher's queue backstop and clears the group."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+
+    try:
+        # A queued message is showing while the agent is thinking.
+        agent_manager.update_queued_messages(
+            "agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}]
+        )
+        agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+
+        # The turn ends (assistant reply, no pending tools) -> IDLE, so the backstop fires.
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "user_message", "content": "go"}, {"type": "assistant_message", "tool_calls": []}],
+        )
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+        assert idle_calls == [True]
+    finally:
+        agent_manager.stop()
+
+
+def test_stop_activity_tracking_clears_queued_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """Stopping tracking drops the queued snapshot and idle handler alongside activity state."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    agent_manager.register_queue_idle_handler("agent-1", lambda: [])
+    agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+
+    with agent_manager._lock:
+        assert "agent-1" in agent_manager._queued_messages_by_agent
+        assert "agent-1" in agent_manager._queue_idle_handler_by_agent
+
+    agent_manager._stop_activity_tracking("agent-1")
+
+    with agent_manager._lock:
+        assert "agent-1" not in agent_manager._queued_messages_by_agent
+        assert "agent-1" not in agent_manager._queue_idle_handler_by_agent
+
+
+def test_provider_snapshot_preserves_queued_messages_for_tracked_agent(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A re-listing observe snapshot must not wipe an already-tracked agent's queued group."""
+    test_agent_id = MngrAgentId()
+    str_id = str(test_agent_id)
+
+    state_dir = tmp_path / "agents" / str_id
+    state_dir.mkdir(parents=True)
+
+    agent = _agent_details("snapshot-agent", agent_id=test_agent_id, work_dir=str(tmp_path / "work"))
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_manager.update_queued_messages(str_id, [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+
+    listener = broadcaster.register()
+    try:
+        agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        agents = latest["agents"]
+        assert isinstance(agents, list)
+        assert agents[0]["id"] == str_id
+        assert agents[0]["queued_messages"] == [{"queued_id": "q1", "content": "hi", "timestamp": "t"}]
+    finally:
+        agent_manager.stop()
 
 
 def test_agent_removed_event_fires_removal_side_effects(agent_manager: AgentManager, tmp_path: Path) -> None:

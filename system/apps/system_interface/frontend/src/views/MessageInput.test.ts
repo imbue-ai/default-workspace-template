@@ -36,8 +36,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../models/Response", () => ({
   sendMessage: mocks.sendMessage,
-  interruptAgent: vi.fn(async () => {}),
-  getEventsForAgent: () => [],
+  drainToComposer: vi.fn(async () => ({ block: "" })),
 }));
 vi.mock("../models/ComposerAttachments", () => ({
   clearComposerAttachments: vi.fn(),
@@ -52,12 +51,6 @@ vi.mock("../models/ComposerAttachments", () => ({
 vi.mock("../models/attachments", () => ({
   buildMessageWithAttachments: (text: string) => text,
   formatFileSize: () => "0 B",
-}));
-vi.mock("../models/PendingMessages", () => ({
-  addPendingMessage: vi.fn(() => 1),
-  getEffectiveActivityState: () => "idle",
-  markPendingMessageQueued: vi.fn(),
-  removePendingMessage: vi.fn(),
 }));
 vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 vi.mock("../models/ModelSettings", () => ({

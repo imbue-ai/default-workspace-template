@@ -1061,3 +1061,72 @@ def test_layout_missing_panel_params_recovers_chat_binding(tmp_path: Path, page:
         expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(page.locator(".message-list-empty")).to_have_count(0)
         expect(page.locator(".message-list-not-found")).to_have_count(0)
+
+
+# A conversation whose transcript ends with an unresolved queue-operation/enqueue,
+# so the Claude queue populator surfaces one currently-queued message. Shaped like
+# the real records (a normal exchange, then an enqueue line the watcher feeds to
+# the tracker); the DOM assertions below match the real queued-group structure.
+_QUEUED_SESSION_EVENTS: list[dict[str, Any]] = [
+    {
+        "type": "user",
+        "uuid": "uuid-q-1",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "message": {"role": "user", "content": "Kick off the big refactor"},
+    },
+    {
+        "type": "assistant",
+        "uuid": "uuid-q-2",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": [{"type": "text", "text": "On it -- starting now."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": 4},
+        },
+    },
+    {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "timestamp": "2026-01-01T00:00:05Z",
+        "sessionId": "e2e-session-001",
+        "content": "actually also update the changelog",
+    },
+]
+
+
+@pytest.mark.timeout(30, func_only=False)
+def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -> None:
+    """A harness-queued message renders as a distinct group with the two actions.
+
+    Drives the whole Claude path end to end: the watcher feeds the trailing
+    ``enqueue`` to the queue populator, the backend pushes the ``queued_messages``
+    snapshot over the agents WebSocket, and the frontend renders the queued group
+    (reusing the user-bubble view) with the shoulder-tap and interrupt-to-composer
+    buttons above it.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 5, session_events=_QUEUED_SESSION_EVENTS) as (base_url, _, _):
+        page.goto(base_url)
+
+        # The committed turn renders as usual...
+        expect(page.locator(".message-user", has_text="Kick off the big refactor").first).to_be_visible(timeout=15000)
+
+        # ...and the queued message shows as a distinct group, reusing the
+        # user-bubble view (not the transcript classifier).
+        group = page.locator(".queued-group")
+        expect(group).to_be_visible(timeout=15000)
+        bubble = page.locator(".queued-message .message-user-bubble .message-content")
+        expect(bubble).to_contain_text("actually also update the changelog")
+
+        # The header row: 'Queued messages' label on the left, the shoulder-tap
+        # button (with its exact tooltip) on the right. No interrupt button here --
+        # interrupt-to-composer moved to the composer Stop button.
+        expect(page.locator(".queued-header-label")).to_contain_text("Queued messages")
+        flush_button = page.locator(".queued-action--flush")
+        expect(flush_button).to_be_visible()
+        expect(flush_button).to_contain_text("Shoulder tap")
+        expect(flush_button).to_have_attribute("data-tooltip", "Gently interrupt model to send queued messages")
+        expect(page.locator(".queued-action--interrupt")).to_have_count(0)
+
+        page.screenshot(path=str(tmp_path / "queued_group.png"))

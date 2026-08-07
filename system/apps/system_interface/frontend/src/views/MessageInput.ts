@@ -11,13 +11,7 @@ import {
 } from "../models/ComposerAttachments";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
-import { interruptAgent, sendMessage, getEventsForAgent } from "../models/Response";
-import {
-  addPendingMessage,
-  getEffectiveActivityState,
-  markPendingMessageQueued,
-  removePendingMessage,
-} from "../models/PendingMessages";
+import { drainToComposer, sendMessage } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
@@ -194,31 +188,19 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         messageText = "";
         clearComposerAttachments(agentId);
         localStorage.removeItem(messageTextKey(agentId));
-        // Show the message immediately (and force "Thinking..." if the agent is
-        // idle) instead of waiting for it to round-trip through the transcript.
-        const pendingId = addPendingMessage(agentId, finalText, getEventsForAgent(agentId));
         m.redraw();
 
+        // POST and return: nothing is painted locally. A queued message appears
+        // as a bubble when the harness records the enqueue (via the WS snapshot);
+        // a normal send appears when its turn lands in the transcript. The
+        // frontend invents no optimistic state.
         try {
           await sendMessage(agentId, finalText);
-          // The POST resolves once the backend confirms the agent accepted the
-          // message into its queue, so move the bubble to "queued". It stays up
-          // until the real transcript event reconciles it away -- that is when
-          // the agent has genuinely received it (the user-facing "sent").
-          if (pendingId !== null) {
-            markPendingMessageQueued(agentId, pendingId);
-          }
         } catch (err) {
           // The send genuinely failed (the backend confirms delivery before
-          // resolving, so a rejection means the message was NOT accepted). Roll
-          // the optimistic bubble back (clearing the forced-"Thinking..."
-          // override) so the UI does not show a message that was never
-          // delivered, and surface the real error.
+          // resolving, so a rejection means the message was NOT accepted).
           const detail = describeRequestError(err);
           console.error(`Failed to send message to agent ${agentId}: ${detail}`);
-          if (pendingId !== null) {
-            removePendingMessage(agentId, pendingId);
-          }
           // Restore the user's text and attachments so the send is not silently
           // lost -- but only if they have not already started a new draft for
           // this agent (the input was cleared at send time, so during the
@@ -247,22 +229,34 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         });
       }
 
-      async function handleInterrupt(): Promise<void> {
+      async function handleStopToComposer(): Promise<void> {
         if (!agentId || isInterruptInFlight) {
           return;
         }
-        // Hide the stop button until the restart request settles so the user
-        // cannot fire off multiple restarts in quick succession.
+        // Hide the stop button until the request settles so the user cannot fire
+        // off multiple restarts in quick succession.
         isInterruptInFlight = true;
         m.redraw();
         try {
-          await interruptAgent(agentId);
+          // Interrupt (restart) the agent and pull any queued messages back into
+          // the composer, unsent, for the user to edit and send. Empty block =
+          // nothing was queued (a clean no-op).
+          const { block } = await drainToComposer(agentId);
+          if (block) {
+            // Drop the block into the composer, guarded by the same composer-empty
+            // check the send-failure restore uses so it never clobbers a draft.
+            const isComposerEmpty = messageText.trim().length === 0 && getComposerAttachments(agentId).length === 0;
+            if (isComposerEmpty) {
+              messageText = block;
+              localStorage.setItem(messageTextKey(agentId), block);
+            }
+          }
         } catch (err) {
           const detail = describeRequestError(err);
           console.error(`Failed to interrupt agent ${agentId}: ${detail}`);
-          // Surface the failure to the user: they deliberately clicked Stop,
-          // and on failure the agent is still running. Matches the alert-based
-          // feedback convention for user-initiated mutations (see executeDestroy).
+          // Surface the failure: they deliberately clicked Stop, and on failure
+          // the agent is still running. Matches the alert-based feedback
+          // convention for user-initiated mutations (see executeDestroy).
           alert(`Failed to interrupt agent: ${detail}`);
         } finally {
           isInterruptInFlight = false;
@@ -402,11 +396,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
       const canSend = hasMessageText || hasReadyAttachments(agentId);
 
       // The stop button is only meaningful while the agent has an interruptible
-      // turn in progress -- the same condition that drives the activity
-      // indicator above the input. Use the effective state so a just-sent
-      // message that forced "Thinking..." also surfaces the stop button, keeping
-      // the two in lockstep. Hide it whenever the agent is idle.
-      const isAgentWorking = isWorkingActivityState(getEffectiveActivityState(agentId));
+      // turn in progress -- the same condition that drives the activity indicator
+      // above the input, read straight off the backend-derived activity state.
+      const isAgentWorking = isWorkingActivityState(getAgentById(agentId)?.activity_state ?? null);
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
 
       return m("div", { class: "message-input mx-auto w-full" }, [
@@ -480,9 +472,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     "button",
                     {
                       class: "message-input-stop-button",
-                      "data-tooltip": "Interrupt",
-                      "aria-label": "Interrupt",
-                      onclick: handleInterrupt,
+                      "data-tooltip": "Interrupt and bring queued messages to the composer",
+                      "aria-label": "Interrupt and bring queued messages to the composer",
+                      onclick: handleStopToComposer,
                     },
                     m.trust(stopIcon(14)),
                   )
