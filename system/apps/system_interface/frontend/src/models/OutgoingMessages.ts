@@ -3,16 +3,18 @@
  * shown at the very tail of the transcript the instant the user sends, before the
  * harness-sourced state (a queued bubble, or the committed turn) catches up.
  *
- * This is the ONE place the frontend paints optimistic state, and it is
- * deliberately thin, self-terminating, and fully decoupled from the backend:
- *  - an entry is "sending" while its send POST is in flight,
- *  - it flips to "failed" (and stays, until the next send) if the POST rejects,
- *  - it is removed a short beat after the POST resolves -- the backend confirms
- *    delivery before resolving, so by then the real bubble (a queued-group entry
- *    or a committed turn) is arriving, and the beat just avoids a flash of nothing.
+ * This is the ONE place the frontend paints optimistic state. Removal is
+ * ARRIVAL-DRIVEN, not timed: the backend's own updates route through
+ * ``noteBackendArrivals`` (a live transcript ``user_message`` arriving, or a new
+ * queued-snapshot entry), and each genuinely-new arrival drops the oldest
+ * "Sending…" bubble. So the optimistic bubble disappears exactly as the real one
+ * appears -- no overlap where both share the screen. Correlation is positional
+ * (oldest-first) + arrival-id dedup; there is NO content matching.
  *
- * No content matching, no correlation, no persistence -- it dies on reload. If it
- * is ever wrong it self-heals on the next send or reload; it never gates real state.
+ * Terminal states: a POST rejection flips a bubble to a persistent "Failed to
+ * send" (until the next send); a delivered bubble that somehow never sees an
+ * arrival is swept by an anti-strand fallback timer. It dies on reload; it never
+ * gates real state.
  */
 import m from "mithril";
 
@@ -27,12 +29,26 @@ export interface OutgoingMessage {
   error?: string;
 }
 
-// How long after a send POST resolves to keep the bubble up, so the real bubble
-// has a beat to render and we never flash an empty gap. Purely cosmetic; small.
-const SETTLE_MS = 450;
+// Anti-strand fallback: if a delivered send never produces an observable arrival,
+// drop its bubble this long after the POST resolves. The fast path is
+// arrival-driven, so this only fires in the unusual no-arrival case.
+const FALLBACK_MS = 6000;
 
 const byAgent: Record<string, OutgoingMessage[]> = {};
+// Arrival ids already accounted for, per agent -- so a re-streamed transcript
+// event or a re-pushed queued snapshot does not drop a bubble twice.
+const seenArrivalIds: Record<string, Set<string>> = {};
+// Anti-strand fallback timers, keyed by outgoing id.
+const fallbackTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 let nextId = 0;
+
+function clearFallback(id: string): void {
+  const timer = fallbackTimers[id];
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    delete fallbackTimers[id];
+  }
+}
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
  *  so the caller can resolve or fail it when the send POST settles. */
@@ -55,24 +71,32 @@ function removeOutgoing(agentId: string, id: string): void {
   const next = list.filter((entry) => entry.id !== id);
   if (next.length !== list.length) {
     byAgent[agentId] = next;
+    clearFallback(id);
     m.redraw();
   }
 }
 
-/** The send POST resolved: the message reached the backend (delivery is confirmed
- *  before the POST resolves). Keep the bubble a short beat so the real bubble
- *  renders first, then drop it. */
+/** The send POST resolved (delivery confirmed): arm the anti-strand fallback so
+ *  the bubble cannot linger forever if no backend arrival is ever observed. The
+ *  fast path is still ``noteBackendArrivals``. */
 export function resolveOutgoing(agentId: string, id: string): void {
-  setTimeout(() => removeOutgoing(agentId, id), SETTLE_MS);
+  clearFallback(id);
+  fallbackTimers[id] = setTimeout(() => {
+    const entry = byAgent[agentId]?.find((candidate) => candidate.id === id);
+    if (entry !== undefined && entry.status === "sending") {
+      removeOutgoing(agentId, id);
+    }
+  }, FALLBACK_MS);
 }
 
 /** The send POST rejected: the message was NOT accepted. Flip to a persistent
- *  "failed" state so the user plainly sees it did not send. */
+ *  "failed" state (cancelling any fallback) so the user plainly sees it. */
 export function failOutgoing(agentId: string, id: string, error: string): void {
   const entry = byAgent[agentId]?.find((candidate) => candidate.id === id);
   if (entry !== undefined) {
     entry.status = "failed";
     entry.error = error;
+    clearFallback(id);
     m.redraw();
   }
 }
@@ -88,5 +112,43 @@ export function clearFailedOutgoing(agentId: string): void {
   if (next.length !== list.length) {
     byAgent[agentId] = next;
     m.redraw();
+  }
+}
+
+function removeOldestSending(agentId: string): void {
+  const list = byAgent[agentId];
+  if (list === undefined) {
+    return;
+  }
+  const oldest = list.find((entry) => entry.status === "sending");
+  if (oldest !== undefined) {
+    removeOutgoing(agentId, oldest.id);
+  }
+}
+
+/**
+ * Route backend arrivals through the optimistic layer: each genuinely-new real
+ * user item for this agent -- a live transcript ``user_message`` (its event_id)
+ * or a new queued-snapshot entry (its queued_id) -- drops the oldest "Sending…"
+ * bubble, so the optimistic bubble clears exactly as the real one lands.
+ *
+ * Ids are deduped per agent, so a re-streamed event or a re-pushed snapshot does
+ * not drop a bubble again. Removal is positional (oldest-first) and never matches
+ * on content. Over-eager removal is harmless: the real bubble is what shows, so at
+ * worst the "Sending…" indicator clears a touch early -- never a duplicate.
+ */
+export function noteBackendArrivals(agentId: string, ids: readonly string[]): void {
+  if (ids.length === 0) {
+    return;
+  }
+  const seen = (seenArrivalIds[agentId] ??= new Set());
+  for (const id of ids) {
+    if (seen.has(id)) {
+      continue;
+    }
+    // Record every arrival id (so a re-stream/re-push cannot drop a later bubble),
+    // and drop the oldest "Sending…" bubble -- a no-op when there are none.
+    seen.add(id);
+    removeOldestSending(agentId);
   }
 }
