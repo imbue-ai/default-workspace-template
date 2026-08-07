@@ -68,12 +68,14 @@ from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentListItem
 from imbue.system_interface.models import AgentListResponse
+from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
 from imbue.system_interface.models import CreateCodexRequest
 from imbue.system_interface.models import DestroyAgentResponse
+from imbue.system_interface.models import DrainToComposerResponse
 from imbue.system_interface.models import ErrorResponse
 from imbue.system_interface.models import HarnessLogoResponse
 from imbue.system_interface.models import InterruptAgentResponse
@@ -680,15 +682,8 @@ def _interrupt_agent_endpoint(agent_id: str) -> Response:
 
     agent_name = agent_info.name
 
-    result = run_local_command_modern_version(
-        command=["mngr", "start", agent_name, "--restart", "--no-resume"],
-        cwd=None,
-        is_checked=False,
-        timeout=60.0,
-    )
-    success = result.returncode == 0
-    output = result.stdout.strip() if success else result.stderr.strip()
-    if not success:
+    is_restarted, output = _restart_agent_process(agent_name)
+    if not is_restarted:
         error = ErrorResponse(detail=f"Failed to interrupt agent '{agent_name}': {output}")
         return _json_response(error.model_dump(), status_code=500)
 
@@ -699,6 +694,124 @@ def _interrupt_agent_endpoint(agent_id: str) -> Response:
     get_state().agent_manager.reset_activity_state(agent_id)
 
     return _json_response(InterruptAgentResponse(status="ok").model_dump())
+
+
+def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
+    """Run ``mngr start <agent> --restart --no-resume``; return ``(is_restarted, output)``.
+
+    Stops the agent (ending any in-progress turn) and relaunches it fresh without
+    a resume prompt: conversation history is preserved (each harness resumes its
+    own on-disk session) and the in-harness queue is dropped by the SIGKILL.
+    ``output`` is stdout on success, stderr on failure (for the caller's message).
+    Refused by mngr for an ``is_primary=true`` agent; callers guard that with a
+    clearer 400 before calling.
+    """
+    result = run_local_command_modern_version(
+        command=["mngr", "start", agent_name, "--restart", "--no-resume"],
+        cwd=None,
+        is_checked=False,
+        timeout=60.0,
+    )
+    is_restarted = result.returncode == 0
+    return is_restarted, (result.stdout.strip() if is_restarted else result.stderr.strip())
+
+
+def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Response | None:
+    """A 400 refusing a restart-based queue action on the primary services agent, or None.
+
+    Both queue actions restart the agent; restarting the ``is_primary=true``
+    services agent would tear down the workspace's supervised services. The
+    frontend hides primary agents, so this is defense-in-depth for direct callers.
+    """
+    if agent_info.labels.get("is_primary") == "true":
+        error = ErrorResponse(
+            detail=(
+                f"Refusing to {action} agent '{agent_info.name}': it carries the "
+                "is_primary=true label (services agent for this workspace)"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+    return None
+
+
+def _drain_queue(agent_info: AgentInfo) -> str:
+    """Shared prefix for both queue actions: capture the block, restart, clear.
+
+    Returns the queued messages as one concatenated block (empty when the queue
+    was already drained -- a no-op). The block is captured BEFORE the restart,
+    which drops the harness queue; the restart is then run and the tracked queued
+    set (which it invalidated) is cleared, emptying the frontend group at once.
+    Raises :class:`AgentRestartError` if the restart fails. The two endpoints
+    differ only in what they do with the returned block.
+    """
+    state = get_state()
+    watcher = state.get_or_create_watcher(agent_info)
+    block = watcher.get_queued_block()
+    if not block:
+        return ""
+    is_restarted, output = _restart_agent_process(agent_info.name)
+    if not is_restarted:
+        raise AgentRestartError(f"Failed to restart agent '{agent_info.name}': {output}")
+    # The restart abandoned the transcript mid-turn, so settle the derived
+    # activity (the flush's own send re-drives it), then drop the tracked queued
+    # set the SIGKILL invalidated -- this also pushes the now-empty group.
+    state.agent_manager.reset_activity_state(agent_info.id)
+    watcher.clear_queue()
+    return block
+
+
+def _flush_queue_endpoint(agent_id: str) -> Response:
+    """Shoulder tap: restart the agent and resend the whole queue as one turn.
+
+    Combining is required: after the restart the agent is idle, so sending the
+    messages one at a time would let the first open a turn and the rest re-queue.
+    Returns 404 for an unknown agent, 400 for the primary services agent, 500 if
+    the restart or the resend fails, 200 otherwise.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    refusal = _refuse_queue_action_on_primary(agent_info, "flush the queue of")
+    if refusal is not None:
+        return refusal
+
+    try:
+        block = _drain_queue(agent_info)
+    except AgentRestartError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+
+    if block:
+        agent_manager: AgentManager = get_state().agent_manager
+        is_sent = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        if not is_sent:
+            error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
+            return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+def _drain_to_composer_endpoint(agent_id: str) -> Response:
+    """Interrupt to composer: restart the agent and hand the queued block back, unsent.
+
+    Same restart-and-clear prefix as the flush, but the concatenated block is
+    returned to the frontend to drop into the composer for the user to edit and
+    send, rather than resent. Returns 404 for an unknown agent, 400 for the
+    primary services agent, 500 if the restart fails, 200 with ``{block}``
+    otherwise (``block`` empty when the queue was already drained).
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    refusal = _refuse_queue_action_on_primary(agent_info, "interrupt the queue of")
+    if refusal is not None:
+        return refusal
+
+    try:
+        block = _drain_queue(agent_info)
+    except AgentRestartError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+
+    return _json_response(DrainToComposerResponse(block=block).model_dump())
 
 
 def _get_subagent_events(agent_id: str, subagent_session_id: str) -> Response:
@@ -1923,6 +2036,10 @@ def create_application(state: SystemInterfaceState) -> Flask:
         endpoint="_delete_attachment",
     )
     application.add_url_rule("/api/agents/<agent_id>/interrupt", view_func=_interrupt_agent_endpoint, methods=["POST"])
+    application.add_url_rule("/api/agents/<agent_id>/flush-queue", view_func=_flush_queue_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/agents/<agent_id>/drain-to-composer", view_func=_drain_to_composer_endpoint, methods=["POST"]
+    )
     application.add_url_rule("/api/layouts", view_func=_list_layouts_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/layouts", view_func=_save_layout_as_endpoint, methods=["POST"], endpoint="_save_layout_as"

@@ -6,6 +6,7 @@ import os
 import queue
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import quote
@@ -24,6 +25,7 @@ from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
@@ -665,6 +667,158 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
 
     assert response.status_code == 500
     assert response.get_json()["detail"] == "Failed to interrupt agent 'claude-agent': mngr start failed"
+
+
+def _agent_info(
+    agent_id: str = "agent-00000000000000000000000000000001",
+    name: str = "claude-agent",
+    labels: dict[str, str] | None = None,
+) -> AgentInfo:
+    return AgentInfo(
+        id=agent_id,
+        name=name,
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+        labels=labels if labels is not None else {},
+    )
+
+
+def _restart_ok() -> FinishedProcess:
+    return FinishedProcess(
+        returncode=0,
+        stdout="Restarted agent: claude-agent",
+        stderr="",
+        command=("mngr", "start", "claude-agent", "--restart", "--no-resume"),
+        is_output_already_logged=False,
+    )
+
+
+def _fake_queue_watcher(block: str) -> SimpleNamespace:
+    """A stand-in watcher exposing just the queue methods the endpoints call.
+
+    ``clear_calls`` records each ``clear_queue`` invocation so a test can assert
+    the tracked set was cleared, without pulling in ``unittest.mock``.
+    """
+    clear_calls: list[bool] = []
+    return SimpleNamespace(
+        get_queued_block=lambda: block,
+        clear_queue=lambda: clear_calls.append(True),
+        clear_calls=clear_calls,
+    )
+
+
+def test_flush_queue_returns_404_for_unknown_agent(client: FlaskClient) -> None:
+    with patch("imbue.system_interface.server._find_agent", return_value=None):
+        response = client.post("/api/agents/nonexistent/flush-queue")
+    assert response.status_code == 404
+
+
+def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskClient) -> None:
+    """Shoulder tap restarts the agent, clears the tracked set, and resends one combined turn."""
+    fake_watcher = _fake_queue_watcher("first message\nsecond message")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=True) as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/flush-queue")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    # Resent as ONE combined turn, in enqueue order.
+    assert mock_send.call_count == 1
+    assert mock_send.call_args.args[1] == "first message\nsecond message"
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:
+    """A flush with nothing queued neither restarts nor resends -- a clean 200."""
+    fake_watcher = _fake_queue_watcher("")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch.object(AgentManager, "send_message_to_agent") as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/flush-queue")
+
+    assert response.status_code == 200
+    mock_run.assert_not_called()
+    mock_send.assert_not_called()
+
+
+def test_flush_queue_rejects_is_primary_agent(client: FlaskClient) -> None:
+    with (
+        patch(
+            "imbue.system_interface.server._find_agent",
+            return_value=_agent_info(agent_id="services-1", name="system-services", labels={"is_primary": "true"}),
+        ),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/services-1/flush-queue")
+
+    assert response.status_code == 400
+    assert "is_primary" in response.get_json()["detail"]
+    mock_run.assert_not_called()
+
+
+def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None:
+    fake_watcher = _fake_queue_watcher("queued text")
+    failed = FinishedProcess(
+        returncode=1,
+        stdout="",
+        stderr="mngr start failed",
+        command=("mngr", "start", "claude-agent", "--restart", "--no-resume"),
+        is_output_already_logged=False,
+    )
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=failed),
+        patch.object(AgentManager, "send_message_to_agent") as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/flush-queue")
+
+    assert response.status_code == 500
+    # The restart failed, so nothing is resent.
+    mock_send.assert_not_called()
+
+
+def test_drain_to_composer_restarts_and_returns_the_block_unsent(client: FlaskClient) -> None:
+    """Interrupt-to-composer restarts and hands the block back without sending it."""
+    fake_watcher = _fake_queue_watcher("edit me before sending")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent") as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "edit me before sending"
+    # The block is handed back, never sent.
+    mock_send.assert_not_called()
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:
+    fake_watcher = _fake_queue_watcher("")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    mock_run.assert_not_called()
 
 
 def test_list_layouts_exposes_defaults(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

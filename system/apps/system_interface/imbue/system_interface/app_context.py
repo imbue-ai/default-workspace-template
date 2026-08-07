@@ -112,6 +112,15 @@ class SystemInterfaceState(MutableModel):
             # watcher, so nothing here knows which harness is running.
             watcher = build_watcher(agent_info, on_events)
             watcher_holder.append(watcher)
+            # Bridge the watcher's live queued-message snapshot onto the agents WS
+            # state, and register its working->IDLE queue backstop with the manager.
+            # Both are no-ops for a harness without a queue populator. The manager
+            # de-dupes/broadcasts, so pushing the full snapshot on each change is
+            # cheap.
+            watcher.set_queue_snapshot_callback(
+                lambda snapshot: self.agent_manager.update_queued_messages(agent_info.id, snapshot)
+            )
+            self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
             self.watchers[agent_info.id] = watcher
             watcher.start()
 

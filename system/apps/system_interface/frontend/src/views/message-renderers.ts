@@ -13,7 +13,7 @@ import { PermissionCard } from "./permission-card";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
-// conversation-rows, ProgressBlock, PendingMessageView -- keep their import path.
+// conversation-rows, ProgressBlock -- keep their import path.
 export { renderUserMessage, StableUserMessage } from "./user-message-display";
 
 /** Build a tool_call_id -> tool_result map, merging skill-expansion

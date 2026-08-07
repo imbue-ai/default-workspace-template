@@ -27,6 +27,12 @@ from imbue.system_interface.agent_discovery import AgentInfo
 # Fanned out to the event queues (and so to the browser) and to the activity tracker.
 OnEventsCallback = Callable[[str, list[dict[str, Any]]], None]
 
+# Called with the full queued-message snapshot each time it changes. Harness-
+# agnostic wire shape (a list of ``{queued_id, content, timestamp}`` dicts); the
+# only harness-specific code is the populator that produces it (see
+# ``harnesses.claude.queue_tracker``).
+QueueSnapshotCallback = Callable[[list[dict[str, Any]]], None]
+
 
 class AgentSessionWatcher(ABC):
     """Watches one agent's transcript and emits parsed events."""
@@ -83,3 +89,26 @@ class AgentSessionWatcher(ABC):
     @abstractmethod
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         """True when ``event`` belongs to the agent's own session rather than a subagent's."""
+
+    # --- Queued messages (the shoulder-tap surface). ---------------------------
+    # Concrete no-op defaults so a harness without a queued-message populator
+    # needs no changes; the Claude watcher overrides them. Everything downstream
+    # (the WS snapshot field and the two common actions) is harness-agnostic.
+
+    def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
+        """Register the sink that receives each new queued-message snapshot. No-op by default."""
+
+    def get_queued_messages(self) -> list[dict[str, Any]]:
+        """The current queued-message snapshot; empty for a harness with no populator."""
+        return []
+
+    def get_queued_block(self) -> str:
+        """The queued messages as one concatenated turn; empty for a harness with no populator."""
+        return ""
+
+    def clear_queue(self) -> None:
+        """Drop the queued set (after a flush restart). No-op for a harness with no populator."""
+
+    def notify_idle(self) -> list[dict[str, Any]]:
+        """Apply the working->IDLE backstop and return the resulting snapshot (empty by default)."""
+        return []
