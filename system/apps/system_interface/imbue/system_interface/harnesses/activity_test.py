@@ -50,9 +50,24 @@ def test_each_tracker_is_independent() -> None:
 
 
 def test_fresh_tracker_is_idle() -> None:
+    # opencode is marker-driven: a running agent with no events yet is legitimately THINKING
+    # (the whole point of showing "Thinking" the instant a turn begins), so it is asserted
+    # separately in test_opencode_marker_drives_state.
     for harness in HarnessType:
+        if harness == HarnessType.OPENCODE:
+            continue
         tracker = build_tracker(harness)
         assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.IDLE
+
+
+def test_opencode_marker_drives_state() -> None:
+    """opencode reads activity off the mngr ``active`` marker (is_agent_running), not the
+    transcript tail -- because it pre-creates the empty assistant row at turn start, so a
+    tail heuristic would show IDLE during a plain turn. Running with no tool is THINKING;
+    not running is IDLE."""
+    tracker = build_tracker(HarnessType.OPENCODE)
+    assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.THINKING
+    assert tracker.derive(is_agent_running=False, process_started_at=None) == ActivityState.IDLE
 
 
 def test_observe_reports_no_change_on_repeat() -> None:
@@ -95,11 +110,15 @@ def test_claude_honors_the_mngr_lifecycle() -> None:
     assert tracker.derive(is_agent_running=False, process_started_at=None) == ActivityState.IDLE
 
 
-# antigravity is excluded: it writes no ``*_process_started`` marker and runs no staleness
-# rung. A turn abandoned by a dead process reads IDLE through the mngr ``active`` lifecycle
-# gate (is_agent_running=False) instead, which ``test_not_running_is_idle`` in
-# ``antigravity/activity_state_test`` covers.
-@pytest.mark.parametrize("harness", [harness for harness in HarnessType if harness != HarnessType.ANTIGRAVITY])
+# antigravity and opencode are excluded: neither runs a transcript-staleness rung. A turn
+# abandoned by a dead process reads IDLE through the mngr ``active`` lifecycle gate
+# (is_agent_running=False) instead -- antigravity via its ``active`` marker, opencode via its
+# marker-driven derive (which ignores the tail entirely). ``test_opencode_marker_drives_state``
+# covers opencode's not-running=IDLE case.
+@pytest.mark.parametrize(
+    "harness",
+    [harness for harness in HarnessType if harness not in (HarnessType.ANTIGRAVITY, HarnessType.OPENCODE)],
+)
 def test_stale_transcript_tail_reads_idle(harness: HarnessType) -> None:
     """A turn abandoned by a prior process must not pin the indicator.
 
@@ -124,7 +143,11 @@ def test_stale_transcript_tail_reads_idle(harness: HarnessType) -> None:
     assert tracker.derive(is_agent_running=True, process_started_at=restarted_at) == ActivityState.IDLE
 
 
-@pytest.mark.parametrize("harness", list(HarnessType))
+# opencode is excluded: its derive is marker-driven, so reset() (which clears cached transcript
+# signals) does not by itself force IDLE while is_agent_running is True -- the real interrupt/
+# restart path clears the ``active`` marker, so is_agent_running goes False -> IDLE. The
+# marker-gated IDLE is covered by test_opencode_marker_drives_state.
+@pytest.mark.parametrize("harness", [harness for harness in HarnessType if harness != HarnessType.OPENCODE])
 def test_reset_settles_on_idle(harness: HarnessType) -> None:
     tracker = build_tracker(harness)
     tracker.observe(
