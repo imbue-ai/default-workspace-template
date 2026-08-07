@@ -37,11 +37,17 @@ function capitalizeEffort(level: string): string {
   return level.length === 0 ? level : level[0].toUpperCase() + level.slice(1);
 }
 
+// A search picker (pi/opencode) can carry thousands of models; never lay out more than
+// this many <li> at once. The user narrows with the search box; the cap bounds the DOM.
+const MODEL_SEARCH_CAP = 100;
+
 export function ModelBar(): m.Component<{ agentId: string }> {
   // Which dropdown is open (model or effort, or none) and the bar element used to
   // detect an outside click closing it.
   let openDropdown: "model" | "effort" | null = null;
   let barElement: HTMLElement | null = null;
+  // The current model-search query (only used when the harness's picker_mode is "search").
+  let modelQuery = "";
 
   function handleOutsideMousedown(event: MouseEvent): void {
     if (barElement !== null && !barElement.contains(event.target as Node)) {
@@ -58,9 +64,18 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     selectedId: string | null;
     interactive: boolean;
     tooltip: string;
+    searchable?: boolean;
     onPick: (id: string) => void;
   }): m.Vnode {
     const isOpen = openDropdown === opts.kind;
+    // For a search picker, filter by the query and cap the rendered rows; otherwise
+    // show every option. Filtering on `label` (== the provider/model tag).
+    const query = modelQuery.trim().toLowerCase();
+    const filtered = opts.searchable
+      ? opts.items.filter((item) => item.label.toLowerCase().includes(query))
+      : opts.items;
+    const visible = opts.searchable ? filtered.slice(0, MODEL_SEARCH_CAP) : filtered;
+    const hiddenCount = filtered.length - visible.length;
     return m("div", { class: "model-selector-wrapper" }, [
       m(
         "button",
@@ -71,7 +86,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           "data-tooltip": opts.tooltip,
           onclick: (event: MouseEvent) => {
             event.stopPropagation();
+            const opening = !isOpen;
             openDropdown = isOpen ? null : opts.kind;
+            // Reset the search each time the picker opens.
+            if (opening && opts.searchable) {
+              modelQuery = "";
+            }
           },
         },
         [
@@ -89,10 +109,22 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             },
             [
               m("div", { class: "model-selector-dropdown-header" }, opts.header),
+              opts.searchable
+                ? m("input", {
+                    class: "model-selector-search",
+                    type: "text",
+                    placeholder: "Search models…",
+                    value: modelQuery,
+                    oncreate: (v: m.VnodeDOM) => (v.dom as HTMLInputElement).focus(),
+                    oninput: (e: InputEvent) => {
+                      modelQuery = (e.target as HTMLInputElement).value;
+                    },
+                  })
+                : null,
               m(
                 "ul",
                 { class: "model-selector-dropdown-list" },
-                opts.items.map((item) =>
+                visible.map((item) =>
                   m(
                     "li",
                     {
@@ -111,6 +143,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                   ),
                 ),
               ),
+              hiddenCount > 0
+                ? m("div", { class: "model-selector-more" }, `+${hiddenCount} more — keep typing to narrow`)
+                : null,
+              opts.searchable && visible.length === 0
+                ? m("div", { class: "model-selector-more" }, "No matching models")
+                : null,
             ],
           )
         : null,
@@ -165,6 +203,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         selectedId: matched.id,
         interactive,
         tooltip: "Select model",
+        searchable: catalog.picker_mode === "search",
         onPick: (modelId) => {
           const option = catalog.options.find((candidate) => candidate.id === modelId);
           if (option === undefined) {

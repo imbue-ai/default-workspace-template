@@ -192,6 +192,7 @@ interface PanelParams {
 // Modal state
 let showNewChatModal = false;
 let showNewCodexModal = false;
+let showNewPiModal = false;
 let sillyModalMode: "silly-claude" | "silly-codex" | null = null;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
@@ -809,6 +810,16 @@ function buildDropdownItems(
       },
     });
   }
+
+  // New pi agent -- the same `chat` role, on the `pi-coding` harness. Always shown.
+  items.push({
+    label: "New Pi Agent",
+    action: () => {
+      newTabTargetGroup = targetGroup ?? null;
+      showNewPiModal = true;
+      m.redraw();
+    },
+  });
 
   if (isSillyModelsEnabled()) {
     items.push({
@@ -2937,6 +2948,22 @@ export const DockviewWorkspace: m.Component = {
               },
               onCancel() {
                 showNewCodexModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        showNewPiModal
+          ? m(CreateAgentModal, {
+              mode: "pi",
+              onCreated(newAgentId: string, newAgentName: string) {
+                showNewPiModal = false;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                showNewPiModal = false;
                 newTabTargetGroup = null;
               },
             })

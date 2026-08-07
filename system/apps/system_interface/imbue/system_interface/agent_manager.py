@@ -335,7 +335,9 @@ class AgentManager:
     # built independent of the local state dir (a remote agent still shows its GUESS),
     # and only the live watch needs the state dir.
     _model_resolver_by_agent: dict[str, HarnessModelResolver]
-    _model_choice_by_agent: dict[str, ModelChoice]
+    # None = the harness has no model to show yet (no launch default and nothing live,
+    # e.g. pi before its session records a model) -> the bar renders logo-only.
+    _model_choice_by_agent: dict[str, ModelChoice | None]
     _model_watcher_by_agent: dict[str, PathWatcher]
     # Assist chats whose tab we have already auto-opened (or that existed at
     # startup, seeded by ``_initial_discover`` so we never auto-open them). Lets
@@ -1239,8 +1241,13 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
             if agent_state is None:
                 return
-            matched = match_option(identity, get_catalog(agent_state.harness).options)
-            choice = ModelChoice(identity=identity, source=source, matched=matched)
+            # identity is None when the harness has nothing to show yet (no launch
+            # default and nothing live, e.g. pi pre-first-model) -> no choice, logo-only.
+            if identity is None:
+                choice: ModelChoice | None = None
+            else:
+                matched = match_option(identity, get_catalog(agent_state.harness).options)
+                choice = ModelChoice(identity=identity, source=source, matched=matched)
             old_choice = self._model_choice_by_agent.get(agent_id)
             if not force and old_choice == choice and agent_state.model_choice == choice:
                 return

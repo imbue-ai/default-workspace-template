@@ -32,28 +32,28 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.watcher import codex_sessions_dir
 from imbue.system_interface.harnesses.codex.watcher import resolve_active_rollout_path
 from imbue.system_interface.harnesses.model import EffortChoice
-from imbue.system_interface.harnesses.model import EffortLevel
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
+from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
 from imbue.system_interface.harnesses.model import parse_effort_level
 
 # Codex efforts: low..xhigh shown; max/ultra declared-but-hidden (valid + matchable,
-# never offered). Shared across the catalog's models.
+# never offered). Plain strings, as the catalog carries them.
 _CODEX_EFFORTS: tuple[EffortChoice, ...] = (
-    EffortChoice(level=EffortLevel.LOW),
-    EffortChoice(level=EffortLevel.MEDIUM),
-    EffortChoice(level=EffortLevel.HIGH),
-    EffortChoice(level=EffortLevel.XHIGH),
-    EffortChoice(level=EffortLevel.MAX, in_picker=False),
-    EffortChoice(level=EffortLevel.ULTRA, in_picker=False),
+    EffortChoice(level="low"),
+    EffortChoice(level="medium"),
+    EffortChoice(level="high"),
+    EffortChoice(level="xhigh"),
+    EffortChoice(level="max", in_picker=False),
+    EffortChoice(level="ultra", in_picker=False),
 )
 
-_DEFAULT_EFFORT: EffortLevel = EffortLevel.MEDIUM
+_DEFAULT_EFFORT: str = "medium"
 
 CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
     options=(
@@ -70,6 +70,7 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
     # codex binary (see setup_system.sh) makes /model <model> [effort] apply inline; the
     # unpatched binary silently ignored it, which is why this used to be READ_ONLY.
     switch_mode=SwitchMode.ON_CHANGE,
+    picker_mode=PickerMode.LIST,
     icon_svg=(Path(__file__).parent / "icon.svg").read_text(),
 )
 
@@ -158,7 +159,7 @@ class CodexModelResolver(HarnessModelResolver):
         if ModelAxis.MODEL in axes or ModelAxis.EFFORT in axes:
             command = f"/model {identity.model_id}"
             if identity.effort is not None:
-                command = f"{command} {identity.effort.value}"
+                command = f"{command} {identity.effort}"
             if not send(command):
                 return SwitchResult(ok=False, detail="Failed to deliver /model to the agent")
         if ModelAxis.FAST in axes:

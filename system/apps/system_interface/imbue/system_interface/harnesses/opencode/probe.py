@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -43,7 +44,7 @@ def read_server_port(agent_state_dir: Path) -> int | None:
         return None
 
 
-def startup_model_from_config(config: dict, providers: dict) -> str | None:
+def startup_model_from_config(config: dict[str, Any], providers: dict[str, Any]) -> str | None:
     """The ``provider/model`` the server starts with, from the two config responses.
 
     ``config.model`` (a pinned model) wins; otherwise the first entry of the
@@ -61,15 +62,15 @@ def startup_model_from_config(config: dict, providers: dict) -> str | None:
     return None
 
 
-def _get_json(port: int, path: str) -> dict | None:
+def _get_json(port: int, path: str) -> dict[str, Any] | None:
     """GET one JSON object from the local opencode server, or None on any failure."""
     url = f"http://127.0.0.1:{port}{path}"
+    # URLError / HTTPError / socket timeout are all OSError subclasses.
     try:
-        with urllib.request.urlopen(url, timeout=_TIMEOUT_SECONDS) as response:  # noqa: S310 -- fixed localhost URL
+        with urllib.request.urlopen(url, timeout=_TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        # URLError / HTTPError / socket timeout are all OSError subclasses.
-        logger.debug("opencode probe {} failed: {}", url, exc)
+        logger.warning("opencode probe {} failed: {}", url, exc)
         return None
     return payload if isinstance(payload, dict) else None
 
