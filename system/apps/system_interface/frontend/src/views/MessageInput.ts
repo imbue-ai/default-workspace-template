@@ -12,6 +12,7 @@ import {
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, sendMessage } from "../models/Response";
+import { addOutgoing, clearFailedOutgoing, failOutgoing, resolveOutgoing } from "../models/OutgoingMessages";
 import { describeRequestError } from "../models/request-error";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
@@ -188,24 +189,35 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         messageText = "";
         clearComposerAttachments(agentId);
         localStorage.removeItem(messageTextKey(agentId));
+
+        // Paint an optimistic "Sending…" bubble at the tail immediately (a fresh
+        // send clears any prior failed bubble first). This is a client-only,
+        // self-terminating overlay (see models/OutgoingMessages): it resolves away
+        // a beat after the POST confirms delivery -- when the real bubble (queued
+        // or committed) is arriving -- or flips to "Failed" if the POST rejects.
+        // The backend stays fully decoupled; it is never told about this state.
+        clearFailedOutgoing(agentId);
+        const outgoingId = addOutgoing(agentId, sentText);
         m.redraw();
 
-        // POST and return: nothing is painted locally. A queued message appears
-        // as a bubble when the harness records the enqueue (via the WS snapshot);
-        // a normal send appears when its turn lands in the transcript. The
-        // frontend invents no optimistic state.
         try {
           await sendMessage(agentId, finalText);
+          // Delivered (the backend confirms before resolving): let the bubble
+          // linger a beat so the real one renders, then it drops itself.
+          resolveOutgoing(agentId, outgoingId);
         } catch (err) {
           // The send genuinely failed (the backend confirms delivery before
           // resolving, so a rejection means the message was NOT accepted).
           const detail = describeRequestError(err);
           console.error(`Failed to send message to agent ${agentId}: ${detail}`);
-          // Restore the user's text and attachments so the send is not silently
-          // lost -- but only if they have not already started a new draft for
-          // this agent (the input was cleared at send time, so during the
-          // in-flight request the user may have typed or attached something
-          // new; blindly restoring would clobber that newer draft).
+          // Flip the optimistic bubble to a persistent "Failed to send" state --
+          // that is now the explicit failure signal (no alert needed).
+          failOutgoing(agentId, outgoingId, detail);
+          // Also restore the user's text and attachments so the send is not
+          // silently lost -- but only if they have not already started a new draft
+          // for this agent (the input was cleared at send time, so during the
+          // in-flight request the user may have typed or attached something new;
+          // blindly restoring would clobber that newer draft).
           const currentDraft =
             currentAgentId === agentId ? messageText : (localStorage.getItem(messageTextKey(agentId)) ?? "");
           const isComposerEmpty = currentDraft.trim().length === 0 && getComposerAttachments(agentId).length === 0;
@@ -217,11 +229,6 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
               m.redraw();
             }
           }
-          // Surface the failure to the user with an explicit signal: the bubble
-          // vanishing on its own is too subtle to read as "your message did not
-          // send." Matches the alert-based feedback convention for user-initiated
-          // mutations in this file (see handleInterrupt).
-          alert(`Failed to send message: ${detail}`);
         }
 
         requestAnimationFrame(() => {
