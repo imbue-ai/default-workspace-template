@@ -24,18 +24,13 @@ import { LayoutDialog, type LayoutDialogMode } from "./LayoutDialog";
 import { ShareModal } from "./ShareModal";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
 import { attachHoverTooltip } from "./hoverTooltip";
-import {
-  addActivityOverlayListener,
-  getEffectiveActivityState,
-  removeActivityOverlayListener,
-} from "../models/PendingMessages";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { apiUrl, getPrimaryAgentId } from "../base-path";
+import { apiUrl, getPrimaryAgentId, areOtherHarnessesEnabled, isSillyModelsEnabled } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
@@ -191,7 +186,11 @@ interface PanelParams {
 
 // Modal state
 let showNewChatModal = false;
-let showNewAgentModal = false;
+let showNewCodexModal = false;
+let showNewPiModal = false;
+let showNewOpencodeModal = false;
+let showNewAntigravityModal = false;
+let sillyModalMode: "silly-claude" | "silly-codex" | null = null;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
 // pre-filled with the name the user typed and the daemon's reason, so the user
@@ -422,11 +421,8 @@ function createCustomTab(options: { id: string; name: string }): {
         //
         // The lifecycle RUNNING/WAITING split comes only from the backend's
         // lifecycle poll and lags a sent message, so the color is resolved through
-        // ``effectiveLifecycleState`` against the prompt activity signal
-        // (transcript-derived, plus the optimistic forced-THINKING the send
-        // applies). That makes the dot turn green the instant a message is sent,
-        // in step with the activity indicator -- hence the second listener below
-        // on the activity overlay, since an optimistic send is not a WS update.
+        // ``effectiveLifecycleState`` against the backend-derived prompt activity
+        // signal, which updates promptly over the agents WebSocket.
         const processDot = document.createElement("span");
         processDot.className = "dv-tab-process-dot";
         const processDotTooltip = attachHoverTooltip(processDot);
@@ -437,7 +433,7 @@ function createCustomTab(options: { id: string; name: string }): {
             processDotTooltip.setText(null);
             return;
           }
-          const effective = effectiveLifecycleState(state, getEffectiveActivityState(chatAgentId));
+          const effective = effectiveLifecycleState(state, getAgentById(chatAgentId)?.activity_state ?? null);
           processDot.style.display = "";
           // ``data-liveness`` drives the color (the primary signal). Several
           // lifecycle states share a color (DONE/STOPPED/REPLACED/UNKNOWN are
@@ -453,9 +449,7 @@ function createCustomTab(options: { id: string; name: string }): {
         element.insertBefore(processDot, element.firstChild);
         const processDotListener: AgentsUpdatedListener = () => updateProcessDot();
         addAgentsUpdatedListener(processDotListener);
-        addActivityOverlayListener(updateProcessDot);
         disposables.push({ dispose: () => removeAgentsUpdatedListener(processDotListener) });
-        disposables.push({ dispose: () => removeActivityOverlayListener(updateProcessDot) });
         disposables.push(processDotTooltip);
 
         const destroyBtn = createTabActionButton(
@@ -794,6 +788,67 @@ function buildDropdownItems(
     },
   });
 
+  // The non-claude harness launchers -- each the same `chat` role as the entry above,
+  // stacked on its own harness template instead of `claude`, in the primary's work_dir.
+  // All gated behind FEATURE_FLAG_ENABLE_OTHER_HARNESSES (delivered via meta tag) so the
+  // alt harnesses can be dark-launched; hidden unless the host explicitly enables them.
+  if (areOtherHarnessesEnabled()) {
+    items.push({
+      label: "New Codex Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewCodexModal = true;
+        m.redraw();
+      },
+    });
+
+    items.push({
+      label: "New Pi Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewPiModal = true;
+        m.redraw();
+      },
+    });
+
+    items.push({
+      label: "New Opencode Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewOpencodeModal = true;
+        m.redraw();
+      },
+    });
+
+    items.push({
+      label: "New Antigravity Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewAntigravityModal = true;
+        m.redraw();
+      },
+    });
+  }
+
+  if (isSillyModelsEnabled()) {
+    items.push({
+      label: "New Silly Claude",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        sillyModalMode = "silly-claude";
+        m.redraw();
+      },
+    });
+    items.push({
+      label: "New Silly Codex",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        sillyModalMode = "silly-codex";
+        m.redraw();
+      },
+    });
+  }
+
   // New terminal -- allocates a fresh named tmux session anchored at the
   // primary agent's work_dir.
   items.push({
@@ -821,16 +876,6 @@ function buildDropdownItems(
       showNewBrowserModal = true;
       m.redraw();
     },
-  });
-
-  items.push({
-    label: "New agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewAgentModal = true;
-      m.redraw();
-    },
-    dividerAfter: true,
   });
 
   // --- Named-layout section ---
@@ -2901,17 +2946,81 @@ export const DockviewWorkspace: m.Component = {
             })
           : null,
 
-        showNewAgentModal
+        showNewCodexModal
           ? m(CreateAgentModal, {
-              mode: "worktree",
+              mode: "codex",
               onCreated(newAgentId: string, newAgentName: string) {
-                showNewAgentModal = false;
+                showNewCodexModal = false;
                 const targetGroup = newTabTargetGroup;
                 newTabTargetGroup = null;
                 focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
               },
               onCancel() {
-                showNewAgentModal = false;
+                showNewCodexModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        showNewPiModal
+          ? m(CreateAgentModal, {
+              mode: "pi",
+              onCreated(newAgentId: string, newAgentName: string) {
+                showNewPiModal = false;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                showNewPiModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        showNewOpencodeModal
+          ? m(CreateAgentModal, {
+              mode: "opencode",
+              onCreated(newAgentId: string, newAgentName: string) {
+                showNewOpencodeModal = false;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                showNewOpencodeModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        showNewAntigravityModal
+          ? m(CreateAgentModal, {
+              mode: "antigravity",
+              onCreated(newAgentId: string, newAgentName: string) {
+                showNewAntigravityModal = false;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                showNewAntigravityModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        sillyModalMode
+          ? m(CreateAgentModal, {
+              mode: sillyModalMode,
+              onCreated(newAgentId: string, newAgentName: string) {
+                sillyModalMode = null;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                sillyModalMode = null;
                 newTabTargetGroup = null;
               },
             })

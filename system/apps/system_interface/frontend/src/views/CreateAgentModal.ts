@@ -1,13 +1,13 @@
 /**
- * Modal dialog for creating a new agent (worktree or chat).
+ * Modal dialog for creating a new agent (chat, on either harness).
  * Shows a single "Name" input field pre-filled with a random name.
  */
 
 import m from "mithril";
-import { apiUrl, getPrimaryAgentId } from "../base-path";
+import { apiUrl } from "../base-path";
 
 interface CreateAgentModalAttrs {
-  mode: "worktree" | "chat";
+  mode: "chat" | "codex" | "pi" | "opencode" | "antigravity" | "silly-claude" | "silly-codex";
   onCreated: (agentId: string, agentName: string) => void;
   onCancel: () => void;
 }
@@ -39,13 +39,20 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
     m.redraw();
 
     try {
-      const url =
-        attrs.mode === "worktree" ? apiUrl("/api/agents/create-worktree") : apiUrl("/api/agents/create-chat");
+      // Both modes create the same `chat` role in the primary's work dir; they
+      // differ only in which harness template the server stacks under it.
+      const urlByMode: Record<string, string> = {
+        chat: "/api/agents/create-chat",
+        codex: "/api/agents/create-codex",
+        pi: "/api/agents/create-pi",
+        opencode: "/api/agents/create-opencode",
+        antigravity: "/api/agents/create-antigravity",
+        "silly-claude": "/api/agents/create-silly-claude",
+        "silly-codex": "/api/agents/create-silly-codex",
+      };
+      const url = apiUrl(urlByMode[attrs.mode]);
 
-      const body: Record<string, string> =
-        attrs.mode === "worktree"
-          ? { name: name.trim(), selected_agent_id: getPrimaryAgentId() }
-          : { name: name.trim() };
+      const body: Record<string, string> = { name: name.trim() };
 
       const response = await m.request<{ agent_id: string }>({
         method: "POST",
@@ -55,7 +62,11 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
 
       attrs.onCreated(response.agent_id, name.trim());
     } catch (e) {
-      error = (e as Error).message ?? "Creation failed";
+      // mithril attaches the parsed JSON error body to `.response`; the server
+      // sends the human-readable reason there as `detail`. Reading `.message`
+      // instead surfaces the raw body object as "[object Object]".
+      const errResp = (e as { response?: { detail?: string } }).response;
+      error = errResp?.detail ?? (e as Error).message ?? "Creation failed";
       loading = false;
       m.redraw();
     }
@@ -68,7 +79,16 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
 
     view(vnode) {
       const attrs = vnode.attrs;
-      const title = attrs.mode === "worktree" ? "Create Worktree Agent" : "Create Chat Agent";
+      const titleByMode: Record<string, string> = {
+        chat: "Create Chat Agent",
+        codex: "Create Codex Agent",
+        pi: "Create Pi Agent",
+        opencode: "Create Opencode Agent",
+        antigravity: "Create Antigravity Agent",
+        "silly-claude": "Create Silly Claude Agent",
+        "silly-codex": "Create Silly Codex Agent",
+      };
+      const title = titleByMode[attrs.mode];
 
       return m(
         "div.custom-url-dialog-overlay",

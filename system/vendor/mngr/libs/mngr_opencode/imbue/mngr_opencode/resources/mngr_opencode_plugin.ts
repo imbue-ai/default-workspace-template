@@ -12,7 +12,7 @@
 // when MNGR_OPENCODE_ROLE=server -- the role mngr sets exclusively on the serve
 // invocation. In every other process it is inert.
 //
-// In the server process it does four things, keyed off $MNGR_AGENT_STATE_DIR:
+// In the server process it does several things, keyed off $MNGR_AGENT_STATE_DIR:
 //
 //   1. Active marker -> RUNNING vs WAITING. BaseAgent.get_lifecycle_state reads
 //      the presence of $MNGR_AGENT_STATE_DIR/active as "actively working". The
@@ -52,6 +52,18 @@
 //      persisted append-only raw transcript at startup, so the rebuild reflects
 //      full history rather than truncating pre-restart turns.
 //
+//   4. Model/variant state. opencode has no static per-agent model config the chat
+//      model bar can read reliably -- the model is a `provider/model` slug resolved
+//      from opencode.json / the authenticated provider default, and the variant
+//      (opencode's effort axis: provider.<p>.models.<m>.variants.<name>) is runtime
+//      TUI state. So on each assistant `message.updated` the plugin writes the
+//      resolved selection to $MNGR_AGENT_STATE_DIR/opencode_model_state.json
+//      ({provider, model, variant}; variant "default" = the base profile), low-latency
+//      and last-write-wins, so a mid-turn model/variant switch reflects promptly. The
+//      system-interface opencode harness reads this file for the model bar. (It cannot
+//      populate the value before the first assistant message; the harness resolver
+//      falls back to opencode.json for that pre-turn-1 guess.)
+//
 // The root session id (for resume) is owned by mngr (opencode_launch.sh). Paths,
 // the role/emit env vars, and the common `source` below are kept in sync with
 // opencode_config.py (the Python side cannot be imported here). Every fs touch is
@@ -73,6 +85,10 @@ const COMMON_TRANSCRIPT_SOURCE = "opencode/common_transcript"
 const ROLE_ENV_VAR = "MNGR_OPENCODE_ROLE"
 const SERVER_ROLE = "server"
 const EMIT_COMMON_ENV_VAR = "MNGR_OPENCODE_EMIT_COMMON"
+// The live model + variant (opencode's effort axis) for the chat model bar. Read by
+// the system-interface opencode harness resolver (harnesses/opencode/model.py); not a
+// sync point with opencode_config.py.
+const MODEL_STATE_FILENAME = "opencode_model_state.json"
 
 const _MAX_INPUT_PREVIEW_LENGTH = 200
 const _MAX_OUTPUT_LENGTH = 2000
@@ -119,6 +135,7 @@ export const MngrLifecyclePlugin: Plugin = async () => {
   const permissionsWaitingPath = join(stateDir, PERMISSIONS_WAITING_FILENAME)
   const rawTranscriptPath = join(stateDir, RAW_TRANSCRIPT_RELATIVE_PATH)
   const commonTranscriptPath = join(stateDir, COMMON_TRANSCRIPT_RELATIVE_PATH)
+  const modelStatePath = join(stateDir, MODEL_STATE_FILENAME)
   const emitCommon = process.env[EMIT_COMMON_ENV_VAR] === "1"
 
   // parentID per session id, learned from session.created/updated (which carry
@@ -239,6 +256,26 @@ export const MngrLifecyclePlugin: Plugin = async () => {
       appendFileSync(rawTranscriptPath, line + "\n")
     } catch {
       // best-effort
+    }
+  }
+
+  // Surface the live model + variant (opencode's effort axis) from an assistant
+  // message.updated. User messages carry no providerID/modelID, so they no-op here;
+  // only a resolved assistant selection is written. variant is "default" for the base
+  // profile. Last-write-wins, so the file always names the most recent selection.
+  const recordModelState = (info: any): void => {
+    const provider = info?.providerID
+    const model = info?.modelID
+    if (typeof provider !== "string" || !provider || typeof model !== "string" || !model) {
+      return
+    }
+    try {
+      writeFileSync(
+        modelStatePath,
+        JSON.stringify({ provider, model, variant: typeof info?.variant === "string" ? info.variant : "" }),
+      )
+    } catch {
+      // best-effort: a transient fs error must not break OpenCode's loop
     }
   }
 
@@ -400,9 +437,25 @@ export const MngrLifecyclePlugin: Plugin = async () => {
         return
       }
 
+      if (type === "session.next.model.switched") {
+        // The model selector changed WITHOUT sending a turn -- via the chat UI's switch
+        // (POST /api/session/{id}/model) or a /model in the attached TUI. Record it now so the
+        // chat model bar reconciles immediately, mirroring pi's model_select handler (opencode
+        // otherwise only writes model state on an assistant message.updated). The event's model
+        // carries `id`/`providerID`/`variant`; recordModelState expects `modelID`.
+        const switched = event.properties?.model
+        if (switched) {
+          recordModelState({ providerID: switched.providerID, modelID: switched.id, variant: switched.variant })
+        }
+        return
+      }
+
       if (type === "message.updated" || type === "message.part.updated") {
         accumulateMessageEvent(type, event.properties)
         appendRaw(JSON.stringify({ type, properties: event.properties }))
+        if (type === "message.updated") {
+          recordModelState(event.properties.info)
+        }
         return
       }
     },

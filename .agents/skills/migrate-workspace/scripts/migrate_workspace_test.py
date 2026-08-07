@@ -417,8 +417,10 @@ def test_build_recreate_argv_adopts_every_session_and_stays_dormant_capable() ->
         "dashboard", ["/s/a.jsonl", "/s/b.jsonl"], {"user_created": "true"}
     )
     assert argv[:3] == ["mngr", "create", "dashboard"]
-    assert argv[argv.index("--template") + 1] == "chat"
-    assert argv[argv.index("--transfer") + 1] == "none"
+    # Harness then role; `transfer = none` comes from the chat role template.
+    templates = [argv[i + 1] for i, token in enumerate(argv) if token == "--template"]
+    assert templates == ["claude", "chat"]
+    assert "--transfer" not in argv
     assert "--no-connect" in argv
     adopted = [argv[i + 1] for i, token in enumerate(argv) if token == "--adopt"]
     assert adopted == ["/s/a.jsonl", "/s/b.jsonl"]

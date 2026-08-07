@@ -1,0 +1,192 @@
+"""Unit tests for the antigravity watcher's SQLite row-offset tailing.
+
+Drives ``_collect_new_events`` directly (synchronously) rather than the background poll
+thread, so the scan/cursor/two-phase logic is tested without timing flakiness.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.antigravity.testing import append_step
+from imbue.system_interface.harnesses.antigravity.testing import build_metadata
+from imbue.system_interface.harnesses.antigravity.testing import build_step_payload
+from imbue.system_interface.harnesses.antigravity.testing import build_steps_db
+from imbue.system_interface.harnesses.antigravity.testing import build_tool_metadata
+from imbue.system_interface.harnesses.antigravity.testing import encode_varint
+from imbue.system_interface.harnesses.antigravity.testing import len_field
+from imbue.system_interface.harnesses.antigravity.testing import set_step_status
+from imbue.system_interface.harnesses.antigravity.testing import str_field
+from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
+
+_STATUS_RUNNING = 2
+_STATUS_DONE = 3
+_TYPE_USER = 14
+_TYPE_PLANNER = 15
+_TYPE_RUN_COMMAND = 21
+
+
+def _user_payload(text: str) -> bytes:
+    return build_step_payload(build_metadata(source=4), body=len_field(19, str_field(1, text)))
+
+
+def _planner_payload(text: str) -> bytes:
+    return build_step_payload(build_metadata(source=2), body=len_field(20, str_field(1, text)))
+
+
+def _tool_payload(result: str = "output", *, short: str = "Running ls") -> bytes:
+    metadata = build_tool_metadata("run_command", '{"CommandLine":"ls"}', short=short)
+    return build_step_payload(metadata, body=len_field(28, str_field(21, result)))
+
+
+def _make_watcher(tmp_path: Path, conv_ids: list[str]) -> AntigravitySessionWatcher:
+    (tmp_path / "antigravity_conversation_ids").write_text("\n".join(conv_ids) + "\n")
+    (tmp_path / "plugin" / "antigravity" / "home" / ".gemini" / "antigravity-cli" / "conversations").mkdir(
+        parents=True, exist_ok=True
+    )
+    agent_info = AgentInfo(
+        id="agent-1",
+        name="agy-test",
+        state="RUNNING",
+        agent_state_dir=tmp_path,
+        claude_config_dir=tmp_path,
+    )
+    return AntigravitySessionWatcher.build(agent_info, lambda _agent_id, _events: None)
+
+
+def _conv_db_path(tmp_path: Path, conv_id: str) -> Path:
+    return (
+        tmp_path
+        / "plugin"
+        / "antigravity"
+        / "home"
+        / ".gemini"
+        / "antigravity-cli"
+        / "conversations"
+        / f"{conv_id}.db"
+    )
+
+
+def test_scans_a_settled_conversation(tmp_path: Path) -> None:
+    conv = "11111111-1111-1111-1111-111111111111"
+    watcher = _make_watcher(tmp_path, [conv])
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("<USER_REQUEST>\nhi\n</USER_REQUEST>")),
+            (1, _TYPE_RUN_COMMAND, _STATUS_DONE, _tool_payload("hello output")),
+            (2, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("all done")),
+        ],
+    )
+    events = watcher._collect_new_events()
+    kinds = [e["type"] for e in events]
+    assert kinds == ["user_message", "assistant_message", "tool_result", "assistant_message"]
+    assert events[0]["content"] == "hi"
+    assert events[1]["tool_calls"][0]["caption_label"] == "Running ls"
+    assert events[2]["output"] == "hello output"
+    assert events[3]["text"] == "all done"
+
+
+def test_second_scan_after_no_change_yields_nothing(tmp_path: Path) -> None:
+    conv = "22222222-2222-2222-2222-222222222222"
+    watcher = _make_watcher(tmp_path, [conv])
+    build_steps_db(_conv_db_path(tmp_path, conv), [(0, _TYPE_USER, _STATUS_DONE, _user_payload("hey"))])
+    assert len(watcher._collect_new_events()) == 1
+    assert watcher._collect_new_events() == []
+
+
+def test_running_tool_emits_call_then_result_on_settle(tmp_path: Path) -> None:
+    conv = "33333333-3333-3333-3333-333333333333"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    build_steps_db(db, [(0, _TYPE_RUN_COMMAND, _STATUS_RUNNING, _tool_payload("", short="Running ls"))])
+
+    first = watcher._collect_new_events()
+    assert [e["type"] for e in first] == ["assistant_message"]
+    assert first[0]["tool_calls"][0]["caption_label"] == "Running ls"
+
+    # The step settles with its result.
+    set_step_status(db, 0, _STATUS_DONE, _tool_payload("final output"))
+    second = watcher._collect_new_events()
+    # The call is not re-emitted; only the result is added.
+    assert [e["type"] for e in second] == ["tool_result"]
+    assert second[0]["output"] == "final output"
+    # call and result share the id
+    assert second[0]["tool_call_id"] == first[0]["tool_calls"][0]["tool_call_id"]
+
+
+def test_cursor_does_not_block_later_rows_behind_a_running_one(tmp_path: Path) -> None:
+    conv = "44444444-4444-4444-4444-444444444444"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    # A backgrounded run_command lingers at RUNNING while a later step settles after it.
+    build_steps_db(db, [(0, _TYPE_RUN_COMMAND, _STATUS_RUNNING, _tool_payload("", short="Running server"))])
+    watcher._collect_new_events()
+    append_step(db, (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("moved on")))
+    events = watcher._collect_new_events()
+    # The later planner is emitted even though idx 0 is still running.
+    assert any(e["type"] == "assistant_message" and e.get("text") == "moved on" for e in events)
+
+
+def test_truncated_row_stops_scan_until_next_pass(tmp_path: Path) -> None:
+    conv = "55555555-5555-5555-5555-555555555555"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    truncated = _tag_len_overrun()
+    build_steps_db(
+        db,
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("first")),
+            # idx 1 is a mid-write row the decoder rejects as truncated.
+            (1, _TYPE_PLANNER, _STATUS_DONE, truncated),
+            (2, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("later")),
+        ],
+    )
+    events = watcher._collect_new_events()
+    # Only idx 0 emitted; the scan stops at the truncated idx 1 and never reaches idx 2.
+    assert [e["type"] for e in events] == ["user_message"]
+    # Once idx 1 is rewritten whole, the scan resumes through idx 2.
+    set_step_status(db, 1, _STATUS_DONE, _planner_payload("fixed"))
+    events2 = watcher._collect_new_events()
+    assert [e.get("text") for e in events2] == ["fixed", "later"]
+
+
+def test_multiple_conversations_concatenate_in_file_order(tmp_path: Path) -> None:
+    conv_a = "aaaaaaaa-0000-0000-0000-000000000000"
+    conv_b = "bbbbbbbb-0000-0000-0000-000000000000"
+    watcher = _make_watcher(tmp_path, [conv_a, conv_b])
+    build_steps_db(_conv_db_path(tmp_path, conv_a), [(0, _TYPE_USER, _STATUS_DONE, _user_payload("from A"))])
+    build_steps_db(_conv_db_path(tmp_path, conv_b), [(0, _TYPE_USER, _STATUS_DONE, _user_payload("from B"))])
+    events = watcher._collect_new_events()
+    assert [e["content"] for e in events] == ["from A", "from B"]
+    # ids are namespaced by conversation, so same-idx rows never collide
+    assert events[0]["event_id"] == f"{conv_a}:0:user"
+    assert events[1]["event_id"] == f"{conv_b}:0:user"
+
+
+def test_paging_methods(tmp_path: Path) -> None:
+    conv = "66666666-6666-6666-6666-666666666666"
+    watcher = _make_watcher(tmp_path, [conv])
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [(i, _TYPE_PLANNER, _STATUS_DONE, _planner_payload(f"msg{i}")) for i in range(5)],
+    )
+    watcher._collect_new_events()
+    assert watcher.get_total_event_count() == 5
+    assert [e["text"] for e in watcher.get_tail_events(2)] == ["msg3", "msg4"]
+    assert [e["text"] for e in watcher.get_events_at_offset(1, 2)] == ["msg1", "msg2"]
+    third_id = watcher.get_all_events()[2]["event_id"]
+    assert watcher.get_event_offset(third_id) == 2
+    assert [e["text"] for e in watcher.get_backfill_events(third_id, 2)] == ["msg0", "msg1"]
+    assert [e["text"] for e in watcher.get_forward_events(third_id, 1)] == ["msg3"]
+
+
+def _tag_len_overrun() -> bytes:
+    """A metadata (f5) length-delimited field that claims more bytes than are present -- the
+    shape a row half-written by agy takes, which the decoder rejects as truncated."""
+    return _tag(5, 2) + encode_varint(80) + b"too short"
+
+
+def _tag(field: int, wire: int) -> bytes:
+    return encode_varint((field << 3) | wire)

@@ -126,6 +126,8 @@ from imbue.mngr.api.preservation import preserve_host_agents_on_destroy
 from imbue.mngr.api.preservation import require_unique_match
 from imbue.mngr.api.preservation import run_adopt_session_preflight
 from imbue.mngr.api.preservation import transfer_cloned_agent_session_store
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.config.data_types import AgentTypeConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import UserInputError
@@ -148,6 +150,8 @@ from imbue.mngr.plugins.hookspecs import OnBeforeCreateArgs
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.utils.git_utils import find_git_source_path
 from imbue.mngr_antigravity import resources as _antigravity_resources
 from imbue.mngr_antigravity.antigravity_config import CAPTURE_CONVERSATION_ID_SCRIPT_NAME
@@ -164,9 +168,11 @@ from imbue.mngr_antigravity.antigravity_config import build_onboarding_seed
 from imbue.mngr_antigravity.antigravity_config import extract_statusline_command
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_cli_dir
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_conversations_dir
+from imbue.mngr_antigravity.antigravity_config import get_antigravity_global_rules_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_hooks_config_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_oauth_token_path
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_onboarding_cache_path
+from imbue.mngr_antigravity.antigravity_config import get_antigravity_output_styles_dir
 from imbue.mngr_antigravity.antigravity_config import get_antigravity_settings_path
 from imbue.mngr_antigravity.antigravity_config import merge_trusted_workspace
 from imbue.mngr_antigravity.antigravity_config import read_antigravity_settings
@@ -179,6 +185,16 @@ from imbue.mngr_antigravity.antigravity_config import serialize_antigravity_sett
 # does not actually gate the run_command confirmation dialog -- see the
 # ``auto_allow_permissions`` field comment and ``build_antigravity_hooks_config``.
 _DANGEROUSLY_SKIP_PERMISSIONS_FLAG: Final[str] = "--dangerously-skip-permissions"
+
+# The role instruction blocks (append_system_prompt, then the output-style body) are
+# joined with a blank line before being written to the per-agent GEMINI.md rule, matching
+# codex's DEVELOPER_INSTRUCTIONS_SEPARATOR so a style reads identically across harnesses.
+_INSTRUCTIONS_SEPARATOR: Final[str] = "\n\n"
+
+# agy documents a 12,000-char limit per rule file. In practice agy 1.1.10 reads larger
+# files in full, so exceeding it is a non-fatal warning rather than an error (a guard
+# against stricter future agy versions, not a known failure).
+_RULES_FILE_SOFT_LIMIT: Final[int] = 12_000
 
 _COMMON_TRANSCRIPT_SCRIPT_NAME: Final[str] = "common_transcript.sh"
 # The python converter common_transcript.sh invokes (python3
@@ -382,6 +398,28 @@ def _resolve_adopt_session(adopt_arg: str, mngr_ctx: MngrContext) -> tuple[str, 
 
 class AntigravityAgentConfig(AgentTypeConfig):
     """Config for the antigravity agent type."""
+
+    # --- role behaviour, set by a create template and applied by this harness ---
+    #
+    # Both are harness-neutral *intent*: a role (e.g. `-t chat`) states them once and each
+    # harness applies them its own way. They live on the harness subclasses rather than
+    # AgentTypeConfig so a harness that cannot honour them has no field to route to -- the
+    # create then fails naming the template, instead of launching an agent that quietly
+    # ignores its role. agy has no output-style concept and no config-level system-prompt
+    # channel, so both reach it as instruction text in the per-agent global GEMINI.md rule
+    # (see ``_build_agent_rules_text`` / ``_provision_agy_home``).
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of an output style to launch with, matched against the `name:` "
+        "frontmatter of a file in the work dir's output-style directory. Scalar: the last "
+        "template in the stack to set it wins.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="Blocks to append to the agent's system prompt, in stack order. Aggregate: "
+        "write `append_system_prompt__extend = [...]` in a template so stacked roles each "
+        "contribute a block instead of the last one replacing the rest.",
+    )
 
     command: CommandString = Field(
         default=CommandString("agy"),
@@ -963,6 +1001,59 @@ class AntigravityAgent(
         hooks_path = get_antigravity_hooks_config_path(agy_home)
         with log_span("Installing antigravity hooks at {}", hooks_path):
             host.write_text_file(hooks_path, serialize_antigravity_hooks(build_antigravity_hooks_config()))
+
+        self._provision_agent_instructions(host, agy_home)
+
+    def _build_agent_rules_text(self, host: OnlineHostInterface) -> str | None:
+        """Join this agent type's role instructions into one blob, or None if there are none.
+
+        The ``append_system_prompt`` blocks come first, in stack order, and the output-style
+        body last. agy has no output-style concept, so ``output_style`` reaches it as
+        instruction text: the style file's body is used **verbatim**, frontmatter included,
+        so a style reads identically whichever harness runs it. Placing it last means it is
+        the nearest instruction to the model, matching how a harness with a real output-style
+        setting applies the style over the prompt. Mirrors codex's ``_build_developer_instructions``.
+
+        The style directory read here is ``.agents/output-styles`` -- the shared source of
+        truth where styles are authored (the same files codex and claude read).
+        """
+        blocks: list[str] = [str(prompt) for prompt in self.agent_config.append_system_prompt]
+        if self.agent_config.output_style is not None:
+            styles_dir = get_antigravity_output_styles_dir(Path(self.work_dir))
+            # Raises UserInputError, listing what is available, when the name has no match.
+            blocks.append(
+                resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+            )
+        if not blocks:
+            return None
+        return _INSTRUCTIONS_SEPARATOR.join(blocks)
+
+    def _provision_agent_instructions(self, host: OnlineHostInterface, agy_home: Path) -> None:
+        """Write the agent's role instructions to the per-agent global ``GEMINI.md`` rule.
+
+        agy discovers ``$HOME/.gemini/GEMINI.md`` as a global rule across all workspaces;
+        under the per-agent ``$HOME`` this is a per-agent file that never touches the source
+        repo. It is a *peer* of the repo's own ``AGENTS.md`` (agy documents no precedence
+        between rule sources) rather than a true system-prompt channel -- an accepted
+        tradeoff, since agy exposes no config-level equivalent of codex's
+        ``developer_instructions``. When the agent type contributes no instructions (no role
+        ``output_style`` / ``append_system_prompt``), nothing is written.
+        """
+        instructions = self._build_agent_rules_text(host)
+        if instructions is None:
+            return
+        if len(instructions) > _RULES_FILE_SOFT_LIMIT:
+            logger.warning(
+                "Antigravity GEMINI.md for agent {} is {} chars, over agy's documented "
+                "{}-char rule-file limit; agy 1.1.10 reads it in full, but a stricter agy "
+                "version may truncate it.",
+                self.name,
+                len(instructions),
+                _RULES_FILE_SOFT_LIMIT,
+            )
+        rules_path = get_antigravity_global_rules_path(agy_home)
+        with log_span("Writing antigravity agent instructions to {}", rules_path):
+            host.write_text_file(rules_path, instructions)
 
     def _provision_user_statusline_command(self, host: OnlineHostInterface, user_statusline: Any) -> None:
         """Record a user's own statusLine command for statusline.sh to compose, or clear a stale one.

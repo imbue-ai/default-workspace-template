@@ -18,6 +18,8 @@ from imbue.mngr import hookimpl
 from imbue.mngr.agents.base_agent import BaseAgent
 from imbue.mngr.agents.installation import ensure_cli_installed
 from imbue.mngr.agents.installation import verify_pinned_cli_version
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.agents.update_policy import AgentUpdatePolicy
 from imbue.mngr.agents.update_policy import is_self_update_disabled
 from imbue.mngr.api.preservation import PreservedItem
@@ -58,6 +60,8 @@ from imbue.mngr.plugins.hookspecs import OnBeforeCreateArgs
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.utils.git_utils import find_git_source_path
 from imbue.mngr.utils.polling import poll_until
@@ -107,6 +111,23 @@ _SESSION_STARTED_SENTINEL_NAME: str = "pi_session_started"
 # in sync with ``SESSION_FILE_NAME`` in mngr_pi_lifecycle.ts.
 _SESSION_FILE_NAME: str = "pi_session_file"
 
+# The output-style body + appended system prompt are written here, in the per-agent
+# pi config dir. pi auto-APPENDS this file to its default system prompt every turn
+# (usage.md: "Append to the default prompt ... with APPEND_SYSTEM.md"). This is the
+# pi analogue of codex writing developer_instructions into config.toml.
+# ``sync_home_settings`` only syncs settings.json + resource dirs, never
+# APPEND_SYSTEM.md, so provisioning owns this file.
+_APPEND_SYSTEM_FILE_NAME: str = "APPEND_SYSTEM.md"
+
+# Where output styles are authored, relative to the work_dir -- the same shared source
+# codex/claude read (``.agents/output-styles``). Replicated here rather than imported
+# from codex_config, to avoid a cross-plugin dependency.
+_OUTPUT_STYLES_DIR_RELPATH: str = ".agents/output-styles"
+
+# Separator between appended system-prompt blocks (mirrors codex's
+# DEVELOPER_INSTRUCTIONS_SEPARATOR) so stacked blocks do not run together.
+_APPEND_SYSTEM_SEPARATOR: str = "\n\n"
+
 # The per-agent pi config dir, relative to the agent state dir (POSIX). Replaces
 # ~/.pi/agent/ for this agent via ``PI_CODING_AGENT_DIR`` (see ``get_pi_config_dir``).
 _PI_CONFIG_DIR_RELPATH: str = "plugin/pi_coding"
@@ -131,6 +152,14 @@ _INBOX_FILE_NAME: str = "pi_inbox"
 # The lifecycle marker the pi extension maintains while a turn is in flight
 # (RUNNING vs WAITING). Kept in sync with ACTIVE_MARKER_NAME in mngr_pi_lifecycle.ts.
 _ACTIVE_MARKER_NAME: str = "active"
+
+# Process-start boundary marker, touched on every launch/resume. The system_interface
+# activity tracker compares transcript timestamps against this marker's mtime to ignore a
+# tail left over from a turn a prior process abandoned mid-flight (which would otherwise pin
+# "Thinking..." forever after a restart). Mirrors mngr_claude's `claude_process_started` /
+# mngr_codex's `codex_process_started`; kept in sync with the pi harness's
+# HarnessActivityTracker.marker_filename on the system-interface side.
+_PROCESS_STARTED_MARKER_NAME: str = "pi_process_started"
 
 # After inboxing a message, wait up to this long for the turn to start (the
 # ``active`` marker to appear) as delivery confirmation. Covers the extension's
@@ -396,6 +425,19 @@ class PiCodingAgentConfig(AgentTypeConfig):
         description="When destroying this agent, first copy its transcripts and resumable session "
         "store to <local_host_dir>/preserved/ so they survive. Set to False to discard them.",
     )
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of an output style (from .agents/output-styles/) whose body is written "
+        "verbatim to APPEND_SYSTEM.md in the per-agent pi config dir, so pi appends it to its system "
+        "prompt every turn. pi has no native output-style setting, so the style reaches it as appended "
+        "instructions -- the pi analogue of codex's developer_instructions.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="Extra system-prompt blocks appended (before the output-style body) to "
+        "APPEND_SYSTEM.md. Write `append_system_prompt__extend = [...]` in a template so stacked "
+        "roles each contribute a block.",
+    )
 
 
 # The npm package pi ships under (used for the auto-install command).
@@ -606,14 +648,23 @@ class PiCodingAgent(
         invocation = f"{base_command} -e {shlex.quote(str(self._get_lifecycle_extension_path()))}"
         if self.agent_config.auto_dismiss_dialogs:
             invocation = f"{invocation} {_PI_APPROVE_FLAG}"
+        # Stamp the process-start boundary and clear a stale `active` marker on every
+        # launch/resume, so the system_interface activity tracker ignores a tail left by a
+        # turn a prior process abandoned mid-flight, and a crash-stale `active` never reads
+        # RUNNING before the first post-launch turn. Mirrors mngr_codex's launch prelude;
+        # `|| true` so a stray failure can't block the launch. The extension re-creates
+        # `active` on the next `agent_start`.
+        active_marker = shlex.quote(str(self._get_agent_dir() / _ACTIVE_MARKER_NAME))
+        process_started_marker = shlex.quote(str(self._get_agent_dir() / _PROCESS_STARTED_MARKER_NAME))
+        marker_prelude = f"rm -f {active_marker} 2>/dev/null || true; touch {process_started_marker} 2>/dev/null || true"
         if not self.agent_config.resume_session:
-            return CommandString(invocation)
+            return CommandString(f"{marker_prelude}; {invocation}")
         quoted_session_file = shlex.quote(str(self._get_agent_dir() / _SESSION_FILE_NAME))
         resume_prelude = (
             f"__mngr_pi_sess=$(cat {quoted_session_file} 2>/dev/null || true); set --; "
             'if [ -n "$__mngr_pi_sess" ] && [ -f "$__mngr_pi_sess" ]; then set -- --session "$__mngr_pi_sess"; fi'
         )
-        return CommandString(f'{resume_prelude}; {invocation} "$@"')
+        return CommandString(f'{marker_prelude}; {resume_prelude}; {invocation} "$@"')
 
     def wait_for_ready_signal(
         self, is_readiness_awaited: bool, start_action: Callable[[], None], timeout: float | None = None
@@ -768,6 +819,40 @@ class PiCodingAgent(
                 include_args.append("--exclude=*")
                 host.copy_local_directory(home_pi, config_dir, " ".join(include_args))
 
+    def _build_append_system(self, host: OnlineHostInterface) -> str | None:
+        """Join this agent type's system-prompt additions into one blob, or None if there are none.
+
+        The ``append_system_prompt`` blocks come first (in stack order), then the output-style file's
+        body last, verbatim (frontmatter included) -- identical to codex's
+        ``_build_developer_instructions``, so a style reads the same whichever harness runs it. pi has
+        no output-style setting, so the style reaches it via ``APPEND_SYSTEM.md`` instead. Reuses the
+        shared ``output_styles`` helpers and the ``.agents/output-styles`` source of truth.
+        """
+        blocks: list[str] = [str(prompt) for prompt in self.agent_config.append_system_prompt]
+        if self.agent_config.output_style is not None:
+            styles_dir = Path(self.work_dir) / _OUTPUT_STYLES_DIR_RELPATH
+            # Raises UserInputError, listing what is available, when the name has no match.
+            blocks.append(
+                resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+            )
+        if not blocks:
+            return None
+        return _APPEND_SYSTEM_SEPARATOR.join(blocks)
+
+    def _provision_append_system_prompt(self, host: OnlineHostInterface) -> None:
+        """Write (or clear) ``APPEND_SYSTEM.md`` in the per-agent pi config dir.
+
+        pi appends this file to its default system prompt every turn. Cleared when there is nothing
+        to append, so a re-provision with the style removed leaves no stale file.
+        """
+        append_system = self._build_append_system(host)
+        append_path = self.get_pi_config_dir() / _APPEND_SYSTEM_FILE_NAME
+        if append_system is None:
+            host.execute_idempotent_command(f"rm -f {shlex.quote(str(append_path))}", timeout_seconds=5.0)
+            return
+        with log_span("Writing pi APPEND_SYSTEM.md to {}", append_path):
+            host.write_text_file(append_path, append_system)
+
     def provision(
         self,
         host: OnlineHostInterface,
@@ -791,6 +876,7 @@ class PiCodingAgent(
         # non-interactive-without-opt-in case exits cleanly before any setup.
         self._ensure_source_repo_trusted(mngr_ctx)
         self._setup_per_agent_config_dir(host, config)
+        self._provision_append_system_prompt(host)
         self._seed_per_agent_workspace_trust(host)
         self._provision_lifecycle_extension(host)
 

@@ -71,6 +71,7 @@ from imbue.mngr.primitives import ErrorBehavior
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import TransferMode
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.providers.docker.host_store import HostRecord
@@ -1172,7 +1173,7 @@ def test_build_readiness_hooks_config_has_session_start_hook() -> None:
     assert "SessionStart" in config["hooks"]
     assert len(config["hooks"]["SessionStart"]) == 1
     hooks = config["hooks"]["SessionStart"][0]["hooks"]
-    assert len(hooks) == 5
+    assert len(hooks) == 6
 
     # First hook: creates session_started file for polling-based detection
     assert hooks[0]["type"] == "command"
@@ -1225,6 +1226,11 @@ def test_build_readiness_hooks_config_has_session_start_hook() -> None:
     assert 'rm -f "$MNGR_AGENT_STATE_DIR/active"' in reset_markers_hook
     assert "permissions_waiting" in reset_markers_hook
 
+    # Sixth hook: snapshots the live model/effort/fast for the chat model bar.
+    model_state_hook = hooks[5]["command"]
+    assert hooks[5]["type"] == "command"
+    assert "model_state_hook.py" in model_state_hook
+
 
 @pytest.mark.parametrize(
     "hook_name, expected_substrings",
@@ -1242,11 +1248,15 @@ def test_build_readiness_hooks_config_has_hook(hook_name: str, expected_substrin
 
     assert hook_name in config["hooks"]
     assert len(config["hooks"][hook_name]) == 1
-    hook = config["hooks"][hook_name][0]["hooks"][0]
-    assert hook["type"] == "command"
-    assert "MNGR_AGENT_STATE_DIR" in hook["command"]
+    # Several events now carry more than one hook (e.g. the model-state snapshot runs first at
+    # Stop, before wait_for_stop_hook.sh blocks), so look for the expected command across all of
+    # them rather than assuming it is the first.
+    commands = [h["command"] for h in config["hooks"][hook_name][0]["hooks"] if h["type"] == "command"]
+    assert any("MNGR_AGENT_STATE_DIR" in command for command in commands)
     for substring in expected_substrings:
-        assert substring in hook["command"], f"Expected '{substring}' in {hook_name} hook command"
+        assert any(substring in command for command in commands), (
+            f"Expected '{substring}' in a {hook_name} hook command"
+        )
 
 
 def test_build_readiness_hooks_config_has_notification_idle_hook() -> None:
@@ -7022,3 +7032,30 @@ def test_approve_api_key_no_host_argument_falls_back_to_process_env(monkeypatch:
     approve_api_key_for_claude(data)
     approved = cast(dict[str, list[str]], data["customApiKeyResponses"])["approved"]
     assert key[-20:] in approved
+
+
+def test_stacked_role_prompts_reach_claude_as_one_flag_carrying_every_block() -> None:
+    """Claude gets ONE --append-system-prompt whose value holds every stacked role's block.
+
+    One flag rather than one per block because claude's flag is last-wins (verified against
+    claude 2.1.220): repeating it would deliver only the final block and silently drop every
+    role stacked before it. The sentinels make both blocks' presence checkable.
+    """
+    agent = ClaudeAgent.model_construct(
+        agent_config=ClaudeAgentConfig(
+            append_system_prompt=(SystemPromptText("SENTINEL_A"), SystemPromptText("SENTINEL_B")),
+            check_installation=False,
+        )
+    )
+    args = agent._build_append_system_prompt_args()
+    assert len(args) == 2, f"expected exactly one flag and one value, got {args!r}"
+    flag, value = args
+    assert flag == "--append-system-prompt"
+    assert "SENTINEL_A" in value
+    assert "SENTINEL_B" in value
+    assert value.index("SENTINEL_A") < value.index("SENTINEL_B"), "blocks must keep stack order"
+
+
+def test_claude_emits_no_prompt_flag_when_no_role_contributed_one() -> None:
+    agent = ClaudeAgent.model_construct(agent_config=ClaudeAgentConfig(check_installation=False))
+    assert agent._build_append_system_prompt_args() == ()

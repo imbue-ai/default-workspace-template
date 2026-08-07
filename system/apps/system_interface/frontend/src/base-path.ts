@@ -45,3 +45,32 @@ export function getPrimaryAgentId(): string {
   cachedPrimaryAgentId = metaElement?.getAttribute("content") ?? "";
   return cachedPrimaryAgentId;
 }
+
+let cachedSillyModelsEnabled: boolean | null = null;
+
+export function isSillyModelsEnabled(): boolean {
+  if (cachedSillyModelsEnabled !== null) {
+    return cachedSillyModelsEnabled;
+  }
+  const metaElement = document.querySelector('meta[name="system-interface-enable-silly-models"]');
+  cachedSillyModelsEnabled = metaElement?.getAttribute("content") === "true";
+  return cachedSillyModelsEnabled;
+}
+
+let cachedOtherHarnessesEnabled: boolean | null = null;
+
+/**
+ * Whether the non-claude harnesses are enabled for this host (backend
+ * FEATURE_FLAG_ENABLE_OTHER_HARNESSES, delivered as the
+ * ``system-interface-enable-other-harnesses`` meta tag). Gates every "New <harness>
+ * Agent" launcher (Codex, Pi, Opencode, Antigravity). Off unless the meta tag is
+ * explicitly "true".
+ */
+export function areOtherHarnessesEnabled(): boolean {
+  if (cachedOtherHarnessesEnabled !== null) {
+    return cachedOtherHarnessesEnabled;
+  }
+  const metaElement = document.querySelector('meta[name="system-interface-enable-other-harnesses"]');
+  cachedOtherHarnessesEnabled = metaElement?.getAttribute("content") === "true";
+  return cachedOtherHarnessesEnabled;
+}
