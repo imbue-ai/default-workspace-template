@@ -38,7 +38,29 @@ from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
+from imbue.system_interface.harnesses.model import base_alias
 from imbue.system_interface.harnesses.model import parse_effort_level
+
+# The snapshot the Claude model-state hook writes ({model, effort, fast}): the live model +
+# effective fast (from the transcript's service tier) + effort (from settings). This is the
+# authoritative live read for the model bar; settings.json only records the fast *preference*,
+# which lies when fast is unavailable at runtime. Kept in sync with resources/model_state_hook.py.
+_MODEL_STATE_NAME: str = "claude_model_state.json"
+
+
+def _to_catalog_model_id(raw: str) -> str:
+    """Map a raw model id to a catalog option id so ``match_option`` resolves it.
+
+    The hook records whatever the transcript says -- the API id (``claude-opus-4-8``) at Stop,
+    or the settings alias (``opus[1m]``) before a turn. Both should light the same chip, so we
+    match on the catalog alias appearing in the raw id (``opus`` in ``claude-opus-4-8`` and in
+    ``opus[1m]``). Falls back to the raw string (a shrug) when nothing matches.
+    """
+    lowered = raw.lower()
+    for option in CLAUDE_CATALOG.options:
+        if base_alias(option.id) in lowered:
+            return option.id
+    return raw
 
 # Every Claude model offers the same efforts: low..max shown, ultra (ultracode)
 # declared-but-hidden. Effort levels are plain strings, as the catalog carries them.
@@ -192,18 +214,43 @@ class ClaudeModelResolver(HarnessModelResolver):
         return ModelIdentity(model_id=model_id, effort=effort, fast=fast)
 
     def read_live(self) -> ModelIdentity | None:
+        # The model-state hook writes the live {model, effort, fast} to a snapshot -- the only
+        # source that knows the EFFECTIVE fast (settings.json's fastMode is just the preference
+        # and lies when fast is unavailable at runtime). Prefer it; the model id is mapped to a
+        # catalog option (it may be a raw API id from the transcript).
+        snapshot = read_json_dict(self._state_dir / _MODEL_STATE_NAME)
+        snapshot_model = snapshot.get("model")
+        if isinstance(snapshot_model, str) and snapshot_model:
+            return ModelIdentity(
+                model_id=_to_catalog_model_id(snapshot_model),
+                effort=parse_effort_level(snapshot.get("effort")),
+                fast=snapshot.get("fast") is True,
+            )
+        # No snapshot yet (before the first hook fires, or an older agent): fall back to
+        # settings.json for model + effort + the fast preference.
         data = read_json_dict(self._settings_path)
         model = data.get("model")
         if not isinstance(model, str) or not model:
-            # settings.json has no model yet -> nothing live; fall back to the guess.
             return None
-        # effortLevel may be absent until the first /effort; None then.
         effort = parse_effort_level(data.get("effortLevel"))
         fast = _resolve_agent_fast_mode(self._settings_path, self._managed_path)
         return ModelIdentity(model_id=model, effort=effort, fast=fast)
 
+    def _write_model_state_snapshot(self, identity: ModelIdentity) -> None:
+        """Optimistically record a switch into the snapshot so the bar reconciles at once.
+
+        A bar-driven switch applies via slash commands, but no hook fires until the next
+        turn/submit, so without this the reconcile would read a stale snapshot and revert the
+        chip. The hook overwrites this with the effective state at the next Stop.
+        """
+        path = self._state_dir / _MODEL_STATE_NAME
+        try:
+            atomic_write(path, json.dumps({"model": identity.model_id, "effort": identity.effort, "fast": identity.fast}))
+        except OSError as e:
+            logger.warning("Failed to write Claude model-state snapshot at {}: {}", path, e)
+
     def watched_paths(self) -> tuple[Path, ...]:
-        return (self._settings_path, self._managed_path)
+        return (self._settings_path, self._managed_path, self._state_dir / _MODEL_STATE_NAME)
 
     def switch(
         self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
@@ -233,4 +280,7 @@ class ClaudeModelResolver(HarnessModelResolver):
             except (FastModeSettingsError, OSError) as e:
                 logger.opt(exception=e).error("Failed to record fast mode at {}", write_path)
                 return SwitchResult(ok=False, detail="Applied the change but could not record fast mode")
+        # Reflect the pick in the snapshot immediately so the chip reconciles without waiting
+        # for the next hook fire; the hook re-writes the effective state at the next Stop.
+        self._write_model_state_snapshot(identity)
         return SwitchResult(ok=True)
