@@ -30,6 +30,10 @@ from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.opencode.activity import OpenCodeActivityTracker
+from imbue.system_interface.harnesses.opencode.model import OpenCodeModelResolver
+from imbue.system_interface.harnesses.opencode.model import get_catalog as get_opencode_catalog
+from imbue.system_interface.harnesses.opencode.watcher import OpenCodePlaceholderSessionWatcher
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import get_catalog as get_pi_catalog
@@ -97,6 +101,17 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=PiActivityTracker,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
+        special_kinds=frozenset(),
+    ),
+    HarnessType.OPENCODE: HarnessSpec(
+        name=HarnessType.OPENCODE,
+        # First cut: the model bar is wired, the transcript is not -- so a placeholder
+        # watcher (empty transcript) and claude-style activity. The real watcher (tailing
+        # the plugin's raw transcript) lands next.
+        watcher_class=OpenCodePlaceholderSessionWatcher,
+        tracker_class=OpenCodeActivityTracker,
+        resolver_class=OpenCodeModelResolver,
+        catalog_factory=get_opencode_catalog,
         special_kinds=frozenset(),
     ),
 }

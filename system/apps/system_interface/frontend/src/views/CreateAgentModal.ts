@@ -7,7 +7,7 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 
 interface CreateAgentModalAttrs {
-  mode: "chat" | "codex" | "pi" | "silly-claude" | "silly-codex";
+  mode: "chat" | "codex" | "pi" | "opencode" | "silly-claude" | "silly-codex";
   onCreated: (agentId: string, agentName: string) => void;
   onCancel: () => void;
 }
@@ -45,6 +45,7 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
         chat: "/api/agents/create-chat",
         codex: "/api/agents/create-codex",
         pi: "/api/agents/create-pi",
+        opencode: "/api/agents/create-opencode",
         "silly-claude": "/api/agents/create-silly-claude",
         "silly-codex": "/api/agents/create-silly-codex",
       };
@@ -77,6 +78,7 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
         chat: "Create Chat Agent",
         codex: "Create Codex Agent",
         pi: "Create Pi Agent",
+        opencode: "Create Opencode Agent",
         "silly-claude": "Create Silly Claude Agent",
         "silly-codex": "Create Silly Codex Agent",
       };
