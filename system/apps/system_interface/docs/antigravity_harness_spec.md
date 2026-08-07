@@ -34,23 +34,81 @@ marked `Q`, not asserted.
 
 ---
 
-## Surface A — launcher config
+## Surface A — launcher config (`.mngr/settings.toml`)
 
-### `.mngr/settings.toml` `[EDIT]`
-Add block (mirrors `[agent_types.codex]`, own base type, no `parent_type`):
+Add an `[agent_types.antigravity]` block, symmetric to `[agent_types.codex]` /
+`[agent_types.opencode]` / `[agent_types.pi-coding]`. Own base type (registered by the
+plugin), so **no `parent_type`**.
+
+### The two axes, and how the peers set them
+
+| Concern | claude | codex | opencode | pi | **antigravity (proposed)** |
+|---|---|---|---|---|---|
+| skip install at provision | (baked) | `check_installation=false` | `check_installation=false` | `check_installation=false` | `check_installation=false` (agy baked in) |
+| unattended approvals | `--dangerously-skip-permissions` | `auto_allow_permissions=true` | `auto_allow_permissions=true` | `auto_allow_permissions=true` | `auto_allow_permissions=true` (adds agy's `--dangerously-skip-permissions`) |
+| trust repo silently | `auto_dismiss_dialogs` | `auto_dismiss_dialogs=true` | — | `auto_dismiss_dialogs=true` | `auto_dismiss_dialogs=true` |
+| freeze binary | version pin + `DISABLE_AUTOUPDATER` | baked + `check_installation=false` | baked | baked | `update_policy="NEVER"` (sets `AGY_CLI_DISABLE_AUTO_UPDATE=true`) |
+| disable nested sandbox | n/a | `sandbox_mode="danger-full-access"` (its OS sandbox is on-by-default + broke under gVisor) | n/a | n/a | **nothing to disable** — agy's terminal sandbox is opt-in (`--sandbox` flag, which mngr never passes); optional defensive `settings_overrides.enableTerminalSandbox=false` (Q-A1) |
+| model pin | `opus[1m]` | `gpt-5.6-sol` + `medium` | none (user/account) | none (user/account) | none (account-driven; Q-A2) |
+
+### Proposed block
+
 ```toml
+# the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
+# claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
+# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# The agy binary is baked into the image (system/scripts/setup_system.sh,
+# agy_install-1.1.10.sh), so check_installation is off. auto_allow_permissions +
+# auto_dismiss_dialogs run the container agent unattended, matching agent_types.codex.
+# update_policy = NEVER freezes the baked build (agy has no version pin; NEVER sets
+# AGY_CLI_DISABLE_AUTO_UPDATE=true in the agent env).
+#
+# No model is pinned (like agent_types.opencode / pi-coding, unlike codex's gpt-5.6-sol):
+# agy's model is a Google-account `agy models` display name ("Gemini 3.5 Flash (High)")
+# that a given account may or may not expose, and the display string (spaces/parens) is
+# finicky to force, so pinning risks a rejection. The chat model bar (Surface D) will
+# read/set the live model; to pin one now, add `model = "<display name>"` to
+# settings_overrides.
+#
+# settings_overrides is folded (last) into the per-agent settings.json over the synced
+# base: the telemetry/tips/survey flags keep the chat surface quiet. NOTE: unlike codex,
+# there is no sandbox to disable -- agy's terminal sandbox is opt-in via the `--sandbox`
+# flag (which mngr never passes), so `run_command` already runs unrestricted in-container.
 [agent_types.antigravity]
 auto_dismiss_dialogs = true
 auto_allow_permissions = true
 check_installation = false
 update_policy = "NEVER"
-# model = "Gemini 3.5 Flash (High)"   # Q9: pin default or leave unset
+settings_overrides = { enableTelemetry = false, showTips = false, showFeedbackSurvey = false }
+# To pin a model instead of using the account default, add it to settings_overrides:
+#   settings_overrides = { model = "Gemini 3.5 Flash (High)", enableTelemetry = false, ... }
 ```
-No `[create_templates.chat]` change — its `output_style` is harness-neutral and
-starts applying to antigravity once Surface B lands.
-`Q8:` confirm a `-t chat` create resolves `output_style` onto the antigravity config
-field without the `-S`-layering caveat that Claude's `fastMode` hit (§ codex has no
-such issue, so likely fine).
+
+Notes:
+- **Model goes in `settings_overrides`, not a top-level key.** Unlike `CodexAgentConfig`
+  (top-level `model` / `model_reasoning_effort`), `AntigravityAgentConfig` has no `model`
+  field; agy's model is a `settings.json` string, so it rides `settings_overrides["model"]`.
+- With `auto_allow_permissions=true`, agy's `--dangerously-skip-permissions` auto-approves
+  every tool call, so `toolPermission` / a `permissions` policy in `settings_overrides`
+  would be moot (skip wins) — omitted here, matching codex.
+- No `[create_templates.chat]` change needed: `output_style` is harness-neutral and now
+  resolves onto the antigravity config (Surface B, shipped). Verified live: `-t chat`
+  resolves `output_style` + `append_system_prompt` onto `AntigravityAgentConfig` exactly
+  as it does for codex.
+
+### Open questions (Surface A)
+
+- **Q-A1 (sandbox):** agy's terminal sandbox is opt-in (`--sandbox` flag / `enableTerminalSandbox`
+  setting), and mngr passes neither, so `run_command` should already run unrestricted
+  in-container — no codex-style override needed. Only add `enableTerminalSandbox=false` if a
+  synced-home base turns it on. Verify a `run_command` actually executes under docker/gVisor.
+- **Q-A2 (model pin):** leave unset (recommended, account-driven like opencode/pi) or pin a
+  default? If pinning, confirm the exact `agy models` display string on a signed-in host
+  (needs sign-in; `agy models` errors "Please sign in" otherwise).
+- **Q-A3 (telemetry keys):** confirm `enableTelemetry` / `showTips` / `showFeedbackSurvey`
+  are honored from the per-agent `settings.json` and are scalar-assignable through
+  `settings_overrides` without tripping the narrowing guard. Low risk (scalars), but
+  untested; drop any that error.
 
 ---
 
