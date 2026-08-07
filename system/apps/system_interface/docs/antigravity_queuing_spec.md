@@ -1,201 +1,168 @@
 # Antigravity (agy) message queuing — design spec
 
-Goal: show a "queued" bubble in the chat the instant a user sends a message to a **busy**
-agy agent, then have it become the real turn seamlessly when agy processes it — the same
-UX Codex gives. **Out of the box agy makes this hard**, so this spec picks the signal that
-actually works and mirrors Codex's reconciliation.
+Goal: when a user sends a message to a **busy** agy agent, show it as a "queued" bubble
+immediately, then let it become the real turn when agy processes it — the UX Codex gives.
+This spec is grounded in live simulations against real agy agents; the findings materially
+shaped the design (agy **coalesces** its queue — see §2).
 
-Status: design only. Not built. Queuing was explicitly deferred in the transcript-harness
-cut; this is the follow-on.
-
----
-
-## 0. Why Codex's approach doesn't port
-
-Codex's queuing (verified in `codex/watcher.py` + `codex/session_parser.py`) relies on a
-**patched codex binary** that appends every enqueued message to a sidecar
-`queued_input.jsonl` with a stable `queued_id`. The watcher tails that sidecar into a
-placeholder `user_message` bubble, and when the message later drains into the rollout it
-re-keys the drained turn's `event_id` onto the placeholder's id (matched by
-whitespace-normalized content, `_dedup_queued_turn`) so the bubble becomes the real turn
-with no double-render.
-
-**agy has no such sidecar and we can't patch it.** Confirmed empirically:
-- A message typed while agy is busy is **not** written to its transcript (the `steps` DB)
-  while queued; it lands as an ordinary `USER_INPUT` step only once agy dequeues and
-  processes it, with no "queued" marker.
-- The only place a queued message is visible before processing is **agy's TUI pane**, where
-  it renders as a `▸`-prefixed line (in-memory).
-
-So we must source the "queued" signal ourselves.
+Status: design only, not built. Session-dependent by nature: the queue lives in agy's TUI
+memory and dies with the process (a restart/interrupt wipes it), exactly like Codex. That is
+acceptable and reflected below.
 
 ---
 
-## 1. The two signals agy gives us (both verified live)
-
-### Signal A — the send-acceptance signal (robust, recommended)
-The UI sends through `AgentManager.send_message_to_agent` → mngr's `send_message_to_agents`.
-For antigravity, mngr confirms delivery when agy's **`active` lifecycle marker advances**
-(the statusLine touches it on the accepted keystroke). Verified: sending to a *busy* agy
-agent (mid `sleep 40`) returned **success in well under the remaining turn time** — mngr
-confirms the message was *accepted into agy's queue* promptly, it does **not** block until
-the turn ends. So the backend already knows, per send:
-- **the message was accepted** (`send_to_agent` returned True), and
-- **whether the agent was busy at that moment** (its `activity_state` != IDLE) → i.e.
-  whether it was *queued* vs processed immediately.
-
-And we know it's still queued for as long as it has **not appeared in the transcript**.
-That triple — accepted + busy-at-send + not-yet-in-transcript — is a precise "queued"
-signal with no fragile parsing.
-
-### Signal B — the pane (authoritative to agy, but fragile)
-`tmux capture-pane` shows queued messages as consecutive `▸`-prefixed lines between the
-activity spinner and the input box. Verified with three queued messages:
-```
-⣻  Running...
-▸ QMSG_ALPHA please remember alpha
-▸ QMSG_BRAVO then bravo
-▸ QMSG_CHARLIE finally charlie
-────────────────────────────────
->
-```
-Authoritative to what agy *actually* has queued (regardless of whether the UI or a
-terminal-typed message put it there), but fragile: `▸` is also the "Thought for Ns" prefix
-(needs positional parsing — the run of `▸` lines immediately above the input box), long
-messages wrap across pane lines, width/scrollback vary, and it's an extra poll per cycle.
-
-**Decision: build on Signal A (the outbox); use Signal B only as an optional enrichment
-(§6).** A is precise for the UI's own sends — which is exactly the case the UI must render —
-and needs no screen-scraping.
+## 0. Why Codex's mechanism doesn't port
+Codex's queuing relies on a **patched codex binary** that appends every enqueued message to a
+`queued_input.jsonl` sidecar with a stable `queued_id`; its watcher tails that into a
+placeholder bubble and re-keys the drained rollout turn onto it (1 queued message → 1 rollout
+turn, matched by normalized content). **agy has neither a sidecar nor 1:1 draining.** We must
+source the queued signal ourselves, and handle coalescing.
 
 ---
 
-## 2. Design — a backend outbox, reconciled in the watcher
+## 1. What agy gives us (all verified live)
 
-Mirror Codex's structure (placeholder bubble now, re-key the drained turn onto it later),
-but **source the placeholder from the send-signal instead of a sidecar file.**
+| Signal | Finding | Use |
+|---|---|---|
+| **Transcript timing** | A message queued while agy is busy is **not** in the transcript (`steps` DB) until agy processes it; then it lands as an ordinary `USER_INPUT` step with no queued marker. | The transcript is the *drain* signal, not the *queued* signal. |
+| **Send acceptance** | `send_message_to_agent` → mngr confirms delivery when agy's `active` marker advances. Sending to a **busy** agent returned success **well before** the turn ended — mngr confirms the message was *accepted into agy's queue* promptly, it does not block to turn-end. | The **primary queued signal**: accepted + agent-was-busy ⇒ queued. |
+| **Pane** | Queued messages render as consecutive `▸`-prefixed lines above the input box. | Optional enrichment (§7); fragile. |
+| **Interrupt** | The UI "interrupt" is `mngr start --restart --no-resume` — a **process restart**, which wipes agy's in-memory queue and calls `reset_activity_state`. | Clear the outbox on interrupt (§6). |
+
+---
+
+## 2. The decisive finding: agy COALESCES its queue
+
+**When agy finishes its current turn, it joins ALL pending queued messages with `\n` into a
+single `USER_INPUT` turn and produces one reply.** Verified live:
+
+- 2 queued → transcript turn `'QUEUE1: reply with only the word ONE\nQUEUE2: reply with only the word TWO'`
+- 3 queued → transcript turn `'AAA say a\nBBB say b\nCCC say c'`
+
+The pane even shows them stacked under one `>` turn, and agy's own summary said "Processed
+both queued items … within a single turn." So the mapping is **N queued messages → 1 combined
+turn**, not Codex's 1→1. This is the core constraint the design must handle: a drained turn
+must reconcile against **multiple** outbox entries at once, and a single queued message is just
+the N=1 case (no `\n`).
+
+---
+
+## 3. Design — a backend-authoritative outbox (not the frontend optimistic store)
+
+Keep the queued state in a **backend per-agent outbox** that the backend fills from the send
+signal and drains by watching the transcript. The frontend only *renders* the outbox list; it
+does not run its own optimistic send/reconcile (the brittle `PendingMessages` content-reconcile
+path we're avoiding). Because the outbox is a plain list keyed by content, coalescing is handled
+by clearing several entries against one drained turn — no per-event id-superseding gymnastics.
 
 ### Components
-- **`AntigravityOutbox`** (new, per-agent) — holds messages sent-and-accepted-while-busy
-  that have not yet appeared in the transcript. One entry: `{content, normalized_content,
-  placeholder_event_id, sent_at}`.
-- **`AntigravitySessionWatcher`** (existing) — gains outbox awareness: it emits the queued
-  placeholder events and reconciles them against the transcript (the `_dedup_queued_turn`
-  analogue).
-- **`AgentManager.send_message_to_agent`** (existing) — after a successful send, tells the
-  agent's watcher whether the send was queued.
+- **`AntigravityOutbox`** (new, per agent): an ordered list of entries
+  `{queued_id, content, normalized_content, sent_at}`. `queued_id` is stable
+  (`f"agy-queued-{sha1(normalized+ordinal)}"`).
+- **`AgentManager.send_message_to_agent`** (existing): after a successful send, if the agent's
+  `activity_state` was **not IDLE** (busy ⇒ queued), append to the outbox and broadcast.
+- **`AntigravitySessionWatcher`** (existing): on each new `USER_INPUT` event, run the
+  **drain-reconcile** (§4) to remove the matched outbox entries and broadcast.
+- **Serialization**: the agent's serialized state gains `queued_messages: [{queued_id, content}]`
+  (ordered). It rides the existing `agents_updated` WebSocket broadcast, so no new stream.
+- **Frontend**: renders `queued_messages` as "Queued" bubbles appended after the transcript,
+  before the input box. No optimistic store, no content-reconcile — the backend owns the list.
 
-### Data flow
-1. **Send.** `send_message_to_agent(agent_id, content)` sends via mngr. On success it reads
-   the agent's current `activity_state`; if it was **not IDLE** (busy → the message queued),
-   it calls `watcher.note_queued_send(content)`. (If IDLE, the message will be processed
-   immediately and show up in the transcript within ~1s — no placeholder needed, or emit a
-   short-lived "sending" one; see §5.)
-2. **Placeholder.** `note_queued_send(content)` synthesizes a `user_message` event with a
-   **stable, content-derived id** (`f"agy-queued-{sha1(normalized_content)[:16]}"`), source
-   `"antigravity/outbox"`, and pushes it through the same `on_events` path the transcript
-   uses — so a queued bubble appears immediately. It records
-   `normalized_content -> placeholder_event_id` in the outbox.
-3. **Drain + reconcile.** When agy processes the message, the watcher's normal scan decodes
-   it as a `USER_INPUT` step → a `user_message` event. Before emitting, the watcher runs the
-   **reconcile step** (mirrors `codex._dedup_queued_turn`): if the event's normalized content
-   matches an outbox entry, **re-key** the event's `event_id`/`message_uuid` to the
-   placeholder's id and drop the outbox entry. Because the ids now match, the store
-   *supersedes* the placeholder in place rather than appending a second bubble — the queued
-   bubble becomes the real turn.
-
-### Why this is clean
-- The queued bubble and its drained turn share one id, so no double-render and no frontend
-  reconciliation needed (unlike the `PendingMessages` optimistic path, which the product
-  direction says not to depend on).
-- Reconciliation lives in the watcher, next to the transcript, exactly as Codex does it.
-- No screen-scraping; the only new coupling is one `send_message_to_agent` → watcher call.
+### Flow
+1. **Send.** UI POST `/message` → `send_message_to_agent`. On success, read `activity_state`:
+   - **busy** (THINKING / TOOL_RUNNING) → append an outbox entry → broadcast → queued bubble shows.
+   - **idle** → no entry; the message is processed now and appears in the transcript within ~1s.
+2. **Queued bubbles** render from `queued_messages` (ordered, styled as pending).
+3. **Drain.** agy coalesces + processes → the watcher decodes one combined `USER_INPUT` turn.
+4. **Reconcile (§4).** The combined turn's `\n`-segments are matched against the front of the
+   outbox; matched entries are removed → broadcast → queued bubbles disappear; the combined turn
+   now renders from the transcript (see §5 for the 3→1 collapse this implies).
 
 ---
 
-## 3. Matching (the "fuzzy match" question)
+## 4. Drain-reconcile (handles coalescing)
 
-Codex matches by **whitespace-normalized full content** (`normalize_user_content`), and flags
-it as brittle (a mid-terminal edit diverges). For agy we can do **better than fuzzy**: the
-parser already strips agy's `<USER_REQUEST>…</USER_REQUEST>` wrapper (§4 of the transcript
-spec), so the drained `USER_INPUT` text equals the sent text. So an **exact
-normalized-content match** is the primary key — reuse `normalize_user_content` verbatim.
+On each newly-emitted `USER_INPUT` event (normalized content `C`):
+1. If the outbox is empty → nothing to do (normal message).
+2. Split `C` on `\n` into ordered segments `s1..sk` (normalize each).
+3. Walk the outbox from the front; if `s1..sk` equal the normalized `content` of the first `k`
+   outbox entries **in order**, remove those `k` entries (they've drained). This covers:
+   - **coalesced** drain (`k = N` queued messages joined), and
+   - **single** queued message (`k = 1`, no `\n`).
+4. If the segments don't line up with the front run (e.g. the user also typed directly in the
+   terminal, or agy reformatted), fall back to a **guarded fuzzy match**: for each segment,
+   remove the single outbox entry whose normalized content it best matches on the last-64-char
+   suffix; only reconcile when exactly one candidate matches (never mis-pair two similar
+   messages). Leave unmatched entries in the outbox (they'll clear on the never-drains safety
+   net, §6).
 
-Keep a **fuzzy fallback** only for the divergence cases (agy trims/reformats, or the user
-edited the queued line in the terminal): match on a normalized **suffix/prefix of the last N
-chars** (e.g. last 64) when no exact match is found. Guard it — only reconcile a fuzzy match
-when exactly one outbox entry is a candidate, to avoid mis-pairing two similar messages.
-
----
-
-## 4. Ordering + multiplicity
-agy processes queued messages **FIFO, one turn each** (verified: multiple queued messages
-stack in the pane and drain in order). The outbox is a list; each drained `USER_INPUT`
-reconciles against the **oldest** matching entry, so two identical queued messages pair to
-two turns in order. Event ids stay unique because a second identical message gets a
-`-2` disambiguator suffix on collision (`agy-queued-{hash}` already present → append an
-ordinal).
+Matching primary key is **exact normalized content** because the parser already strips agy's
+`<USER_REQUEST>…</USER_REQUEST>` wrapper, so the drained text equals the sent text — no fuzzy
+needed for the common case; the fuzzy pass is only a safety fallback.
 
 ---
 
-## 5. Edge cases
-- **Sent while IDLE (not queued).** The message is processed right away and appears in the
-  transcript within ~1s. Either emit no placeholder, or a short-lived `"sending"` variant that
-  reconciles on arrival. Simplest v1: **no placeholder when IDLE** — the transcript event
-  shows up promptly on its own.
-- **Interrupt clears agy's queue.** agy drops queued messages on an interrupt. Wire the
-  outbox to `AgentManager.reset_activity_state` (the interrupt path): **clear all
-  placeholders** for that agent — they will never drain, so the bubbles must go. (This is the
-  agy analogue of Codex's `turn_aborted` + the frontend's `clearQueuedMessagesOnIdle`.)
-- **Never-drains safety net.** If the lifecycle returns to IDLE (turn + queue fully done) and
-  an outbox entry still hasn't reconciled, drop it (it provably won't arrive) — mirror the
-  frontend's working→IDLE queue-drain safeguard, but on the backend.
-- **Restart.** The outbox is in-memory; a backend restart loses placeholders, but the drained
-  messages still render from the transcript (just without the pre-drain "queued" affordance).
-  Acceptable — no persistence needed.
-- **Message typed directly in the agent terminal** (not via the UI). Signal A can't see it
-  (no send went through the UI). It will still render correctly once drained (as a normal
-  turn); it just won't show a *pre-drain* queued bubble. Signal B (§6) is the only way to
-  catch these, at the cost of fragility.
+## 5. Rendering: the 3→1 collapse (accepted)
+Because agy coalesces, the durable transcript holds **one** combined turn, while the outbox held
+**N** queued bubbles. On drain the N queued bubbles are removed and the one combined turn renders
+(its literal `\n`-joined text, as one user bubble), followed by agy's single reply. So three
+queued bubbles visibly **collapse into one** combined bubble on drain.
+
+This is accepted, because it is honest (agy really did process them as one turn) and it is
+**consistent with a rebuild-from-transcript** (a page refresh / reconnect, or a backend restart,
+shows the same one combined bubble — there is no durable N-bubble form to preserve). Splitting the
+combined turn back into N bubbles was rejected: it can't be distinguished from a genuine
+multi-line single message, and it would still collapse on any transcript rebuild.
 
 ---
 
-## 6. Optional enrichment — pane cross-check (defer)
-If we want queued bubbles for **terminal-typed** messages too, or want to detect when agy
-**drops** a queued message before it drains, add a periodic pane read:
-- Capture the pane; take the contiguous run of `▸`-prefixed lines immediately **above the
-  input box separator** (this excludes the "Thought for Ns" `▸` line, which sits above the
-  activity output, not adjacent to the input box).
-- Each such line (de-wrapped) is a currently-queued message. Reconcile against / seed the
-  outbox by normalized content.
-- A queued message that **disappears** from that run without a matching transcript drain was
-  dropped (interrupt/edit) → remove its placeholder.
+## 6. Edge cases
+- **Sent while IDLE** → not queued; no outbox entry (message appears in the transcript promptly).
+- **Interrupt** = process restart (verified): agy's in-memory queue is gone. Hook the outbox clear
+  into `AgentManager.reset_activity_state` (the interrupt path already calls it) → drop all entries
+  for that agent. No synthetic marker needed.
+- **Never-drains safety net.** If the lifecycle returns to a settled IDLE (turn + queue fully done)
+  and outbox entries remain unreconciled, drop them — they provably won't arrive (agy drained its
+  queue). Mirrors the frontend's working→IDLE queue-drain safeguard, on the backend.
+- **Backend restart.** The outbox is in-memory and lost on restart; the still-queued messages are
+  gone from *our* view too (and, since interrupt=restart is how they'd be cleared anyway, the agy
+  queue may also be gone). Drained messages still render from the transcript. No persistence —
+  matches the session-dependent nature the user accepts.
+- **Terminal-typed messages** (not via the UI) never enter the outbox (no send went through us);
+  they render only on drain, as the combined turn. §7 is the only way to show them pre-drain.
+- **Duplicate content** queued twice → two entries with distinct `queued_id` (ordinal suffix);
+  the front-run match removes them in order.
 
-This is authoritative to agy's real queue but brittle (wrapping, width, `▸` ambiguity,
-scrollback, per-cycle tmux cost). Recommend shipping §2 first and adding this only if
+---
+
+## 7. Optional enrichment — pane cross-check (defer)
+To also show queued bubbles for **terminal-typed** messages, or to detect a **dropped** queue,
+add a periodic `tmux capture-pane`: take the contiguous run of `▸`-prefixed lines immediately
+above the input-box separator (excludes the "Thought for Ns" `▸`, which sits by the activity
+output, not the input box), de-wrap, and seed/verify the outbox by normalized content. A queued
+line that vanishes without a transcript drain was dropped → remove its entry. Brittle (wrapping,
+width, `▸` ambiguity, scrollback, per-cycle tmux cost); ship §3 first, add this only if
 terminal-typed queuing matters.
 
 ---
 
-## 7. Build order
-1. `AntigravityOutbox` (in-memory list + normalized-content index) + unit tests.
-2. Watcher: `note_queued_send(content)` (emit placeholder) + reconcile-on-drain in the scan
-   loop (re-key matching `USER_INPUT` events) + clear-on-reset.
-3. `AgentManager.send_message_to_agent`: on success, read activity_state; if busy, call
-   `note_queued_send`. Wire `reset_activity_state` → outbox clear.
-4. Frontend: none required — queued bubbles arrive as normal `user_message` events (source
-   `antigravity/outbox`) and supersede on drain via the shared event store. (A distinct
-   "Queued" style pill can key off the `source`/a `queued: true` flag if desired.)
-5. Manual tmux verification: busy agent, send 2-3 via the UI, confirm queued bubbles appear
-   and each becomes the real turn as agy drains them; interrupt mid-queue and confirm the
-   bubbles clear.
+## 8. Build order
+1. `AntigravityOutbox` (ordered list + normalized index + front-run/fuzzy match) + unit tests
+   (coalesced drain clears N entries; single clears 1; fuzzy fallback; safety-net clear).
+2. Serialize `queued_messages` onto the agent state; broadcast on change.
+3. `send_message_to_agent`: on success + busy → append; wire `reset_activity_state` → clear.
+4. Watcher: run drain-reconcile on each new `USER_INPUT` event, clearing matched entries.
+5. Frontend: render `queued_messages` as queued bubbles after the transcript (a `queued` style
+   pill); no optimistic store.
+6. Manual tmux verification: busy agent, send 3 via the UI → 3 queued bubbles; on drain they
+   collapse into the one combined turn + reply; interrupt mid-queue → bubbles clear.
 
 ---
 
-## 8. Limitations (explicit)
-- Only **UI-sent** messages get a pre-drain queued bubble (Signal A); terminal-typed ones
-  render only on drain, unless §6 is added.
-- Reconciliation is content-based (exact-normalized primary, fuzzy fallback) — inherently
-  imperfect if agy reformats the text or the user edits it in the terminal; the fuzzy guard
-  limits mis-pairing but can't eliminate it. Same class of brittleness Codex accepts.
-- In-memory only (no persistence across a backend restart).
+## 9. Limitations (explicit)
+- **Session-dependent / in-memory** — queue dies with the agy process (restart/interrupt) and the
+  outbox dies with the backend. No persistence, by design (matches Codex).
+- **N→1 coalescing collapse** — N queued bubbles become one combined bubble on drain (§5).
+- **UI-sent only** — terminal-typed queued messages have no pre-drain bubble unless §7 is added.
+- **Content-based reconcile** — exact-normalized primary + guarded fuzzy fallback; imperfect if agy
+  reformats the text, same brittleness class Codex accepts.
