@@ -57,6 +57,12 @@ _CACHE_RELATIVE_PATH: tuple[str, ...] = (".cache", "opencode", "models.json")
 # Kept in sync with MODEL_STATE_FILENAME in mngr_opencode's plugin.
 _MODEL_STATE_NAME: str = "opencode_model_state.json"
 
+# The launch script writes this readiness sentinel once the server is up and the session
+# exists -- i.e. when the pre-turn-1 probe will succeed. Watched so a server that starts
+# AFTER the resolver is built re-triggers the model-choice recompute (and thus the probe).
+# Kept in sync with READY_SENTINEL_FILENAME in mngr_opencode's opencode_config.py.
+_READY_NAME: str = "opencode_ready"
+
 # Per-agent dirs opencode isolates under (OPENCODE_CONFIG_DIR / XDG_DATA_HOME) and the
 # file recording its root session id. Kept in sync with mngr_opencode's opencode_config.py
 # (_CONFIG_DIR_RELATIVE_PATH, _DATA_HOME_RELATIVE_PATH, ROOT_SESSION_FILENAME).
@@ -186,28 +192,30 @@ class OpenCodeModelResolver(HarnessModelResolver):
     guesses the pre-turn-1 model from the live server, and switches via that server's API."""
 
     _state_dir: Path
-    # The probe result, computed once: the startup model does not change, and the probe is
-    # a timeout-bounded HTTP call that must not run on every model-choice recompute.
+    # The probe result, cached once it SUCCEEDS. The startup model does not change, so a
+    # successful probe is cached for good; a failed one (server not up yet) is NOT cached, so
+    # a later call re-probes rather than stranding the bar empty.
     _cached_guess: ModelIdentity | None
-    _has_guessed: bool
 
     @classmethod
     def build(cls, agent_info: AgentInfo) -> "OpenCodeModelResolver":
         self = cls.__new__(cls)
         self._state_dir = agent_info.agent_state_dir
         self._cached_guess = None
-        self._has_guessed = False
         return self
 
     def guess_from_launch(self) -> ModelIdentity | None:
         # opencode's running server resolved a model at startup (from opencode.json / the
-        # authed provider default). Probe it once and cache -- read_live takes over once the
-        # first assistant message records the live selection. Effort is unknown pre-turn-1
-        # (merge_identities fills it from a live read when one appears).
-        if not self._has_guessed:
+        # authed provider default). Probe it and cache the FIRST success -- the server starts
+        # after the agent is tracked, so a probe at resolver-build time can miss it; caching a
+        # None then would leave the bar empty forever. Instead re-probe until it answers (the
+        # readiness marker in watched_paths re-triggers the recompute when the server comes up),
+        # then cache. guess is called only at build and on watched-path changes, never per tick,
+        # so re-probing is cheap. Effort is unknown pre-turn-1 (read_live fills it after a turn).
+        if self._cached_guess is None:
             model_id = probe_startup_model(self._state_dir)
-            self._cached_guess = ModelIdentity(model_id=model_id, effort=None, fast=False) if model_id else None
-            self._has_guessed = True
+            if model_id:
+                self._cached_guess = ModelIdentity(model_id=model_id, effort=None, fast=False)
         return self._cached_guess
 
     def read_live(self) -> ModelIdentity | None:
@@ -223,7 +231,9 @@ class OpenCodeModelResolver(HarnessModelResolver):
         return ModelIdentity(model_id=f"{provider}/{model}", effort=effort, fast=False)
 
     def watched_paths(self) -> tuple[Path, ...]:
-        return (self._state_dir / _MODEL_STATE_NAME,)
+        # The model-state file drives the live read; the readiness marker re-triggers the
+        # recompute (and the guess probe) when the server comes up after the resolver is built.
+        return (self._state_dir / _MODEL_STATE_NAME, self._state_dir / _READY_NAME)
 
     def list_offered_models(self) -> tuple[str, ...] | None:
         # opencode's offer set is account-gated and dynamic: ``opencode models`` lists exactly
