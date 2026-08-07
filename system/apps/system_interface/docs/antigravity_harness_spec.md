@@ -229,20 +229,7 @@ append-only file, no rotation/marker).
   `antigravity_process_started` is what the plugin/base writes on start/resume), `observe()`,
   `derive()` delegating to activity_state.
 
-### `harnesses/antigravity/model.py` `[NEW]`
-- `ANTIGRAVITY_CATALOG: HarnessCatalog` — options with **per-model** effort sets
-  (Gemini Flash: low/med/high; Gemini Pro: low/high; Claude/GPT-OSS: their single
-  fixed qualifier), `supports_fast=False`, `default_model_id` (Q9), `switch_mode` (Q2/O7),
-  `icon_svg`.
-- `_display_name(model_id, effort) -> str` and `_parse_display_name("<Name> (<Effort>)") -> ModelIdentity` (id + effort, effort parsed out of the parenthetical).
-- `AntigravityModelResolver(HarnessModelResolver)`:
-  - `guess_from_launch()` → read `settings.json` `model` key (via `get_antigravity_settings_path`), parse; default from catalog.
-  - `read_live()` → active_model file (option 2) or re-read settings.json (option 1). `Q7`.
-  - `watched_paths()` → that file.
-  - `switch(identity, axes, send)` → `Q(O7)`: if `/model <name>` is one-shot,
-    `send("/model <display name>")` (+ effort); `SwitchMode.ON_CHANGE`. If it opens a
-    picker (wedges the pane, like pre-patch Codex), fall back to READ_ONLY or a
-    settings-rewrite-then-restart changer. **Must verify before writing `switch()`.**
+### `harnesses/antigravity/model.py` `[NEW]` — the model bar. Detailed in **Surface D** below.
 
 ### `harnesses/antigravity/icon.svg` `[NEW]` — Antigravity/Gemini logo.
 
@@ -251,7 +238,90 @@ append-only file, no rotation/marker).
 
 ---
 
-## Surface D — covered inline in `harnesses/antigravity/model.py` + (option 2) the plugin statusline edit above.
+## Surface D — model bar ("models wired up", like pi)
+
+**Design (decided): read the live model from an on-disk state file, not the transcript.**
+Codex reads its live model from the rollout (transcript); pi reads it from a state file
+its lifecycle extension writes (`pi_model_state.json`) at session start + every change.
+We follow **pi**. agy's advantage: its `statusline.sh` already receives the live `model`
+in every payload (verified — `"model":"Gemini 3.6 Flash (Medium)"`), fires on every
+agent-state change, and runs POSIX grep/sed — so it is the natural writer of the state
+file. **No separate lifecycle extension needed** (unlike pi's `.ts`).
+
+Model-id facts (verified live, §established-facts): `--model <base-slug> --effort <tier>`
+or a combined slug. `agy models` returns slugs (`gemini-3.6-flash-medium`); the statusLine
+`model` and error messages are **display names** (`Gemini 3.6 Flash (Medium)`). So the
+resolver maps display→slug and holds both in the catalog.
+
+Prereq: registering the harness needs the full `HarnessSpec` (watcher + tracker from
+Surface C). The model bar can't light up in isolation — Surface C's watcher/activity must
+exist so `HarnessType.ANTIGRAVITY` is registerable.
+
+### `mngr_antigravity/resources/statusline.sh` `[EDIT]` (vendored plugin)
+- After parsing `agent_state`, also grep `"model":"..."` from the payload (same POSIX
+  `grep -oE` style, no jq) and write it to `$MNGR_AGENT_STATE_DIR/antigravity_model_state`
+  (a plain file holding the raw display name). Guard like `conversation_id`: an empty /
+  absent `model` must NOT clobber a previously-recorded value.
+- Tests in `statusline_test.py`: model written on a payload that carries it; not clobbered
+  by a later payload without one.
+
+### `mngr_antigravity/antigravity_config.py` `[EDIT]`
+- `MODEL_STATE_FILENAME: str = "antigravity_model_state"` + `get_antigravity_model_state_path(state_dir)`.
+- Add it to `_antigravity_preserved_items()` so a resumed agent shows its last model
+  immediately (before the first post-resume statusLine).
+
+### `mngr_antigravity/plugin.py` `[EDIT]` (seed the guess)
+- At provision, seed the state file with the pinned model/effort (from the `model`/`effort`
+  fields, §Surface A) as a display name, so `guess_from_launch` has an on-disk value before
+  the first statusLine fires. `Q-D1:` alternatively read agy's `config/config.json`
+  `userSettings.model` for the guess — but that only reflects a persisted `/model`, not the
+  session `--model` pin, so the seed is more accurate. Recommend the seed.
+
+### `harnesses/antigravity/model.py` `[NEW]`
+- `ANTIGRAVITY_CATALOG: HarnessCatalog` — hand-written (codex-style, small), `PickerMode.LIST`,
+  `switch_mode` per O7 (below), `default_model_id="gemini-3.6-flash"`, `icon_svg`. Options
+  (id = the slug `switch` sends / `read_live` matches; label = display base; efforts per model):
+  | id | label | efforts |
+  |---|---|---|
+  | `gemini-3.6-flash` | Gemini 3.6 Flash | low, medium, high |
+  | `gemini-3.5-flash` | Gemini 3.5 Flash | low, medium, high |
+  | `gemini-3.1-pro` | Gemini 3.1 Pro | low, high |
+  | `claude-sonnet-4-6` | Claude Sonnet 4.6 | (none) |
+  | `claude-opus-4-6-thinking` | Claude Opus 4.6 | (none) |
+  | `gpt-oss-120b-medium` | GPT-OSS 120B | (none) |
+  `supports_fast=False` everywhere (agy has no fast tier).
+- `_DISPLAY_TO_ID: dict[str,str]` built from the catalog labels, and
+  `_parse_status_model(display: str) -> ModelIdentity | None` — split `"Name (Effort)"` into
+  base display + effort, map base→id via `_DISPLAY_TO_ID`, lower-case the effort.
+  `Q-D2:` confirm the Gemini display bases are exactly "Gemini 3.6 Flash" etc. and the
+  Claude/GPT-OSS displays ("Claude Sonnet 4.6 (Thinking)", "GPT-OSS 120B (Medium)") map to
+  their effort-suffixed ids with effort=None (the qualifier is part of the id, not an axis).
+- `AntigravityModelResolver(HarnessModelResolver)`:
+  - `build(agent_info)` → store `agent_state_dir`.
+  - `read_live()` → read the state file → `_parse_status_model` → `ModelIdentity(model_id, effort, fast=False)`; None if absent/garbage. **On-disk, not transcript.**
+  - `guess_from_launch()` → read the same state file (seeded at provision); None if absent. (Effort parsed from the seeded display name.)
+  - `watched_paths()` → `(state_dir / MODEL_STATE_FILENAME,)`.
+  - `list_offered_models()` → None (small static catalog, offer everything — unlike pi).
+  - `switch(identity, axes, send)` → **O7-gated**:
+    - if agy `/model <slug>` applies one-shot: `send("/model {id}")`, and effort via
+      `send("/effort {effort}")` (agy has a real `--effort`/effort axis); `SwitchMode.ON_CHANGE`
+      (chip reconciles once statusLine rewrites the state file).
+    - if `/model` opens a pane-wedging picker: v1 `SwitchMode.READ_ONLY` (bar shows the live
+      model, no in-UI switch) — still "models wired up" for display, the bulk of the value.
+
+### `harnesses/registry.py` `[EDIT]`
+- Import `ANTIGRAVITY_CATALOG` + `AntigravityModelResolver` (+ the Surface C watcher/tracker);
+  add the `HarnessType.ANTIGRAVITY` `HarnessSpec` with `catalog_factory=lambda: ANTIGRAVITY_CATALOG`.
+
+### `harnesses/harness_type.py` `[EDIT]` — `ANTIGRAVITY = "antigravity"` (shared with Surface C).
+
+### Open questions (Surface D)
+- **O7 (switch):** does agy `/model <slug>` apply one-shot, or open a pane-wedging picker?
+  Decides `switch_mode` (ON_CHANGE vs READ_ONLY). Drive a live agy TUI with `tmux send-keys`.
+  Same question for `/effort`.
+- **Q-D2:** exact display-name bases as agy emits them in the statusLine `model` field (for
+  the display→id map). Capture from a live statusLine payload / `agy models` + error output.
+- **Q-D1:** seed the guess at provision (recommended) vs read `config/config.json`.
 
 ---
 
