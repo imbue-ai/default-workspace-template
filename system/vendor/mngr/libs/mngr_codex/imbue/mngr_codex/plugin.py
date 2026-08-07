@@ -167,13 +167,11 @@ from imbue.mngr_codex.codex_config import build_codex_hooks_config
 from imbue.mngr_codex.codex_config import extract_latest_codex_version
 from imbue.mngr_codex.codex_config import get_codex_auth_path
 from imbue.mngr_codex.codex_config import get_codex_config_path
-from imbue.mngr_codex.codex_config import get_codex_global_instructions_path
 from imbue.mngr_codex.codex_config import get_codex_home
 from imbue.mngr_codex.codex_config import get_codex_hooks_path
 from imbue.mngr_codex.codex_config import get_codex_personality_migration_path
 from imbue.mngr_codex.codex_config import get_codex_tui_log_dir
 from imbue.mngr_codex.codex_config import get_codex_version_cache_path
-from imbue.mngr_codex.codex_config import get_repo_codex_instructions_path
 from imbue.mngr_codex.codex_config import get_shared_output_styles_dir
 from imbue.mngr_codex.codex_config import is_codex_update_available
 from imbue.mngr_codex.codex_config import is_project_trusted
@@ -677,11 +675,9 @@ class CodexAgent(
 
         Provisions the auth.json symlink, config.toml (model/sandbox/approval +
         the credential-store pin + the trusted work-dir + notice suppressors +
-        overrides), hooks.json, the personality-migration NUX-skip marker, and --
-        when the repo commits one at ``<work_dir>/.codex/AGENTS.md`` -- codex's
-        global ``AGENTS.md`` (its private system-prompt delta).
-        ``host.write_text_file`` creates intermediate dirs; codex-owned
-        ``sessions/`` is left intact across re-provision.
+        overrides + the ``developer_instructions`` role/harness prompt), hooks.json,
+        and the personality-migration NUX-skip marker. ``host.write_text_file`` creates
+        intermediate dirs; codex-owned ``sessions/`` is left intact across re-provision.
         """
         codex_home = self._get_codex_home()
         self._provision_auth_symlink(host, user_codex_home, codex_home)
@@ -704,16 +700,6 @@ class CodexAgent(
         hooks_path = get_codex_hooks_path(codex_home)
         with log_span("Installing codex hooks at {}", hooks_path):
             host.write_text_file(hooks_path, serialize_codex_hooks(build_codex_hooks_config()))
-
-        # Codex's private system-prompt delta: if the repo commits codex-only
-        # instructions at <work_dir>/.codex/AGENTS.md, copy them into
-        # CODEX_HOME/AGENTS.md so codex concatenates them ahead of the shared
-        # project-root AGENTS.md. Absent source -> nothing to inject (never blocks).
-        repo_codex_instructions_path = get_repo_codex_instructions_path(Path(canonical_work_dir))
-        if host.path_exists(repo_codex_instructions_path):
-            global_instructions_path = get_codex_global_instructions_path(codex_home)
-            with log_span("Installing codex global instructions at {}", global_instructions_path):
-                host.write_text_file(global_instructions_path, host.read_text_file(repo_codex_instructions_path))
 
         # Empty marker: codex skips the personality-migration prompt when it exists.
         host.write_text_file(get_codex_personality_migration_path(codex_home), "")
