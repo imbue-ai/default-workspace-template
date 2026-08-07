@@ -432,27 +432,6 @@ class AntigravityAgentConfig(AgentTypeConfig):
         default=(),
         description="Additional CLI arguments to pass to the antigravity agent.",
     )
-    # model / effort are the antigravity analog of codex's model / model_reasoning_effort:
-    # the plugin emits them as agy's own ``--model`` / ``--effort`` launch flags (see
-    # ``assemble_command``), NOT into a settings file -- agy persists a chosen model in the
-    # ``config/config.json`` userSettings scope, which mngr does not manage, so the launch
-    # flags are the reliable per-agent mechanism. Both values are single tokens (no spaces),
-    # so they never word-split on the command line, unlike agy's "Gemini 3.6 Flash (Medium)"
-    # display names. The model is a slug from ``agy models`` (e.g. "gemini-3.6-flash",
-    # "claude-sonnet-4-6"). A base Gemini slug requires an effort; the Claude / GPT-OSS models
-    # take no effort tier. mngr passes whatever is set and lets agy validate at launch.
-    model: str | None = Field(
-        default=None,
-        description="Model to pin via agy's --model flag -- a slug from `agy models` "
-        "(e.g. 'gemini-3.6-flash', 'gemini-3.6-flash-medium', 'claude-sonnet-4-6'). None uses "
-        "the account default. A base Gemini slug also needs `effort`.",
-    )
-    effort: str | None = Field(
-        default=None,
-        description="Reasoning effort to pin via agy's --effort flag (low|medium|high). Required "
-        "for a base Gemini model; the Claude / GPT-OSS models have no effort tier. None leaves "
-        "the default (or the effort baked into a combined model slug).",
-    )
     # settings_overrides mirrors mngr_claude's field of the same name: a
     # free-form blob merged last into the per-agent settings.json. Avoids a
     # structured schema that could drift from agy's native format, and naturally
@@ -1461,14 +1440,6 @@ class AntigravityAgent(
         # ``permissions`` block (settings_overrides).
         if self.is_unattended_enabled():
             extra_args.append(_DANGEROUSLY_SKIP_PERMISSIONS_FLAG)
-        # Pin model / effort via agy's own launch flags (the antigravity analog of codex's
-        # config.toml model + model_reasoning_effort). Emitted only when set; agy validates
-        # the combination at launch (a base Gemini slug requires an effort, the Claude /
-        # GPT-OSS models take none). Both are single tokens, but quote for consistency.
-        if self.agent_config.model is not None:
-            extra_args.append(f"--model {shlex.quote(self.agent_config.model)}")
-        if self.agent_config.effort is not None:
-            extra_args.append(f"--effort {shlex.quote(self.agent_config.effort)}")
         base_command = super().assemble_command(host, agent_args, command_override, initial_message)
         background_cmd = self._build_background_tasks_command()
 
