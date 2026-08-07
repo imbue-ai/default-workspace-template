@@ -64,6 +64,27 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     }
   }
 
+  // Slide an open popup horizontally so it stays within the viewport. The popups are
+  // right-anchored to their trigger, so a wide one (or a trigger near the left edge) would
+  // otherwise spill off-screen; this nudges it back by just enough, leaving a small margin.
+  // Shared by every bottom popup (model + effort) since they all render through the same
+  // container below. `max-width` already bounds it to the viewport width, so a shift always
+  // brings it fully on-screen. Reset before measuring so it is idempotent across redraws.
+  function keepInViewport(dom: HTMLElement): void {
+    const margin = 8;
+    dom.style.transform = "";
+    const rect = dom.getBoundingClientRect();
+    let shift = 0;
+    if (rect.left < margin) {
+      shift = margin - rect.left;
+    } else if (rect.right > window.innerWidth - margin) {
+      shift = window.innerWidth - margin - rect.right;
+    }
+    if (shift !== 0) {
+      dom.style.transform = `translateX(${shift}px)`;
+    }
+  }
+
   // Recompute the offerable models for `agentId`. Called on every picker-open so a fresh
   // /login is reflected without reloading the page. A null `models` (offer everything) and
   // a fetch failure both leave `offeredModels` null -- the picker then shows the whole
@@ -141,22 +162,29 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             "div",
             {
               class: "model-selector-dropdown",
-              oncreate: () => document.addEventListener("mousedown", handleOutsideMousedown),
+              oncreate: (v: m.VnodeDOM) => {
+                document.addEventListener("mousedown", handleOutsideMousedown);
+                keepInViewport(v.dom as HTMLElement);
+              },
+              onupdate: (v: m.VnodeDOM) => keepInViewport(v.dom as HTMLElement),
               onremove: () => document.removeEventListener("mousedown", handleOutsideMousedown),
             },
             [
               m("div", { class: "model-selector-dropdown-header" }, opts.header),
               opts.searchable
-                ? m("input", {
-                    class: "model-selector-search",
-                    type: "text",
-                    placeholder: "Search models…",
-                    value: modelQuery,
-                    oncreate: (v: m.VnodeDOM) => (v.dom as HTMLInputElement).focus(),
-                    oninput: (e: InputEvent) => {
-                      modelQuery = (e.target as HTMLInputElement).value;
-                    },
-                  })
+                ? m("div", { class: "model-selector-search" }, [
+                    m("span", { class: "model-selector-search-icon" }, m.trust(icon("search", { size: 14 }))),
+                    m("input", {
+                      class: "model-selector-search-input",
+                      type: "text",
+                      placeholder: "Search models…",
+                      value: modelQuery,
+                      oncreate: (v: m.VnodeDOM) => (v.dom as HTMLInputElement).focus(),
+                      oninput: (e: InputEvent) => {
+                        modelQuery = (e.target as HTMLInputElement).value;
+                      },
+                    }),
+                  ])
                 : null,
               opts.loading
                 ? m("div", { class: "model-selector-more" }, "Loading models…")
