@@ -267,9 +267,7 @@ class OpenCodeModelResolver(HarnessModelResolver):
             return None
         return _parse_models_output(finished.stdout)
 
-    def switch(
-        self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
-    ) -> SwitchResult:
+    def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
         # opencode is client-server: a switch is a session-level HTTP call to the live server
         # (POST /api/session/{id}/model, which sets model AND variant together), applied to the
         # next turn. ON_CHANGE: the chip reconciles from the state file once the next assistant
