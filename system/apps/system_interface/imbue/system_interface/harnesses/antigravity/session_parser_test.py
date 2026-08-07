@@ -7,18 +7,19 @@ from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedT
 from imbue.system_interface.harnesses.antigravity.session_parser import parse_step
 
 
+_BASE_STEP = DecodedStep(
+    conv_id="c1",
+    idx=0,
+    step_type_name="USER_INPUT",
+    status_name="DONE",
+    source_name="USER_EXPLICIT",
+    created_at="2026-08-07T00:00:00Z",
+    is_terminal=True,
+)
+
+
 def _step(**kwargs: object) -> DecodedStep:
-    base: dict[str, object] = {
-        "conv_id": "c1",
-        "idx": 0,
-        "step_type_name": "USER_INPUT",
-        "status_name": "DONE",
-        "source_name": "USER_EXPLICIT",
-        "created_at": "2026-08-07T00:00:00Z",
-        "is_terminal": True,
-    }
-    base.update(kwargs)
-    return DecodedStep(**base)  # type: ignore[arg-type]
+    return _BASE_STEP.model_copy(update=kwargs)
 
 
 def test_user_input_strips_the_request_wrapper() -> None:

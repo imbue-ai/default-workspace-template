@@ -1,9 +1,8 @@
 """Unit tests for the agy ``steps`` protobuf decoder.
 
-Fixtures are built with a tiny local protobuf encoder (``_msg`` / ``_varint`` / ``_field``)
-so each test states exactly the wire bytes it exercises -- clearer than a captured hex blob
-and independent of any live ``.db``. The field numbers mirror ``agy_transcript``'s recovered
-map; if that map changes these builders change with it.
+Fixtures are built with the tiny protobuf encoder in :mod:`testing` so each test states
+exactly the wire bytes it exercises -- clearer than a captured hex blob and independent of
+any live ``.db``.
 """
 
 from __future__ import annotations
@@ -13,59 +12,18 @@ from imbue.system_interface.harnesses.antigravity.agy_transcript import STEP_TYP
 from imbue.system_interface.harnesses.antigravity.agy_transcript import STEP_TYPE_USER_INPUT
 from imbue.system_interface.harnesses.antigravity.agy_transcript import TruncatedError
 from imbue.system_interface.harnesses.antigravity.agy_transcript import decode_step
+from imbue.system_interface.harnesses.antigravity.testing import build_metadata as _timestamp_metadata
+from imbue.system_interface.harnesses.antigravity.testing import build_step_payload as _step
+from imbue.system_interface.harnesses.antigravity.testing import build_tool_metadata as _tool_metadata
+from imbue.system_interface.harnesses.antigravity.testing import encode_varint as _varint
+from imbue.system_interface.harnesses.antigravity.testing import len_field as _lfield
+from imbue.system_interface.harnesses.antigravity.testing import str_field as _sfield
 
 import pytest
-
-# --- a minimal protobuf wire encoder, just for building fixtures -------------------------
-
-
-def _varint(value: int) -> bytes:
-    out = bytearray()
-    while True:
-        byte = value & 0x7F
-        value >>= 7
-        out.append(byte | (0x80 if value else 0))
-        if not value:
-            return bytes(out)
 
 
 def _tag(field: int, wire: int) -> bytes:
     return _varint((field << 3) | wire)
-
-
-def _vfield(field: int, value: int) -> bytes:
-    return _tag(field, 0) + _varint(value)
-
-
-def _lfield(field: int, value: bytes) -> bytes:
-    return _tag(field, 2) + _varint(len(value)) + value
-
-
-def _sfield(field: int, text: str) -> bytes:
-    return _lfield(field, text.encode("utf-8"))
-
-
-def _timestamp_metadata(seconds: int = 1_700_000_000, *, source: int = 4, extra: bytes = b"") -> bytes:
-    """A CortexStepMetadata: created_at (f1 = Timestamp{f1 seconds}), source (f3), + extra."""
-    created_at = _vfield(1, seconds)
-    return _lfield(1, created_at) + _vfield(3, source) + extra
-
-
-def _tool_metadata(name: str, args: str, *, call_id: str = "abc123", short: str = "", long: str = "") -> bytes:
-    """Metadata carrying a ChatToolCall (f4) + optional captions (f30/f31)."""
-    call = _sfield(1, call_id) + _sfield(2, name) + _sfield(3, args)
-    extra = _lfield(4, call)
-    if short:
-        extra += _sfield(30, short)
-    if long:
-        extra += _sfield(31, long)
-    return _timestamp_metadata(source=2, extra=extra)
-
-
-def _step(metadata: bytes, body: bytes = b"") -> bytes:
-    """A Step payload: metadata (f5) + a body field. step_type/status come from columns,
-    so they are passed to decode_step separately, not encoded here."""
-    return _lfield(5, metadata) + body
 
 
 # --- tests -------------------------------------------------------------------------------
