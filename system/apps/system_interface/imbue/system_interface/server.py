@@ -76,6 +76,7 @@ from imbue.system_interface.models import CreateCodexRequest
 from imbue.system_interface.models import DestroyAgentResponse
 from imbue.system_interface.models import ErrorResponse
 from imbue.system_interface.models import InterruptAgentResponse
+from imbue.system_interface.models import ModelOptionsResponse
 from imbue.system_interface.models import RandomNameResponse
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
@@ -524,7 +525,7 @@ def _get_model_options_endpoint(agent_id: str) -> Response:
     if resolver is None:
         return _agent_not_found_response(agent_id)
     offered = resolver.list_offered_models()
-    return _json_response({"models": list(offered) if offered is not None else None})
+    return _json_response(ModelOptionsResponse(models=offered).model_dump())
 
 
 def _workspace_fast_mode_decision_path() -> Path | None:
