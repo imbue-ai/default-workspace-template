@@ -271,8 +271,17 @@ row settles to DONE (tool_result emitted, now matched) → THINKING  "Thinking�
 final PLANNER_RESPONSE answer settles, lifecycle→WAITING → IDLE     (dot clears with the answer on screen)
 ```
 
-Keep `marker_filename = "antigravity_process_started"`; **verify the mngr plugin writes
-exactly that filename** on launch/resume, else the staleness guard (rung 2) is inert.
+**Marker reality (verified):** agy does NOT write an `antigravity_process_started` file.
+mngr_antigravity's `statusline.sh` maintains `$MNGR_AGENT_STATE_DIR/active` — present
+while working, removed when idle — which `BaseAgent.get_lifecycle_state` reads to report
+RUNNING/WAITING. So the **lifecycle gate (rung 1) is fully backed** and real-time. The
+placeholder's `marker_filename="antigravity_process_started"` points at a nonexistent
+file, so **rung 2 (staleness) is currently inert**. Two options, pick one at build:
+(a) add a one-line `touch "$STATE_DIR/antigravity_process_started"` on launch/resume to
+the mngr plugin (mirrors claude/codex `<h>_process_started`) and keep rung 2 — recommended
+for restart-safety parity; or (b) drop rung 2 and rely on rung 1 (the `active`-driven
+lifecycle already forces IDLE after a restart, since a restarted-but-idle agy has no
+`active` marker). Either is correct; (a) is the small, parity-preserving choice.
 
 ### Why no synthetic events / close-offs are needed (vs Codex)
 Codex must synthesize a `turn_aborted` on interrupt because it persists an in-flight
