@@ -57,23 +57,44 @@ conversations   = agy_home / ".gemini/antigravity-cli/conversations"
 conv_ids_file   = agent_state_dir / "antigravity_conversation_ids"
 ```
 
-### Tailing = SQLite row-offset polling (NOT byte-offset)
+### agy persists the in-flight step (verified) — this is what enables a live caption
+Probed live: when a tool runs, agy writes its `steps` row **immediately with a
+non-terminal status** and updates it to terminal on completion. A `sleep 25`
+`run_command` showed up as `idx=3 RUN_COMMAND status=2 (RUNNING)` for the entire
+execution, with its tool name + `f30` caption already present. So the currently-running
+tool — name, args, and agy's own caption — is readable **while it runs**, not only after.
+This is the agy equivalent of Codex's real-time turn feedback, and it drives both the
+`TOOL_RUNNING` state and the live caption (§5). (Caveat: an async `run_command` — one that
+backgrounds via `WaitMsBeforeAsync` — can *linger* at `RUNNING` after agy moves on; the
+lifecycle gate in §5 prevents that from pinning the dot.)
+
+### Tailing = SQLite row-offset polling (NOT byte-offset), two-phase per step
 This is the one structural difference from Claude/Codex. There is no append-JSONL to
 seek in; instead:
 - Keep an **in-memory** last-seen `idx` per `conv_id` (our own offset — do **not** read
-  mngr's `.transcript_offsets/`, that's mngr's cursor at mngr's pace).
+  mngr's `.transcript_offsets/`, that's mngr's cursor at mngr's pace). Also keep a set of
+  already-emitted `event_id`s (spine dedup) so a row re-seen across polls (RUNNING →
+  DONE) supersedes rather than duplicates.
 - Each poll, per conversation:
   ```
-  SELECT idx, step_type, status, step_payload FROM steps WHERE idx > ? ORDER BY idx
+  SELECT idx, step_type, status, step_payload FROM steps WHERE idx >= ? ORDER BY idx
   ```
-  Open **read-only, WAL-aware**: `sqlite3.connect(f"file:{db}?mode=ro", uri=True)`.
-  NOT `immutable=1` (agy is concurrently writing WAL). A transient `sqlite3.Error`
-  (locked/mid-checkpoint) → skip this conversation this pass, retry next.
-- **Stop at the first non-terminal (still-generating) row** and do not advance the
-  offset past it — its payload is incomplete. Terminal statuses = `{DONE, INVALID,
-  CLEARED, CANCELED, ERROR, INTERRUPTED}` (the same set mngr's decoder uses). This
-  preserves in-order, no-partial, no-skip emission.
-- Decode each settled row → events; broadcast via `on_events`.
+  (`>=` the last **fully-settled** idx, because a non-terminal row we saw last pass may
+  now have settled and needs re-reading.) Open **read-only, WAL-aware**:
+  `sqlite3.connect(f"file:{db}?mode=ro", uri=True)`. NOT `immutable=1` (agy writes WAL).
+  Transient `sqlite3.Error` (locked/mid-checkpoint) → skip this conversation this pass.
+- **Two-phase emission per row** (the key to live captions — §4):
+  - A **tool** row: emit its `tool_call` event as soon as the row appears (even
+    `RUNNING`) — the name + `f30` caption are known at dispatch. Emit its `tool_result`
+    event only once the row reaches a **terminal** status. An unmatched tool_call during
+    execution is exactly the `TOOL_RUNNING` signal.
+  - A **user** row: emit immediately (always written terminal).
+  - A **planner (assistant text)** row: emit only when **terminal** — never show partial
+    streaming text.
+  Advance the settled-offset only past terminal rows; track emitted `event_id`s so the
+  early tool_call isn't re-emitted when the row later settles (only the result is added).
+- Terminal statuses = `{DONE, INVALID, CLEARED, CANCELED, ERROR, INTERRUPTED}` (same set
+  mngr uses). `_TruncatedError` (mid-write payload) → treat the row as not-yet-settled.
 
 ### Wake / poll
 Watchdog on the `conversations/` dir (catches `.db`/`-wal` writes) + 1s poll safety net
@@ -185,52 +206,84 @@ emitting the shared `events.py` shapes so the frontend renders unchanged.
 |---|---|
 | `USER_INPUT`, source USER_EXPLICIT | `user_message` (strip agy's `<USER_REQUEST>…</USER_REQUEST>` wrapper; drop metadata trailers) |
 | `USER_INPUT`, source USER_IMPLICIT/SYSTEM | skip (injected context, not a turn) |
-| `PLANNER_RESPONSE` with text | `assistant_message` {text, thinking, tool_calls:[]} |
-| tool step (metadata.f4 present) | `assistant_message` {text:"", tool_calls:[one tool_call]} **plus** a `tool_result` {tool_call_id, output} — both from the same step, sharing call_id |
+| `PLANNER_RESPONSE` with text (terminal only) | `assistant_message` {text, thinking, tool_calls:[]} |
+| tool step (metadata.f4 present), row first seen | `assistant_message` {text:"", tool_calls:[one tool_call]} — emitted even while `RUNNING` |
+| tool step, row now **terminal** | add its `tool_result` {tool_call_id, output} |
 | `ERROR_MESSAGE` | `assistant_message` flagged error (is_api_error/text) |
 | everything else | skip |
 
 - **tool_call** dict: `{tool_call_id: f"{conv_id}:{idx}:toolcall", tool_name: name,
   input_preview: <args clipped to 200>, header_label, caption_label}` (labels from §6).
+  Emitted at dispatch (RUNNING) so it renders and drives `TOOL_RUNNING` live.
 - **tool_result** dict: `{type:"tool_result", event_id: f"{conv_id}:{idx}:toolresult",
   tool_call_id: <same>, tool_name, output: <result clipped 2000>, is_error: status∈{ERROR,CANCELED}}`.
+  Emitted only when the row settles — so during execution the call is **unmatched**
+  (= `TOOL_RUNNING`) and after, **matched** (= back to `THINKING`).
 - **thinking**: pass agy's `thinking` through on the assistant event (Claude drops
   thinking; we get it free). Rendering it collapsed is a small optional frontend add.
-- Emitting call+result from one step means the pair is **always matched** — this is
-  what makes activity (§5) correct.
 
 `source` field on events: `"antigravity/steps"`; `message_uuid = event_id`;
 `timestamp = created_at`.
 
 ---
 
-## 5. Activity — reuse Claude's derivation (now valid)
+## 5. Activity — indicator, state, caption, and how each is found
 
-The placeholder `activity.py` already reuses `claude/activity_state.derive` +
-`has_unmatched_tool_use`. **That is correct now** — because §4 emits a `tool_result`
-for every tool call, tool calls get matched, so `has_unmatched_tool_use` is only
-transiently true and never stuck. (An earlier draft of this spec, when it planned to
-read mngr's lossy stream that drops results, hit permanent TOOL_RUNNING; emitting
-results from the same step fixes it and is the reason to read the original store.)
+Three states, same as Claude/Codex: `IDLE / THINKING / TOOL_RUNNING`. Reuse
+`claude/activity_state.derive` + `has_unmatched_tool_use` **unchanged** — the two-phase
+emission in §4 makes it correct: a running tool's `tool_call` is emitted without its
+`tool_result`, so it's an unmatched call = `TOOL_RUNNING`; once settled, the result
+matches it = back to `THINKING`. So `activity.py` stays claude-style (already written).
 
-Derivation (Claude's ladder, unchanged):
-- not RUNNING (mngr lifecycle) → IDLE
-- transcript tail stale vs `antigravity_process_started` marker mtime → IDLE
-- unmatched tool call at tail → TOOL_RUNNING
-- tail is user_message/tool_result → THINKING
-- tail is assistant_message (final answer) → IDLE
+### What lights the dot at turn start (the Codex-`task_started` equivalent)
+Codex latches on a transcript `turn_started` marker because its mngr lifecycle is
+unreliable. **agy is the opposite**: mngr's `statusLine` (agy invokes `statusline.sh` on
+every agent-state change) drives the RUNNING/WAITING lifecycle in real time, and agy's
+`agent_state` already aggregates subagents (stays `working` until root + subagents are
+all done). So agy's authoritative "a turn is open" signal is the **mngr lifecycle**
+(`is_agent_running`) — exactly what Claude uses, and it flips to RUNNING the instant the
+turn starts, before any step settles. **We do not need, and do not emit, synthetic turn
+markers** (keep `special_kinds=frozenset()`); the lifecycle is the turn bracket and the
+`tool_call` is the caption signal.
+
+### Derivation ladder (Claude's, unchanged)
+1. `not is_agent_running` (mngr lifecycle WAITING/STOPPED) → **IDLE**  ← also closes off a
+   lingering async `run_command` still at `RUNNING`, and an interrupted turn.
+2. transcript tail stale vs `antigravity_process_started` marker mtime → **IDLE** (restart
+   guard).
+3. unmatched tool call at tail → **TOOL_RUNNING**.
+4. tail is `user_message` / `tool_result` → **THINKING**.
+5. tail is `assistant_message` (final answer) → **IDLE**.
+
+### The three display outputs
+
+| output | value | how it's found |
+|---|---|---|
+| **indicator (dot)** | lit when THINKING or TOOL_RUNNING; hidden when IDLE | derived state above; the dot is a pure function of it (`ActivityIndicator.ts`) |
+| **caption** | `TOOL_RUNNING` → the in-flight tool's `caption_label` (= agy's native `f30`, e.g. `"Running python3 showcase.py"`); `THINKING` → `"Thinking…"`; `IDLE` → hidden | frontend's `pendingToolCall(events)` finds the most recent unmatched `tool_call`; its `caption_label` is agy's `f30` we emitted at dispatch |
+| **title (tool header)** | per rendered tool call: `header_label` = `"Tool: <name>"` (or agy's long `f31`) | set in the parser (§6) on each tool_call, rendered in the transcript bubble |
+
+### State timeline over a real turn
+```
+turn opens (lifecycle RUNNING, tail=user_message)     → THINKING  "Thinking…"
+agy writes RUN_COMMAND row status=RUNNING (tool_call, no result yet) → TOOL_RUNNING  "Running python3 showcase.py"
+row settles to DONE (tool_result emitted, now matched) → THINKING  "Thinking…"
+final PLANNER_RESPONSE answer settles, lifecycle→WAITING → IDLE     (dot clears with the answer on screen)
+```
 
 Keep `marker_filename = "antigravity_process_started"`; **verify the mngr plugin writes
-exactly that filename** on launch/resume, else the staleness guard is inert.
+exactly that filename** on launch/resume, else the staleness guard (rung 2) is inert.
 
-Caveat (document, don't fix): agy writes a step row only on completion (the in-flight
-tool has no row until it finishes — confirmed live). So between "tool dispatched" and
-"tool done" there is no row; the indicator rides the mngr lifecycle (RUNNING) and the
-prior tail. Acceptable — the busy signal is lifecycle-anchored.
-
-Activity **caption**: the frontend renders the in-flight tool's `caption_label`. Since
-we carry agy's native caption on the tool_call, it reads well ("Running python3
-showcase.py"). No tool in flight → THINKING → "Thinking…".
+### Why no synthetic events / close-offs are needed (vs Codex)
+Codex must synthesize a `turn_aborted` on interrupt because it persists an in-flight
+tool *call* but not the aborted *result*, leaving a permanently-unmatched call that would
+pin `TOOL_RUNNING`. agy has the same shape (we emit the call early, result on settle), so
+the same risk exists on interrupt — **but rung 1 (lifecycle gate) already closes it off**:
+an interrupt drops the mngr lifecycle out of RUNNING → IDLE, and `agent_manager.reset_activity_state`
+(wired to the interrupt endpoint) clears the tracker. So we get Codex's close-off behavior
+for free from the reliable lifecycle, without a synthetic marker. If the lifecycle ever
+proves laggy on interrupt in practice, the fallback is to add a `TURN_ABORTED` special
+event driven off the `antigravity_process_started` marker bump — not needed for v1.
 
 ---
 
@@ -242,12 +295,38 @@ them** in `metadata.f30/f31`. So:
 - `header_label  = f"Tool: {tool_name}"` (or `caption_long (f31)` if we prefer agy's
   long form as the header).
 - Fallback only if f30 is empty: synthesize via the **shared** `harnesses/tool_labels.py`
-  (`basename`/`shorten`/`quoted` + a small verb table: write_to_file→Writing,
-  run_command→Running, grep_search→Searching, view_file→Viewing, list_dir→Listing,
-  replace_file_content→Editing, generate_image→Generating image). Reuse the shared
-  helpers; don't reimplement.
+  (`basename`/`shorten`/`quoted`) + the verb/target table below. Reuse the shared helpers;
+  don't reimplement.
 
 This makes `tool_labels.py` thin — mostly "prefer f30, fall back to synthesis."
+
+### Complete agy tool set (from `list all tool calls`, agy 1.1.11) — the fallback table
+agy has 17 tools in 5 categories. Primary caption is always agy's `f30`; this table is
+only the fallback when `f30` is empty, and documents the args keys per tool.
+
+| category | tool | verb (fallback) | target key in args |
+|---|---|---|---|
+| File/Workspace | `view_file` | Viewing | `AbsolutePath` → basename |
+| | `write_to_file` | Writing | `TargetFile` → basename |
+| | `replace_file_content` | Editing | `TargetFile` → basename |
+| | `multi_replace_file_content` | Editing | `TargetFile` → basename |
+| | `list_dir` | Listing | `DirectoryPath` → shorten |
+| | `grep_search` | Searching | `Query` → quoted |
+| System/Exec | `run_command` | Running | `CommandLine` → shorten |
+| | `manage_task` | Managing task | `TaskId`/`Action` → shorten |
+| | `schedule` | Scheduling | `Cron`/`Name` → shorten |
+| Web/Image | `search_web` | Searching the web | `Query` → quoted |
+| | `read_url_content` | Fetching | `Url` → shorten |
+| | `generate_image` | Generating image | `ImageName`/`Prompt` → shorten |
+| Subagents/Comms | `define_subagent` | Defining subagent | `Name` → shorten |
+| | `invoke_subagent` | Delegating to sub-agent | `Name`/`Prompt` → shorten |
+| | `manage_subagents` | Managing subagents | `Action` → shorten |
+| | `send_message` | Sending message | `Recipient` → shorten |
+| User Interaction | `ask_question` | Asking | `Question` → shorten |
+
+Unknown tool (a new agy release) → `caption_label = "Running <target>"` or
+`GENERIC_CAPTION`. Because f30 is primary, an unrecognized tool still gets agy's own
+caption; this table only matters when f30 is empty.
 
 ---
 
@@ -285,15 +364,35 @@ Do not silently fork the map with no guard.
 
 ---
 
+## 8b. Codex refinements — which we adopt, which we don't
+
+Codex's watcher/parser carry hard-won refinements. Verdict per item for agy:
+
+| Codex refinement | Adopt for agy? |
+|---|---|
+| **Turn markers** (`turn_started/completed/aborted` as `special` events) latching activity independent of the mngr lifecycle | **No.** Codex needs them because its lifecycle is unreliable; agy's `statusLine`-driven lifecycle is reliable and real-time, so we latch on it (Claude-style). Keep `special_kinds=frozenset()`. |
+| **Synthetic `turn_aborted`** to close off an unmatched in-flight tool_call on interrupt | **No (not needed).** Our lifecycle gate (§5 rung 1) + `reset_activity_state` already force IDLE on interrupt. Same close-off, no synthetic event. |
+| **Stable, id-keyed `event_id`s** (message id / call_id) so re-serialized duplicates dedup + supersede | **Yes.** Use `conv_id:idx:suffix`; `idx` is agy's stable per-conversation identity. This is also what lets the two-phase tool row (RUNNING→DONE) supersede in place. |
+| **Two sourcing streams** (canonical vs display) because the canonical user role mixes human + injected context | **Partial.** agy's `USER_INPUT` wraps the human text in `<USER_REQUEST>…</USER_REQUEST>` — one field, cleanly unwrappable (§4). No dual-stream needed; just strip the wrapper. |
+| **`input_preview` kept whole for tk/patch bodies** (mid-body truncation breaks the diff/timeline view) | **Yes, port it.** agy's `write_to_file`/`replace_file_content` args carry file bodies; reuse the shared `keeps_full_tool_input` exemption so the diff view gets the whole body. |
+| **`is_error` from output shape** (e.g. "Script failed") | **Yes.** Set `is_error` from terminal status ∈ {ERROR, CANCELED} and/or a failed-result marker. |
+| **Queued-input sidecar** (`queued_input.jsonl`, `queued_id` correlation) | **No.** Out of scope (§9); agy doesn't persist queued messages anyway. |
+| **Two-phase live tool feedback** | **Yes — our own version.** Codex gets it from `task_started`; we get it from agy's `RUNNING`-status tool row (emit call early, result on settle). Same UX (dot + live caption from turn start), different source. |
+
 ## 9. Out of scope / limitations (explicit)
 
 - **Queuing: not implemented.** Verified live: a message typed while agy is busy is
   **not** written to the store while queued (lives only in agy's TUI, shown `▸`); it
   lands as an ordinary `USER_INPUT` step only once dequeued, with no queued marker. No
   Claude-style `queued_command` to parse. Ship without it; do not rely on `PendingMessages`.
-- **In-flight tool not persisted** — no row until the tool completes; busy/idle rides the
-  lifecycle (§5). No "running THIS tool" caption mid-execution beyond the last dispatch.
-- **No subagents** in the store.
+- **Subagents deferred to v1.5.** agy has `invoke_subagent`, and each subagent is its own
+  conversation `.db` whose id is also captured in `antigravity_conversation_ids`. v1
+  renders the **root** conversation only (the `invoke_subagent` call still shows as a tool
+  call there); subagent sessions + linkage are a later slice, like Claude's subagent
+  layer. `get_subagent_metadata`→None / `is_main_session_event`→True for now.
+- **Async `run_command`** that backgrounds can linger at `RUNNING`; the lifecycle gate
+  (§5 rung 1) keeps it from pinning the dot, but its `tool_result` may only land in a
+  later turn.
 - **Schema drift** — must be guarded (§8).
 
 ---
