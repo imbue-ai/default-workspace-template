@@ -194,6 +194,7 @@ let showNewChatModal = false;
 let showNewCodexModal = false;
 let showNewPiModal = false;
 let showNewOpencodeModal = false;
+let showNewAntigravityModal = false;
 let sillyModalMode: "silly-claude" | "silly-codex" | null = null;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
@@ -828,6 +829,16 @@ function buildDropdownItems(
     action: () => {
       newTabTargetGroup = targetGroup ?? null;
       showNewOpencodeModal = true;
+      m.redraw();
+    },
+  });
+
+  // New antigravity agent -- the same `chat` role, on the `antigravity` harness. Always shown.
+  items.push({
+    label: "New Antigravity Agent",
+    action: () => {
+      newTabTargetGroup = targetGroup ?? null;
+      showNewAntigravityModal = true;
       m.redraw();
     },
   });
@@ -2991,6 +3002,22 @@ export const DockviewWorkspace: m.Component = {
               },
               onCancel() {
                 showNewOpencodeModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        showNewAntigravityModal
+          ? m(CreateAgentModal, {
+              mode: "antigravity",
+              onCreated(newAgentId: string, newAgentName: string) {
+                showNewAntigravityModal = false;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                showNewAntigravityModal = false;
                 newTabTargetGroup = null;
               },
             })
