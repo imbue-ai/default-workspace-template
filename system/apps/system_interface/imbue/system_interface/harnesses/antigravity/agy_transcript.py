@@ -32,12 +32,14 @@ _STEP_METADATA: Final[int] = 5
 _STEP_USER_INPUT: Final[int] = 19
 _STEP_PLANNER_RESPONSE: Final[int] = 20
 _STEP_ERROR_MESSAGE: Final[int] = 24
-# CortexStepMetadata
-_METADATA_CREATED_AT: Final[int] = 1  # google.protobuf.Timestamp { f1 seconds; f2 nanos }
+# CortexStepMetadata. created_at (f1) is a google.protobuf.Timestamp { f1 seconds; f2 nanos }.
+# f4 is a ChatToolCall present on tool steps; f30/f31 are agy's own short/long captions
+# (e.g. "Running python3 showcase.py" / "Executing showcase python script").
+_METADATA_CREATED_AT: Final[int] = 1
 _METADATA_SOURCE: Final[int] = 3
-_METADATA_TOOL_CALL: Final[int] = 4  # ChatToolCall, present on tool steps
-_METADATA_CAPTION_SHORT: Final[int] = 30  # e.g. "Running python3 showcase.py"
-_METADATA_CAPTION_LONG: Final[int] = 31  # e.g. "Executing showcase python script"
+_METADATA_TOOL_CALL: Final[int] = 4
+_METADATA_CAPTION_SHORT: Final[int] = 30
+_METADATA_CAPTION_LONG: Final[int] = 31
 _TIMESTAMP_SECONDS: Final[int] = 1
 # CortexStepUserInput: the typed message lands in query (f1) or user_response (f2).
 _USER_INPUT_QUERY: Final[int] = 1
@@ -121,9 +123,11 @@ class TruncatedError(Exception):
 class DecodedToolCall(FrozenModel):
     call_id: str
     name: str
-    args: str  # a JSON string, per ChatToolCall.f3
-    caption_short: str  # agy's own f30 (fallback when we can't synthesize)
-    caption_long: str  # agy's own f31
+    # ``args`` is a JSON string (ChatToolCall.f3). ``caption_short``/``caption_long`` are agy's
+    # own f30/f31 captions, the fallback when we can't synthesize a shared-vocabulary label.
+    args: str
+    caption_short: str
+    caption_long: str
 
 
 class DecodedStep(FrozenModel):
@@ -353,6 +357,10 @@ def decode_step(conv_id: str, idx: int, step_type: int, status: int, payload: by
                 or _first_str(details, _ERROR_DETAILS_SHORT_ERROR)
                 or _first_str(details, _ERROR_DETAILS_FULL_ERROR)
             )
+    else:
+        # Other step types (conversation history, system messages) carry no renderable
+        # role payload; they decode to a bare record the parser drops.
+        pass
 
     return DecodedStep(
         conv_id=conv_id,

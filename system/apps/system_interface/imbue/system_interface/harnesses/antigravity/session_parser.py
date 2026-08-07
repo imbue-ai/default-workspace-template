@@ -112,7 +112,7 @@ def _assistant_message(step: DecodedStep, *, text: str, tool_calls: list[dict[st
 
 def _tool_events(step: DecodedStep) -> list[dict[str, Any]]:
     call = step.tool_call
-    assert call is not None  # caller checks
+    assert call is not None
     call_event_id = _event_id(step, "toolcall")
     header_label, caption_label = tool_labels(call.name, call.args, call.caption_short)
     tool_call = {
@@ -161,12 +161,15 @@ def parse_step(step: DecodedStep) -> list[dict[str, Any]]:
             return []
         return _user_message(step)
     if step.step_type_name == "PLANNER_RESPONSE":
+        # Assistant text is only shown once the step settles -- never a partial stream.
+        if not step.is_terminal:
+            return []
         text = step.assistant_text or ""
         if not text and not step.thinking:
             return []
         return [_assistant_message(step, text=text, tool_calls=[], suffix="assistant")]
     if step.step_type_name == "ERROR_MESSAGE":
-        if not step.error_text:
+        if not step.is_terminal or not step.error_text:
             return []
         event = _assistant_message(step, text=step.error_text, tool_calls=[], suffix="error")
         event["is_api_error"] = True
