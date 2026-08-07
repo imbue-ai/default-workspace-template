@@ -465,6 +465,13 @@ def _parse_user_message(
                 # NOT isMeta, so it still needs its own guard.)
                 if raw.get("isMeta"):
                     event["is_meta"] = True
+                # Claude Code stamps ``isCompactSummary`` on the record it injects
+                # after auto-compaction -- a normal (non-``isMeta``) user record whose
+                # text is the carried-over summary ("This session is being continued
+                # ..."). Passed through so the frontend can collapse it into a chip
+                # instead of showing the whole summary as a bare user bubble.
+                if raw.get("isCompactSummary"):
+                    event["is_compact_summary"] = True
                 if session_id is not None:
                     event["session_id"] = session_id
                 existing_event_ids.add(event_id)
