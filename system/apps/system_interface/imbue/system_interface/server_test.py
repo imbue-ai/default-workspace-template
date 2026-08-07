@@ -487,7 +487,7 @@ def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
 
 
 def test_set_model_switches_codex_via_slash_model(tmp_path: Path) -> None:
-    """Codex switching (ON_CHANGE) applies model + effort with one /model command."""
+    """Codex switching applies model + effort with one /model command."""
     agent_id = "agent-00000000000000000000000000000007"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     manager, messenger = _manager_with_resolver(agent_info)
