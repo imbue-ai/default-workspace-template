@@ -92,14 +92,14 @@ describe("renderQueuedMessages", () => {
   it("gives the shoulder-tap button the exact hover tooltip text", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
     const button = findByClass(renderQueuedMessages("agent-1"), "queued-action--flush");
-    expect(button?.attrs?.["data-tooltip"]).toBe("gently interrupt to send queued messages early");
+    expect(button?.attrs?.["data-tooltip"]).toBe("Gently interrupt your agent to send queued messages early");
   });
 
   it("shows an info affordance next to the label with the explanatory tooltip", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
     const info = findByClass(renderQueuedMessages("agent-info"), "queued-info");
     expect(info?.attrs?.["data-tooltip"]).toBe(
-      "Messages below are sent when the model takes a breather or finishes a turn.",
+      "Messages below are sent when your agent takes a breather or finishes a turn.",
     );
   });
 
