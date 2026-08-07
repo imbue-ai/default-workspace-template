@@ -23,6 +23,7 @@ vi.mock("../models/Response", () => ({
 vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
 import { renderQueuedMessages } from "./QueuedMessageView";
+import { noteBackendArrivals } from "../models/OutgoingMessages";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -91,7 +92,15 @@ describe("renderQueuedMessages", () => {
   it("gives the shoulder-tap button the exact hover tooltip text", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
     const button = findByClass(renderQueuedMessages("agent-1"), "queued-action--flush");
-    expect(button?.attrs?.["data-tooltip"]).toBe("Gently interrupt model to send queued messages");
+    expect(button?.attrs?.["data-tooltip"]).toBe("gently interrupt to send queued messages early");
+  });
+
+  it("shows an info affordance next to the label with the explanatory tooltip", () => {
+    mocks.queued = [queuedMessage("q1", "hi")];
+    const info = findByClass(renderQueuedMessages("agent-info"), "queued-info");
+    expect(info?.attrs?.["data-tooltip"]).toBe(
+      "Messages below are sent when the model takes a breather or finishes a turn.",
+    );
   });
 
   it("fires the flush intent when Shoulder tap is clicked", async () => {
@@ -101,41 +110,39 @@ describe("renderQueuedMessages", () => {
     expect(mocks.flushQueue).toHaveBeenCalledWith("agent-1");
   });
 
-  it("freezes the queued group while the flush restarts (no blip), then releases when it settles", async () => {
-    // Uses its own agent id so the module-level freeze state cannot collide with
-    // other tests' agents; fake timers drive the settle release deterministically.
-    vi.useFakeTimers();
-    try {
-      const agent = "agent-freeze";
-      mocks.queued = [queuedMessage("q1", "hi")];
-      let resolveFlush: () => void = () => {};
-      mocks.flushQueue.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFlush = resolve)));
+  it("freezes the queued group during the flush and releases it on a backend arrival (no blip, no countdown)", async () => {
+    // Its own agent id so the module-level freeze state cannot collide with others.
+    const agent = "agent-freeze";
+    mocks.queued = [queuedMessage("q1", "hi")];
+    let resolveFlush: () => void = () => {};
+    mocks.flushQueue.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFlush = resolve)));
 
-      const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
-      const pending = (button?.attrs?.onclick as () => Promise<void>)();
+    const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
+    const pending = (button?.attrs?.onclick as () => Promise<void>)();
 
-      // In flight: the group is frozen -- the captured message is still shown and
-      // the shoulder-tap button is replaced by the frozen header + countdown.
-      const duringFlight = renderQueuedMessages(agent);
-      expect(findByClass(duringFlight, "queued-group--frozen")).toBeTruthy();
-      expect(findByClass(duringFlight, "queued-action--flush")).toBeUndefined();
-      expect(renderedText(duringFlight)).toContain("hi");
+    // In flight: the group is frozen -- the captured message is still shown, the
+    // button is gone, and there is NO countdown.
+    const duringFlight = renderQueuedMessages(agent);
+    expect(findByClass(duringFlight, "queued-group--frozen")).toBeTruthy();
+    expect(findByClass(duringFlight, "queued-action--flush")).toBeUndefined();
+    expect(findByClass(duringFlight, "queued-countdown")).toBeUndefined();
+    expect(renderedText(duringFlight)).toContain("hi");
 
-      // The fix: even when the backend snapshot empties during the restart, the
-      // frozen group holds the messages rather than blipping them out.
-      mocks.queued = [];
-      expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
-      expect(renderedText(renderQueuedMessages(agent))).toContain("hi");
+    // Even when the backend snapshot empties during the restart, the frozen group
+    // holds the messages rather than blipping them out.
+    mocks.queued = [];
+    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
 
-      resolveFlush();
-      await pending;
-      // Settles a beat later, then the freeze releases; with the queue now drained
-      // into the transcript, the group is gone (clean handoff, no blip).
-      vi.advanceTimersByTime(1000);
-      expect(renderQueuedMessages(agent)).toEqual([]);
-      expect(mocks.flushQueue).toHaveBeenCalledWith(agent);
-    } finally {
-      vi.useRealTimers();
-    }
+    // The flush POST resolving does NOT release the hold -- that would clear it
+    // before the resent turn renders, reopening the blip.
+    resolveFlush();
+    await pending;
+    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
+
+    // A genuinely-new backend arrival (the resent message landing) releases it, so
+    // the group hands off to the real (now empty) state exactly as it appears.
+    noteBackendArrivals(agent, ["resent-arrival-id"]);
+    expect(renderQueuedMessages(agent)).toEqual([]);
+    expect(mocks.flushQueue).toHaveBeenCalledWith(agent);
   });
 });

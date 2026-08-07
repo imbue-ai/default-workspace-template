@@ -1551,6 +1551,42 @@ def test_working_to_idle_drains_the_queue_via_the_registered_handler(
         agent_manager.stop()
 
 
+def test_idle_agent_with_a_stale_queue_is_swept_without_a_transition(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The backstop is level-triggered: an already-IDLE agent that shows a queued
+    survivor (e.g. re-surfaced by a backend restart's full replay, or a harness
+    ledger hole) is swept on the next recompute, even with no working->IDLE edge."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    # _ensure_activity_tracking seeds IDLE with no working->IDLE transition.
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+        # A stale queued entry is showing on the idle agent (no turn in flight).
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "stale", "timestamp": "t"}])
+        with agent_manager._lock:
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+
+        # A plain recompute (agent still IDLE, no edge) must sweep it.
+        agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+        assert idle_calls == [True]
+    finally:
+        agent_manager.stop()
+
+
 def test_stop_activity_tracking_clears_queued_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
     """Stopping tracking drops the queued snapshot and idle handler alongside activity state."""
     state_dir = tmp_path / "agents" / "agent-1"

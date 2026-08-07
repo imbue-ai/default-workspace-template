@@ -5,88 +5,52 @@
  * The frontend is dumb here -- it renders a full snapshot the backend pushes on
  * the agents WebSocket (``AgentState.queued_messages``) and holds no queued state
  * of its own. The only action on the group is [Shoulder tap] (flush): it fires an
- * intent (`POST /flush-queue`) and paints nothing locally; the next snapshot
- * reflects what it did. (Interrupt-to-composer now lives on the composer's Stop
- * button -- see MessageInput.) There is no harness branch anywhere in here.
+ * intent (`POST /flush-queue`) and paints nothing locally EXCEPT a transient
+ * "freeze" so the group does not blip out while the agent restarts -- the freeze is
+ * released by the same backend-arrival signal that clears a "Sending…" bubble (see
+ * models/OutgoingMessages), so it clears exactly as the resent messages land.
+ * (Interrupt-to-composer lives on the composer's Stop button -- see MessageInput.)
+ * There is no harness branch anywhere in here.
  */
 
 import m from "mithril";
 import { getQueuedMessagesForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
+import { getFlushFreeze, releaseFlushFreeze, startFlushFreeze } from "../models/OutgoingMessages";
 import { flushQueue } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 
-const SHOULDER_TAP_TOOLTIP = "Gently interrupt model to send queued messages";
-
-// Hard cap on the freeze window. The freeze normally releases as soon as the flush
-// POST settles (the /flush-queue endpoint restarts + resends and only returns once
-// the backend STRICT-confirms delivery -- that HTTP response IS the success
-// signal). This cap only bounds a request that never settles.
-const FREEZE_CAP_MS = 10_000;
-// A beat after the POST settles before unfreezing, so the resent committed turn's
-// WS push renders before the greyed group vanishes (no empty flash).
-const FREEZE_SETTLE_MS = 500;
+const SHOULDER_TAP_TOOLTIP = "gently interrupt to send queued messages early";
+const QUEUED_INFO_TOOLTIP = "Messages below are sent when the model takes a breather or finishes a turn.";
 
 // Agents with the flush action in flight. While it runs the button is disabled so
 // it cannot double-fire; cleared when the request settles. The snapshot itself
 // stays the source of truth for what is shown.
 const inFlightAgentIds = new Set<string>();
 
-// Frozen queued groups: while an agent restarts for a flush, the backend snapshot
-// momentarily empties (its in-harness queue is killed) before the messages
-// reappear as a committed turn. Rendering the live snapshot then would blip the
-// messages out and back. Instead, on click we capture the current messages and
-// render THEM (greyed, with a countdown) until the flush POST settles -- a purely
-// client-side, ephemeral hold that dies with the tab.
-interface FrozenGroup {
-  messages: QueuedMessage[];
-  deadline: number; // Date.now() cap, drives the countdown
-}
-const freezeByAgent = new Map<string, FrozenGroup>();
-let countdownTimer: ReturnType<typeof setInterval> | null = null;
-
-function ensureCountdownTicking(): void {
-  if (countdownTimer === null && freezeByAgent.size > 0) {
-    countdownTimer = setInterval(() => m.redraw(), 1000);
-  }
-}
-
-function releaseFreeze(agentId: string): void {
-  const removed = freezeByAgent.delete(agentId);
-  if (freezeByAgent.size === 0 && countdownTimer !== null) {
-    clearInterval(countdownTimer);
-    countdownTimer = null;
-  }
-  if (removed) {
-    m.redraw();
-  }
-}
-
 async function flushQueuedMessages(agentId: string): Promise<void> {
   if (inFlightAgentIds.has(agentId)) {
     return;
   }
-  // Capture the messages BEFORE the restart empties the backend snapshot.
+  // Capture the messages BEFORE the restart empties the backend snapshot, and hold
+  // them greyed until a backend arrival releases the freeze (arrival-driven, like a
+  // "Sending…" bubble; a 20s cap is the only fallback). We deliberately do NOT
+  // release on the POST resolving -- that would clear the hold before the resent
+  // turn renders, reopening the blip. The arrival is the release.
   const captured = getQueuedMessagesForAgent(agentId);
   inFlightAgentIds.add(agentId);
   if (captured.length > 0) {
-    freezeByAgent.set(agentId, { messages: captured, deadline: Date.now() + FREEZE_CAP_MS });
-    ensureCountdownTicking();
-    // Fallback: never hold the freeze past the cap even if the POST never settles.
-    setTimeout(() => releaseFreeze(agentId), FREEZE_CAP_MS);
+    startFlushFreeze(agentId, captured);
   }
   m.redraw();
   try {
     await flushQueue(agentId);
-    // Settled: the backend restarted and confirmed the resent turn. Give its WS
-    // push a beat to render the committed turn, then drop the greyed hold.
-    setTimeout(() => releaseFreeze(agentId), FREEZE_SETTLE_MS);
   } catch (err) {
     const detail = describeRequestError(err);
     console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);
-    // Nothing happened -- drop the hold immediately so the real (unchanged) state
-    // shows again, and surface the failure.
-    releaseFreeze(agentId);
+    // The flush failed -- drop the hold so the UI reverts to the true backend state,
+    // and surface a popup.
+    releaseFlushFreeze(agentId);
     alert(`Failed to send queued messages: ${detail}`);
   } finally {
     inFlightAgentIds.delete(agentId);
@@ -110,26 +74,26 @@ function renderQueuedBubble(queued: QueuedMessage, frozen = false): m.Vnode {
 
 /**
  * The queued group, rendered below the last committed turn. Returns [] when the
- * agent has nothing queued. A subtle header row reads:
- *   'Queued messages' .................................... [Shoulder tap]
- * with the label on the left and the flush button (disabled while in flight,
- * with the shoulder-tap tooltip) on the right; the queued bubbles follow below.
+ * agent has nothing queued (and is not mid-flush). A subtle header row reads:
+ *   'Queued messages' (i) ................................... [Shoulder tap]
+ * with the label + an info tooltip on the left and the flush button on the right;
+ * the queued bubbles follow below. While a flush restarts the agent, the group is
+ * held greyed (no button) until the resent messages arrive.
  */
 export function renderQueuedMessages(agentId: string): m.Vnode[] {
   // While a flush is restarting the agent, render the frozen (captured) messages
-  // greyed with a countdown, ignoring the backend snapshot (which briefly empties)
-  // -- this is the fix for the messages blipping out during the restart.
-  const freeze = freezeByAgent.get(agentId);
+  // greyed, ignoring the backend snapshot (which briefly empties). The freeze is
+  // released by a backend arrival (see models/OutgoingMessages), so it clears
+  // exactly as the resent messages land. No visible countdown.
+  const freeze = getFlushFreeze(agentId);
   if (freeze !== undefined) {
-    const remaining = Math.max(0, Math.ceil((freeze.deadline - Date.now()) / 1000));
     const frozenHeader = m("div", { class: "queued-header queued-header--frozen", key: "queued-header" }, [
       m("span", { class: "queued-header-label" }, "Sending queued messages…"),
-      m("span", { class: "queued-countdown" }, `${remaining}s`),
     ]);
     return [
       m("div", { class: "queued-group queued-group--frozen", key: "queued-group" }, [
         frozenHeader,
-        ...freeze.messages.map((queued) => renderQueuedBubble(queued, true)),
+        ...freeze.messages.map((message) => renderQueuedBubble(message, true)),
       ]),
     ];
   }
@@ -141,15 +105,27 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   const isInFlight = inFlightAgentIds.has(agentId);
 
   const header = m("div", { class: "queued-header", key: "queued-header" }, [
-    m("span", { class: "queued-header-label" }, "Queued messages"),
+    m("span", { class: "queued-header-title" }, [
+      m("span", { class: "queued-header-label" }, "Queued messages"),
+      // A subtle (i) explaining when queued messages get sent. CSS tooltip (native
+      // title= is unreliable in the webview), same data-tooltip pattern as the button.
+      m(
+        "span",
+        {
+          class: "queued-info",
+          tabindex: 0,
+          "data-tooltip": QUEUED_INFO_TOOLTIP,
+          "aria-label": QUEUED_INFO_TOOLTIP,
+        },
+        "ⓘ",
+      ),
+    ]),
     m(
       "button",
       {
         type: "button",
         class: "queued-action queued-action--flush",
         disabled: isInFlight,
-        // CSS tooltip (native title= is unreliable in the webview) -- same
-        // data-tooltip pattern the progress-view markers use.
         "data-tooltip": SHOULDER_TAP_TOOLTIP,
         "aria-label": SHOULDER_TAP_TOOLTIP,
         onclick: () => flushQueuedMessages(agentId),

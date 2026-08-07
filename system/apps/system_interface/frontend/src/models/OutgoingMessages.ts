@@ -16,8 +16,17 @@
  * restoring the text to the composer. A delivered bubble that somehow never sees
  * an arrival is swept by an anti-strand fallback timer. It dies on reload; it
  * never gates real state.
+ *
+ * This module also owns the SHOULDER-TAP FREEZE (see the flush-freeze section
+ * below): the same optimistic-overlay idea for the shoulder-tap action. While the
+ * agent restarts and the queued messages are resent, the frozen (captured) group
+ * is held greyed, and it is released on the very same backend-arrival signal that
+ * clears a "Sending…" bubble -- so the frozen group disappears exactly as the
+ * resent messages land, never leaving a stale hold or a gap.
  */
 import m from "mithril";
+
+import type { QueuedMessage } from "./AgentManager";
 
 export interface OutgoingMessage {
   id: string;
@@ -106,6 +115,7 @@ export function noteBackendArrivals(agentId: string, ids: readonly string[]): vo
     return;
   }
   const seen = (seenArrivalIds[agentId] ??= new Set());
+  let sawNew = false;
   for (const id of ids) {
     if (seen.has(id)) {
       continue;
@@ -113,6 +123,63 @@ export function noteBackendArrivals(agentId: string, ids: readonly string[]): vo
     // Record every arrival id (so a re-stream/re-push cannot drop a later bubble),
     // and drop the oldest bubble -- a no-op when there are none.
     seen.add(id);
+    sawNew = true;
     removeOldest(agentId);
+  }
+  // A genuinely-new arrival also releases a shoulder-tap freeze: the resent
+  // messages are landing, so the greyed hold clears exactly as they appear.
+  if (sawNew && flushFreezeByAgent[agentId] !== undefined) {
+    releaseFlushFreeze(agentId);
+  }
+}
+
+// --- Shoulder-tap freeze --------------------------------------------------
+//
+// While the shoulder-tap action restarts the agent and resends the queue, the
+// backend snapshot momentarily empties (its harness queue is killed) before the
+// resent messages reappear as committed turns. Rendering the live snapshot then
+// would blip the messages out and back. Instead we capture them on click and hold
+// them greyed until a backend arrival (routed through ``noteBackendArrivals``
+// above, exactly like a "Sending…" bubble) signals the resent messages are
+// landing -- with a cap as the only fallback. No visible countdown.
+const FLUSH_FREEZE_CAP_MS = 20_000;
+
+interface FlushFreeze {
+  messages: QueuedMessage[];
+}
+
+const flushFreezeByAgent: Record<string, FlushFreeze> = {};
+const flushFreezeCapTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+/** Begin holding the captured queued messages greyed while the flush restarts the
+ *  agent. Released by the next backend arrival (see ``noteBackendArrivals``) or the
+ *  cap, whichever comes first. */
+export function startFlushFreeze(agentId: string, messages: QueuedMessage[]): void {
+  flushFreezeByAgent[agentId] = { messages };
+  const existing = flushFreezeCapTimers[agentId];
+  if (existing !== undefined) {
+    clearTimeout(existing);
+  }
+  flushFreezeCapTimers[agentId] = setTimeout(() => releaseFlushFreeze(agentId), FLUSH_FREEZE_CAP_MS);
+  m.redraw();
+}
+
+/** The frozen (captured) messages to render greyed, or ``undefined`` when not frozen. */
+export function getFlushFreeze(agentId: string): FlushFreeze | undefined {
+  return flushFreezeByAgent[agentId];
+}
+
+/** Release the freeze so the real backend snapshot renders again -- called by an
+ *  arrival, the cap, or the flush's own failure path. */
+export function releaseFlushFreeze(agentId: string): void {
+  const wasFrozen = flushFreezeByAgent[agentId] !== undefined;
+  delete flushFreezeByAgent[agentId];
+  const timer = flushFreezeCapTimers[agentId];
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    delete flushFreezeCapTimers[agentId];
+  }
+  if (wasFrozen) {
+    m.redraw();
   }
 }
