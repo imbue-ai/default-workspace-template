@@ -69,6 +69,17 @@ describe("classifyUserMessage", () => {
     expect(classifyUserMessage("Continue from where you left off.", false).kind).toBe(UserMessageKind.UserPrompt);
   });
 
+  it("surfaces the post-compaction summary as a chip via the is_compact_summary flag", () => {
+    const summary = "This session is being continued from a previous conversation that ran out of context. ...";
+    // Without the flag it is just a (giant) human-looking turn.
+    expect(classifyUserMessage(summary, false, false).kind).toBe(UserMessageKind.UserPrompt);
+    // With the flag it collapses into a labelled chip -- keyed off the flag, not the text.
+    const c = classifyUserMessage(summary, false, true);
+    expect(c.kind).toBe(UserMessageKind.SystemChip);
+    expect(c.label).toBe("Summary of earlier conversation");
+    expect(c.body).toBe(summary);
+  });
+
   it("lets an explicit detector WIN over is_meta: Stop-hook feedback is is_meta yet shown as a chip", () => {
     // Stop-hook feedback is is_meta:true in the transcript, but we deliberately surface it.
     const c = classifyUserMessage("Stop hook feedback:\nlint failed", true);
@@ -134,10 +145,18 @@ describe("semantic helpers", () => {
     expect(isSystemChipUserMessage("Stop hook feedback:\nx")).toBe(true);
     expect(isSystemChipUserMessage(`<${BROWSER_FLEET_TAG}>x</${BROWSER_FLEET_TAG}>`)).toBe(true);
     expect(isSystemChipUserMessage("<task-notification>x</task-notification>")).toBe(true);
+    // the compaction summary is a chip, but only with its flag set
+    expect(isSystemChipUserMessage("This session is being continued ...", true)).toBe(true);
+    expect(isSystemChipUserMessage("This session is being continued ...", false)).toBe(false);
     // skill expansion + welcome are non-boundary but NOT chips (no user-rail row)
     expect(isSystemChipUserMessage("Base directory for this skill: /x/skills/y/")).toBe(false);
     expect(isSystemChipUserMessage("/welcome")).toBe(false);
     expect(isSystemChipUserMessage("a normal message")).toBe(false);
+  });
+
+  it("isNonBoundaryUserMessage is true for the compaction summary (it folds, not opens a turn)", () => {
+    expect(isNonBoundaryUserMessage("This session is being continued ...", false, true)).toBe(true);
+    expect(isNonBoundaryUserMessage("This session is being continued ...", false, false)).toBe(false);
   });
 
   it("isHiddenUserMessage covers /welcome and skill expansions (no user-rail row)", () => {
