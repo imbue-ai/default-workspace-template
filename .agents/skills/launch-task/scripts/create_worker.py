@@ -33,9 +33,10 @@ Four subcommands cover the lead-side lifecycle:
     still be coming).
 
 ``destroy``
-    Destroys the worker agent (``mngr destroy <name> --force``). The git branch
-    ``mngr/<name>`` survives in the shared object store, so the work can still
-    be merged or inspected.
+    Destroys the worker agent (``mngr destroy <name> --force``). The worker's git
+    branch (``mngr/<name>`` by default, or whatever ``--branch`` resolved to)
+    survives in the shared object store, so the work can still be merged or
+    inspected.
 
 The ``launch`` / ``await`` / ``launch-sync`` subcommands take the same
 ``--task-file``: ``launch`` sends it to the worker, and ``await`` /
@@ -110,6 +111,11 @@ _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
 _DEFAULT_TIMEOUT = "30m"
 _DEFAULT_POLL_INTERVAL = "5s"
 
+# mngr's own default ``--branch`` NEW-branch pattern (``_DEFAULT_NEW_BRANCH_PATTERN``
+# in ``mngr/cli/create.py``): ``*`` expands to the agent name. Mirrored here so
+# ``resolve_worker_branch`` can name the branch mngr will actually produce.
+_MNGR_DEFAULT_NEW_BRANCH_PATTERN = "mngr/*"
+
 # Distinct exit code for an await that timed out without the report appearing,
 # matching coreutils ``timeout``'s convention so the prose's mental model
 # carries over.
@@ -119,6 +125,51 @@ _AWAIT_TIMEOUT_RC = 124
 # Separate from the timeout code so the lead can tell "paused for memory" apart
 # from "still running, just slow".
 _AWAIT_SHED_RC = 75
+
+
+class BranchSpecError(ValueError):
+    """A malformed mngr ``--branch`` spec (avoids raising a built-in directly).
+
+    Inherits ``ValueError`` so the failure still reads as a bad-argument error to
+    anything catching broadly, while giving callers a name to catch precisely.
+    """
+
+
+def resolve_worker_branch(name: str, branch: str | None) -> str:
+    """The branch the worker's commits actually land on, for a ``--branch`` spec.
+
+    Mirrors mngr's own ``[BASE][:NEW]`` parsing (``_parse_branch_flag`` in
+    ``mngr/cli/create.py``):
+
+    - ``None`` -- no ``--branch`` passed, so mngr applies its default spec
+      (``:mngr/*``) and cuts a fresh ``mngr/<name>``.
+    - ``BASE`` (no colon) -- ``BASE`` is checked out directly, so it *is* the
+      worker's branch.
+    - ``BASE:NEW`` -- ``NEW`` is created from ``BASE``, with ``*`` expanding to
+      the agent name; an empty ``NEW`` falls back to mngr's ``mngr/*`` pattern.
+
+    This is not cosmetic bookkeeping: ``launch-sync`` reports this branch as the
+    machine-readable contract its callers merge from. Deriving it as a fixed
+    ``mngr/<name>`` was correct only while ``--branch`` did not exist -- with a
+    spec that renames or reuses a branch, that guess names a branch the worker
+    never committed to, so a caller would merge the wrong ref (or a missing one).
+    """
+    if branch is None:
+        return f"mngr/{name}"
+    if ":" not in branch:
+        if not branch:
+            raise BranchSpecError(
+                "branch spec must not be empty -- pass None for mngr's default (mngr/<name>)"
+            )
+        return branch
+    _base, new = branch.split(":", 1)
+    if not new:
+        new = _MNGR_DEFAULT_NEW_BRANCH_PATTERN
+    if new.count("*") > 1:
+        raise BranchSpecError(
+            f"branch spec allows at most one '*' in the new branch name: {branch!r}"
+        )
+    return new.replace("*", name)
 
 
 def _normalize_dir(value: str) -> str:
@@ -340,6 +391,7 @@ def launch(
     task_file: Path,
     state_dir: Path | None = None,
     runner: Runner | None = None,
+    branch: str | None = None,
 ) -> int:
     """Run the worker-creation lifecycle. Returns the process exit code.
 
@@ -350,7 +402,8 @@ def launch(
     the task's ``finish_report_path`` -- a stale report from a previous run
     would satisfy ``await`` instantly, so launch refuses until the caller has
     confirmed it was handled and moved it aside. So does a dirty working tree:
-    the worker branches from committed HEAD, so uncommitted changes never reach
+    the worker is created from a committed branch tip -- this checkout's HEAD by
+    default, or whatever ``branch`` names -- so uncommitted changes never reach
     it (and ``mngr create`` refuses a dirty tree anyway) -- launch stops with an
     actionable "commit first" message rather than letting that surface as an
     opaque ``mngr create`` failure. Malformed task-file frontmatter instead
@@ -361,8 +414,29 @@ def launch(
     converter at ``<state_dir>/commands/common_transcript.sh`` is flushed
     before the task message lands so the worker's first transcript read
     sees fresh events.
+
+    ``branch`` is an optional mngr ``--branch`` spec, passed through verbatim in
+    the full ``[BASE][:NEW]`` form. The default (``None``) keeps mngr's own
+    default (branch ``mngr/<name>`` from the current HEAD). Pass an existing
+    branch name (e.g. ``mngr/update-<slug>``) to have the worker *check out that
+    branch directly* instead of branching anew -- so its commits extend the
+    branch the lead already built up, rather than starting from the lead's
+    current HEAD. In that ``[BASE]``-only form the caller is responsible for the
+    branch not being checked out in another worktree at create time (git forbids
+    the same branch in two worktrees); the ``BASE:NEW`` form has no such
+    constraint, since mngr cuts ``NEW`` from ``BASE`` without checking ``BASE``
+    out. The spec is resolved through ``resolve_worker_branch`` up front, so a
+    malformed one raises here -- before any worker is created -- rather than
+    after a caller has waited out a whole run.
     """
     runner = runner or Runner()
+
+    # Parse the branch spec before anything is created. A malformed spec is an
+    # authoring bug in the caller's argv, and it is knowable now: leaving it to
+    # ``launch_sync``'s own resolve (which runs after the await) would only
+    # surface it once the worker had already run to completion, discarding the
+    # report it had just collected.
+    resolve_worker_branch(name, branch)
 
     if not runtime_dir.is_dir():
         print(
@@ -405,39 +479,40 @@ def launch(
         )
         return 2
 
-    # A dirty working tree is fatal: the worker is created from committed HEAD,
-    # so uncommitted changes never reach it, and ``mngr create`` refuses a dirty
+    # A dirty working tree is fatal: the worker is created from a committed
+    # branch tip (this checkout's HEAD, or the one ``--branch`` names), so
+    # uncommitted changes never reach it, and ``mngr create`` refuses a dirty
     # tree regardless. Catch it here with an actionable message. Commit -- never
     # stash: stashed work silently drops out of multi-agent coordination and
     # gets lost.
     if not _worktree_is_clean(runner):
         print(
             f"create_worker: refusing to launch {name}: the working tree has "
-            "uncommitted changes. The worker is created from your committed "
-            "HEAD, so uncommitted changes never reach it (and `mngr create` "
-            "refuses a dirty tree). Commit your changes -- do NOT stash "
-            "(stashed work gets lost during multi-agent coordination) -- then "
-            "relaunch.",
+            "uncommitted changes. The worker is created from a committed branch "
+            "tip (this checkout's HEAD, or the branch `--branch` names), so "
+            "uncommitted changes never reach it (and `mngr create` refuses a "
+            "dirty tree). Commit your changes -- do NOT stash (stashed work "
+            "gets lost during multi-agent coordination) -- then relaunch.",
             file=sys.stderr,
         )
         return 2
 
-    runner.run(
-        [
-            "mngr",
-            "create",
-            name,
-            "-t",
-            template,
-            # Marks this as an agent-created (worker) agent so the OOM
-            # agent-tagging hook puts it in the worker-agent band -- shed before
-            # user-created agents (but after every agent's subprocesses) under
-            # memory pressure.
-            "--label",
-            "agent_created=true",
-        ],
-        check=True,
-    )
+    create_argv = [
+        "mngr",
+        "create",
+        name,
+        "-t",
+        template,
+        # Marks this as an agent-created (worker) agent so the OOM
+        # agent-tagging hook puts it in the worker-agent band -- shed before
+        # user-created agents (but after every agent's subprocesses) under
+        # memory pressure.
+        "--label",
+        "agent_created=true",
+    ]
+    if branch is not None:
+        create_argv += ["--branch", branch]
+    runner.run(create_argv, check=True)
 
     rsync_dir(name, runtime_dir, runner)
     if artifacts_dir is not None:
@@ -612,10 +687,12 @@ def parse_report(text: str) -> ReportResult:
 
 
 def destroy(name: str, runner: Runner | None = None) -> None:
-    """Destroy the worker agent. The git branch ``mngr/<name>`` survives.
+    """Destroy the worker agent. The worker's git branch survives.
 
     ``mngr destroy`` removes the agent and its worktree; the branch persists in
     the shared object store, so a caller can still merge or inspect the work.
+    That branch is ``mngr/<name>`` unless ``launch`` was given a ``--branch``
+    spec -- see ``resolve_worker_branch``.
     """
     runner = runner or Runner()
     runner.run(["mngr", "destroy", name, "--force"], check=True)
@@ -677,6 +754,7 @@ def launch_sync(
     clock: Callable[[], float] = time.monotonic,
     out: TextIO | None = None,
     result_path: Path | None = None,
+    branch: str | None = None,
 ) -> int:
     """Launch a worker, wait for its report in the *foreground*, emit JSON, destroy.
 
@@ -705,6 +783,7 @@ def launch_sync(
         task_file=task_file,
         state_dir=state_dir,
         runner=runner,
+        branch=branch,
     )
     if launch_rc != 0:
         return launch_rc
@@ -720,7 +799,7 @@ def launch_sync(
         worker_name=name,
         pending_shed_check=_worker_has_pending_shed,
     )
-    branch = f"mngr/{name}"
+    worker_branch = resolve_worker_branch(name, branch)
     if await_rc != 0:
         # Timed out: leave the worker alive for liveness diagnosis.
         _emit_run_result(
@@ -729,7 +808,7 @@ def launch_sync(
                 "type": None,
                 "name": None,
                 "body": "",
-                "branch": branch,
+                "branch": worker_branch,
                 "raw_report": "",
             },
             stream,
@@ -753,7 +832,7 @@ def launch_sync(
             "type": report.report_type,
             "name": report.name,
             "body": report.body,
-            "branch": branch,
+            "branch": worker_branch,
             "raw_report": report.raw,
         },
         stream,
@@ -772,6 +851,7 @@ def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
         task_file=args.task_file,
         state_dir=state_dir,
         runner=runner,
+        branch=args.branch,
     )
 
 
@@ -812,6 +892,7 @@ def _run_launch_sync(args: argparse.Namespace, runner: Runner | None) -> int:
         state_dir=state_dir,
         runner=runner,
         result_path=args.result_json,
+        branch=args.branch,
     )
 
 
@@ -829,7 +910,10 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         "launch", help="Create the worker and hand it the task (synchronous)."
     )
     launch_parser.add_argument(
-        "--name", required=True, help="Worker name; becomes the mngr/<name> branch."
+        "--name",
+        required=True,
+        help="Worker name; also names the default branch (mngr/<name>) unless "
+        "--branch says otherwise.",
     )
     launch_parser.add_argument(
         "--template",
@@ -847,6 +931,15 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         required=True,
         type=Path,
         help="Markdown task file (must already exist; typically inside --runtime-dir).",
+    )
+    launch_parser.add_argument(
+        "--branch",
+        default=None,
+        help="Optional mngr --branch spec. Omit to branch mngr/<name> from the "
+        "current HEAD (the default). Pass an existing branch (e.g. "
+        "mngr/update-<slug>) to have the worker check it out directly and extend "
+        "it, instead of branching anew. The branch must not be checked out in "
+        "another worktree at create time.",
     )
 
     await_parser = subparsers.add_parser(
@@ -888,7 +981,10 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         "destroy, in one call. For non-interactive callers (services).",
     )
     launch_sync_parser.add_argument(
-        "--name", required=True, help="Worker name; becomes the mngr/<name> branch."
+        "--name",
+        required=True,
+        help="Worker name; also names the default branch (mngr/<name>) unless "
+        "--branch says otherwise.",
     )
     launch_sync_parser.add_argument(
         "--template",
@@ -933,11 +1029,17 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         help="Also write the result JSON to this path (the machine-readable "
         "contract for programmatic callers; stdout still carries it too).",
     )
+    launch_sync_parser.add_argument(
+        "--branch",
+        default=None,
+        help="Optional mngr --branch spec (see `launch --branch`). Omit for the "
+        "default (branch mngr/<name> from the current HEAD).",
+    )
 
     destroy_parser = subparsers.add_parser(
         "destroy",
-        help="Destroy a worker agent (mngr destroy --force). The mngr/<name> "
-        "branch survives.",
+        help="Destroy a worker agent (mngr destroy --force). The worker's branch "
+        "(mngr/<name> by default, or whatever --branch resolved to) survives.",
     )
     destroy_parser.add_argument("--name", required=True, help="Worker name to destroy.")
 

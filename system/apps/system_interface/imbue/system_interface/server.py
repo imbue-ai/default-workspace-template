@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import queue
@@ -190,6 +191,20 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
+def _inject_self_referential_services_meta_tag(html_content: str, service_names: frozenset[str]) -> str:
+    """Tell the frontend which services resolve back to this instance.
+
+    The shell can only refuse to frame these client-side: every service owns a
+    browser origin the frontend derives itself, so the browser loads it directly
+    and this server never sees the request. Names are sorted for a stable tag
+    and escaped because they come from configuration rather than from the
+    service registry's own validation.
+    """
+    content = html.escape(",".join(sorted(service_names)), quote=True)
+    meta_tag = f'<meta name="system-interface-self-referential-services" content="{content}">'
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -199,6 +214,10 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
+        if config.self_referential_service_names:
+            html_content = _inject_self_referential_services_meta_tag(
+                html_content, config.self_referential_service_names
+            )
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _html_response(html_content)
@@ -243,6 +262,33 @@ def _list_agents_endpoint() -> Response:
     agents = _discover_with_filters()
     items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
     return _json_response(AgentListResponse(agents=items).model_dump())
+
+
+def _health_endpoint() -> Response:
+    """Report whether this instance is actually working, for a boot health gate.
+
+    Two independent things must hold, and it is 200 only when both do:
+
+    - a fresh mngr discovery succeeds, which exercises the plugin/config path a
+      missing backend dependency or a bad plugin config would take down;
+    - the agent lifecycle event stream is live (see
+      ``AgentManager.get_agent_events_status``).
+
+    The second check is the point. ``/api/agents`` runs its own discovery rather
+    than reading the manager's cache, so it answers correctly even on an
+    instance whose lifecycle stream died -- which let a preview whose agent view
+    was permanently frozen sail through its boot probe looking healthy. A
+    degraded instance answers 503 here, so whoever is gating on it (the preview
+    boot, the reveal pre-flight) refuses to bring it up.
+    """
+    agents = _discover_with_filters()
+    status = get_state().agent_manager.get_agent_events_status()
+    payload = {
+        "status": "ok" if status.is_alive else "degraded",
+        "agent_count": len(agents),
+        "agent_events": status.model_dump(mode="json"),
+    }
+    return _json_response(payload, status_code=200 if status.is_alive else 503)
 
 
 def _find_agent(agent_id: str) -> AgentInfo | None:
@@ -708,11 +754,23 @@ _recently_allocated_terminal_names: set[str] = set()
 def _primary_agent_layout_dir() -> Path | None:
     """Return the workspace layout directory for this workspace's primary agent.
 
-    The system_interface always serves a single workspace (its own primary
-    agent); the layout lives at $MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/.
-    Returns None if either env var is missing, which should only happen in
+    The config's ``system_interface_layout_dir`` wins when set (from
+    ``SYSTEM_INTERFACE_LAYOUT_DIR``, as pydantic-settings maps every other
+    ``SYSTEM_INTERFACE_*`` field): the live-editing preview points it at a
+    throwaway copy of the live layout so the preview renders the user's real tabs
+    while its own autosaves land in the copy, never clobbering the live layout.
+    It is read off the per-app config rather than the process env so that two
+    servers in one process each keep their own override.
+
+    Otherwise the system_interface serves a single workspace (its own primary
+    agent) and the layout lives at
+    $MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/. Returns None if the
+    override is unset and MNGR_AGENT_ID is missing, which should only happen in
     dev/test setups that don't care about persistence.
     """
+    override = get_state().config.system_interface_layout_dir
+    if override is not None:
+        return override
     agent_id = os.environ.get("MNGR_AGENT_ID", "")
     if not agent_id:
         return None
@@ -1178,12 +1236,13 @@ def _ws_endpoint(websocket: Any) -> None:
     """Unified WebSocket for agent state and app updates."""
     state = get_state()
     # Resolve the primary agent's layout dir once, at connect, and bind it to
-    # this connection for the lifetime of the loop. The resolver reads
-    # process-global env (MNGR_HOST_DIR / MNGR_AGENT_ID); capturing it here
-    # keeps every write this connection makes pointed at *this* server's
-    # workspace even if that env is later mutated (which only happens in tests,
-    # where several servers share one process -- a stray late write from a
-    # lingering connection would otherwise land in another server's log).
+    # this connection for the lifetime of the loop. The resolver reads this
+    # app's config override, falling back to process-global env (MNGR_HOST_DIR /
+    # MNGR_AGENT_ID); capturing it here keeps every write this connection makes
+    # pointed at *this* server's workspace even if that env is later mutated
+    # (which only happens in tests, where several servers share one process -- a
+    # stray late write from a lingering connection would otherwise land in
+    # another server's log).
     _run_ws_broadcast_loop(
         websocket=websocket,
         agent_manager=state.agent_manager,
@@ -1765,6 +1824,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
+    application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-worktree", view_func=_create_worktree_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])

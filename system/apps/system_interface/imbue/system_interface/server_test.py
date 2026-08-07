@@ -19,11 +19,13 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.mngr.api.observe import make_full_agent_state_event
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_events import AgentEventsMode
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
@@ -35,9 +37,11 @@ from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
+from imbue.system_interface.server import _primary_agent_layout_dir
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.testing import build_agent_details
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
@@ -110,6 +114,41 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert len(data["agents"]) == 1
     assert data["agents"][0]["name"] == "test-agent"
     assert data["agents"][0]["state"] == "RUNNING"
+
+
+def test_health_is_degraded_while_no_lifecycle_events_have_arrived(client: FlaskClient) -> None:
+    """Discovery working is not enough; the lifecycle stream must be live too.
+
+    This is the gap that let a preview boot green with a permanently frozen agent
+    view: ``/api/agents`` runs its own discovery, so it answers 200 regardless of
+    whether the instance is receiving lifecycle events at all.
+    """
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
+        agents_response = client.get("/api/agents")
+        health_response = client.get("/api/health")
+
+    assert agents_response.status_code == 200
+    assert health_response.status_code == 503
+    body = health_response.get_json()
+    assert body["status"] == "degraded"
+    assert body["agent_events"]["is_alive"] is False
+
+
+def test_health_is_ok_once_the_lifecycle_stream_is_feeding_the_instance(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager = AgentManager.build(broadcaster)
+    manager._handle_observe_event(make_full_agent_state_event([build_agent_details("live")]))
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    with patch("imbue.system_interface.server.discover_agents", return_value=[]):
+        response = client.get("/api/health")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "ok"
+    assert body["agent_events"]["is_alive"] is True
+    assert body["agent_events"]["mode"] == AgentEventsMode.OBSERVE
 
 
 def test_get_events_for_unknown_agent(client: FlaskClient) -> None:
@@ -736,6 +775,35 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
     assert response.get_json()["detail"] == "Failed to interrupt agent 'claude-agent': mngr start failed"
 
 
+def test_layout_dir_override_wins_over_the_agent_path(tmp_path: Path) -> None:
+    # The live-editing preview points system_interface_layout_dir at a throwaway
+    # copy of the live layout so it renders the user's real tabs without writing to
+    # the live one. That override must win even when a real MNGR_AGENT_ID is
+    # present (the autouse isolation fixture sets one) -- otherwise the preview's
+    # autosaves would land on the live layout, which is the exact thing this
+    # prevents.
+    override = tmp_path / "seeded-layout"
+    app = create_application(build_test_state(config=Config(system_interface_layout_dir=override)))
+
+    with app.app_context():
+        assert _primary_agent_layout_dir() == override
+
+
+def test_layout_dir_override_is_per_app_not_process_wide(tmp_path: Path) -> None:
+    # The override lives on each app's own config, so two servers in one process
+    # (how the test suite runs them) resolve to their own layout dirs. Reading it
+    # from the process env instead would make whichever booted last win, and a
+    # lingering connection on the other would write into the wrong workspace.
+    override = tmp_path / "seeded-layout"
+    previewing = create_application(build_test_state(config=Config(system_interface_layout_dir=override)))
+    plain = create_application(build_test_state(config=Config()))
+
+    with previewing.app_context():
+        assert _primary_agent_layout_dir() == override
+    with plain.app_context():
+        assert _primary_agent_layout_dir() != override
+
+
 def test_list_layouts_exposes_defaults(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A fresh workspace lists the two default layout names, both empty."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
@@ -1030,6 +1098,42 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         response = test_client.get("/")
         assert response.status_code == 200
         assert "system-interface-hostname" in response.text
+
+
+def test_index_hands_the_self_referential_services_to_the_frontend(tmp_path: Path) -> None:
+    """The configured names reach the shell, which is the only place that can refuse them.
+
+    Each service owns a browser origin the frontend derives itself, so a panel
+    naming one of these never reaches this server -- the meta tag is the whole
+    delivery mechanism for the refusal.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+    config = Config(system_interface_self_referential_services=["si-preview", "si-preview-app"])
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state(config=config)).test_client()
+        response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert '<meta name="system-interface-self-referential-services" content="si-preview,si-preview-app">' in (
+        response.text
+    )
+
+
+def test_index_omits_the_self_referential_meta_tag_when_none_are_configured(tmp_path: Path) -> None:
+    """The workspace's own system interface registers no services, so it has nothing to exclude."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert "system-interface-self-referential-services" not in response.text
 
 
 def test_random_name_endpoint(client: FlaskClient) -> None:

@@ -25,9 +25,10 @@ If you're doing something *other* than editing an existing app or service:
 
 - **Creating a new app** -> `build-app`.
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
-  dockview shell, chat panels, progress view) -> `update-system-interface`
-  (it never edits the served tree directly; it previews in isolation and
-  reveals only when known-good).
+  dockview shell, chat panels, progress view) -> `update-system-interface`,
+  this flow's system-interface specialization: it runs the same live loop, but
+  against an isolated worktree (never the served tree), with the preview tab as
+  the user's view, and reveals only when known-good.
 - **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
 
 ## Match the flow to the scope of the change
@@ -47,13 +48,26 @@ the request is -- it changes what you do *before* touching code:
   they **explicitly confirm** the shape, and only then build the real thing
   to a usable state. Never build heavy against an unconfirmed shape.
 
-  When a hand mock won't convince -- a redesign, or a data-touching change --
-  boot the *actually changed* service as a labeled preview tab beside the
-  live one via the shared `serve_isolated_instance.py` script (invocation
-  under "Protect the user's data while you verify"; it's the same preview
-  mechanism the system-interface flow uses). Keep the lighter hand mock for
-  quick look-and-feel loops. Either way, *reading* the live store to render a
-  preview is fine; never let a preview or verification *write* to it.
+  This is the demonstrative-prototype choice from
+  [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
+  phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
+  throwaway) is fastest for quick look-and-feel loops. When it won't convince --
+  a redesign, or a data-touching change -- boot the *actually changed* service as
+  a labeled preview tab beside the live one (Type 1 -- the real edit shown
+  through the real surface) via the shared `serve_isolated_instance.py` script
+  (invocation under "Protect the user's data while you verify"; it's the same
+  preview mechanism the system-interface flow uses). Either way, *reading* the
+  live store to render a preview is fine; never let a preview or verification
+  *write* to it.
+
+  **Does this change warrant a preview at all?** For an ordinary service a
+  preview is the exception, not the default. If the change *works*, a taste
+  mismatch is cheap to fix next round, so most changes can just go live and
+  iterate. Reserve a preview for changes that are costly to redo -- a redesign,
+  a data-touching change, a substantial visual shift. A routine tweak, a copy
+  change, or a behavior-only change behind an unchanged surface doesn't need one.
+  (The system interface is the exception: its own flow, `update-system-interface`,
+  previews by default because the live tab is off-limits.)
 
   A new view or capability bolted onto an existing service is its own
   delivery with its own feedback gate (interactive-delivery phase 8):
@@ -227,6 +241,18 @@ where the data dies. Encode these, cheapest first:
   rm -rf /tmp/<name>-scratch      # deleting a copy can't harm real data
   ```
 
+  **To pick up a further edit, refresh in place -- don't tear down and re-`up`.**
+  A `down`/`up` cycle picks a new port, so a surfaced preview tab would point at
+  a dead one. `refresh` re-boots just the instance's own process on its existing
+  port, leaving the port, the service registration, and any tab untouched:
+
+  ```bash
+  python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
+  ```
+
+  A change that only alters files the running process reads from disk on each
+  request needs no refresh at all. Reserve `down` for when you are finished.
+
   This is the point of the `DATA_DIR` + `<PACKAGE_UPPER>_PORT` overrides: the
   isolation you need is **data isolation, not code isolation**, and it's a
   copy-plus-one-command setup, not a worktree. The live store is only ever
@@ -310,7 +336,7 @@ exactly as `build-app`'s Step 5 gates on the working site.)
   it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
   background service) at turn-end instead.
 - **The workspace UI (`system/apps/system_interface`)** -> `update-system-interface`
-  owns its own preview-before-merge and safe-reveal go-live; use it rather
+  owns its own live preview loop and safe-reveal go-live; use it rather
   than this flow.
 
 `update-creation` and `heal-creation` also stand on their own as turn-end

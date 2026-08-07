@@ -40,23 +40,41 @@ it must not depend on any particular venv being synced.
 The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
 over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
 substrate every service flow shares). They hand it the system-interface
-specifics -- boot ``uv run system-interface`` from the worker's already-built
-``--work-dir`` on a free port, with layout persistence neutered (drop
-MNGR_AGENT_ID so it can't clobber the live ``layout.json``) but agent discovery
-kept, probe ``/api/agents``, and register the inner app plus the labeled
+specifics -- boot ``uv run system-interface`` from an already-built
+``--work-dir`` on a free port; point layout persistence at a throwaway copy of
+the live layout (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the
+user's real tabs while its autosaves land in the copy, with MNGR_AGENT_ID also
+dropped as a guard against clobbering the live ``layout.json``; declare the two
+preview service names self-referential
+(``SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES``) so the preview tab that layout
+almost always contains explains itself rather than nesting; keep agent
+discovery; source agent lifecycle events by *following* the live observer rather
+than running a second one (``SYSTEM_INTERFACE_AGENT_EVENTS_MODE=FOLLOW``, since
+``mngr observe`` is single-writer per mngr host dir); probe ``/api/health``,
+which refuses to go green unless that lifecycle stream is actually live; and
+register the inner app plus the labeled
 "preview" wrapper frame the user opens. The shared script owns the ports, the
 process/service teardown, and the state file; no fetch, checkout, or rebuild
-happens, and the served tree and the worker's folder are never touched. The
-worker is a local git-worktree sub-agent whose work_dir is a folder it has
-already built, and it must still exist at preview time.
+happens, and the served tree and the previewed folder are never touched.
+
+That ``--work-dir`` is either the **lead's own editing worktree** (the live
+editing loop, where no worker exists yet) or a **worker's work_dir** (the
+optional final pre-merge preview). Either way it must be a folder that has
+already been built, and it must still exist at preview time -- for a worker's
+work_dir that means previewing before the worker is destroyed.
 
 The non-deterministic part -- opening the tab and gating on the user's judgment
 -- stays with the agent.
 
 Usage:
     python3 reveal_system_interface.py reveal --rollback-to <pre-merge-sha> [--repo-root PATH]
-    python3 reveal_system_interface.py preview --slug <name> --work-dir <worker-work-dir> [--repo-root PATH]
+    python3 reveal_system_interface.py preview --slug <name> --work-dir <built-work-dir> [--repo-root PATH]
+    python3 reveal_system_interface.py preview-refresh --slug <name> [--repo-root PATH]
     python3 reveal_system_interface.py unpreview --slug <name> [--repo-root PATH]
+
+The ``preview-refresh`` subcommand re-boots the preview's inner app on its
+existing port (for a backend round in the live editing loop) so an edit/rebuild
+is picked up in place, without disturbing the wrapper frame or the user's tab.
 
 Environment:
     MINDS_WORKSPACE_SERVER_URL  Base URL of the live workspace server
@@ -70,10 +88,11 @@ Exit codes (``reveal``):
        on the known-good revision (the requested change did NOT land).
     3  EMERGENCY: even rollback could not restore a healthy UI.
 
-Exit codes (``preview`` / ``unpreview``):
-    0  Success (preview is up / torn down).
-    1  The preview failed to build or boot (and tore itself down), or a bad
-       argument / unreadable state file.
+Exit codes (``preview`` / ``preview-refresh`` / ``unpreview``):
+    0  Success (preview is up / rebooted in place / torn down).
+    1  The preview failed to build or boot (and tore itself down); or there was
+       no live preview to refresh, or the rebooted inner app never became
+       healthy; or a bad argument / unreadable state file.
 """
 
 from __future__ import annotations
@@ -81,6 +100,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -143,11 +163,77 @@ _INSTANCE_STATE_FILENAME = "instance.json"
 PREVIEW_PORT_ENV = "SYSTEM_INTERFACE_PORT"
 PREVIEW_HOST_ENV = "SYSTEM_INTERFACE_HOST"
 
-# Endpoints used to probe liveness. ``/api/agents`` exercises the mngr plugin
-# discovery path -- exactly what a missing backend dependency or a broken
-# plugin-config parse would take down -- so a 200 there is a strong "the backend
-# actually works" signal, not just "the server is listening". It is also handed
-# to the shared preview script as its ``--health-path``.
+# Seed the preview with the user's real tab layout. The preview boots pointed at
+# a throwaway *copy* of the live layout (via SYSTEM_INTERFACE_LAYOUT_DIR -- the
+# env spelling of the server's ``Config.system_interface_layout_dir`` field, which
+# it honors ahead of the MNGR_AGENT_ID-derived path) so it renders the
+# user's existing tabs while its own layout autosaves land in the copy -- never
+# clobbering the live layout. This script owns the copy (the shared serve
+# script wipes its own state dir on every boot, so the seed can't live there):
+# ``preview`` re-seeds it fresh, ``unpreview`` removes it. Only the layout files
+# are copied, never the client-activity log or terminal banner that also live
+# under workspace_layout/. The seed persists across a ``preview-refresh`` because
+# the shared script records the env override at ``up`` time and reapplies it.
+PREVIEW_LAYOUT_DIR_ENV = "SYSTEM_INTERFACE_LAYOUT_DIR"
+_PREVIEW_LAYOUT_SEED_ROOT = "data/.state/si-preview-layout"
+_WORKSPACE_LAYOUT_SUBDIR = "workspace_layout"
+# What gets copied: the per-slug layout contents, the slug registry (display names
+# + last-active slug), and any un-migrated legacy single-layout file.
+_SEEDED_LAYOUT_ENTRIES = ("layouts", "layouts_meta.json", "layout.json")
+ENV_MNGR_HOST_DIR = "MNGR_HOST_DIR"
+# The layout belongs to the workspace's *primary* agent -- the services agent
+# supervisord (and therefore the live system interface) runs under, which mngr
+# labels ``is_primary=true``. It is emphatically NOT whichever agent runs this
+# script: the frontend hides is_primary agents from the agent list, so the lead
+# driving this skill is always some other agent (a chat agent, or a worktree
+# worker) whose state dir has no workspace_layout/ at all. Resolving the primary
+# agent by label is the same convention as system/scripts/with_agent_env.sh and
+# bootstrap's _read_main_agent_labels.
+_AGENT_DATA_FILENAME = "data.json"
+_PRIMARY_AGENT_LABEL = "is_primary"
+
+# The seeded layout will nearly always contain the preview tab itself -- it stays
+# open across the whole editing pass, so any re-``preview`` copies a layout that
+# has it. Rendering it would make the preview show *itself*: the inner app
+# resolves ``service:si-preview`` against the same live app registry, so the panel
+# frames the wrapper that frames it, and each nested iframe loads another full
+# system interface. Telling the previewed instance that those two service names
+# resolve to itself makes its shell render a one-line explanation in that tab
+# instead. That keeps the rest of the layout exactly as the user has it, which
+# neither dropping the layout (their real tabs vanish) nor editing dockview's
+# serialized grid by hand (fragile, and a malformed grid renders blank) manages.
+PREVIEW_SELF_REFERENTIAL_SERVICES_ENV = "SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES"
+_PREVIEW_SERVICE_NAMES = (PREVIEW_SERVICE_NAME, PREVIEW_INNER_SERVICE_NAME)
+
+# How a throwaway second instance sources agent lifecycle events. ``mngr observe``
+# is single-writer per mngr host dir (an exclusive flock), and this box's live
+# system interface already holds that lock -- so an instance booted alongside it
+# (the preview, the pre-flight) that tried to run its own observer would have it
+# die seconds into boot, leaving that instance's agent list and chat panels
+# frozen at boot state forever while terminals and everything else kept working.
+# FOLLOW makes it read the live observer's event stream instead, which is all a
+# read-only second instance ever needed. This is the env spelling of the server's
+# ``Config.system_interface_agent_events_mode``.
+PREVIEW_AGENT_EVENTS_MODE_ENV = "SYSTEM_INTERFACE_AGENT_EVENTS_MODE"
+FOLLOW_AGENT_EVENTS_MODE = "FOLLOW"
+
+# Endpoints used to probe liveness.
+#
+# ``/api/health`` is the strict gate, used for the *throwaway* instances (the
+# preview and the pre-flight boot). It asserts both that a fresh mngr discovery
+# works -- the plugin/config path a missing backend dependency or a broken
+# plugin-config parse would take down -- and that the instance's agent lifecycle
+# event stream is actually live. That second half is why ``/api/agents`` is not
+# enough: it runs its own discovery rather than reading the cache the lifecycle
+# stream feeds, so it answers 200 on an instance whose agent view is dead. A
+# preview that came up looking healthy and showed "No conversation data" for
+# every agent created after it booted is exactly the gap this closes.
+STRICT_HEALTH_PATH = "/api/health"
+# ``/api/agents`` stays the probe for the *live* service (post-restart and during
+# recovery). Deliberately the looser check: a rollback here is a heavy, risky
+# action, and lifecycle-stream trouble on the live service is not something
+# reverting a UI change would fix -- it would just escalate a real problem into a
+# spurious rollback, and then into an "even rollback failed" emergency.
 HEALTH_PATH = "/api/agents"
 SERVE_PATH = "/"
 
@@ -411,16 +497,26 @@ def _preflight_ok(
     sleeper: Callable[[float], None],
 ) -> bool:
     """Boot the merged backend on a throwaway port and probe it, without touching
-    the live service. Returns True iff it serves a healthy response."""
+    the live service. Returns True iff it serves a healthy response.
+
+    Runs in FOLLOW mode: this boots *alongside* the still-running live service,
+    which holds the single-writer observe lock, so a pre-flight that tried to run
+    its own observer would lose the lock and boot with a dead agent view -- and
+    then pass anyway, because the old ``/api/agents`` probe never looked at the
+    lifecycle stream. Following the live observer makes the pre-flight both able
+    to come up and able to prove the merged backend really can serve a live agent
+    view, which is what this gate is for.
+    """
     port = find_free_port()
     env = dict(os.environ)
     env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
     env["SYSTEM_INTERFACE_PORT"] = str(port)
+    env[PREVIEW_AGENT_EVENTS_MODE_ENV] = FOLLOW_AGENT_EVENTS_MODE
     spawned = spawner.spawn([TOOL_NAME], cwd=str(repo_root / APP_DIR), env=env)
     try:
         return wait_healthy(
             http,
-            f"http://127.0.0.1:{port}{HEALTH_PATH}",
+            f"http://127.0.0.1:{port}{STRICT_HEALTH_PATH}",
             _PREFLIGHT_ATTEMPTS,
             _PREFLIGHT_INTERVAL_SECONDS,
             sleeper,
@@ -705,42 +801,169 @@ def _find_other_preview(repo_root: Path, slug: str) -> str | None:
     return None
 
 
+def _mngr_host_dir() -> Path:
+    """The mngr host dir, mirroring the system interface's own resolver."""
+    return Path(os.environ.get(ENV_MNGR_HOST_DIR, "") or (Path.home() / ".mngr"))
+
+
+def _is_primary_agent_data(data_path: Path) -> bool:
+    """Whether this agent record carries the ``is_primary=true`` label."""
+    try:
+        data = json.loads(data_path.read_text())
+    except (OSError, ValueError):
+        # A half-written or unreadable record just isn't a match; the scan moves
+        # on rather than failing the whole preview over one bad file.
+        return False
+    if not isinstance(data, dict):
+        return False
+    labels = data.get("labels")
+    if not isinstance(labels, dict):
+        return False
+    # Labels round-trip through pydantic serialization, so coerce rather than
+    # comparing against a bare `True`.
+    return str(labels.get(_PRIMARY_AGENT_LABEL, "")).lower() == "true"
+
+
+def _live_layout_dir() -> Path | None:
+    """The live workspace's layout dir, or None if the primary agent isn't found.
+
+    The system interface persists layouts under *its own* agent's state dir --
+    ``$MNGR_HOST_DIR/agents/<primary-agent-id>/workspace_layout/`` -- and it runs
+    under the workspace's services agent, the one mngr labels
+    ``is_primary=true``. So this resolves that agent by scanning the host dir's
+    agent records, exactly as ``system/scripts/with_agent_env.sh`` does.
+
+    It deliberately does *not* use the ambient ``MNGR_AGENT_ID``, even though the
+    server's resolver does: the server reads its own id, whereas here the ambient
+    id belongs to whoever ran this script -- the lead chat agent, or a worker.
+    Those agents never own a workspace_layout/, so deriving the path from that id
+    resolved somewhere that does not exist and silently seeded nothing, which is
+    why the preview always opened with the fresh-workspace layout.
+
+    Returns None when the host dir has no primary agent (dev/test, or a host that
+    isn't a minds workspace); the caller reports that rather than seeding blind.
+    """
+    agents_dir = _mngr_host_dir() / "agents"
+    if not agents_dir.is_dir():
+        return None
+    for state_dir in sorted(agents_dir.iterdir()):
+        if _is_primary_agent_data(state_dir / _AGENT_DATA_FILENAME):
+            return state_dir / _WORKSPACE_LAYOUT_SUBDIR
+    return None
+
+
+def _preview_layout_seed_dir(repo_root: Path, slug: str) -> Path:
+    """Where this slug's throwaway layout copy lives (gitignored runtime state)."""
+    return repo_root / _PREVIEW_LAYOUT_SEED_ROOT / _preview_instance_name(slug)
+
+
+def _seed_preview_layout(repo_root: Path, slug: str) -> Path:
+    """Copy the live layout files verbatim into a fresh throwaway dir; return it.
+
+    Re-seeded from scratch on every ``preview`` call, since the live layout is
+    the source of truth at preview time. When there is no live layout to copy the
+    dir is left empty and the preview renders the fresh-workspace state -- but it
+    says so on stderr first. "The preview opened with default tabs" and "seeding
+    found nothing" are indistinguishable on screen, so a silent empty seed reads
+    as a working preview; that silence is what hid the primary-agent resolution
+    bug (see ``_live_layout_dir``) through a whole round of real use.
+
+    Every layout is copied as-is, including one that opens the preview tab
+    itself -- which, in the editing loop, is nearly all of them, since that tab
+    stays open across the whole pass. The nesting that would cause is refused by
+    the previewed instance instead (``system_interface_self_referential_services``
+    below), which is the only place that can do it without either editing
+    dockview's serialized grid by hand or silently dropping the user's real tabs.
+    """
+    seed_dir = _preview_layout_seed_dir(repo_root, slug)
+    shutil.rmtree(seed_dir, ignore_errors=True)
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    live_dir = _live_layout_dir()
+    if live_dir is None:
+        sys.stderr.write(
+            f"preview: no agent under {_mngr_host_dir() / 'agents'} carries the "
+            f"'{_PRIMARY_AGENT_LABEL}=true' label, so the live layout could not be "
+            "located; the preview will open with the default tabs rather than "
+            "yours.\n"
+        )
+        return seed_dir
+    if not live_dir.is_dir():
+        sys.stderr.write(
+            f"preview: {live_dir} does not exist, so this workspace has no saved "
+            "layout yet; the preview will open with the default tabs.\n"
+        )
+        return seed_dir
+    for entry in _SEEDED_LAYOUT_ENTRIES:
+        source = live_dir / entry
+        if source.is_dir():
+            # The per-slug layout contents. Copied file-by-file rather than with
+            # copytree so a nested sub-tree under the same dir could never ride
+            # along; today only flat ``<slug>.json`` files live here.
+            destination_dir = seed_dir / entry
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            for layout_file in sorted(source.iterdir()):
+                if layout_file.is_file():
+                    shutil.copy2(layout_file, destination_dir / layout_file.name)
+        elif source.is_file():
+            shutil.copy2(source, seed_dir / entry)
+    return seed_dir
+
+
 def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int:
-    """Stand up a pre-merge preview of the worker's ``work_dir``.
+    """Stand up a preview of an already-built ``work_dir``.
+
+    ``work_dir`` is the lead's own editing worktree during the live editing loop
+    (no worker exists yet), or a worker's work_dir for the optional final
+    pre-merge preview. Either way it must already be built, and it must still
+    exist -- for a worker's work_dir, run this before the worker is destroyed.
 
     Thin system-interface adapter over the shared ``serve_isolated_instance.py``
-    ``up`` motion: validate the worker's app dir, require that the worker built its
-    frontend bundle, then hand the shared script the system-interface specifics --
-    boot ``uv run system-interface`` from the worker's already-built app dir on a
-    free port; neuter layout persistence by dropping MNGR_AGENT_ID (so the preview
-    can't clobber the live ``layout.json``) while keeping discovery, so the real
-    conversations still render; probe ``/api/agents``; register the inner app and
-    the labeled wrapper frame. The shared script owns the ports, the
-    process/service teardown, and the state file. ``work_dir`` must still exist --
-    run this before the worker is destroyed.
+    ``up`` motion: validate the app dir, require that its frontend bundle was
+    built, then hand the shared script the system-interface specifics --
+    boot ``uv run system-interface`` from that already-built app dir on a
+    free port; point layout persistence at a throwaway copy of the live layout
+    (``SYSTEM_INTERFACE_LAYOUT_DIR``) so the preview renders the user's real tabs
+    while its autosaves land in the copy, and additionally drop MNGR_AGENT_ID as a
+    belt-and-suspenders guard against clobbering the live ``layout.json``; declare
+    its own two service names self-referential
+    (``SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES``) so the preview tab the seeded
+    layout almost always contains renders an explanation instead of nesting the
+    preview inside itself; keep discovery so real conversations still render; run
+    in FOLLOW mode so the preview reads the live observer's agent lifecycle stream
+    instead of trying to start a second observer it cannot get the lock for; probe
+    ``/api/health``, which stays red unless that stream really is feeding the
+    preview; register the inner app and the labeled wrapper frame. The shared
+    script owns the ports, the process/service teardown, and the state file.
+
+    Because the health gate is strict, a preview whose lifecycle stream cannot be
+    established does not come up at all -- the shared script tears the partial
+    instance down and this returns non-zero. That is deliberate: a preview whose
+    agent view is silently frozen is worse than no preview, because the user
+    reads it as the real UI.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
     # should fail fast rather than reaching the shared script.
-    worker_app_dir = Path(work_dir) / APP_DIR
-    if not worker_app_dir.is_dir():
+    previewed_app_dir = Path(work_dir) / APP_DIR
+    if not previewed_app_dir.is_dir():
         sys.stderr.write(
-            f"preview: {worker_app_dir} is not a directory; is --work-dir correct "
-            "and is the worker still alive (not destroyed)?\n"
+            f"preview: {previewed_app_dir} is not a directory; is --work-dir "
+            "correct, and does that folder still exist (an editing worktree that "
+            "was removed, or a worker that was destroyed)?\n"
         )
         return 1
-    # The preview serves the worker's app dir as-is; it does not build for the
-    # worker. A work_dir without a frontend bundle means the worker reported done
-    # without building it (a fresh worktree has no gitignored static/ until built),
-    # so booting would only serve the backend's "Frontend not built" placeholder --
-    # a dead preview that reads as working. Refuse loudly and point at the fix: the
-    # worker must build before it is previewable.
+    # The preview serves the app dir as-is; it never builds for it. A work_dir
+    # without a frontend bundle means whoever produced it skipped the build (a
+    # fresh worktree has no gitignored static/ until built), so booting would only
+    # serve the backend's "Frontend not built" placeholder -- a dead preview that
+    # reads as working. Refuse loudly and point at the fix.
     if not (Path(work_dir) / FRONTEND_BUILD_INDEX).exists():
         sys.stderr.write(
             f"preview: no frontend build in {work_dir} "
             f"({FRONTEND_BUILD_INDEX} is missing), so the preview would serve the "
-            "'Frontend not built' placeholder. The worker must build the frontend "
-            "(cd system/apps/system_interface/frontend && npm ci && npm run build) before "
-            "its work_dir can be previewed -- re-brief it to build, then retry.\n"
+            "'Frontend not built' placeholder. Build the frontend first "
+            "(cd system/apps/system_interface/frontend && npm ci && npm run build) "
+            "-- in your editing worktree, or by re-briefing the worker -- then "
+            "retry.\n"
         )
         return 1
     other = _find_other_preview(repo_root, slug)
@@ -754,6 +977,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             f"'unpreview --slug {other_slug}'.\n"
         )
         return 1
+    seed_dir = _seed_preview_layout(repo_root, slug)
     result = runner.run(
         [
             sys.executable,
@@ -762,15 +986,24 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             "--name",
             _preview_instance_name(slug),
             "--cwd",
-            str(worker_app_dir),
+            str(previewed_app_dir),
             "--port-env",
             PREVIEW_PORT_ENV,
             "--host-env",
             PREVIEW_HOST_ENV,
+            "--env",
+            f"{PREVIEW_LAYOUT_DIR_ENV}={seed_dir}",
+            "--env",
+            f"{PREVIEW_AGENT_EVENTS_MODE_ENV}={FOLLOW_AGENT_EVENTS_MODE}",
+            "--env",
+            (
+                f"{PREVIEW_SELF_REFERENTIAL_SERVICES_ENV}="
+                f"{','.join(_PREVIEW_SERVICE_NAMES)}"
+            ),
             "--unset-env",
             ENV_MNGR_AGENT_ID,
             "--health-path",
-            HEALTH_PATH,
+            STRICT_HEALTH_PATH,
             "--service-name",
             PREVIEW_INNER_SERVICE_NAME,
             "--preview-service-name",
@@ -783,6 +1016,43 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             "uv",
             "run",
             TOOL_NAME,
+        ],
+        cwd=str(repo_root),
+        check=False,
+    )
+    returncode = int(getattr(result, "returncode", 0))
+    if returncode != 0:
+        # The boot failed, so nothing will consume the copy we just seeded and no
+        # ``unpreview`` is owed for an instance that never came up. Remove it here
+        # rather than leaving a stale layout copy behind for a preview that does
+        # not exist.
+        shutil.rmtree(seed_dir, ignore_errors=True)
+    return returncode
+
+
+def preview_refresh(slug: str, repo_root: Path, *, runner: Runner) -> int:
+    """Re-boot the preview's inner app on its existing port via the shared script.
+
+    Thin adapter over ``serve_isolated_instance.py refresh``. Used during the live
+    editing loop for a **backend** round: after the lead rebuilds/edits the code
+    in its worktree (which the inner app runs from), this bounces just the inner
+    app process on the same port so the new backend is picked up -- leaving the
+    wrapper frame, the service registration, and the user's tab untouched. A
+    frontend-only round needs no process bounce (the inner app serves the rebuilt
+    ``static/`` bundle straight from disk); the lead just rebuilds and reloads the
+    tab's iframe with ``layout.py refresh si-preview``. Either way the lead
+    reloads the iframe itself afterward -- this never touches the tab. Returns the
+    shared script's exit code (0 healthy; 1 if there is nothing to refresh or the
+    rebooted app did not come up)."""
+    result = runner.run(
+        [
+            sys.executable,
+            str(_SHARED_SERVE_SCRIPT),
+            "refresh",
+            "--name",
+            _preview_instance_name(slug),
+            "--repo-root",
+            str(repo_root),
         ],
         cwd=str(repo_root),
         check=False,
@@ -807,6 +1077,9 @@ def unpreview(slug: str, repo_root: Path, *, runner: Runner) -> int:
         cwd=str(repo_root),
         check=False,
     )
+    # Remove the throwaway layout copy this preview booted from (the shared
+    # script only tears down its own state dir, not ours). Idempotent.
+    shutil.rmtree(_preview_layout_seed_dir(repo_root, slug), ignore_errors=True)
     return int(getattr(result, "returncode", 0))
 
 
@@ -821,9 +1094,9 @@ def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Manage the system-interface update lifecycle: preview a worker "
-            "branch before merging, reveal a merged change with auto-recovery, "
-            "and tear the preview down."
+            "Manage the system-interface update lifecycle: preview a built "
+            "work_dir as a labeled tab, refresh that preview in place, reveal a "
+            "merged change with auto-recovery, and tear the preview down."
         )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -840,8 +1113,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     preview_parser = subparsers.add_parser(
         "preview",
-        help="Boot the worker's already-built work_dir and serve it as a "
-        "previewable tab, before any merge.",
+        help="Boot an already-built work_dir and serve it as a previewable tab, "
+        "before any merge.",
     )
     preview_parser.add_argument(
         "--slug",
@@ -851,10 +1124,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     preview_parser.add_argument(
         "--work-dir",
         required=True,
-        help="The worker's work_dir (from `mngr ls --include 'name==\"<worker>\"' "
-        "--format json` -> agent.work_dir). The worker must still exist.",
+        help="A built work_dir to serve: the lead's editing worktree during the "
+        "live loop, or a worker's work_dir (from `mngr ls --include "
+        "'name==\"<worker>\"' --format json` -> agent.work_dir) for a final "
+        "pre-merge preview. It must still exist when this runs.",
     )
     _add_repo_root_arg(preview_parser)
+
+    preview_refresh_parser = subparsers.add_parser(
+        "preview-refresh",
+        help="Re-boot the preview's inner app on its existing port to pick up a "
+        "backend edit/rebuild, without touching the wrapper or the user's tab.",
+    )
+    preview_refresh_parser.add_argument(
+        "--slug", required=True, help="The slug passed to 'preview'."
+    )
+    _add_repo_root_arg(preview_refresh_parser)
 
     unpreview_parser = subparsers.add_parser(
         "unpreview",
@@ -883,6 +1168,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root,
                 runner=Runner(),
             )
+        if args.command == "preview-refresh":
+            return preview_refresh(args.slug, repo_root, runner=Runner())
         if args.command == "unpreview":
             return unpreview(args.slug, repo_root, runner=Runner())
         parser.error(f"unknown command: {args.command}")
