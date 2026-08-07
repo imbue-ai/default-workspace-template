@@ -101,6 +101,23 @@ class InterruptAgentResponse(FrozenModel):
     status: str = Field(description="Status of the interrupt operation")
 
 
+class DrainToComposerResponse(FrozenModel):
+    """Response from POST /api/agents/{id}/drain-to-composer.
+
+    Carries the concatenated queued block the frontend drops into the composer
+    (unsent) for the user to edit and send. Empty when the queue was already
+    drained by the time the action fired.
+    """
+
+    block: str = Field(description="The queued messages as one concatenated block, or '' if the queue was empty")
+
+
+class AgentRestartError(RuntimeError):
+    """Raised when the ``mngr start --restart`` a queue action depends on fails."""
+
+    ...
+
+
 class ActivityRequest(FrozenModel):
     """Request body for the /api/activity endpoint.
 
@@ -126,6 +143,19 @@ class ErrorResponse(FrozenModel):
     """Error response body."""
 
     detail: str = Field(description="Human-readable error description")
+
+
+class QueuedMessageState(FrozenModel):
+    """One currently-queued message on the per-agent WebSocket state.
+
+    The harness-agnostic wire shape of a queued message: the frontend renders the
+    queued group from a full snapshot of these, minted by the harness's queue
+    populator (see ``harnesses.queued_set``).
+    """
+
+    queued_id: str = Field(description="Stable id the populator minted; keys the rendered bubble")
+    content: str = Field(description="Verbatim text the user queued")
+    timestamp: str = Field(description="Enqueue timestamp (ISO string from the harness ledger)")
 
 
 class AgentStateItem(FrozenModel):
@@ -157,6 +187,15 @@ class AgentStateItem(FrozenModel):
             "The agent's live model/effort/fast selection plus the catalog option "
             "it matched, or None when no model resolution is available for this "
             "agent. Twin of ``activity_state``; drives the composer's model bar."
+        ),
+    )
+    queued_messages: tuple[QueuedMessageState, ...] = Field(
+        default=(),
+        description=(
+            "Full snapshot of the messages currently parked in the agent's harness "
+            "queue, in enqueue order. Empty when nothing is queued (or the harness "
+            "has no queue populator). A sibling of ``activity_state``: ephemeral "
+            "live state pushed on the agents WebSocket, replaced wholesale each push."
         ),
     )
 

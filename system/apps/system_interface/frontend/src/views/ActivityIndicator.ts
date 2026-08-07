@@ -16,7 +16,7 @@
 
 import m from "mithril";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
-import { getEffectiveActivityState } from "../models/PendingMessages";
+import { getAgentById } from "../models/AgentManager";
 
 /**
  * Find the most recent assistant tool call whose tool_call_id has no matching
@@ -112,7 +112,7 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
   return {
     view(vnode) {
       const { agentId, events } = vnode.attrs;
-      const state = getEffectiveActivityState(agentId);
+      const state = getAgentById(agentId)?.activity_state ?? null;
       const label = labelForActivityState(state, events);
 
       const now = Date.now();

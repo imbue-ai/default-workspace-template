@@ -46,7 +46,7 @@ import { ModelBar } from "./ModelBar";
 import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
-import { renderPendingMessages } from "./PendingMessageView";
+import { renderQueuedMessages } from "./QueuedMessageView";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -643,18 +643,18 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const events = getEventsForAgent(agentId);
 
     if (events.length === 0) {
-      // No transcript yet -- but the user may have just sent their first
-      // message, which should still show immediately as an optimistic bubble
-      // rather than be hidden behind the empty-state placeholder.
-      const pendingNodes = renderPendingMessages(agentId);
-      if (pendingNodes.length === 0) {
+      // No transcript yet -- but a message the user just sent may already be
+      // queued (the harness parked it), so render the queued group rather than
+      // hiding it behind the empty-state placeholder.
+      const queuedNodes = renderQueuedMessages(agentId);
+      if (queuedNodes.length === 0) {
         return m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
           m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
         );
       }
-      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, pendingNodes)]);
+      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, queuedNodes)]);
     }
 
     const agent = getAgentById(agentId);
@@ -739,11 +739,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     });
 
     return m("div", { class: "message-list-wrapper" }, [
-      // Pending (optimistic) messages render after the virtualized rows so a
-      // just-sent bubble shows at the live tail until its real event lands.
+      // The queued-message group renders after the virtualized rows so it sits at
+      // the live tail, below the last committed turn. It is a full snapshot from
+      // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
         ...renderTranscriptSegments(rows, segments),
-        ...renderPendingMessages(agentId),
+        ...renderQueuedMessages(agentId),
       ]),
     ]);
   }
