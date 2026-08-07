@@ -18,6 +18,7 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
+import { clampDropdownLeft } from "./dropdown-position";
 import { icon } from "./icons";
 
 /** Shown on hover for any read-only model/effort/fast slot: a read-only harness's model is
@@ -68,24 +69,77 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     }
   }
 
-  // Slide an open popup horizontally so it stays within the viewport. The popups are
-  // right-anchored to their trigger, so a wide one (or a trigger near the left edge) would
-  // otherwise spill off-screen; this nudges it back by just enough, leaving a small margin.
-  // Shared by every bottom popup (model + effort) since they all render through the same
-  // container below. `max-width` already bounds it to the viewport width, so a shift always
-  // brings it fully on-screen. Reset before measuring so it is idempotent across redraws.
-  function keepInViewport(dom: HTMLElement): void {
-    const margin = 8;
-    dom.style.transform = "";
-    const rect = dom.getBoundingClientRect();
-    let shift = 0;
-    if (rect.left < margin) {
-      shift = margin - rect.left;
-    } else if (rect.right > window.innerWidth - margin) {
-      shift = window.innerWidth - margin - rect.right;
+  // The margin every popup keeps between itself and each screen edge.
+  const DROPDOWN_MARGIN = 8;
+
+  // The live viewport listeners/observer that keep the OPEN dropdown positioned. A
+  // single dropdown is open at a time (see `openDropdown`), so one set suffices; they
+  // are wired in the dropdown's `oncreate` and torn down in its `onremove`.
+  let dropdownResizeObserver: ResizeObserver | null = null;
+  let dropdownViewportListener: (() => void) | null = null;
+
+  // Position an open popup horizontally: align its inner text under the trigger's label
+  // text when there is room, and clamp so the whole box stays on-screen with a margin.
+  // The dropdown is left-anchored to its wrapper (`left: 0`); we translateX from there.
+  //
+  // Robust to size/layout changes AFTER open -- the searchable picker grows once its async
+  // model list resolves, and a dockview split/resize can move the trigger with no redraw --
+  // because it re-measures the live rects every time it runs, and it runs on every redraw
+  // (`onupdate`), on any dropdown resize (ResizeObserver), and on window resize. Clearing
+  // the transform before measuring keeps it idempotent across those repeated calls.
+  function positionDropdown(dom: HTMLElement): void {
+    const wrapper = dom.parentElement;
+    if (wrapper === null) {
+      return;
     }
+    dom.style.transform = "";
+    const dropdownRect = dom.getBoundingClientRect();
+    const label = wrapper.querySelector(".model-selector-label");
+    const header = dom.querySelector(".model-selector-dropdown-header");
+    // Fall back to the dropdown's own left when either reference is somehow absent, so a
+    // missing node yields no shift rather than throwing (both always render in practice).
+    const labelLeft = label === null ? dropdownRect.left : label.getBoundingClientRect().left;
+    // Measure the text inset from the DOM (header text left minus the box's left) rather
+    // than hard-coding padding, so it stays correct if the styling changes. The header's own
+    // left padding is added because its border-box left only reaches the dropdown's padding,
+    // not the text; without it the dropdown would sit ~10px right of the trigger label.
+    const textInset =
+      header === null
+        ? 0
+        : header.getBoundingClientRect().left - dropdownRect.left + parseFloat(getComputedStyle(header).paddingLeft);
+    const targetLeft = clampDropdownLeft({
+      labelLeft,
+      textInset,
+      dropdownWidth: dropdownRect.width,
+      viewportWidth: window.innerWidth,
+      margin: DROPDOWN_MARGIN,
+    });
+    const shift = targetLeft - dropdownRect.left;
     if (shift !== 0) {
       dom.style.transform = `translateX(${shift}px)`;
+    }
+  }
+
+  // Attach the live re-position listeners for a freshly opened dropdown.
+  function attachDropdownPositioning(dom: HTMLElement): void {
+    dropdownViewportListener = () => positionDropdown(dom);
+    window.addEventListener("resize", dropdownViewportListener);
+    // The ResizeObserver's initial notification (delivered before the next paint) is
+    // redundant with the direct positionDropdown() call in oncreate; its real job is to
+    // re-fire when the async model list later changes the dropdown's size.
+    dropdownResizeObserver = new ResizeObserver(() => positionDropdown(dom));
+    dropdownResizeObserver.observe(dom);
+  }
+
+  // Tear the listeners down when the dropdown closes.
+  function detachDropdownPositioning(): void {
+    if (dropdownViewportListener !== null) {
+      window.removeEventListener("resize", dropdownViewportListener);
+      dropdownViewportListener = null;
+    }
+    if (dropdownResizeObserver !== null) {
+      dropdownResizeObserver.disconnect();
+      dropdownResizeObserver = null;
     }
   }
 
@@ -174,10 +228,14 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               class: "model-selector-dropdown",
               oncreate: (v: m.VnodeDOM) => {
                 document.addEventListener("mousedown", handleOutsideMousedown);
-                keepInViewport(v.dom as HTMLElement);
+                positionDropdown(v.dom as HTMLElement);
+                attachDropdownPositioning(v.dom as HTMLElement);
               },
-              onupdate: (v: m.VnodeDOM) => keepInViewport(v.dom as HTMLElement),
-              onremove: () => document.removeEventListener("mousedown", handleOutsideMousedown),
+              onupdate: (v: m.VnodeDOM) => positionDropdown(v.dom as HTMLElement),
+              onremove: () => {
+                document.removeEventListener("mousedown", handleOutsideMousedown);
+                detachDropdownPositioning();
+              },
             },
             [
               m("div", { class: "model-selector-dropdown-header" }, opts.header),
@@ -333,8 +391,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             {
               type: "button",
               class:
-                `fast-toggle${currentFast ? " fast-toggle--on" : ""}` +
-                (interactive ? "" : " fast-toggle--readonly"),
+                `fast-toggle${currentFast ? " fast-toggle--on" : ""}` + (interactive ? "" : " fast-toggle--readonly"),
               // Not `disabled` for read-only (see the trigger above: disabled kills the tooltip).
               "data-tooltip": !interactive
                 ? READ_ONLY_TOOLTIP
