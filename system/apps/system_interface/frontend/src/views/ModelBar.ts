@@ -46,19 +46,6 @@ function capitalizeEffort(level: string): string {
 // this many <li> at once. The user narrows with the search box; the cap bounds the DOM.
 const MODEL_SEARCH_CAP = 100;
 
-// The harness logo is static per harness (from the catalog), so it must never flicker as
-// the live model_choice churns. Isolate it in its own component that only re-renders when
-// the SVG actually changes -- otherwise mithril would re-inject the trusted HTML on every
-// redraw, which reads as a flicker.
-const HarnessLogo: m.Component<{ svg: string }> = {
-  onbeforeupdate(vnode, old) {
-    return vnode.attrs.svg !== (old.attrs as { svg: string }).svg;
-  },
-  view(vnode) {
-    return m("span", { class: "model-bar-logo", "aria-hidden": "true" }, m.trust(vnode.attrs.svg));
-  },
-};
-
 export function ModelBar(): m.Component<{ agentId: string }> {
   // Which dropdown is open (model or effort, or none) and the bar element used to
   // detect an outside click closing it.
@@ -256,21 +243,22 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       const agent = getAgentById(agentId);
       const catalog: HarnessCatalog | null = getHarnessCatalog(agent?.harness);
       if (catalog === null) {
-        // No catalog (feature-flagged off, or catalogs not loaded yet): no bar.
+        // No catalog (feature-flagged off, or catalogs not loaded yet): no slots.
         return null;
       }
-      const logo = m(HarnessLogo, { svg: catalog.icon_svg });
 
+      // The harness logo lives on its own path now (HarnessLogo, mounted beside this bar), so
+      // it never blinks with the model choice. This component renders ONLY the model/effort/fast
+      // slots and is free to return null before a choice resolves without taking the logo down.
       const choice = effectiveChoice(agentId, agent?.model_choice);
       if (choice === null) {
-        // The live selection has not resolved yet; show the logo alone.
-        return m("div", { class: "model-bar" }, logo);
+        // The live selection has not resolved yet; render no slots (the logo shows separately).
+        return null;
       }
       const matched = choice.matched;
       if (matched === null) {
         // The current combo matches no catalog option: a shrug, no model/effort/fast.
         return m("div", { class: "model-bar" }, [
-          logo,
           m("span", { class: "model-bar-shrug", "data-tooltip": "Unrecognized model" }, "\u{1F937}"),
         ]);
       }
@@ -381,7 +369,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             barElement = null;
           },
         },
-        [logo, modelSlot, effortSlot, fastSlot],
+        [modelSlot, effortSlot, fastSlot],
       );
     },
   };

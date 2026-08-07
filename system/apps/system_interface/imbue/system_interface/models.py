@@ -74,6 +74,12 @@ class ModelOptionsResponse(FrozenModel):
     )
 
 
+class HarnessLogoResponse(FrozenModel):
+    """Response from GET /api/agents/{id}/harness-logo."""
+
+    svg: str = Field(description="The agent's harness logo as an inline SVG (currentColor monochrome)")
+
+
 class WorkspaceFastModeResponse(FrozenModel):
     """Response from GET|POST /api/workspace/fast-mode."""
 

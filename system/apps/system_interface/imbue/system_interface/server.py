@@ -75,6 +75,7 @@ from imbue.system_interface.models import CreateChatRequest
 from imbue.system_interface.models import CreateCodexRequest
 from imbue.system_interface.models import DestroyAgentResponse
 from imbue.system_interface.models import ErrorResponse
+from imbue.system_interface.models import HarnessLogoResponse
 from imbue.system_interface.models import InterruptAgentResponse
 from imbue.system_interface.models import ModelOptionsResponse
 from imbue.system_interface.models import RandomNameResponse
@@ -526,6 +527,21 @@ def _get_model_options_endpoint(agent_id: str) -> Response:
         return _agent_not_found_response(agent_id)
     offered = resolver.list_offered_models()
     return _json_response(ModelOptionsResponse(models=offered).model_dump())
+
+
+def _get_harness_logo_endpoint(agent_id: str) -> Response:
+    """The agent's harness logo SVG -- a per-agent path decoupled from the model bar.
+
+    The logo is a pure function of the agent's harness, so it must never blink with the live
+    model choice or wait on the catalog fetch. This resolves the harness backend-side and
+    returns its icon directly, so the frontend can render the logo from ``agentId`` alone,
+    independent of ``model_choice`` and of ``GET /api/harnesses``. 404 for an unknown agent
+    (e.g. a proto-agent), which the frontend treats as "don't show the logo yet".
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    return _json_response(HarnessLogoResponse(svg=get_catalog(agent_info.harness).icon_svg).model_dump())
 
 
 def _workspace_fast_mode_decision_path() -> Path | None:
@@ -1886,6 +1902,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_choice_endpoint, methods=["POST"])
     application.add_url_rule(
         "/api/agents/<agent_id>/model-options", view_func=_get_model_options_endpoint, methods=["GET"]
+    )
+    application.add_url_rule(
+        "/api/agents/<agent_id>/harness-logo", view_func=_get_harness_logo_endpoint, methods=["GET"]
     )
     application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
     application.add_url_rule(
