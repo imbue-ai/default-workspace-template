@@ -238,7 +238,10 @@ these two the same text."
   whole group on each push.
 - Render the queued group below the last committed turn, in enqueue order, reusing
   the user-bubble *view* (not `classifyUserMessage`).
-- **[Shoulder tap]** button above the queued group → `POST /flush-queue`; disabled
+- **Header row** above the topmost queued message: a label **"Queued messages"**
+  on the LEFT and the **[Shoulder tap]** button on the RIGHT of the same row,
+  styled as a subtle group header consistent with the chat UI.
+- **[Shoulder tap]** button (in that header row) → `POST /flush-queue`; disabled
   while in flight. On hover it shows a tooltip: **"Gently interrupt model to send
   queued instructions"** (use the same CSS `data-tooltip` pattern the progress-view
   markers use; native `title` is unreliable in the webview).
