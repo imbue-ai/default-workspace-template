@@ -1,168 +1,168 @@
-# Antigravity (agy) message queuing — design spec
+# Antigravity (agy) queuing — a send-sourced outbox that feeds the shared queue
 
-Goal: when a user sends a message to a **busy** agy agent, show it as a "queued" bubble
-immediately, then let it become the real turn when agy processes it — the UX Codex gives.
-This spec is grounded in live simulations against real agy agents; the findings materially
-shaped the design (agy **coalesces** its queue — see §2).
+agy slots into the **existing** shoulder-tap queued-message system (the shared `QueuedSet`,
+the `queued_messages` WS snapshot, `QueuedMessageView`, the `[Gently]` flush + composer
+actions). It needs exactly one harness-specific piece — a queue **populator** — same as
+claude, codex, and pi. The only twist is agy's enqueue *source* and its coalescing *leave*.
 
-Status: design only, not built. Session-dependent by nature: the queue lives in agy's TUI
-memory and dies with the process (a restart/interrupt wipes it), exactly like Codex. That is
-acceptable and reflected below.
-
----
-
-## 0. Why Codex's mechanism doesn't port
-Codex's queuing relies on a **patched codex binary** that appends every enqueued message to a
-`queued_input.jsonl` sidecar with a stable `queued_id`; its watcher tails that into a
-placeholder bubble and re-keys the drained rollout turn onto it (1 queued message → 1 rollout
-turn, matched by normalized content). **agy has neither a sidecar nor 1:1 draining.** We must
-source the queued signal ourselves, and handle coalescing.
+Everything downstream of the populator is untouched: no frontend changes, no new endpoint,
+no new WS field. agy "just works" with the queue system once its populator feeds the set.
 
 ---
 
-## 1. What agy gives us (all verified live)
+## 0. The shared system (recap — do not rebuild any of this)
+- **`QueuedSet`** (`harnesses/queued_set.py`): FIFO of `QueuedMessage{queued_id, content,
+  enqueue_ts, is_phantom}`. Mutators `add` / `resolve_oldest` / `resolve(id)` / `clear`;
+  readers `snapshot()` (real entries → wire) and `concatenated_block()` (newline-joined turn).
+- **Per-harness populator** maps that harness's raw signals onto those mutators. The ONLY
+  harness-specific code. Examples: `claude/queue_tracker.py` (reconstructs enqueue/leave from
+  the transcript ledger), `pi_coding/queue_tracker.py` (tails mngr's `pi_inbox` file).
+- **Watcher owns the populator** and exposes the base hooks (`session_watcher.py`, default
+  no-ops): `set_queue_snapshot_callback`, `get_queued_messages`, `get_queued_block`,
+  `clear_queue`, `notify_idle`. `app_context.get_or_create_watcher` bridges the snapshot to
+  `agent_manager.update_queued_messages` and registers `notify_idle` as the working→IDLE
+  backstop.
+- **Downstream (all shared)**: `queued_messages` on the agents WS state → `QueuedMessageView`
+  renders the group + `[Gently]` button → `POST /flush-queue` / composer action, both using
+  `concatenated_block()`.
 
-| Signal | Finding | Use |
+Each populator is defined by two signals and one backstop:
+- **enqueue** — a message the user parked (added to the FIFO tail),
+- **leave** — a parked message committed (dropped from the FIFO head),
+- **working→IDLE → clear** — the backstop for interrupts / crashes / flush-restart.
+
+---
+
+## 1. agy's problem: no enqueue ledger. The outbox IS the ledger.
+
+pi reads `pi_inbox` (mngr appends every outgoing message there); claude reconstructs the
+ledger from its transcript. **agy has neither** — verified: mngr_antigravity writes no inbox,
+and a message queued while agy is busy does NOT appear in agy's transcript until it drains.
+So agy has no on-disk source the watcher can tail for **enqueue**.
+
+**The enqueue source is our own send.** When the UI sends a message, that IS the parked
+message — agy accepted it (mngr confirms) but won't act until the current turn ends. So the
+populator is a **send-sourced outbox**: the list of messages we sent that have not yet drained
+into the transcript. This is the "custom outbox" — the agy analogue of `pi_inbox`, except the
+ledger is the UI's own send record rather than a file. **leave** and the **backstop** are the
+same as every harness (drained `user_message` / working→IDLE).
+
+---
+
+## 2. Design — `AntigravityQueueTracker` (mirrors `PiQueueTracker`)
+
+`harnesses/antigravity/queue_tracker.py`, wrapping one shared `QueuedSet`:
+
+| method | driver | action |
 |---|---|---|
-| **Transcript timing** | A message queued while agy is busy is **not** in the transcript (`steps` DB) until agy processes it; then it lands as an ordinary `USER_INPUT` step with no queued marker. | The transcript is the *drain* signal, not the *queued* signal. |
-| **Send acceptance** | `send_message_to_agent` → mngr confirms delivery when agy's `active` marker advances. Sending to a **busy** agent returned success **well before** the turn ended — mngr confirms the message was *accepted into agy's queue* promptly, it does not block to turn-end. | The **primary queued signal**: accepted + agent-was-busy ⇒ queued. |
-| **Pane** | Queued messages render as consecutive `▸`-prefixed lines above the input box. | Optional enrichment (§7); fragile. |
-| **Interrupt** | The UI "interrupt" is `mngr start --restart --no-resume` — a **process restart**, which wipes agy's in-memory queue and calls `reset_activity_state`. | Clear the outbox on interrupt (§6). |
+| `enqueue(content, timestamp)` | **the send path** (§3) | `QueuedSet.add(mint_id(...), content, timestamp, is_phantom=blank)` — append to FIFO tail |
+| `leave(drained_content)` | **the watcher** (each newly-ingested `user_message`) | drop FIFO head(s) — **coalescing-aware (§4)** |
+| `on_idle()` / `clear()` | working→IDLE backstop / flush restart | `QueuedSet.clear()` |
+| `reset()` | re-attach / truncation | fresh `QueuedSet` |
+| `snapshot()` / `concatenated_block()` | shared surface | delegate to the set |
+
+`mint_id`: stable synthetic id salted by a monotonic enqueue counter + content (so two
+identical sends get distinct ids; stable for the rendered bubble). Not a correlation key —
+resolution is positional, exactly like pi/claude.
+
+The FIFO conservation holds uniformly: **every UI send enqueues one; every drained
+`user_message` leaves (pops).** A message sent to an idle agent enqueues then drains within
+~1s and pops right back off — so, as pi already does, the snapshot push is **debounced** by a
+short stability window so that transient enqueue never flickers as "queued".
 
 ---
 
-## 2. The decisive finding: agy COALESCES its queue
+## 3. Wiring the enqueue (the one new seam)
 
-**When agy finishes its current turn, it joins ALL pending queued messages with `\n` into a
-single `USER_INPUT` turn and produces one reply.** Verified live:
+The watcher owns the populator (like pi), but agy's enqueue comes from the send, which the
+watcher can't observe. Bridge it with one base-watcher hook:
 
-- 2 queued → transcript turn `'QUEUE1: reply with only the word ONE\nQUEUE2: reply with only the word TWO'`
-- 3 queued → transcript turn `'AAA say a\nBBB say b\nCCC say c'`
+- **`session_watcher.py`**: add `note_sent_message(self, content: str, timestamp: str) -> None`
+  — a concrete **no-op default** (so no other harness changes), alongside the existing queue
+  hooks.
+- **`AntigravitySessionWatcher.note_sent_message`** → `self._queue_tracker.enqueue(...)` then
+  push the (debounced) snapshot via the registered callback.
+- **The send endpoint** (`server` `POST /api/agents/:id/message`) already resolves both the
+  agent and the watcher; on a successful `send_message_to_agent`, call
+  `watcher.note_sent_message(content, now_iso)`. (No-op for non-agy harnesses, whose watchers
+  keep the default.)
 
-The pane even shows them stacked under one `>` turn, and agy's own summary said "Processed
-both queued items … within a single turn." So the mapping is **N queued messages → 1 combined
-turn**, not Codex's 1→1. This is the core constraint the design must handle: a drained turn
-must reconcile against **multiple** outbox entries at once, and a single queued message is just
-the N=1 case (no `\n`).
-
----
-
-## 3. Design — a backend-authoritative outbox (not the frontend optimistic store)
-
-Keep the queued state in a **backend per-agent outbox** that the backend fills from the send
-signal and drains by watching the transcript. The frontend only *renders* the outbox list; it
-does not run its own optimistic send/reconcile (the brittle `PendingMessages` content-reconcile
-path we're avoiding). Because the outbox is a plain list keyed by content, coalescing is handled
-by clearing several entries against one drained turn — no per-event id-superseding gymnastics.
-
-### Components
-- **`AntigravityOutbox`** (new, per agent): an ordered list of entries
-  `{queued_id, content, normalized_content, sent_at}`. `queued_id` is stable
-  (`f"agy-queued-{sha1(normalized+ordinal)}"`).
-- **`AgentManager.send_message_to_agent`** (existing): after a successful send, if the agent's
-  `activity_state` was **not IDLE** (busy ⇒ queued), append to the outbox and broadcast.
-- **`AntigravitySessionWatcher`** (existing): on each new `USER_INPUT` event, run the
-  **drain-reconcile** (§4) to remove the matched outbox entries and broadcast.
-- **Serialization**: the agent's serialized state gains `queued_messages: [{queued_id, content}]`
-  (ordered). It rides the existing `agents_updated` WebSocket broadcast, so no new stream.
-- **Frontend**: renders `queued_messages` as "Queued" bubbles appended after the transcript,
-  before the input box. No optimistic store, no content-reconcile — the backend owns the list.
-
-### Flow
-1. **Send.** UI POST `/message` → `send_message_to_agent`. On success, read `activity_state`:
-   - **busy** (THINKING / TOOL_RUNNING) → append an outbox entry → broadcast → queued bubble shows.
-   - **idle** → no entry; the message is processed now and appears in the transcript within ~1s.
-2. **Queued bubbles** render from `queued_messages` (ordered, styled as pending).
-3. **Drain.** agy coalesces + processes → the watcher decodes one combined `USER_INPUT` turn.
-4. **Reconcile (§4).** The combined turn's `\n`-segments are matched against the front of the
-   outbox; matched entries are removed → broadcast → queued bubbles disappear; the combined turn
-   now renders from the transcript (see §5 for the 3→1 collapse this implies).
+leave / idle / snapshot need **no** new wiring — they use the existing base hooks the watcher
+already overrides: the antigravity watcher, on each newly-ingested `user_message` event
+(its existing scan), calls `self._queue_tracker.leave(event_content)`; `notify_idle` and
+`set_queue_snapshot_callback` are the standard overrides `app_context` already invokes.
 
 ---
 
-## 4. Drain-reconcile (handles coalescing)
+## 4. Coalescing — the flag biases `leave`
 
-On each newly-emitted `USER_INPUT` event (normalized content `C`):
-1. If the outbox is empty → nothing to do (normal message).
-2. Split `C` on `\n` into ordered segments `s1..sk` (normalize each).
-3. Walk the outbox from the front; if `s1..sk` equal the normalized `content` of the first `k`
-   outbox entries **in order**, remove those `k` entries (they've drained). This covers:
-   - **coalesced** drain (`k = N` queued messages joined), and
-   - **single** queued message (`k = 1`, no `\n`).
-4. If the segments don't line up with the front run (e.g. the user also typed directly in the
-   terminal, or agy reformatted), fall back to a **guarded fuzzy match**: for each segment,
-   remove the single outbox entry whose normalized content it best matches on the last-64-char
-   suffix; only reconcile when exactly one candidate matches (never mis-pair two similar
-   messages). Leave unmatched entries in the outbox (they'll clear on the never-drains safety
-   net, §6).
+agy joins ALL pending queued messages with newlines into ONE `user_message` turn at turn-end
+(verified: 3 queued → `"A\nB\nC"`). So one drained turn represents **N** parked messages
+leaving. `leave` must pop N heads, not one. Drive that off the **queue-behavior flag**, so the
+coalescing lives in one declared place, not hardcoded:
 
-Matching primary key is **exact normalized content** because the parser already strips agy's
-`<USER_REQUEST>…</USER_REQUEST>` wrapper, so the drained text equals the sent text — no fuzzy
-needed for the common case; the fuzzy pass is only a safety fallback.
+- **`QueueBehavior` enum** (`harnesses/model.py`, beside `SwitchMode`/`PickerMode`):
+  `NORMAL = "normal"` (one drain pops one head — claude/codex/pi) · `COALESCES = "coalesces"`
+  (one drain pops one head **per newline segment**). Add `queue_behavior: QueueBehavior =
+  QueueBehavior.NORMAL` to `HarnessCatalog`; set `COALESCES` on `ANTIGRAVITY_CATALOG`. Default
+  NORMAL ⇒ inert for every existing harness. The bias is applied **backend-side in the
+  populator's `leave`**, not the frontend — the frontend stays dumb and just renders
+  `queued_messages`.
+- **`AntigravityQueueTracker.leave(drained_content)`**: with `COALESCES`, `resolve_oldest()`
+  once per newline segment of `drained_content` (positional, FIFO — the combined turn is the
+  join of the oldest N parked messages, so popping N heads is exactly right). With `NORMAL`
+  it's a single `resolve_oldest()` (but agy only ever uses COALESCES).
 
----
+  The tracker reads its behavior from the catalog at build (or is handed it), so the enum is
+  the single source of truth for the bias.
 
-## 5. Rendering: the 3→1 collapse (accepted)
-Because agy coalesces, the durable transcript holds **one** combined turn, while the outbox held
-**N** queued bubbles. On drain the N queued bubbles are removed and the one combined turn renders
-(its literal `\n`-joined text, as one user bubble), followed by agy's single reply. So three
-queued bubbles visibly **collapse into one** combined bubble on drain.
-
-This is accepted, because it is honest (agy really did process them as one turn) and it is
-**consistent with a rebuild-from-transcript** (a page refresh / reconnect, or a backend restart,
-shows the same one combined bubble — there is no durable N-bubble form to preserve). Splitting the
-combined turn back into N bubbles was rejected: it can't be distinguished from a genuine
-multi-line single message, and it would still collapse on any transcript rebuild.
+Result: three queued bubbles (from three sends) render via the shared `queued_messages`
+snapshot; when agy drains them as one combined turn the populator pops all three heads and the
+snapshot empties — the shared `QueuedMessageView` clears the group. No frontend involvement.
 
 ---
 
-## 6. Edge cases
-- **Sent while IDLE** → not queued; no outbox entry (message appears in the transcript promptly).
-- **Interrupt** = process restart (verified): agy's in-memory queue is gone. Hook the outbox clear
-  into `AgentManager.reset_activity_state` (the interrupt path already calls it) → drop all entries
-  for that agent. No synthetic marker needed.
-- **Never-drains safety net.** If the lifecycle returns to a settled IDLE (turn + queue fully done)
-  and outbox entries remain unreconciled, drop them — they provably won't arrive (agy drained its
-  queue). Mirrors the frontend's working→IDLE queue-drain safeguard, on the backend.
-- **Backend restart.** The outbox is in-memory and lost on restart; the still-queued messages are
-  gone from *our* view too (and, since interrupt=restart is how they'd be cleared anyway, the agy
-  queue may also be gone). Drained messages still render from the transcript. No persistence —
-  matches the session-dependent nature the user accepts.
-- **Terminal-typed messages** (not via the UI) never enter the outbox (no send went through us);
-  they render only on drain, as the combined turn. §7 is the only way to show them pre-drain.
-- **Duplicate content** queued twice → two entries with distinct `queued_id` (ordinal suffix);
-  the front-run match removes them in order.
+## 5. Registration
+Mirror pi/claude: the antigravity watcher builds its `AntigravityQueueTracker` in `build`,
+overrides the queue hooks, drives `enqueue` (from `note_sent_message`) / `leave` (from drained
+`user_message`s) / `clear` (`notify_idle`), and pushes debounced snapshots. No registry field
+is needed (the populator lives in the watcher, as pi's does); the only cross-harness edits are
+the `note_sent_message` base-hook default and the send-endpoint call (§3), plus the
+`QueueBehavior` flag (§4).
 
 ---
 
-## 7. Optional enrichment — pane cross-check (defer)
-To also show queued bubbles for **terminal-typed** messages, or to detect a **dropped** queue,
-add a periodic `tmux capture-pane`: take the contiguous run of `▸`-prefixed lines immediately
-above the input-box separator (excludes the "Thought for Ns" `▸`, which sits by the activity
-output, not the input box), de-wrap, and seed/verify the outbox by normalized content. A queued
-line that vanishes without a transcript drain was dropped → remove its entry. Brittle (wrapping,
-width, `▸` ambiguity, scrollback, per-cycle tmux cost); ship §3 first, add this only if
-terminal-typed queuing matters.
+## 6. The two shared actions — confirm they behave for agy
+Both come free from the shared surface (`concatenated_block()`), but agy's interrupt=restart
+makes them meaningful:
+- **`[Gently]` shoulder-tap (`/flush-queue`)**: restart agy (clears its in-memory queue) and
+  resend `concatenated_block()` (all parked messages, newline-joined) as one turn. Agy would
+  have coalesced them anyway, so resending the block is the same shape — and now none are lost
+  on the restart (the whole point). `clear_queue` empties the set after the restart.
+- **Composer action** (hand the block back to the input): unchanged, harness-agnostic.
+
+No agy-specific action code — the shared `_drain_queue`/flush already resend the whole block.
 
 ---
 
-## 8. Build order
-1. `AntigravityOutbox` (ordered list + normalized index + front-run/fuzzy match) + unit tests
-   (coalesced drain clears N entries; single clears 1; fuzzy fallback; safety-net clear).
-2. Serialize `queued_messages` onto the agent state; broadcast on change.
-3. `send_message_to_agent`: on success + busy → append; wire `reset_activity_state` → clear.
-4. Watcher: run drain-reconcile on each new `USER_INPUT` event, clearing matched entries.
-5. Frontend: render `queued_messages` as queued bubbles after the transcript (a `queued` style
-   pill); no optimistic store.
-6. Manual tmux verification: busy agent, send 3 via the UI → 3 queued bubbles; on drain they
-   collapse into the one combined turn + reply; interrupt mid-queue → bubbles clear.
+## 7. Build order
+1. `QueueBehavior` enum + `HarnessCatalog.queue_behavior` (default NORMAL) + set COALESCES on
+   `ANTIGRAVITY_CATALOG`. (~15 lines, inert for others.)
+2. `antigravity/queue_tracker.py` (`AntigravityQueueTracker`, coalescing `leave`) + unit tests
+   (enqueue/leave/coalesced-pop-N/idle-clear; mirror `pi_coding/queue_tracker_test.py`).
+3. `session_watcher.py`: `note_sent_message` no-op default.
+4. `AntigravitySessionWatcher`: own the tracker, override the queue hooks, drive leave from
+   drained `user_message`s + push debounced snapshots + `note_sent_message` enqueue.
+5. Send endpoint: call `watcher.note_sent_message` on a successful send.
+6. Live verify: queue 3 to a busy agy agent → three bubbles via the shared group; on the
+   combined drain they all clear; `[Gently]` restarts + resends the block.
 
----
-
-## 9. Limitations (explicit)
-- **Session-dependent / in-memory** — queue dies with the agy process (restart/interrupt) and the
-  outbox dies with the backend. No persistence, by design (matches Codex).
-- **N→1 coalescing collapse** — N queued bubbles become one combined bubble on drain (§5).
-- **UI-sent only** — terminal-typed queued messages have no pre-drain bubble unless §7 is added.
-- **Content-based reconcile** — exact-normalized primary + guarded fuzzy fallback; imperfect if agy
-  reformats the text, same brittleness class Codex accepts.
+## 8. Limitations (explicit)
+- **UI-sent only** — a message typed directly into agy's terminal never enters our outbox (no
+  send passed through us), so it has no pre-drain bubble. It still renders on drain as the
+  normal turn. (Same as pi would have if a message bypassed `pi_inbox`.)
+- **Positional resolution** — the outbox has no correlation id back to the drained turn, so
+  leaves are FIFO/positional (like pi/claude); the working→IDLE backstop sweeps anything that
+  never drains (interrupt/crash).
+- **Session-dependent** — the queue is agy's TUI memory + our in-memory outbox; a restart /
+  interrupt / backend restart clears it. Accepted (matches pi/claude).
