@@ -355,15 +355,19 @@ body {
 }
 
 /* Hover tooltips for the composer toolbar controls (model picker, fast-mode
-   toggle, attach, interrupt, send). Uses the shared CSS-tooltip pattern -- a
-   `::after` bubble fed by `data-tooltip` -- rather than native `title`, which is
-   unreliable in the desktop webview (see .pending-message-interrupt). The
-   toolbar sits at the composer's bottom, so the bubble points upward. */
-.message-input-toolbar [data-tooltip] {
+   toggle, attach, interrupt, send) and the under-bar row beneath the input
+   (the model/effort/fast slots live here, not in the toolbar). Uses the shared
+   CSS-tooltip pattern -- a `::after` bubble fed by `data-tooltip` -- rather than
+   native `title`, which is unreliable in the desktop webview (see
+   .pending-message-interrupt). Both rows sit at the composer's bottom, so the
+   bubble points upward. */
+.message-input-toolbar [data-tooltip],
+.composer-under-bar [data-tooltip] {
   position: relative;
 }
 
-.message-input-toolbar [data-tooltip]::after {
+.message-input-toolbar [data-tooltip]::after,
+.composer-under-bar [data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 8px);
@@ -389,7 +393,9 @@ body {
 }
 
 .message-input-toolbar [data-tooltip]:hover::after,
-.message-input-toolbar [data-tooltip]:focus-visible::after {
+.message-input-toolbar [data-tooltip]:focus-visible::after,
+.composer-under-bar [data-tooltip]:hover::after,
+.composer-under-bar [data-tooltip]:focus-visible::after {
   opacity: 1;
   visibility: visible;
 }
