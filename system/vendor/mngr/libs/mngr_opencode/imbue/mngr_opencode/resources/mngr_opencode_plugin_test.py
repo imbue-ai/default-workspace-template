@@ -213,6 +213,28 @@ def test_model_state_absent_variant_records_empty(tmp_path: Path) -> None:
     }
 
 
+def test_model_state_written_from_model_switch_without_a_turn(tmp_path: Path) -> None:
+    """A model switch (chat UI's POST /api/session/{id}/model, or /model in the TUI) emits
+    session.next.model.switched; the plugin records it immediately so the model bar reconciles
+    without waiting for an assistant message. The event's model uses `id`, not `modelID`."""
+    events = [
+        {"type": "session.created", "properties": {"info": {"id": "ses_root"}}},
+        {
+            "type": "session.next.model.switched",
+            "properties": {
+                "sessionID": "ses_root",
+                "model": {"providerID": "opencode", "id": "nemotron-3-ultra-free", "variant": ""},
+            },
+        },
+    ]
+    state = _run_plugin(tmp_path, events)
+    assert json.loads((state / _MODEL_STATE).read_text()) == {
+        "provider": "opencode",
+        "model": "nemotron-3-ultra-free",
+        "variant": "",
+    }
+
+
 # Permission events: the running opencode server (verified against the 1.16.2
 # binary) emits `permission.asked` (carrying the request `id`) when a tool blocks on
 # approval, and `permission.replied` (carrying `requestID`) when it is answered. The

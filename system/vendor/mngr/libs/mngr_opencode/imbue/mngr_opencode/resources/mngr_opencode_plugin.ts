@@ -437,6 +437,19 @@ export const MngrLifecyclePlugin: Plugin = async () => {
         return
       }
 
+      if (type === "session.next.model.switched") {
+        // The model selector changed WITHOUT sending a turn -- via the chat UI's switch
+        // (POST /api/session/{id}/model) or a /model in the attached TUI. Record it now so the
+        // chat model bar reconciles immediately, mirroring pi's model_select handler (opencode
+        // otherwise only writes model state on an assistant message.updated). The event's model
+        // carries `id`/`providerID`/`variant`; recordModelState expects `modelID`.
+        const switched = event.properties?.model
+        if (switched) {
+          recordModelState({ providerID: switched.providerID, modelID: switched.id, variant: switched.variant })
+        }
+        return
+      }
+
       if (type === "message.updated" || type === "message.part.updated") {
         accumulateMessageEvent(type, event.properties)
         appendRaw(JSON.stringify({ type, properties: event.properties }))
