@@ -119,8 +119,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   function attachDropdownPositioning(dom: HTMLElement): void {
     dropdownViewportListener = () => positionDropdown(dom);
     window.addEventListener("resize", dropdownViewportListener);
-    // ResizeObserver first fires synchronously after observe(), which also serves as the
-    // initial placement; it then re-fires when the async model list changes the size.
+    // The ResizeObserver's initial notification (delivered before the next paint) is
+    // redundant with the direct positionDropdown() call in oncreate; its real job is to
+    // re-fire when the async model list later changes the dropdown's size.
     dropdownResizeObserver = new ResizeObserver(() => positionDropdown(dom));
     dropdownResizeObserver.observe(dom);
   }
