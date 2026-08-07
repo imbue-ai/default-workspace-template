@@ -879,6 +879,18 @@ body {
   background: none;
 }
 
+/* A read-only slot (a read_only-switch-mode harness) is NOT `disabled` -- it renders at
+   normal weight/color and keeps its hover tooltip -- but it isn't interactive: default
+   cursor, no hover brighten/background. The model is switched from the agent's terminal. */
+.model-selector-trigger--readonly {
+  cursor: default;
+}
+
+.model-selector-trigger--readonly:hover {
+  color: var(--color-text-secondary);
+  background: none;
+}
+
 /* ── Composer fast-mode toggle (icon button in the toolbar) ── */
 .fast-toggle {
   display: inline-flex;
@@ -907,6 +919,17 @@ body {
 .fast-toggle--on:hover {
   color: var(--color-accent);
   background: var(--color-accent-light);
+}
+
+/* Read-only fast toggle: not `disabled` (keeps its tooltip), default cursor, no hover
+   brighten. `:not(--on)` so a read-only harness with fast enabled still shows the accent. */
+.fast-toggle--readonly {
+  cursor: default;
+}
+
+.fast-toggle--readonly:not(.fast-toggle--on):hover {
+  color: var(--color-text-secondary);
+  background: none;
 }
 
 /* A non-interactive copy of the toggle, set inline in running text so a sentence
