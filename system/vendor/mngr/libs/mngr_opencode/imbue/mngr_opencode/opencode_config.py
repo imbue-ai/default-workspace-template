@@ -66,6 +66,17 @@ _PLUGIN_DIR_NAME: str = "plugin"
 # transcript (see ``resources/mngr_opencode_plugin.ts``).
 PLUGIN_FILENAME: str = "mngr_opencode_plugin.ts"
 
+# opencode auto-reads ``<OPENCODE_CONFIG_DIR>/AGENTS.md`` as its global rules file (verified
+# against opencode's ``session/instruction.ts`` ``systemPaths()``: ``global.config`` resolves
+# from ``OPENCODE_CONFIG_DIR``). The plugin writes the agent's role instructions
+# (``append_system_prompt`` blocks + the output-style body) here so opencode's system prompt
+# carries them -- the opencode analog of agy's GEMINI.md / pi's APPEND_SYSTEM.md.
+AGENTS_MD_FILENAME: str = "AGENTS.md"
+
+# Where output styles are authored, relative to the work dir (mirrors mngr_antigravity /
+# mngr_pi_coding); read via the shared ``output_styles`` helpers.
+_OUTPUT_STYLES_DIR_RELATIVE: str = ".agents/output-styles"
+
 # Marker file (in ``$MNGR_AGENT_STATE_DIR``) whose presence
 # ``BaseAgent.get_lifecycle_state`` reads as RUNNING; absence means WAITING. The
 # plugin touches/removes it. Kept in sync with the literal ``"active"`` core checks.
@@ -187,6 +198,16 @@ def get_opencode_config_file_path(config_dir: Path) -> Path:
 def get_opencode_plugin_path(config_dir: Path) -> Path:
     """Return the lifecycle-plugin path under an OpenCode config dir's ``plugin/``."""
     return config_dir / _PLUGIN_DIR_NAME / PLUGIN_FILENAME
+
+
+def get_opencode_agents_md_path(config_dir: Path) -> Path:
+    """Return the ``AGENTS.md`` path under an OpenCode config dir (opencode's global rules file)."""
+    return config_dir / AGENTS_MD_FILENAME
+
+
+def get_opencode_output_styles_dir(work_dir: Path) -> Path:
+    """Return ``<work_dir>/.agents/output-styles`` -- where output styles are authored."""
+    return work_dir / _OUTPUT_STYLES_DIR_RELATIVE
 
 
 def get_opencode_auth_path_for_data_home(data_home: Path) -> Path:

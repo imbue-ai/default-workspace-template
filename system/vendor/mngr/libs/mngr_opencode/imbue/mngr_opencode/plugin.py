@@ -67,6 +67,8 @@ from imbue.mngr.agents.base_agent import BaseAgent
 from imbue.mngr.agents.common_transcript import provision_scripts_to_commands_dir
 from imbue.mngr.agents.installation import ensure_cli_installed
 from imbue.mngr.agents.installation import verify_pinned_cli_version
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.agents.update_policy import AgentUpdatePolicy
 from imbue.mngr.agents.update_policy import is_self_update_disabled
 from imbue.mngr.api.preservation import PreservedItem
@@ -104,6 +106,8 @@ from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.utils.polling import poll_for_value
 from imbue.mngr.utils.polling import poll_until
@@ -129,11 +133,13 @@ from imbue.mngr_opencode.opencode_config import apply_opencode_merge
 from imbue.mngr_opencode.opencode_config import apply_opencode_rebind
 from imbue.mngr_opencode.opencode_config import build_opencode_config
 from imbue.mngr_opencode.opencode_config import collect_adopt_search_db_paths
+from imbue.mngr_opencode.opencode_config import get_opencode_agents_md_path
 from imbue.mngr_opencode.opencode_config import get_opencode_app_data_dir
 from imbue.mngr_opencode.opencode_config import get_opencode_auth_path_for_data_home
 from imbue.mngr_opencode.opencode_config import get_opencode_config_dir
 from imbue.mngr_opencode.opencode_config import get_opencode_config_file_path
 from imbue.mngr_opencode.opencode_config import get_opencode_data_home
+from imbue.mngr_opencode.opencode_config import get_opencode_output_styles_dir
 from imbue.mngr_opencode.opencode_config import get_opencode_plugin_path
 from imbue.mngr_opencode.opencode_config import get_opencode_root_session_file_path
 from imbue.mngr_opencode.opencode_config import get_opencode_server_port_file_path
@@ -170,6 +176,11 @@ _PROMPT_ENDPOINT_TEMPLATE: Final[str] = "http://127.0.0.1:{port}/session/{sessio
 # staging path and copies exactly this trio onto the (possibly remote) host -- the ``-wal``/``-shm``
 # sidecars carry writes not yet checkpointed into the main file, so they travel with it.
 _DB_SIDECAR_SUFFIXES: Final[tuple[str, ...]] = ("-wal", "-shm")
+
+# Role instruction blocks (append_system_prompt, then the output-style body) are joined with a
+# blank line before being written to the per-agent AGENTS.md, matching the separator the other
+# harness plugins use so a style reads identically across harnesses.
+_INSTRUCTIONS_SEPARATOR: Final[str] = "\n\n"
 
 
 def _build_prompt_post_command(port: str, session_id: str, message: str) -> str:
@@ -248,6 +259,22 @@ class OpenCodeAgentConfig(AgentTypeConfig):
         default=False,
         description="Auto-approve everything not explicitly denied "
         "(injects a wildcard allow into the opencode.json permission block).",
+    )
+    # output_style / append_system_prompt mirror mngr_antigravity and mngr_pi_coding: the
+    # role's output style and any stacked system-prompt blocks are concatenated and written to
+    # the per-agent AGENTS.md, which opencode auto-loads as global rules. Declaring output_style
+    # here is also what lets the shared `chat` template (which sets output_style) resolve
+    # against this agent type instead of being rejected.
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of the output style whose body is appended to the agent's AGENTS.md "
+        "(opencode's system prompt). Resolved from .agents/output-styles in the work dir.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="System-prompt blocks appended to the agent's AGENTS.md, before the "
+        "output-style body. Write `append_system_prompt__extend = [...]` in a template so "
+        "stacked roles each contribute.",
     )
     check_installation: bool = Field(
         default=True,
@@ -501,6 +528,7 @@ class OpenCodeAgent(
                 )
         host_home = self._resolve_host_home(host)
         self._provision_opencode_config(host, host_home)
+        self._provision_agent_instructions(host)
         self._provision_plugin(host)
         self._provision_auth(host, host_home)
         with mngr_ctx.concurrency_group.make_concurrency_group("opencode_provisioning") as concurrency_group:
@@ -692,6 +720,39 @@ class OpenCodeAgent(
         config_path = get_opencode_config_file_path(self._get_opencode_config_dir())
         with log_span("Writing per-agent opencode config to {}", config_path):
             host.write_text_file(config_path, serialize_opencode_config(per_agent_config))
+
+    def _build_agent_rules_text(self, host: OnlineHostInterface) -> str | None:
+        """Join this agent type's role instructions into one blob, or None if there are none.
+
+        The ``append_system_prompt`` blocks come first, in stack order, then the output-style
+        file's body -- the same ordering codex/antigravity/pi use, so a style reads identically
+        across harnesses. Returns None when the agent type contributes nothing.
+        """
+        blocks: list[str] = [str(prompt) for prompt in self.agent_config.append_system_prompt]
+        if self.agent_config.output_style is not None:
+            styles_dir = get_opencode_output_styles_dir(Path(self.work_dir))
+            blocks.append(
+                resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+            )
+        blocks = [block for block in blocks if block]
+        if not blocks:
+            return None
+        return _INSTRUCTIONS_SEPARATOR.join(blocks)
+
+    def _provision_agent_instructions(self, host: OnlineHostInterface) -> None:
+        """Write the agent's role instructions to the per-agent ``AGENTS.md`` opencode auto-loads.
+
+        opencode discovers ``<OPENCODE_CONFIG_DIR>/AGENTS.md`` as its global rules file (see
+        opencode's ``session/instruction.ts``), so this is a true system-prompt channel for the
+        agent, additive with the project's own ``AGENTS.md``. When the agent type contributes no
+        instructions (no role ``output_style`` / ``append_system_prompt``), nothing is written.
+        """
+        instructions = self._build_agent_rules_text(host)
+        if instructions is None:
+            return
+        rules_path = get_opencode_agents_md_path(self._get_opencode_config_dir())
+        with log_span("Writing opencode agent instructions to {}", rules_path):
+            host.write_text_file(rules_path, instructions)
 
     def _provision_plugin(self, host: OnlineHostInterface) -> None:
         """Write the lifecycle plugin into the per-agent config dir's ``plugin/``.
