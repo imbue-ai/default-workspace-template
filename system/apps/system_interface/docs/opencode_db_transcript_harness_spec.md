@@ -12,9 +12,12 @@ Reference implementation for every DB-tailing piece is the **antigravity** harne
 event/watcher contracts are `harnesses/events.py` and `harnesses/session_watcher.py`; the
 label contract is `harnesses/tool_labels.py`.
 
-Grounded against the installed opencode (Bun binary at `~/.opencode/bin/opencode`), its
-live `opencode.db` schema, real preserved-agent conversation rows, and the mngr_opencode
-plugin (`system/vendor/mngr/libs/mngr_opencode/`).
+Grounded against the installed opencode (Bun binary at `~/.opencode/bin/opencode`, v1.18.15),
+its live `opencode.db` schema, real conversation rows, the mngr_opencode plugin
+(`system/vendor/mngr/libs/mngr_opencode/`), and — for the tool label table and MCP naming — a
+**live probe run**: an opencode agent driven headless through each built-in tool
+(`opencode run --auto`), reading the resulting `state.input` JSON straight out of its
+`opencode.db`. So the §5 field mappings are observed, not guessed.
 
 ---
 
@@ -107,25 +110,30 @@ inline the id). The parser must combine column ids with the `data` object.
 (opencode's effort axis) is NOT on `message.data` in the installed version — it is on the
 `session.model` JSON — so the transcript does not carry it (the model bar reads it elsewhere).
 
-**`part.data` shapes** (real rows; `type` discriminates):
+**`part.data` shapes** (real rows; `type` discriminates — all six types below observed live
+by driving a real opencode agent):
 
 ```jsonc
 { "type":"text", "text":"...", "time":{"start":..,"end":..} }          // may add "synthetic":true
-{ "type":"reasoning", ... }                                             // opencode's thinking
+{ "type":"reasoning", "text":"...", "time":{"start":..,"end":..} }     // opencode's thinking
 { "type":"step-start", "snapshot":"<sha>" }                            // turn bookkeeping
 { "type":"step-finish", "reason":"stop", "tokens":{...}, "cost":0 }    // turn bookkeeping
-{ "type":"tool", "tool":"bash", "callID":"01KZ...",
+{ "type":"patch", "hash":"<sha>", "files":["/abs/path", ...] }         // post-edit summary (NO callID)
+{ "type":"tool", "tool":"bash", "callID":"call_00_...",
   "state":{ "status":"completed",                                      // pending|running|completed|error
             "time":{"start":..,"end":..},
-            "input":{"command":"ls"},
+            "input":{"command":"ls"},                                  // per-tool shape — see §5
             "title":"", "metadata":{"output":"..."},
             "output":"AGENTS.md\n...",                                  // present on completed
-            "error":"..." } }                                          // present on error
+            "error":"..." } }                                          // present on error (status=error)
 ```
 
-Only `text` and `tool` parts become events (parity with `buildCommonRecords`); `step-*` are
-skipped; `reasoning` is skipped in v1 (see Q4). Distinct part types seen live: `text`,
-`reasoning`, `tool`, `step-start`, `step-finish`.
+Only `text` and `tool` parts become events (parity with `buildCommonRecords`). Everything
+else is skipped: `step-start`/`step-finish` (turn bookkeeping), `patch` (a post-edit summary
+artifact with NO `callID`/`state` — the `edit`/`write` tool part already carries the action,
+so emitting the patch part too would double-count), and `reasoning` (thinking; dropped in v1
+for plugin parity — see Q4). Verified live: an `edit` produces BOTH a `tool` part and a
+sibling `patch` part; the parser keys off `type=="tool"` so the `patch` never leaks in.
 
 **In-place mutation.** As a turn runs, opencode UPDATES rows: a streaming `text` part's
 `text` grows, a `tool` part's `state` goes `pending`→`running`→`completed`/`error`, and the
@@ -154,14 +162,12 @@ Public surface:
   and the type-specific payload: `kind` (`"text"|"tool"|"reasoning"|"other"`), `text`,
   `synthetic`, `tool_name`, `call_id`, `state_status`, `state_input` (dict), `state_output`,
   `state_error`.
-- `read_root_and_descendant_session_ids(db_path, root_session_id) -> set[str]` — the root
-  plus every session whose `parent_id` chain reaches it (recursive CTE, as
-  `build_opencode_merge_sql` walks). For v1 filtering see Q3.
-- `read_changed_messages(db_path, session_ids, since_updated) -> tuple[list[OpenCodeMessage],
+- `read_changed_messages(db_path, root_session_id, since_updated) -> tuple[list[OpenCodeMessage],
   dict[str, list[OpenCodePart]]]` — the incremental read (see §3 for the query + cursor
-  contract). Returns messages whose own or whose child part's `time_updated >= since_updated`,
-  each with ALL its current parts (a message's events depend on all its parts, so a message is
-  re-emitted whole whenever any part changes).
+  contract). Returns root-session messages whose own or whose child part's
+  `time_updated >= since_updated`, each with ALL its current parts (a message's events depend
+  on all its parts, so a message is re-emitted whole whenever any part changes). Subagents are
+  disabled (Q3), so this filters on the single root `session_id`; no descendant walk.
 
 Robustness (mirror antigravity/`opencode_config._db_has_session`): every connect + query in
 `try/except sqlite3.Error` → return "nothing this pass" so a transient WAL lock/checkpoint is
@@ -187,8 +193,13 @@ not fatal.
   streaming text/tool-status updates ARE supersessions of an already-shown event).
 - `_updated_cursor: int` — the `time_updated` watermark (ms). The lowest `time_updated` NOT
   yet known-settled; re-scan from here every poll.
-- `_root_session_id: str | None`, `_session_ids: frozenset[str]` — resolved from the marker;
-  refreshed each poll (a subagent session can appear mid-turn).
+- `_root_session_id: str | None` — resolved from the `opencode_root_session` marker. **We run
+  opencode with subagents disabled (decided — Q3 resolved), so the transcript is the single
+  root session**: every read filters `message.session_id == _root_session_id`, there is no
+  descendant walk, `is_main_session_event` is `event.session_id == root`, and
+  `get_subagent_metadata` returns `None`. (If subagents are ever enabled, extend to the
+  `parent_id` descendant set — the `db_reader` helper is specced for it — but that is
+  explicitly out of scope here.)
 - `_path_watcher: PathWatcher | None`.
 
 ### Tailing contract (the crux — DB rows mutate in place)
@@ -198,13 +209,13 @@ its **change** key is `time_updated`. So the cursor is a `time_updated` watermar
 is by **stable event_id + content supersession** (codex's `_ingest_event`), which absorbs the
 in-place updates:
 
-1. Resolve `_session_ids` (root + descendants, Q3) from the marker.
-2. `read_changed_messages(db, _session_ids, since_updated=_updated_cursor)`:
+1. Resolve `_root_session_id` from the `opencode_root_session` marker (root session only — Q3).
+2. `read_changed_messages(db, _root_session_id, since_updated=_updated_cursor)`:
    ```sql
    -- messages touched since the cursor, OR owning a part touched since the cursor
    SELECT m.id, m.session_id, m.time_created, m.time_updated, m.data
    FROM message m
-   WHERE m.session_id IN (:sessions)
+   WHERE m.session_id = :root_session
      AND (m.time_updated >= :cursor
           OR EXISTS (SELECT 1 FROM part p
                      WHERE p.message_id = m.id AND p.time_updated >= :cursor))
@@ -321,36 +332,58 @@ codex's `exec`), so the header is `Tool: <Title>` and only the caption's verb+ta
 derived. Reuse the shared helpers (`basename`, `shorten`, `quoted`, `first_string_value`,
 `mcp_caption`, `parse_input_preview`, `GENERIC_CAPTION`) from `harnesses/tool_labels.py`.
 
-**Vocabulary is opencode's own** — extracted from the installed TUI's caption functions in
-the binary (so our captions read like opencode's, and header nouns match claude's where a tool
-is equivalent, so harnesses read alike). opencode tool ids (verified from the binary's
-title-map keys): `bash, edit, write, read, grep, glob, list, patch, webfetch, websearch,
-task, skill, todowrite, todoread, question, invalid` (+ MCP tools, Q7).
+**Vocabulary is opencode's own**, and the **input field names below are verified two ways**:
+(a) by driving a real opencode agent (v1.18.15) through each tool and reading the actual
+`state.input` JSON out of its `opencode.db` — done for `bash`, `read`, `grep`, `glob`, `edit`,
+`write`, `todowrite`; and (b) from the tool parameter schemas + TUI caption code embedded in
+the binary — for `list`, `webfetch`, `websearch`, `task`, `skill`. Header nouns match claude's
+where a tool is equivalent so the two harnesses read alike.
 
-| opencode tool | input key(s) for target | header (`Tool: …`) | caption verb | caption target |
-|---|---|---|---|---|
-| `bash` | `description` then `command` | `Bash` | Running | shortened description/command |
-| `edit` | `filePath` | `Edit` | Editing | `basename` |
-| `write` | `filePath` | `Write` | Writing | `basename` |
-| `read` | `filePath` | `Read` | Reading | `basename` |
-| `grep` | `pattern` | `Grep` | Searching | `quoted(pattern)` |
-| `glob` | `pattern` | `Glob` | Searching | `quoted(pattern)` |
-| `list` | `path` | `List` | Listing | `basename` |
-| `patch` | `filePath`/`files` | `Edit` | Editing | `basename` or `…` |
-| `webfetch` | `url` | `WebFetch` | Fetching page | `shorten(url)` |
-| `websearch` | `query` | `WebSearch` | Searching the web | `quoted(query)` |
-| `task` | (subagent) | `Task` | — | `Delegating to sub-agent…` |
-| `skill` | `name` | `Skill` | Loading skill | `shorten(name)` |
-| `todowrite` | — | `TodoWrite` | Updating todos | — (`Updating todos…`) |
-| `todoread` | — | `TodoRead` | Reading todos | — |
-| `question` | — | `Question` | Asking | `a question` |
-| `invalid` / unknown | — | `Tool: <id>` | — | `GENERIC_CAPTION` |
+Full built-in tool-id set (from the binary registrations): `bash, edit, write, read, grep,
+glob, list, patch, apply_patch, multiedit, webfetch, websearch, task, skill, todowrite,
+todoread, question, plan_exit, lsp, invalid`. Only the common ones need explicit rows; the
+rest fall to the generic fallback (honest — names the tool). Every input value is a **string**
+except where noted.
 
-`bash` uses `description` before `command` (claude parity — the agent's own description reads
-better than a clipped shell line). `task` captions as a delegation, not a verb+target (claude's
-`_SUBAGENT_CAPTION` pattern). Anything not in the table → `Tool: <id>` + `GENERIC_CAPTION`
-(the honest fallback, names the tool). Build the header noun from a `{tool_id: Title}` map so
-an unknown id still yields `Tool: <id>` rather than a crash.
+| opencode tool | verified input key(s) | header (`Tool: …`) | caption |
+|---|---|---|---|
+| `bash` | `command` (also `timeout`,`workdir`; **no `description`**) | `Bash` | `Running <shorten(command)>` |
+| `read` | `filePath` | `Read` | `Reading <basename>` |
+| `edit` | `filePath` (+`oldString`,`newString`) | `Edit` | `Editing <basename>` |
+| `write` | `filePath` (+`content`) | `Write` | `Writing <basename>` |
+| `grep` | `pattern` (+opt `path`,`include`) | `Grep` | `Searching <quoted(pattern)>` |
+| `glob` | `pattern` (+opt `path`) | `Glob` | `Searching <quoted(pattern)>` |
+| `list` | `path` (optional) | `List` | `Listing <basename>` / `Listing…` |
+| `webfetch` | `url` (+opt `format`) | `WebFetch` | `Fetching page <shorten(url)>` |
+| `websearch` | `query` | `WebSearch` | `Searching the web <quoted(query)>` |
+| `skill` | `name` | `Skill` | `Loading skill <shorten(name)>` |
+| `todowrite` | `todos` (array) | `TodoWrite` | `Updating todos` |
+| `todoread` | — | `TodoRead` | `Reading todos` |
+| `question` / `plan_exit` | — | (their id) | `GENERIC_CAPTION` |
+| `patch` / `apply_patch` / `multiedit` | (varies) | `Edit` | `Editing…` |
+| `task` | `subagent_type`,`description` | `Task` | `Delegating to sub-agent…` |
+| unknown / MCP `<server>_<tool>` | — | `Tool: <id>` | `GENERIC_CAPTION` |
+
+Notes carried from the verification:
+- **`bash` has NO `description` field** (its schema is `command`/`timeout`/`workdir`) — this
+  DIFFERS from claude, whose bash caption prefers the agent's description. So opencode's bash
+  caption uses the (shortened) `command` directly.
+- **`task` never appears in our setup** — we run opencode with subagents disabled (Q3), so the
+  task tool is not exercised. The row is kept defensively; if it ever fires it captions as a
+  delegation (claude's `_SUBAGENT_CAPTION`) rather than following the child session.
+- **MCP tools are `<server>_<toolname>`** (single underscore; a tool literally named `default`
+  registers as just `<server>`) — verified against opencode's registration code
+  (``Xo==="default" ? ho : `${ho}_${Xo}` ``) AND its docs ("registered with server name as
+  prefix … `mymcpservername_*`"). This is NOT the `mcp__<server>__<tool>` form the shared
+  `mcp_caption` matches, so it will not fire — and there is no reliable way to re-split the id
+  (both server names and built-ins like `apply_patch`/`plan_exit`/`todowrite` contain
+  underscores). So an MCP tool falls to `Tool: <server>_<tool>` + `GENERIC_CAPTION`. That is
+  the honest v1 behavior; do NOT attempt to prettify it.
+
+Build the header noun from a `{tool_id: Title}` map and default an unknown id to `Tool: <id>`
+(never crash). Reuse the shared helpers (`basename`, `shorten`, `quoted`,
+`first_string_value`, `GENERIC_CAPTION`) — do NOT call `mcp_caption` (opencode's MCP form
+won't match it, and calling it just adds a dead branch).
 
 `[NEW] harnesses/opencode/icon.svg` — already exists (used by the model catalog); reused.
 
@@ -429,6 +462,20 @@ heuristic for v1 — zero new plugin surface, and it already exists.
 
 ---
 
+## Resolved (verified against a live opencode 1.18.15)
+
+- **Subagents — DISABLED (was Q3).** The transcript is the single root session; filter every
+  read on `message.session_id == root`, no `parent_id` walk, `get_subagent_metadata` → `None`.
+- **Tool input field names — VERIFIED (was "unknown target mapping").** See the §5 table:
+  captured from a real agent's `opencode.db` for the common tools, and from the binary's tool
+  schemas for the rest. Notably `bash` has **no** `description` field (caption uses `command`).
+- **MCP tool naming — VERIFIED (was Q7).** `<server>_<toolname>` (underscore; `default` →
+  bare `<server>`), confirmed in opencode's registration code and its docs. Does not match the
+  shared `mcp_caption`; falls to `Tool: <id>` + generic caption. Do not try to re-split it.
+- **Part types — ENUMERATED.** `text`, `reasoning`, `tool`, `patch`, `step-start`,
+  `step-finish` (all observed live). Only `text` + `tool` become events; `patch` (a post-edit
+  summary with no `callID`) is skipped, so `edit`/`write` never double-counts.
+
 ## Open questions (carry into build)
 
 - **Q1 — cursor settle vs simplicity.** The `time_updated` watermark + "advance past leading
@@ -437,24 +484,16 @@ heuristic for v1 — zero new plugin surface, and it already exists.
   very long, mostly-settled transcript? (Antigravity does the leading-run version.)
 - **Q2 — activity model.** Claude-style heuristic (recommended, zero plugin work) vs a
   codex-style turn latch fed by new plugin `special` events.
-- **Q3 — subagents.** v1 shows the **root session only** (`is_main_session_event =
-  event.session_id == root`, filter `_session_ids` to `{root}`). opencode's task tool spawns
-  child sessions (`parent_id` set) — surface them via `get_subagent_metadata` + descendant
-  filtering later, matching claude's subagent linkage. Decide whether v1 filters to root or
-  includes descendants inline (the plugin's common transcript includes ALL sessions flatly).
-- **Q4 — reasoning parts.** opencode emits `reasoning` parts (thinking). The plugin drops
-  them; antigravity surfaces them as an optional `thinking` key on `assistant_message`.
-  Recommend v1 parity (drop), add `thinking` as an enhancement.
+- **Q4 — reasoning parts.** opencode emits `reasoning` parts (thinking; shape
+  `{type:"reasoning", text, time}`). The plugin drops them; antigravity surfaces them as an
+  optional `thinking` key on `assistant_message`. Recommend v1 parity (drop), add `thinking`
+  as an enhancement.
 - **Q5 — queued messages.** opencode has a `session_input` table (queue: `prompt`,
   `delivery`, `admitted_seq`, `promoted_seq`) that could power the queued-message snapshot
   like codex's sidecar. v1 inherits the base no-op; wire later if the shoulder-tap surface is
   wanted for opencode.
 - **Q6 — usage/tokens.** `message.data.tokens` and `session` token columns exist; emit
   `usage` on `assistant_message` (input/output/cache) if the model-bar/cost UI wants it.
-- **Q7 — MCP tool naming.** opencode exposes MCP tools as `<server>_<tool>` (single
-  underscore), NOT claude/codex's `mcp__<server>__<tool>`, so the shared `mcp_caption` won't
-  match. Decide: a small opencode-specific MCP recognizer, or let unknown ids fall to
-  `Tool: <id>` + generic caption (acceptable v1).
 - **Q8 — schema drift.** opencode self-upgrades; the `data` JSON shapes and even columns can
   move (`opencode_config.py` already documents `project_directory` drift). The
   `session`/`message`/`part` + JSON-`data` + `ses_`/`msg_`/`prt_` shape is stable across
