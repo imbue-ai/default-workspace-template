@@ -21,6 +21,7 @@ returns None and the bar shows logo-only until the extension records a model.
 """
 
 import json
+import os
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -28,6 +29,8 @@ from typing import Any
 
 from loguru import logger
 
+from imbue.concurrency_group.subprocess_utils import ProcessSetupError
+from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.model import HarnessCatalog
@@ -53,6 +56,35 @@ _CONTROL_NAME: str = "pi_control.jsonl"
 # this order). This is pi's ordering, not a curated effort set -- which levels a given
 # model actually offers comes from that model's own data below, verbatim as strings.
 _PI_THINKING_LEVELS: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+
+# The per-agent pi config dir (== PI_CODING_AGENT_DIR), where the agent's auth lives.
+# Kept in sync with _PI_CONFIG_DIR_RELPATH in mngr_pi_coding's plugin.py.
+_PI_CONFIG_DIR_RELPATH: str = "plugin/pi_coding"
+# How long to wait for `pi --list-models` before falling back to the whole catalog.
+_LIST_MODELS_TIMEOUT_SECONDS: float = 15.0
+
+
+def _parse_list_models(output: str) -> tuple[str, ...]:
+    """The ``provider/model`` tags from ``pi --list-models`` table output.
+
+    The output is a whitespace-column table led by a ``provider  model  ...`` header;
+    each data row's first two columns are the provider and model. We skip everything up
+    to and including the header, then take the first two tokens of each row. When there
+    is no header at all (pi prints "No models available. Use /login ..." when unauthed),
+    the result is empty -- meaning the user can offer nothing, which is correct.
+    """
+    tags: list[str] = []
+    header_seen = False
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        if not header_seen:
+            if parts[0] == "provider" and parts[1] == "model":
+                header_seen = True
+            continue
+        tags.append(f"{parts[0]}/{parts[1]}")
+    return tuple(tags)
 
 
 def _supported_thinking_levels(model: dict[str, Any]) -> tuple[str, ...]:
@@ -168,6 +200,39 @@ class PiModelResolver(HarnessModelResolver):
             effort=parse_effort_level(data.get("thinking_level")),
             fast=False,
         )
+
+    def list_offered_models(self) -> tuple[str, ...] | None:
+        # pi's offer set is account-gated and dynamic: exactly the provider/model pairs the
+        # user is authenticated for, which `pi --list-models` reports (reading the agent's own
+        # auth via PI_CODING_AGENT_DIR). Run per picker-open so a fresh /login shows up. The
+        # full catalog stays the master list -- these ids are matched back to it for labels
+        # and thinking levels. On any failure, return None (offer the whole catalog) rather
+        # than an empty picker.
+        executable = shutil.which("pi")
+        if executable is None:
+            return None
+        pi_config_dir = self._state_dir / _PI_CONFIG_DIR_RELPATH
+        env = {**os.environ, "PI_CODING_AGENT_DIR": str(pi_config_dir)}
+        try:
+            finished = run_local_command_modern_version(
+                [executable, "--list-models"],
+                is_checked=False,
+                timeout=_LIST_MODELS_TIMEOUT_SECONDS,
+                env=env,
+                name="pi --list-models",
+            )
+        except ProcessSetupError as e:
+            logger.warning("pi --list-models could not start for {}: {}", pi_config_dir, e)
+            return None
+        if finished.is_timed_out or finished.returncode != 0:
+            logger.warning(
+                "pi --list-models failed for {} (timed_out={}, returncode={})",
+                pi_config_dir,
+                finished.is_timed_out,
+                finished.returncode,
+            )
+            return None
+        return _parse_list_models(finished.stdout)
 
     def watched_paths(self) -> tuple[Path, ...]:
         return (self._state_dir / _MODEL_STATE_NAME,)
