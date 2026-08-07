@@ -1393,6 +1393,9 @@ _CLAUDE_ALWAYS_PROVISIONED_SCRIPT_NAMES: Final[tuple[str, ...]] = (
     "claude_background_tasks.sh",
     "wait_for_stop_hook.sh",
     "sync_keychain_credentials.py",
+    # Writes claude_model_state.json (live model/effort/fast) for the chat model bar; invoked
+    # by the SessionStart/UserPromptSubmit/Stop hooks (see build_readiness_hooks_config).
+    "model_state_hook.py",
 )
 
 # The tmux-based response-streaming watcher. Provisioned only when

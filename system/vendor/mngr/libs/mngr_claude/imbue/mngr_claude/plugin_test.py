@@ -1173,7 +1173,7 @@ def test_build_readiness_hooks_config_has_session_start_hook() -> None:
     assert "SessionStart" in config["hooks"]
     assert len(config["hooks"]["SessionStart"]) == 1
     hooks = config["hooks"]["SessionStart"][0]["hooks"]
-    assert len(hooks) == 5
+    assert len(hooks) == 6
 
     # First hook: creates session_started file for polling-based detection
     assert hooks[0]["type"] == "command"
@@ -1226,6 +1226,11 @@ def test_build_readiness_hooks_config_has_session_start_hook() -> None:
     assert 'rm -f "$MNGR_AGENT_STATE_DIR/active"' in reset_markers_hook
     assert "permissions_waiting" in reset_markers_hook
 
+    # Sixth hook: snapshots the live model/effort/fast for the chat model bar.
+    model_state_hook = hooks[5]["command"]
+    assert hooks[5]["type"] == "command"
+    assert "model_state_hook.py" in model_state_hook
+
 
 @pytest.mark.parametrize(
     "hook_name, expected_substrings",
@@ -1243,11 +1248,15 @@ def test_build_readiness_hooks_config_has_hook(hook_name: str, expected_substrin
 
     assert hook_name in config["hooks"]
     assert len(config["hooks"][hook_name]) == 1
-    hook = config["hooks"][hook_name][0]["hooks"][0]
-    assert hook["type"] == "command"
-    assert "MNGR_AGENT_STATE_DIR" in hook["command"]
+    # Several events now carry more than one hook (e.g. the model-state snapshot runs first at
+    # Stop, before wait_for_stop_hook.sh blocks), so look for the expected command across all of
+    # them rather than assuming it is the first.
+    commands = [h["command"] for h in config["hooks"][hook_name][0]["hooks"] if h["type"] == "command"]
+    assert any("MNGR_AGENT_STATE_DIR" in command for command in commands)
     for substring in expected_substrings:
-        assert substring in hook["command"], f"Expected '{substring}' in {hook_name} hook command"
+        assert any(substring in command for command in commands), (
+            f"Expected '{substring}' in a {hook_name} hook command"
+        )
 
 
 def test_build_readiness_hooks_config_has_notification_idle_hook() -> None:

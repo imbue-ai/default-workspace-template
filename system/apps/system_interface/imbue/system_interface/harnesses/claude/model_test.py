@@ -5,6 +5,8 @@ from pathlib import Path
 
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
+from imbue.system_interface.harnesses.claude.model import _MODEL_STATE_NAME
+from imbue.system_interface.harnesses.claude.model import _to_catalog_model_id
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 
@@ -24,6 +26,10 @@ def _agent_info(tmp_path: Path) -> AgentInfo:
 
 def _write_settings(tmp_path: Path, settings: dict[str, object]) -> None:
     (tmp_path / "claude_config" / "settings.json").write_text(json.dumps(settings))
+
+
+def _write_state_snapshot(tmp_path: Path, snapshot: dict[str, object]) -> None:
+    (tmp_path / "state" / _MODEL_STATE_NAME).write_text(json.dumps(snapshot))
 
 
 def test_guess_from_launch_defaults_when_no_settings(tmp_path: Path) -> None:
@@ -53,6 +59,50 @@ def test_read_live_leaves_effort_none_before_first_effort(tmp_path: Path) -> Non
     live = resolver.read_live()
     assert live is not None
     assert live.effort is None
+
+
+def test_read_live_prefers_the_snapshot_over_settings(tmp_path: Path) -> None:
+    # The hook's snapshot is the effective truth: settings say fast-on, but the snapshot
+    # records fast=False (Claude ran standard -- credits exhausted). The bar must show off.
+    resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
+    _write_settings(tmp_path, {"model": "opus[1m]", "effortLevel": "medium", "fastMode": True})
+    _write_state_snapshot(tmp_path, {"model": "opus[1m]", "effort": "high", "fast": False})
+    assert resolver.read_live() == ModelIdentity(model_id="opus[1m]", effort="high", fast=False)
+
+
+def test_read_live_maps_a_raw_api_model_id_from_the_snapshot(tmp_path: Path) -> None:
+    # At Stop the hook records the transcript's raw API id; it must light the catalog chip.
+    resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
+    _write_state_snapshot(tmp_path, {"model": "claude-opus-4-8", "effort": "max", "fast": True})
+    live = resolver.read_live()
+    assert live == ModelIdentity(model_id="opus[1m]", effort="max", fast=True)
+
+
+def test_read_live_falls_back_to_settings_when_no_snapshot(tmp_path: Path) -> None:
+    # An older agent (no hook yet) has no snapshot: settings still drive the read.
+    resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
+    _write_settings(tmp_path, {"model": "sonnet", "effortLevel": "low", "fastMode": False})
+    assert resolver.read_live() == ModelIdentity(model_id="sonnet", effort="low", fast=False)
+
+
+def test_switch_writes_the_snapshot_so_the_bar_reconciles_at_once(tmp_path: Path) -> None:
+    # No hook fires until the next turn, so the switch must optimistically record its pick.
+    resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
+    result = resolver.switch(
+        ModelIdentity(model_id="sonnet", effort="high", fast=False),
+        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
+        lambda _line: True,
+    )
+    assert result.ok
+    assert resolver.read_live() == ModelIdentity(model_id="sonnet", effort="high", fast=False)
+
+
+def test_to_catalog_model_id_maps_raw_and_alias_and_shrugs_on_miss() -> None:
+    assert _to_catalog_model_id("claude-opus-4-8") == "opus[1m]"
+    assert _to_catalog_model_id("opus[1m]") == "opus[1m]"
+    assert _to_catalog_model_id("claude-sonnet-4-5") == "sonnet"
+    # Unknown ids pass through untouched (a shrug, not a crash).
+    assert _to_catalog_model_id("some-unknown-model") == "some-unknown-model"
 
 
 def test_switch_sends_only_the_axes_it_is_told(tmp_path: Path) -> None:

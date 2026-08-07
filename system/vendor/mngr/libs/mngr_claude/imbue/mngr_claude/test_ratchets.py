@@ -22,6 +22,9 @@ _STANDALONE_RESOURCE_SCRIPTS: tuple[str, ...] = (
     "stream_snapshot.py",
     # Prints its appended-event count to stdout for common_transcript.sh to capture.
     "common_transcript_convert.py",
+    # Runs as a Claude Code hook (SessionStart/UserPromptSubmit/PostToolUse/Stop) to snapshot
+    # the live model/effort/fast for the chat model bar; stdlib-only, outside the mngr process.
+    "model_state_hook.py",
 )
 _RATCHET_SELF_EXCLUSION: tuple[str, ...] = ("test_ratchets.py", "standard_ratchet_checks.py")
 
