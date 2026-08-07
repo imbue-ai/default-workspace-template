@@ -10,7 +10,9 @@ from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
+from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
+from imbue.system_interface.harnesses.pi_coding.model import _parse_list_models
 from imbue.system_interface.harnesses.pi_coding.model import _supported_thinking_levels
 from imbue.system_interface.harnesses.pi_coding.model import build_catalog
 
@@ -89,7 +91,36 @@ def test_build_catalog_tags_and_string_efforts(tmp_path: Path) -> None:
     assert all(not opt.supports_fast for opt in catalog.options)
 
 
+# --- pi --list-models parsing (the authed offer set) ----------------------------
+
+
+def test_parse_list_models_takes_provider_and_model_columns() -> None:
+    # Real `pi --list-models` output: a header row then whitespace-column rows whose
+    # first two columns are provider and model.
+    output = (
+        "provider   model                     context  max-out  thinking  images\n"
+        "anthropic  claude-opus-4-8           1M       128K     yes       yes\n"
+        "anthropic  claude-sonnet-5           1M       128K     yes       yes\n"
+    )
+    assert _parse_list_models(output) == ("anthropic/claude-opus-4-8", "anthropic/claude-sonnet-5")
+
+
+def test_parse_list_models_no_header_is_empty() -> None:
+    # When unauthenticated pi prints a message with no table header -> no offer set.
+    assert _parse_list_models("No models available. Use /login to authenticate.\n") == ()
+
+
+def test_parse_list_models_empty_output_is_empty() -> None:
+    assert _parse_list_models("") == ()
+
+
 # --- resolver -------------------------------------------------------------------
+
+
+def test_list_offered_models_defaults_to_whole_catalog_for_non_pi(tmp_path: Path) -> None:
+    # The base resolver hook returns None (offer the whole catalog); only a dynamic,
+    # account-gated harness overrides it.
+    assert ClaudeModelResolver.build(_agent_info(tmp_path)).list_offered_models() is None
 
 
 def test_guess_from_launch_is_none(tmp_path: Path) -> None:

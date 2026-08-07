@@ -300,6 +300,19 @@ class HarnessModelResolver(ABC):
         watched recursively; a file is watched via its parent directory.
         """
 
+    def list_offered_models(self) -> tuple[str, ...] | None:
+        """The model ids to OFFER in the picker right now, or None to offer the whole catalog.
+
+        The catalog is the master list -- every model's label and thinking levels -- but it
+        is not the offer set. For a harness whose offerable models are account-gated and
+        dynamic (pi/opencode: only the providers/models the user is authenticated for), the
+        picker calls this per open, so a fresh ``/login`` shows up without a catalog refetch.
+        The returned ids are matched back against the catalog for their labels and efforts;
+        ids absent from the catalog are simply not shown. The default -- for a small,
+        static, non-gated catalog (claude, codex) -- returns None: offer everything.
+        """
+        return None
+
     @abstractmethod
     def switch(
         self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]

@@ -759,6 +759,9 @@ body {
      toolbar, so a left-anchored menu would spill off the composer. */
   right: 0;
   min-width: 200px;
+  /* Bound the width so a long provider/model tag can't grow the menu leftward off the
+     edge of the screen; options past this width ellipsize (full text on hover). */
+  max-width: min(92vw, 460px);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -799,12 +802,14 @@ body {
   font-size: 13px;
   color: var(--color-text-primary);
   height: var(--_option-height);
-  display: flex;
-  align-items: center;
+  line-height: var(--_option-height);
+  display: block;
   padding: 0 10px;
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: background 80ms;
 }
 

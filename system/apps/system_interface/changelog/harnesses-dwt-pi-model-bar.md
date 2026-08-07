@@ -18,3 +18,9 @@ transcript yet).
 - Switching pi's model/effort from the bar is ON_CHANGE: the pick is written to a control
   file the pi extension applies via its own API, and the chip reconciles from the state
   file. (The extension-side consumer of that control file is a follow-up.)
+
+- The search picker now offers only the models the agent is actually authenticated for
+  (from `pi --list-models`), not the whole ~1150-model catalog. It is recomputed every
+  time the picker opens, so a fresh login shows up without reloading. The full catalog is
+  still the master list behind it, supplying each model's label and thinking levels. Long
+  model names no longer let the dropdown spill off the edge of the screen.

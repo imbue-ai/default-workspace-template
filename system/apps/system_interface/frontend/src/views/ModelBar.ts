@@ -12,6 +12,7 @@
  */
 
 import m from "mithril";
+import { apiUrl } from "../base-path";
 import { getAgentById } from "../models/AgentManager";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
@@ -48,10 +49,43 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   let barElement: HTMLElement | null = null;
   // The current model-search query (only used when the harness's picker_mode is "search").
   let modelQuery = "";
+  // The account-gated set of model ids to OFFER in a search picker, fetched fresh each
+  // time the picker opens (so a login mid-session shows up). `null` means "offer the whole
+  // catalog" -- the backend's answer for a static harness, or the not-yet-fetched state
+  // (disambiguated by `offeredLoaded`). Only consulted for a searchable picker.
+  let offeredModels: Set<string> | null = null;
+  let offeredLoaded = false;
+  let offeredLoading = false;
 
   function handleOutsideMousedown(event: MouseEvent): void {
     if (barElement !== null && !barElement.contains(event.target as Node)) {
       openDropdown = null;
+      m.redraw();
+    }
+  }
+
+  // Recompute the offerable models for `agentId`. Called on every picker-open so a fresh
+  // /login is reflected without reloading the page. A null `models` (offer everything) and
+  // a fetch failure both leave `offeredModels` null -- the picker then shows the whole
+  // catalog rather than an empty list.
+  async function fetchOfferedModels(agentId: string): Promise<void> {
+    offeredLoading = true;
+    offeredLoaded = false;
+    offeredModels = null;
+    m.redraw();
+    try {
+      const response = await m.request<{ models: string[] | null }>({
+        method: "GET",
+        url: apiUrl("/api/agents/:agentId/model-options"),
+        params: { agentId },
+      });
+      offeredModels = response.models === null ? null : new Set(response.models);
+    } catch (error) {
+      console.warn(`Failed to load offered models for agent ${agentId}`, error);
+      offeredModels = null;
+    } finally {
+      offeredLoading = false;
+      offeredLoaded = true;
       m.redraw();
     }
   }
@@ -65,6 +99,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     interactive: boolean;
     tooltip: string;
     searchable?: boolean;
+    loading?: boolean;
+    onOpen?: () => void;
     onPick: (id: string) => void;
   }): m.Vnode {
     const isOpen = openDropdown === opts.kind;
@@ -88,9 +124,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             event.stopPropagation();
             const opening = !isOpen;
             openDropdown = isOpen ? null : opts.kind;
-            // Reset the search each time the picker opens.
+            // Reset the search and recompute the offer set each time the picker opens.
             if (opening && opts.searchable) {
               modelQuery = "";
+              opts.onOpen?.();
             }
           },
         },
@@ -121,32 +158,35 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                     },
                   })
                 : null,
-              m(
-                "ul",
-                { class: "model-selector-dropdown-list" },
-                visible.map((item) =>
-                  m(
-                    "li",
-                    {
-                      key: item.id,
-                      class:
-                        "model-selector-option" +
-                        (opts.selectedId === item.id ? " model-selector-option--selected" : ""),
-                      onclick: () => {
-                        openDropdown = null;
-                        if (opts.selectedId !== item.id) {
-                          opts.onPick(item.id);
-                        }
-                      },
-                    },
-                    item.label,
+              opts.loading
+                ? m("div", { class: "model-selector-more" }, "Loading models…")
+                : m(
+                    "ul",
+                    { class: "model-selector-dropdown-list" },
+                    visible.map((item) =>
+                      m(
+                        "li",
+                        {
+                          key: item.id,
+                          title: item.label,
+                          class:
+                            "model-selector-option" +
+                            (opts.selectedId === item.id ? " model-selector-option--selected" : ""),
+                          onclick: () => {
+                            openDropdown = null;
+                            if (opts.selectedId !== item.id) {
+                              opts.onPick(item.id);
+                            }
+                          },
+                        },
+                        item.label,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              hiddenCount > 0
+              !opts.loading && hiddenCount > 0
                 ? m("div", { class: "model-selector-more" }, `+${hiddenCount} more — keep typing to narrow`)
                 : null,
-              opts.searchable && visible.length === 0
+              !opts.loading && opts.searchable && visible.length === 0
                 ? m("div", { class: "model-selector-more" }, "No matching models")
                 : null,
             ],
@@ -193,17 +233,27 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       const currentEffort = choice.identity.effort;
       const currentFast = choice.identity.fast;
 
+      // A searchable picker offers only the account-gated set fetched on open (matched
+      // back to the catalog for labels/efforts); everything else offers the whole catalog.
+      // While that fetch is in flight the picker shows a loading row, not a stale full list.
+      const searchable = catalog.picker_mode === "search";
+      const offeredIds = searchable && offeredLoaded ? offeredModels : null;
+      const modelItems = catalog.options
+        .filter((option) => option.in_picker)
+        .filter((option) => offeredIds === null || offeredIds.has(option.id))
+        .map((option) => ({ id: option.id, label: option.label }));
+
       const modelSlot = renderDropdown({
         kind: "model",
         triggerLabel: matched.label,
         header: "Model",
-        items: catalog.options
-          .filter((option) => option.in_picker)
-          .map((option) => ({ id: option.id, label: option.label })),
+        items: modelItems,
         selectedId: matched.id,
         interactive,
         tooltip: "Select model",
-        searchable: catalog.picker_mode === "search",
+        searchable,
+        loading: searchable && (offeredLoading || !offeredLoaded),
+        onOpen: () => void fetchOfferedModels(agentId),
         onPick: (modelId) => {
           const option = catalog.options.find((candidate) => candidate.id === modelId);
           if (option === undefined) {

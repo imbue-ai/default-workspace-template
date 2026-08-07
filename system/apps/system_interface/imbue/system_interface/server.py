@@ -508,6 +508,25 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
+def _get_model_options_endpoint(agent_id: str) -> Response:
+    """The model ids this agent should OFFER in the picker right now, or null for all.
+
+    Recomputed per request (the frontend calls it each time the picker opens) so a
+    dynamic, account-gated offer set -- pi/opencode's authenticated models -- reflects a
+    fresh login without a catalog refetch. ``null`` means offer the whole catalog (the
+    default for a static, non-gated harness). The catalog itself still supplies each
+    id's label and thinking levels; this only narrows which are shown.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    resolver = get_state().agent_manager.get_model_resolver(agent_info.id)
+    if resolver is None:
+        return _agent_not_found_response(agent_id)
+    offered = resolver.list_offered_models()
+    return _json_response({"models": list(offered) if offered is not None else None})
+
+
 def _workspace_fast_mode_decision_path() -> Path | None:
     """Where this workspace records its fast-mode decision, or None outside a workspace."""
     work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
@@ -1826,6 +1845,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents/<agent_id>/message", view_func=_send_message_endpoint, methods=["POST"])
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_choice_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/agents/<agent_id>/model-options", view_func=_get_model_options_endpoint, methods=["GET"]
+    )
     application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/workspace/fast-mode",
