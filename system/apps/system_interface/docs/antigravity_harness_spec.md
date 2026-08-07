@@ -238,52 +238,43 @@ append-only file, no rotation/marker).
 
 ---
 
-## Surface D — model bar ("models wired up", like pi)
+## Surface D — model bar (READ_ONLY, from a persisted launch file)
 
-**Design (decided): read the live model from an on-disk state file, not the transcript.**
-Codex reads its live model from the rollout (transcript); pi reads it from a state file
-its lifecycle extension writes (`pi_model_state.json`) at session start + every change.
-We follow **pi**. agy's advantage: its `statusline.sh` already receives the live `model`
-in every payload (verified — `"model":"Gemini 3.6 Flash (Medium)"`), fires on every
-agent-state change, and runs POSIX grep/sed — so it is the natural writer of the state
-file. **No separate lifecycle extension needed** (unlike pi's `.ts`).
+**Design (decided): read model/effort from a PERSISTED file the plugin writes at launch —
+never from live events (statusline) or the transcript.** Two facts make this the right call:
+the bar is READ_ONLY (agy has no scriptable `/model`), and the model is PINNED by the
+launcher (`model`/`effort`, §Surface A). So the model is a static per-agent fact, and the
+robust source is the pin itself, persisted to disk — survives restarts, depends on no live
+event firing. (This drops the earlier statusline-writes-the-model idea entirely.)
 
-Model-id facts (verified live, §established-facts): `--model <base-slug> --effort <tier>`
-or a combined slug. `agy models` returns slugs (`gemini-3.6-flash-medium`); the statusLine
-`model` and error messages are **display names** (`Gemini 3.6 Flash (Medium)`). So the
-resolver maps display→slug and holds both in the catalog.
+**The bridge (`--model`/`--effort` → the resolver):** the flags are ephemeral; nothing reads
+them back. So wherever the plugin emits `--model`/`--effort` from the `model`/`effort` config
+fields, it ALSO writes those same values to a persisted file. The resolver reads that file.
+Same source as the flags, re-written on every launch → the file always matches exactly what
+agy was launched with, across restarts and config changes. We persist OUR slug + effort (the
+catalog ids), so there is **no display-name parsing and no display→slug map** — the earlier
+statusline approach needed both.
 
-Prereq: registering the harness needs the full `HarnessSpec` (watcher + tracker from
-Surface C). The model bar can't light up in isolation — Surface C's watcher/activity must
-exist so `HarnessType.ANTIGRAVITY` is registerable.
+Prereq: registering the harness needs the full `HarnessSpec` (watcher + tracker, Surface C)
+so `HarnessType.ANTIGRAVITY` is registerable. The model bar rides on that.
 
-### `mngr_antigravity/resources/statusline.sh` `[EDIT]` (vendored plugin)
-- After parsing `agent_state`, also grep `"model":"..."` from the payload (same POSIX
-  `grep -oE` style, no jq) and write it to `$MNGR_AGENT_STATE_DIR/antigravity_model_state`
-  (a plain file holding the raw display name). Guard like `conversation_id`: an empty /
-  absent `model` must NOT clobber a previously-recorded value.
-- Tests in `statusline_test.py`: model written on a payload that carries it; not clobbered
-  by a later payload without one.
+### `mngr_antigravity/plugin.py` `[EDIT]` — write the persisted model file at launch
+- In `assemble_command`, at the point where `--model`/`--effort` are appended from
+  `agent_config.model` / `agent_config.effort`, also persist them. Recommended: a shell
+  prelude in the launch command that writes the JSON every start (so file == flags on every
+  restart), e.g. `mkdir -p <state> && printf '%s' '{"model":"<m>","effort":"<e>"}' > <model_file>`.
+  (Alternative: write it once in `provision` — simpler, but re-provision needed to change.)
+  When `model` is unset (no pin), write nothing.
 
 ### `mngr_antigravity/antigravity_config.py` `[EDIT]`
-- `MODEL_STATE_FILENAME: str = "antigravity_model_state"` + `get_antigravity_model_state_path(state_dir)`.
-- Add it to `_antigravity_preserved_items()` so a resumed agent shows its last model
-  immediately (before the first post-resume statusLine).
-
-### `mngr_antigravity/plugin.py` `[EDIT]` (seed the guess)
-- `statusline.sh` is **agy-invoked** — agy runs it on every state change and pipes it the
-  payload (with the live `model`). mngr cannot call it to synthesize a model (it would have
-  nothing to feed it). But the guess doesn't need it: the launcher **pins** `model`/`effort`
-  (§Surface A), so at provision the plugin **writes those pinned values to the state file**
-  (as a display name) — that seed IS the launch guess, exact and on-disk before agy runs. agy
-  then fires `statusline.sh` early in startup (`initializing`→`idle`, before the first turn),
-  overwriting the seed with the live value — so `read_live` catches up within ~a second of boot.
+- `MODEL_FILENAME: str = "antigravity_model.json"` + `get_antigravity_model_path(state_dir)`.
+- Add it to `_antigravity_preserved_items()` (survives destroy/adopt).
+- Test: `assemble_command` writes `{model, effort}` when pinned; nothing when unset.
 
 ### `harnesses/antigravity/model.py` `[NEW]`
-- `ANTIGRAVITY_CATALOG: HarnessCatalog` — hand-written (codex-style, small), `PickerMode.LIST`,
-  `switch_mode=SwitchMode.READ_ONLY` (agy has no scriptable model switch),
-  `default_model_id="gemini-3.6-flash"`, `icon_svg`. Options
-  (id = the slug `switch` sends / `read_live` matches; label = display base; efforts per model):
+- `ANTIGRAVITY_CATALOG: HarnessCatalog` — hand-written (codex-style), `PickerMode.LIST`,
+  `switch_mode=SwitchMode.READ_ONLY`, `default_model_id="gemini-3.6-flash"`, `icon_svg`. Options
+  (id = the slug the launcher pins / the file holds; label = display; efforts per model):
   | id | label | efforts |
   |---|---|---|
   | `gemini-3.6-flash` | Gemini 3.6 Flash | low, medium, high |
@@ -292,26 +283,18 @@ exist so `HarnessType.ANTIGRAVITY` is registerable.
   | `claude-sonnet-4-6` | Claude Sonnet 4.6 | (none) |
   | `claude-opus-4-6-thinking` | Claude Opus 4.6 | (none) |
   | `gpt-oss-120b-medium` | GPT-OSS 120B | (none) |
-  `supports_fast=False` everywhere (agy has no fast tier).
-- `_DISPLAY_TO_ID: dict[str,str]` built from the catalog labels, and
-  `_parse_status_model(display: str) -> ModelIdentity | None` — split `"Name (Effort)"` into
-  base display + effort, map base→id via `_DISPLAY_TO_ID`, lower-case the effort.
-  `Q-D2:` confirm the Gemini display bases are exactly "Gemini 3.6 Flash" etc. and the
-  Claude/GPT-OSS displays ("Claude Sonnet 4.6 (Thinking)", "GPT-OSS 120B (Medium)") map to
-  their effort-suffixed ids with effort=None (the qualifier is part of the id, not an axis).
+  `supports_fast=False` everywhere. The `id` is exactly the `model` value the launcher writes
+  to the file, so `read_live` matches it directly — no translation.
 - `AntigravityModelResolver(HarnessModelResolver)`:
   - `build(agent_info)` → store `agent_state_dir`.
-  - `read_live()` → read the state file → `_parse_status_model` → `ModelIdentity(model_id, effort, fast=False)`; None if absent/garbage. **On-disk, not transcript.**
-  - `guess_from_launch()` → read the same state file (seeded at provision); None if absent. (Effort parsed from the seeded display name.)
-  - `watched_paths()` → `(state_dir / MODEL_STATE_FILENAME,)`.
-  - `list_offered_models()` → None (small static catalog, offer everything — unlike pi).
-  - `switch(identity, axes, send)` → **READ_ONLY (decided).** agy has no one-shot `/model <slug>`
-    (its `/model` opens an interactive picker), so `switch` sends nothing and returns
+  - `guess_from_launch()` → read the persisted file → `ModelIdentity(model_id=<model>, effort=<effort or None>, fast=False)`; None when the file is absent/empty (unpinned agent → logo-only).
+  - `read_live()` → read the same file (so a restart with a changed pin reflects); None if absent. **Persisted, not live.**
+  - `watched_paths()` → `(state_dir / MODEL_FILENAME,)` (a restart rewrite re-fires the recompute).
+  - `list_offered_models()` → None (small static catalog).
+  - `switch(identity, axes, send)` → **READ_ONLY**: sends nothing, returns
     `SwitchResult(ok=False, detail="Antigravity model switching is not available from the bar")`
-    (the endpoint maps this to 409). `ANTIGRAVITY_CATALOG.switch_mode = SwitchMode.READ_ONLY` —
-    the bar shows the live model/effort but the slots are not interactive. This is still "models
-    wired up" for display (guess + live), which is the bulk of the value. To change an
-    antigravity agent's model, re-pin `model`/`effort` in the agent type (Surface A) and recreate.
+    (endpoint → 409). To change the model, re-pin `model`/`effort` (Surface A) and recreate.
+- No statusline dependency, no display-name parsing: the file holds the catalog id + effort.
 
 ### `harnesses/registry.py` `[EDIT]`
 - Import `ANTIGRAVITY_CATALOG` + `AntigravityModelResolver` (+ the Surface C watcher/tracker);
@@ -320,14 +303,13 @@ exist so `HarnessType.ANTIGRAVITY` is registerable.
 ### `harnesses/harness_type.py` `[EDIT]` — `ANTIGRAVITY = "antigravity"` (shared with Surface C).
 
 ### Open questions (Surface D)
-- **O7 (switch): RESOLVED — READ_ONLY.** agy has no one-shot `/model <slug>` (its `/model` is
+- **O7 (switch): RESOLVED — READ_ONLY.** agy has no scriptable `/model <slug>` (its `/model` is
   an interactive picker), so the bar is display-only; `switch` returns 409.
-- **Q-D1: RESOLVED — seed at provision.** The guess is the pinned `model`/`effort` written to
-  the state file at provision (exact; reflects the `--model`/`--effort` pin, unlike
-  `config/config.json`).
-- **Q-D2 (still open):** the exact display-name bases agy emits in the statusLine `model` field
-  (for the display→id map) — e.g. is it "Gemini 3.6 Flash" / "Claude Sonnet 4.6 (Thinking)"?
-  Capture from a live statusLine payload. Only affects the parser's lookup table, not the design.
+- **Source: RESOLVED — persisted launch file.** model/effort come from the pin the plugin
+  writes to `antigravity_model.json` at launch (same values as `--model`/`--effort`), read by
+  the resolver. No statusline, no transcript, no display→slug parsing. Restart-robust.
+- (No Q-D2: persisting our own slug+effort removes the display-name parsing the statusline
+  approach would have needed.)
 
 ---
 
