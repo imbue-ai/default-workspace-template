@@ -193,6 +193,7 @@ interface PanelParams {
 let showNewChatModal = false;
 let showNewCodexModal = false;
 let showNewPiModal = false;
+let showNewOpencodeModal = false;
 let sillyModalMode: "silly-claude" | "silly-codex" | null = null;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
@@ -817,6 +818,16 @@ function buildDropdownItems(
     action: () => {
       newTabTargetGroup = targetGroup ?? null;
       showNewPiModal = true;
+      m.redraw();
+    },
+  });
+
+  // New opencode agent -- the same `chat` role, on the `opencode` harness. Always shown.
+  items.push({
+    label: "New Opencode Agent",
+    action: () => {
+      newTabTargetGroup = targetGroup ?? null;
+      showNewOpencodeModal = true;
       m.redraw();
     },
   });
@@ -2964,6 +2975,22 @@ export const DockviewWorkspace: m.Component = {
               },
               onCancel() {
                 showNewPiModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        showNewOpencodeModal
+          ? m(CreateAgentModal, {
+              mode: "opencode",
+              onCreated(newAgentId: string, newAgentName: string) {
+                showNewOpencodeModal = false;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                showNewOpencodeModal = false;
                 newTabTargetGroup = null;
               },
             })

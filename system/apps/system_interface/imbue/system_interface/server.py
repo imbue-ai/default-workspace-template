@@ -1219,6 +1219,23 @@ def _create_pi_agent() -> Response:
         return _json_response(error.model_dump(), status_code=400)
 
 
+def _create_opencode_agent() -> Response:
+    """Create a new opencode chat agent in the primary agent's work directory.
+
+    Same ``chat`` role as _create_chat_agent, on the opencode harness instead of claude.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    body = request.get_json()
+
+    try:
+        create_request = CreateChatRequest(**body)
+        agent_id = agent_manager.create_chat_agent(create_request.name, HarnessType.OPENCODE)
+        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+    except (AgentCreationError, OSError, ValueError) as e:
+        error = ErrorResponse(detail=str(e))
+        return _json_response(error.model_dump(), status_code=400)
+
+
 def _create_chat_agent_with_roles(harness: HarnessType, roles: tuple[str, ...]) -> Response:
     agent_manager: AgentManager = get_state().agent_manager
     body = request.get_json()
@@ -1834,6 +1851,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-codex", view_func=_create_codex_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-pi", view_func=_create_pi_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/create-opencode", view_func=_create_opencode_agent, methods=["POST"])
     application.add_url_rule(
         "/api/agents/create-silly-claude", view_func=_create_silly_claude_agent, methods=["POST"]
     )

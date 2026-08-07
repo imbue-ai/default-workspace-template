@@ -23,6 +23,9 @@ class HarnessType(StrEnum):
     # The mngr agent type is ``pi-coding`` (``pi`` is only an alias); this value MUST
     # match it so ``parse_harness`` resolves a pi agent here and not the default.
     PI_CODING = "pi-coding"
+    # The mngr agent type is ``opencode``; this value MUST match it so ``parse_harness``
+    # resolves an opencode agent here and not the default.
+    OPENCODE = "opencode"
 
 
 # What an agent whose mngr type is not a harness is treated as. Such agents still get a
