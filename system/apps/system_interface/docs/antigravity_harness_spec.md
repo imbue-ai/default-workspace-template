@@ -238,63 +238,82 @@ append-only file, no rotation/marker).
 
 ---
 
-## Surface D — model bar (READ_ONLY, from a persisted launch file)
+## Surface D — model bar (READ_ONLY; persisted file, seeded at launch + statusline-updated)
 
-**Design (decided): read model/effort from a PERSISTED file the plugin writes at launch —
-never from live events (statusline) or the transcript.** Two facts make this the right call:
-the bar is READ_ONLY (agy has no scriptable `/model`), and the model is PINNED by the
-launcher (`model`/`effort`, §Surface A). So the model is a static per-agent fact, and the
-robust source is the pin itself, persisted to disk — survives restarts, depends on no live
-event firing. (This drops the earlier statusline-writes-the-model idea entirely.)
+**Design (decided): the resolver reads a PERSISTED file (`antigravity_model.json`); that file
+is SEEDED at launch and kept CURRENT by `statusline.sh` on every change.** This satisfies
+both needs: the file survives restarts (read_live never depends on a live event having fired),
+AND it updates when the model changes mid-session. The bar itself is READ_ONLY (agy has no
+scriptable `/model`), so "model changes in the chat" means the user picking a model in agy's
+own `/model` picker in the terminal — agy then re-fires the statusline with the new model,
+which rewrites the file, which re-fires the resolver recompute, which updates the bar.
 
-**The bridge (`--model`/`--effort` → the resolver):** the flags are ephemeral; nothing reads
-them back. So wherever the plugin emits `--model`/`--effort` from the `model`/`effort` config
-fields, it ALSO writes those same values to a persisted file. The resolver reads that file.
-Same source as the flags, re-written on every launch → the file always matches exactly what
-agy was launched with, across restarts and config changes. We persist OUR slug + effort (the
-catalog ids), so there is **no display-name parsing and no display→slug map** — the earlier
-statusline approach needed both.
+Two writers, one file:
+- **Launch seed (plugin, `assemble_command`):** writes the pinned `model`/`effort` (the same
+  values it turns into `--model`/`--effort`) so the file is correct from boot, before any
+  statusline fires. This is the bridge from the ephemeral flags to the resolver.
+- **Live update (`statusline.sh`, on every agy state change):** agy pipes it the current
+  `model`; it rewrites the file. Populates on first launch and updates on every in-agy change.
 
 Prereq: registering the harness needs the full `HarnessSpec` (watcher + tracker, Surface C)
 so `HarnessType.ANTIGRAVITY` is registerable. The model bar rides on that.
 
-### `mngr_antigravity/plugin.py` `[EDIT]` — write the persisted model file at launch
-- In `assemble_command`, at the point where `--model`/`--effort` are appended from
-  `agent_config.model` / `agent_config.effort`, also persist them. Recommended: a shell
-  prelude in the launch command that writes the JSON every start (so file == flags on every
-  restart), e.g. `mkdir -p <state> && printf '%s' '{"model":"<m>","effort":"<e>"}' > <model_file>`.
-  (Alternative: write it once in `provision` — simpler, but re-provision needed to change.)
-  When `model` is unset (no pin), write nothing.
+**Format note (the one wrinkle):** the launch seed knows the SLUG (`gemini-3.6-flash` +
+`medium`); the statusline gets agy's DISPLAY name (`"Gemini 3.6 Flash (Medium)"`). Pick ONE
+stored format so `read_live` is uniform. Recommended: store the **display string** (what the
+statusline naturally has); the launch seed converts slug→display via a small map in
+`antigravity_config`; the resolver parses display→identity. See the parser note below.
+
+### `mngr_antigravity/resources/statusline.sh` `[EDIT]` — live writer
+- After parsing `agent_state`, also `grep -oE '"model"[[:space:]]*:[[:space:]]*"[^"]*"'`
+  (POSIX, no jq) and write the value to `antigravity_model.json`. Guard like `conversation_id`:
+  an empty/absent `model` must NOT clobber a recorded value.
+- `Q-D3:` confirm agy re-invokes the statusLine on a *model* change (not only busy/idle) — if
+  it only fires on agent_state changes, an in-agy model switch mid-idle might not update until
+  the next state change. Verify with `tmux send-keys` (`/model` then observe the file).
+
+### `mngr_antigravity/plugin.py` `[EDIT]` — launch seed
+- In `assemble_command`, where `--model`/`--effort` are appended from `agent_config.model` /
+  `.effort`, also write the pinned value (converted to the display form) to
+  `antigravity_model.json` via a shell prelude, so the bar is right from boot. When `model` is
+  unset, write nothing (logo-only, or wait for the statusline).
 
 ### `mngr_antigravity/antigravity_config.py` `[EDIT]`
 - `MODEL_FILENAME: str = "antigravity_model.json"` + `get_antigravity_model_path(state_dir)`.
-- Add it to `_antigravity_preserved_items()` (survives destroy/adopt).
-- Test: `assemble_command` writes `{model, effort}` when pinned; nothing when unset.
+- A small slug↔display map (e.g. `gemini-3.6-flash` ↔ `Gemini 3.6 Flash`) for the launch seed.
+- Add the file to `_antigravity_preserved_items()` (survives destroy/adopt → restart shows the
+  last model immediately).
 
 ### `harnesses/antigravity/model.py` `[NEW]`
 - `ANTIGRAVITY_CATALOG: HarnessCatalog` — hand-written (codex-style), `PickerMode.LIST`,
   `switch_mode=SwitchMode.READ_ONLY`, `default_model_id="gemini-3.6-flash"`, `icon_svg`. Options
-  (id = the slug the launcher pins / the file holds; label = display; efforts per model):
+  (id/label = the display forms the file holds; efforts per model):
   | id | label | efforts |
   |---|---|---|
-  | `gemini-3.6-flash` | Gemini 3.6 Flash | low, medium, high |
-  | `gemini-3.5-flash` | Gemini 3.5 Flash | low, medium, high |
-  | `gemini-3.1-pro` | Gemini 3.1 Pro | low, high |
-  | `claude-sonnet-4-6` | Claude Sonnet 4.6 | (none) |
-  | `claude-opus-4-6-thinking` | Claude Opus 4.6 | (none) |
-  | `gpt-oss-120b-medium` | GPT-OSS 120B | (none) |
-  `supports_fast=False` everywhere. The `id` is exactly the `model` value the launcher writes
-  to the file, so `read_live` matches it directly — no translation.
+  | `Gemini 3.6 Flash` | Gemini 3.6 Flash | low, medium, high |
+  | `Gemini 3.5 Flash` | Gemini 3.5 Flash | low, medium, high |
+  | `Gemini 3.1 Pro` | Gemini 3.1 Pro | low, high |
+  | `Claude Sonnet 4.6 (Thinking)` | Claude Sonnet 4.6 (Thinking) | (none) |
+  | `Claude Opus 4.6 (Thinking)` | Claude Opus 4.6 (Thinking) | (none) |
+  | `GPT-OSS 120B (Medium)` | GPT-OSS 120B (Medium) | (none) |
+  `supports_fast=False` everywhere. (id=label since switch is READ_ONLY — the id only has to
+  match what `read_live` returns, and nothing sends a slug.)
+- `_parse_stored_model(display) -> ModelIdentity | None`: match the FULL string against a
+  catalog label first (catches Claude/GPT-OSS, whose qualifier is part of the identity, not a
+  selectable effort); else strip a trailing `(<Effort>)` and match the base + take the effort
+  (catches Gemini's low/medium/high). Returns `ModelIdentity(model_id=<matched id>, effort, fast=False)`.
 - `AntigravityModelResolver(HarnessModelResolver)`:
   - `build(agent_info)` → store `agent_state_dir`.
-  - `guess_from_launch()` → read the persisted file → `ModelIdentity(model_id=<model>, effort=<effort or None>, fast=False)`; None when the file is absent/empty (unpinned agent → logo-only).
-  - `read_live()` → read the same file (so a restart with a changed pin reflects); None if absent. **Persisted, not live.**
-  - `watched_paths()` → `(state_dir / MODEL_FILENAME,)` (a restart rewrite re-fires the recompute).
+  - `read_live()` → read the file → `_parse_stored_model` → identity; None if absent/garbage.
+  - `guess_from_launch()` → read the same file (the launch seed guarantees it exists from boot);
+    None if absent (unpinned agent → logo-only).
+  - `watched_paths()` → `(state_dir / MODEL_FILENAME,)` — a statusline rewrite (in-agy model
+    change) re-fires the recompute so the bar updates. **This is the on-change path.**
   - `list_offered_models()` → None (small static catalog).
   - `switch(identity, axes, send)` → **READ_ONLY**: sends nothing, returns
     `SwitchResult(ok=False, detail="Antigravity model switching is not available from the bar")`
-    (endpoint → 409). To change the model, re-pin `model`/`effort` (Surface A) and recreate.
-- No statusline dependency, no display-name parsing: the file holds the catalog id + effort.
+    (endpoint → 409). The bar still *reflects* an in-agy model change (via the watched file);
+    it just can't *drive* one.
 
 ### `harnesses/registry.py` `[EDIT]`
 - Import `ANTIGRAVITY_CATALOG` + `AntigravityModelResolver` (+ the Surface C watcher/tracker);
@@ -303,13 +322,15 @@ so `HarnessType.ANTIGRAVITY` is registerable. The model bar rides on that.
 ### `harnesses/harness_type.py` `[EDIT]` — `ANTIGRAVITY = "antigravity"` (shared with Surface C).
 
 ### Open questions (Surface D)
-- **O7 (switch): RESOLVED — READ_ONLY.** agy has no scriptable `/model <slug>` (its `/model` is
-  an interactive picker), so the bar is display-only; `switch` returns 409.
-- **Source: RESOLVED — persisted launch file.** model/effort come from the pin the plugin
-  writes to `antigravity_model.json` at launch (same values as `--model`/`--effort`), read by
-  the resolver. No statusline, no transcript, no display→slug parsing. Restart-robust.
-- (No Q-D2: persisting our own slug+effort removes the display-name parsing the statusline
-  approach would have needed.)
+- **O7 (switch): RESOLVED — READ_ONLY.** agy has no scriptable `/model <slug>`, so the bar is
+  display-only; `switch` returns 409. The bar still *reflects* an in-agy model change.
+- **Source: RESOLVED — persisted `antigravity_model.json`.** Seeded at launch (the pin), kept
+  current by `statusline.sh` on every change, read by the resolver. Restart-robust AND
+  updates-on-change. Not the transcript.
+- **Q-D3 (verify):** does agy re-fire the statusLine on a *model* change specifically (not only
+  busy/idle)? If not, an in-agy switch may lag until the next state change. `tmux send-keys` test.
+- **Q-D2 (verify):** the exact agy display strings (for the catalog labels + the slug↔display
+  seed map): `Gemini 3.6 Flash (Medium)`, `Claude Sonnet 4.6 (Thinking)`, etc.
 
 ---
 
