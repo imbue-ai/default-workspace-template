@@ -261,7 +261,12 @@ check_installation = false
 # NEVER sets AGY_CLI_DISABLE_AUTO_UPDATE=true in the agent env.
 #
 # settings_overrides is folded (last) into the per-agent settings.json -- the agy analog of
-# agent_types.codex's config_overrides, turning off surfaces a headless chat does not use:
+# agent_types.codex's config_overrides. `model` pins the agent's model: agy reads its model
+# from settings.json's `model` key (a display name from `agy models`) at launch AND rewrites
+# it on an in-agy `/model` change (verified live) -- so this is both the launch pin and the
+# source the chat model bar reads. antigravity is single-auth (one Google account), so a slug
+# is safe to force (the lateral of agent_types.codex's gpt-5.6-sol); Gemini 3.6 Flash (High)
+# is the account default. The rest turn off surfaces a headless chat does not use:
 # enableTerminalSandbox=false keeps run_command unrestricted (the container is already the
 # isolation boundary, same intent as codex's danger-full-access; agy's terminal sandbox is
 # opt-in anyway, so this is belt-and-suspenders), and telemetry / tips / feedback-survey /
@@ -271,7 +276,7 @@ auto_allow_permissions = true
 auto_dismiss_dialogs = true
 check_installation = false
 update_policy = "NEVER"
-settings_overrides = { enableTerminalSandbox = false, enableTelemetry = false, showTips = false, showFeedbackSurvey = false, notifications = false }
+settings_overrides = { model = "Gemini 3.6 Flash (High)", enableTerminalSandbox = false, enableTelemetry = false, showTips = false, showFeedbackSurvey = false, notifications = false }
 
 # --- Provider configurations ---
 
