@@ -159,6 +159,16 @@ body {
   gap: 12px;
 }
 
+/* Left group: the 'Queued messages' label plus its (i) info icon, kept together
+   and allowed to shrink/ellipsize so the [Shoulder tap] button on the right is
+   never crowded. */
+.queued-header-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .queued-header-label {
   font-family: var(--font-family-base);
   font-size: 12px;
@@ -248,7 +258,8 @@ body {
 
 /* Frozen queued group: while a shoulder-tap restart is in flight, the captured
    messages are held greyed (ignoring the backend snapshot briefly emptying) so
-   they do not blip out and back. A countdown sits where the button was. */
+   they do not blip out and back, until a backend arrival releases the hold. No
+   countdown is shown. */
 .queued-group--frozen {
   opacity: 0.55;
 }
@@ -257,12 +268,51 @@ body {
   color: var(--color-text-secondary);
 }
 
-.queued-countdown {
+/* The (i) info affordance next to 'Queued messages'. */
+.queued-info {
+  position: relative;
   flex-shrink: 0;
-  font-family: var(--font-family-base);
   font-size: 12px;
+  line-height: 1;
   color: var(--color-text-secondary);
-  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  cursor: help;
+}
+
+.queued-info:hover {
+  opacity: 1;
+}
+
+/* Its hover tooltip, same right-anchored CSS pattern as the [Shoulder tap] button
+   (native title= is unreliable in the webview). Left-anchored here since the icon
+   sits at the column's left edge, so the tooltip does not clip off-screen. */
+.queued-info[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 0;
+  z-index: 1000;
+  width: max-content;
+  max-width: 300px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--color-text-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.queued-info[data-tooltip]:hover::after,
+.queued-info[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
 }
 
 /* Optimistic "Sending…" bubble: shown at the tail the instant the user sends,

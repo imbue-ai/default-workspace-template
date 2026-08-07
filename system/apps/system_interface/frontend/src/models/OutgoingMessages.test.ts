@@ -7,10 +7,15 @@ vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 import {
   addOutgoing,
   dropOutgoing,
+  getFlushFreeze,
   getOutgoingMessages,
   noteBackendArrivals,
+  releaseFlushFreeze,
   resolveOutgoing,
+  startFlushFreeze,
 } from "./OutgoingMessages";
+
+const QM = (queued_id: string, content: string) => ({ queued_id, content, timestamp: "t" });
 
 describe("OutgoingMessages", () => {
   beforeEach(() => {
@@ -70,5 +75,40 @@ describe("OutgoingMessages", () => {
     expect(getOutgoingMessages(agent)).toHaveLength(1);
     vi.advanceTimersByTime(7000);
     expect(getOutgoingMessages(agent)).toHaveLength(0);
+  });
+
+  it("holds a shoulder-tap freeze and releases it on the next backend arrival", () => {
+    const agent = `a-${Math.random()}`;
+    startFlushFreeze(agent, [QM("q1", "one"), QM("q2", "two")]);
+    expect(getFlushFreeze(agent)?.messages.map((m) => m.content)).toEqual(["one", "two"]);
+
+    // A genuinely-new arrival (the resent message landing) releases the hold.
+    noteBackendArrivals(agent, ["resent-1"]);
+    expect(getFlushFreeze(agent)).toBeUndefined();
+  });
+
+  it("does not release the freeze on an already-seen arrival id", () => {
+    const agent = `a-${Math.random()}`;
+    noteBackendArrivals(agent, ["dup"]); // seen before the freeze exists
+    startFlushFreeze(agent, [QM("q1", "one")]);
+    noteBackendArrivals(agent, ["dup"]); // already seen -> no release
+    expect(getFlushFreeze(agent)).toBeDefined();
+    noteBackendArrivals(agent, ["fresh"]); // a new one releases
+    expect(getFlushFreeze(agent)).toBeUndefined();
+  });
+
+  it("releases the freeze via the cap if no arrival is ever observed", () => {
+    const agent = `a-${Math.random()}`;
+    startFlushFreeze(agent, [QM("q1", "one")]);
+    expect(getFlushFreeze(agent)).toBeDefined();
+    vi.advanceTimersByTime(21000);
+    expect(getFlushFreeze(agent)).toBeUndefined();
+  });
+
+  it("releaseFlushFreeze drops the hold (the flush-failure path)", () => {
+    const agent = `a-${Math.random()}`;
+    startFlushFreeze(agent, [QM("q1", "one")]);
+    releaseFlushFreeze(agent);
+    expect(getFlushFreeze(agent)).toBeUndefined();
   });
 });
