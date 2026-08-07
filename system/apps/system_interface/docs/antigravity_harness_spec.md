@@ -271,15 +271,18 @@ exist so `HarnessType.ANTIGRAVITY` is registerable.
   immediately (before the first post-resume statusLine).
 
 ### `mngr_antigravity/plugin.py` `[EDIT]` (seed the guess)
-- At provision, seed the state file with the pinned model/effort (from the `model`/`effort`
-  fields, §Surface A) as a display name, so `guess_from_launch` has an on-disk value before
-  the first statusLine fires. `Q-D1:` alternatively read agy's `config/config.json`
-  `userSettings.model` for the guess — but that only reflects a persisted `/model`, not the
-  session `--model` pin, so the seed is more accurate. Recommend the seed.
+- `statusline.sh` is **agy-invoked** — agy runs it on every state change and pipes it the
+  payload (with the live `model`). mngr cannot call it to synthesize a model (it would have
+  nothing to feed it). But the guess doesn't need it: the launcher **pins** `model`/`effort`
+  (§Surface A), so at provision the plugin **writes those pinned values to the state file**
+  (as a display name) — that seed IS the launch guess, exact and on-disk before agy runs. agy
+  then fires `statusline.sh` early in startup (`initializing`→`idle`, before the first turn),
+  overwriting the seed with the live value — so `read_live` catches up within ~a second of boot.
 
 ### `harnesses/antigravity/model.py` `[NEW]`
 - `ANTIGRAVITY_CATALOG: HarnessCatalog` — hand-written (codex-style, small), `PickerMode.LIST`,
-  `switch_mode` per O7 (below), `default_model_id="gemini-3.6-flash"`, `icon_svg`. Options
+  `switch_mode=SwitchMode.READ_ONLY` (agy has no scriptable model switch),
+  `default_model_id="gemini-3.6-flash"`, `icon_svg`. Options
   (id = the slug `switch` sends / `read_live` matches; label = display base; efforts per model):
   | id | label | efforts |
   |---|---|---|
@@ -302,12 +305,13 @@ exist so `HarnessType.ANTIGRAVITY` is registerable.
   - `guess_from_launch()` → read the same state file (seeded at provision); None if absent. (Effort parsed from the seeded display name.)
   - `watched_paths()` → `(state_dir / MODEL_STATE_FILENAME,)`.
   - `list_offered_models()` → None (small static catalog, offer everything — unlike pi).
-  - `switch(identity, axes, send)` → **O7-gated**:
-    - if agy `/model <slug>` applies one-shot: `send("/model {id}")`, and effort via
-      `send("/effort {effort}")` (agy has a real `--effort`/effort axis); `SwitchMode.ON_CHANGE`
-      (chip reconciles once statusLine rewrites the state file).
-    - if `/model` opens a pane-wedging picker: v1 `SwitchMode.READ_ONLY` (bar shows the live
-      model, no in-UI switch) — still "models wired up" for display, the bulk of the value.
+  - `switch(identity, axes, send)` → **READ_ONLY (decided).** agy has no one-shot `/model <slug>`
+    (its `/model` opens an interactive picker), so `switch` sends nothing and returns
+    `SwitchResult(ok=False, detail="Antigravity model switching is not available from the bar")`
+    (the endpoint maps this to 409). `ANTIGRAVITY_CATALOG.switch_mode = SwitchMode.READ_ONLY` —
+    the bar shows the live model/effort but the slots are not interactive. This is still "models
+    wired up" for display (guess + live), which is the bulk of the value. To change an
+    antigravity agent's model, re-pin `model`/`effort` in the agent type (Surface A) and recreate.
 
 ### `harnesses/registry.py` `[EDIT]`
 - Import `ANTIGRAVITY_CATALOG` + `AntigravityModelResolver` (+ the Surface C watcher/tracker);
@@ -316,12 +320,14 @@ exist so `HarnessType.ANTIGRAVITY` is registerable.
 ### `harnesses/harness_type.py` `[EDIT]` — `ANTIGRAVITY = "antigravity"` (shared with Surface C).
 
 ### Open questions (Surface D)
-- **O7 (switch):** does agy `/model <slug>` apply one-shot, or open a pane-wedging picker?
-  Decides `switch_mode` (ON_CHANGE vs READ_ONLY). Drive a live agy TUI with `tmux send-keys`.
-  Same question for `/effort`.
-- **Q-D2:** exact display-name bases as agy emits them in the statusLine `model` field (for
-  the display→id map). Capture from a live statusLine payload / `agy models` + error output.
-- **Q-D1:** seed the guess at provision (recommended) vs read `config/config.json`.
+- **O7 (switch): RESOLVED — READ_ONLY.** agy has no one-shot `/model <slug>` (its `/model` is
+  an interactive picker), so the bar is display-only; `switch` returns 409.
+- **Q-D1: RESOLVED — seed at provision.** The guess is the pinned `model`/`effort` written to
+  the state file at provision (exact; reflects the `--model`/`--effort` pin, unlike
+  `config/config.json`).
+- **Q-D2 (still open):** the exact display-name bases agy emits in the statusLine `model` field
+  (for the display→id map) — e.g. is it "Gemini 3.6 Flash" / "Claude Sonnet 4.6 (Thinking)"?
+  Capture from a live statusLine payload. Only affects the parser's lookup table, not the design.
 
 ---
 
