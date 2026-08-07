@@ -25,10 +25,14 @@ marked `Q`, not asserted.
 - agy launch flags (verified via `--help`): `--model "<name>"`, `--effort low|medium|high`
   (effort is a **separate** launch axis), `--conversation <id>`, `--add-dir`,
   `--dangerously-skip-permissions`, `--mode`, `--print`/`--output-format`, `--json-schema`.
-- Models (docs): Gemini 3.6 Flash (Low/Med/High), Gemini 3.5 Flash (Low/Med/High),
-  Gemini 3.1 Pro (Low/High), Claude Sonnet 4.6 (thinking), Claude Opus 4.6 (thinking),
-  GPT-OSS-120b (Medium). Selection is "sticky between user messages within a
-  conversation." `agy models` needs sign-in → catalog is hardcoded.
+- Models (from live `agy models`, signed in): slug ids `gemini-3.6-flash-{high,medium,low}`,
+  `gemini-3.5-flash-{high,medium,low}`, `gemini-3.1-pro-{high,low}`, `claude-sonnet-4-6`,
+  `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`. **Effort is a separate axis**: `--model`
+  + `--effort low|medium|high`. Verified live: `--model gemini-3.6-flash --effort medium` is
+  valid; `--model gemini-3.6-flash-medium` (combined slug) is also valid; `--model
+  gemini-3.6-flash` alone errors `requires --effort`. The Gemini models have low/med/high;
+  Claude/GPT-OSS have no effort tier. Display names ("Gemini 3.6 Flash (Medium)") are labels
+  shown in errors, not the identifier. `agy models` needs sign-in → catalog is hardcoded.
 - No turn markers in the transcript → activity is Claude-style (lifecycle + tail),
   `special_kinds = frozenset()`.
 
@@ -63,12 +67,11 @@ plugin), so **no `parent_type`**.
 # update_policy = NEVER freezes the baked build (agy has no version pin; NEVER sets
 # AGY_CLI_DISABLE_AUTO_UPDATE=true in the agent env).
 #
-# No model is pinned (like agent_types.opencode / pi-coding, unlike codex's gpt-5.6-sol):
-# agy's model is a Google-account `agy models` display name ("Gemini 3.5 Flash (High)")
-# that a given account may or may not expose, and the display string (spaces/parens) is
-# finicky to force, so pinning risks a rejection. The chat model bar (Surface D) will
-# read/set the live model; to pin one now, add `model = "<display name>"` to
-# settings_overrides.
+# Model pin: pass agy's own `--model` / `--effort` launch flags via cli_args (both are
+# shell-safe -- the slug and the effort word have no spaces, unlike the "Gemini 3.5 Flash
+# (High)" display name). Verified against live agy: `--model <slug> --effort <low|med|high>`.
+# Leave cli_args empty to use the account default (like opencode / pi-coding); the chat
+# model bar (Surface D) will drive model+effort as two axes, matching this flag pair.
 #
 # settings_overrides is folded (last) into the per-agent settings.json over the synced
 # base: the telemetry/tips/survey flags keep the chat surface quiet. NOTE: unlike codex,
@@ -80,14 +83,18 @@ auto_allow_permissions = true
 check_installation = false
 update_policy = "NEVER"
 settings_overrides = { enableTelemetry = false, showTips = false, showFeedbackSurvey = false }
-# To pin a model instead of using the account default, add it to settings_overrides:
-#   settings_overrides = { model = "Gemini 3.5 Flash (High)", enableTelemetry = false, ... }
+# To pin a model + effort, add agy's launch flags (both shell-safe, no spaces):
+#   cli_args = ["--model", "gemini-3.6-flash", "--effort", "medium"]
 ```
 
 Notes:
-- **Model goes in `settings_overrides`, not a top-level key.** Unlike `CodexAgentConfig`
-  (top-level `model` / `model_reasoning_effort`), `AntigravityAgentConfig` has no `model`
-  field; agy's model is a `settings.json` string, so it rides `settings_overrides["model"]`.
+- **Model is a launch flag, not a settings key.** `--model <slug> --effort <tier>` is the
+  verified mechanism (both forms work: `gemini-3.6-flash --effort medium`, or the combined
+  `gemini-3.6-flash-medium`). agy's model persistence otherwise lives in the `config/config.json`
+  `userSettings` scope, NOT `antigravity-cli/settings.json` -- so a `settings_overrides.model`
+  is the wrong file; use `cli_args`. **Symmetric-with-codex design (Surface D):** add dedicated
+  `model` + `effort` fields to `AntigravityAgentConfig` and have the plugin emit `--model` /
+  `--effort` from them, the antigravity analog of codex's `model` / `model_reasoning_effort`.
 - With `auto_allow_permissions=true`, agy's `--dangerously-skip-permissions` auto-approves
   every tool call, so `toolPermission` / a `permissions` policy in `settings_overrides`
   would be moot (skip wins) — omitted here, matching codex.
@@ -102,9 +109,9 @@ Notes:
   setting), and mngr passes neither, so `run_command` should already run unrestricted
   in-container — no codex-style override needed. Only add `enableTerminalSandbox=false` if a
   synced-home base turns it on. Verify a `run_command` actually executes under docker/gVisor.
-- **Q-A2 (model pin):** leave unset (recommended, account-driven like opencode/pi) or pin a
-  default? If pinning, confirm the exact `agy models` display string on a signed-in host
-  (needs sign-in; `agy models` errors "Please sign in" otherwise).
+- **Q-A2 (model pin): RESOLVED.** Model+effort set via `--model <slug> --effort <tier>` launch
+  flags (verified live). Slugs from `agy models`. Recommend leaving unset (account default) for
+  v1; pin via `cli_args` if desired, or add `model`/`effort` fields for the codex-symmetric design.
 - **Q-A3 (telemetry keys):** confirm `enableTelemetry` / `showTips` / `showFeedbackSurvey`
   are honored from the per-agent `settings.json` and are scalar-assignable through
   `settings_overrides` without tripping the narrowing guard. Low risk (scalars), but
