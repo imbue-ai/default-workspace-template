@@ -622,6 +622,43 @@ def test_genuine_user_message_has_no_is_meta() -> None:
     assert "is_meta" not in events[0]
 
 
+def test_compaction_summary_user_message_emitted_with_flag() -> None:
+    """Claude Code's post-auto-compaction record carries ``isCompactSummary`` (and is
+    NOT ``isMeta``): it is a real, visible message whose text is the carried-over
+    summary. The flag is passed through so the frontend can collapse it into a chip
+    rather than render the whole summary as a bare user bubble.
+    """
+    line = json.dumps(
+        {
+            "type": "user",
+            "uuid": "uuid-c",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "isCompactSummary": True,
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "This session is being continued from a previous conversation that ran out of context.",
+                    }
+                ],
+            },
+        }
+    )
+    events = parse_lines([line])
+    assert len(events) == 1
+    assert events[0]["type"] == "user_message"
+    assert events[0]["is_compact_summary"] is True
+    assert "is_meta" not in events[0]
+
+
+def test_genuine_user_message_has_no_compact_summary_flag() -> None:
+    """A real human turn carries no ``is_compact_summary`` key."""
+    events = parse_lines([_make_user_line("uuid-h2", "2026-01-01T00:00:00Z", "hello there")])
+    assert len(events) == 1
+    assert "is_compact_summary" not in events[0]
+
+
 def test_synthetic_model_assistant_message_not_emitted() -> None:
     """The synthetic "No response requested." reply -- the answer half of the
     resume turn-pair -- is bookkeeping, not a real agent turn, and must not
