@@ -22,7 +22,7 @@ import { icon } from "./icons";
 
 /** Shown on hover for any read-only model/effort/fast slot: a read-only harness's model is
  *  switched from the agent's own terminal (its native picker), not from this bar. */
-const READ_ONLY_TOOLTIP = "use agent terminal to switch models";
+const READ_ONLY_TOOLTIP = "Use agent terminal to switch models";
 
 /** The effort to carry when switching to `option`: keep the current one if the new
  *  model declares it, else the model's first shown (or first declared) effort. Null
