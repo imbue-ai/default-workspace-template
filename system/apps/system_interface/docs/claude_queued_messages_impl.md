@@ -61,88 +61,93 @@ two independent reviews):
   found (`…928Z` enqueue vs `…927Z` attachment). So an exact-timestamp join is
   NOT safe: use it only as a sanity assertion, never as the join. Position is the
   join.
-- `remove.timestamp` is the **remove moment**, NOT the enqueue moment. Combined
-  with the above, we **ignore both the `remove` op and the raw `dequeue` op** for
-  resolution (see below) and key off the two records that unambiguously mark a
-  message leaving as a *human* turn.
-- `popAll.timestamp` is the flush moment, shared across the batch. `popAll` =
-  "clear all" (§4).
-- **Task-notifications ride the same queue.** Background-task notices appear as
-  `enqueue` records whose content begins `<task-notification>`, and they resolve
-  through the same ops. They are NOT user turns and must never surface — skip them
-  at enqueue by that content prefix (a structural-marker check, categorically
-  different from the banned fuzzy content reconciliation).
-- **`dequeue` is overloaded** and must not be treated as "committed": it also
-  fires on user interrupt (the following `user` record is
-  `[Request interrupted by user]`, `promptSource` absent) and on task-notification
-  drains (`promptSource:"system"`). The clean discriminator is the resolving
-  `user` record's `promptSource`: `"queued"` = a real human new-turn commit.
+- **A message leaves the queue via exactly one leave-op: `dequeue`, `remove`, or
+  `popAll`** — this is the conservation law (`enqueue = dequeue + remove +
+  popAll`, verified exactly). Resolution keys off THESE OPS, positionally
+  (drop the FIFO head per leave-op). Do NOT try to key resolution off the
+  `queued_command` attachment or the committed `user` record's `promptSource` —
+  that was tried and is WRONG (see the box below).
+- **Task-notifications ride the same queue** and must NOT surface. They appear as
+  `enqueue` records whose content begins `<task-notification>`, and they consume a
+  leave-op like any message. So they are tracked as **phantom** placeholders: they
+  occupy a FIFO slot (keeping positional resolution aligned) but are filtered out
+  of the snapshot. A blank enqueue is a phantom too.
+
+> **Why not `promptSource`/`queued_command` (a bug the preview caught).** An
+> earlier model resolved only on a `queued_command` (`commandMode=="prompt"`) or a
+> `user` record with `promptSource=="queued"`, ignoring the `dequeue`/`remove`
+> ops. It passed 865 tests and then **stranded a committed message in the queued
+> group on a real conversation.** Reason: in the real Minds flow every message is
+> delivered via `mngr` (typed into the TUI), so a mid-turn message commits via a
+> `dequeue` whose `promptSource` is `"typed"`, NOT `"queued"`; slash commands
+> (`/fast`) and task-notifications behave likewise. Those resolutions were
+> invisible, entries piled up, and later resolves dropped the wrong (oldest) one.
+> Keying on the leave-ops with phantom placeholders nets exactly to the
+> conservation law and reproduces empty on the real session. `promptSource` and
+> `queued_command` are no longer used for resolution at all.
 
 ## 4. Backend: the tracker
 
 One tracker per session, keyed on `sessionId`, reset on a new session file. Pure
 function of the ledger; holds no UI state.
 
+Entries carry a `kind` (`real` | `phantom`); only `real` entries are surfaced.
+Resolution is one operation — drop the FIFO head — fired by every leave-op.
+
 ```python
 @dataclass(frozen=True)
 class QueuedMessage:
     queued_id: str      # sha1(f"{session_id}\0{enqueue_ts}\0{content}")[:16] — stable across replays
     content: str
-    enqueue_ts: str     # verbatim ISO string from the enqueue record
+    enqueue_ts: str
+    is_phantom: bool    # task-notification / blank — occupies a FIFO slot, never surfaced
 
 _TASK_NOTIFICATION_PREFIX = "<task-notification>"
 
 class ClaudeQueueTracker:
-    pending: list[QueuedMessage]   # FIFO, oldest first
+    pending: list[QueuedMessage]   # FIFO, oldest first (real + phantom interleaved)
 
     def on_enqueue(self, ts, content):
-        if content.startswith(_TASK_NOTIFICATION_PREFIX) or not content.strip():
-            return                             # not a user turn — never surfaces
-        self.pending.append(QueuedMessage(_qid(session_id, ts, content), content, ts))
+        phantom = content.startswith(_TASK_NOTIFICATION_PREFIX) or not content.strip()
+        self.pending.append(QueuedMessage(_qid(session_id, ts, content), content, ts, phantom))
 
-    def on_inline_commit(self, attachment_ts=None):   # queued_command, commandMode == "prompt"
-        # A message left the queue inline (the remove path). Drop the oldest.
+    def on_leave(self):                        # dequeue OR remove OR popAll (one record)
         if self.pending:
-            self.pending.pop(0)                # POSITIONAL. attachment_ts, if present,
-                                               # may assert == head.enqueue_ts (skew-tolerant: log, don't rely)
+            self.pending.pop(0)                # POSITIONAL — drop the oldest, phantom or real
 
-    def on_new_turn_commit(self):              # user record with promptSource == "queued"
-        if self.pending:
-            self.pending.pop(0)                # POSITIONAL — the FIFO head opened its own turn
-
-    def on_pop_all(self):                      # bulk flush
+    def on_idle(self):                         # backstop (§5)
         self.pending.clear()
 
-    def on_idle(self):                         # backstop (§5) — also covers interrupts
-        self.pending.clear()
-
-    def snapshot(self):                        # what goes on the wire
+    def snapshot(self):                        # what goes on the wire — REAL entries only
         return [{"queued_id": m.queued_id, "content": m.content, "timestamp": m.enqueue_ts}
-                for m in self.pending]
+                for m in self.pending if not m.is_phantom]
 ```
 
-We deliberately do **not** read the raw `dequeue` or `remove` ops — they are
-overloaded/mis-timed (§3). Each message leaves the queue via exactly one surfaced
-signal: `on_inline_commit` (a `commandMode=="prompt"` `queued_command`) OR
-`on_new_turn_commit` (a `promptSource=="queued"` `user` record) OR `on_pop_all`.
-The conservation law guarantees no double-resolve; a resolve on an empty list is a
-harmless no-op. End-to-end simulation over all five real sessions nets to zero
-pending except one genuinely-queued message in the still-live session.
+That is the whole model. `enqueue` adds (real or phantom); every `dequeue`,
+`remove`, and `popAll` record drops the FIFO head; the snapshot hides phantoms.
+This matches the conservation law exactly, so it is self-balancing: replaying the
+whole ledger nets to precisely the still-pending real messages. Verified on the
+real worker session (mngr-delivered message + `/fast` slash command + four
+task-notifications + inline and dequeue commits) — nets to **empty**, where the
+buggy model stranded one message.
+
+Notes:
+- `popAll` emits one record per flushed message; treating each as one `on_leave`
+  (drop head) is uniform with dequeue/remove and needs no special "clear all".
+- We do **not** read `promptSource` or the `queued_command` attachment for
+  resolution at all (they broke — see §3 box). The `queued_command` attachment is
+  still parsed *for the transcript* (it renders the committed inline turn), just
+  not for queue tracking.
+- `auto-continuation`: a rare non-human `commandMode=="prompt"` enqueue is
+  indistinguishable at enqueue and is added as `real`; it resolves normally on its
+  leave-op and may briefly appear. Rare; the idle backstop mops residue.
 
 Wiring:
-- The Claude watcher tails the session JSONL. Feed each raw line to the tracker in
-  the watcher's forward-consume loop (NOT `session_parser.parse_session_lines` —
-  that drops `queue-operation` records at its `uuid` guard, since they are not DAG
-  nodes). Add `parse_queue_signals(line)` that recognizes the four ops plus the
-  `queued_command` attachment and the `promptSource:"queued"` user record; one
-  record can feed both the transcript parse and the tracker.
-- `commandMode != "prompt"` attachments (task-notifications) are ignored by
-  `on_inline_commit` — they were never added at enqueue, so nothing to resolve.
-- `auto-continuation` note: a rare `commandMode=="prompt"` `queued_command` with
-  `origin.kind=="auto-continuation"` exists (1 in 50). It is indistinguishable
-  from human at enqueue (enqueue carries no `origin`), so it is added and then
-  resolved normally — it may briefly appear in the group and self-clears. Do not
-  over-engineer; the idle backstop mops any residue.
+- Feed each raw session line to the tracker in the Claude watcher's
+  forward-consume loop (NOT `parse_session_lines` — it drops `queue-operation`
+  records at the `uuid` guard). `parse_queue_signals(line)` recognizes only the
+  four `queue-operation` ops (`enqueue` → ADD with the phantom flag; `dequeue` /
+  `remove` / `popAll` → LEAVE) and returns `None` for everything else.
 - Reset the tracker (empty `pending`) on `SessionStart` / new session file.
 
 Self-correcting on a backend restart: replaying the whole ledger nets every
@@ -195,18 +200,18 @@ This is the whole point. Every correlation is **positional** (FIFO) or a
 **structural-marker** check; nothing compares normalized text, and nothing relies
 on a timestamp (which can skew).
 
-| transition | detected by | resolve |
+| transition | detected by | action |
 |---|---|---|
-| becomes queued | `queue-operation/enqueue`, content NOT `<task-notification>` | append (none) |
-| committed inline | `queued_command`, `commandMode=="prompt"` | **positional** — drop FIFO head |
-| committed as new turn | `user` record, `promptSource=="queued"` | **positional** — drop FIFO head |
-| bulk flushed | `queue-operation/popAll` | clear all (none) |
-| stale survivor (interrupt / SIGKILL / crash) | working→IDLE | clear all (none) |
-| ignored (overloaded / mis-timed) | raw `dequeue` op, `remove` op | — |
+| becomes queued (real) | `queue-operation/enqueue`, content NOT `<task-notification>`/blank | append REAL |
+| becomes queued (phantom) | `queue-operation/enqueue`, `<task-notification>`/blank | append PHANTOM (never surfaced) |
+| leaves the queue | `queue-operation/dequeue` OR `remove` OR `popAll` (per record) | **positional** — drop FIFO head |
+| stale survivor (SIGKILL / crash) | working→IDLE | clear all |
 
-The only use of content is the `<task-notification>` prefix skip (a structural
+The only use of content is the `<task-notification>` prefix check (a structural
 marker, not fuzzy matching) and salting the `queued_id` hash. Timestamps are never
-a join key — at most a logged sanity assertion.
+a join key. `promptSource` and the `queued_command` attachment are NOT used for
+resolution (they broke — §3 box); the attachment is still parsed for the
+transcript render only.
 
 The old `reconcilePendingMessages` / `normalizeContentForMatch` (frontend) is
 deleted; the codex `_dedup_queued_turn` text match is out of scope here (handled
@@ -232,41 +237,52 @@ these two the same text."
 - Read `queued_messages` (full snapshot) from the WS per-agent state; replace the
   whole group on each push.
 - Render the queued group below the last committed turn, in enqueue order, reusing
-  the user-bubble *view* (not `classifyUserMessage`), with two buttons above the
-  group (both disabled while in flight): **[Shoulder tap]** → `POST /flush-queue`,
-  and **[Interrupt → composer]** → `POST /drain-to-composer` then drop the
-  returned block into the composer (see `shoulder_tap_spec.md` §8).
+  the user-bubble *view* (not `classifyUserMessage`).
+- **[Shoulder tap]** button above the queued group → `POST /flush-queue`; disabled
+  while in flight. On hover it shows a tooltip: **"Gently interrupt model to send
+  queued instructions"** (use the same CSS `data-tooltip` pattern the progress-view
+  markers use; native `title` is unreliable in the webview).
+- **The interrupt/drain action is the bottom composer Stop button, NOT a button on
+  the queued group.** Restore the Stop button in the bottom chat bar (where it used
+  to live). It calls `POST /drain-to-composer` (restart the agent and drop the
+  returned combined block into the composer). Do NOT render a separate
+  "[Interrupt → composer]" button above the queued group — the queued group has
+  only the [Shoulder tap] button.
 - No new `UserMessageKind`. Committed queued messages render as ordinary turns via
-  the paths that already exist (`queued_command` attachment for inline;
-  `promptSource:"queued"` `user` record for the new-turn commit).
+  the paths that already exist.
 
 ## 9. Tests (real fixtures already on host)
 
-Fixtures are extractable from `~/.claude/projects/-home-user-workspace/*.jsonl`.
 Unit-test `ClaudeQueueTracker.snapshot()` against recorded ledger sequences:
 
-1. `enqueue` → snapshot has 1 → `user`(`promptSource:"queued"`) → snapshot empty.
-2. `enqueue` → `queued_command`(`commandMode:"prompt"`) → snapshot empty (inline).
-3. `enqueue`×3 → `popAll` → snapshot empty.
-4. Interleaved: `enqueue A`, `enqueue B`, `queued_command`(prompt) → head A
-   dropped, snapshot has B; then `user`(queued) → empty.
-5. **Task-notification skip:** `enqueue`(`<task-notification>…`) → snapshot empty
-   (never added); a following `dequeue`/task-notif `queued_command` does not
-   disturb a real human entry queued alongside it.
-6. **Interrupt:** `enqueue` → `dequeue` → `user` with `[Request interrupted by
-   user]` (no `promptSource:"queued"`) → snapshot still has the entry (we ignore
-   the raw dequeue) → working→IDLE → empty (idle sweep).
-7. **Timestamp skew:** `enqueue`(ts `…928Z`) → `queued_command`(ts `…927Z`) →
-   snapshot empty — resolution is positional, so the 1 ms miss does not strand it.
+1. `enqueue` real → snapshot has 1 → `dequeue` → snapshot empty.
+2. `enqueue` real → `remove` → snapshot empty (inline commit's leave-op).
+3. `enqueue`×3 real → `popAll`×3 → snapshot empty.
+4. Interleaved: `enqueue A`, `enqueue B`, one leave-op → head A dropped, snapshot
+   has B; second leave-op → empty.
+5. **Task-notification phantom:** `enqueue`(`<task-notification>…`) then
+   `enqueue`(real human) → snapshot has ONLY the human; the task-notif's leave-op
+   drops the phantom head, leaving the human; the human's leave-op empties it.
+   Assert the human is never dropped by the phantom's resolution and the
+   `<task-notification>` blob never surfaces.
+6. **Interrupt:** `enqueue` real → `dequeue` (interrupt) → snapshot empty (a
+   leave-op is a leave-op); independently, an unresolved real entry + working→IDLE
+   → empty (idle sweep).
+7. **REGRESSION (the preview bug):** the exact real worker session — a
+   mngr-delivered message + a `/fast` slash command + four task-notifications, with
+   dequeue and remove commits — must net to **empty**. This is the case the buggy
+   `promptSource`/`queued_command` model stranded. Commit this session's ledger as
+   a fixture and assert `snapshot() == []` after full replay.
 8. Full-replay determinism: feed a whole real session's ledger from byte 0 →
    snapshot equals the live-tail result (self-correcting, no cursor).
-9. Duplicate content: two `enqueue`s of identical text → two entries; one
-   positional resolve leaves exactly one.
+9. Duplicate content: two `enqueue`s of identical text → two entries; one leave-op
+   leaves exactly one.
 
-Use the recorded real sessions as fixtures — extract the ledger lines from
-`~/.claude/projects/-home-user-workspace/*.jsonl` (five sessions; the conservation
-law and `remove == queued_command` are the invariants to assert, not the raw
-counts, which drift as the host accrues sessions).
+Fixtures: the five recorded sessions under
+`~/.claude/projects/-home-user-workspace/*.jsonl` PLUS the worker's own session
+for the regression (test 7) — assert the conservation law
+(`enqueue == dequeue + remove + popAll`) as the invariant, not raw counts (which
+drift). The buggy model would fail test 7; the corrected model passes it.
 
 Do NOT write tmux/interactive tests for the flush restart (flaky, per repo
 guidance) — verify that manually.
