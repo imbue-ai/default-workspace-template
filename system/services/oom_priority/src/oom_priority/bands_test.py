@@ -8,6 +8,38 @@ services must keep the documented least- to most-expendable order.
 
 from oom_priority import bands
 
+_HOUR = 3600.0
+
+
+def _fresh(*, is_open: bool, is_visible: bool, recency_rank: int | None) -> int:
+    """The score for a just-engaged chat: the engagement-only behaviour."""
+    return bands.chat_agent_oom_score_adj(
+        is_open=is_open,
+        is_visible=is_visible,
+        recency_rank=recency_rank,
+        idle_seconds=0.0,
+        is_mid_turn=False,
+    )
+
+
+def _aged(
+    idle_seconds: float,
+    *,
+    is_open: bool = False,
+    is_visible: bool = False,
+    recency_rank: int | None = None,
+    is_mid_turn: bool = False,
+) -> int:
+    """The score for a chat last engaged with ``idle_seconds`` ago."""
+    return bands.chat_agent_oom_score_adj(
+        is_open=is_open,
+        is_visible=is_visible,
+        recency_rank=recency_rank,
+        idle_seconds=idle_seconds,
+        is_mid_turn=is_mid_turn,
+    )
+
+
 # The built-in services in their documented order, least- to most-expendable.
 # User-created services (the "user" key) are excluded -- they are asserted
 # separately as sitting above every one of these.
@@ -76,21 +108,20 @@ def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
     assert bands.PRIMARY_AGENT < bands.USER_AGENT
 
 
-def test_chat_band_range_sits_strictly_between_services_and_workers() -> None:
-    # Every chat, however engaged, stays below WORKER_AGENT (workers are shed
-    # first) and above the user-service band (a chat revives on its next message,
-    # so it is shed before a service).
+def test_chat_band_range_straddles_the_worker_band() -> None:
+    # A fresh chat stays below WORKER_AGENT (workers are shed first) and above the
+    # user-service band (a chat revives on its next message, so it is shed before a
+    # service). A stale one crosses the worker band -- but never reaches
+    # AGENT_SUBPROCESS, so an agent's own subprocesses are always shed before any
+    # agent.
     assert bands.USER_SERVICE < bands.CHAT_AGENT_FLOOR
     assert bands.CHAT_AGENT_FLOOR < bands.CHAT_AGENT_BASE < bands.WORKER_AGENT
+    assert bands.WORKER_AGENT < bands.CHAT_AGENT_STALE_CEILING < bands.AGENT_SUBPROCESS
 
 
 def test_chat_score_is_most_protected_when_fully_engaged() -> None:
-    engaged = bands.chat_agent_oom_score_adj(
-        is_open=True, is_visible=True, recency_rank=0
-    )
-    idle = bands.chat_agent_oom_score_adj(
-        is_open=False, is_visible=False, recency_rank=None
-    )
+    engaged = _fresh(is_open=True, is_visible=True, recency_rank=0)
+    idle = _fresh(is_open=False, is_visible=False, recency_rank=None)
     assert engaged == bands.CHAT_AGENT_FLOOR
     assert idle == bands.CHAT_AGENT_BASE
     # A fully engaged chat is the most protected; a closed, never-messaged one the least.
@@ -101,31 +132,17 @@ def test_never_messaged_chat_gets_no_recency_bonus() -> None:
     # ``None`` (never messaged) must not be treated as the most-recent (rank 0):
     # an open+visible chat that was never messaged is less protected than one that
     # was just messaged.
-    never = bands.chat_agent_oom_score_adj(
-        is_open=True, is_visible=True, recency_rank=None
-    )
-    just_messaged = bands.chat_agent_oom_score_adj(
-        is_open=True, is_visible=True, recency_rank=0
-    )
+    never = _fresh(is_open=True, is_visible=True, recency_rank=None)
+    just_messaged = _fresh(is_open=True, is_visible=True, recency_rank=0)
     assert just_messaged < never
 
 
 def test_chat_score_monotonic_in_each_signal() -> None:
-    base = bands.chat_agent_oom_score_adj(
-        is_open=False, is_visible=False, recency_rank=5
-    )
-    opened = bands.chat_agent_oom_score_adj(
-        is_open=True, is_visible=False, recency_rank=5
-    )
-    visible = bands.chat_agent_oom_score_adj(
-        is_open=True, is_visible=True, recency_rank=5
-    )
-    more_recent = bands.chat_agent_oom_score_adj(
-        is_open=False, is_visible=False, recency_rank=2
-    )
-    never = bands.chat_agent_oom_score_adj(
-        is_open=False, is_visible=False, recency_rank=None
-    )
+    base = _fresh(is_open=False, is_visible=False, recency_rank=5)
+    opened = _fresh(is_open=True, is_visible=False, recency_rank=5)
+    visible = _fresh(is_open=True, is_visible=True, recency_rank=5)
+    more_recent = _fresh(is_open=False, is_visible=False, recency_rank=2)
+    never = _fresh(is_open=False, is_visible=False, recency_rank=None)
     # Each engagement signal only ever lowers (more-protects) the score.
     assert opened < base
     assert visible < opened
@@ -161,8 +178,94 @@ def test_chat_score_always_within_the_chat_band() -> None:
     for is_open in (True, False):
         for is_visible in (True, False):
             for rank in (0, 1, 3, 10, 100, None):
-                adj = bands.chat_agent_oom_score_adj(
-                    is_open=is_open, is_visible=is_visible, recency_rank=rank
-                )
-                assert bands.CHAT_AGENT_FLOOR <= adj <= bands.CHAT_AGENT_BASE
-                assert bands.USER_SERVICE < adj < bands.WORKER_AGENT
+                for idle in (
+                    None,
+                    0.0,
+                    1 * _HOUR,
+                    6 * _HOUR,
+                    24 * _HOUR,
+                    3650 * 24 * _HOUR,
+                ):
+                    for mid_turn in (True, False):
+                        adj = bands.chat_agent_oom_score_adj(
+                            is_open=is_open,
+                            is_visible=is_visible,
+                            recency_rank=rank,
+                            idle_seconds=idle,
+                            is_mid_turn=mid_turn,
+                        )
+                        assert (
+                            bands.CHAT_AGENT_FLOOR
+                            <= adj
+                            <= bands.CHAT_AGENT_STALE_CEILING
+                        )
+                        # However stale, a chat is never shed before an agent's own
+                        # subprocesses, and never before a user-created service.
+                        assert bands.USER_SERVICE < adj < bands.AGENT_SUBPROCESS
+
+
+def test_an_abandoned_chat_is_shed_before_a_worker() -> None:
+    # The point of the stale ceiling: a chat nobody has touched in a day is worth
+    # less than the worker a live chat just spawned. It revives on its next message
+    # with its transcript intact; the worker's in-flight work does not.
+    assert _aged(24 * _HOUR) == bands.CHAT_AGENT_STALE_CEILING
+    assert _aged(24 * _HOUR) > bands.WORKER_AGENT
+    assert _aged(30 * 24 * _HOUR) == bands.CHAT_AGENT_STALE_CEILING
+
+
+def test_staleness_crosses_the_worker_band_within_a_few_hours() -> None:
+    # The documented schedule for a chat with no engagement at all: unchanged for
+    # the first hour, still worth more than a worker at four hours, worth less by
+    # six. The exact crossing is a tunable, but it must land inside a working day.
+    assert _aged(0.5 * _HOUR) == bands.CHAT_AGENT_BASE
+    assert _aged(1 * _HOUR) == bands.CHAT_AGENT_BASE
+    assert _aged(4 * _HOUR) < bands.WORKER_AGENT
+    assert _aged(6 * _HOUR) > bands.WORKER_AGENT
+
+
+def test_engagement_delays_the_climb_but_never_prevents_it() -> None:
+    # A visible, recently-ranked tab is still protected hours in -- but a tab left
+    # open and untouched for a day is not protection, so it ends at the ceiling
+    # like any other abandoned chat. Age wins over presence.
+    def engaged(idle_seconds: float) -> int:
+        return _aged(idle_seconds, is_open=True, is_visible=True, recency_rank=0)
+
+    assert engaged(6 * _HOUR) < bands.WORKER_AGENT
+    assert engaged(6 * _HOUR) > engaged(0.0)
+    assert engaged(24 * _HOUR) == bands.CHAT_AGENT_STALE_CEILING
+
+
+def test_chat_score_rises_monotonically_with_idle_time() -> None:
+    # Whatever the engagement, more idle time is never *more* protective.
+    for is_open, is_visible, rank in (
+        (False, False, None),
+        (True, False, None),
+        (True, True, 0),
+    ):
+        scores = [
+            _aged(idle, is_open=is_open, is_visible=is_visible, recency_rank=rank)
+            for idle in (0.0, 1 * _HOUR, 4 * _HOUR, 12 * _HOUR, 24 * _HOUR)
+        ]
+        assert scores == sorted(scores), (is_open, is_visible, rank, scores)
+
+
+def test_mid_turn_chat_is_never_demoted_past_a_worker() -> None:
+    # A chat mid-turn is doing work that a shed would destroy outright (unlike an
+    # idle chat, whose transcript survives and resumes), so age must not move it.
+    assert _aged(30 * 24 * _HOUR, is_mid_turn=True) == bands.CHAT_AGENT_BASE
+    assert _aged(30 * 24 * _HOUR, is_mid_turn=True) < bands.WORKER_AGENT
+    assert _aged(
+        30 * 24 * _HOUR, is_open=True, is_visible=True, recency_rank=0, is_mid_turn=True
+    ) == (bands.CHAT_AGENT_FLOOR)
+
+
+def test_unknown_idle_time_is_treated_as_fresh() -> None:
+    # No engagement evidence at all (no reported activity, no process-start marker)
+    # must not read as "abandoned": a chat is demoted only on positive evidence.
+    assert _aged(0.0) == bands.chat_agent_oom_score_adj(
+        is_open=False,
+        is_visible=False,
+        recency_rank=None,
+        idle_seconds=None,
+        is_mid_turn=False,
+    )
