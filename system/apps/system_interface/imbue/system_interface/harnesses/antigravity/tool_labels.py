@@ -22,10 +22,11 @@ from typing import Final
 
 from tk_command_parsing.parser import parse_command
 
+from typing import Any
+
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.harnesses.tool_labels import GENERIC_CAPTION
 from imbue.system_interface.harnesses.tool_labels import basename
-from imbue.system_interface.harnesses.tool_labels import first_string_value
 from imbue.system_interface.harnesses.tool_labels import parse_input_preview
 from imbue.system_interface.harnesses.tool_labels import quoted
 from imbue.system_interface.harnesses.tool_labels import shorten
@@ -66,6 +67,19 @@ _TK_LIFECYCLE_VERBS: Final[frozenset[str]] = frozenset({"create", "start", "clos
 
 
 @pure
+def _first_string_ci(args: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    """The first key's non-empty string value, matched case-insensitively. agy is
+    inconsistent about arg-key casing (``grep_search`` uses ``Query`` but ``search_web``
+    uses ``query``), so we normalize both sides rather than enumerate every casing."""
+    lowered = {key.lower(): value for key, value in args.items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+@pure
 def _render_target(value: str, renderer: str) -> str:
     if renderer == _BASENAME:
         return basename(value)
@@ -93,7 +107,7 @@ def tool_labels(tool_name: str, args_json: str, native_caption: str) -> tuple[st
     noun, verb, keys, renderer = entry
     header = f"Tool: {noun}"
     args = parse_input_preview(args_json)
-    target = first_string_value(args, *keys)
+    target = _first_string_ci(args, keys)
     if target is not None:
         return header, f"{verb} {_render_target(target, renderer)}"
     # No parseable target: prefer agy's own caption over a bare verb.
@@ -108,7 +122,7 @@ def keeps_full_tool_input(tool_name: str, args_json: str) -> bool:
     if tool_name in _KEEPS_FULL_BODY_TOOLS:
         return True
     if tool_name == "run_command":
-        command = first_string_value(parse_input_preview(args_json), "CommandLine")
+        command = _first_string_ci(parse_input_preview(args_json), ("CommandLine",))
         if command is not None:
             parsed = parse_command(command)
             if parsed is not None and any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments):
