@@ -33,6 +33,8 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.harnesses.auth_check import HARNESS_AUTH_CHECKS
+from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _make_apps_file_handler
@@ -273,9 +275,19 @@ def test_create_chat_agent_broadcasts_proto_created(
 
 
 def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, git_work_dir: Path
+    agent_manager: AgentManager,
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Both menu entries make a chat, so creation_type is the role -- never the harness."""
+    # Stub codex's sign-in preflight to a command that always reports signed in, so the
+    # create does not depend on a real (possibly signed-out) codex CLI in the test env.
+    monkeypatch.setitem(
+        HARNESS_AUTH_CHECKS,
+        HarnessType.CODEX,
+        HarnessAuthCheck(command=("true",), display_name="Codex"),
+    )
     q = broadcaster.register()
 
     with agent_manager._lock:

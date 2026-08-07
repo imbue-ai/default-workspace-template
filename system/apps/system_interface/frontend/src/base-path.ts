@@ -57,18 +57,20 @@ export function isSillyModelsEnabled(): boolean {
   return cachedSillyModelsEnabled;
 }
 
-let cachedCodexEnabled: boolean | null = null;
+let cachedOtherHarnessesEnabled: boolean | null = null;
 
 /**
- * Whether the codex harness is enabled for this host (backend FEATURE_FLAG_ENABLE_CODEX,
- * delivered as the ``system-interface-enable-codex`` meta tag). Gates the "New Codex
- * Agent" launcher. Off unless the meta tag is explicitly "true".
+ * Whether the non-claude harnesses are enabled for this host (backend
+ * FEATURE_FLAG_ENABLE_OTHER_HARNESSES, delivered as the
+ * ``system-interface-enable-other-harnesses`` meta tag). Gates every "New <harness>
+ * Agent" launcher (Codex, Pi, Opencode, Antigravity). Off unless the meta tag is
+ * explicitly "true".
  */
-export function isCodexEnabled(): boolean {
-  if (cachedCodexEnabled !== null) {
-    return cachedCodexEnabled;
+export function areOtherHarnessesEnabled(): boolean {
+  if (cachedOtherHarnessesEnabled !== null) {
+    return cachedOtherHarnessesEnabled;
   }
-  const metaElement = document.querySelector('meta[name="system-interface-enable-codex"]');
-  cachedCodexEnabled = metaElement?.getAttribute("content") === "true";
-  return cachedCodexEnabled;
+  const metaElement = document.querySelector('meta[name="system-interface-enable-other-harnesses"]');
+  cachedOtherHarnessesEnabled = metaElement?.getAttribute("content") === "true";
+  return cachedOtherHarnessesEnabled;
 }

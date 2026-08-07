@@ -30,7 +30,7 @@ import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { apiUrl, getPrimaryAgentId, isCodexEnabled, isSillyModelsEnabled } from "../base-path";
+import { apiUrl, getPrimaryAgentId, areOtherHarnessesEnabled, isSillyModelsEnabled } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
@@ -788,11 +788,11 @@ function buildDropdownItems(
     },
   });
 
-  // New codex agent -- the same `chat` role as the entry above, stacked on the
-  // `codex` harness template instead of `claude`, in the primary's work_dir.
-  // Gated behind FEATURE_FLAG_ENABLE_CODEX (delivered via meta tag) so codex can
-  // be dark-launched; hidden unless the host explicitly enables it.
-  if (isCodexEnabled()) {
+  // The non-claude harness launchers -- each the same `chat` role as the entry above,
+  // stacked on its own harness template instead of `claude`, in the primary's work_dir.
+  // All gated behind FEATURE_FLAG_ENABLE_OTHER_HARNESSES (delivered via meta tag) so the
+  // alt harnesses can be dark-launched; hidden unless the host explicitly enables them.
+  if (areOtherHarnessesEnabled()) {
     items.push({
       label: "New Codex Agent",
       action: () => {
@@ -801,37 +801,34 @@ function buildDropdownItems(
         m.redraw();
       },
     });
+
+    items.push({
+      label: "New Pi Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewPiModal = true;
+        m.redraw();
+      },
+    });
+
+    items.push({
+      label: "New Opencode Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewOpencodeModal = true;
+        m.redraw();
+      },
+    });
+
+    items.push({
+      label: "New Antigravity Agent",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        showNewAntigravityModal = true;
+        m.redraw();
+      },
+    });
   }
-
-  // New pi agent -- the same `chat` role, on the `pi-coding` harness. Always shown.
-  items.push({
-    label: "New Pi Agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewPiModal = true;
-      m.redraw();
-    },
-  });
-
-  // New opencode agent -- the same `chat` role, on the `opencode` harness. Always shown.
-  items.push({
-    label: "New Opencode Agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewOpencodeModal = true;
-      m.redraw();
-    },
-  });
-
-  // New antigravity agent -- the same `chat` role, on the `antigravity` harness. Always shown.
-  items.push({
-    label: "New Antigravity Agent",
-    action: () => {
-      newTabTargetGroup = targetGroup ?? null;
-      showNewAntigravityModal = true;
-      m.redraw();
-    },
-  });
 
   if (isSillyModelsEnabled()) {
     items.push({
