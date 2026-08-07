@@ -274,6 +274,18 @@ class OpenCodeModelResolver(HarnessModelResolver):
         # (POST /api/session/{id}/model, which sets model AND variant together), applied to the
         # next turn. ON_CHANGE: the chip reconciles from the state file once the next assistant
         # message records the new selection. ``send`` (a pane command) is unused here.
+        #
+        # KNOWN LIMITATION -- the chat model bar and the opencode TUI (``opencode connect``) do
+        # NOT stay in sync, and cannot without patching opencode (verified against v1.18.14):
+        #   * bar -> TUI: this POST sets the server's session model, but the attached TUI keeps
+        #     its model client-local, ignores the ``session.next.model.switched`` event, and
+        #     ships its own model inline on its next prompt -- so a bar switch does not move the
+        #     TUI, and a TUI-sent turn overrides it. There is no server API to set the TUI model.
+        #   * TUI -> bar: a ``/model`` in the TUI is local too; it reaches the bar only when the
+        #     user sends a turn (the assistant message records the model -> read_live). A bare
+        #     ``/model`` with no turn is invisible to the server, so the bar cannot reflect it.
+        # The bar is authoritative for chat-UI-sent messages (mngr's send carries no inline
+        # model, so it uses the session model this sets); the TUI is a separate client.
         if ModelAxis.MODEL not in axes and ModelAxis.EFFORT not in axes:
             return SwitchResult(ok=True)
         port = read_server_port(self._state_dir)
