@@ -69,6 +69,11 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // unless an explicit detector surfaces one, e.g. Stop-hook feedback, which is
   // isMeta yet shown as a chip. Absent/false for a genuine human turn.
   is_meta?: boolean;
+  // Claude Code's `isCompactSummary`: the record injected after auto-compaction,
+  // whose content is the carried-over summary ("This session is being continued
+  // ..."). Unlike is_meta it is NOT hidden -- an explicit detector surfaces it as a
+  // collapsed chip (UserMessageKind.SystemChip). Absent/false for a genuine turn.
+  is_compact_summary?: boolean;
 }
 
 /**

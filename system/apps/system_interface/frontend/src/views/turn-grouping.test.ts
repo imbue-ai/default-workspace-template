@@ -782,6 +782,38 @@ describe("audit regressions", () => {
     expect(sections.length).toBe(1);
     expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "tn1")).toBe(true);
   });
+
+  // The post-auto-compaction summary carries is_compact_summary and is the FIRST
+  // event of a resumed session -- there is no section open yet. It must still
+  // render (as a top chip in a fresh section), not be dropped.
+  it("renders a LEADING compaction summary as a top chip instead of dropping it", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t0", "This session is being continued from a previous conversation ...", "cs1"),
+      is_compact_summary: true,
+    };
+    const events = [summary, assistantText("t1", "continuing the work", "a1")];
+    const sections = run(events);
+    expect(sections.length).toBe(1);
+    // It is a chip (folded), not a user-prompt turn boundary.
+    expect(sections[0].user_event).toBeNull();
+    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs1")).toBe(true);
+  });
+
+  it("folds a mid-session compaction summary into the current section as a chip", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t2", "This session is being continued from a previous conversation ...", "cs2"),
+      is_compact_summary: true,
+    };
+    const events = [
+      userMsg("t0", "go"),
+      assistantText("t1", "working", "a1"),
+      summary,
+      assistantText("t3", "more", "a2"),
+    ];
+    const sections = run(events);
+    expect(sections.length).toBe(1);
+    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs2")).toBe(true);
+  });
 });
 
 describe("regular ticket transitions", () => {

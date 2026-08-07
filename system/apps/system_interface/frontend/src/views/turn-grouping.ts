@@ -448,12 +448,18 @@ export function buildSections(
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
       }
-      if (isNonBoundaryUserMessage(e.content ?? "", e.is_meta)) {
+      if (isNonBoundaryUserMessage(e.content ?? "", e.is_meta, e.is_compact_summary)) {
         // Collapsed system chips -- Stop-hook feedback, browser-fleet nudges,
-        // background task-notifications -- fold into the current section as a
-        // chip rather than opening a new turn. (A chip only ever comes from an
-        // explicit detector, never from is_meta, so this check needs no is_meta.)
-        if (current !== null && isSystemChipUserMessage(e.content ?? "")) {
+        // background task-notifications, the post-compaction summary -- fold into
+        // the current section as a chip rather than opening a new turn. A chip
+        // comes from an explicit detector OR the is_compact_summary flag (never
+        // from is_meta), so the flag is threaded through but is_meta is not.
+        if (isSystemChipUserMessage(e.content ?? "", e.is_compact_summary)) {
+          // The compaction summary can be the FIRST event of a resumed session,
+          // with no section open yet; open a pre-section so it is not dropped
+          // (mirrors the leading-assistant-message case below). emitChips(-1)
+          // then renders it at the top of that section.
+          if (current === null) current = ensureSection(null, "section-pre");
           current.chips.push({ event: e, after: current.entries.length - 1 });
         }
         // The other non-boundary messages -- skill expansions, /welcome, and any

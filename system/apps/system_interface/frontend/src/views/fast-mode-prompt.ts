@@ -31,7 +31,7 @@ export function countUserTurns(events: TranscriptEvent[]): number {
       continue;
     }
     const content = event.content ?? "";
-    if (isNonBoundaryUserMessage(content, event.is_meta)) {
+    if (isNonBoundaryUserMessage(content, event.is_meta, event.is_compact_summary)) {
       continue;
     }
     if (parsePermissionResolution(content) !== null) {

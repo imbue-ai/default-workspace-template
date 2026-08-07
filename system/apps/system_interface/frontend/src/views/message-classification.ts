@@ -142,6 +142,9 @@ const USER_MESSAGE_DETECTORS: Array<(content: string) => UserMessageClass | null
   matchComposerCommandOutput,
 ];
 
+/** Chip label for the post-auto-compaction summary. */
+const COMPACTION_SUMMARY_LABEL = "Summary of earlier conversation";
+
 /**
  * Classify a user_message into a `UserMessageKind` (+ chip label + display body).
  * This is the single classification entry point; grouping and rendering both call
@@ -151,18 +154,26 @@ const USER_MESSAGE_DETECTORS: Array<(content: string) => UserMessageClass | null
  *   1. An explicit detector matches (Stop hook, fleet, task-notification, skill,
  *      /welcome) -> that kind. Explicit detectors WIN over `isMeta` -- Stop-hook
  *      feedback is `isMeta` yet we deliberately surface it as a chip.
- *   2. else `isMeta` (Claude Code's flag for a framework-injected, model-only
+ *   2. else `isCompactSummary` (Claude Code's flag for the record injected after
+ *      auto-compaction, whose text is the carried-over summary) -> SystemChip. It
+ *      is real and worth keeping but ugly raw, exactly like a Stop hook, so it
+ *      collapses into a chip instead of a wall-of-text bubble. Keyed off the
+ *      structural flag, not the summary text, so wording changes never break it.
+ *   3. else `isMeta` (Claude Code's flag for a framework-injected, model-only
  *      message: resume marker, image coordinate note, MCP-resource dumps, hook
  *      context, ...) -> Hidden. One rule hides the whole family, present and
  *      future, instead of a detector per message.
- *   3. else -> UserPrompt (a genuine human turn).
+ *   4. else -> UserPrompt (a genuine human turn).
  */
-export function classifyUserMessage(content: string, isMeta = false): UserMessageClass {
+export function classifyUserMessage(content: string, isMeta = false, isCompactSummary = false): UserMessageClass {
   for (const detect of USER_MESSAGE_DETECTORS) {
     const result = detect(content);
     if (result !== null) {
       return result;
     }
+  }
+  if (isCompactSummary) {
+    return { kind: UserMessageKind.SystemChip, label: COMPACTION_SUMMARY_LABEL, body: content };
   }
   if (isMeta) {
     return { kind: UserMessageKind.Hidden, label: null, body: content };
@@ -181,19 +192,19 @@ export function classifyUserMessage(content: string, isMeta = false): UserMessag
  * collapsed system chips (Stop hook / fleet / task-notification), skill
  * expansions, and hidden messages alike.
  */
-export function isNonBoundaryUserMessage(content: string, isMeta = false): boolean {
+export function isNonBoundaryUserMessage(content: string, isMeta = false, isCompactSummary = false): boolean {
   // Derived from the KIND_SPEC registry (its `boundary` column) so the boundary
   // rule lives in exactly one place -- the spec -- rather than being duplicated
   // as a hardcoded kind check here.
-  return !KIND_SPEC[classifyUserMessage(content, isMeta).kind].boundary;
+  return !KIND_SPEC[classifyUserMessage(content, isMeta, isCompactSummary).kind].boundary;
 }
 
 /** True when the message folds into the current turn as a collapsed chip (rather
  *  than being dropped): the SystemChip kinds. This is the generalisation of the
  *  former stop-hook-only chip path -- fleet notices and task-notifications ride
  *  it now too. */
-export function isSystemChipUserMessage(content: string): boolean {
-  return classifyUserMessage(content).kind === UserMessageKind.SystemChip;
+export function isSystemChipUserMessage(content: string, isCompactSummary = false): boolean {
+  return classifyUserMessage(content, false, isCompactSummary).kind === UserMessageKind.SystemChip;
 }
 
 /** True when the content is a skill expansion (its body is folded into the
@@ -205,11 +216,11 @@ export function isSkillExpansionUserMessage(content: string): boolean {
 /** True when the message produces NO row on the user rail -- either fully hidden
  *  (`/welcome`) or relocated into an assistant-side block (skill expansion). The
  *  rendering/rows layers use this to skip emitting a user-rail row. */
-export function isHiddenUserMessage(content: string, isMeta = false): boolean {
+export function isHiddenUserMessage(content: string, isMeta = false, isCompactSummary = false): boolean {
   // "No user-rail row" is exactly "does not render on the User rail" -- read
   // straight from the KIND_SPEC registry. Covers both fully-hidden (/welcome,
   // is_meta) and relocated-to-assistant (skill expansions).
-  return KIND_SPEC[classifyUserMessage(content, isMeta).kind].rail !== Rail.User;
+  return KIND_SPEC[classifyUserMessage(content, isMeta, isCompactSummary).kind].rail !== Rail.User;
 }
 
 // --- Permission REQUEST (a tool call) ---------------------------------------
