@@ -176,7 +176,31 @@ No agy-specific action code — the shared `_drain_queue`/flush already resend t
 6. Live verify: queue 3 to a busy agy agent → three bubbles via the shared group; on the
    combined drain they all clear; `[Gently]` restarts + resends the block.
 
-## 8. Limitations (explicit)
+## 8. The ledger — the outbox survives a backend restart
+
+The outbox is also a JSONL file, `<agent_state_dir>/agy_outbox` (beside
+`antigravity_conversation_ids`): one `{"content", "ts"}` line per enqueue. It is the
+`pi_inbox` analogue mngr never wrote, except we write it ourselves — which also means we can
+prune it (pi's inbox only ever grows).
+
+- **Append** on enqueue (one small write, no fsync — losing the tail in an OS crash costs a
+  bubble, not data). **Prune** (rewrite to the still-pending entries, tmp + `os.replace`,
+  atomic) on leave / clear / idle. All writes run under the watcher lock in the one
+  system_interface process — single-writer is structural.
+- **Replay** on watcher build: parse lines, skip a torn tail (mid-append crash), cap at the
+  trailing 100 (growth guard only). Then pi's proven replay-then-reconcile shape runs for
+  free: the prime scan replays every historical `user_message` through `leave`, popping any
+  replayed entry whose turn drained while we were down, and the **level-triggered** idle
+  backstop (it sweeps whenever the agent is idle with a non-empty queue, no transition
+  required — `agent_manager._recompute_activity_state` names the restart-replay case
+  explicitly) clears stale survivors on an idle agent.
+- **No two-phase commit, deliberately.** agy has no ack API, so no local file protocol can
+  be atomic with "the message entered agy's memory" — a 2PC's uncertainty window (crash
+  between send-success and commit-mark) collapses to the same degraded state as the
+  single-phase append-after-confirmed-send, at 3x the code. The ledger is a display cache
+  with a self-healing reconciler behind it, not a delivery mechanism.
+
+## 9. Limitations (explicit)
 - **UI-sent only** — a message typed directly into agy's terminal never enters our outbox (no
   send passed through us), so it has no pre-drain bubble, and its drain verbatim-matches no
   prefix so it disturbs nothing. It still renders on drain as the normal turn. (Same as pi
@@ -184,5 +208,10 @@ No agy-specific action code — the shared `_drain_queue`/flush already resend t
 - **Resolution is verbatim front-run matching (§4)** against the outbox's own stored contents,
   so a coalesced drain pops exactly its entries — no over/under-pop from multi-line messages or
   duplicates. The working→IDLE backstop still sweeps anything that never drains (interrupt/crash).
-- **Session-dependent** — the queue is agy's TUI memory + our in-memory outbox; a restart /
-  interrupt / backend restart clears it. Accepted (matches pi/claude).
+- **Content-identical collision on replay** — after a restart, a replayed entry can be popped
+  by an *older* transcript turn with byte-identical content during the prime scan. The parked
+  message loses its bubble (invisible-parked, an already-accepted state); the backstop covers
+  the rest. Accepted for ephemeral display state.
+- **Assumes text in, text out** — matching is proven for plain text turns; a content-
+  transforming coalesce (attachments, injected context) would fail the match and leave
+  bubbles until the idle sweep. Accepted.

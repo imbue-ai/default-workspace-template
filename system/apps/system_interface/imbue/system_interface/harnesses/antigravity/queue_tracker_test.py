@@ -4,6 +4,9 @@ coalescing-aware verbatim front-run ``leave``."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from imbue.system_interface.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.system_interface.harnesses.model import QueueBehavior
 
@@ -133,4 +136,79 @@ def test_reset_forgets_everything() -> None:
     tracker = AntigravityQueueTracker.build()
     tracker.enqueue("gone", "")
     tracker.reset()
+    assert tracker.snapshot() == []
+
+
+# --- the on-disk ledger ---------------------------------------------------------------
+
+
+def test_outbox_replay_restores_the_queue(tmp_path: Path) -> None:
+    outbox = tmp_path / "agy_outbox"
+    first = AntigravityQueueTracker.build(outbox_path=outbox)
+    first.enqueue("survives", "2026-08-07T00:00:00+00:00")
+    first.enqueue("also survives", "2026-08-07T00:00:01+00:00")
+    # A fresh build (a backend restart) replays the ledger.
+    second = AntigravityQueueTracker.build(outbox_path=outbox)
+    assert _contents(second) == ["survives", "also survives"]
+    assert [entry["timestamp"] for entry in second.snapshot()] == [
+        "2026-08-07T00:00:00+00:00",
+        "2026-08-07T00:00:01+00:00",
+    ]
+
+
+def test_outbox_pruned_on_leave(tmp_path: Path) -> None:
+    outbox = tmp_path / "agy_outbox"
+    tracker = AntigravityQueueTracker.build(outbox_path=outbox)
+    tracker.enqueue("A", "")
+    tracker.enqueue("B", "")
+    tracker.leave("A")
+    assert _contents(AntigravityQueueTracker.build(outbox_path=outbox)) == ["B"]
+
+
+def test_outbox_cleared_on_idle(tmp_path: Path) -> None:
+    outbox = tmp_path / "agy_outbox"
+    tracker = AntigravityQueueTracker.build(outbox_path=outbox)
+    tracker.enqueue("stale", "")
+    tracker.on_idle()
+    assert AntigravityQueueTracker.build(outbox_path=outbox).snapshot() == []
+    assert outbox.read_text() == ""
+
+
+def test_outbox_torn_tail_line_is_skipped(tmp_path: Path) -> None:
+    outbox = tmp_path / "agy_outbox"
+    tracker = AntigravityQueueTracker.build(outbox_path=outbox)
+    tracker.enqueue("whole", "")
+    # Simulate a crash mid-append: a torn, unparseable trailing line.
+    with outbox.open("a") as handle:
+        handle.write('{"content": "torn')
+    assert _contents(AntigravityQueueTracker.build(outbox_path=outbox)) == ["whole"]
+
+
+def test_outbox_replay_reconciles_with_a_drained_turn(tmp_path: Path) -> None:
+    # The restart-during-drain case: the ledger still holds entries whose coalesced
+    # turn drained while the backend was down; the prime scan's leave pops them.
+    outbox = tmp_path / "agy_outbox"
+    first = AntigravityQueueTracker.build(outbox_path=outbox)
+    first.enqueue("A", "")
+    first.enqueue("B", "")
+    second = AntigravityQueueTracker.build(outbox_path=outbox)
+    second.leave("A\nB")
+    assert second.snapshot() == []
+    assert AntigravityQueueTracker.build(outbox_path=outbox).snapshot() == []
+
+
+def test_outbox_replay_caps_pathological_growth(tmp_path: Path) -> None:
+    outbox = tmp_path / "agy_outbox"
+    with outbox.open("w") as handle:
+        for index in range(250):
+            handle.write(json.dumps({"content": f"m{index}", "ts": ""}) + "\n")
+    replayed = AntigravityQueueTracker.build(outbox_path=outbox)
+    assert len(replayed.snapshot()) == 100
+    assert _contents(replayed)[0] == "m150"
+
+
+def test_missing_outbox_file_is_fine(tmp_path: Path) -> None:
+    tracker = AntigravityQueueTracker.build(outbox_path=tmp_path / "never_written")
+    assert tracker.snapshot() == []
+    tracker.leave("anything")
     assert tracker.snapshot() == []

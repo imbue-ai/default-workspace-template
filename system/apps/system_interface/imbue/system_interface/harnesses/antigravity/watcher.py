@@ -50,6 +50,8 @@ _QUEUE_DEBOUNCE_SECONDS: float = 2.0
 # conversation ids, both relative to the mngr agent state dir.
 _CONVERSATIONS_RELATIVE = Path("plugin") / "antigravity" / "home" / ".gemini" / "antigravity-cli" / "conversations"
 _CONVERSATION_IDS_RELATIVE = Path("antigravity_conversation_ids")
+# Our own send-sourced enqueue ledger (the pi_inbox analogue mngr never wrote).
+_OUTBOX_RELATIVE = Path("agy_outbox")
 
 _STEPS_QUERY = "SELECT idx, step_type, status, step_payload FROM steps WHERE idx >= ? ORDER BY idx"
 
@@ -95,7 +97,13 @@ class AntigravitySessionWatcher(AgentSessionWatcher):
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
         self._observer: Any = None
-        self._queue_tracker = AntigravityQueueTracker.build(ANTIGRAVITY_CATALOG.queue_behavior)
+        # The ledger lives beside the conversation-ids file; replay restores bubbles a
+        # backend restart would otherwise drop (the prime scan + level-triggered idle
+        # backstop reconcile anything that drained or died while we were down).
+        self._queue_tracker = AntigravityQueueTracker.build(
+            ANTIGRAVITY_CATALOG.queue_behavior,
+            outbox_path=self._state_dir / _OUTBOX_RELATIVE,
+        )
         self._queue_snapshot_callback = None
         self._last_queue_snapshot = []
         self._pending_queue_snapshot = []

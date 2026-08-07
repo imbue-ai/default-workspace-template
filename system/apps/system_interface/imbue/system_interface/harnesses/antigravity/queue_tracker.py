@@ -20,6 +20,11 @@ the list of messages we sent that have not yet drained into the transcript.
 """
 
 import hashlib
+import json
+import os
+from pathlib import Path
+
+from loguru import logger
 
 from imbue.system_interface.harnesses.model import QueueBehavior
 from imbue.system_interface.harnesses.queued_set import QueuedSet
@@ -28,6 +33,10 @@ from imbue.system_interface.harnesses.queued_set import QueuedSet
 # slot (so front-run joins stay aligned with what agy actually coalesces) but never
 # surfaces as a bubble.
 _TASK_NOTIFICATION_CONTENT_PREFIX = "<task-notification>"
+
+# Replay reads at most this many trailing ledger lines -- a guard against pathological
+# growth only; pruning keeps the file at the live queue's size in normal operation.
+_OUTBOX_REPLAY_CAP = 100
 
 
 def _queued_id(enqueue_index: int, content: str) -> str:
@@ -54,22 +63,50 @@ def _normalize(text: str) -> str:
 
 
 class AntigravityQueueTracker:
-    """Populates one agent's :class:`QueuedSet` from UI sends + drained user turns."""
+    """Populates one agent's :class:`QueuedSet` from UI sends + drained user turns.
+
+    With an ``outbox_path``, the outbox is also a JSONL ledger on disk -- the
+    ``pi_inbox`` analogue mngr never wrote, except we write it ourselves. Each enqueue
+    appends one ``{"content", "ts"}`` line; every pop/clear prunes the file (tmp +
+    ``os.replace``, so a crash mid-prune leaves the old file or the new one, never
+    garbage); ``build`` replays it, so bubbles survive a backend restart exactly as
+    pi's do. Replay-then-reconcile is pi's proven shape: the watcher's prime scan
+    replays every historical ``user_message`` through :meth:`leave`, popping any
+    replayed entry whose turn drained while we were down, and the level-triggered
+    idle backstop sweeps stale survivors on an idle agent. No fsync and no
+    two-phase protocol on purpose: agy has no ack API, so no file protocol can be
+    atomic with "the message entered agy" -- this is a display cache with a
+    self-healing reconciler, and the stakes are a bubble.
+
+    All mutators run under the owning watcher's lock, and only one process writes
+    (the send endpoint and the watcher share the system_interface process).
+    """
 
     _queued_set: QueuedSet
     _enqueue_count: int
     _queue_behavior: QueueBehavior
+    _outbox_path: Path | None
 
     @classmethod
-    def build(cls, queue_behavior: QueueBehavior = QueueBehavior.COALESCES) -> "AntigravityQueueTracker":
+    def build(
+        cls,
+        queue_behavior: QueueBehavior = QueueBehavior.COALESCES,
+        outbox_path: Path | None = None,
+    ) -> "AntigravityQueueTracker":
         tracker = cls.__new__(cls)
         tracker._queue_behavior = queue_behavior
         tracker._enqueue_count = 0
+        tracker._outbox_path = outbox_path
         tracker.reset()
+        tracker._replay_outbox()
         return tracker
 
     def enqueue(self, content: str, timestamp: str) -> None:
         """Add one UI-sent message to the FIFO tail (phantom for a task-notification / blank)."""
+        self._add(content, timestamp)
+        self._append_outbox_line(content, timestamp)
+
+    def _add(self, content: str, timestamp: str) -> None:
         self._queued_set.add(
             _queued_id(self._enqueue_count, content),
             content,
@@ -101,15 +138,18 @@ class AntigravityQueueTracker:
             joined = _normalize("\n".join(entry.content for entry in pending[:run_length]))
             if joined == drained:
                 del pending[:run_length]
+                self._prune_outbox()
                 return
 
     def on_idle(self) -> None:
         """Clear the queue -- the working->IDLE backstop (a genuine IDLE means it drained)."""
         self._queued_set.clear()
+        self._prune_outbox()
 
     def clear(self) -> None:
         """Drop everything (a flush restart handed the block back)."""
         self._queued_set.clear()
+        self._prune_outbox()
 
     def reset(self) -> None:
         """Reset to an empty set (a re-attach or truncation)."""
@@ -122,3 +162,48 @@ class AntigravityQueueTracker:
     def concatenated_block(self) -> str:
         """The queue as one newline-joined turn (shared by both common actions)."""
         return self._queued_set.concatenated_block()
+
+    # --- the on-disk ledger ------------------------------------------------------------
+
+    def _replay_outbox(self) -> None:
+        """Rebuild the outbox from the ledger (a backend restart). Torn tail lines from a
+        mid-append crash parse as garbage and are skipped; the cap guards pathological
+        growth (the file tracks the live queue, so it is normally a handful of lines)."""
+        if self._outbox_path is None or not self._outbox_path.is_file():
+            return
+        try:
+            lines = self._outbox_path.read_text().splitlines()
+        except OSError:
+            return
+        for line in lines[-_OUTBOX_REPLAY_CAP:]:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict) and isinstance(entry.get("content"), str):
+                self._add(entry["content"], str(entry.get("ts", "")))
+
+    def _append_outbox_line(self, content: str, timestamp: str) -> None:
+        """One append per enqueue; a single small write, no fsync (see class docstring)."""
+        if self._outbox_path is None:
+            return
+        try:
+            with self._outbox_path.open("a") as handle:
+                handle.write(json.dumps({"content": content, "ts": timestamp}) + "\n")
+        except OSError:
+            logger.debug("agy outbox: failed to append to {}", self._outbox_path)
+
+    def _prune_outbox(self) -> None:
+        """Rewrite the ledger to the still-pending entries, atomically (tmp + replace)."""
+        if self._outbox_path is None:
+            return
+        body = "".join(
+            json.dumps({"content": entry.content, "ts": entry.enqueue_ts}) + "\n"
+            for entry in self._queued_set.pending
+        )
+        tmp_path = self._outbox_path.with_suffix(".tmp")
+        try:
+            tmp_path.write_text(body)
+            os.replace(tmp_path, self._outbox_path)
+        except OSError:
+            logger.debug("agy outbox: failed to prune {}", self._outbox_path)
