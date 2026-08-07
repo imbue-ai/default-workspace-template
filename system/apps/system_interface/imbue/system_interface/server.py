@@ -439,11 +439,16 @@ def _get_harnesses_endpoint() -> Response:
     default model, switch mode, logo); the frontend keys in by an agent's harness.
     Codex is included only when its feature flag is on, matching the rest of the UI.
     """
-    catalogs = {
-        harness.value: spec.catalog.model_dump()
-        for harness, spec in HARNESS_SPECS.items()
-        if harness != HarnessType.CODEX or _is_codex_enabled()
-    }
+    catalogs: dict[str, Any] = {}
+    for harness in HARNESS_SPECS:
+        if harness == HarnessType.CODEX and not _is_codex_enabled():
+            continue
+        # A parsed catalog (pi/opencode) reads data files; a bad/absent one must be
+        # skipped, not 500 the endpoint for every other harness.
+        try:
+            catalogs[harness.value] = get_catalog(harness).model_dump()
+        except (OSError, ValueError) as e:
+            logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
     return _json_response(catalogs)
 
 
@@ -1177,6 +1182,23 @@ def _create_codex_agent() -> Response:
         return _json_response(error.model_dump(), status_code=400)
 
 
+def _create_pi_agent() -> Response:
+    """Create a new pi chat agent in the primary agent's work directory.
+
+    Same ``chat`` role as _create_chat_agent, on the pi harness instead of claude.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    body = request.get_json()
+
+    try:
+        create_request = CreateChatRequest(**body)
+        agent_id = agent_manager.create_chat_agent(create_request.name, HarnessType.PI_CODING)
+        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+    except (AgentCreationError, OSError, ValueError) as e:
+        error = ErrorResponse(detail=str(e))
+        return _json_response(error.model_dump(), status_code=400)
+
+
 def _create_chat_agent_with_roles(harness: HarnessType, roles: tuple[str, ...]) -> Response:
     agent_manager: AgentManager = get_state().agent_manager
     body = request.get_json()
@@ -1791,6 +1813,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-codex", view_func=_create_codex_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/create-pi", view_func=_create_pi_agent, methods=["POST"])
     application.add_url_rule(
         "/api/agents/create-silly-claude", view_func=_create_silly_claude_agent, methods=["POST"]
     )

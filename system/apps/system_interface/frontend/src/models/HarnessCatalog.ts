@@ -29,6 +29,7 @@ export interface HarnessCatalog {
   options: CatalogModelOption[];
   default_model_id: string;
   switch_mode: string; // "eager_then_reconcile" | "on_change" | "read_only"
+  picker_mode: string; // "list" | "search" -- how the model dropdown renders (orthogonal to switch_mode)
   icon_svg: string;
 }
 

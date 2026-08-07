@@ -5,7 +5,6 @@ from pathlib import Path
 
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
-from imbue.system_interface.harnesses.model import EffortLevel
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 
@@ -31,7 +30,7 @@ def test_guess_from_launch_defaults_when_no_settings(tmp_path: Path) -> None:
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
     guess = resolver.guess_from_launch()
     # The launch default: Opus (1M), medium effort, fast off (no settings written yet).
-    assert guess == ModelIdentity(model_id="opus[1m]", effort=EffortLevel.MEDIUM, fast=False)
+    assert guess == ModelIdentity(model_id="opus[1m]", effort="medium", fast=False)
 
 
 def test_read_live_is_none_until_settings_has_a_model(tmp_path: Path) -> None:
@@ -45,7 +44,7 @@ def test_read_live_is_none_until_settings_has_a_model(tmp_path: Path) -> None:
 def test_read_live_reads_model_effort_and_fast(tmp_path: Path) -> None:
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
     _write_settings(tmp_path, {"model": "sonnet", "effortLevel": "high", "fastMode": True})
-    assert resolver.read_live() == ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=True)
+    assert resolver.read_live() == ModelIdentity(model_id="sonnet", effort="high", fast=True)
 
 
 def test_read_live_leaves_effort_none_before_first_effort(tmp_path: Path) -> None:
@@ -66,7 +65,7 @@ def test_switch_sends_only_the_axes_it_is_told(tmp_path: Path) -> None:
         return True
 
     result = resolver.switch(
-        ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False),
+        ModelIdentity(model_id="sonnet", effort="high", fast=False),
         frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
         send,
     )
@@ -80,7 +79,7 @@ def test_switch_fast_toggle_sends_only_fast(tmp_path: Path) -> None:
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
     result = resolver.switch(
-        ModelIdentity(model_id="opus[1m]", effort=EffortLevel.MEDIUM, fast=True),
+        ModelIdentity(model_id="opus[1m]", effort="medium", fast=True),
         frozenset({ModelAxis.FAST}),
         lambda line: sent.append(line) or True,
     )
@@ -97,7 +96,7 @@ def test_switch_reissues_a_value_the_agent_is_already_on(tmp_path: Path) -> None
     _write_settings(tmp_path, {"model": "opus[1m]", "effortLevel": "medium"})
     sent: list[str] = []
     result = resolver.switch(
-        ModelIdentity(model_id="opus[1m]", effort=EffortLevel.MEDIUM, fast=False),
+        ModelIdentity(model_id="opus[1m]", effort="medium", fast=False),
         frozenset({ModelAxis.EFFORT}),
         lambda line: sent.append(line) or True,
     )
@@ -109,7 +108,7 @@ def test_switch_with_no_axes_sends_nothing(tmp_path: Path) -> None:
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
     result = resolver.switch(
-        ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False),
+        ModelIdentity(model_id="sonnet", effort="high", fast=False),
         frozenset(),
         lambda line: sent.append(line) or True,
     )
@@ -120,7 +119,7 @@ def test_switch_with_no_axes_sends_nothing(tmp_path: Path) -> None:
 def test_switch_reports_a_failed_send(tmp_path: Path) -> None:
     resolver = ClaudeModelResolver.build(_agent_info(tmp_path))
     result = resolver.switch(
-        ModelIdentity(model_id="sonnet", effort=EffortLevel.HIGH, fast=False),
+        ModelIdentity(model_id="sonnet", effort="high", fast=False),
         frozenset({ModelAxis.MODEL}),
         lambda _line: False,
     )

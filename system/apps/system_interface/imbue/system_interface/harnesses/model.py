@@ -31,44 +31,26 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
 
 
-class EffortLevel(StrEnum):
-    """The full universe of reasoning-effort levels.
+def parse_effort_level(value: Any) -> str | None:
+    """Narrow a raw on-disk effort value to a non-empty string, or ``None``.
 
-    A harness's declared efforts are a subset of these, and the levels it *shows*
-    in the picker are a further subset (see :class:`EffortChoice`). Declaring the
-    full universe lets a live read of a rarely-shown level (claude's ``ultra`` /
-    ultracode) still match its option and display, even though the picker hides it.
+    Effort levels are free-form strings taken verbatim from each harness's own data
+    (pi's thinking levels, codex's ``reasoning_effort``, claude's ``effortLevel``) --
+    there is no fixed enum. This only checks the value is a non-empty string; whatever
+    the harness's catalog declares for a model is what the picker shows.
     """
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    XHIGH = "xhigh"
-    MAX = "max"
-    ULTRA = "ultra"
-
-
-def parse_effort_level(value: Any) -> EffortLevel | None:
-    """Narrow a raw on-disk effort value to an :class:`EffortLevel`, or ``None``.
-
-    Shared by every harness's resolver: the value comes from a different settings
-    key per harness (claude's ``effortLevel``, codex's ``reasoning_effort``), but
-    the narrowing is the same -- it only maps a string onto the shared enum and
-    never consults any catalog's declared effort *set*, so there is nothing
-    harness-specific to duplicate.
-    """
-    if not isinstance(value, str):
-        return None
-    try:
-        return EffortLevel(value)
-    except ValueError:
-        return None
+    return value if isinstance(value, str) and value else None
 
 
 class EffortChoice(FrozenModel):
-    """One effort in a model's declared set."""
+    """One effort in a model's declared set.
 
-    level: EffortLevel
+    ``level`` is a free-form string taken verbatim from the harness's catalog (pi's
+    thinking levels, codex's reasoning efforts, claude's effort levels) -- never
+    validated against a fixed enum, so a harness can offer whatever levels its own
+    data declares (``off``/``minimal``/...)."""
+
+    level: str
     # False = a valid, matchable level that is nonetheless hidden from the dropdown.
     in_picker: bool = True
 
@@ -95,10 +77,9 @@ class ModelIdentity(FrozenModel):
     """The tuple that IS a selection. Resolvers return it; ``switch()`` sets it."""
 
     model_id: str
-    # None only mid-merge (a live read before the harness has recorded an effort);
-    # a resolved choice handed to the frontend is always concrete (see
-    # :func:`merge_identities`).
-    effort: EffortLevel | None
+    # A free-form effort string from the harness's catalog, or None (a model with no
+    # effort axis, or a live read before an effort was recorded).
+    effort: str | None
     fast: bool
 
 
@@ -155,6 +136,18 @@ class SwitchMode(StrEnum):
     READ_ONLY = "read_only"
 
 
+class PickerMode(StrEnum):
+    """How the model dropdown renders its options. ONE value per harness, orthogonal
+    to :class:`SwitchMode` -- that governs switching *behavior* (across model/effort/
+    fast); this governs only the model picker's *presentation*. A five-model harness
+    and a thousand-model harness need different affordances for identical behavior."""
+
+    # Every option as a row (claude/codex -- small, hand-written catalogs).
+    LIST = "list"
+    # A search box filters the options by tag (pi/opencode -- huge, auth-gated sets).
+    SEARCH = "search"
+
+
 class HarnessCatalog(FrozenModel):
     """The serializable, per-harness static half. IS the ``/api/harnesses`` wire
     shape (dumped verbatim -- no endpoint-side field selection)."""
@@ -165,6 +158,8 @@ class HarnessCatalog(FrozenModel):
     default_model_id: str
     # One mode; applies to model, effort, AND fast.
     switch_mode: SwitchMode
+    # How the model picker renders (list vs search); orthogonal to switch_mode.
+    picker_mode: PickerMode
     # Harness logo, currentColor monochrome.
     icon_svg: str
 
@@ -210,18 +205,47 @@ def match_option(identity: ModelIdentity, options: tuple[ModelOption, ...]) -> M
     return None
 
 
-def merge_identities(live: ModelIdentity | None, guess: ModelIdentity) -> ModelIdentity:
-    """Merge a live read over the always-concrete guess, per field.
+def merge_identities(live: ModelIdentity | None, guess: ModelIdentity | None) -> ModelIdentity | None:
+    """Merge a live read over the guess, per field.
 
     Live wins where it has a value; the guess fills the one field a live read may
     leave unset (effort, before the harness has recorded one). ``model_id`` and
-    ``fast`` come straight from the live read when it exists. When ``live`` is
-    None (nothing on disk yet), the guess stands alone.
+    ``fast`` come straight from the live read when it exists. When ``live`` is None the
+    guess stands alone, and when BOTH are None (a harness with no launch default and
+    nothing live yet -- pi before its model is recorded) the result is None, which the
+    bar renders as logo-only rather than inventing a model.
     """
     if live is None:
         return guess
-    effort = live.effort if live.effort is not None else guess.effort
+    effort = live.effort if live.effort is not None else (guess.effort if guess is not None else None)
     return ModelIdentity(model_id=live.model_id, effort=effort, fast=live.fast)
+
+
+def to_options(entries: tuple[tuple[str, tuple[str, ...]], ...]) -> tuple[ModelOption, ...]:
+    """Normalize ``(tag, effort_strings)`` pairs into catalog options.
+
+    For the parsed catalogs (pi/opencode) that build their options from data rather
+    than by hand. The tag is BOTH ``id`` and ``label`` (``provider/model``). Efforts
+    are taken verbatim, in the order given (the source's own order). Neither pi nor
+    opencode has a fast tier, so ``supports_fast`` is uniformly False. Duplicate tags
+    collapse to the first -- the tag carries its provider prefix, so one model reachable
+    through two providers is two genuine options, not a collision.
+    """
+    seen: set[str] = set()
+    options: list[ModelOption] = []
+    for tag, efforts in entries:
+        if tag in seen:
+            continue
+        seen.add(tag)
+        options.append(
+            ModelOption(
+                id=tag,
+                label=tag,
+                efforts=tuple(EffortChoice(level=level) for level in efforts),
+                supports_fast=False,
+            )
+        )
+    return tuple(options)
 
 
 class HarnessModelResolver(ABC):
@@ -248,12 +272,14 @@ class HarnessModelResolver(ABC):
         """Construct for one agent, not yet reading anything."""
 
     @abstractmethod
-    def guess_from_launch(self) -> ModelIdentity:
+    def guess_from_launch(self) -> ModelIdentity | None:
         """The launch-config selection, read from the config file directly.
 
-        ALWAYS returns a fully concrete identity -- effort is the config value or
-        the harness's declared default, never None -- so the merged choice is never
-        missing a field and the chip needs no default-label special-case.
+        Returns a concrete identity when the harness has a knowable launch model
+        (claude, codex), or ``None`` when it does not (pi: many-auth, no default --
+        the model only becomes known once its session records it). A returned identity
+        should be fully concrete (effort filled from config or omitted for a
+        no-effort model), so :func:`merge_identities` never leaves a field missing.
         """
 
     @abstractmethod

@@ -30,29 +30,29 @@ from imbue.mngr_claude.claude_config import get_agent_hook_settings_path
 from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.model import EffortChoice
-from imbue.system_interface.harnesses.model import EffortLevel
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
+from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
 from imbue.system_interface.harnesses.model import parse_effort_level
 
 # Every Claude model offers the same efforts: low..max shown, ultra (ultracode)
-# declared-but-hidden. Shared so the four options do not each re-list them.
+# declared-but-hidden. Effort levels are plain strings, as the catalog carries them.
 _CLAUDE_EFFORTS: tuple[EffortChoice, ...] = (
-    EffortChoice(level=EffortLevel.LOW),
-    EffortChoice(level=EffortLevel.MEDIUM),
-    EffortChoice(level=EffortLevel.HIGH),
-    EffortChoice(level=EffortLevel.XHIGH),
-    EffortChoice(level=EffortLevel.MAX),
-    EffortChoice(level=EffortLevel.ULTRA, in_picker=False),
+    EffortChoice(level="low"),
+    EffortChoice(level="medium"),
+    EffortChoice(level="high"),
+    EffortChoice(level="xhigh"),
+    EffortChoice(level="max"),
+    EffortChoice(level="ultra", in_picker=False),
 )
 
 # The effort a guess falls back to when launch config records none yet.
-_DEFAULT_EFFORT: EffortLevel = EffortLevel.MEDIUM
+_DEFAULT_EFFORT: str = "medium"
 
 CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     options=(
@@ -63,6 +63,7 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     ),
     default_model_id="opus[1m]",
     switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
+    picker_mode=PickerMode.LIST,
     icon_svg=(Path(__file__).parent / "icon.svg").read_text(),
 )
 
@@ -219,7 +220,7 @@ class ClaudeModelResolver(HarnessModelResolver):
             if not send(f"/model {identity.model_id}"):
                 return SwitchResult(ok=False, detail="Failed to deliver /model to the agent")
         if ModelAxis.EFFORT in axes and identity.effort is not None:
-            if not send(f"/effort {identity.effort.value}"):
+            if not send(f"/effort {identity.effort}"):
                 return SwitchResult(ok=False, detail="Failed to deliver /effort to the agent")
         if ModelAxis.FAST in axes:
             if not send("/fast on" if identity.fast else "/fast off"):

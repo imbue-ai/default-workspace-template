@@ -8,7 +8,6 @@ from imbue.mngr_codex.codex_config import get_codex_home
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.harnesses.model import EffortLevel
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 
@@ -36,7 +35,7 @@ def _write_rollout(tmp_path: Path, thread_settings: dict[str, object]) -> None:
 
 def test_guess_from_launch_defaults_when_no_config(tmp_path: Path) -> None:
     resolver = CodexModelResolver.build(_agent_info(tmp_path))
-    assert resolver.guess_from_launch() == ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.MEDIUM, fast=False)
+    assert resolver.guess_from_launch() == ModelIdentity(model_id="gpt-5.6-sol", effort="medium", fast=False)
 
 
 def test_guess_from_launch_reads_config_toml(tmp_path: Path) -> None:
@@ -44,7 +43,7 @@ def test_guess_from_launch_reads_config_toml(tmp_path: Path) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text('model = "gpt-5.5"\nmodel_reasoning_effort = "low"\n')
     resolver = CodexModelResolver.build(_agent_info(tmp_path))
-    assert resolver.guess_from_launch() == ModelIdentity(model_id="gpt-5.5", effort=EffortLevel.LOW, fast=False)
+    assert resolver.guess_from_launch() == ModelIdentity(model_id="gpt-5.5", effort="low", fast=False)
 
 
 def test_read_live_is_none_before_any_turn(tmp_path: Path) -> None:
@@ -56,7 +55,7 @@ def test_read_live_parses_the_last_thread_settings(tmp_path: Path) -> None:
     _write_rollout(tmp_path, {"model": "gpt-5.6-sol", "reasoning_effort": "high", "service_tier": "priority"})
     resolver = CodexModelResolver.build(_agent_info(tmp_path))
     # priority service tier reads as fast on.
-    assert resolver.read_live() == ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.HIGH, fast=True)
+    assert resolver.read_live() == ModelIdentity(model_id="gpt-5.6-sol", effort="high", fast=True)
 
 
 def test_read_live_non_priority_tier_is_not_fast(tmp_path: Path) -> None:
@@ -73,7 +72,7 @@ def test_switch_model_and_effort_send_one_model_command(tmp_path: Path) -> None:
     resolver = CodexModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
     result = resolver.switch(
-        ModelIdentity(model_id="gpt-5.6-terra", effort=EffortLevel.HIGH, fast=False),
+        ModelIdentity(model_id="gpt-5.6-terra", effort="high", fast=False),
         frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
         lambda line: sent.append(line) or True,
     )
@@ -86,7 +85,7 @@ def test_switch_effort_only_still_goes_through_model(tmp_path: Path) -> None:
     resolver = CodexModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
     result = resolver.switch(
-        ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.XHIGH, fast=False),
+        ModelIdentity(model_id="gpt-5.6-sol", effort="xhigh", fast=False),
         frozenset({ModelAxis.EFFORT}),
         lambda line: sent.append(line) or True,
     )
@@ -98,7 +97,7 @@ def test_switch_fast_toggle_sends_only_fast(tmp_path: Path) -> None:
     resolver = CodexModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
     result = resolver.switch(
-        ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.MEDIUM, fast=True),
+        ModelIdentity(model_id="gpt-5.6-sol", effort="medium", fast=True),
         frozenset({ModelAxis.FAST}),
         lambda line: sent.append(line) or True,
     )
@@ -110,7 +109,7 @@ def test_switch_with_no_axes_sends_nothing(tmp_path: Path) -> None:
     resolver = CodexModelResolver.build(_agent_info(tmp_path))
     sent: list[str] = []
     result = resolver.switch(
-        ModelIdentity(model_id="gpt-5.6-sol", effort=EffortLevel.MEDIUM, fast=False),
+        ModelIdentity(model_id="gpt-5.6-sol", effort="medium", fast=False),
         frozenset(),
         lambda line: sent.append(line) or True,
     )
