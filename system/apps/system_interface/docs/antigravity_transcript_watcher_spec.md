@@ -2,382 +2,331 @@
 
 Scope: everything in `imbue/system_interface/harnesses/antigravity/` needed to turn
 the placeholder into a real transcript harness — message rendering, tool-call
-detection + titles, the activity indicator, and the activity caption. Modeled on
-the Claude harness. **Queuing is explicitly out of scope** (see §9).
+detection + titles, tool results, the activity indicator, and the activity caption.
+Modeled on the Claude/Codex harnesses. **Queuing is out of scope** (§9).
 
-Status quo: the model bar is fully wired (`model.py`, read-only catalog + resolver).
-`watcher.py` and `activity.py` are placeholders. Registry entry exists
-(`registry.py`, `special_kinds=frozenset()`). This spec fills in the watcher,
-parser, tool labels, and a correct activity derivation.
-
----
-
-## 0. The decisive fact that shapes everything
-
-agy does **not** store its transcript as a tailable JSONL like Claude/Codex. Since
-agy 1.0.4 each conversation is a **protobuf-encoded SQLite DB** at
-`…/antigravity-cli/conversations/<conv_id>.db`, table `steps`
-(`idx`, `step_type` int enum, `status` int enum, `step_payload` protobuf BLOB).
-Verified live by probing the DB directly.
-
-**We do not re-decode that protobuf in system_interface.** `mngr_antigravity`
-already ships `resources/decode_agy_transcript.py` — a defensive, dependency-free
-protobuf wire-walk that:
-- reads new `steps` rows incrementally (per-conversation offset in
-  `<agent_state_dir>/plugin/antigravity/.transcript_offsets/<conv_id>`),
-- stops at the first non-terminal (still-generating) step so emission is in-order
-  and never partial,
-- decodes each into a **clean JSON record** and appends it to
-  `<agent_state_dir>/logs/antigravity_transcript/events.jsonl`,
-- is pinned against the live agy binary by a release-marked descriptor-diff test,
-  so agy's ~weekly schema drift is caught in mngr, not here.
-
-**Tail source (recommendation): `<agent_state_dir>/logs/antigravity_transcript/events.jsonl`.**
-This is a Claude-style byte-offset JSONL tail — the exact shape the existing
-watchers already know how to do — over a stream someone else keeps correct.
-Rationale, and why not the alternatives, in §1.
+Status quo: model bar fully wired (`model.py`, read-only catalog + resolver).
+`watcher.py`/`activity.py` are placeholders. Registry entry exists
+(`special_kinds=frozenset()`). This spec fills in a real watcher that reads **agy's own
+transcript**, a parser, tool labels, and activity.
 
 ---
 
-## 1. Architecture decision — what the watcher tails
+## 0. Architecture rule (the correction that governs this spec)
 
-Three candidate sources, and the call:
+**A system_interface harness reads the agent's OWN original transcript, directly —
+never mngr's mirror.** The Claude watcher tails `~/.claude/projects/**/<session>.jsonl`;
+the Codex watcher tails its live rollout and explicitly does **not** read
+`mngr_codex`'s `stream_transcript.sh` mirror (the mirror lags). Antigravity follows
+the same rule: it reads agy's authoritative conversation store.
 
-| Source | Pros | Cons |
-|---|---|---|
-| **A. mngr's `logs/antigravity_transcript/events.jsonl`** (recommend) | clean JSONL; already incremental + offset-tracked; protobuf decode + schema-drift guard owned by mngr; nothing agy-opaque enters system_interface | lags agy by the streamer's ~1s poll; **lossy** — drops tool *result* steps and agy's own `f30/f31` captions |
-| B. agy's SQLite `.db` directly (port `decode_agy_transcript.py`) | full fidelity incl. native captions + tool results; lowest latency | duplicates fragile black-magic protobuf decode in a second package; two places to chase agy schema drift |
-| C. agy's `brain/<conv>/.system_generated/logs/transcript.jsonl` | clean JSONL, richer (inline tool-result text) | per-conversation; a legacy path agy may stop writing; not offset-managed for us |
+`mngr_antigravity` has its own decoder (`decode_agy_transcript.py`) feeding
+`mngr transcript` — that is mngr's concern, not ours. We do **not** consume
+`logs/antigravity_transcript/events.jsonl`. We decode agy's store ourselves so we get
+full fidelity (tool results, args, and agy's native captions) that mngr's stream drops.
 
-**Pick A.** Codex deliberately tails its *own* live rollout instead of mngr's mirror
-because the mirror lagged up to 1s — but that reasoning doesn't transfer: **agy
-only writes a step row when it completes** (confirmed live — the DB row count stayed
-flat while a tool ran and jumped only on completion), so agy's own store is already
-completion-granular. The streamer's extra ~1s is immaterial for rendering completed
-messages, and the busy/idle indicator does **not** come from the transcript anyway
-(it comes from the mngr lifecycle + process marker, §5). Reserve B only if we later
-want native captions or tool-result bodies.
-
-Consequence to design around up front: **the stream contains no tool-result events.**
-That breaks the reused Claude activity heuristic and shapes §4 and §5.
-
-### The record schema we consume (from `decode_agy_transcript.py`)
-
-One JSON object per settled step:
-
+### agy's original store
+Since agy 1.0.4 each conversation is a **protobuf-encoded SQLite DB**:
 ```
-step_index   int        # order within the conversation
-source       str        # USER_EXPLICIT | USER_IMPLICIT | MODEL | SYSTEM | SYSTEM_SDK | STEP_SOURCE_<n>
-type         str        # USER_INPUT | PLANNER_RESPONSE | ERROR_MESSAGE | CONVERSATION_HISTORY | SYSTEM_MESSAGE | STEP_TYPE_<n>
-status       str        # PENDING|RUNNING|DONE|INVALID|CLEARED|CANCELED|ERROR|GENERATING|WAITING|QUEUED|INTERRUPTED
-created_at   str        # "YYYY-MM-DDTHH:MM:SSZ" (may be "")
-content      str        # present on USER_INPUT / PLANNER_RESPONSE / ERROR_MESSAGE
-thinking     str        # optional; on PLANNER_RESPONSE only
-tool_calls   [ {name: str, args: str} ]   # optional; on PLANNER_RESPONSE only. args is a JSON string.
-_mngr_conv_id str       # the conversation UUID
+<agent_state_dir>/plugin/antigravity/home/.gemini/antigravity-cli/conversations/<conv_id>.db
 ```
+Table `steps`: `idx` (int PK, order), `step_type` (int enum), `status` (int enum),
+`step_payload` (BLOB = a `gemini_coder.Step` protobuf), `step_format`. This is what agy
+reads back on resume — the authoritative original, parallel to Claude's session JSONL.
 
-Only `USER_INPUT`, `PLANNER_RESPONSE`, `ERROR_MESSAGE` carry renderable content; the
-decoder drops everything else (tool-result/system/history steps). Multiple
-conversations for one agent are interleaved in the same `events.jsonl`, tagged by
-`_mngr_conv_id` (matters for resume; see §3 ordering).
+**Fidelity is proven.** A dependency-free wire-walk over `step_payload` (in-process,
+no mngr) already yields, per tool step: call id, tool name, args JSON, agy's native
+short caption (`Running python3 showcase.py`) and long caption, and the tool result
+text. Verified against real `.db`s.
 
 ---
 
-## 2. Files to create / change in `harnesses/antigravity/`
+## 1. What the watcher reads and how
 
+### Conversation discovery (like Claude's session-history)
+`<agent_state_dir>/antigravity_conversation_ids` — one conversation UUID per line,
+maintained by mngr's `PreInvocation` capture hook (verified present on live agents).
+Resumed agents accumulate multiple ids; render them in file order (matches chronology,
+like Claude concatenating its session history). For each id, open
+`…/conversations/<id>.db`.
+
+`AgentInfo` exposes `agent_state_dir` (Codex uses it the same way). Derive:
 ```
-antigravity/
-  watcher.py         REPLACE placeholder → real JSONL-tailing watcher
-  session_parser.py  NEW  record → shared UI events
-  tool_labels.py     NEW  (name, args) → header_label / caption_label
-  activity.py        REWRITE derivation (placeholder heuristic is wrong for agy)
-  activity_state.py  NEW  pure agy activity derivation
-  model.py           KEEP (done)
-  icon.svg           KEEP
-  __init__.py        KEEP empty
-  watcher_test.py    NEW
-  session_parser_test.py NEW
-  tool_labels_test.py    NEW
-  activity_state_test.py NEW
+agy_home        = agent_state_dir / "plugin/antigravity/home"
+conversations   = agy_home / ".gemini/antigravity-cli/conversations"
+conv_ids_file   = agent_state_dir / "antigravity_conversation_ids"
 ```
 
-Registry (`harnesses/registry.py`): entry already present; keep
-`special_kinds=frozenset()` (agy stream has no turn markers). No spine changes.
+### Tailing = SQLite row-offset polling (NOT byte-offset)
+This is the one structural difference from Claude/Codex. There is no append-JSONL to
+seek in; instead:
+- Keep an **in-memory** last-seen `idx` per `conv_id` (our own offset — do **not** read
+  mngr's `.transcript_offsets/`, that's mngr's cursor at mngr's pace).
+- Each poll, per conversation:
+  ```
+  SELECT idx, step_type, status, step_payload FROM steps WHERE idx > ? ORDER BY idx
+  ```
+  Open **read-only, WAL-aware**: `sqlite3.connect(f"file:{db}?mode=ro", uri=True)`.
+  NOT `immutable=1` (agy is concurrently writing WAL). A transient `sqlite3.Error`
+  (locked/mid-checkpoint) → skip this conversation this pass, retry next.
+- **Stop at the first non-terminal (still-generating) row** and do not advance the
+  offset past it — its payload is incomplete. Terminal statuses = `{DONE, INVALID,
+  CLEARED, CANCELED, ERROR, INTERRUPTED}` (the same set mngr's decoder uses). This
+  preserves in-order, no-partial, no-skip emission.
+- Decode each settled row → events; broadcast via `on_events`.
 
----
-
-## 3. `watcher.py` — real `AgentSessionWatcher`
-
-Mirror the Claude/Codex watcher shape but simpler: single JSONL, append-only, no
-subagents, no rotation-rewrite (mngr only appends).
-
-### Source path
-```
-transcript = agent_info.agent_state_dir / "logs" / "antigravity_transcript" / "events.jsonl"
-```
-`AgentInfo.agent_state_dir` is available (used by Codex the same way). No marker-file
-indirection needed — the path is stable (unlike Codex's rotating rollout).
-
-### Tailing (reuse Claude's proven mechanics, minus rotation)
-- `SessionFileState`: `byte_offset_consumed`, `last_mtime`, `locators` (append-only
-  `EventLocator` list), `emitted_count`. Same two-tier memory model as Claude
-  (bodyless locators + bounded LRU body cache) — or, given agy transcripts are
-  small, a simpler "hold parsed events in a list" is acceptable for v1; keep the
-  locator interface so paging methods are cheap.
-- Watchdog on the `logs/antigravity_transcript/` dir + 1s poll safety net
-  (`watcher_common.POLL_INTERVAL_SECONDS`, `WakeOnChangeHandler`) — identical to
-  Claude.
-- Incremental read: `seek(byte_offset_consumed)`, read tail, split at last complete
-  line (`_split_at_last_complete_line`), parse complete lines, advance offset. mngr
-  writes whole lines (`sink.write(line + "\n")`), so partial-line handling is only a
-  mid-write safety net — reuse Claude's helper as-is.
-- **No truncation/rotation branch**: mngr's `events.jsonl` is append-only across the
-  agent's life. If `size < byte_offset_consumed` ever occurs (unexpected), fall back
-  to Claude's purge-and-reparse to stay safe, but it should never fire.
-- Emission: `_poll_for_changes` broadcasts every locator past `emitted_count` via
-  `on_events(agent_id, pending)` — same decoupling as Claude (HTTP reads and the poll
-  loop share the offset; the loop broadcasts by `emitted_count`, not by what it
-  parsed).
+### Wake / poll
+Watchdog on the `conversations/` dir (catches `.db`/`-wal` writes) + 1s poll safety net
+(`watcher_common.POLL_INTERVAL_SECONDS`, `WakeOnChangeHandler`) — same primitives as
+Claude, just triggering a DB re-query instead of a file re-read.
 
 ### event_id (spine invariant: stable, harness-derived)
 ```
-event_id = f"{_mngr_conv_id}:{step_index}:{suffix}"
-suffix ∈ {"user", "assistant", "toolcall-<n>", "error"}
+f"{conv_id}:{idx}:{suffix}"   suffix ∈ {user, assistant, toolcall, toolresult, error}
 ```
-Because one PLANNER_RESPONSE record yields an `assistant_message` **plus** N
-`tool_call` entries embedded in it, the assistant event is one event; tool calls are
-carried inside its `tool_calls[]` (as in Claude), not separate events. `step_index`
-is unique within a conversation and monotonic; `_mngr_conv_id` disambiguates resumed
-conversations sharing the file.
-
-### Ordering
-Sort emitted events by `(_mngr_conv_id groupings in first-seen order, step_index)`.
-In practice a single agent works one conversation at a time and the decoder writes in
-`idx` order, so file order already equals render order; sort by file order and keep
-`step_index` only as a tiebreak. Do **not** sort by `created_at` (second-granularity,
-many ties).
+A tool step yields two events (a `tool_call` carrier + a `tool_result`) sharing the
+`idx`, distinguished by suffix. `idx` is unique+monotonic within a conversation;
+`conv_id` disambiguates resumed conversations.
 
 ### The 11 abstract methods
-- `get_all_events / get_tail_events / get_backfill_events / get_forward_events /
-  get_events_at_offset / get_event_offset / get_total_event_count` — index into the
-  ordered locator list exactly like Claude's single-session case.
-- `get_subagent_metadata` → `None`; `is_main_session_event` → `True` (agy has no
-  subagents in this stream).
-- `start/stop` — schedule/stop the watchdog + poll thread.
+Index into the ordered decoded-step list exactly like Claude's single-session case
+(`get_all/tail/backfill/forward/at_offset/offset/total`). `get_subagent_metadata` →
+`None`; `is_main_session_event` → `True` (no subagents in the store). `start/stop`
+manage the watchdog + poll thread.
+
+---
+
+## 2. Files in `harnesses/antigravity/`
+
+```
+agy_transcript.py       NEW  protobuf wire-walk: steps row → decoded Step record (full fidelity)
+watcher.py              REPLACE placeholder → sqlite-tailing watcher (uses agy_transcript)
+session_parser.py       NEW  decoded Step record → shared UI events
+tool_labels.py          NEW  thin: uses agy's native captions (no synthesis)
+activity.py             KEEP claude-style (now correct — see §5)
+activity_state.py       —    reuse claude/activity_state (see §5); no new file
+model.py, icon.svg, __init__.py   KEEP
+*_test.py               NEW  agy_transcript_test, session_parser_test, tool_labels_test, watcher_test
+```
+
+Registry: entry present; keep `special_kinds=frozenset()`. No spine changes.
+
+---
+
+## 3. `agy_transcript.py` — the protobuf decoder (ported + extended)
+
+A small, dependency-free protobuf wire-walk. **Port it from
+`mngr_antigravity/resources/decode_agy_transcript.py`** (proven, defensive: truncation
+guards, `utf-8 "replace"`, unknown-field skip) but **extend** it to surface what mngr
+drops: tool call id/args, agy's captions, and tool results.
+
+### `gemini_coder.Step` field map (recovered; keep in sync with mngr — §8)
+Top-level `step_payload`:
+- `f1` step_type (varint) — mirrors the `step_type` column
+- `f4` status (varint)
+- `f5` metadata (message)
+- body oneof by type: `f10` code_action · `f19` user_input · `f20` planner_response ·
+  `f24` error_message
+
+`metadata` (f5):
+- `f1` created_at `Timestamp{f1 seconds, f2 nanos}`
+- `f3` source (varint)
+- `f4` **ChatToolCall** `{f1 call_id, f2 name, f3 args(JSON string), f9 name}` — present
+  on tool steps
+- `f30` caption_short (e.g. `"Running python3 showcase.py"`)
+- `f31` caption_long (e.g. `"Executing showcase python script"`)
+
+Bodies:
+- user_input (f19): `f1` query or `f2` user_response = the text
+- planner_response (f20): `f1` text · `f3` thinking · `f7` repeated ChatToolCall
+- error_message (f24): `f3` CortexErrorDetails `{f1 user_msg, f2 short, f3 full}`
+
+### Enums (from mngr's recovered map)
+- step_type: `5 CODE_ACTION, 14 USER_INPUT, 15 PLANNER_RESPONSE, 17 ERROR_MESSAGE,
+  98 CONVERSATION_HISTORY, 101 SYSTEM_MESSAGE`, plus per-tool categories observed in the
+  wild: `7 GREP_SEARCH, 8 VIEW_FILE, 9 LIST_DIRECTORY, 21 RUN_COMMAND, 91 GENERATE_IMAGE`
+  (unknown → `STEP_TYPE_<n>`).
+- source: `2 MODEL, 3 USER_IMPLICIT, 4 USER_EXPLICIT, 5 SYSTEM, 6 SYSTEM_SDK`.
+- status: `1 PENDING, 2 RUNNING, 3 DONE, 4 INVALID, 5 CLEARED, 6 CANCELED, 7 ERROR,
+  8 GENERATING, 9 WAITING, 11 QUEUED, 12 INTERRUPTED`. Terminal = `{3,4,5,6,7,12}`.
+
+### Tool-step detection (robust to new tool types)
+**A step is a tool call iff `metadata.f4` exists and has a name (f2).** Do not enumerate
+tool step_types — new agy tools get new type numbers but keep the same `metadata.f4`
+ChatToolCall shape. From it: `call_id=f1, name=f2, args=f3`, captions `f30/f31`.
+
+### Tool result extraction
+The result lives in a per-tool-type top-level body field (observed: write→f10,
+grep→f13, view→f14, list_dir→f15, run_command→f28, image→f104). Two-tier approach:
+1. Map known step_type → result field for precise extraction (edit diff, grep hits,
+   command stdout, dir listing).
+2. Fallback for unknown tools: the longest printable string across non-metadata
+   top-level fields (proven to recover run_command output, grep results, edit diffs).
+Truncate to `events.MAX_TOOL_OUTPUT_LENGTH` (2000).
+
+### Output: a decoded record dataclass
+```
+DecodedStep(conv_id, idx, step_type_name, status_name, created_at, source,
+            text, thinking, user_text,
+            tool_call: {call_id, name, args, caption_short, caption_long} | None,
+            tool_result_text: str | None,
+            error_text: str | None)
+```
+`_TruncatedError` on a mid-write payload → caller stops at that step (as in mngr's).
 
 ---
 
 ## 4. `session_parser.py` — record → shared UI events
 
-Pure function `parse_records(records, existing_event_ids) -> list[event dict]`,
-mirroring `claude/session_parser.parse_lines`. Emits the shared `events.py` shapes so
-the frontend renders unchanged. Dedup by `event_id` against `existing_event_ids`.
+`parse_steps(records, existing_event_ids) -> list[event dict]`, dedup by `event_id`,
+emitting the shared `events.py` shapes so the frontend renders unchanged.
 
-Mapping:
+| record | → events |
+|---|---|
+| `USER_INPUT`, source USER_EXPLICIT | `user_message` (strip agy's `<USER_REQUEST>…</USER_REQUEST>` wrapper; drop metadata trailers) |
+| `USER_INPUT`, source USER_IMPLICIT/SYSTEM | skip (injected context, not a turn) |
+| `PLANNER_RESPONSE` with text | `assistant_message` {text, thinking, tool_calls:[]} |
+| tool step (metadata.f4 present) | `assistant_message` {text:"", tool_calls:[one tool_call]} **plus** a `tool_result` {tool_call_id, output} — both from the same step, sharing call_id |
+| `ERROR_MESSAGE` | `assistant_message` flagged error (is_api_error/text) |
+| everything else | skip |
 
-| record.type | source | → event |
-|---|---|---|
-| `USER_INPUT` | USER_EXPLICIT | `user_message` (see text extraction) |
-| `USER_INPUT` | USER_IMPLICIT / SYSTEM* | **skip** (framework-injected context, not a user turn) |
-| `PLANNER_RESPONSE` | MODEL | `assistant_message` with `text`, optional `thinking`, and `tool_calls[]` |
-| `ERROR_MESSAGE` | any | `assistant_message` with `is_api_error`/error text, empty `tool_calls` |
-| `CONVERSATION_HISTORY`, `SYSTEM_MESSAGE`, `STEP_TYPE_<n>`, anything else | any | **skip** |
+- **tool_call** dict: `{tool_call_id: f"{conv_id}:{idx}:toolcall", tool_name: name,
+  input_preview: <args clipped to 200>, header_label, caption_label}` (labels from §6).
+- **tool_result** dict: `{type:"tool_result", event_id: f"{conv_id}:{idx}:toolresult",
+  tool_call_id: <same>, tool_name, output: <result clipped 2000>, is_error: status∈{ERROR,CANCELED}}`.
+- **thinking**: pass agy's `thinking` through on the assistant event (Claude drops
+  thinking; we get it free). Rendering it collapsed is a small optional frontend add.
+- Emitting call+result from one step means the pair is **always matched** — this is
+  what makes activity (§5) correct.
 
-### `user_message`
-`content` is wrapped by agy as
-`"<USER_REQUEST>\n{text}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>…"` (verified). Strip
-to the inner `<USER_REQUEST>` body; drop the metadata/settings-change trailers. If no
-`<USER_REQUEST>` wrapper (older records), use `content` verbatim. Emit:
-`{type:"user_message", event_id, role:"user", content, source:"antigravity/common_transcript", message_uuid: event_id, timestamp: created_at}`.
-
-### `assistant_message`
-`{type:"assistant_message", event_id, role:"assistant", model: <agy model or "">,
-text: content, thinking: record.thinking or "", tool_calls: [...], stop_reason: null,
-timestamp, message_uuid: event_id, source}`.
-- **thinking**: unlike Claude (which drops thinking), agy gives us `thinking` — pass
-  it through on the event. Frontend already tolerates unknown fields; rendering a
-  collapsed "thought" is a small frontend add (optional, not required for v1).
-- Each `record.tool_calls[i] = {name, args}` → a `tool_call` dict:
-  ```
-  {tool_call_id: f"{event_id}-toolcall-{i}",
-   tool_name: name,
-   input_preview: <args clipped to MAX_TOOL_INPUT_PREVIEW_LENGTH>,
-   header_label, caption_label}     # from tool_labels(name, args) — §6
-  ```
-  `args` is already a JSON string; clip to `events.MAX_TOOL_INPUT_PREVIEW_LENGTH`
-  (200) like Claude, then feed the raw (unclipped) args to `tool_labels` for target
-  extraction.
-
-### No `tool_result` events (design limitation, call it out)
-mngr's stream drops tool-result steps, so we emit tool calls but **no results**. The
-UI shows "used `run_command`: Running python3 showcase.py" with no output body. This
-is acceptable for v1 (user asked for tool-call detection + title). Wiring results
-would require tail source B (the `.db`), where the result lives in the tool step's
-own body field — a later enhancement.
-
-Truncation constants: reuse `events.MAX_TOOL_INPUT_PREVIEW_LENGTH` /
-`MAX_TOOL_OUTPUT_LENGTH` for cross-harness consistency.
+`source` field on events: `"antigravity/steps"`; `message_uuid = event_id`;
+`timestamp = created_at`.
 
 ---
 
-## 5. Activity — `activity.py` + `activity_state.py`
+## 5. Activity — reuse Claude's derivation (now valid)
 
-**The current placeholder `activity.py` reuses Claude's `has_unmatched_tool_use`,
-which is WRONG for agy**: we emit tool calls but never tool results, so every tool
-call is forever "unmatched" → the tracker would pin `TOOL_RUNNING` permanently. Replace
-the derivation.
+The placeholder `activity.py` already reuses `claude/activity_state.derive` +
+`has_unmatched_tool_use`. **That is correct now** — because §4 emits a `tool_result`
+for every tool call, tool calls get matched, so `has_unmatched_tool_use` is only
+transiently true and never stuck. (An earlier draft of this spec, when it planned to
+read mngr's lossy stream that drops results, hit permanent TOOL_RUNNING; emitting
+results from the same step fixes it and is the reason to read the original store.)
 
-agy has no turn-boundary markers, and — critically — no in-flight step is persisted
-(the running tool has no row until it completes). So the only reliable signals are the
-**mngr lifecycle** (is the agent process mid-turn) and the **transcript tail shape**.
+Derivation (Claude's ladder, unchanged):
+- not RUNNING (mngr lifecycle) → IDLE
+- transcript tail stale vs `antigravity_process_started` marker mtime → IDLE
+- unmatched tool call at tail → TOOL_RUNNING
+- tail is user_message/tool_result → THINKING
+- tail is assistant_message (final answer) → IDLE
 
-### `activity_state.py` (new, pure) — `derive(...)`
-Ladder (priority order):
-1. `if not is_agent_running: return IDLE` — a non-RUNNING mngr agent is IDLE.
-2. `if is_transcript_tail_stale(tail_event_at, process_started_at): return IDLE` —
-   reuse the shared staleness guard (tail predates the current process = abandoned
-   mid-turn after a restart). Uses the `antigravity_process_started` marker mtime.
-3. Determine the tail settled step:
-   - tail is `assistant_message` **with text and no tool_calls** → the model gave its
-     final answer → `IDLE`.
-   - tail is `assistant_message` **with tool_calls** (model just dispatched tools; the
-     results/continuation haven't landed) → `TOOL_RUNNING`.
-   - tail is `user_message` (agent handed input, hasn't answered) → `THINKING`.
-   - empty transcript but process running → `THINKING` (turn started, nothing settled
-     yet — agy writes the first step only on completion).
-4. else `IDLE`.
+Keep `marker_filename = "antigravity_process_started"`; **verify the mngr plugin writes
+exactly that filename** on launch/resume, else the staleness guard is inert.
 
-This mirrors Claude's tail logic but keys on "assistant_message with vs without
-tool_calls" instead of unmatched-tool-use, since we have no results. Three states as
-today: `IDLE / THINKING / TOOL_RUNNING`.
+Caveat (document, don't fix): agy writes a step row only on completion (the in-flight
+tool has no row until it finishes — confirmed live). So between "tool dispatched" and
+"tool done" there is no row; the indicator rides the mngr lifecycle (RUNNING) and the
+prior tail. Acceptable — the busy signal is lifecycle-anchored.
 
-### `activity.py` (rewrite `observe`)
-Cache: `_last_event_type`, `_last_event_has_tool_calls`, `_last_event_timestamp`.
-`observe` recomputes them from the tail event; return `True` iff any changed. `derive`
-forwards them + `is_agent_running` + `process_started_at` to the pure function.
-Keep `marker_filename = "antigravity_process_started"` (already correct; mngr touches
-it — verify the mngr plugin writes exactly this name, else the staleness guard is
-inert).
-
-Optional refinement (defer): the decoder exposes `status` (RUNNING/GENERATING/…). If a
-future tail source surfaces a non-terminal step, prefer it as a direct busy signal.
-Not available from source A today.
+Activity **caption**: the frontend renders the in-flight tool's `caption_label`. Since
+we carry agy's native caption on the tool_call, it reads well ("Running python3
+showcase.py"). No tool in flight → THINKING → "Thinking…".
 
 ---
 
-## 6. `tool_labels.py` — tool-call detection & titles
+## 6. `tool_labels.py` — use agy's native captions (no synthesis)
 
-Same contract as `claude/tool_labels.py`: `tool_labels(tool_name, args_json) ->
-(header_label, caption_label)`, attached to each tool_call in the parser. agy's own
-`f30/f31` captions are **not** in source A, so we synthesize from name+args (agy's tool
-names are descriptive and its args are a JSON object with well-known keys — verified
-against real steps).
+Unlike Claude (which synthesizes captions from tool name + args), **agy already provides
+them** in `metadata.f30/f31`. So:
+- `caption_label = caption_short (f30)` — agy's own short caption.
+- `header_label  = f"Tool: {tool_name}"` (or `caption_long (f31)` if we prefer agy's
+  long form as the header).
+- Fallback only if f30 is empty: synthesize via the **shared** `harnesses/tool_labels.py`
+  (`basename`/`shorten`/`quoted` + a small verb table: write_to_file→Writing,
+  run_command→Running, grep_search→Searching, view_file→Viewing, list_dir→Listing,
+  replace_file_content→Editing, generate_image→Generating image). Reuse the shared
+  helpers; don't reimplement.
 
-`header_label = f"Tool: {tool_name}"` (agy reports real names, no translation table).
-
-`caption_label`: verb from a table + target from args. Verb table (from observed agy
-tools):
-
-| agy tool_name | verb | target key(s) in args |
-|---|---|---|
-| `write_to_file` | Writing | `TargetFile` → basename |
-| `replace_file_content`, `multi_replace_file_content` | Editing | `TargetFile` → basename |
-| `view_file` | Viewing | `AbsolutePath` → basename |
-| `list_dir` | Listing | `DirectoryPath` → shorten |
-| `grep_search` | Searching | `Query` → quoted |
-| `find_by_name`, `file_glob` | Searching | `Pattern`/`Query` → quoted |
-| `run_command` | Running | `CommandLine` → shorten (fallback for target) |
-| `read_url_content`, `read_web_page` | Fetching | `Url` → shorten |
-| `search_web` | Searching the web | `Query` → quoted |
-| `generate_image` | Generating image | `ImageName`/`Prompt` → shorten |
-| `browser_*` | Browsing | url/selector → shorten |
-
-Resolution helpers: reuse the **shared** `harnesses/tool_labels.py`
-(`basename`, `shorten`, `quoted`, `parse_input_preview`, `mcp_caption`,
-`first_string_value`) — do not reimplement. Unknown tool → `caption_label =
-f"Running {target}"` or `GENERIC_CAPTION = "Running tool…"`. args is real JSON here
-(not always truncated), so `json.loads(args)` succeeds more often than Claude's
-preview-parse; still fall back to `{}` on failure.
-
-Note: agy also ships nicer captions natively (`f30`="Writing showcase.py",
-`f31`="Creating showcase python file"). If we ever move to source B, prefer those
-verbatim over synthesizing.
+This makes `tool_labels.py` thin — mostly "prefer f30, fall back to synthesis."
 
 ---
 
-## 7. Event schema — worked examples
-
-Real records (captured live), showing the mapping:
+## 7. Worked example (real `.db`, decoded in-process)
 
 ```
-{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE",
- "content":"<USER_REQUEST>\nput on a little tool call show…\n</USER_REQUEST>…"}
-→ user_message  content="put on a little tool call show…"
-
-{"step_index":15,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE",
- "content":"", "tool_calls":[{"name":"run_command","args":"{\"CommandLine\":\"python3 /home/user/showcase.py\",…}"}]}
-→ assistant_message text="" tool_calls=[{tool_name:"run_command",
-     header_label:"Tool: run_command", caption_label:"Running python3 /home/user/showcase.py"}]
-
-{"step_index":19,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE",
- "content":"Here is the tool call show…","thinking":"**Initiating…"}
-→ assistant_message text="Here is the tool call show…" thinking="**Initiating…" tool_calls=[]
+steps.idx=0  type=USER_INPUT     → user_message "put on a little tool call show…"
+steps.idx=3  type=LIST_DIRECTORY → assistant_message(tool_call list_dir, cap "Listing directory /home/user")
+                                    + tool_result(output=dir listing)
+steps.idx=6  type=CODE_ACTION    → tool_call write_to_file cap "Writing showcase.py" + tool_result(diff)
+steps.idx=16 type=RUN_COMMAND    → tool_call run_command cap "Running python3 showcase.py"
+                                    + tool_result("✨ Hello from Antigravity!… Result of magic calculation: 1000")
+steps.idx=19 type=PLANNER_RESPONSE → assistant_message "Here is the tool call show…" (+thinking)
 ```
-
-Activity over that turn: user_message tail → THINKING; PLANNER_RESPONSE-with-tool_calls
-tail → TOOL_RUNNING; final PLANNER_RESPONSE-text-no-tool_calls tail → IDLE.
+Activity: user tail → THINKING; each tool call+result matched → brief TOOL_RUNNING then
+THINKING; final planner answer → IDLE.
 
 ---
 
-## 8. Testing plan
+## 8. Schema-drift obligation (the one real cost of full fidelity)
 
-Unit tests with inline record fixtures (no live agy needed) — mirror
-`claude/session_parser_test.py`:
-- `session_parser_test.py`: USER_INPUT wrapper stripping; USER_IMPLICIT skip;
-  PLANNER_RESPONSE text+thinking+tool_calls; ERROR_MESSAGE; unknown type skip; dedup by
-  event_id; multi-tool PLANNER_RESPONSE yields N tool_calls with distinct ids.
-- `tool_labels_test.py`: each verb-table row; unknown tool; malformed args → `{}`;
-  basename/quoted/shorten targets.
-- `activity_state_test.py`: the four ladder cases + non-running IDLE + stale-tail IDLE;
-  the tool-calls-vs-no-tool-calls distinction (the bug the reuse would have caused).
-- `watcher_test.py`: byte-offset incremental read across appends; mid-write partial
-  line held then completed; event_id stability across re-read; paging
-  (tail/backfill/forward/offset). Real captured records make good fixtures.
+agy ships no `.proto`; the field/enum numbers are recovered from the binary. mngr guards
+this with a **release-marked descriptor-diff test** and a regeneration doc
+(`libs/mngr_antigravity/regenerating_protobuf_schema.md`). By decoding in system_interface
+we take on a second copy of that map. Mitigations, in preference order:
+1. **Share, don't duplicate**: factor the field-number/enum constants + wire-walk into
+   one importable module both mngr and system_interface use. Check whether
+   system_interface may depend on `mngr_antigravity` (it already reads mngr's agent dirs);
+   if so, import the decoder and *extend* via a thin wrapper for the extra fields.
+2. If not importable: vendor a copy into `agy_transcript.py`, add a parallel
+   descriptor-diff test in system_interface, and cross-reference mngr's regeneration doc
+   so an agy bump updates both. Document the sync obligation at the top of the file.
 
-Manual (tmux): create an agy agent, drive a multi-tool task, confirm messages + tool
-titles render and the indicator goes THINKING → (tool) → IDLE. Do **not** crystallize
-tmux checks into pytest.
-
-Ratchets: `read_json_dict` for any JSON reads (avoid the bare-`json.loads` ratchet);
-`dict[str, Any]` not bare `dict`.
+Do not silently fork the map with no guard.
 
 ---
 
 ## 9. Out of scope / limitations (explicit)
 
-- **Queuing: not implemented.** Verified live that a message typed while agy is busy is
-  **not** written to the transcript while queued (it lives only in agy's TUI, shown
-  with `▸`); it lands as an ordinary `USER_INPUT` step only once agy dequeues it, with
-  no queued marker. There is no Claude-style `queued_command` record to parse. Per
-  direction, ship without queuing; do not rely on `PendingMessages` for agy.
-- **No tool results** in v1 (source A drops them). Tool calls show title only.
-- **No native captions** in v1 (synthesized from name+args; source B has agy's own).
-- **~1s render lag** from the mngr streamer poll (busy/idle indicator is unaffected —
-  it's lifecycle-driven).
-- **No subagents** surfaced.
-- **Schema drift**: owned by mngr's descriptor-diff test; if mngr's record shape
-  changes, update the parser. system_interface never touches agy's protobuf.
+- **Queuing: not implemented.** Verified live: a message typed while agy is busy is
+  **not** written to the store while queued (lives only in agy's TUI, shown `▸`); it
+  lands as an ordinary `USER_INPUT` step only once dequeued, with no queued marker. No
+  Claude-style `queued_command` to parse. Ship without it; do not rely on `PendingMessages`.
+- **In-flight tool not persisted** — no row until the tool completes; busy/idle rides the
+  lifecycle (§5). No "running THIS tool" caption mid-execution beyond the last dispatch.
+- **No subagents** in the store.
+- **Schema drift** — must be guarded (§8).
 
 ---
 
-## 10. Build order
+## 10. Testing plan
 
-1. `tool_labels.py` + test (pure, no deps).
-2. `session_parser.py` + test (pure; consumes records, emits events).
-3. `activity_state.py` + `activity.py` rewrite + test (fixes the stuck-TOOL_RUNNING bug).
-4. `watcher.py` real impl + test (JSONL tail → parser → on_events).
-5. Manual tmux verification end-to-end; confirm the mngr plugin actually writes
-   `antigravity_process_started` and populates `logs/antigravity_transcript/events.jsonl`
-   for a live agent (both observed to exist; confirm they fill during a turn).
+Unit (inline fixtures built from real captured `.db` bytes — commit a few real
+`step_payload` blobs as testdata):
+- `agy_transcript_test.py`: decode user/planner/tool/error steps; tool detection via
+  metadata.f4; caption + args + result extraction; truncated payload → `_TruncatedError`;
+  unknown step_type/tool → graceful skip/fallback; unknown enum → `STEP_TYPE_<n>`.
+- `session_parser_test.py`: USER_REQUEST unwrap; USER_IMPLICIT skip; planner
+  text+thinking; tool step → matched assistant+tool_call+tool_result with shared id;
+  error; dedup by event_id.
+- `tool_labels_test.py`: prefer f30; fallback synthesis per verb; empty f30.
+- `watcher_test.py`: sqlite row-offset polling advances on new rows; stops at
+  non-terminal status; WAL `mode=ro` open; multi-conversation concat in
+  `antigravity_conversation_ids` order; paging methods.
+
+Manual (tmux, not crystallized): create an agy agent, drive a multi-tool task, confirm
+messages + tool titles + results render and the indicator goes THINKING → (tool) → IDLE.
+
+Ratchets: `read_json_dict` / `dict[str, Any]`.
+
+---
+
+## 11. Build order
+
+1. `agy_transcript.py` + test — port mngr's wire-walk, extend for tool call/args/captions/result.
+2. `session_parser.py` + test — records → events (call+result matched).
+3. `tool_labels.py` + test — prefer agy captions.
+4. `watcher.py` — sqlite row-offset tail → parser → on_events; conversation discovery.
+5. `activity.py` — already correct once results are emitted; verify end-to-end.
+6. Manual tmux verification; confirm the mngr plugin writes `antigravity_process_started`
+   and that `antigravity_conversation_ids` + `conversations/<id>.db` populate live.
 ```
