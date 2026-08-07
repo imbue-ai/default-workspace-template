@@ -89,13 +89,6 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 
-# Activity states in which the agent has a turn in progress. A transition out of
-# one of these into IDLE is the signal the harness queue has drained -- the one
-# backstop that clears any queued-message survivor (interrupt / SIGKILL / crash).
-_WORKING_ACTIVITY_STATES: Final[frozenset[ActivityState]] = frozenset(
-    {ActivityState.THINKING, ActivityState.TOOL_RUNNING}
-)
-
 # A chat spawned by the minds "get help -> have an agent help" flow carries this
 # label (set on its ``mngr create``). When such an agent is first discovered, we
 # auto-open its tab so the user lands on it without hunting.
@@ -1380,7 +1373,18 @@ class AgentManager:
                 process_started_at=process_started_at,
             )
             old_state = self._activity_state_by_agent.get(agent_id)
-            if old_state == new_state and agent_state.activity_state == new_state.value:
+            # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
+            # IDLE agent's harness queue is drained by definition, so ANY queued
+            # survivor while idle is stale -- an interrupt, our flush-restart SIGKILL,
+            # a crash, a hole in the harness's own ledger (an enqueue with no matching
+            # leave), or a stale entry re-surfaced by a backend restart's full replay
+            # (which sees no new working->IDLE transition to sweep it). So sweep
+            # whenever the agent is idle with a non-empty queue, even if the activity
+            # state itself did not change this cycle -- an edge-only backstop leaves
+            # such survivors stranded on an idle agent forever.
+            is_idle = new_state == ActivityState.IDLE
+            has_stale_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
+            if old_state == new_state and agent_state.activity_state == new_state.value and not has_stale_queue:
                 return
             self._activity_state_by_agent[agent_id] = new_state
             # Update just this slot so any cached ``model_choice`` stays intact --
@@ -1388,11 +1392,7 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(
                 to_update(agent_state.field_ref().activity_state, new_state)
             )
-            # The queued-message backstop: a working->IDLE transition means the
-            # harness queue has drained, so any survivor is stale (an interrupt,
-            # our flush-restart SIGKILL, a crash -- none write a resolution record).
-            became_idle = new_state == ActivityState.IDLE and old_state in _WORKING_ACTIVITY_STATES
-            idle_handler = self._queue_idle_handler_by_agent.get(agent_id) if became_idle else None
+            idle_handler = self._queue_idle_handler_by_agent.get(agent_id) if has_stale_queue else None
 
         # The idle handler clears the watcher's queue populator and returns the
         # resulting (empty) snapshot; it calls into the watcher, so it runs outside
