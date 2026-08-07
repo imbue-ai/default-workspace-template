@@ -475,10 +475,11 @@ pi does" — settled below — leaving exactly one real decision (the queued-mes
 
 **Settled by pi parity + the live probe (no longer open):**
 
-- **File set = pi's.** `watcher.py`, `session_parser.py`, `tool_labels.py`, `activity.py`
-  (already exists), `model.py` (already done), + `db_reader.py` (opencode's analogue of pi's
-  "read the native file" step — pi inlines it since JSONL is trivial; opencode needs a thin
-  SQLite reader). Optionally `queue_tracker.py` — the one open item.
+- **File set = pi's, minus the queue.** `watcher.py`, `session_parser.py`, `tool_labels.py`,
+  `activity.py` (already exists), `model.py` (already done), + `db_reader.py` (opencode's
+  analogue of pi's "read the native file" step — pi inlines it since JSONL is trivial; opencode
+  needs a thin SQLite reader). **No `queue_tracker.py`** — opencode has no queue ledger to tail
+  (resolved below).
 - **Activity = claude-style lifecycle+tail** — pi's `activity.py` is exactly this, and
   opencode's already is too. No plugin `special` events, no turn latch. (was Q2)
 - **Reasoning/thinking = dropped** — pi's parser drops thinking blocks and never renders them;
@@ -501,17 +502,36 @@ pi does" — settled below — leaving exactly one real decision (the queued-mes
 - **Schema drift.** opencode self-upgrades; the reader degrades (skip an unparseable row)
   rather than crash, and the fixture is re-confirmed when `OPENCODE_VERSION` moves.
 
-## The one open question
+## Queued messages — RESOLVED to the base no-op (opencode has no queue ledger)
 
-- **Q5 — queued messages (the shoulder-tap surface).** pi's harness DOES populate it (a
-  `queue_tracker.py` fed by mngr's `pi_inbox` ledger; codex and claude have it too). So strict
-  pi parity means opencode gets one. opencode's native equivalent is the **`session_input`
-  table** in `opencode.db` (columns `prompt`, `delivery`, `admitted_seq`, `promoted_seq`): a
-  row with `promoted_seq IS NULL` is a parked prompt (enqueue), and it leaves when
-  `promoted_seq` is set / it drains into a `user` message — the same enqueue/leave shape pi
-  gets from its inbox, readable from the DB we are already tailing (no plugin change). **Two
-  options:** (a) include a `queue_tracker.py` that tails `session_input` in v1 (true pi
-  parity), or (b) ship the transcript first with the base no-op queue and add it as a
-  fast-follow. Recommend (a) if "match pi" is literal, since the ledger is right there in the
-  same db; (b) if the transcript is the priority and the shoulder-tap can lag.
+pi's harness populates a shoulder-tap queue from mngr's `pi_inbox` ledger, so the natural
+question was whether opencode gets the same, fed by the `session_input` table. **Tested live,
+and the answer is no — opencode has nothing to tail:**
+
+- mngr delivers an opencode message with a fire-and-forget `POST /session/{id}/prompt_async`
+  (`mngr_opencode/plugin.py`), and writes **no** inbox/ledger file (unlike pi).
+- Experiment: with a `sleep 15` bash tool call **provably running** (a `tool` part in
+  `state.status == "running"`), a second prompt was POSTed to the same session. `session_input`
+  stayed at **0 rows** the entire time, while the `message` count incremented **immediately** —
+  opencode wrote the second prompt straight in as a normal `user` message, it did not park it.
+
+So there is no "parked, not-yet-delivered" state anywhere on disk to surface: by the time a
+mid-turn message exists in the DB it is already a `user` message in the transcript. `session_input`
+(`admitted_seq`/`promoted_seq`) is an opencode internal not used by the server-prompt path.
+
+**Decision: opencode inherits the base no-op queue methods** (`get_queued_messages` → `[]`,
+etc. — the `AgentSessionWatcher` defaults), so there is **no `queue_tracker.py`**. This is a
+justified divergence from pi, forced by opencode's architecture, not an omission. The
+frontend's optimistic "Sending" bubble reconciles the instant the `user_message` event appears
+(immediate here), so the "Queued" state simply never applies. If opencode later grows a real
+parked-input surface (or mngr starts queuing opencode sends itself), revisit — the ledger would
+then be `session_input`, tailable from the same db.
+
+## Everything is resolved — no open questions
+
+All prior questions are settled (pi parity + the two live probes). The build is fully specified:
+the file set is `db_reader.py` + `watcher.py` + `session_parser.py` + `tool_labels.py`, the
+registry swap, and tests; `activity.py`/`model.py` already exist; **no `queue_tracker.py`**. The
+only non-copyable-from-pi piece is the DB-tail cursor (in-place row mutation), which copies
+antigravity and is decided in §3.
 ```
