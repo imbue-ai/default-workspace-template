@@ -284,19 +284,11 @@ body {
   border: 1px dashed var(--color-border);
 }
 
-.outgoing-message--failed .message-user-bubble {
-  border-color: #b3573c;
-}
-
 .outgoing-status {
   margin-top: 3px;
   font-family: var(--font-family-base);
   font-size: 11px;
   color: var(--color-text-secondary);
-}
-
-.outgoing-message--failed .outgoing-status {
-  color: #b3573c;
 }
 
 /* ── Assistant message ── */
