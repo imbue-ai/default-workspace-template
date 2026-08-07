@@ -1,7 +1,8 @@
 # Shoulder tap — spec (Claude primary, codex delta)
 
 How the system interface renders a message the user sends while an agent is
-mid-turn, and the single action ("shoulder tap") that flushes the queue.
+mid-turn: one common queue entity, populated per-harness, with two shared actions
+("shoulder tap" flush, and interrupt-to-composer) that both operate on it.
 
 Design principle: **the queued state comes only from the harness, never from the
 click.** No optimistic bubble. Robust confirmation, not a guess — and when the
@@ -14,13 +15,26 @@ confirmation path is fast, it reads as instant anyway.
 **Goal.** Exactly two user-visible states for a sent message:
 
 - **queued** — the harness has parked it; it has not been acted on. Rendered as a
-  distinct group below the conversation, with one **[Shoulder tap]** button above
-  the whole group.
+  distinct group below the conversation, with the action buttons above the group.
 - **sent** — it is an ordinary turn in the conversation.
 
-The [Shoulder tap] button does one thing: **interrupt the agent (restart) and
-resend everything currently in the queue as a single combined turn.** No Esc
-(rejected — its meaning differs per harness and is unpredictable).
+**The spine of this design: one common queue entity, populated per-harness.**
+There is a single harness-agnostic `QueuedSet` entity with all the behavior
+(snapshot to the frontend, concatenate, flush, bring-to-composer). The ONLY
+harness-specific code is the reader that *populates* it by looking at that
+harness's queue (§4.5, §5, §6). Everything the user touches is common.
+
+**Two actions on the queued group, both harness-agnostic, both sharing one
+concatenation builder** (`concatenated_block()`, §8):
+
+- **Shoulder tap (flush)** — restart the agent and resend the whole queue as one
+  concatenated turn. Commits it now.
+- **Interrupt (to composer)** — restart the agent and drop the same concatenated
+  block into the composer, unsent, for the user to edit and send.
+
+Both restart (the only harness-agnostic way to clear the harness queue; no Esc —
+its meaning differs per harness and is unpredictable). They differ only in the
+final step: resend vs. hand back to the composer.
 
 **Non-goals.** No optimistic UI. No client-side content-matching. No per-message
 queue actions. No durability — queued state answers "what is happening right
@@ -135,21 +149,33 @@ the detectors apart.**
    implementation (restart via `mngr`, resend via `send_message`) is already
    harness-agnostic.
 
-**Shared core (backend), harness-agnostic:**
+**Shared core (backend), harness-agnostic — the `QueuedSet` entity.** It holds the
+data and ALL the behavior; it knows nothing about any harness:
 
 ```python
-class QueueState:                     # one instance per session, no harness knowledge
+class QueuedSet:                      # one instance per session, no harness knowledge
     pending: list[QueuedMessage]      # FIFO
+
+    # --- mutated only by the per-harness populator (§4.5 adapter table) ---
     def add(self, queued_id, content, ts): ...
     def resolve(self, queued_id): ...        # exact id/key removal
     def resolve_oldest(self): ...            # FIFO head (for signals that carry no key)
     def clear(self): ...                     # bulk flush / backstop
-    def snapshot(self) -> list[dict]: ...    # the wire shape in (2)
+
+    # --- read by the common surface + actions; NO harness code below here ---
+    def snapshot(self) -> list[dict]: ...    # the WS wire shape in (2); full snapshot
+    def concatenated_block(self) -> str:     # the SHARED builder for BOTH actions (§8)
+        return "\n".join(m.content for m in self.pending)   # enqueue order
 ```
 
-**Per-harness adapter** — the ONLY harness-specific code. It maps that harness's
-raw signals onto `QueueState` calls and owns that harness's backstop. Everything
-below collapses to the same `snapshot()`:
+`concatenated_block()` is the single source of the text that flush resends and
+that interrupt drops into the composer — one function, two callers, so the two
+buttons can never disagree about what "the queue" is.
+
+**Per-harness populator** — the ONLY harness-specific code. It maps that harness's
+raw queue signals onto the `add`/`resolve`/`clear` mutators above and owns that
+harness's backstop. Everything downstream (`snapshot`, `concatenated_block`, both
+actions in §8) is common. Every harness below collapses to the same `snapshot()`:
 
 | step | Claude adapter | codex adapter |
 |---|---|---|
@@ -369,69 +395,75 @@ Every QUEUED tap must reach a terminal state. Three rules guarantee it:
 
 ---
 
-## 8. The shoulder-tap action
+## 8. The common actions (zero harness-specific code)
 
-One button above the queued group. Both variants below share steps 1–3 (a new
-server-side atomic endpoint, e.g. `POST /api/agents/:id/flush-queue`); they
-differ only in what happens after the restart. **Recommendation:
-flush-to-composer (§8.2)** — it is more robust, gives the user an edit moment,
-and dissolves the "combining flattens intent" objection. Auto-resend (§8.1)
-stays documented as the one-click alternative.
+Both actions live entirely on the shared `QueuedSet` entity (§4.5). Neither
+touches harness internals — they call `concatenated_block()` and the generic
+`mngr` / `send_message` layers, which are harness-agnostic. **The only shared
+input is `concatenated_block()`, so the two buttons can never disagree about what
+"the queue" is.**
 
-Shared prefix:
+**Shared prefix (both actions):**
 
-1. Read the agent's current queued-set (backend holds it; §8.5 makes it survive
-   a backend restart). If empty, no-op.
+1. `block = queued_set.concatenated_block()` — capture BEFORE the restart (the
+   restart drops the harness queue). If empty, no-op.
 2. `mngr start <agent> --restart --no-resume`. Verified semantics: kills and
    relaunches; **conversation history is preserved** (each harness resumes its
    own on-disk session); in-harness queued messages are dropped by the SIGKILL
-   (why we must re-deliver); `--no-resume` only suppresses an optional stored
-   resume prompt; the agent returns idle in a few seconds. Refused only for
+   (why we re-deliver / hand back); `--no-resume` only suppresses an optional
+   stored resume prompt; the agent returns idle in a few seconds. Refused only for
    `is_primary=true` (the workspace services agent) — the coding agents the user
    chats with are not primary, so this does not restrict us.
-3. Mark the flushed entries resolved in the durable cursor (§8.5) so a
-   subsequent re-read does not resurface them, and clear the live queued-set.
+3. `queued_set.clear()` (the restart invalidated the harness queue; §7's backstop
+   also sweeps any ledger residue).
 
-### 8.1 Variant A — auto-resend combined (one click)
+Both restart, so both **interrupt the current turn** — inherent to pulling
+messages out of the harness queue with no Esc. They diverge only in step 4.
 
-4a. Re-deliver the queued contents **as one combined message**, joined by
-    newlines, in enqueue order, through the existing `send_message` path (waits
-    for TUI ready after restart; confirms submission against durable on-disk
-    evidence, STRICT). Combining is required, not cosmetic: after restart the
-    agent is idle, so sending them one at a time would let the first open a turn
-    and the rest re-queue — defeating the flush.
+Factor the prefix + `block` into one backend helper so the two endpoints are thin:
 
-Cost: commits immediately and flattens N messages into one turn.
+```python
+def _drain_queue(agent) -> str:          # shared, harness-agnostic
+    block = get_queued_set(agent).concatenated_block()
+    if not block: return ""
+    restart(agent)                        # mngr start --restart --no-resume
+    get_queued_set(agent).clear()
+    return block
+```
 
-### 8.2 Variant B — flush back to the composer (recommended)
+### 8.1 Shoulder tap (flush) — `POST /api/agents/:id/flush-queue`
 
-4b. Do **not** re-deliver. Instead put the combined queued text (newline-joined,
-    enqueue order) back into the **web composer**, editable, and let the user
-    review and send. The queued group clears; the agent sits idle with history
-    intact.
+```python
+block = _drain_queue(agent)
+if block: send_message(agent, block)      # STRICT confirm; becomes one committed turn
+```
 
-Why this is better:
+Combining into one message is required, not cosmetic: after the restart the agent
+is idle, so sending the messages one at a time would let the first open a turn and
+the rest re-queue — defeating the flush.
 
-- **Robust and honest** — the text returns to the user's hands (spec §3's
-  RETRACTED semantics). No auto-commit, no guessing, nothing to reconcile.
-- **Solves merge-intent** — the user can edit, split, or drop before sending, so
-  combining is no longer a lossy decision the system makes for them.
-- **Cheap** — the frontend already has the queued texts (WS list) and already has
-  a composer-prefill path: the send-failure handler in `MessageInput.ts:226-237`
-  writes `localStorage[messageTextKey(agentId)]` + sets `messageText` and
-  redraws, guarded by an `isComposerEmpty` check. Reuse that verbatim (prepend,
-  or guard, if the composer is non-empty).
-- Prefer prefilling the **web** composer over the tmux pane. If a backend-side
-  prefill is ever wanted, the primitive exists: `_send_tmux_literal_keys`
-  (`mngr/agents/base_agent.py:709`) types into the pane **without** sending
-  Enter — a "type, don't submit" method is that call minus
-  `submit_message_and_confirm`.
+### 8.2 Interrupt (to composer) — `POST /api/agents/:id/drain-to-composer`
 
-Both variants restart the agent, so both **interrupt the current turn** — that is
-inherent to pulling messages out of the harness queue (the only harness-agnostic
-way to clear it, since Esc is rejected). "Shoulder tap" therefore means "stop and
-take my input now," which is the intended semantic. On Claude, mind the §5.4 race:
-the message may already have been auto-consumed before the click.
+```python
+block = _drain_queue(agent)
+return {"block": block}                    # do NOT send; hand back to the frontend
+```
+
+The frontend drops `block` into the **web composer**, unsent, for the user to edit
+and send. Backend-owned as much as possible: the backend builds the block, does
+the restart, and returns the text; the frontend's only job is to place a string it
+was handed (reuse the existing `MessageInput.ts:226` localStorage prefill —
+`localStorage[messageTextKey(agentId)]` + `messageText` + redraw, guarded by the
+`isComposerEmpty` check). No harness code, no client text logic.
+
+> Why the web composer and not the tmux pane: the user edits in the web UI. A
+> backend-side pane prefill primitive exists if ever needed —
+> `_send_tmux_literal_keys` (`mngr/agents/base_agent.py:709`) types without
+> Enter — but it targets the hidden TUI composer, not what the user sees.
+
+Claude caveat (§5.4): queued messages auto-consume mid-turn within seconds, so
+either action may find the queue already drained by the time it is clicked — the
+empty-block no-op handles that cleanly.
 
 ### 8.5 Persisting the queued-set across a backend restart
 
@@ -477,17 +509,20 @@ flush time (spec §3 rule 3).
   `initQueuedMessageIdleClearing`, `clearQueuedMessagesOnIdle`, and every
   `reconcilePendingMessages` call site (`Response.ts`, `ChatPanel.ts`).
 
-**Add**
+**Add** (dumb: render the snapshot, fire intents)
 
-- Consume `queued_messages` from the per-agent WS state push.
+- Consume `queued_messages` (full snapshot) from the per-agent WS state push;
+  replace the queued group wholesale each push. No diffing, no accumulation.
 - Render the queued group below the last committed turn, in enqueue order,
-  visually distinct from committed messages, with one [Shoulder tap] button above
-  the group. Reuse the user-bubble *view* (not the classifier — queued messages
-  never call `classifyUserMessage`; see §13). Button → `POST /flush-queue`;
-  disable while in flight.
-- Recommended button behavior (§8.2): on success, prefill the composer with the
-  combined queued text (reuse the `MessageInput.ts:226` localStorage path) and
-  clear the queued group. The user reviews and sends.
+  visually distinct from committed messages, reusing the user-bubble *view* (not
+  the classifier — queued messages never call `classifyUserMessage`; see §13).
+- Two buttons above the group, both disabled while in flight:
+  - **[Shoulder tap]** → `POST /flush-queue`. Fire-and-forget; the next WS
+    snapshot (empty group) + the new committed turn reflect the result.
+  - **[Interrupt → composer]** → `POST /drain-to-composer`; on success, drop the
+    returned `block` into the composer via the existing `MessageInput.ts:226`
+    localStorage prefill. The frontend only *places a string it was handed* — it
+    does not build or reconcile anything.
 - Nothing paints on send; the queued bubble appears when the harness records the
   enqueue (typically ~1s). A normal (non-queued) message appears when its turn
   lands. If perceived latency is ever a problem, re-introduce a *distinct*
@@ -515,19 +550,23 @@ flush time (spec §3 rule 3).
 
 ## 11. Build order
 
-1. **Backend queued-set + terminal backstops.** Claude adapter on the four
-   `queue-operation` ops (§5.3), codex adapter reusing the sidecar reader plus the
-   §8.5 high-water cursor; expose `queued_messages` on the per-agent WS state.
-   Assert against recorded fixtures — real ones already exist on this host for
-   Claude; capture codex fixtures from a live codex agent first (§12.6). No UI
-   change — safe, reversible.
-2. **Backend `/flush-queue`** — restart + (chosen variant §8.1/§8.2) + cursor
-   update.
-3. **Frontend tear-out + queued group + button** — recommended: button prefills
-   the composer (§8.2).
+1. **Shared `QueuedSet` entity + common surface.** The entity (§4.5) with
+   `snapshot`/`concatenated_block`, and `queued_messages` on the per-agent WS
+   state. Pure common code; unit-testable with hand-built entities. No harness
+   code, no UI change.
+2. **Claude populator.** The Claude adapter on the four `queue-operation` ops
+   (§5.3), feeding the entity. Assert against recorded fixtures — real ones exist
+   on this host. This is the first harness-specific code.
+3. **Common actions.** `_drain_queue` helper + `/flush-queue` and
+   `/drain-to-composer` endpoints (§8). Harness-agnostic.
+4. **Frontend tear-out + queued group + two buttons** (§9).
+5. **codex populator** (later) — reusing the sidecar reader, validated against a
+   live codex agent (§12.6); ideally after the fork emits a resolution record so
+   it drops content-dedup.
 
-Rough size: backend ~half a day, frontend tear-out ~half a day, button small.
-Real Claude fixtures are in hand; the main remaining unknown is live codex.
+Rough size: entity + Claude populator ~half a day, actions small, frontend
+tear-out ~half a day. Real Claude fixtures are in hand; the main remaining
+unknown is live codex.
 
 ---
 
@@ -536,13 +575,15 @@ Real Claude fixtures are in hand; the main remaining unknown is live codex.
 1. ~~Step 0~~ **SETTLED by measurement.** The container's Claude (2.1.207) emits
    BOTH `queue-operation` (4 ops) and `queued_command`, complementary. Build on
    §5.1–§5.3.
-2. **Button behavior** — flush-to-composer (§8.2, recommended) or auto-resend
-   combined (§8.1)? The user leaned auto-resend earlier, then raised
-   flush-to-composer; §8.2 argues the latter is strictly more robust. Decide.
+2. ~~Button behavior~~ **SETTLED.** BOTH actions ship: shoulder-tap flush
+   (§8.1, restart + resend concatenated) and interrupt-to-composer (§8.2, restart
+   + hand the same concatenated block to the composer). Both are common code on
+   the shared entity; both use the one `concatenated_block()` builder.
 3. **Persistence** (§8.5) — memory-only (spec non-goal) or the small durable
    cursor that closes the codex reader-restart + post-flush-resurface holes?
    Recommend the cursor; it is cheap and fixes real bugs the investigations
-   found.
+   found. (Claude alone does not need it — §4/§5 self-correct; the cursor is a
+   codex concern.)
 4. **Side channel vs transcript flag** (§4): recommend the WS live-set; confirm.
 5. **codex binary patch** (external spec §4, thread `queued_id` into
    `client_user_message_id`): NOT present in 0.146.0 today. Out of scope for the
