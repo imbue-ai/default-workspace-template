@@ -36,6 +36,7 @@ members = [
     "host-backup",
     "mngr-cli-contract",
     "oom-priority",
+    "owner-exec",
     "share-gateway",
     "system-interface",
     "tk-command-parsing",
@@ -2598,6 +2599,23 @@ source = { editable = "system/vendor/mngr/libs/overlay" }
 [package.metadata]
 requires-dist = [{ name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" }]
 provides-extras = ["dev"]
+
+[[package]]
+name = "owner-exec"
+version = "0.1.0"
+source = { editable = "system/services/owner_exec" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "flask" },
+    { name = "werkzeug" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=42.0.0" },
+    { name = "flask", specifier = ">=3.0.0" },
+    { name = "werkzeug", specifier = ">=3.0.0" },
+]
 
 [[package]]
 name = "packaging"
