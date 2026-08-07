@@ -39,9 +39,18 @@ from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentNameStyle
 from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
+from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
+from imbue.system_interface.activity_state import resolve_is_agent_running
+from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import discover_agents
+from imbue.system_interface.agent_discovery import get_host_dir
+from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.claude.launch_defaults import FAST_MODE_BEFORE_DECISION
+from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
+from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
@@ -54,14 +63,6 @@ from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import build_tracker
 from imbue.system_interface.harnesses.registry import get_catalog
-from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.agent_discovery import MngrMessenger
-from imbue.system_interface.agent_discovery import discover_agents
-from imbue.system_interface.agent_discovery import get_host_dir
-from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
-from imbue.system_interface.harnesses.claude.launch_defaults import FAST_MODE_BEFORE_DECISION
-from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
-from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
@@ -143,9 +144,7 @@ def _build_chat_create_command(
     # .mngr/settings.toml defaults every other type to standard speed. Claude-specific:
     # fast mode is a claude setting, so it is meaningless under any other harness.
     if harness == HarnessType.CLAUDE:
-        cmd.extend(
-            ["-S", f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}"]
-        )
+        cmd.extend(["-S", f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}"])
     # Inherit the project label from the primary agent. The chat agent belongs to
     # its workspace by sharing the host; it carries no workspace label.
     if "project" in primary_labels:
@@ -682,9 +681,7 @@ class AgentManager:
         labels: dict[str, str] = {}
         if "project" in primary_labels:
             labels["project"] = primary_labels["project"]
-        self._launch_creation_thread(
-            agent_id, name, cmd, Path(work_dir), log_queue, labels, harness
-        )
+        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, harness)
 
         return agent_id
 
@@ -1368,6 +1365,10 @@ class AgentManager:
         # reflected even when no new transcript events arrive -- the post-restart
         # observe snapshot drives the recompute.
         process_started_at = self._read_process_started_at(agent_id, tracker.marker_filename)
+        # The `active` marker flips promptly at turn start/end, whereas the observe-reported
+        # lifecycle state can miss a short turn entirely -- so read the marker directly for a
+        # timely "is a turn in flight" signal (stat outside the lock, like the one above).
+        is_active_marker_present = (self._get_agent_state_dir(agent_id) / ACTIVE_MARKER_FILENAME).exists()
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
@@ -1375,7 +1376,7 @@ class AgentManager:
             if agent_state is None:
                 return
             new_state = tracker.derive(
-                is_agent_running=agent_state.state in RUNNING_LIFECYCLE_STATES,
+                is_agent_running=resolve_is_agent_running(agent_state.state, is_active_marker_present),
                 process_started_at=process_started_at,
             )
             old_state = self._activity_state_by_agent.get(agent_id)

@@ -165,6 +165,36 @@ def parse_iso_timestamp_to_epoch(timestamp: str | None) -> float | None:
 
 RUNNING_LIFECYCLE_STATES: frozenset[str] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"})
 
+# mngr's lifecycle reports RUNNING iff this marker file exists in the agent state dir while
+# the process is alive; every harness's plugin writes the same filename. Reading it directly
+# is a *timely* alternative to the observe-reported lifecycle state (see
+# :func:`resolve_is_agent_running`).
+ACTIVE_MARKER_FILENAME: str = "active"
+
+# The lifecycle state of an alive-but-idle agent (between turns). This is the ONLY state where
+# the observe-reported state can trail the real turn: a quick turn sets and clears the `active`
+# marker before the observe stream reports RUNNING, leaving the reported state at WAITING the
+# whole time.
+WAITING_LIFECYCLE_STATE: str = "WAITING"
+
+
+@pure
+def resolve_is_agent_running(lifecycle_state: str, is_active_marker_present: bool) -> bool:
+    """Whether the agent has a turn in flight, preferring the ``active`` marker over the
+    (laggy) observe-reported lifecycle state.
+
+    RUNNING states are authoritative. In the alive-but-idle WAITING state the marker breaks the
+    tie: the observe stream can miss a short turn, so the reported state stays WAITING while the
+    marker itself flips promptly -- trust the marker there. Any other state (STOPPED / EXITED /
+    ...) reads as not running, so a hard-crashed agent's stale marker is never mistaken for a
+    live turn (the launch-time marker clear covers the rest).
+    """
+    if lifecycle_state in RUNNING_LIFECYCLE_STATES:
+        return True
+    if lifecycle_state == WAITING_LIFECYCLE_STATE:
+        return is_active_marker_present
+    return False
+
 
 @pure
 def is_transcript_tail_stale(

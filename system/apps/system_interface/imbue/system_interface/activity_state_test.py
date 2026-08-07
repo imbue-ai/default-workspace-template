@@ -8,6 +8,26 @@ from imbue.system_interface.activity_state import is_transcript_tail_stale
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
+from imbue.system_interface.activity_state import resolve_is_agent_running
+
+
+def test_resolve_is_agent_running_running_state_is_authoritative() -> None:
+    # A reported RUNNING state means running regardless of the marker.
+    assert resolve_is_agent_running("RUNNING", is_active_marker_present=False) is True
+    assert resolve_is_agent_running("RUNNING_UNKNOWN_AGENT_TYPE", is_active_marker_present=False) is True
+
+
+def test_resolve_is_agent_running_waiting_trusts_the_marker() -> None:
+    # The lag case: a short turn leaves the reported state at WAITING while the marker flips.
+    assert resolve_is_agent_running("WAITING", is_active_marker_present=True) is True
+    assert resolve_is_agent_running("WAITING", is_active_marker_present=False) is False
+
+
+def test_resolve_is_agent_running_terminal_state_ignores_a_stale_marker() -> None:
+    # A hard-crashed agent can leave a stale marker; a STOPPED/EXITED state must still read
+    # as not running so it never shows "Thinking".
+    assert resolve_is_agent_running("STOPPED", is_active_marker_present=True) is False
+    assert resolve_is_agent_running("EXITED", is_active_marker_present=True) is False
 
 
 def _assistant_with_tool_calls(*tool_call_ids: str) -> dict[str, Any]:
@@ -89,7 +109,10 @@ def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> 
         pytest.param({"type": "user_message", "content": "/effort xhigh"}, True, id="effort_command"),
         pytest.param({"type": "user_message", "content": "/fast on"}, True, id="fast_command"),
         pytest.param(
-            {"type": "user_message", "content": "<local-command-stdout>Set effort level to xhigh</local-command-stdout>"},
+            {
+                "type": "user_message",
+                "content": "<local-command-stdout>Set effort level to xhigh</local-command-stdout>",
+            },
             True,
             id="effort_stdout",
         ),
