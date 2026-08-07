@@ -56,7 +56,7 @@ same as every harness (drained `user_message` / working→IDLE).
 | method | driver | action |
 |---|---|---|
 | `enqueue(content, timestamp)` | **the send path** (§3) | `QueuedSet.add(mint_id(...), content, timestamp, is_phantom=blank)` — append to FIFO tail |
-| `leave(drained_content)` | **the watcher** (each newly-ingested `user_message`) | drop FIFO head(s) — **coalescing-aware (§4)** |
+| `leave(drained_content)` | **the watcher** (each newly-ingested `user_message`) | pop the front-run whose joined content **verbatim-matches** the drained turn — **coalescing-aware (§4)** |
 | `on_idle()` / `clear()` | working→IDLE backstop / flush restart | `QueuedSet.clear()` |
 | `reset()` | re-attach / truncation | fresh `QueuedSet` |
 | `snapshot()` / `concatenated_block()` | shared surface | delegate to the set |
@@ -108,17 +108,36 @@ coalescing lives in one declared place, not hardcoded:
   NORMAL ⇒ inert for every existing harness. The bias is applied **backend-side in the
   populator's `leave`**, not the frontend — the frontend stays dumb and just renders
   `queued_messages`.
-- **`AntigravityQueueTracker.leave(drained_content)`**: with `COALESCES`, `resolve_oldest()`
-  once per newline segment of `drained_content` (positional, FIFO — the combined turn is the
-  join of the oldest N parked messages, so popping N heads is exactly right). With `NORMAL`
-  it's a single `resolve_oldest()` (but agy only ever uses COALESCES).
+- **`AntigravityQueueTracker.leave(drained_content)` — verbatim match against the KNOWN
+  outbox, not a blind split.** We hold the exact parked contents, so we don't guess how many
+  entries a drain covers — we *prove* it: pop the **largest front-run `k` of parked entries
+  whose `"\n".join(contents[0..k-1])` equals the drained turn** (whitespace-normalized). Then
+  clear phantoms adjacent as usual. Concretely, with `COALESCES`:
+  ```
+  for k in range(len(pending), 0, -1):          # longest match first
+      if normalize("\n".join(e.content for e in pending[:k])) == normalize(drained_content):
+          pop the first k entries; return
+  # no prefix matches -> pop nothing (a turn we did not enqueue: a terminal-typed message,
+  # or a divergence). The working->IDLE backstop sweeps any stragglers.
+  ```
+  With `NORMAL` this degenerates to the k=1 case (`resolve_oldest`), which is the current
+  positional behavior for claude/codex/pi. The enum (from the catalog) is the single source of
+  truth for the bias.
 
-  The tracker reads its behavior from the catalog at build (or is handed it), so the enum is
-  the single source of truth for the bias.
+This matching is **exact and unambiguous because it joins the entries' real stored text**, so
+every case that broke the naive "pop per line" is now correct:
+- a single message (`k=1`, `pending[0].content == drained`),
+- a coalesced turn of N single-line messages (`k=N`),
+- a message that itself contains newlines (e.g. queue `"A"` then `"B\nC"` → drain `"A\nB\nC"`
+  → `join(["A","B\nC"]) == "A\nB\nC"` at `k=2`, so it pops exactly two, not three),
+- duplicates (`["dup","dup"]` → `"dup\ndup"` at `k=2`).
+And a turn we never enqueued (typed straight into agy's terminal) matches **no** prefix, so it
+pops **nothing** — it can no longer wrongly drop a UI-queued bubble; it just renders on drain
+as an ordinary turn (which is correct — we never showed a bubble for it).
 
 Result: three queued bubbles (from three sends) render via the shared `queued_messages`
-snapshot; when agy drains them as one combined turn the populator pops all three heads and the
-snapshot empties — the shared `QueuedMessageView` clears the group. No frontend involvement.
+snapshot; when agy drains them as one combined turn the populator pops exactly those three and
+the snapshot empties — the shared `QueuedMessageView` clears the group. No frontend involvement.
 
 ---
 
@@ -159,10 +178,11 @@ No agy-specific action code — the shared `_drain_queue`/flush already resend t
 
 ## 8. Limitations (explicit)
 - **UI-sent only** — a message typed directly into agy's terminal never enters our outbox (no
-  send passed through us), so it has no pre-drain bubble. It still renders on drain as the
-  normal turn. (Same as pi would have if a message bypassed `pi_inbox`.)
-- **Positional resolution** — the outbox has no correlation id back to the drained turn, so
-  leaves are FIFO/positional (like pi/claude); the working→IDLE backstop sweeps anything that
-  never drains (interrupt/crash).
+  send passed through us), so it has no pre-drain bubble, and its drain verbatim-matches no
+  prefix so it disturbs nothing. It still renders on drain as the normal turn. (Same as pi
+  would have if a message bypassed `pi_inbox`.)
+- **Resolution is verbatim front-run matching (§4)** against the outbox's own stored contents,
+  so a coalesced drain pops exactly its entries — no over/under-pop from multi-line messages or
+  duplicates. The working→IDLE backstop still sweeps anything that never drains (interrupt/crash).
 - **Session-dependent** — the queue is agy's TUI memory + our in-memory outbox; a restart /
   interrupt / backend restart clears it. Accepted (matches pi/claude).
