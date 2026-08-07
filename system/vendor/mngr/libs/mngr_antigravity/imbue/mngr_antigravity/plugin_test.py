@@ -504,6 +504,37 @@ def test_assemble_command_adds_dangerously_skip_permissions_when_auto_allow_enab
     assert "--dangerously-skip-permissions" in command
 
 
+def test_assemble_command_emits_model_and_effort_flags(
+    local_provider: LocalProviderInstance, tmp_path: Path
+) -> None:
+    """A pinned model + effort become agy's own --model / --effort launch flags."""
+    agent = _make_antigravity_agent(
+        local_provider, tmp_path, AntigravityAgentConfig(model="gemini-3.6-flash", effort="medium")
+    )
+    command = str(agent.assemble_command(agent.host, (), command_override=None))
+    assert "--model gemini-3.6-flash" in command
+    assert "--effort medium" in command
+
+
+def test_assemble_command_omits_model_and_effort_when_unset(antigravity_agent: AntigravityAgent) -> None:
+    """The default config pins neither, so agy uses the account default."""
+    command = str(antigravity_agent.assemble_command(antigravity_agent.host, (), command_override=None))
+    assert "--model" not in command
+    assert "--effort" not in command
+
+
+def test_assemble_command_emits_model_without_effort(
+    local_provider: LocalProviderInstance, tmp_path: Path
+) -> None:
+    """A model with no effort (e.g. a Claude model, or a combined slug) emits --model only."""
+    agent = _make_antigravity_agent(
+        local_provider, tmp_path, AntigravityAgentConfig(model="claude-sonnet-4-6")
+    )
+    command = str(agent.assemble_command(agent.host, (), command_override=None))
+    assert "--model claude-sonnet-4-6" in command
+    assert "--effort" not in command
+
+
 def test_assemble_command_does_not_symlink_playwright_cache(antigravity_agent: AntigravityAgent) -> None:
     """The playwright cache symlink is set up at provision time (durable), not in the launch command."""
     command = str(antigravity_agent.assemble_command(antigravity_agent.host, (), command_override=None))
