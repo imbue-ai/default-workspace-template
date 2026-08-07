@@ -172,6 +172,8 @@ export type TerminalSessionListener = (terminalId: string | null, sessionId: str
 export type AgentActivityListener = (agentId: string, previous: string | null, current: string | null) => void;
 
 let agents: AgentState[] = [];
+// The JSON of the last agents_updated payload, to skip redundant identical pushes.
+let lastAgentsSerialized = "";
 let apps: AppEntry[] = [];
 let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
@@ -257,6 +259,15 @@ function scheduleReconnect(): void {
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "agents_updated": {
+      // The backend can broadcast the same snapshot many times during a turn (transcript
+      // churn), and a redraw on each identical push makes the model bar (its trusted-HTML
+      // logo especially) visibly flicker. Skip a push byte-identical to the last one: an
+      // idempotent update should cause no re-render.
+      const serialized = JSON.stringify(event.agents);
+      if (serialized === lastAgentsSerialized) {
+        break;
+      }
+      lastAgentsSerialized = serialized;
       // Diff against the outgoing snapshot (still in `agents` here) so we can
       // report per-agent activity transitions before replacing it. No separate
       // previous-state bookkeeping is needed -- the prior array is the record.

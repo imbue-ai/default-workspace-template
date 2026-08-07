@@ -46,6 +46,19 @@ function capitalizeEffort(level: string): string {
 // this many <li> at once. The user narrows with the search box; the cap bounds the DOM.
 const MODEL_SEARCH_CAP = 100;
 
+// The harness logo is static per harness (from the catalog), so it must never flicker as
+// the live model_choice churns. Isolate it in its own component that only re-renders when
+// the SVG actually changes -- otherwise mithril would re-inject the trusted HTML on every
+// redraw, which reads as a flicker.
+const HarnessLogo: m.Component<{ svg: string }> = {
+  onbeforeupdate(vnode, old) {
+    return vnode.attrs.svg !== (old.attrs as { svg: string }).svg;
+  },
+  view(vnode) {
+    return m("span", { class: "model-bar-logo", "aria-hidden": "true" }, m.trust(vnode.attrs.svg));
+  },
+};
+
 export function ModelBar(): m.Component<{ agentId: string }> {
   // Which dropdown is open (model or effort, or none) and the bar element used to
   // detect an outside click closing it.
@@ -246,7 +259,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         // No catalog (feature-flagged off, or catalogs not loaded yet): no bar.
         return null;
       }
-      const logo = m("span", { class: "model-bar-logo", "aria-hidden": "true" }, m.trust(catalog.icon_svg));
+      const logo = m(HarnessLogo, { svg: catalog.icon_svg });
 
       const choice = effectiveChoice(agentId, agent?.model_choice);
       if (choice === null) {
