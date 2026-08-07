@@ -100,8 +100,13 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // missing node yields no shift rather than throwing (both always render in practice).
     const labelLeft = label === null ? dropdownRect.left : label.getBoundingClientRect().left;
     // Measure the text inset from the DOM (header text left minus the box's left) rather
-    // than hard-coding padding, so it stays correct if the styling changes.
-    const textInset = header === null ? 0 : header.getBoundingClientRect().left - dropdownRect.left;
+    // than hard-coding padding, so it stays correct if the styling changes. The header's own
+    // left padding is added because its border-box left only reaches the dropdown's padding,
+    // not the text; without it the dropdown would sit ~10px right of the trigger label.
+    const textInset =
+      header === null
+        ? 0
+        : header.getBoundingClientRect().left - dropdownRect.left + parseFloat(getComputedStyle(header).paddingLeft);
     const targetLeft = clampDropdownLeft({
       labelLeft,
       textInset,
