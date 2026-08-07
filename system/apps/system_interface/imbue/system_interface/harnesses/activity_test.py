@@ -95,7 +95,11 @@ def test_claude_honors_the_mngr_lifecycle() -> None:
     assert tracker.derive(is_agent_running=False, process_started_at=None) == ActivityState.IDLE
 
 
-@pytest.mark.parametrize("harness", list(HarnessType))
+# antigravity is excluded: it writes no ``*_process_started`` marker and runs no staleness
+# rung. A turn abandoned by a dead process reads IDLE through the mngr ``active`` lifecycle
+# gate (is_agent_running=False) instead, which ``test_not_running_is_idle`` in
+# ``antigravity/activity_state_test`` covers.
+@pytest.mark.parametrize("harness", [harness for harness in HarnessType if harness != HarnessType.ANTIGRAVITY])
 def test_stale_transcript_tail_reads_idle(harness: HarnessType) -> None:
     """A turn abandoned by a prior process must not pin the indicator.
 
