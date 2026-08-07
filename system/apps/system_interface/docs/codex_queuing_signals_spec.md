@@ -16,21 +16,63 @@ harness signals. Two small additions fix it.
 This is the exact mirror of Claude: **Claude has the lifecycle (leave-ops) but no
 id; codex has an id but no lifecycle.** Codex needs the leave side.
 
-## 2. The target model (recap — what Claude gives, now live)
+## 2. The point, and how Claude does it (self-contained — read this first)
 
-The shipped Claude side is a conservation-law FIFO ledger:
+**The point.** When a user sends a message while the agent is mid-turn, the
+harness *queues* it. Minds must show that queued message in the UI and offer to
+act on it. The design rule is: **the frontend is dumb and invents no state — it
+renders exactly what the harness reports.** "Queued" is not a guess the UI paints
+on send; it is a fact read out of the harness's own queue. Everything hard about
+this feature is getting a *reliable, harness-sourced* queued state without
+fragile heuristics. Codex must feed that same machine.
+
+**Why not just content-match?** The tempting shortcut — watch the message get
+queued, then match its text against the turn it later becomes — is what the whole
+design rejects. Text matching can't tell two identical messages apart, breaks when
+the text is transformed (slash-command expansion, edits), and can't represent a
+*retracted* message at all. The Minds side had exactly this and it stranded/duped
+messages. So resolution must be by an explicit signal, never by text.
+
+**How Claude does it (the model codex must match).** Claude writes a small
+out-of-band **ledger** to its session log. Every queued message produces an
+`enqueue` record; every message that *leaves* the queue produces exactly one of
+`dequeue` (it opened its own turn), `remove` (it was injected inline into the
+running turn), or `popAll` (the whole queue was flushed). These obey a
+conservation law:
 
 ```
-enqueue = dequeue + remove + popAll
+enqueue = dequeue + remove + popAll        (every enqueue has exactly one leave)
 ```
 
-`ClaudeQueueTracker`: an `enqueue` record ADDs an entry (task-notification/blank →
-invisible "phantom" placeholder); every `dequeue`/`remove`/`popAll` record
-RESOLVES (drops the FIFO head, positionally). The `QueuedSet` snapshot is pushed
-full each time on the per-agent WebSocket state; the frontend renders it. The two
-actions (flush = restart + resend concatenated; interrupt-to-composer = restart +
-hand the block to the composer) and the endpoints are **harness-agnostic** — they
-read `QueuedSet` only. Adding codex means adding **one populator**, nothing else.
+A single tracker (`ClaudeQueueTracker`) folds that ledger into a FIFO
+(`QueuedSet`):
+
+- `enqueue` → **add** an entry. (Framework noise — Claude's `<task-notification>`
+  items ride the same queue — is added as an invisible "phantom" that holds a FIFO
+  slot but never shows.)
+- any leave record (`dequeue`/`remove`/`popAll`) → **resolve** (drop the FIFO
+  head).
+
+No ids, no text matching — purely the ledger. Because every enqueue has exactly
+one leave, replaying the whole log nets to precisely the still-pending set (it is
+self-correcting; no durable cursor). The set of currently-pending messages is
+pushed — as a **full snapshot every time** — on the per-agent WebSocket state,
+right beside the activity indicator. The frontend replaces its "queued" group
+wholesale on each push and renders it below the conversation.
+
+**Two actions, both harness-agnostic.** Above the queued group is a *Shoulder tap*
+button (flush: restart the agent and resend the whole queue as one concatenated
+turn); the composer's *Stop* button drains the queue back into the composer
+(restart + hand the concatenated block to the input box, unsent). Both read only
+`QueuedSet` and the generic restart/send plumbing — **zero harness-specific code.**
+
+**So what codex needs.** The `QueuedSet` entity, the WebSocket snapshot, the two
+actions, and the entire frontend are already built and harness-agnostic. Wiring
+codex in means writing **one thing**: a `CodexQueueTracker` that folds codex's
+queue signals into the same `QueuedSet`. For that tracker to exist without text
+matching, codex must emit the same shape of ledger: an **enqueue** signal AND a
+**leave** signal per message. It emits the first today and not the second — that
+is the entire gap this spec closes.
 
 ## 3. What the fork emits today (measured from the patch)
 
