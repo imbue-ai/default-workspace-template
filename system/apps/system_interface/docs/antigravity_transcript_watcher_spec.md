@@ -296,18 +296,50 @@ event driven off the `antigravity_process_started` marker bump — not needed fo
 
 ---
 
-## 6. `tool_labels.py` — use agy's native captions (no synthesis)
+## 6. `tool_labels.py` — synthesize for cross-harness parity (agy's f30 is fallback)
 
-Unlike Claude (which synthesizes captions from tool name + args), **agy already provides
-them** in `metadata.f30/f31`. So:
-- `caption_label = caption_short (f30)` — agy's own short caption.
-- `header_label  = f"Tool: {tool_name}"` (or `caption_long (f31)` if we prefer agy's
-  long form as the header).
-- Fallback only if f30 is empty: synthesize via the **shared** `harnesses/tool_labels.py`
-  (`basename`/`shorten`/`quoted`) + the verb/target table below. Reuse the shared helpers;
-  don't reimplement.
+**Goal: agy reads *identically* to Codex and Claude.** agy provides its own captions in
+`f30` ("Grep search showcase.py", "Listing directory /home/user"), but those diverge from
+the shared verb style ("Searching …"). Codex solves the same divergence by **normalizing
+its tool names to Claude's nouns** (`exec_command`→`Tool: Bash`, `apply_patch update`→
+`Tool: Edit`) and **synthesizing captions from a shared verb + target**. agy does the same:
+map each agy tool to the shared noun/verb, synthesize with the **shared**
+`harnesses/tool_labels.py` helpers (`basename`/`quoted`/`shorten`/`mcp_caption`). Use agy's
+`f30` **only** as a graceful fallback when synthesis yields no target (or for a tool we
+don't map yet).
 
-This makes `tool_labels.py` thin — mostly "prefer f30, fall back to synthesis."
+### The shared vocabulary (identical strings across all three harnesses)
+- header: `f"Tool: {noun}"`, noun ∈ {Read, Write, Edit, Bash, Grep, WebSearch, WebFetch,
+  ImageGen, Agent, …} — the same nouns Claude reports natively and Codex normalizes to.
+- caption: `f"{verb} {target}"` or `f"{verb}…"`, verb ∈ {Reading, Writing, Editing,
+  Running, Searching, Searching the web, Fetching, Generating an image, Delegating to
+  sub-agent…}.
+- target: `basename(path)` for files, `quoted(query)` for searches, `shorten(cmd/url)` for
+  commands/urls — the exact helpers Claude and Codex call.
+
+### agy tool → shared (noun, verb, target) — the parity map
+| agy tool | header noun | caption verb | target |
+|---|---|---|---|
+| `view_file` | Read | Reading | `basename(AbsolutePath)` |
+| `write_to_file` | Write | Writing | `basename(TargetFile)` |
+| `replace_file_content` | Edit | Editing | `basename(TargetFile)` |
+| `multi_replace_file_content` | Edit | Editing | `basename(TargetFile)` |
+| `grep_search` | Grep | Searching | `quoted(Query)` |
+| `list_dir` | List | Listing | `basename(DirectoryPath)` — *slightly diverges: Claude/Codex have no clean dir-list verb, so "Listing" is agy-only but reads naturally* |
+| `run_command` | Bash | Running | `shorten(CommandLine)` |
+| `search_web` | WebSearch | Searching the web | `quoted(Query)` |
+| `read_url_content` | WebFetch | Fetching | `shorten(Url)` |
+| `generate_image` | ImageGen | Generating an image | `quoted(Prompt)` |
+| `invoke_subagent` | Agent | Delegating to sub-agent… | — (fixed caption, matches Claude) |
+| `manage_task`/`schedule`/`send_message`/`ask_question`/`define_subagent`/`manage_subagents` | (agy name) | (agy `f30`, or `Running…`) | — |
+
+Args keys taken from real steps (e.g. `run_command`→`CommandLine`, `grep_search`→`Query`,
+`write_to_file`→`TargetFile`). Because args arrive as real JSON (not a truncated preview),
+`json.loads` succeeds; fall back to `{}` on failure, then to `f30`, then `GENERIC_CAPTION`.
+
+Also port Codex's/Claude's **`keeps_full_tool_input`** exemption: don't truncate the args
+of `write_to_file`/`replace_file_content` (the diff view needs the whole body) or `tk`
+lifecycle `run_command`s (the step timeline needs the `--step` titles).
 
 ### Complete agy tool set (from `list all tool calls`, agy 1.1.11) — the fallback table
 agy has 17 tools in 5 categories. Primary caption is always agy's `f30`; this table is
