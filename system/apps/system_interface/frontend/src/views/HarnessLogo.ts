@@ -37,12 +37,6 @@ async function loadLogo(agentId: string): Promise<void> {
 }
 
 export const HarnessLogo: m.Component<{ agentId: string }> = {
-  onbeforeupdate(vnode, old) {
-    // Re-render only if the agent changed or we don't yet have its logo; once the SVG is
-    // cached it is constant, so skip diffing (the trusted HTML is never re-injected).
-    const agentId = vnode.attrs.agentId;
-    return agentId !== (old.attrs as { agentId: string }).agentId || !svgByAgent.has(agentId);
-  },
   view(vnode) {
     const { agentId } = vnode.attrs;
     const svg = svgByAgent.get(agentId);
@@ -50,6 +44,8 @@ export const HarnessLogo: m.Component<{ agentId: string }> = {
       void loadLogo(agentId);
       return null;
     }
+    // m.trust with the same cached SVG string is a no-op on redraw (mithril skips re-injecting
+    // identical trusted HTML), and identical agent pushes are already deduped, so this stays put.
     return m("span", { class: "model-bar-logo", "aria-hidden": "true" }, m.trust(svg));
   },
 };
