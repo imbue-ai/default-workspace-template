@@ -148,6 +148,18 @@ class PickerMode(StrEnum):
     SEARCH = "search"
 
 
+class QueueBehavior(StrEnum):
+    """How a harness commits parked messages when a turn ends -- the single declared
+    bias a queue populator's ``leave`` applies. Backend-only in effect: the frontend
+    just renders ``queued_messages`` and never branches on this."""
+
+    # One drained user turn commits one parked message (claude/codex/pi).
+    NORMAL = "normal"
+    # The harness joins ALL parked messages into ONE newline-joined user turn at
+    # turn-end (antigravity), so one drained turn commits a whole front-run.
+    COALESCES = "coalesces"
+
+
 class HarnessCatalog(FrozenModel):
     """The serializable, per-harness static half. IS the ``/api/harnesses`` wire
     shape (dumped verbatim -- no endpoint-side field selection)."""
@@ -160,6 +172,9 @@ class HarnessCatalog(FrozenModel):
     switch_mode: SwitchMode
     # How the model picker renders (list vs search); orthogonal to switch_mode.
     picker_mode: PickerMode
+    # How the harness commits parked messages (see QueueBehavior); read only by the
+    # harness's own queue populator, inert on the wire.
+    queue_behavior: QueueBehavior = QueueBehavior.NORMAL
     # Harness logo, currentColor monochrome.
     icon_svg: str
 

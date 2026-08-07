@@ -6,6 +6,8 @@ import threading
 import traceback
 from collections.abc import Callable
 from collections.abc import Iterator
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -421,6 +423,14 @@ def _send_message_endpoint(agent_id: str) -> Response:
     if not success:
         failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
         return _json_response(failure.model_dump(), status_code=500)
+
+    # A harness whose queue-enqueue source is the send itself (antigravity has no on-disk
+    # enqueue ledger) parks the message in its watcher's outbox; the base hook is a no-op
+    # for every other harness. Only an EXISTING watcher is told: if none is watching, no
+    # UI is connected and no queued bubble is needed (and send stays side-effect free).
+    watcher = get_state().watchers.get(agent_info.id)
+    if watcher is not None:
+        watcher.note_sent_message(send_message_request.message, datetime.now(timezone.utc).isoformat())
 
     # Record which client (and layout) the message came from, so agents can
     # attribute requests to a client via ``layout.py context``. Legacy callers

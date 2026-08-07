@@ -27,6 +27,7 @@ from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import PickerMode
+from imbue.system_interface.harnesses.model import QueueBehavior
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
 
@@ -67,6 +68,9 @@ ANTIGRAVITY_CATALOG: HarnessCatalog = HarnessCatalog(
     switch_mode=SwitchMode.READ_ONLY,
     # A small hand-written set -- a plain list, not a search box.
     picker_mode=PickerMode.LIST,
+    # agy joins ALL parked messages into one newline-joined turn at turn-end (verified
+    # live: 3 queued -> "A\nB\nC"), so one drained turn commits a whole front-run.
+    queue_behavior=QueueBehavior.COALESCES,
     icon_svg=_ICON,
 )
 
