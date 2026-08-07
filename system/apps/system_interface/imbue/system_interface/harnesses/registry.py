@@ -23,7 +23,7 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.antigravity.activity import AntigravityActivityTracker
 from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
 from imbue.system_interface.harnesses.antigravity.model import AntigravityModelResolver
-from imbue.system_interface.harnesses.antigravity.watcher import AntigravityPlaceholderSessionWatcher
+from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
@@ -121,10 +121,10 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     ),
     HarnessType.ANTIGRAVITY: HarnessSpec(
         name=HarnessType.ANTIGRAVITY,
-        # First cut: the model bar is wired, the transcript is not -- so a placeholder
-        # watcher (empty transcript) and claude-style activity. The real watcher (tailing
-        # agy's raw transcript) lands next.
-        watcher_class=AntigravityPlaceholderSessionWatcher,
+        # Reads agy's own conversation store (the protobuf SQLite steps table); claude-style
+        # activity works because the parser emits tool_results (matched calls) and the mngr
+        # `active` marker drives the RUNNING/WAITING lifecycle gate.
+        watcher_class=AntigravitySessionWatcher,
         tracker_class=AntigravityActivityTracker,
         resolver_class=AntigravityModelResolver,
         catalog_factory=lambda: ANTIGRAVITY_CATALOG,
