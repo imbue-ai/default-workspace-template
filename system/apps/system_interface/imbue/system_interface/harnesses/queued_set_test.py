@@ -36,6 +36,26 @@ def test_resolve_oldest_on_empty_set_is_a_noop() -> None:
     assert queued_set.snapshot() == []
 
 
+def test_resolve_by_id_drops_the_named_entry_not_the_head() -> None:
+    # Used by codex, whose leave records name which message left. Resolving a middle
+    # entry by id leaves the others in order -- exact, content-free, no FIFO assumption.
+    queued_set = QueuedSet.build()
+    queued_set.add("id-a", "first", "t1", False)
+    queued_set.add("id-b", "second", "t2", False)
+    queued_set.add("id-c", "third", "t3", False)
+
+    queued_set.resolve("id-b")
+
+    assert [message.queued_id for message in queued_set.pending] == ["id-a", "id-c"]
+
+
+def test_resolve_by_unknown_id_is_a_noop() -> None:
+    queued_set = QueuedSet.build()
+    queued_set.add("id-a", "first", "t1", False)
+    queued_set.resolve("id-does-not-exist")
+    assert [message.queued_id for message in queued_set.pending] == ["id-a"]
+
+
 def test_clear_drops_everything() -> None:
     queued_set = QueuedSet.build()
     queued_set.add("id-a", "first", "t1", False)
