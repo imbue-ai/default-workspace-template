@@ -30,4 +30,17 @@ solely to support one app lives in that app's folder under
 
 Point the service at scratch state (env-var overrides, a copied data dir) --
 never at the live workspace's `data/` -- and keep every run bounded so a
-long-lived daemon loop cannot outlive the test.
+long-lived daemon loop cannot outlive the test. `update-app`'s "Protect the
+user's data while you verify" owns the full contract and the
+`.agents/shared/scripts/serve_isolated_instance.py` helper that implements it.
+
+**A service's tests must not depend on particular user data being present.**
+Resolve the persistent path injectably -- `DATA_DIR = Path(os.environ.get(
+"<PACKAGE_UPPER>_DATA_DIR", "data/.apps/<name>"))`, read at call time rather
+than at import -- and point tests at an isolated directory they populate
+themselves. A test that reads whatever happens to be on disk is not
+deterministic, and worse, it *passes* against an empty store while never
+exercising the code path it exists to cover. Where a test uses fixtures, the
+fixtures must be accurate: a fixture that does not match a real record's shape
+buys confidence the code has not earned. Retrofit older services when you touch
+them, the same way `update-app` describes.

@@ -17,6 +17,7 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from bootstrap.manager import (
     FAST_MODE_DECISION_FILE,
     INITIAL_CHAT_AGENT_ID_FILENAME,
+    SSH_PUBLISHED_ENV_VARS,
     TimezoneFetchError,
     _apply_container_timezone,
     _build_create_chat_command,
@@ -28,6 +29,7 @@ from bootstrap.manager import (
     _parse_created_agent_id,
     _parse_timezone_response,
     _persist_initial_chat_agent_id,
+    _publish_agent_env_for_ssh,
     _read_host_name,
     _read_main_agent_labels,
     _read_workspace_fast_mode_enabled,
@@ -750,3 +752,117 @@ def test_parse_timezone_response_rejects_wrong_shapes(body: bytes) -> None:
 def test_parse_timezone_response_rejects_a_non_json_body() -> None:
     with pytest.raises(ValueError):
         _parse_timezone_response(b"<html>bad gateway</html>")
+
+
+# --- _publish_agent_env_for_ssh ---
+
+
+def _parse_environment_file(path: Path) -> dict[str, str]:
+    """Parse an /etc/environment-style file the way pam_env reads it."""
+    parsed: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        name, _, value = line.partition("=")
+        parsed[name] = value
+    return parsed
+
+
+def test_publish_agent_env_for_ssh_writes_the_identity_vars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # host-backup-now resolves its events dir from MNGR_HOST_DIR or
+    # MNGR_AGENT_STATE_DIR; over ssh it had neither, which is the failure this
+    # publishes to fix.
+    monkeypatch.setenv("MNGR_HOST_DIR", "/home/user/.mngr")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-abc")
+    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", "/home/user/.mngr/agents/agent-abc")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/home/user/workspace")
+    target = tmp_path / "environment"
+
+    _publish_agent_env_for_ssh(target)
+
+    published = _parse_environment_file(target)
+    assert published["MNGR_HOST_DIR"] == "/home/user/.mngr"
+    assert published["MNGR_AGENT_STATE_DIR"] == "/home/user/.mngr/agents/agent-abc"
+    assert published["MNGR_AGENT_ID"] == "agent-abc"
+    # Readable by the sshd session that has to consume it.
+    assert target.stat().st_mode & 0o044
+
+
+def test_publish_agent_env_for_ssh_never_publishes_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # /etc/environment is world-readable and the agent environment carries
+    # secrets. The allowlist is what keeps them out, so assert on a real one.
+    monkeypatch.setenv("MNGR_HOST_DIR", "/home/user/.mngr")
+    monkeypatch.setenv("LATCHKEY_ENCRYPTION_KEY", "super-secret-value")
+    monkeypatch.setenv("LATCHKEY_EXTENSION_MINDS_API_KEY", "another-secret")
+    monkeypatch.setenv("GH_TOKEN", "ghp_secret")
+    monkeypatch.setenv("MNGR_FUTURE_TOKEN", "not-allowlisted-so-not-published")
+    target = tmp_path / "environment"
+
+    _publish_agent_env_for_ssh(target)
+
+    contents = target.read_text(encoding="utf-8")
+    assert "super-secret-value" not in contents
+    assert "another-secret" not in contents
+    assert "ghp_secret" not in contents
+    # A MNGR_-prefixed secret added later must not slip in via a prefix match.
+    assert "not-allowlisted-so-not-published" not in contents
+    assert set(_parse_environment_file(target)) <= set(SSH_PUBLISHED_ENV_VARS)
+
+
+def test_publish_agent_env_for_ssh_never_publishes_the_ownership_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # mngr's teardown reads MNGR_AGENT_OWNER as "this agent may kill this
+    # process" and scans /proc for it. Publishing it to ssh sessions would put a
+    # person's work back in the blast radius of `mngr stop` -- the exact bug that
+    # splitting it from MNGR_AGENT_ID exists to prevent.
+    monkeypatch.setenv("MNGR_HOST_DIR", "/home/user/.mngr")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-abc")
+    monkeypatch.setenv("MNGR_AGENT_OWNER", "agent-abc")
+    target = tmp_path / "environment"
+
+    _publish_agent_env_for_ssh(target)
+
+    published = _parse_environment_file(target)
+    assert "MNGR_AGENT_OWNER" not in published
+    assert "MNGR_AGENT_OWNER" not in SSH_PUBLISHED_ENV_VARS
+    # The identity var is still published -- that is what in-workspace tooling needs.
+    assert published["MNGR_AGENT_ID"] == "agent-abc"
+
+
+def test_publish_agent_env_for_ssh_skips_values_pam_env_cannot_represent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # pam_env reads one KEY=value per line, so an embedded newline would truncate
+    # the var and turn its tail into a bogus one. Dropping it keeps the rest of
+    # the file valid.
+    for name in SSH_PUBLISHED_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("MNGR_HOST_DIR", "/home/user/.mngr")
+    monkeypatch.setenv("MNGR_AGENT_NAME", "bad\nname=injected")
+    target = tmp_path / "environment"
+
+    _publish_agent_env_for_ssh(target)
+
+    published = _parse_environment_file(target)
+    assert published == {"MNGR_HOST_DIR": "/home/user/.mngr"}
+    assert "injected" not in target.read_text(encoding="utf-8")
+
+
+def test_publish_agent_env_for_ssh_leaves_a_prior_file_intact_when_env_is_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Nothing to publish means the environment was not sourced. Truncating the
+    # file would strip a previous boot's working values for no gain.
+    for name in SSH_PUBLISHED_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    target = tmp_path / "environment"
+    target.write_text("MNGR_HOST_DIR=/home/user/.mngr\n", encoding="utf-8")
+
+    _publish_agent_env_for_ssh(target)
+
+    assert _parse_environment_file(target) == {"MNGR_HOST_DIR": "/home/user/.mngr"}
