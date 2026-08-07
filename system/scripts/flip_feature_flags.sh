@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Flags: FEATURE_FLAG_ENABLE_CODEX, FEATURE_FLAG_SILLY_MODELS
+# Flags: FEATURE_FLAG_ENABLE_OTHER_HARNESSES, FEATURE_FLAG_SILLY_MODELS
 set -euo pipefail
 
 CONF=/home/user/workspace/system/supervisord.conf
