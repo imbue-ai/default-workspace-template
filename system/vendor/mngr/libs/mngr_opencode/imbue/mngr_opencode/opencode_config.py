@@ -53,6 +53,13 @@ _CONFIG_DIR_RELATIVE_PATH: tuple[str, ...] = ("plugin", "opencode", "config")
 # keeps its db/auth/storage/logs under ``<this>/opencode``.
 _DATA_HOME_RELATIVE_PATH: tuple[str, ...] = ("plugin", "opencode", "data")
 
+# Per-agent temp dir (-> TMPDIR), under the agent state dir. opencode's TUI is a Bun
+# binary that extracts its OpenTUI native render library to the temp dir and maps it
+# executable; the default ``/tmp`` is mounted ``noexec`` in this image, which rejects the
+# map ("failed to map segment from shared object"). The agent state dir is on an
+# exec-capable filesystem, so pointing TMPDIR here lets the extracted ``.so`` load.
+_TMP_DIR_RELATIVE_PATH: tuple[str, ...] = ("plugin", "opencode", "tmp")
+
 # OpenCode namespaces everything it writes under ``$XDG_DATA_HOME/opencode``.
 _OPENCODE_APP_DIR_NAME: str = "opencode"
 _AUTH_FILENAME: str = "auth.json"
@@ -183,6 +190,11 @@ def get_opencode_config_dir(agent_state_dir: Path) -> Path:
 def get_opencode_data_home(agent_state_dir: Path) -> Path:
     """Return the per-agent OpenCode data root (the ``XDG_DATA_HOME`` value)."""
     return agent_state_dir.joinpath(*_DATA_HOME_RELATIVE_PATH)
+
+
+def get_opencode_tmp_dir(agent_state_dir: Path) -> Path:
+    """Return the per-agent OpenCode temp dir (the ``TMPDIR`` value; exec-capable, unlike /tmp)."""
+    return agent_state_dir.joinpath(*_TMP_DIR_RELATIVE_PATH)
 
 
 def get_opencode_app_data_dir(data_home: Path) -> Path:

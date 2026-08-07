@@ -239,8 +239,13 @@ def test_assemble_command_runs_launch_script_with_isolation_and_server_env(openc
     command = str(opencode_agent.assemble_command(opencode_agent.host, (), command_override=None))
     config_dir = str(opencode_agent._get_opencode_config_dir())
     data_home = str(opencode_agent._get_opencode_data_home())
+    tmp_dir = str(opencode_agent._get_opencode_tmp_dir())
     assert f"OPENCODE_CONFIG_DIR={config_dir}" in command
     assert f"XDG_DATA_HOME={data_home}" in command
+    # TMPDIR points at a per-agent exec-capable dir (not the image's noexec /tmp) so opencode's
+    # Bun/OpenTUI native library can be extracted and mapped executable.
+    assert f"TMPDIR={tmp_dir}" in command
+    assert tmp_dir != "/tmp"
     assert "MNGR_OPENCODE_BIN=opencode" in command
     # Port 0 -> the server binds an OS-assigned free port (the script records it).
     assert "MNGR_OPENCODE_PORT=0" in command

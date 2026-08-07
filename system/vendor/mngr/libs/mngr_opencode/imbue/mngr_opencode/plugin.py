@@ -140,6 +140,7 @@ from imbue.mngr_opencode.opencode_config import get_opencode_config_dir
 from imbue.mngr_opencode.opencode_config import get_opencode_config_file_path
 from imbue.mngr_opencode.opencode_config import get_opencode_data_home
 from imbue.mngr_opencode.opencode_config import get_opencode_output_styles_dir
+from imbue.mngr_opencode.opencode_config import get_opencode_tmp_dir
 from imbue.mngr_opencode.opencode_config import get_opencode_plugin_path
 from imbue.mngr_opencode.opencode_config import get_opencode_root_session_file_path
 from imbue.mngr_opencode.opencode_config import get_opencode_server_port_file_path
@@ -157,6 +158,10 @@ _USER_CONFIG_RELATIVE_PATH: Final[tuple[str, ...]] = (".config", "opencode", "op
 # OpenCode env vars that isolate config and data per agent.
 _OPENCODE_CONFIG_DIR_ENV_VAR: Final[str] = "OPENCODE_CONFIG_DIR"
 _XDG_DATA_HOME_ENV_VAR: Final[str] = "XDG_DATA_HOME"
+# TMPDIR points opencode (a Bun binary) at an exec-capable temp dir: it extracts its OpenTUI
+# native render library to TMPDIR and maps it executable, which the image's ``noexec`` /tmp
+# rejects. Set on both serve and attach (both are Bun).
+_TMPDIR_ENV_VAR: Final[str] = "TMPDIR"
 
 # Ask ``opencode serve`` for an OS-assigned free port (verified: concurrent
 # ``--port 0`` servers get distinct ports). The launch script records the actual
@@ -416,6 +421,10 @@ class OpenCodeAgent(
     def _get_opencode_data_home(self) -> Path:
         """Per-agent OpenCode data root (the ``XDG_DATA_HOME`` value)."""
         return get_opencode_data_home(self._get_agent_dir())
+
+    def _get_opencode_tmp_dir(self) -> Path:
+        """Per-agent OpenCode temp dir (the ``TMPDIR`` value; exec-capable, unlike /tmp)."""
+        return get_opencode_tmp_dir(self._get_agent_dir())
 
     def _get_root_session_file_path(self) -> Path:
         """File where the launch script records the root session id (read by send_message)."""
@@ -815,6 +824,7 @@ class OpenCodeAgent(
 
         config_dir = self._get_opencode_config_dir()
         data_home = self._get_opencode_data_home()
+        tmp_dir = self._get_opencode_tmp_dir()
         launch_script = "$MNGR_AGENT_STATE_DIR/commands/" + LAUNCH_SCRIPT_NAME
         # The launch script puts this straight into the session-create URL query
         # (?directory=...), so URL-encode it here (in Python, via the stdlib)
@@ -825,6 +835,7 @@ class OpenCodeAgent(
         env_prefix = (
             f"env {_OPENCODE_CONFIG_DIR_ENV_VAR}={shlex.quote(str(config_dir))}"
             f" {_XDG_DATA_HOME_ENV_VAR}={shlex.quote(str(data_home))}"
+            f" {_TMPDIR_ENV_VAR}={shlex.quote(str(tmp_dir))}"
             f" {OPENCODE_BIN_ENV_VAR}={shlex.quote(opencode_bin)}"
             f" {OPENCODE_PORT_ENV_VAR}={_EPHEMERAL_PORT}"
             f" {OPENCODE_WORKDIR_ENV_VAR}={shlex.quote(directory_query)}"
