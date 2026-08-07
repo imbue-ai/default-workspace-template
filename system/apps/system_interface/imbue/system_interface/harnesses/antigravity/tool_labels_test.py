@@ -35,7 +35,9 @@ def test_list_dir_diverges_naturally() -> None:
 
 
 def test_web_search_matches_codex_phrase() -> None:
-    header, caption = tool_labels("search_web", '{"Query":"gemini docs"}', "x")
+    # agy's real search_web uses a lowercase "query" key (grep_search uses "Query");
+    # the label match is case-insensitive so both read the same.
+    header, caption = tool_labels("search_web", '{"query":"gemini docs"}', "Web search")
     assert (header, caption) == ("Tool: WebSearch", 'Searching the web "gemini docs"')
 
 
