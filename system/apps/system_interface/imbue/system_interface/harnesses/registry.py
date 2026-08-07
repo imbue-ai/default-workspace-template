@@ -20,6 +20,10 @@ from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.antigravity.activity import AntigravityActivityTracker
+from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
+from imbue.system_interface.harnesses.antigravity.model import AntigravityModelResolver
+from imbue.system_interface.harnesses.antigravity.watcher import AntigravityPlaceholderSessionWatcher
 from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
@@ -112,6 +116,17 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=OpenCodeActivityTracker,
         resolver_class=OpenCodeModelResolver,
         catalog_factory=get_opencode_catalog,
+        special_kinds=frozenset(),
+    ),
+    HarnessType.ANTIGRAVITY: HarnessSpec(
+        name=HarnessType.ANTIGRAVITY,
+        # First cut: the model bar is wired, the transcript is not -- so a placeholder
+        # watcher (empty transcript) and claude-style activity. The real watcher (tailing
+        # agy's raw transcript) lands next.
+        watcher_class=AntigravityPlaceholderSessionWatcher,
+        tracker_class=AntigravityActivityTracker,
+        resolver_class=AntigravityModelResolver,
+        catalog_factory=lambda: ANTIGRAVITY_CATALOG,
         special_kinds=frozenset(),
     ),
 }
