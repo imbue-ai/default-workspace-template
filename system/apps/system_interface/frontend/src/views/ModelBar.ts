@@ -20,6 +20,10 @@ import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSet
 import type { ModelIdentity } from "../models/ModelSettings";
 import { icon } from "./icons";
 
+/** Shown on hover for any read-only model/effort/fast slot: a read-only harness's model is
+ *  switched from the agent's own terminal (its native picker), not from this bar. */
+const READ_ONLY_TOOLTIP = "use agent terminal to switch models";
+
 /** The effort to carry when switching to `option`: keep the current one if the new
  *  model declares it, else the model's first shown (or first declared) effort. Null
  *  when the model has no effort axis. */
@@ -138,11 +142,14 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         "button",
         {
           type: "button",
-          class: "model-selector-trigger",
-          disabled: !opts.interactive,
-          "data-tooltip": opts.tooltip,
+          class: "model-selector-trigger" + (opts.interactive ? "" : " model-selector-trigger--readonly"),
+          // A read-only slot is NOT `disabled`: a disabled button suppresses :hover, which
+          // would kill the tooltip. It renders normally, shows the switch-in-terminal tooltip,
+          // and no-ops on click instead.
+          "data-tooltip": opts.interactive ? opts.tooltip : READ_ONLY_TOOLTIP,
           onclick: (event: MouseEvent) => {
             event.stopPropagation();
+            if (!opts.interactive) return;
             const opening = !isOpen;
             openDropdown = isOpen ? null : opts.kind;
             // Reset the search and recompute the offer set each time the picker opens.
@@ -154,7 +161,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         },
         [
           m("span", { class: "model-selector-label" }, opts.triggerLabel),
-          m("span", { class: "model-selector-chevron" }, m.trust(icon("chevron-down", { size: 12 }))),
+          // No chevron on a read-only slot -- it isn't a dropdown.
+          opts.interactive
+            ? m("span", { class: "model-selector-chevron" }, m.trust(icon("chevron-down", { size: 12 })))
+            : null,
         ],
       ),
       isOpen && opts.interactive
@@ -321,12 +331,20 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             "button",
             {
               type: "button",
-              class: `fast-toggle${currentFast ? " fast-toggle--on" : ""}`,
-              disabled: !interactive,
-              "data-tooltip": currentFast ? "Disable fast mode" : "Enable fast mode",
+              class:
+                `fast-toggle${currentFast ? " fast-toggle--on" : ""}` +
+                (interactive ? "" : " fast-toggle--readonly"),
+              // Not `disabled` for read-only (see the trigger above: disabled kills the tooltip).
+              "data-tooltip": !interactive
+                ? READ_ONLY_TOOLTIP
+                : currentFast
+                  ? "Disable fast mode"
+                  : "Enable fast mode",
               "aria-label": currentFast ? "Disable fast mode" : "Enable fast mode",
               "aria-pressed": currentFast ? "true" : "false",
+              "aria-disabled": interactive ? undefined : "true",
               onclick: () => {
+                if (!interactive) return;
                 const nextIdentity: ModelIdentity = {
                   model_id: matched.id,
                   effort: currentEffort,
