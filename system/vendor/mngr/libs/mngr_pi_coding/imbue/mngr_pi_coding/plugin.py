@@ -18,6 +18,8 @@ from imbue.mngr import hookimpl
 from imbue.mngr.agents.base_agent import BaseAgent
 from imbue.mngr.agents.installation import ensure_cli_installed
 from imbue.mngr.agents.installation import verify_pinned_cli_version
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.agents.update_policy import AgentUpdatePolicy
 from imbue.mngr.agents.update_policy import is_self_update_disabled
 from imbue.mngr.api.preservation import PreservedItem
@@ -58,6 +60,8 @@ from imbue.mngr.plugins.hookspecs import OnBeforeCreateArgs
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.utils.git_utils import find_git_source_path
 from imbue.mngr.utils.polling import poll_until
@@ -106,6 +110,23 @@ _SESSION_STARTED_SENTINEL_NAME: str = "pi_session_started"
 # evaluated) by ``assemble_command`` to resume via ``pi --session <file>``. Kept
 # in sync with ``SESSION_FILE_NAME`` in mngr_pi_lifecycle.ts.
 _SESSION_FILE_NAME: str = "pi_session_file"
+
+# The output-style body + appended system prompt are written here, in the per-agent
+# pi config dir. pi auto-APPENDS this file to its default system prompt every turn
+# (usage.md: "Append to the default prompt ... with APPEND_SYSTEM.md"). This is the
+# pi analogue of codex writing developer_instructions into config.toml.
+# ``sync_home_settings`` only syncs settings.json + resource dirs, never
+# APPEND_SYSTEM.md, so provisioning owns this file.
+_APPEND_SYSTEM_FILE_NAME: str = "APPEND_SYSTEM.md"
+
+# Where output styles are authored, relative to the work_dir -- the same shared source
+# codex/claude read (``.agents/output-styles``). Replicated here rather than imported
+# from codex_config, to avoid a cross-plugin dependency.
+_OUTPUT_STYLES_DIR_RELPATH: str = ".agents/output-styles"
+
+# Separator between appended system-prompt blocks (mirrors codex's
+# DEVELOPER_INSTRUCTIONS_SEPARATOR) so stacked blocks do not run together.
+_APPEND_SYSTEM_SEPARATOR: str = "\n\n"
 
 # The per-agent pi config dir, relative to the agent state dir (POSIX). Replaces
 # ~/.pi/agent/ for this agent via ``PI_CODING_AGENT_DIR`` (see ``get_pi_config_dir``).
@@ -395,6 +416,19 @@ class PiCodingAgentConfig(AgentTypeConfig):
         default=True,
         description="When destroying this agent, first copy its transcripts and resumable session "
         "store to <local_host_dir>/preserved/ so they survive. Set to False to discard them.",
+    )
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of an output style (from .agents/output-styles/) whose body is written "
+        "verbatim to APPEND_SYSTEM.md in the per-agent pi config dir, so pi appends it to its system "
+        "prompt every turn. pi has no native output-style setting, so the style reaches it as appended "
+        "instructions -- the pi analogue of codex's developer_instructions.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="Extra system-prompt blocks appended (before the output-style body) to "
+        "APPEND_SYSTEM.md. Write `append_system_prompt__extend = [...]` in a template so stacked "
+        "roles each contribute a block.",
     )
 
 
@@ -768,6 +802,40 @@ class PiCodingAgent(
                 include_args.append("--exclude=*")
                 host.copy_local_directory(home_pi, config_dir, " ".join(include_args))
 
+    def _build_append_system(self, host: OnlineHostInterface) -> str | None:
+        """Join this agent type's system-prompt additions into one blob, or None if there are none.
+
+        The ``append_system_prompt`` blocks come first (in stack order), then the output-style file's
+        body last, verbatim (frontmatter included) -- identical to codex's
+        ``_build_developer_instructions``, so a style reads the same whichever harness runs it. pi has
+        no output-style setting, so the style reaches it via ``APPEND_SYSTEM.md`` instead. Reuses the
+        shared ``output_styles`` helpers and the ``.agents/output-styles`` source of truth.
+        """
+        blocks: list[str] = [str(prompt) for prompt in self.agent_config.append_system_prompt]
+        if self.agent_config.output_style is not None:
+            styles_dir = Path(self.work_dir) / _OUTPUT_STYLES_DIR_RELPATH
+            # Raises UserInputError, listing what is available, when the name has no match.
+            blocks.append(
+                resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+            )
+        if not blocks:
+            return None
+        return _APPEND_SYSTEM_SEPARATOR.join(blocks)
+
+    def _provision_append_system_prompt(self, host: OnlineHostInterface) -> None:
+        """Write (or clear) ``APPEND_SYSTEM.md`` in the per-agent pi config dir.
+
+        pi appends this file to its default system prompt every turn. Cleared when there is nothing
+        to append, so a re-provision with the style removed leaves no stale file.
+        """
+        append_system = self._build_append_system(host)
+        append_path = self.get_pi_config_dir() / _APPEND_SYSTEM_FILE_NAME
+        if append_system is None:
+            host.execute_idempotent_command(f"rm -f {shlex.quote(str(append_path))}", timeout_seconds=5.0)
+            return
+        with log_span("Writing pi APPEND_SYSTEM.md to {}", append_path):
+            host.write_text_file(append_path, append_system)
+
     def provision(
         self,
         host: OnlineHostInterface,
@@ -791,6 +859,7 @@ class PiCodingAgent(
         # non-interactive-without-opt-in case exits cleanly before any setup.
         self._ensure_source_repo_trusted(mngr_ctx)
         self._setup_per_agent_config_dir(host, config)
+        self._provision_append_system_prompt(host)
         self._seed_per_agent_workspace_trust(host)
         self._provision_lifecycle_extension(host)
 
