@@ -379,7 +379,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     } catch (error) {
       if (agentId === currentAgentId) {
         loading = false;
-        loadingError = (error as Error).message ?? String(error);
+        // mithril attaches the parsed JSON error body to `.response`; the server
+        // sends the human-readable reason there as `detail`. Reading `.message`
+        // alone surfaces the raw body object as "[object Object]".
+        const errResp = (error as { response?: { detail?: string } }).response;
+        loadingError = errResp?.detail ?? (error as Error).message ?? String(error);
       }
     }
   }

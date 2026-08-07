@@ -62,7 +62,11 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
 
       attrs.onCreated(response.agent_id, name.trim());
     } catch (e) {
-      error = (e as Error).message ?? "Creation failed";
+      // mithril attaches the parsed JSON error body to `.response`; the server
+      // sends the human-readable reason there as `detail`. Reading `.message`
+      // instead surfaces the raw body object as "[object Object]".
+      const errResp = (e as { response?: { detail?: string } }).response;
+      error = errResp?.detail ?? (e as Error).message ?? "Creation failed";
       loading = false;
       m.redraw();
     }
