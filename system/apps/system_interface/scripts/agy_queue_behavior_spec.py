@@ -3,10 +3,12 @@
     uv run python system/apps/system_interface/scripts/agy_queue_behavior_spec.py <agent-name>
 
 Exercises the send-sourced outbox end to end against the REAL backend + agy, sampling the
-exact surface the frontend consumes (``/api/agents``: ``queued_messages`` + ``activity_state``)
-at 200ms in a background thread. The sampler starts BEFORE any scenario acts, so debounce
-windows and drain latencies are observed rather than raced. Each scenario asserts over the
-recorded timeline, not point-in-time reads.
+exact surface the frontend consumes -- the ``/api/ws`` agents WebSocket, whose
+``agents_updated`` pushes carry ``queued_messages`` + ``activity_state`` (the REST
+``/api/agents`` list is raw provider data and does NOT carry them). The sampler connects
+BEFORE any scenario acts (and reconnects across the S3 backend restart), so debounce
+windows and drain latencies are observed rather than raced. Each scenario asserts over
+the recorded timeline, not point-in-time reads.
 
 Scenarios:
   S1 idle send    -- a message to an idle agy drains within seconds and NEVER surfaces as a
@@ -56,7 +58,12 @@ def _post(path: str, body: dict) -> int:
 
 
 class Sampler:
-    """Polls the frontend's agent state every 200ms into a timestamped timeline."""
+    """Tails the agents WebSocket (the frontend's surface) into a timestamped timeline.
+
+    Each ``agents_updated`` push appends one sample; the latest sample IS the current
+    frontend-visible state (the backend pushes on every change). Reconnects with a short
+    backoff, so the S3 backend restart shows up as a gap, not a sampler death.
+    """
 
     def __init__(self, agent_name: str) -> None:
         self.agent_name = agent_name
@@ -69,21 +76,28 @@ class Sampler:
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=2)
+        self._thread.join(timeout=3)
 
     def _run(self) -> None:
+        from simple_websocket import Client
+
         while not self._stop.is_set():
             try:
-                agents = _get("/api/agents")["agents"]
-                mine = next((a for a in agents if a["name"] == self.agent_name), None)
-                if mine is not None:
-                    queued = [entry["content"] for entry in (mine.get("queued_messages") or [])]
-                    # activity_state is absent until the watcher exists; treat as unknown.
-                    self.samples.append((time.monotonic(), mine.get("activity_state") or "?", queued))
+                websocket = Client.connect(BASE.replace("http", "ws") + "/api/ws")
+                while not self._stop.is_set():
+                    raw = websocket.receive(timeout=SAMPLE_INTERVAL_SECONDS)
+                    if raw is None:
+                        continue
+                    message = json.loads(raw)
+                    if message.get("type") != "agents_updated":
+                        continue
+                    mine = next((a for a in message["agents"] if a["name"] == self.agent_name), None)
+                    if mine is not None:
+                        queued = [entry["content"] for entry in (mine.get("queued_messages") or [])]
+                        self.samples.append((time.monotonic(), mine.get("activity_state") or "?", queued))
             except Exception:
-                # Backend down mid-restart (S3) -- keep sampling; gaps are expected.
-                pass
-            time.sleep(SAMPLE_INTERVAL_SECONDS)
+                # Backend down mid-restart (S3) or a dropped socket -- reconnect.
+                time.sleep(0.5)
 
     def since(self, t0: float) -> list[tuple[float, str, list[str]]]:
         return [s for s in self.samples if s[0] >= t0]
