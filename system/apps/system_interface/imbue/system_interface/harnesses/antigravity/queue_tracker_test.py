@@ -212,3 +212,22 @@ def test_missing_outbox_file_is_fine(tmp_path: Path) -> None:
     assert tracker.snapshot() == []
     tracker.leave("anything")
     assert tracker.snapshot() == []
+
+
+def test_retract_removes_exactly_the_failed_entry(tmp_path: Path) -> None:
+    # Write-ahead compensation: a failed send un-parks its own entry, others stay.
+    outbox = tmp_path / "agy_outbox"
+    tracker = AntigravityQueueTracker.build(outbox_path=outbox)
+    tracker.enqueue("kept", "")
+    failed_id = tracker.enqueue("failed", "")
+    tracker.retract(failed_id)
+    assert _contents(tracker) == ["kept"]
+    # The prune reached the ledger too.
+    assert _contents(AntigravityQueueTracker.build(outbox_path=outbox)) == ["kept"]
+
+
+def test_retract_unknown_id_is_a_noop() -> None:
+    tracker = AntigravityQueueTracker.build()
+    tracker.enqueue("stays", "")
+    tracker.retract("not-a-real-id")
+    assert _contents(tracker) == ["stays"]

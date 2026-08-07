@@ -417,20 +417,27 @@ def _send_message_endpoint(agent_id: str) -> Response:
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
 
+    # A harness whose queue-enqueue source is the send itself (antigravity has no on-disk
+    # enqueue ledger) parks the message in its watcher's outbox BEFORE delivery -- an idle
+    # agy can drain the turn within one watcher poll, so parking after confirmation would
+    # lose the race to its own drain and strand the bubble. A failed send retracts the
+    # parked entry. The base hook is a no-op returning None for every other harness, and
+    # only an EXISTING watcher is told: if none is watching, no UI needs a bubble.
+    watcher = get_state().watchers.get(agent_info.id)
+    queued_token = (
+        watcher.note_sent_message(send_message_request.message, datetime.now(timezone.utc).isoformat())
+        if watcher is not None
+        else None
+    )
+
     agent_manager: AgentManager = get_state().agent_manager
     success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
 
     if not success:
+        if watcher is not None and queued_token is not None:
+            watcher.retract_sent_message(queued_token)
         failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
         return _json_response(failure.model_dump(), status_code=500)
-
-    # A harness whose queue-enqueue source is the send itself (antigravity has no on-disk
-    # enqueue ledger) parks the message in its watcher's outbox; the base hook is a no-op
-    # for every other harness. Only an EXISTING watcher is told: if none is watching, no
-    # UI is connected and no queued bubble is needed (and send stays side-effect free).
-    watcher = get_state().watchers.get(agent_info.id)
-    if watcher is not None:
-        watcher.note_sent_message(send_message_request.message, datetime.now(timezone.utc).isoformat())
 
     # Record which client (and layout) the message came from, so agents can
     # attribute requests to a client via ``layout.py context``. Legacy callers

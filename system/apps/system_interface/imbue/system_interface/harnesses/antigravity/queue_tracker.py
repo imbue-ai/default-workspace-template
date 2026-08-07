@@ -101,19 +101,38 @@ class AntigravityQueueTracker:
         tracker._replay_outbox()
         return tracker
 
-    def enqueue(self, content: str, timestamp: str) -> None:
-        """Add one UI-sent message to the FIFO tail (phantom for a task-notification / blank)."""
-        self._add(content, timestamp)
-        self._append_outbox_line(content, timestamp)
+    def enqueue(self, content: str, timestamp: str) -> str:
+        """Add one UI-sent message to the FIFO tail (phantom for a task-notification / blank).
 
-    def _add(self, content: str, timestamp: str) -> None:
+        Called BEFORE the send is attempted (write-ahead, pi's ordering): an idle agy can
+        commit the turn to its db within one watcher poll, so an enqueue that waited for
+        send confirmation could lose the race to its own drain -- ``leave`` would pop
+        nothing and the entry would stick forever. Returns the minted queued id so a
+        FAILED send can :meth:`retract` exactly this entry.
+        """
+        queued_id = self._add(content, timestamp)
+        self._append_outbox_line(content, timestamp)
+        return queued_id
+
+    def retract(self, queued_id: str) -> None:
+        """The send this entry recorded failed: remove it (compensation for write-ahead).
+
+        Unknown id is a no-op -- the entry may have already left (a drain or sweep won
+        the race), which is fine either way.
+        """
+        self._queued_set.resolve(queued_id)
+        self._prune_outbox()
+
+    def _add(self, content: str, timestamp: str) -> str:
+        queued_id = _queued_id(self._enqueue_count, content)
         self._queued_set.add(
-            _queued_id(self._enqueue_count, content),
+            queued_id,
             content,
             timestamp,
             _is_phantom_content(content),
         )
         self._enqueue_count += 1
+        return queued_id
 
     def leave(self, drained_content: str) -> None:
         """A user turn drained into the transcript: pop the front-run it verbatim-matches.
