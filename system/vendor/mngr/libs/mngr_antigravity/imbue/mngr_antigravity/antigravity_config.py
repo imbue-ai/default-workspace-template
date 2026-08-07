@@ -135,6 +135,31 @@ def get_antigravity_hooks_config_path(home: Path) -> Path:
     return home.joinpath(_GEMINI_DIR_NAME, *_HOOKS_CONFIG_RELATIVE)
 
 
+# agy discovers "global" rules (applied across all workspaces) from
+# ``$HOME/.gemini/GEMINI.md``. Under the per-agent ``$HOME`` mngr provisions, this is a
+# per-agent file that never touches the source repo, so it is where mngr writes the
+# agent's role instructions (the ``append_system_prompt`` blocks plus the output-style
+# body). Note this is a *peer* of the repo's own ``AGENTS.md`` -- agy documents no
+# precedence between rule sources -- which is an accepted tradeoff: agy exposes no
+# higher-precedence, config-level system-prompt channel like codex's
+# ``developer_instructions``.
+_GLOBAL_RULES_FILENAME: str = "GEMINI.md"
+
+# The shared output-style source of truth, relative to the work dir -- the same files
+# codex and claude read (claude's ``.claude/output-styles`` is a symlink to this).
+_OUTPUT_STYLES_DIR_RELATIVE: str = ".agents/output-styles"
+
+
+def get_antigravity_global_rules_path(home: Path) -> Path:
+    """Return ``<home>/.gemini/GEMINI.md`` -- agy's global (per-agent) rules file."""
+    return home / _GEMINI_DIR_NAME / _GLOBAL_RULES_FILENAME
+
+
+def get_antigravity_output_styles_dir(work_dir: Path) -> Path:
+    """Return ``<work_dir>/.agents/output-styles`` -- where output styles are authored."""
+    return work_dir / _OUTPUT_STYLES_DIR_RELATIVE
+
+
 TRUSTED_WORKSPACES_KEY: str = "trustedWorkspaces"
 
 
