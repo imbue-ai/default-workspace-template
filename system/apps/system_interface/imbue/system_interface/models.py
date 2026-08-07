@@ -66,6 +66,14 @@ class SetModelChoiceRequest(FrozenModel):
     )
 
 
+class ModelOptionsResponse(FrozenModel):
+    """Response from GET /api/agents/{id}/model-options."""
+
+    models: tuple[str, ...] | None = Field(
+        description="Model ids to offer in the picker right now, or null to offer the whole catalog"
+    )
+
+
 class WorkspaceFastModeResponse(FrozenModel):
     """Response from GET|POST /api/workspace/fast-mode."""
 
