@@ -301,50 +301,102 @@ def _write_queued_input(agent_state_dir: Path, lines: list[dict[str, Any]]) -> P
     return path
 
 
-def test_queued_input_surfaces_as_a_user_bubble(tmp_path: Path) -> None:
-    """A message queued mid-turn appears immediately as a user bubble, keyed on its
-    queued_id, rather than being invisible until the running turn drains it."""
+def _leave_line(record_type: str, queued_id: str, timestamp: str = "2026-08-03T00:00:09Z") -> dict[str, Any]:
+    """A terminating ledger record (``queued_committed`` / ``queued_retracted``)."""
+    return {"type": record_type, "queued_id": queued_id, "timestamp": timestamp}
+
+
+def test_queued_input_surfaces_in_the_queued_snapshot(tmp_path: Path) -> None:
+    """A message queued mid-turn appears in the live queued snapshot (keyed on its
+    queued_id) -- NOT as a placeholder in the transcript."""
     _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
     _write_queued_input(tmp_path, [_queued_line("q1", "do gmail next")])
     watcher, _ = _build_watcher(tmp_path)
+    # Force a refresh so the sidecar is consumed into the tracker
+    watcher.get_all_events()
 
-    queued = [event for event in watcher.get_all_events() if event["event_id"] == "codex-queued-q1"]
-    assert len(queued) == 1
-    assert queued[0]["type"] == "user_message"
-    assert queued[0]["content"] == "do gmail next"
+    snapshot = watcher.get_queued_messages()
+    assert [(m["queued_id"], m["content"]) for m in snapshot] == [("q1", "do gmail next")]
+    # It is queued state, not a transcript event.
+    assert not any(e["content"] == "do gmail next" for e in watcher.get_all_events())
 
 
-def test_queued_message_is_deduped_when_it_drains_into_the_rollout(tmp_path: Path) -> None:
-    """When the running turn ends, the queued message lands in the rollout as a normal
-    user turn. It must supersede the placeholder in place, not render a second bubble."""
+def test_queued_message_leaves_the_snapshot_when_committed(tmp_path: Path) -> None:
+    """queued_committed resolves the entry by id; the message then reaches the transcript
+    as an ordinary rollout user turn (no placeholder, no content-match, single render)."""
     rollout = _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
-    _write_queued_input(tmp_path, [_queued_line("q1", "do gmail next")])
+    sidecar = _write_queued_input(tmp_path, [_queued_line("q1", "do gmail next")])
     watcher, _ = _build_watcher(tmp_path)
-    assert sum(1 for e in watcher.get_all_events() if e["content"] == "do gmail next") == 1
+    watcher.get_all_events()
+    assert len(watcher.get_queued_messages()) == 1
 
+    # The steer commits: the ledger records queued_committed, and the message lands in the
+    # rollout as a normal user turn.
+    with sidecar.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_leave_line("queued_committed", "q1")) + "\n")
     with rollout.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_user_line("do gmail next", "2026-08-03T00:00:09Z")) + "\n")
 
-    drained = [e for e in watcher.get_all_events() if e["content"] == "do gmail next"]
-    assert len(drained) == 1, "the drained turn must reuse the placeholder id, not add a bubble"
-    assert drained[0]["event_id"] == "codex-queued-q1"
+    # Refreshes
+    committed = [e for e in watcher.get_all_events() if e["content"] == "do gmail next"]
+    assert watcher.get_queued_messages() == []
+    assert len(committed) == 1, "the committed turn renders once, as an ordinary user turn"
+    assert not committed[0]["event_id"].startswith("codex-queued-")
+
+
+def test_queued_message_leaves_the_snapshot_when_retracted(tmp_path: Path) -> None:
+    """queued_retracted (interrupt / reject / resume) resolves the entry by id and leaves
+    no transcript turn."""
+    _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
+    sidecar = _write_queued_input(tmp_path, [_queued_line("q1", "never mind")])
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+    assert len(watcher.get_queued_messages()) == 1
+
+    with sidecar.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_leave_line("queued_retracted", "q1")) + "\n")
+
+    # Refresh so the retracted record is consumed
+    watcher.get_all_events()
+    assert watcher.get_queued_messages() == []
+    assert not any(e["content"] == "never mind" for e in watcher.get_all_events())
+
+
+def test_resolution_is_by_id_even_for_duplicate_content(tmp_path: Path) -> None:
+    """Two identical messages resolve independently by queued_id -- committing the first
+    leaves the second, which positional resolution could not guarantee."""
+    _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
+    sidecar = _write_queued_input(tmp_path, [_queued_line("q1", "same"), _queued_line("q2", "same")])
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+    assert [m["queued_id"] for m in watcher.get_queued_messages()] == ["q1", "q2"]
+
+    with sidecar.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_leave_line("queued_committed", "q1")) + "\n")
+
+    # Refresh so the committed record is consumed
+    watcher.get_all_events()
+    assert [m["queued_id"] for m in watcher.get_queued_messages()] == ["q2"]
 
 
 def test_queued_input_appended_after_the_first_read_is_picked_up(tmp_path: Path) -> None:
-    """The sidecar is tailed incrementally, like the rollout."""
+    """The sidecar ledger is tailed incrementally, like the rollout."""
     _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
     sidecar = _write_queued_input(tmp_path, [])
     watcher, _ = _build_watcher(tmp_path)
-    assert not [e for e in watcher.get_all_events() if e["event_id"].startswith("codex-queued-")]
+    watcher.get_all_events()
+    assert watcher.get_queued_messages() == []
 
     with sidecar.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_queued_line("q1", "later")) + "\n")
 
-    assert [e["content"] for e in watcher.get_all_events() if e["event_id"] == "codex-queued-q1"] == ["later"]
+    # Refresh
+    watcher.get_all_events()
+    assert [m["content"] for m in watcher.get_queued_messages()] == ["later"]
 
 
 def test_invalid_queued_input_lines_are_skipped(tmp_path: Path) -> None:
-    """A record missing its id, blank, or of the wrong type yields no bubble."""
+    """A record missing its id, blank, or of the wrong type adds nothing to the snapshot."""
     _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
     _write_queued_input(
         tmp_path,
@@ -355,4 +407,5 @@ def test_invalid_queued_input_lines_are_skipped(tmp_path: Path) -> None:
         ],
     )
     watcher, _ = _build_watcher(tmp_path)
-    assert not [e for e in watcher.get_all_events() if e["event_id"].startswith("codex-queued-")]
+    watcher.get_all_events()
+    assert watcher.get_queued_messages() == []

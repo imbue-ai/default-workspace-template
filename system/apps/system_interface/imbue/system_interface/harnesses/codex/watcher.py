@@ -47,10 +47,10 @@ from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
+from imbue.system_interface.harnesses.codex.queue_tracker import CodexQueueTracker
 from imbue.system_interface.harnesses.codex.session_parser import SOURCE as _SOURCE
-from imbue.system_interface.harnesses.codex.session_parser import normalize_user_content
+from imbue.system_interface.harnesses.codex.session_parser import parse_codex_queue_signals
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
-from imbue.system_interface.harnesses.codex.session_parser import queued_input_event
 
 logger = _loguru_logger
 
@@ -126,16 +126,21 @@ class CodexSessionWatcher(AgentSessionWatcher):
     _partial: bytes
     _line_index: int
     _tool_name_by_call_id: dict[str, str]
-    # The queued-input sidecar and its own byte cursor + trailing-partial, read exactly
-    # like the rollout but from a separate file. ``_queued_id_by_content`` maps a queued
-    # message's normalised content to the placeholder event id it was emitted under, so
-    # the real rollout turn (which carries no queued_id) supersedes the placeholder in
-    # place instead of double-rendering. Kept for the whole session -- never popped -- so
-    # a resume that re-serialises the drained turn still dedups against it.
+    # The queued-input sidecar (codex's queue LEDGER) and its own byte cursor +
+    # trailing-partial, read exactly like the rollout but from a separate file. Each new
+    # line feeds ``_queue_tracker`` (enqueue -> add, committed/retracted -> resolve by id);
+    # the ledger drives the live queued snapshot only, never the transcript. The sidecar is
+    # append-only and continuous across ``codex resume`` (unlike the rollout, which
+    # rotates), so its cursor never resets on rotation.
     _queued_input_path: Path
     _queued_offset: int
     _queued_partial: bytes
-    _queued_id_by_content: dict[str, str]
+    # The codex queued-message populator + the snapshot sink (set by app_context) and the
+    # last snapshot pushed to it, so a pure-enqueue cycle (which produces no transcript
+    # events) still broadcasts the queued snapshot, and only when it actually changed.
+    _queue_tracker: CodexQueueTracker
+    _queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None
+    _last_broadcast_queue_snapshot: list[dict[str, Any]]
     # The shared watch loop: a recursive watchdog on the sessions dir plus the poll
     # safety net, invoking _emit_unsent once at start and on every wake. Replaces the
     # bespoke thread/observer/poll block this watcher used to hand-roll.
@@ -190,10 +195,14 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # from the earlier function_call. Persists across files (a resume re-serialises
         # the calls, but keeping the map is harmless and covers output-only cases).
         self._tool_name_by_call_id = {}
-        # Queued-input sidecar cursor + dedup map (see the attribute docs above).
+        # Queued-input sidecar cursor (see the attribute docs above).
         self._queued_offset = 0
         self._queued_partial = b""
-        self._queued_id_by_content = {}
+        # The codex queued-message populator, its snapshot sink, and the last snapshot
+        # pushed (starts empty so the first non-empty snapshot broadcasts).
+        self._queue_tracker = CodexQueueTracker.build()
+        self._queue_snapshot_callback = None
+        self._last_broadcast_queue_snapshot = []
 
         self._path_watcher = None
         return self
@@ -248,6 +257,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
             self._emitted_count = len(self._events)
         if to_send:
             self._on_events(self._agent_id, to_send)
+        # Queue-ledger lines produce no transcript events, so a pure-enqueue cycle
+        # broadcasts nothing above; push the live queued snapshot here if it moved
+        # (including a change an HTTP read fed into the tracker via _refresh).
+        self._broadcast_queue_snapshot_if_changed()
 
     def _read_active_rollout(self) -> Path | None:
         """The absolute path of the live rollout, per the marker; None until written."""
@@ -262,9 +275,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
         new_events: list[dict[str, Any]] = []
         with self._lock:
-            # Read the queued-input sidecar first, so a message's placeholder exists before
-            # the rollout turn it later drains into is deduped against it.
-            self._consume_queued_input(new_events)
+            # Feed codex's queue ledger into the tracker (drives the live queued snapshot,
+            # not the transcript). Read it first so a message's enqueue is folded in before
+            # the rollout turn it later commits into is parsed below.
+            self._consume_queued_input()
             if target != self._current_path:
                 # First resolution or rotation (resume -> new rollout). Tail the new
                 # file from its start. Keep _line_index (global -> ids stay unique
@@ -314,9 +328,6 @@ class CodexSessionWatcher(AgentSessionWatcher):
                 if not stripped:
                     continue
                 for event in self._adapt_line(stripped, idx):
-                    # If this rollout turn is the drained form of a still-queued message,
-                    # re-key it onto that placeholder's id so it supersedes it in place.
-                    self._dedup_queued_turn(event)
                     self._ingest_event(event, new_events)
                     # A user interrupt (turn_aborted) leaves any in-flight tool call with
                     # no result -- codex never persists one -- so its card would spin
@@ -329,14 +340,17 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
         return new_events
 
-    def _consume_queued_input(self, new_events: list[dict[str, Any]]) -> None:
-        """Read new lines from the queued-input sidecar and ingest each as a placeholder
-        user bubble. Records content -> placeholder-id so the drained rollout turn
-        supersedes it. Must hold ``_lock``.
+    def _consume_queued_input(self) -> None:
+        """Read new lines from the queued-input sidecar (codex's queue LEDGER) and fold
+        each into the queued-message tracker. Must hold ``_lock``.
 
-        The sidecar is append-only and TUI-owned (never rotated/truncated by core), so the
-        cursor only ever moves forward; a shrink (unexpected) re-reads from the start, and
-        id-based dedup collapses any re-emitted placeholder.
+        Produces NO transcript events: a queued message drives the live queued snapshot
+        (pushed separately via ``_broadcast_queue_snapshot_if_changed``), and the committed
+        message reaches the transcript on its own as an ordinary rollout ``user_message``.
+        The sidecar is append-only and continuous across ``codex resume`` (unlike the
+        rollout, which rotates), so the cursor only moves forward; a shrink (unexpected)
+        re-reads from the start, and the ledger's own conservation (one leave per enqueue)
+        makes a full re-read self-correcting.
         """
         path = self._queued_input_path
         try:
@@ -360,40 +374,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
         byte_lines = (self._queued_partial + raw).split(b"\n")
         self._queued_partial = byte_lines.pop()
         for byte_line in byte_lines:
-            stripped = byte_line.decode("utf-8", errors="replace").strip()
-            if not stripped:
-                continue
-            try:
-                record = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                logger.warning("codex watcher: skipping malformed queued-input line: {}", exc)
-                continue
-            if not isinstance(record, dict):
-                continue
-            event = queued_input_event(record)
-            if event is None:
-                continue
-            self._queued_id_by_content[normalize_user_content(event["content"])] = event["event_id"]
-            self._ingest_event(event, new_events)
-
-    def _dedup_queued_turn(self, event: dict[str, Any]) -> None:
-        """Re-key a rollout ``user_message`` onto its queued placeholder's id when it is the
-        drained form of a message we already showed as queued.
-
-        The drained turn carries no ``queued_id``, so the match is by normalised content --
-        the same brittleness the frontend's content reconcile has, and the reason the
-        placeholder uses codex's ``queued_id`` in the first place. Mutating the id in place
-        lets ``_ingest_event`` supersede the placeholder rather than append a second bubble.
-        """
-        if event.get("type") != "user_message":
-            return
-        content = event.get("content")
-        if not isinstance(content, str):
-            return
-        placeholder_id = self._queued_id_by_content.get(normalize_user_content(content))
-        if placeholder_id is not None and placeholder_id != event["event_id"]:
-            event["event_id"] = placeholder_id
-            event["message_uuid"] = placeholder_id
+            decoded = byte_line.decode("utf-8", errors="replace")
+            signal = parse_codex_queue_signals(decoded)
+            if signal is not None:
+                self._queue_tracker.consume(signal)
 
     def _ingest_event(self, event: dict[str, Any], new_events: list[dict[str, Any]]) -> None:
         """Add one parsed event to the view: append a new id, supersede a changed one in
@@ -536,3 +520,57 @@ class CodexSessionWatcher(AgentSessionWatcher):
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         """Every codex event belongs to the single main session."""
         return True
+
+    # --- queued-message interface (mirrors ClaudeSessionWatcher) ------------
+    #
+    # Backed by the shared QueuedSet via CodexQueueTracker. The snapshot field,
+    # the two common actions, and the frontend are all harness-agnostic; this is
+    # the codex population behind the same interface.
+
+    def set_queue_snapshot_callback(self, callback: Callable[[list[dict[str, Any]]], None]) -> None:
+        """Register the sink the watcher pushes each new queued-message snapshot to."""
+        self._queue_snapshot_callback = callback
+
+    def get_queued_messages(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return self._queue_tracker.snapshot()
+
+    def get_queued_block(self) -> str:
+        with self._lock:
+            return self._queue_tracker.concatenated_block()
+
+    def clear_queue(self) -> None:
+        """Drop the queued set (a flush restart invalidated it) and push the empty snapshot."""
+        with self._lock:
+            self._queue_tracker.clear()
+        self._broadcast_queue_snapshot_if_changed()
+
+    def notify_idle(self) -> list[dict[str, Any]]:
+        """Apply the working->IDLE backstop and return the resulting (empty) snapshot.
+
+        The caller (the agent manager, on a working->IDLE transition) folds the returned
+        snapshot into the same broadcast that carries the IDLE activity state, so this does
+        not push a broadcast of its own -- it only records the cleared snapshot as broadcast
+        so the poll loop does not re-push it.
+        """
+        with self._lock:
+            self._queue_tracker.on_idle()
+            snapshot = self._queue_tracker.snapshot()
+            self._last_broadcast_queue_snapshot = snapshot
+        return snapshot
+
+    def _broadcast_queue_snapshot_if_changed(self) -> None:
+        """Push the live queued snapshot to the registered sink when it has changed.
+
+        The snapshot read + last-broadcast comparison run under the lock; the callback
+        fan-out runs outside it, matching the ``on_events`` fan-out rule.
+        """
+        callback = self._queue_snapshot_callback
+        if callback is None:
+            return
+        with self._lock:
+            snapshot = self._queue_tracker.snapshot()
+            if snapshot == self._last_broadcast_queue_snapshot:
+                return
+            self._last_broadcast_queue_snapshot = snapshot
+        callback(snapshot)

@@ -81,10 +81,21 @@ class QueuedSet:
 
         Positional and uniform: one leave record pops exactly one head, whether it
         is a phantom or a real entry, so positions stay aligned under the
-        conservation law. A resolve on an empty set is a harmless no-op.
+        conservation law. A resolve on an empty set is a harmless no-op. Used by a
+        harness whose leave records do not name which message left (Claude).
         """
         if self.pending:
             self.pending.pop(0)
+
+    def resolve(self, queued_id: str) -> None:
+        """Drop the entry with this id -- the message it names left the queue.
+
+        Used by a harness whose leave records name the message by a stable id
+        (codex's ``queued_committed`` / ``queued_retracted`` carry the ``queued_id``),
+        which is exact and content-free, correct even for duplicate content. A
+        resolve of an unknown id is a harmless no-op.
+        """
+        self.pending = [message for message in self.pending if message.queued_id != queued_id]
 
     def clear(self) -> None:
         """Drop every entry (backstop sweep on working->IDLE, or a flush restart)."""
