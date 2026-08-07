@@ -19,7 +19,7 @@ _BASE_STEP = DecodedStep(
 
 
 def _step(**kwargs: object) -> DecodedStep:
-    return _BASE_STEP.model_copy(update=kwargs)
+    return _BASE_STEP.model_copy_update(*kwargs.items())
 
 
 def test_user_input_strips_the_request_wrapper() -> None:
