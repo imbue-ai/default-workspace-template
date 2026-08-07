@@ -116,6 +116,72 @@ queued-set drop — is cosmetic and self-heals on the next push.
 
 ---
 
+## 4.5 The cross-harness contract (what stays identical to the frontend)
+
+The frontend must never know which harness produced anything. This mirrors the
+existing transcript design (`harnesses/events.py`: one event vocabulary, per-
+harness parsers, "no view needs to know which harness produced an event"). Queued
+messages get the same treatment: **share the shape and the state machine; keep
+the detectors apart.**
+
+**The contract — three things, identical for every harness:**
+
+1. **Committed turns** — ordinary `user_message` transcript events (already
+   harness-agnostic). A queued message that commits arrives here; nothing new.
+2. **Queued snapshot** — `queued_messages: QueuedMessage[]` on the per-agent WS
+   state, a full snapshot each push, where
+   `QueuedMessage = {queued_id: str, content: str, timestamp: str}`.
+3. **Flush intent** — `POST /api/agents/:id/flush-queue`, uniform. Its
+   implementation (restart via `mngr`, resend via `send_message`) is already
+   harness-agnostic.
+
+**Shared core (backend), harness-agnostic:**
+
+```python
+class QueueState:                     # one instance per session, no harness knowledge
+    pending: list[QueuedMessage]      # FIFO
+    def add(self, queued_id, content, ts): ...
+    def resolve(self, queued_id): ...        # exact id/key removal
+    def resolve_oldest(self): ...            # FIFO head (for signals that carry no key)
+    def clear(self): ...                     # bulk flush / backstop
+    def snapshot(self) -> list[dict]: ...    # the wire shape in (2)
+```
+
+**Per-harness adapter** — the ONLY harness-specific code. It maps that harness's
+raw signals onto `QueueState` calls and owns that harness's backstop. Everything
+below collapses to the same `snapshot()`:
+
+| step | Claude adapter | codex adapter |
+|---|---|---|
+| becomes queued | `queue-operation/enqueue` → `add(hash(sess,ts,content), …)` | sidecar `queued_input` → `add(queued_id, …)` |
+| committed (new turn) | `dequeue` → `resolve_oldest()` | (n/a — codex drains inline) |
+| committed (inline) | `queued_command` attachment → `resolve(hash(sess,attach_ts,prompt))` | drained rollout turn → `resolve(queued_id)` once the fork emits `queued_committed`; until then content-dedup |
+| bulk flush | `popAll` → `clear()` | — |
+| stale sweep (backstop) | working→IDLE → `clear()` | `task_complete` / rollout rotation → `clear()` |
+
+Note the near-unification: both harnesses resolve by **id** for the inline commit
+(Claude reconstructs the same `queued_id` from the `queued_command` attachment's
+enqueue-timestamp + prompt; codex uses its native `queued_id`). Only Claude's
+`dequeue` needs the positional `resolve_oldest()`, because that one signal carries
+no key.
+
+**How sameness is guaranteed (not just intended):**
+
+1. **One type, mirrored.** `QueuedMessage` is a single backend dataclass; the
+   frontend type mirrors it and is kept in step the same way `SpecialEventKind`
+   is — a divergence is a type error, not a silent drift.
+2. **Zero harness branches in the frontend.** The litmus test: if the queued-
+   group render or the flush button ever needs `if harness == …`, the contract
+   has leaked. It must not.
+3. **A shared contract test.** One abstract test suite, parametrized over
+   harnesses: feed each adapter its own recorded fixture for the same scenarios
+   ("queue one → commit", "queue two → flush", "queue → never resolve → idle"),
+   and assert the resulting `snapshot()` sequence is identical. Both harnesses
+   pass the same assertions. This is what keeps them from drifting as either
+   harness (or the fork) evolves.
+
+---
+
 ## 5. Claude (primary)
 
 > This section is rewritten from MEASURED data — four real session JSONLs on
