@@ -250,6 +250,42 @@ auto_allow_permissions = true
 auto_dismiss_dialogs = true
 check_installation = false
 
+# the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
+# claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
+# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# The agy binary is baked into the image (system/scripts/setup_system.sh,
+# agy_install-1.1.10.sh), so check_installation is off. auto_allow_permissions +
+# auto_dismiss_dialogs run the container agent unattended, matching agent_types.codex
+# (auto_allow adds agy's --dangerously-skip-permissions; auto_dismiss silently trusts the
+# source repo). update_policy = NEVER freezes the baked build -- agy has no version pin, so
+# NEVER sets AGY_CLI_DISABLE_AUTO_UPDATE=true in the agent env.
+#
+# model / effort ARE pinned (unlike opencode / pi-coding): antigravity is a single-auth
+# harness (one Google account), so a slug is safe to force -- the lateral of
+# agent_types.codex's gpt-5.6-sol + medium. gemini-3.6-flash is the newest Flash and medium
+# is the balanced tier a human-waiting chat wants (matching codex's medium rationale); both
+# are single-token `agy models` slugs the plugin passes as --model / --effort. Bump effort to
+# high, or switch model to gemini-3.1-pro / a claude-* slug, for heavier work.
+#
+# settings_overrides is folded (last) into the per-agent settings.json -- the agy analog of
+# agent_types.codex's config_overrides, turning off surfaces a headless chat does not use:
+# enableTerminalSandbox=false keeps run_command unrestricted (the container is already the
+# isolation boundary, same intent as codex's danger-full-access; agy's terminal sandbox is
+# opt-in anyway, so this is belt-and-suspenders), and telemetry / tips / feedback-survey /
+# notifications off keep the surface quiet.
+#
+# NOTE: model/effort require a mngr build that carries the imbue-mngr-antigravity plugin
+# fields (this repo's vendored source). A workspace whose *running* mngr predates them will
+# reject this block ("Unknown fields ... ['effort', 'model']") until the image is rebuilt.
+[agent_types.antigravity]
+auto_allow_permissions = true
+auto_dismiss_dialogs = true
+check_installation = false
+update_policy = "NEVER"
+model = "gemini-3.6-flash"
+effort = "medium"
+settings_overrides = { enableTerminalSandbox = false, enableTelemetry = false, showTips = false, showFeedbackSurvey = false, notifications = false }
+
 # --- Provider configurations ---
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers
