@@ -1092,6 +1092,36 @@ def _browsers_passthrough() -> Response:
     )
 
 
+def _destroy_browser_passthrough(name: str) -> Response:
+    """Same-origin passthrough for retiring one browser in the fleet.
+
+    Companion to :func:`_browsers_passthrough` for the destroy control on a
+    browser pane's tab. The panels live on their own service origin, so the
+    shell can't ``DELETE`` the daemon's ``/browsers/<name>`` directly (no CORS);
+    this hop forwards ``DELETE /api/browsers/<name>`` to the registered
+    ``browser`` service and relays the daemon's body and status verbatim
+    (including its 404/409/503 rejections). Returns a 503 JSON error when the
+    service is not registered or unreachable.
+    """
+    state = get_state()
+    base_url = state.agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
+    if base_url is None:
+        error = ErrorResponse(detail="Browser service is not registered")
+        return _json_response(error.model_dump(), status_code=503)
+    backend_url = f"{base_url.rstrip('/')}/browsers/{name}"
+    try:
+        backend_response = state.http_client.delete(backend_url)
+    except httpx.HTTPError as e:
+        _loguru_logger.warning("Browser service DELETE to {} failed: {}", backend_url, e)
+        error = ErrorResponse(detail="Browser service is unreachable")
+        return _json_response(error.model_dump(), status_code=503)
+    return Response(
+        backend_response.content,
+        status=backend_response.status_code,
+        content_type=backend_response.headers.get("content-type", "application/json"),
+    )
+
+
 def _get_screen_capture(agent_id: str) -> Response:
     """Capture the tmux pane content for an agent.
 
@@ -1828,6 +1858,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
     application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
+    application.add_url_rule(
+        "/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"]
+    )
     claude_auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
