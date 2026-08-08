@@ -29,10 +29,11 @@ _SHARE_ENV_PATH = _REPO_ROOT / "data" / ".secrets" / "share.env"
 _AUTHORIZED_KEYS_PATH = Path.home() / ".ssh" / "authorized_keys"
 
 _SHARE_WORKSPACE_DOMAIN_KEY = "SHARE_WORKSPACE_DOMAIN"
+_SHARE_CHROME_ORIGIN_KEY = "SHARE_CHROME_ORIGIN"
 
 
-def read_share_audience(share_env_path: Path) -> str:
-    """Read the workspace's share domain from share.env, or '' when not shared."""
+def _read_share_env_value(share_env_path: Path, wanted_key: str) -> str:
+    """Read one exported value from share.env, or '' when absent/unreadable."""
     if not share_env_path.exists():
         return ""
     try:
@@ -45,9 +46,19 @@ def read_share_audience(share_env_path: Path) -> str:
             continue
         assignment = line[len("export ") :]
         key, separator, value = assignment.partition("=")
-        if separator and key.strip() == _SHARE_WORKSPACE_DOMAIN_KEY:
-            return value.strip().strip("\"'").lower()
+        if separator and key.strip() == wanted_key:
+            return value.strip().strip("\"'")
     return ""
+
+
+def read_share_audience(share_env_path: Path) -> str:
+    """Read the workspace's share domain from share.env, or '' when not shared."""
+    return _read_share_env_value(share_env_path, _SHARE_WORKSPACE_DOMAIN_KEY).lower()
+
+
+def read_share_chrome_origin(share_env_path: Path) -> str:
+    """Read the hosted chrome origin from share.env, or '' when none is configured."""
+    return _read_share_env_value(share_env_path, _SHARE_CHROME_ORIGIN_KEY).rstrip("/")
 
 
 def _register_port() -> None:
@@ -91,6 +102,7 @@ def main() -> None:
         repo_root=_REPO_ROOT,
         nonce_cache=NonceCache(),
         now=current_unix_time,
+        chrome_origin_resolver=lambda: read_share_chrome_origin(_SHARE_ENV_PATH),
     )
     app = build_owner_exec_app(config)
     server = make_server(LISTEN_HOST, LISTEN_PORT, app, threaded=True)

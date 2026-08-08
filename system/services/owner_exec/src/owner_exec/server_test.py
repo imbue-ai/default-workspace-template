@@ -44,7 +44,7 @@ class _Harness:
         return self.client.post(path, data=body, headers=self.signed_headers("POST", path, body))
 
 
-def _make_harness(tmp_path: Path, audience: str = _AUDIENCE) -> _Harness:
+def _make_harness(tmp_path: Path, audience: str = _AUDIENCE, chrome_origin: str = "") -> _Harness:
     key = Ed25519PrivateKey.generate()
     authorized_keys_path = tmp_path / "authorized_keys"
     authorized_keys_path.write_text(_openssh_public(key) + "\n")
@@ -55,6 +55,7 @@ def _make_harness(tmp_path: Path, audience: str = _AUDIENCE) -> _Harness:
         repo_root=tmp_path,
         nonce_cache=NonceCache(),
         now=lambda: 1000.0,
+        chrome_origin_resolver=lambda: chrome_origin,
     )
     app = build_owner_exec_app(config)
     return _Harness(app.test_client(), key, tmp_path)
@@ -169,3 +170,41 @@ def test_run_rejects_empty_command(tmp_path: Path) -> None:
     resp = harness.post("/run", {"command": []})
 
     assert resp.status_code == 400
+
+
+_CHROME = "https://minds.example.com"
+
+
+def test_preflight_answers_cors_for_the_configured_chrome_origin(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path, chrome_origin=_CHROME)
+
+    resp = harness.client.options("/run", headers={"Origin": _CHROME})
+
+    assert resp.status_code == 204
+    assert resp.headers["Access-Control-Allow-Origin"] == _CHROME
+    assert resp.headers["Access-Control-Allow-Credentials"] == "true"
+    assert "X-Exec-Signature" in resp.headers["Access-Control-Allow-Headers"]
+
+
+def test_cors_headers_are_absent_for_other_origins_and_when_unconfigured(tmp_path: Path) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    configured = _make_harness(tmp_path / "a", chrome_origin=_CHROME)
+    foreign = configured.client.options("/run", headers={"Origin": "https://evil.example.com"})
+    assert "Access-Control-Allow-Origin" not in foreign.headers
+
+    unconfigured = _make_harness(tmp_path / "b")
+    no_chrome = unconfigured.client.options("/run", headers={"Origin": _CHROME})
+    assert "Access-Control-Allow-Origin" not in no_chrome.headers
+
+
+def test_signed_responses_carry_cors_for_the_chrome_origin(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path, chrome_origin=_CHROME)
+    body = json.dumps({"command": ["printf", "cors"]}).encode()
+    headers = harness.signed_headers("POST", "/run", body)
+    headers["Origin"] = _CHROME
+
+    resp = harness.client.post("/run", data=body, headers={**headers, "Content-Type": "application/json"})
+
+    assert resp.status_code == 200
+    assert resp.headers["Access-Control-Allow-Origin"] == _CHROME
