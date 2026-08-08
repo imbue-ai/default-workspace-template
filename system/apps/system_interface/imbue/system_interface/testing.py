@@ -3,7 +3,7 @@
 Houses deterministic stand-ins for outside-world dependencies that
 `ClaudeAuthService` takes as constructor-injected callables
 (`command_runner`, `pexpect_spawner`). Both `claude_auth_test.py` and
-`claude_auth_endpoints_test.py` need the same fakes, so they live here
+`harnesses/claude/auth_endpoints_test.py` need the same fakes, so they live here
 rather than being copy-pasted into each test module.
 
 Also houses `build_test_state`, the test-side composition root: it builds a

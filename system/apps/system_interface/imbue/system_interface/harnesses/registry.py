@@ -123,7 +123,7 @@ def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
     return get_harness_spec(agent_info.harness).resolver_class.build(agent_info)
 
 
-# Built once per process from each harness's factory. The parsed catalogs (pi/opencode)
+# Built once per process from each harness's factory. The parsed catalogs (pi)
 # read data files that ship in the image, so a non-empty catalog is immutable for the
 # container's life and cached unconditionally; an empty one (harness data absent) is NOT
 # cached, so a later call retries rather than freezing the blank.
