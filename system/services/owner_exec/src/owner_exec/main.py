@@ -9,8 +9,10 @@ restart.
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
+from loguru import logger
 from werkzeug.serving import make_server
 
 from owner_exec.server import OwnerExecConfig
@@ -49,19 +51,34 @@ def read_share_audience(share_env_path: Path) -> str:
 
 
 def _register_port() -> None:
-    """Register the owner-exec port in apps.toml so forward + share route to it."""
-    subprocess.run(
-        [
-            "python3",
-            str(_REPO_ROOT / "system" / "scripts" / "forward_port.py"),
-            "--name",
-            SERVICE_NAME,
-            "--url",
-            f"http://{LISTEN_HOST}:{LISTEN_PORT}",
-        ],
-        cwd=str(_REPO_ROOT),
-        check=False,
-    )
+    """Register the owner-exec port in apps.toml so forward + share route to it.
+
+    Best-effort: a registration hiccup (the helper script is missing, the
+    interpreter can't be spawned, the repo root is momentarily unavailable
+    during a restore's restart) must never take the exec service down --
+    supervisord would report that as a spawn error and fail the whole
+    ``restart all``. The service is still useful without the apps.toml row
+    (the row only affects forward/share routing, not the loopback listener),
+    and the next boot re-registers.
+    """
+    forward_port_script = _REPO_ROOT / "system" / "scripts" / "forward_port.py"
+    cwd = str(_REPO_ROOT) if _REPO_ROOT.is_dir() else None
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                str(forward_port_script),
+                "--name",
+                SERVICE_NAME,
+                "--url",
+                f"http://{LISTEN_HOST}:{LISTEN_PORT}",
+            ],
+            cwd=cwd,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Port registration failed (continuing without it): {}", exc)
 
 
 def main() -> None:

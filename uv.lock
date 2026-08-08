@@ -2607,6 +2607,7 @@ source = { editable = "system/services/owner_exec" }
 dependencies = [
     { name = "cryptography" },
     { name = "flask" },
+    { name = "loguru" },
     { name = "werkzeug" },
 ]
 
@@ -2614,6 +2615,7 @@ dependencies = [
 requires-dist = [
     { name = "cryptography", specifier = ">=42.0.0" },
     { name = "flask", specifier = ">=3.0.0" },
+    { name = "loguru", specifier = ">=0.7.0" },
     { name = "werkzeug", specifier = ">=3.0.0" },
 ]
 
