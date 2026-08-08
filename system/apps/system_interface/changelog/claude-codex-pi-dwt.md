@@ -1,9 +1,7 @@
 Added codex as a peer harness in the workspace chat UI, alongside claude.
 
-- Depends on three more mngr harness plugins (`imbue-mngr-opencode`,
-  `imbue-mngr-pi-coding`, `imbue-mngr-antigravity`), installed with the
-  system-interface tool so `uv run mngr` parses their agent-type config. This is the
-  install groundwork only; the chat UI does not yet expose these harnesses.
+- Depends on the `imbue-mngr-pi-coding` mngr harness plugin, installed with the
+  system-interface tool so `uv run mngr` parses its agent-type config.
 - Chat-agent creation now selects the harness with `mngr create --type <harness>`
   (which resolves `[agent_types.<harness>]` directly) and layers only the `chat` role
   template on top, instead of stacking a per-harness create template ahead of the role.
@@ -20,21 +18,15 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
 - Sending to a cold codex agent no longer hangs the request past the proxy
   timeout ("Failed to send: null"): the send is bounded and, if the agent is
   still starting, accepted for background delivery.
-- Every non-claude launcher ("New Codex/Pi/Opencode/Antigravity Agent") is gated
+- Every non-claude launcher ("New Codex/Pi Agent") is gated
   behind a single FEATURE_FLAG_ENABLE_OTHER_HARNESSES feature flag (off by
   default), so the alt harnesses can be dark-launched and enabled per host without
   a rebuild. (Generalizes the earlier codex-only FEATURE_FLAG_ENABLE_CODEX flag.)
 - Creating an alt-harness agent now runs that harness's own CLI sign-in check
-  first (codex/agy/pi/opencode) and refuses the create with a readable message
+  first (codex/pi) and refuses the create with a readable message
   when the harness is signed out, so a chat that could never take a turn is never
   launched.
 - Fixed: a codex agent interrupted mid-turn and resumed could stay stuck on
   "Thinking..." until the user sent another message. The restart-boundary check
   looked for claude's marker file on every agent, so it never fired for codex
   (which writes its own).
-- Added "New Silly Claude" / "New Silly Codex" launchers, gated behind a
-  `FEATURE_FLAG_SILLY_MODELS` feature flag (off by default, same shape as the codex flag).
-  Each stacks two role templates after `chat` -- `pirate` then `scottish` -- so
-  the create-template cascade is exercised end to end: `pirate`'s `output_style`
-  overrides the one `chat` sets, while both roles' `append_system_prompt__extend`
-  blocks accumulate into a single prompt.
