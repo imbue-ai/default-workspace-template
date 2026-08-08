@@ -17,6 +17,12 @@ dependencies = [
     "litellm>=1.88.1",
     "browser",
     "eval-worker",
+    # Every service supervisord runs via `uv run <name>` MUST be a root
+    # dependency: a root-closure-scoped `uv sync` (e.g. the backup restore
+    # flow's) prunes workspace members that are not in the root closure, which
+    # deletes the service's console script and makes the next `uv run <name>`
+    # a supervisord spawn error.
+    "owner-exec",
 ]
 
 [dependency-groups]
@@ -72,6 +78,7 @@ env-converge = { workspace = true }
 host-backup = { workspace = true }
 share-gateway = { workspace = true }
 eval-worker = { workspace = true }
+owner-exec = { workspace = true }
 mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
