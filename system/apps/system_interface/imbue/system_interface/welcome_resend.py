@@ -1,6 +1,6 @@
 """Detect whether the chat agent already received `/welcome` and resend if not.
 
-Invoked from the auth-success chokepoint in `claude_auth_endpoints` so a
+Invoked from the auth-success chokepoint in `harnesses/claude/auth_endpoints` so a
 mind whose initial `/welcome` failed for lack of credentials gets the
 greeting once auth recovers.
 

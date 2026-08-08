@@ -2141,8 +2141,10 @@ def _build_stub_browser_backend() -> Flask:
 
     ``GET /browsers`` returns a fixed fleet listing; ``POST /browsers``
     echoes the submitted name on success and rejects the reserved name
-    ``taken`` with the daemon's 409 error shape, so tests can observe both
-    the body forwarding and the status relay through the passthrough.
+    ``taken`` with the daemon's 409 error shape; ``DELETE /browsers/<name>``
+    retires the browser, echoing the name on success and rejecting the
+    reserved name ``missing`` with a 404, so tests can observe both the body
+    forwarding and the status relay through the passthrough.
     """
     stub = Flask(__name__, static_folder=None)
 
@@ -2157,8 +2159,14 @@ def _build_stub_browser_backend() -> Flask:
             return Response(json.dumps({"error": "name already in use"}), status=409, mimetype="application/json")
         return Response(json.dumps({"name": name}), status=200, mimetype="application/json")
 
+    def delete_browser(browser_id: str) -> Response:
+        if browser_id == "missing":
+            return Response(json.dumps({"error": "no such browser"}), status=404, mimetype="application/json")
+        return Response(json.dumps({"closed": browser_id}), status=200, mimetype="application/json")
+
     stub.add_url_rule("/browsers", view_func=list_browsers, methods=["GET"])
     stub.add_url_rule("/browsers", view_func=create_browser, methods=["POST"], endpoint="create_browser")
+    stub.add_url_rule("/browsers/<string:browser_id>", view_func=delete_browser, methods=["DELETE"])
     return stub
 
 
@@ -2199,10 +2207,32 @@ def test_post_browsers_passthrough_relays_backend_rejection() -> None:
         assert response.get_json() == {"error": "name already in use"}
 
 
+def test_delete_browser_passthrough_forwards_and_relays_success() -> None:
+    """``DELETE /api/browsers/<name>`` forwards to the daemon and relays its success."""
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        response = test_client.delete("/api/browsers/research")
+        assert response.status_code == 200
+        assert response.get_json() == {"closed": "research"}
+
+
+def test_delete_browser_passthrough_relays_backend_rejection() -> None:
+    """A daemon 404 (unknown browser) passes through status and body verbatim."""
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        response = test_client.delete("/api/browsers/missing")
+        assert response.status_code == 404
+        assert response.get_json() == {"error": "no such browser"}
+
+
 def test_browsers_passthrough_returns_503_when_service_not_registered() -> None:
-    """Without a registered ``browser`` service, both methods return a 503 JSON error."""
+    """Without a registered ``browser`` service, every method returns a 503 JSON error."""
     test_client = _client_with_browser_service(None)
-    for response in (test_client.get("/api/browsers"), test_client.post("/api/browsers", json={"name": "x"})):
+    for response in (
+        test_client.get("/api/browsers"),
+        test_client.post("/api/browsers", json={"name": "x"}),
+        test_client.delete("/api/browsers/x"),
+    ):
         assert response.status_code == 503
         assert "not registered" in response.get_json()["detail"]
 
