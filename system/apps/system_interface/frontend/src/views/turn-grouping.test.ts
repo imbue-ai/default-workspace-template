@@ -22,6 +22,9 @@ function assistantText(ts: string, text: string, id = `a-${ts}`): AssistantMessa
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -38,6 +41,9 @@ function workMsg(ts: string, toolName: string, callId: string, id = `a-${callId}
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -55,6 +61,24 @@ function tkMsg(ts: string, command: string, callId: string, id = `a-${callId}`):
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
+  };
+}
+
+/** The codex form of a tk lifecycle command: a code-mode `exec` call whose
+ *  input_preview is the JS program invoking `tools.exec_command({cmd})`. */
+function codexTkMsg(ts: string, command: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
+  return {
+    ...tkMsg(ts, command, callId, id),
+    tool_calls: [
+      {
+        tool_call_id: callId,
+        tool_name: "exec",
+        input_preview: `await tools.exec_command(${JSON.stringify({ cmd: command })});`,
+      },
+    ],
   };
 }
 
@@ -80,6 +104,9 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -225,6 +252,31 @@ describe("decoration from the transcript", () => {
     expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
   });
 
+  // pi's shell tool is lowercase `bash` (not claude's `Bash` / codex's `exec`); its tk
+  // lifecycle calls must still be recognised as step markers, or the pi step timeline
+  // would render nothing.
+  it("recognises a lowercase pi `bash` tk call as a step marker", () => {
+    const piTk = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
+      ...tkMsg(ts, command, callId),
+      tool_calls: [{ tool_call_id: callId, tool_name: "bash", input_preview: JSON.stringify({ command }) }],
+    });
+    const events = [
+      userMsg("t0", "go"),
+      piTk("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Fix it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      piTk("t3", "tk close s1", "t2"),
+      result("t3", "t2", closeOut("s1", "Fix it", "Fixed the bug")),
+    ];
+    const steps = stepItems(run(events)[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].title).toBe("Fix it");
+    expect(steps[0].summary).toBe("Fixed the bug");
+    // The tk calls are consumed as markers, so only the real Edit work is inside the step.
+    expect(steps[0].events.map((e) => e.event_id)).toEqual(["a-w1"]);
+  });
+
   it("reads a pending step's title from its `Created` line", () => {
     const events = [
       userMsg("t0", "go"),
@@ -250,6 +302,21 @@ describe("decoration from the transcript", () => {
     ];
     const sections = run(events);
     const steps = stepItems(sections[0].items);
+    expect(steps[0].events).toHaveLength(0);
+    expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
+  });
+
+  it("hides a codex exec tk call the same way as a claude Bash one", () => {
+    // Codex runs tk through code-mode exec (tool_name "exec", command under "cmd");
+    // it must be consumed as a step marker, not rendered as a raw tool card.
+    const events = [
+      userMsg("t0", "go"),
+      codexTkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+    ];
+    const sections = run(events);
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
     expect(steps[0].events).toHaveLength(0);
     expect(sections[0].items.filter((i) => i.kind === "ungrouped")).toHaveLength(0);
   });
@@ -625,6 +692,9 @@ describe("audit regressions", () => {
       stop_reason: null,
       usage: null,
       is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
     };
     const events = [
       userMsg("t0", "go"),
@@ -711,6 +781,38 @@ describe("audit regressions", () => {
     const sections = run(events);
     expect(sections.length).toBe(1);
     expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "tn1")).toBe(true);
+  });
+
+  // The post-auto-compaction summary carries is_compact_summary and is the FIRST
+  // event of a resumed session -- there is no section open yet. It must still
+  // render (as a top chip in a fresh section), not be dropped.
+  it("renders a LEADING compaction summary as a top chip instead of dropping it", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t0", "This session is being continued from a previous conversation ...", "cs1"),
+      is_compact_summary: true,
+    };
+    const events = [summary, assistantText("t1", "continuing the work", "a1")];
+    const sections = run(events);
+    expect(sections.length).toBe(1);
+    // It is a chip (folded), not a user-prompt turn boundary.
+    expect(sections[0].user_event).toBeNull();
+    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs1")).toBe(true);
+  });
+
+  it("folds a mid-session compaction summary into the current section as a chip", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t2", "This session is being continued from a previous conversation ...", "cs2"),
+      is_compact_summary: true,
+    };
+    const events = [
+      userMsg("t0", "go"),
+      assistantText("t1", "working", "a1"),
+      summary,
+      assistantText("t3", "more", "a2"),
+    ];
+    const sections = run(events);
+    expect(sections.length).toBe(1);
+    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs2")).toBe(true);
   });
 });
 

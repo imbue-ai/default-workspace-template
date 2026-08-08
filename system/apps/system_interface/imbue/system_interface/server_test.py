@@ -6,6 +6,7 @@ import os
 import queue
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import quote
@@ -20,11 +21,11 @@ from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
-from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
@@ -36,6 +37,8 @@ from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
@@ -373,93 +376,105 @@ def test_send_message_success() -> None:
     assert messenger.sent == [(agent_id, "hello")]
 
 
-def _model_settings_agent_info(agent_id: str, tmp_path: Path, settings: dict[str, Any] | None) -> AgentInfo:
-    """An AgentInfo whose claude_config_dir holds a settings.json (or none, when settings is None)."""
+def _model_agent_info(agent_id: str, tmp_path: Path, harness: HarnessType = HarnessType.CLAUDE) -> AgentInfo:
+    """An AgentInfo with real (empty) config/state dirs for the given harness."""
     config_dir = tmp_path / "claude_config"
     config_dir.mkdir(exist_ok=True)
-    if settings is not None:
-        (config_dir / "settings.json").write_text(json.dumps(settings))
+    (tmp_path / "state").mkdir(exist_ok=True)
     return AgentInfo(
         id=agent_id,
         name="test-agent",
         state="RUNNING",
         agent_state_dir=tmp_path / "state",
         claude_config_dir=config_dir,
+        harness=harness,
     )
 
 
-def test_get_model_settings_reflects_settings_json(client: FlaskClient, tmp_path: Path) -> None:
-    """The endpoint returns the agent's stored model + fast mode and the catalog."""
-    agent_id = "agent-00000000000000000000000000000002"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]", "fastMode": True})
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/model-settings")
-
-    assert response.status_code == 200
-    data = response.get_json()
-    assert data["model"] == "opus[1m]"
-    assert data["fast_mode"] is True
-    # Opus supports fast mode, so the toggle is offered.
-    assert data["fast_mode_supported"] is True
-    option_ids = [option["id"] for option in data["options"]]
-    assert option_ids == ["fable", "opus[1m]", "sonnet", "haiku"]
-
-
-def test_get_model_settings_non_opus_hides_fast_toggle(client: FlaskClient, tmp_path: Path) -> None:
-    """A non-Opus model reports fast mode unsupported (frontend hides the toggle)."""
-    agent_id = "agent-00000000000000000000000000000003"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "sonnet"})
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/model-settings")
-
-    data = response.get_json()
-    assert data["model"] == "sonnet"
-    assert data["fast_mode"] is False
-    assert data["fast_mode_supported"] is False
-
-
-def test_get_model_settings_unknown_agent_returns_404(client: FlaskClient) -> None:
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
-        response = client.get("/api/agents/nonexistent/model-settings")
-    assert response.status_code == 404
-
-
-def test_set_model_sends_slash_command() -> None:
-    """POSTing a model switch sends the running agent a `/model <id>` command."""
-    agent_id = "agent-00000000000000000000000000000004"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
+def _manager_with_resolver(agent_info: AgentInfo) -> tuple[AgentManager, RecordingMngrMessenger]:
+    """A manager whose model resolver for ``agent_info`` is pre-built, so the switch
+    endpoint can reach it without full agent discovery."""
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager._model_resolver_by_agent[agent_info.id] = build_resolver(agent_info)
+    return manager, messenger
+
+
+def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
+    """The catalog endpoint serves each harness's static model catalog."""
+    response = client.get("/api/harnesses")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "claude" in data
+    claude = data["claude"]
+    assert [option["id"] for option in claude["options"]] == ["opus[1m]", "fable", "sonnet", "haiku"]
+    assert claude["default_model_id"] == "opus[1m]"
+    assert claude["switch_mode"] == "eager_then_reconcile"
+    assert claude["icon_svg"].startswith("<svg")
+
+
+def test_get_harnesses_excludes_alt_harnesses_without_the_flag(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only claude appears without the alt-harness flag, like the rest of its UI."""
+    monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
+    data = client.get("/api/harnesses").get_json()
+    assert set(data) == {"claude"}
+
+
+def test_get_harnesses_includes_alt_harnesses_with_the_flag(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every alt harness appears once the flag is on."""
+    monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
+    data = client.get("/api/harnesses").get_json()
+    assert "claude" in data
+    assert "codex" in data
+
+
+def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
+    """A claude switch sends exactly the axes the client says a click changed.
+
+    The client reports model + effort changed (not fast), so the endpoint sends
+    /model + /effort and not /fast.
+    """
+    agent_id = "agent-00000000000000000000000000000004"
+    agent_info = _model_agent_info(agent_id, tmp_path)
+    manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/model", json={"model": "sonnet"})
+        response = client.post(
+            f"/api/agents/{agent_id}/model",
+            json={"model_id": "sonnet", "effort": "high", "fast": False, "axes": ["model", "effort"]},
+        )
 
     assert response.status_code == 200
-    assert response.get_json()["status"] == "ok"
-    assert messenger.sent == [(agent_id, "/model sonnet")]
+    assert messenger.sent == [(agent_id, "/model sonnet"), (agent_id, "/effort high")]
 
 
-def test_set_model_rejects_unknown_model() -> None:
+def test_set_model_rejects_unknown_model(tmp_path: Path) -> None:
     """An id outside the catalog is a 400 and no command is sent."""
     agent_id = "agent-00000000000000000000000000000005"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
-    messenger = RecordingMngrMessenger()
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    agent_info = _model_agent_info(agent_id, tmp_path)
+    manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/model", json={"model": "gpt-4"})
+        response = client.post(f"/api/agents/{agent_id}/model", json={"model_id": "gpt-4", "effort": "high"})
+
+    assert response.status_code == 400
+    assert messenger.sent == []
+
+
+def test_set_model_rejects_fast_on_a_model_without_fast(tmp_path: Path) -> None:
+    """Fast on a model that does not support it is a 400 and no command is sent."""
+    agent_id = "agent-00000000000000000000000000000006"
+    agent_info = _model_agent_info(agent_id, tmp_path)
+    manager, messenger = _manager_with_resolver(agent_info)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.post(
+            f"/api/agents/{agent_id}/model", json={"model_id": "sonnet", "effort": "medium", "fast": True}
+        )
 
     assert response.status_code == 400
     assert messenger.sent == []
@@ -467,93 +482,24 @@ def test_set_model_rejects_unknown_model() -> None:
 
 def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
     with patch("imbue.system_interface.server._find_agent", return_value=None):
-        response = client.post("/api/agents/nonexistent/model", json={"model": "sonnet"})
+        response = client.post("/api/agents/nonexistent/model", json={"model_id": "sonnet", "effort": "high"})
     assert response.status_code == 404
 
 
-def test_set_fast_mode_sends_on_and_off(tmp_path: Path) -> None:
-    """POSTing fast mode sends the running agent a `/fast on` or `/fast off` command."""
-    agent_id = "agent-00000000000000000000000000000006"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
-    messenger = RecordingMngrMessenger()
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+def test_set_model_switches_codex_via_slash_model(tmp_path: Path) -> None:
+    """Codex switching applies model + effort with one /model command."""
+    agent_id = "agent-00000000000000000000000000000007"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager, messenger = _manager_with_resolver(agent_info)
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        on = client.post(f"/api/agents/{agent_id}/fast", json={"enabled": True})
-        off = client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False})
+        response = client.post(
+            f"/api/agents/{agent_id}/model",
+            json={"model_id": "gpt-5.6-sol", "effort": "high", "fast": False, "axes": ["model", "effort"]},
+        )
 
-    assert on.status_code == 200
-    assert off.status_code == 200
-    assert messenger.sent == [(agent_id, "/fast on"), (agent_id, "/fast off")]
-
-
-def test_set_fast_mode_unknown_agent_returns_404(client: FlaskClient) -> None:
-    with patch("imbue.system_interface.server._find_agent", return_value=None):
-        response = client.post("/api/agents/nonexistent/fast", json={"enabled": True})
-    assert response.status_code == 404
-
-
-def test_model_settings_prefers_managed_settings_over_user_settings(client: FlaskClient, tmp_path: Path) -> None:
-    """mngr passes the managed file via --settings, which Claude layers above the
-    shared user settings -- so a freshly launched agent reports the provisioned
-    value, not the stale one the shared config happens to carry."""
-    agent_id = "agent-00000000000000000000000000000020"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
-    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
-    managed_path.parent.mkdir(parents=True, exist_ok=True)
-    managed_path.write_text(json.dumps({"fastMode": True}))
-
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.get(f"/api/agents/{agent_id}/model-settings")
-
-    # The user settings file has no fastMode key at all, which on its own reads as
-    # off; the managed overlay is what makes this agent fast.
-    assert response.get_json()["fast_mode"] is True
-
-
-def test_setting_fast_mode_records_it_where_the_next_launch_reads_it(tmp_path: Path) -> None:
-    """`/fast off` deletes the key instead of writing false, so the toggle is written
-    into the agent's own launch settings -- which is both what the picker reads back
-    and what the agent comes back with if it restarts."""
-    agent_id = "agent-00000000000000000000000000000021"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
-    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
-    managed_path.parent.mkdir(parents=True, exist_ok=True)
-    # The agent was provisioned fast, and mngr's hooks share the file.
-    managed_path.write_text(json.dumps({"hooks": {"SessionStart": ["mark-active"]}, "fastMode": True}))
-
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is True
-        assert client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False}).status_code == 200
-        assert client.get(f"/api/agents/{agent_id}/model-settings").get_json()["fast_mode"] is False
-
-    # On disk, so a restart of this service or of the agent reports the same thing --
-    # and mngr's hooks are still there.
-    assert json.loads(managed_path.read_text()) == {
-        "hooks": {"SessionStart": ["mark-active"]},
-        "fastMode": False,
-    }
-
-
-def test_setting_fast_mode_reports_settings_it_cannot_record(tmp_path: Path) -> None:
-    """The running session took the command but the change will not outlive it, so
-    the caller is told rather than shown a success it cannot rely on."""
-    agent_id = "agent-00000000000000000000000000000022"
-    agent_info = _model_settings_agent_info(agent_id, tmp_path, {"model": "opus[1m]"})
-    managed_path = get_managed_settings_path(agent_info.agent_state_dir)
-    managed_path.parent.mkdir(parents=True, exist_ok=True)
-    managed_path.write_text("{not valid json")
-
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
-        response = client.post(f"/api/agents/{agent_id}/fast", json={"enabled": False})
-
-    assert response.status_code == 500
-    # Whatever mngr had in there is untouched rather than replaced.
-    assert managed_path.read_text() == "{not valid json"
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "/model gpt-5.6-sol high")]
 
 
 def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
@@ -734,6 +680,158 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
 
     assert response.status_code == 500
     assert response.get_json()["detail"] == "Failed to interrupt agent 'claude-agent': mngr start failed"
+
+
+def _agent_info(
+    agent_id: str = "agent-00000000000000000000000000000001",
+    name: str = "claude-agent",
+    labels: dict[str, str] | None = None,
+) -> AgentInfo:
+    return AgentInfo(
+        id=agent_id,
+        name=name,
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+        labels=labels if labels is not None else {},
+    )
+
+
+def _restart_ok() -> FinishedProcess:
+    return FinishedProcess(
+        returncode=0,
+        stdout="Restarted agent: claude-agent",
+        stderr="",
+        command=("mngr", "start", "claude-agent", "--restart", "--no-resume"),
+        is_output_already_logged=False,
+    )
+
+
+def _fake_queue_watcher(block: str) -> SimpleNamespace:
+    """A stand-in watcher exposing just the queue methods the endpoints call.
+
+    ``clear_calls`` records each ``clear_queue`` invocation so a test can assert
+    the tracked set was cleared, without pulling in ``unittest.mock``.
+    """
+    clear_calls: list[bool] = []
+    return SimpleNamespace(
+        get_queued_block=lambda: block,
+        clear_queue=lambda: clear_calls.append(True),
+        clear_calls=clear_calls,
+    )
+
+
+def test_flush_queue_returns_404_for_unknown_agent(client: FlaskClient) -> None:
+    with patch("imbue.system_interface.server._find_agent", return_value=None):
+        response = client.post("/api/agents/nonexistent/flush-queue")
+    assert response.status_code == 404
+
+
+def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskClient) -> None:
+    """Shoulder tap restarts the agent, clears the tracked set, and resends one combined turn."""
+    fake_watcher = _fake_queue_watcher("first message\nsecond message")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=True) as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/flush-queue")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    # Resent as ONE combined turn, in enqueue order.
+    assert mock_send.call_count == 1
+    assert mock_send.call_args.args[1] == "first message\nsecond message"
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:
+    """A flush with nothing queued neither restarts nor resends -- a clean 200."""
+    fake_watcher = _fake_queue_watcher("")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch.object(AgentManager, "send_message_to_agent") as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/flush-queue")
+
+    assert response.status_code == 200
+    mock_run.assert_not_called()
+    mock_send.assert_not_called()
+
+
+def test_flush_queue_rejects_is_primary_agent(client: FlaskClient) -> None:
+    with (
+        patch(
+            "imbue.system_interface.server._find_agent",
+            return_value=_agent_info(agent_id="services-1", name="system-services", labels={"is_primary": "true"}),
+        ),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/services-1/flush-queue")
+
+    assert response.status_code == 400
+    assert "is_primary" in response.get_json()["detail"]
+    mock_run.assert_not_called()
+
+
+def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None:
+    fake_watcher = _fake_queue_watcher("queued text")
+    failed = FinishedProcess(
+        returncode=1,
+        stdout="",
+        stderr="mngr start failed",
+        command=("mngr", "start", "claude-agent", "--restart", "--no-resume"),
+        is_output_already_logged=False,
+    )
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=failed),
+        patch.object(AgentManager, "send_message_to_agent") as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/flush-queue")
+
+    assert response.status_code == 500
+    # The restart failed, so nothing is resent.
+    mock_send.assert_not_called()
+
+
+def test_drain_to_composer_restarts_and_returns_the_block_unsent(client: FlaskClient) -> None:
+    """Interrupt-to-composer restarts and hands the block back without sending it."""
+    fake_watcher = _fake_queue_watcher("edit me before sending")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent") as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "edit me before sending"
+    # The block is handed back, never sent.
+    mock_send.assert_not_called()
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:
+    fake_watcher = _fake_queue_watcher("")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    mock_run.assert_not_called()
 
 
 def test_list_layouts_exposes_defaults(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1032,6 +1130,32 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         assert "system-interface-hostname" in response.text
 
 
+def test_index_enable_other_harnesses_meta_tag_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The alt-harness feature flag is injected and defaults to off (buttons hidden)."""
+    monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(build_test_state()).test_client().get("/")
+        assert response.status_code == 200
+        assert '<meta name="system-interface-enable-other-harnesses" content="false">' in response.text
+
+
+def test_index_enable_other_harnesses_meta_tag_on_when_flag_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting FEATURE_FLAG_ENABLE_OTHER_HARNESSES to a truthy value flips the injected flag on."""
+    monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        response = create_application(build_test_state()).test_client().get("/")
+        assert response.status_code == 200
+        assert '<meta name="system-interface-enable-other-harnesses" content="true">' in response.text
+
+
 def test_random_name_endpoint(client: FlaskClient) -> None:
     """The random name endpoint returns a non-empty name."""
     response = client.get("/api/random-name")
@@ -1053,16 +1177,6 @@ def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> 
     assert response.status_code == 400
 
 
-def test_create_worktree_agent_missing_agent(client: FlaskClient) -> None:
-    """Creating a worktree agent with an unknown selected agent returns 400."""
-    response = client.post(
-        "/api/agents/create-worktree",
-        json={"name": "test-worktree", "selected_agent_id": "nonexistent"},
-    )
-    assert response.status_code == 400
-
-
-@pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     """The WebSocket endpoint sends agents_updated and apps_updated on connect."""
     with serve_app(app) as served:
@@ -1560,7 +1674,8 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
         # synchronously. Assert before ``stop()``, which clears these
         # caches alongside the marker watchers.
         with manager._lock:
-            assert manager._has_unmatched_tool_use_by_agent[agent_id] is True
+            tracker = manager._activity_tracker_by_agent[agent_id]
+            assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.TOOL_RUNNING
             assert manager._activity_state_by_agent[agent_id] == ActivityState.TOOL_RUNNING
     finally:
         manager.stop()
