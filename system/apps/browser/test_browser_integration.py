@@ -453,6 +453,44 @@ def test_http_cast_closes_a_failed_launch_name_terminally(monkeypatch: pytest.Mo
     runner.manager._failed_launch_names.clear()
 
 
+def test_http_cast_closes_a_closed_browser_with_the_terminated_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A browser explicitly CLOSED by an agent is closed with the terminal 4001 code (NOT 1008),
+    # so a viewer whose tab is still open renders the "terminated by an agent" overlay instead
+    # of the generic "reopen" text or a "Starting browser…" retry loop.
+    runner.manager._browsers.clear()
+    runner.manager._closed_names.append("alex-smith")
+    try:
+        with _BootedServer() as server:
+            ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/alex-smith/cast")
+            assert _wait_until(lambda: not ws.connected)
+            assert ws.close_reason == runner._WS_CLOSE_TERMINATED
+    finally:
+        runner.manager._closed_names.clear()
+
+
+def test_http_cast_closes_a_stale_valid_name_terminally_once_restore_is_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A syntactically valid name that resolves to nothing is RETRYABLE (1013) while the fleet
+    # is still restoring -- it may yet come up -- but TERMINAL (4001) once restore is done: a
+    # layout-restored tab of a browser closed in a PRIOR daemon life (whose in-memory close
+    # memory didn't survive the restart) must show the terminated overlay, not loop forever on
+    # "Starting browser…".
+    runner.manager._browsers.clear()
+    runner.manager._closed_names.clear()
+    runner.manager._failed_launch_names.clear()
+    runner._init_done.clear()  # still restoring -> retryable
+    try:
+        with _BootedServer() as server:
+            ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/riley-jones/cast")
+            assert _wait_until(lambda: not ws.connected)
+            assert ws.close_reason == 1013
+    finally:
+        runner._init_done.set()  # restore done -> terminal (conftest also re-sets on teardown)
+    with _BootedServer() as server:
+        ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/riley-jones/cast")
+        assert _wait_until(lambda: not ws.connected)
+        assert ws.close_reason == runner._WS_CLOSE_TERMINATED
+
+
 def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(monkeypatch: pytest.MonkeyPatch) -> None:
     # A viewer joining an already-running browser must NOT receive the fleet-level
     # `initializing` banner, even while the whole fleet is still restoring (finding

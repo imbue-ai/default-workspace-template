@@ -98,6 +98,12 @@ _NDJSON_POLL_SECONDS = 0.5
 _CAST_OUTBOUND_POLL_SECONDS = 1.0
 _CAST_INBOUND_POLL_SECONDS = 0.05
 
+# Application WebSocket close code (private-use 4000-4999 range) for a /cast or /stream
+# socket whose browser is gone because it was CLOSED by an agent (or is a stale
+# layout-restored tab of one). The viewer renders the terminal "terminated by an agent"
+# overlay and stops reconnecting -- distinct from 1008 (failed/invalid) and 1013 (retry).
+_WS_CLOSE_TERMINATED = 4001
+
 # The ONE sync<->async boundary: every route reaches the async world through this
 # bridge's single background loop (see browser.loop_bridge). The manager and all
 # LiveBrowsers are constructed/driven on that loop, so their asyncio locks/events
@@ -887,17 +893,24 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
 def _close_unresolved_ws(ws: Any, browser_id: str) -> None:
     """Close a /cast or /stream WS whose browser didn't resolve, with the close code that tells
     the viewer how to react (both handlers share this one contract):
-    - launch FAILED, or the browser was explicitly CLOSED -> 1008 terminal (stop retrying); a
-      late optimistic viewer that missed the launch_failed broadcast otherwise retries forever.
-    - a syntactically valid name not registered YET (the optimistic pane opened on modal-accept
-      before the serialized launch finished) -> 1013 retryable; the viewer backs off and reconnects.
+    - launch FAILED -> 1008 terminal ("failed to start"); a late optimistic viewer that missed
+      the launch_failed broadcast otherwise retries forever.
+    - the browser was explicitly CLOSED by an agent -> 4001 terminal, so the viewer shows the
+      "terminated by an agent" overlay rather than the generic "reopen" text.
+    - a syntactically valid name not registered YET:
+        * while the fleet is still restoring (init not done) -> 1013 retryable; it may still come
+          up, so the viewer backs off and reconnects.
+        * once restore is done -> the name resolves to nothing and never will (e.g. a
+          layout-restored tab of a browser closed in a PRIOR daemon life, whose in-memory
+          close memory didn't survive the restart) -> 4001 terminal, so the viewer shows the
+          terminated overlay instead of looping forever on "Starting browser…".
     - an invalid name (could never exist) -> 1008 terminal (shows "browser closed -- reopen")."""
     if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
         ws.close(1008)
     elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):
-        ws.close(1008)
+        ws.close(_WS_CLOSE_TERMINATED)
     elif is_valid_browser_name(browser_id):
-        ws.close(1013)
+        ws.close(_WS_CLOSE_TERMINATED if _init_done.is_set() else 1013)
     else:
         ws.close(1008)
 

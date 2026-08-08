@@ -721,6 +721,21 @@ def test_lifecycle_init_to_running_broadcasts_the_new_state(monkeypatch: pytest.
     asyncio.run(go())
 
 
+def test_close_broadcasts_closed_before_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Closing a browser announces `{"type": "closed"}` to every connected viewer (mirroring
+    # the `crashed` broadcast) so the pane shows the terminal "terminated" overlay at once,
+    # instead of flashing the loading spinner while its cast socket closes and reconnects.
+    casts: list[dict[str, Any]] = []
+    monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", lambda self, message: casts.append(message))
+
+    async def go() -> None:
+        session = bsession.LiveBrowser(browser_id="alex-smith")
+        await session.close()
+        assert any(m.get("type") == "closed" and m.get("browser_id") == "alex-smith" for m in casts)
+
+    asyncio.run(go())
+
+
 def test_launch_failure_removes_the_browser_and_announces(monkeypatch: pytest.MonkeyPatch) -> None:
     # An init browser whose Chromium never comes up is REMOVED (not left as a stranded
     # init shell holding a cap slot), and a launch_failed message is broadcast so the
