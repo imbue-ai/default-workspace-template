@@ -1126,7 +1126,9 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
         flush_button = page.locator(".queued-action--flush")
         expect(flush_button).to_be_visible()
         expect(flush_button).to_contain_text("Shoulder tap")
-        expect(flush_button).to_have_attribute("data-tooltip", "Gently interrupt model to send queued messages")
+        expect(flush_button).to_have_attribute(
+            "data-tooltip", "Gently interrupt your agent to send queued messages early"
+        )
         expect(page.locator(".queued-action--interrupt")).to_have_count(0)
 
         page.screenshot(path=str(tmp_path / "queued_group.png"))
