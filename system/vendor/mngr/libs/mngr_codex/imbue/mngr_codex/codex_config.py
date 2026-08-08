@@ -75,9 +75,21 @@ CODEX_HOME_RELATIVE_PATH: tuple[str, ...] = ("plugin", "codex", "home")
 # of the auth symlink and config, so targeting it specifically excludes those.
 SESSIONS_RELATIVE_PATH: str = Path(*CODEX_HOME_RELATIVE_PATH, "sessions").as_posix()
 
+# The queued-input sidecar the patched codex binary appends to the instant a message
+# is queued (submitted while a turn is running), as a POSIX rel-path under the agent
+# state dir. It is the only per-submission evidence a *queued* message leaves -- the
+# ``active`` marker does not advance until the message actually opens a turn, which for
+# a queued message is not until the running turn ends.
+QUEUED_INPUT_RELATIVE_PATH: str = Path(*CODEX_HOME_RELATIVE_PATH, "queued_input.jsonl").as_posix()
+
 _CONFIG_FILENAME: str = "config.toml"
 _AUTH_FILENAME: str = "auth.json"
 _HOOKS_FILENAME: str = "hooks.json"
+
+# Where output styles are authored, relative to the work_dir. Harness-neutral by design:
+# claude reads the same files through its own ``.claude/output-styles`` (a symlink to this),
+# while codex, having no output-style concept, reads the body straight from here.
+SHARED_OUTPUT_STYLES_DIR: str = ".agents/output-styles"
 # First-run NUX gate: codex skips the personality-migration prompt when this
 # marker file exists (it auto-writes one on a fresh home with no sessions, but
 # seeding it makes the silent-launch behavior explicit and order-independent).
@@ -104,6 +116,11 @@ def get_codex_auth_path(codex_home: Path) -> Path:
 def get_codex_hooks_path(codex_home: Path) -> Path:
     """Return the ``hooks.json`` path under ``codex_home``."""
     return codex_home / _HOOKS_FILENAME
+
+
+def get_shared_output_styles_dir(work_dir: Path) -> Path:
+    """Return the repo's output-style directory -- where styles are authored."""
+    return work_dir / SHARED_OUTPUT_STYLES_DIR
 
 
 def get_codex_personality_migration_path(codex_home: Path) -> Path:
@@ -135,6 +152,14 @@ def get_codex_version_cache_path(codex_home: Path) -> Path:
 # in sync with the literal ``"active"`` that core checks and that the hook
 # scripts touch/remove.
 ACTIVE_MARKER_FILENAME: str = "active"
+
+# Marker file (in ``$MNGR_AGENT_STATE_DIR``) touched on every launch/resume by
+# ``assemble_command``. Its mtime is the boundary the system_interface activity
+# tracker compares transcript timestamps against: a transcript tail older than this
+# belongs to a turn a prior process abandoned mid-flight (e.g. a container restart
+# killed codex mid-tool), so the "Running.../Thinking..." indicator must not treat
+# that stale tail as live work. Mirrors mngr_claude's ``claude_process_started``.
+PROCESS_STARTED_MARKER_FILENAME: str = "codex_process_started"
 
 # Marker file (in ``$MNGR_AGENT_STATE_DIR``) present while codex is blocked on a
 # tool-approval dialog. The ``PermissionRequest`` hook touches it; ``PostToolUse``
@@ -301,6 +326,38 @@ def _tomlkit_to_plain_dict(value: Any) -> dict[str, Any]:
     return converted
 
 
+# Codex's plaintext TUI log -- the source of the ``codex.sse_event`` heartbeat that
+# the system_interface uses to drive the "Thinking..." indicator (codex's lifecycle
+# state is unreliable for that; the sse deltas are the real "generating now" signal).
+# We point ``log_dir`` at a DEDICATED subdir of CODEX_HOME rather than the default
+# ($CODEX_HOME/log), because codex deletes the default log file on every startup
+# (remove_legacy_tui_log_file) -- a custom dir is left alone. The tailer reads
+# ``<codex_home>/<TUI_LOG_DIR_NAME>/<TUI_LOG_FILENAME>``.
+TUI_LOG_DIR_NAME: str = "tui_log"
+TUI_LOG_FILENAME: str = "codex-tui.log"
+_LOG_DIR_KEY: str = "log_dir"
+
+# Top-level ``config.toml`` key holding extra instructions injected into the session.
+# It APPENDS to codex's built-in instructions (``model_instructions_file`` is the key
+# that replaces them), which is what makes it the right home for mngr's output-style
+# body and appended system prompt.
+DEVELOPER_INSTRUCTIONS_KEY: str = "developer_instructions"
+
+# Separator between the output-style body and the appended system prompt when both are
+# set, so the two blocks do not run together into one paragraph.
+DEVELOPER_INSTRUCTIONS_SEPARATOR: str = "\n\n"
+
+# RUST_LOG for the codex process: the default tracing targets PLUS ``codex_otel=info``,
+# which is what makes codex emit ``codex.sse_event`` delta lines into the TUI log.
+# Setting RUST_LOG replaces codex's fallback wholesale, so the defaults are re-listed.
+RUST_LOG_VALUE: str = "codex_core=info,codex_tui=info,codex_rmcp_client=info,codex_otel=info"
+
+
+def get_codex_tui_log_dir(codex_home: Path) -> Path:
+    """Return the dedicated TUI-log directory under ``codex_home`` (codex's log_dir)."""
+    return codex_home / TUI_LOG_DIR_NAME
+
+
 @pure
 def build_codex_config(
     *,
@@ -310,6 +367,8 @@ def build_codex_config(
     approval_policy: str | None,
     trusted_projects: Sequence[str],
     config_overrides: Mapping[str, Any],
+    log_dir: str | None = None,
+    developer_instructions: str | None = None,
 ) -> dict[str, Any]:
     """Build a per-agent ``config.toml`` body (low -> high precedence).
 
@@ -329,6 +388,15 @@ def build_codex_config(
     4. ``config_overrides`` -- the per-agent-type blob, merged last (shallow) so
        it wins; covers anything not surfaced as a typed knob.
 
+    ``developer_instructions`` carries the role-contributed system-prompt additions
+    (the ``output_style`` body and the ``append_system_prompt`` blocks, already
+    joined by the caller). Codex has no output-style concept, so a style reaches
+    it through this key instead. It *appends* to codex's built-in instructions --
+    unlike ``model_instructions_file``, which replaces them -- which is why a
+    style that suppresses an agent's built-in prompt cannot behave identically
+    here. Written before the ``config_overrides`` merge, so an explicit override
+    of the same key still wins.
+
     Returns a plain dict; ``serialize_codex_config`` renders it as TOML.
     """
     config: dict[str, Any] = {
@@ -345,6 +413,10 @@ def build_codex_config(
         config["sandbox_mode"] = sandbox_mode
     if approval_policy is not None:
         config["approval_policy"] = approval_policy
+    if log_dir is not None:
+        config[_LOG_DIR_KEY] = log_dir
+    if developer_instructions is not None:
+        config[DEVELOPER_INSTRUCTIONS_KEY] = developer_instructions
     config["notice"] = dict(_NOTICE_SUPPRESSORS)
 
     projects: dict[str, Any] = {}

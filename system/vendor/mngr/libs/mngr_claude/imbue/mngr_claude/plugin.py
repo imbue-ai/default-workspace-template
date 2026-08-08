@@ -38,6 +38,8 @@ from imbue.mngr.agents.common_transcript import maybe_provision_common_transcrip
 from imbue.mngr.agents.common_transcript import provision_raw_transcript_scripts
 from imbue.mngr.agents.common_transcript import provision_scripts_to_commands_dir
 from imbue.mngr.agents.installation import ensure_cli_installed
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.agents.tui_agent import InteractiveTuiAgent
 from imbue.mngr.agents.tui_utils import POST_SUBMIT_DIALOG_OBSERVE_SECONDS
 from imbue.mngr.agents.tui_utils import SubmissionConfirmationPolicy
@@ -96,6 +98,8 @@ from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import TransferMode
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.utils.git_utils import find_git_source_path
@@ -246,8 +250,32 @@ def _resolve_adopt_session(adopt_session_arg: str, mngr_ctx: MngrContext) -> tup
     return adopt_session_arg, match.parent
 
 
+# Separator between stacked `append_system_prompt` blocks. Blank line, so each role's
+# block reads as its own paragraph in the assembled prompt.
+APPEND_SYSTEM_PROMPT_SEPARATOR: Final[str] = "\n\n"
+
+
 class ClaudeAgentConfig(AgentTypeConfig):
     """Config for the claude agent type."""
+
+    # --- role behaviour, set by a create template and applied by this harness ---
+    #
+    # Both are harness-neutral *intent*: a role states them once and each harness applies
+    # them its own way. They live on the harness subclasses rather than AgentTypeConfig so
+    # a harness that cannot honour them has no field to route to -- the create then fails
+    # naming the template, instead of launching an agent that quietly ignores its role.
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of an output style to launch with, matched against the `name:` "
+        "frontmatter of a file in the work dir's output-style directory. Scalar: the last "
+        "template in the stack to set it wins.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="Blocks to append to the agent's system prompt, in stack order. Aggregate: "
+        "write `append_system_prompt__extend = [...]` in a template so stacked roles each "
+        "contribute a block instead of the last one replacing the rest.",
+    )
 
     command: CommandString = Field(
         default=CommandString("claude"),
@@ -562,6 +590,14 @@ an mngr agent rather than in the user's persistent ~/.claude/ directory.
 _MANAGED_SETTINGS_SHELL_PATH: Final[str] = f"$MNGR_AGENT_STATE_DIR/{'/'.join(MANAGED_SETTINGS_RELATIVE_PATH)}"
 MANAGED_SETTINGS_LAUNCH_ARG: Final[str] = f'--settings "{_MANAGED_SETTINGS_SHELL_PATH}"'
 
+# Where claude itself looks for output styles, relative to the work_dir. mngr validates
+# `output_style` against this exact path -- the one claude will read -- so a name that
+# resolves here is guaranteed to resolve for claude too.
+CLAUDE_OUTPUT_STYLES_DIR: Final[str] = ".claude/output-styles"
+
+# The settings.json key claude reads to select an output style by name.
+OUTPUT_STYLE_SETTING_KEY: Final[str] = "outputStyle"
+
 
 _PLUGINS_DIR_MARKER: Final[str] = "/plugins/"
 """Generic marker for extracting relative plugin paths.
@@ -663,6 +699,7 @@ def _build_settings_json(
     *,
     is_unattended: bool = False,
     allow_narrowing: bool = False,
+    extra_settings: dict[str, Any] | None = None,
 ) -> str:
     """Build settings.json content for per-agent config dirs.
 
@@ -696,6 +733,10 @@ def _build_settings_json(
     data = apply_settings_patch(
         data, config.settings_overrides, allow_narrowing=allow_narrowing, base_description=base_description
     )
+    # Applied last so a resolved agent-type setting (currently only `output_style`) wins
+    # over a settings_overrides value for the same key.
+    if extra_settings:
+        data.update(extra_settings)
     return json.dumps(data, indent=2) + "\n"
 
 
@@ -1352,6 +1393,9 @@ _CLAUDE_ALWAYS_PROVISIONED_SCRIPT_NAMES: Final[tuple[str, ...]] = (
     "claude_background_tasks.sh",
     "wait_for_stop_hook.sh",
     "sync_keychain_credentials.py",
+    # Writes claude_model_state.json (live model/effort/fast) for the chat model bar; invoked
+    # by the SessionStart/UserPromptSubmit/Stop hooks (see build_readiness_hooks_config).
+    "model_state_hook.py",
 )
 
 # The tmux-based response-streaming watcher. Provisioned only when
@@ -1856,6 +1900,23 @@ class ClaudeCoreAgent(
 
         return transfers
 
+    def _build_output_style_settings(self, host: OnlineHostInterface) -> dict[str, Any]:
+        """Return the ``outputStyle`` settings patch for this agent type, or ``{}`` if unset.
+
+        Claude resolves the style file itself at launch, so mngr only needs to pass the
+        name -- but it validates first, against ``.claude/output-styles/`` in the work_dir:
+        the very directory claude will read. Validating claude's own path (rather than
+        wherever the styles are authored, which may be a symlink away) is what turns a
+        broken link or a misspelled name into a failed create instead of an agent that
+        launches silently unstyled.
+        """
+        if self.agent_config.output_style is None:
+            return {}
+        styles_dir = Path(self.work_dir) / CLAUDE_OUTPUT_STYLES_DIR
+        # Raises UserInputError, listing what is available, when the name has no match.
+        resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+        return {OUTPUT_STYLE_SETTING_KEY: str(self.agent_config.output_style)}
+
     def _configure_agent_hooks(self, host: OnlineHostInterface, mngr_ctx: MngrContext) -> None:
         """Write mngr's hooks (and the user's settings_overrides) to the managed settings file.
 
@@ -1891,6 +1952,11 @@ class ClaudeCoreAgent(
             allow_narrowing=mngr_ctx.config.allow_settings_key_assignment_narrowing,
             base_description="mngr's managed Claude hooks",
         )
+        # Folded on last so a role's `output_style` wins over a settings_overrides
+        # outputStyle. Merged into the resolved dict rather than layered as config, so it
+        # cannot disturb the model / fastMode / skipDangerousModePermissionPrompt keys
+        # already resolved above.
+        settings.update(self._build_output_style_settings(host))
 
         settings_path = get_managed_settings_path(self._get_agent_dir())
         # The plugin/claude/ parent may not exist yet (in use_env_config_dir
@@ -1995,6 +2061,8 @@ class ClaudeCoreAgent(
             sync_local=config.sync_home_settings,
             is_unattended=self.is_unattended_enabled(),
             allow_narrowing=mngr_ctx.config.allow_settings_key_assignment_narrowing,
+            # Same fold as the shared-mode path in _configure_agent_hooks.
+            extra_settings=self._build_output_style_settings(host),
         )
 
         generated_files: dict[Path, str] = {
@@ -2774,6 +2842,22 @@ class ClaudeAgent(
         script_path = "$MNGR_AGENT_STATE_DIR/commands/claude_background_tasks.sh"
         return f"( {script_path} {shlex.quote(session_name)} {shlex.quote(primary_window_name)} ) &"
 
+    def _build_append_system_prompt_args(self) -> tuple[str, ...]:
+        """Turn this agent type's ``append_system_prompt`` blocks into claude's own flag.
+
+        Joined into ONE flag rather than repeated: claude's ``--append-system-prompt`` is
+        last-wins, verified against claude 2.1.220, so passing the flag per block would
+        deliver only the final one and silently drop every role stacked before it.
+
+        ``output_style`` is deliberately absent here: claude takes it as the ``outputStyle``
+        setting written during provisioning (see ``_build_output_style_settings``), not as a
+        launch flag.
+        """
+        blocks = self.agent_config.append_system_prompt
+        if not blocks:
+            return ()
+        return ("--append-system-prompt", APPEND_SYSTEM_PROMPT_SEPARATOR.join(str(block) for block in blocks))
+
     def assemble_command(
         self,
         host: OnlineHostInterface,
@@ -2833,6 +2917,10 @@ class ClaudeAgent(
         # (Claude is last-wins) -- the accepted, documented limitation of that mode.
         cli_args = self.agent_config.cli_args
         all_extra_args = cli_args + quote_agent_args(agent_args)
+        # Role-contributed system-prompt blocks, joined into a single flag (see
+        # _build_append_system_prompt_args). Quoted here rather than in the builder so the
+        # builder stays a plain value function.
+        all_extra_args = all_extra_args + quote_agent_args(self._build_append_system_prompt_args())
         # Claude appends & unions repeated --disallowed-tools flags.
         if self.agent_config.auto_disable_questions:
             all_extra_args = all_extra_args + ("--disallowed-tools", "AskUserQuestion")

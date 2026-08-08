@@ -36,7 +36,11 @@ const handlers = {};
 const mod = await import("./mngr_pi_lifecycle.ts");
 mod.default({ on: (name, handler) => { (handlers[name] ||= []).push(handler); } });
 for (const ev of events) {
-  const ctx = { sessionManager: { getSessionId: () => ev.sessionId, getSessionFile: () => ev.sessionFile } };
+  const ctx = {
+    sessionManager: { getSessionId: () => ev.sessionId, getSessionFile: () => ev.sessionFile },
+    model: ev.model,
+    thinkingLevel: ev.thinkingLevel,
+  };
   for (const handler of (handlers[ev.event] || [])) {
     await handler(ev.payload || {}, ctx);
   }
@@ -126,6 +130,65 @@ def test_in_memory_session_does_not_clobber_recorded_file(tmp_path: Path) -> Non
         ],
     )
     assert (state / "pi_session_file").read_text() == "/s/s1.jsonl"
+
+
+_MODEL_STATE = Path("pi_model_state.json")
+
+
+def test_model_state_written_on_session_start(tmp_path: Path) -> None:
+    """Pre-turn-1: session_start fires before the first prompt, so the launch model +
+    thinking level land on disk immediately for the chat model bar."""
+    state = _run_extension(
+        tmp_path,
+        [
+            {
+                "event": "session_start",
+                "sessionId": "s1",
+                "sessionFile": "/s/s1.jsonl",
+                "model": {"provider": "anthropic", "id": "claude-opus-4-8"},
+                "thinkingLevel": "high",
+            }
+        ],
+    )
+    assert json.loads((state / _MODEL_STATE).read_text()) == {
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "thinking_level": "high",
+    }
+
+
+def test_model_state_tracks_model_and_thinking_switches(tmp_path: Path) -> None:
+    """model_select / thinking_level_select keep the state live. The changed axis comes
+    from the event; the untouched one from ctx (which may lag the event)."""
+    state = _run_extension(
+        tmp_path,
+        [
+            {
+                "event": "session_start",
+                "sessionId": "s1",
+                "sessionFile": "/s/s1.jsonl",
+                "model": {"provider": "anthropic", "id": "claude-opus-4-8"},
+                "thinkingLevel": "high",
+            },
+            # /model switch: event carries the new model, ctx still reports the thinking level.
+            {
+                "event": "model_select",
+                "payload": {"model": {"provider": "openai", "id": "gpt-5.2"}},
+                "thinkingLevel": "high",
+            },
+            # thinking change: event carries the new level, ctx still reports the model.
+            {
+                "event": "thinking_level_select",
+                "payload": {"level": "low"},
+                "model": {"provider": "openai", "id": "gpt-5.2"},
+            },
+        ],
+    )
+    assert json.loads((state / _MODEL_STATE).read_text()) == {
+        "provider": "openai",
+        "model": "gpt-5.2",
+        "thinking_level": "low",
+    }
 
 
 def test_marker_set_on_agent_start_and_cleared_on_agent_end(tmp_path: Path) -> None:
@@ -558,3 +621,61 @@ def test_usage_writer_is_inert_without_the_gate_marker(tmp_path: Path) -> None:
         emit_usage=False,
     )
     assert not (state / _USAGE_EVENTS).exists()
+
+
+# Drives the control-file switch consumer: a fake pi captures setModel/setThinkingLevel and
+# stores handlers so the driver can fire session_start (which the consumer needs to capture a
+# ctx for ctx.modelRegistry). Then a switch intent is appended and we wait for the poll.
+_CONTROL_DRIVER_MJS = """
+import { appendFileSync, writeFileSync } from "node:fs";
+import mngrPiLifecycle from "./mngr_pi_lifecycle.ts";
+const STATE = process.env.MNGR_AGENT_STATE_DIR;
+const control = STATE + "/pi_control.jsonl";
+const calls = { setModel: [], setThinkingLevel: [] };
+const handlers = {};
+const targetModel = { provider: "anthropic", id: "claude-opus-4-8", label: "opus" };
+const ctx = {
+  model: { provider: "anthropic", id: "claude-sonnet-4-5" },
+  thinkingLevel: "medium",
+  modelRegistry: {
+    find: (p, id) => (p === "anthropic" && id === "claude-opus-4-8") ? targetModel : undefined,
+    hasConfiguredAuth: () => true,
+  },
+};
+const pi = {
+  on: (evt, h) => { handlers[evt] = h; },
+  setModel: (m) => { calls.setModel.push({ provider: m.provider, id: m.id }); return Promise.resolve(true); },
+  setThinkingLevel: (l) => { calls.setThinkingLevel.push(l); },
+};
+mngrPiLifecycle(pi);
+handlers["session_start"]({}, ctx);
+appendFileSync(control, JSON.stringify({ model_id: "anthropic/claude-opus-4-8", thinking_level: "high" }) + "\\n");
+setTimeout(() => { writeFileSync(STATE + "/switch_calls.json", JSON.stringify(calls)); }, 600);
+"""
+
+
+def test_control_watcher_applies_model_and_effort_switch(tmp_path: Path) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(exist_ok=True)
+    if not _node_supports_typescript(node, work_dir):
+        pytest.skip("node does not support importing TypeScript modules")
+    (work_dir / _LIFECYCLE_EXTENSION_NAME).write_text(_load_resource(_LIFECYCLE_EXTENSION_NAME))
+    driver = work_dir / "control_driver.mjs"
+    driver.write_text(_CONTROL_DRIVER_MJS)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    result = subprocess.run(
+        [node, str(driver)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": os.environ.get("PATH", ""), "MNGR_AGENT_STATE_DIR": str(state_dir)},
+    )
+    assert result.returncode == 0, f"control driver failed:\n{result.stdout}\n{result.stderr}"
+    calls = json.loads((state_dir / "switch_calls.json").read_text())
+    # The slug resolved to pi's Model via the registry and was applied; the effort passed through.
+    assert calls["setModel"] == [{"provider": "anthropic", "id": "claude-opus-4-8"}]
+    assert calls["setThinkingLevel"] == ["high"]
