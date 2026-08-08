@@ -122,13 +122,15 @@ export interface SectionView {
   trailing_reply: AssistantMessageEvent[];
 }
 
-/** Detects a `tk`/`ticket` lifecycle invocation at the START of a Bash tool
- *  call's command, so a pure tk call (the enforced shape for `tk start`/`close`,
- *  and the batched literal-id `tk create --step ...` form) is hidden from the
- *  rendered output. A command that merely mentions a tk verb later (e.g.
+/** Detects a `tk`/`ticket` lifecycle invocation at the START of a tool call's
+ *  command, so a pure tk call (the enforced shape for `tk start`/`close`, and the
+ *  batched literal-id `tk create --step ...` form) is hidden from the rendered
+ *  output. Covers both harnesses' command shapes: claude's Bash carries the command
+ *  under `"command"`, codex's code-mode `exec` under the `"cmd"` key of its inner
+ *  `tools.exec_command({...})`. A command that merely mentions a tk verb later (e.g.
  *  `git commit -m "tk close ..."`) is NOT misclassified. `super` is the
  *  plugin-bypassing form. */
-const TK_LIFECYCLE_RE = /"command"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
+const TK_LIFECYCLE_RE = /"(?:command|cmd)"\s*:\s*"\s*(?:tk|ticket)\s+(?:super\s+)?(?:create|start|close)\b/;
 
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see system/vendor/tk/ticket). Global so a batched
@@ -169,10 +171,14 @@ function isStepId(id: string): boolean {
 }
 
 /** True when a tool call is a tk lifecycle command (consumed as a structural
- *  marker, not rendered as work). Restricted to Bash calls whose command
- *  begins with the tk verb (see TK_LIFECYCLE_RE). */
+ *  marker, not rendered as work). Restricted to the harnesses' shell tools --
+ *  claude's `Bash` and codex's code-mode `exec` -- whose command begins with the
+ *  tk verb (see TK_LIFECYCLE_RE). */
 function isTkLifecycleCall(tc: ToolCall): boolean {
-  return tc.tool_name === "Bash" && TK_LIFECYCLE_RE.test(tc.input_preview);
+  return (
+    (tc.tool_name === "Bash" || tc.tool_name === "exec" || tc.tool_name === "bash") &&
+    TK_LIFECYCLE_RE.test(tc.input_preview)
+  );
 }
 
 /** True when an assistant message issues a permission request. */
@@ -184,7 +190,9 @@ function hasPermissionRequest(e: AssistantMessageEvent): boolean {
  *  input_preview is not parseable -- e.g. a truncated non-tk command). tk
  *  lifecycle inputs are exempt from input truncation, so they parse cleanly. */
 function tkCommand(tc: ToolCall): string | null {
-  if (tc.tool_name !== "Bash") return null;
+  // claude's `Bash` and pi's `bash` both carry the command under the "command" key;
+  // codex's `exec` is handled via its own tk-input path, not here.
+  if (tc.tool_name !== "Bash" && tc.tool_name !== "bash") return null;
   try {
     const obj = JSON.parse(tc.input_preview) as { command?: unknown };
     return typeof obj.command === "string" ? obj.command : null;
@@ -440,12 +448,18 @@ export function buildSections(
         current = ensureSection(null, `section-after-${e.event_id}`);
         continue;
       }
-      if (isNonBoundaryUserMessage(e.content ?? "", e.is_meta)) {
+      if (isNonBoundaryUserMessage(e.content ?? "", e.is_meta, e.is_compact_summary)) {
         // Collapsed system chips -- Stop-hook feedback, browser-fleet nudges,
-        // background task-notifications -- fold into the current section as a
-        // chip rather than opening a new turn. (A chip only ever comes from an
-        // explicit detector, never from is_meta, so this check needs no is_meta.)
-        if (current !== null && isSystemChipUserMessage(e.content ?? "")) {
+        // background task-notifications, the post-compaction summary -- fold into
+        // the current section as a chip rather than opening a new turn. A chip
+        // comes from an explicit detector OR the is_compact_summary flag (never
+        // from is_meta), so the flag is threaded through but is_meta is not.
+        if (isSystemChipUserMessage(e.content ?? "", e.is_compact_summary)) {
+          // The compaction summary can be the FIRST event of a resumed session,
+          // with no section open yet; open a pre-section so it is not dropped
+          // (mirrors the leading-assistant-message case below). emitChips(-1)
+          // then renders it at the top of that section.
+          if (current === null) current = ensureSection(null, "section-pre");
           current.chips.push({ event: e, after: current.entries.length - 1 });
         }
         // The other non-boundary messages -- skill expansions, /welcome, and any

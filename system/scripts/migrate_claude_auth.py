@@ -44,7 +44,7 @@ import sys
 from pathlib import Path
 
 from imbue.mngr.utils.env_utils import parse_env_file
-from imbue.system_interface.claude_auth import (
+from imbue.system_interface.harnesses.claude.auth import (
     CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR,
     MANAGED_AUTH_ENV_KEYS,
     ClaudeAuthService,

@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
-import { buildToolResultsWithSkillExpansions, renderSubagentCard } from "./message-renderers";
+import type { AssistantMessageEvent } from "../models/Response";
+import {
+  buildToolResultsWithSkillExpansions,
+  renderAssistantMessageChildren,
+  renderSubagentCard,
+  renderToolCallBlock,
+} from "./message-renderers";
 import { isSkillExpansionUserMessage, parsePermissionResolution } from "./message-classification";
 
 // Avoid importing the heavy/DOM-dependent module graph (dockview, dompurify) at test time;
@@ -20,6 +26,9 @@ function skillToolCall(ts: string, callId: string): TranscriptEvent {
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -46,6 +55,60 @@ function skillExpansion(ts: string, skillName: string, eventId: string): Transcr
     content: `Base directory for this skill: /home/.claude/skills/${skillName}/\n\n# ${skillName}\n\nBody of ${skillName}.`,
   };
 }
+
+function apiErrorEvent(text: string, kind: string | null, providerFault: boolean): AssistantMessageEvent {
+  return {
+    timestamp: "2026-08-06T00:00:00.000Z",
+    type: "assistant_message",
+    event_id: "err-1",
+    source: "test",
+    model: "<synthetic>",
+    text,
+    tool_calls: [],
+    stop_reason: null,
+    usage: null,
+    is_auth_error: false,
+    is_api_error: kind !== null,
+    api_error_kind: kind,
+    is_provider_fault: providerFault,
+  };
+}
+
+// Uses allText + collectClasses (defined lower in this file) to read the rendered tree.
+describe("renderAssistantMessageChildren API errors", () => {
+  it("wraps a provider-fault error in the red block with a not-our-fault note", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("API Error: 529 Overloaded", "overloaded", true),
+      new Map(),
+      "agent-1",
+    );
+    const classes = collectClasses(children);
+    expect(classes).toContain("message-api-error");
+    expect(classes).toContain("message-api-error-note");
+    expect(allText(children)).toContain("isn't Minds' fault");
+    expect(allText(children)).toContain("overloaded");
+  });
+
+  it("styles a client-side error red but adds no not-our-fault note", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false),
+      new Map(),
+      "agent-1",
+    );
+    const classes = collectClasses(children);
+    expect(classes).toContain("message-api-error");
+    expect(classes).not.toContain("message-api-error-note");
+  });
+
+  it("leaves an ordinary assistant message unstyled", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("Here's the fix.", null, false),
+      new Map(),
+      "agent-1",
+    );
+    expect(collectClasses(children)).not.toContain("message-api-error");
+  });
+});
 
 describe("isSkillExpansionUserMessage", () => {
   it("matches user_messages whose content starts with the skill-expansion preamble", () => {
@@ -164,6 +227,9 @@ describe("buildToolResultsWithSkillExpansions", () => {
         stop_reason: null,
         usage: null,
         is_auth_error: false,
+        is_api_error: false,
+        api_error_kind: null,
+        is_provider_fault: false,
       },
       skillExpansion("2026-04-28T01:00:01Z", "alpha", "u-a"),
       skillExpansion("2026-04-28T01:00:02Z", "beta", "u-b"),
@@ -203,6 +269,9 @@ describe("buildToolResultsWithSkillExpansions", () => {
         stop_reason: null,
         usage: null,
         is_auth_error: false,
+        is_api_error: false,
+        api_error_kind: null,
+        is_provider_fault: false,
       },
       toolResult("2026-04-28T01:00:01Z", "tc-read", "file contents"),
     ];
@@ -301,6 +370,31 @@ describe("renderSubagentCard", () => {
     const text = allText(renderSubagentCard(toolCall, "agent-1", false));
     expect(text).toContain("from metadata");
     expect(text).toContain("View conversation");
+  });
+});
+
+describe("renderToolCallBlock header", () => {
+  // A real codex code-mode call: tool_name is always "exec"; the operation is buried
+  // in the JS input as tools.<fn>(...). The header should surface what it ran.
+  const execCall: ToolCall = {
+    tool_call_id: "c1",
+    tool_name: "exec",
+    input_preview: 'const r = await tools.exec_command({"cmd":"ls -la ."}); text(r.output);',
+    header_label: "Tool: Bash",
+  };
+
+  it("renders the parser's header label, keeping the raw input in the body", () => {
+    const text = allText(renderToolCallBlock(execCall, null));
+    // A codex exec is headed by what it actually did, never the bare "Tool: exec".
+    expect(text).toContain("Tool: Bash");
+    expect(text).not.toContain("Tool: exec");
+    // preserve-raw: the JS program is still shown in the block body.
+    expect(text).toContain("tools.exec_command");
+  });
+
+  it("falls back to 'Tool: <name>' for a call parsed before labels existed", () => {
+    const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_preview: "ls -la" };
+    expect(allText(renderToolCallBlock(bash, null))).toContain("Tool: Bash");
   });
 });
 

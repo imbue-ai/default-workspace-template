@@ -34,7 +34,11 @@ fi
 # CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
+: "${NODE_VERSION:=22.23.2}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
+: "${CODEX_VERSION:=0.146.0}"
+: "${CODEX_PATCH_RELEASE:=v0.146.0}"
+: "${PI_VERSION:=0.83.0}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
@@ -213,12 +217,62 @@ if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
     exit 1
 fi
 
-# Node.js from trixie main (pinned by the snapshot timestamp like every other
-# apt package; trixie ships the nodejs 20.x line). npm is its own package on
-# Debian, unlike the NodeSource builds that bundled it.
-apt-get update
-apt-get install -y --no-install-recommends nodejs npm
-rm -rf /var/lib/apt/lists/*
+# Node.js as a pinned, sha256-verified nodejs.org release tarball (installed to
+# /usr/local so node/npm/npx land on PATH). NOT the trixie apt nodejs (20.x): the
+# pi CLI ships an `undici` that calls `worker_threads.markAsUncloneable`, which is
+# absent on Node 20 and crashes pi at import -- so we pin Node 22 LTS. Installs like
+# gh/caddy/restic above: fixed version, checksummed download. Keep NODE_VERSION in
+# sync with the Dockerfile ARG.
+node_arch="$(uname -m)"
+case "${node_arch}" in
+    x86_64) node_goarch="x64"; node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" ;;
+    aarch64) node_goarch="arm64"; node_sha256="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30" ;;
+    *) echo "Unsupported architecture for node: ${node_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_goarch}.tar.gz" -o /tmp/node.tar.gz
+echo "${node_sha256}  /tmp/node.tar.gz" | sha256sum -c -
+# --strip-components=1 lands bin/node, bin/npm, bin/npx, lib/node_modules under /usr/local.
+tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1
+rm /tmp/node.tar.gz
+command -v node npm >/dev/null
+
+# Codex CLI (pinned; npm-installed, needs Node.js above). Keep in sync with
+# agent_types.codex.version in .mngr/settings.toml.
+npm install -g "@openai/codex@${CODEX_VERSION}"
+command -v codex >/dev/null
+
+# Replace the binary npm just vendored with a patched build that supports
+# `/model <model> [effort]`; upstream makes that a silent no-op that looks like
+# it worked (openai/codex#32212). npm still performs the install above -- we
+# overwrite exactly one file inside it. The codex-code-mode-host binary beside
+# it embeds V8 and is left alone, which is what keeps this patch cheap to carry.
+codex_patch_arch="$(dpkg --print-architecture)"
+case "${codex_patch_arch}" in
+    arm64) codex_patch_sha256="79c2b918bbee821b7b34e82bcb4aaa44fda83aa0d1e4fcdf1ebeacf560569f62" ;;
+    amd64) codex_patch_sha256="df58a4ebc53b6d446822b755ad38fafeee585e959ad0a84d949205b13a27c2f1" ;;
+    *) echo "Unsupported architecture for patched codex: ${codex_patch_arch}" >&2; exit 1 ;;
+esac
+# npm nests the platform subpackage, and the exact path differs between npm
+# versions, so locate it rather than hardcoding it. Refuse ambiguity instead of
+# picking one and patching the wrong install.
+codex_vendored="$(find /usr/local/lib/node_modules/@openai -type f -path '*/vendor/*/bin/codex')"
+if [ "$(printf '%s\n' "${codex_vendored}" | grep -c .)" != "1" ]; then
+    echo "Expected exactly one vendored codex binary, found: ${codex_vendored:-none}" >&2
+    exit 1
+fi
+# Same download-then-rename(2) dance as install_downloaded_binary (see its
+# comment re: ETXTBSY on a live re-provision), with a checksum in the middle.
+codex_patch_tmp="$(mktemp "${codex_vendored}.XXXXXX")"
+curl -fsSL "https://github.com/minhtrinh-imbue/codex-in-minds/releases/download/${CODEX_PATCH_RELEASE}/codex-linux-${codex_patch_arch}" -o "${codex_patch_tmp}"
+echo "${codex_patch_sha256}  ${codex_patch_tmp}" | sha256sum -c -
+chmod 0755 "${codex_patch_tmp}"
+mv -f "${codex_patch_tmp}" "${codex_vendored}"
+codex --version
+
+# Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
+# in sync with agent_types.pi-coding.version in .mngr/settings.toml.
+npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
+command -v pi >/dev/null
 
 # apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the
 # environment record under ~/.mngr/plugin/env-converge re-captures from dpkg's

@@ -121,7 +121,7 @@ specifics:
   A change can be partly both -- anchored in a real conversation but adding
   something new -- in which case name the real anchor and call out the new part.
   Use your judgment.
-- **Launch** with `--template subskill-worker` (installs the generic
+- **Launch** with `--template worker` (installs the generic
   `harden-worker`) per `update-creation` Step 3, then background-poll per
   `.agents/shared/references/lead-proxy.md`.
 - **Terminal handling differs:** the system interface emits no gate, and on
