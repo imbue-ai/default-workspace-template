@@ -58,11 +58,13 @@
   #takecontrol { padding: 8px 16px; background: #b5462b; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
   #takecontrol:disabled { opacity: .6; cursor: default; }
 
-  /* Terminal near-opaque cover for a crashed/OOM-killed browser. */
-  #crashoverlay { display: none; position: absolute; inset: 0; z-index: 20; background: rgba(20, 20, 20, 0.92); flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px; }
-  #crashoverlay.show { display: flex; }
-  #crashoverlay .msg { font-size: 19px; line-height: 1.4; color: #fff; font-weight: 700; max-width: 90%; }
-  #crashoverlay .sub { font-size: 14px; color: rgba(255, 255, 255, 0.75); max-width: 90%; }
+  /* Terminal near-opaque cover for a browser that is gone: crashed/OOM-killed
+     (#crashoverlay) or explicitly closed by an agent (#terminatedoverlay). Same styling
+     for both -- they differ only in wording. */
+  #crashoverlay, #terminatedoverlay { display: none; position: absolute; inset: 0; z-index: 20; background: rgba(20, 20, 20, 0.92); flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px; }
+  #crashoverlay.show, #terminatedoverlay.show { display: flex; }
+  #crashoverlay .msg, #terminatedoverlay .msg { font-size: 19px; line-height: 1.4; color: #fff; font-weight: 700; max-width: 90%; }
+  #crashoverlay .sub, #terminatedoverlay .sub { font-size: 14px; color: rgba(255, 255, 255, 0.75); max-width: 90%; }
 
   /* Paused-stream overlay: a translucent tint + label OVER the frozen last frame while
      this viewer isn't the active stream (another pane/device is). Click anywhere to resume. */
@@ -126,6 +128,10 @@
       <div class="msg">This browser crashed.<br />Chromium was killed (for example, out of memory).</div>
       <div class="sub">Open a new browser from the + menu.</div>
     </div>
+    <div id="terminatedoverlay">
+      <div class="msg">This browser has been terminated by an agent.</div>
+      <div class="sub">Open a new browser from the + menu.</div>
+    </div>
     <div id="initoverlay">
       <div class="bar"><div class="fill" id="initfill"></div></div>
       <div class="msg">Starting browser…</div>
@@ -141,6 +147,7 @@
       <div id="tipscard">
         <h2>Using this browser</h2>
         <ul>
+          <li><b>Browser works in the background.</b> Even if you close this workspace tab, the browser will run in the background and agents can work on it.</li>
           <li><b>Copy and paste, both ways.</b> You can copy both images and text out of the browser, and can paste them in too.</li>
           <li><b>Keyboard shortcuts.</b>
             <ul>
@@ -173,6 +180,7 @@
   const context = canvas.getContext("2d", { desynchronized: true });
   const overlay = document.getElementById("overlay");
   const crashOverlay = document.getElementById("crashoverlay");
+  const terminatedOverlay = document.getElementById("terminatedoverlay");
   const initOverlay = document.getElementById("initoverlay");
   const pausedOverlay = document.getElementById("pausedoverlay");
   const memWarn = document.getElementById("memwarn");
@@ -190,6 +198,10 @@
 
   const HEADER_LEN = 10;
   const FRAME_TYPE_IDR = 1;
+  // Application WebSocket close code (4000-4999 range) the server uses on /cast + /stream
+  // when a browser is gone because an agent CLOSED it (distinct from 1008 "failed/invalid"
+  // and 1013 "retry"): the viewer renders the terminal "terminated" overlay, no reconnect.
+  const WS_CLOSE_TERMINATED = 4001;
 
   // ---- control plane (unchanged): ownership, overlay, lifecycle, over /cast ----
   let controlOwner = "human";
@@ -328,6 +340,20 @@
     returnBar.classList.remove("show");
     initOverlay.classList.remove("show");
     crashOverlay.classList.add("show");
+  }
+
+  // The browser was explicitly closed by an agent (or otherwise retired) -- a terminal
+  // state like a crash, but its own wording. Cover the pane with the same near-opaque
+  // overlay the crash/OOM screen uses instead of the "Loading browser view…" spinner or a
+  // "Starting browser…" retry loop. Marks the viewer closed-for-good so nothing reconnects.
+  function showTerminated() {
+    closedForGood = true;
+    stopIdleTimer();
+    overlay.classList.remove("show");
+    returnBar.classList.remove("show");
+    initOverlay.classList.remove("show");
+    pausedOverlay.classList.remove("show");
+    terminatedOverlay.classList.add("show");
   }
 
   // ---- pixel plane: per-stripe H.264 decoder over /stream ----
@@ -936,7 +962,8 @@ registerProcessor('pb', PB);`;
       bumpWatchdog();  // any inbound frame (ping included) proves the link is alive
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "crashed") showCrashed();
-      else if (crashed) return;
+      else if (m.type === "closed") showTerminated();  // agent closed this browser -> terminal overlay
+      else if (crashed || closedForGood) return;
       else if (m.type === "launch_failed") {
         closedForGood = true;
         initOverlay.classList.add("static");
@@ -960,6 +987,10 @@ registerProcessor('pb', PB);`;
     };
     ws.onclose = (ev) => {
       clearTimeout(watchdog);
+      // Already in a terminal state (a "closed" broadcast, a prior 1008/4001, launch_failed):
+      // don't re-show the init cover or schedule a reconnect over the terminal overlay.
+      if (closedForGood) return;
+      if (ev.code === WS_CLOSE_TERMINATED) { showTerminated(); return; }
       if (ev.code === 1008) {
         closedForGood = true;
         overlay.classList.remove("show");

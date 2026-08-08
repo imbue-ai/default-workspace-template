@@ -1977,6 +1977,12 @@ class LiveBrowser(MutableModel):
         self._closed = True
         if self._keepalive_task is not None:
             self._keepalive_task.cancel()
+        # Tell every connected viewer this browser is gone BEFORE pushing the shutdown
+        # sentinel, so the pane shows the terminal "terminated by an agent" overlay
+        # immediately (mirrors the ``crashed`` broadcast) instead of flashing the
+        # "Loading browser view…" spinner while its cast socket closes and reconnects.
+        # Enqueued ahead of the sentinel, so the ordered per-socket queue sends it first.
+        self._broadcast({"type": "closed", "browser_id": self.browser_id})
         # Tell every cast socket to tear down (don't wait for the client to disconnect).
         self._shutdown_cast_queues()
         # Release every queued agent so none hangs on a browser being torn down: wait-queue
