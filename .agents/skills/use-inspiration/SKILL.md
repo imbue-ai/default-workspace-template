@@ -232,3 +232,17 @@ when the user has enabled GitHub sync, the post-commit hook handles any push).
 Include the merged-in tree, the modified
 files from filling holes, and the updated manifest with its new `Adaptation
 history` entry.
+
+## 8. Record it in user knowledge
+
+Update `data/.state/user_knowledge.toml` (gitignored machine state, separate
+from the commit above -- see `data/.state/README.md`) so the agent knows this
+user has already used inspirations and doesn't keep proactively suggesting
+it. Create the file if it doesn't exist; otherwise set `has_used = true`
+under `[inspirations]` without touching any other keys or tables already
+there:
+
+```toml
+[inspirations]
+has_used = true
+```
