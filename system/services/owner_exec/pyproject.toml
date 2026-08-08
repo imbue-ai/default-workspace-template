@@ -8,6 +8,7 @@ dependencies = [
     "flask>=3.0.0",
     "cryptography>=42.0.0",
     "werkzeug>=3.0.0",
+    "loguru>=0.7.0",
 ]
 
 [project.scripts]
