@@ -389,7 +389,9 @@ def test_health_authenticated_reports_backend_detail(tmp_path: Path) -> None:
 
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body == {"gateway": "ok", "backend": "ok", "owner": True}
+    assert body["gateway"] == "ok"
+    assert body["backend"] == "ok"
+    assert body["owner"] is True
 
 
 def test_health_cors_only_echoes_the_configured_chrome_origin(tmp_path: Path) -> None:
@@ -423,5 +425,77 @@ def test_expired_session_cookie_is_rejected(tmp_path: Path) -> None:
     harness.client.set_cookie(SESSION_COOKIE_NAME, expired)
 
     resp = harness.client.get("/_auth/verify", headers=_verify_headers(accept="application/json"))
+
+    assert resp.status_code == 401
+
+
+def test_health_owner_detail_includes_the_service_label_map(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True))
+
+    resp = harness.client.get("/_health", headers={"Origin": _CHROME_ORIGIN})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["owner"] is True
+    assert body["services"] == {name: label for label, name in _LABELS.items()}
+
+
+def test_health_visitor_detail_omits_the_service_label_map(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    resp = harness.client.get("/_health")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["owner"] is False
+    assert "services" not in body
+
+
+def test_post_with_the_chrome_origin_is_allowed(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True))
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, method="POST", origin=_CHROME_ORIGIN),
+    )
+
+    assert resp.status_code == 200
+
+
+def test_post_with_the_chrome_origin_is_rejected_when_no_chrome_is_configured(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path, chrome_origin="")
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True))
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, method="POST", origin=_CHROME_ORIGIN),
+    )
+
+    assert resp.status_code == 403
+
+
+def test_chrome_preflight_passes_verify_without_a_session(tmp_path: Path) -> None:
+    # Preflights never carry credentials, so the forward_auth must let the
+    # chrome's OPTIONS through for the service to answer with CORS headers.
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, method="OPTIONS", origin=_CHROME_ORIGIN, accept="*/*"),
+    )
+
+    assert resp.status_code == 200
+
+
+def test_foreign_preflight_still_requires_a_session(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, method="OPTIONS", origin="https://evil.example.com", accept="*/*"),
+    )
 
     assert resp.status_code == 401

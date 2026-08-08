@@ -182,6 +182,11 @@ def build_gateway_app(
             "backend": "ok" if is_backend_registered else "starting",
             "owner": identity.is_owner,
         }
+        if identity.is_owner:
+            # The owner's chrome needs the service origins (unguessable labels)
+            # to reach individual services -- most importantly owner-exec. Only
+            # the owner gets the map; a visitor sees just liveness + backend.
+            detail["services"] = {name: label for label, name in label_to_name.items()}
         return _apply_health_cors(app.response_class(response=_json_body(detail), mimetype="application/json"))
 
     @app.get("/_auth/loading")
@@ -205,10 +210,24 @@ def build_gateway_app(
 
         origin_header = request.headers.get("Origin")
         if not is_request_origin_allowed(
-            method, origin_header, is_websocket_upgrade, workspace_domain, label_to_name, auth_label
+            method,
+            origin_header,
+            is_websocket_upgrade,
+            workspace_domain,
+            label_to_name,
+            auth_label,
+            chrome_origin,
         ):
             _log_denied("request Origin is not allowed", host)
             return _forbidden()
+
+        # A CORS preflight from the hosted chrome must reach the service so it
+        # can answer with its CORS headers -- and preflights never carry
+        # credentials, so the session check below would bounce them. Allowing
+        # the preflight through exposes nothing: the actual request that
+        # follows it is session-checked as usual.
+        if method.upper() == "OPTIONS" and chrome_origin and origin_header == chrome_origin:
+            return Response(status=200)
 
         cookie_header = request.headers.get("Cookie", "")
         session_value = request.cookies.get(SESSION_COOKIE_NAME, "")

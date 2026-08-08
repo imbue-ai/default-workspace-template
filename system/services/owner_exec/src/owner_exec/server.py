@@ -56,6 +56,7 @@ class OwnerExecConfig:
         repo_root: Path,
         nonce_cache: NonceCache,
         now: Callable[[], float],
+        chrome_origin_resolver: Callable[[], str] | None = None,
     ) -> None:
         # Returns the workspace's own share domain (an envelope must bind to
         # it), read fresh so enabling/disabling sharing needs no restart; "" when
@@ -65,10 +66,42 @@ class OwnerExecConfig:
         self.repo_root = repo_root
         self.nonce_cache = nonce_cache
         self.now = now
+        # Returns the hosted chrome origin (from share.env) allowed to drive
+        # this service cross-origin; "" disables the CORS headers entirely.
+        self.chrome_origin_resolver = chrome_origin_resolver if chrome_origin_resolver is not None else lambda: ""
 
 
 def build_owner_exec_app(config: OwnerExecConfig) -> Flask:
     app = Flask(__name__)
+
+    @app.after_request
+    def _apply_chrome_cors(response: Response) -> Response:
+        """Echo the configured chrome origin so the hosted chrome can call exec.
+
+        Credentialed CORS (the gateway's forward_auth needs the workspace
+        session cookie), so the exact origin is echoed -- never a wildcard --
+        and only when the request's Origin matches the configured chrome.
+        """
+        chrome_origin = config.chrome_origin_resolver()
+        request_origin = request.headers.get("Origin", "")
+        if chrome_origin and request_origin == chrome_origin:
+            response.headers["Access-Control-Allow-Origin"] = chrome_origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = ", ".join(
+                ("Content-Type", _SIGNATURE_HEADER, _PUBLIC_KEY_HEADER, _TIMESTAMP_HEADER, _NONCE_HEADER)
+            )
+            response.headers["Vary"] = "Origin"
+        return response
+
+    @app.route("/run", methods=["OPTIONS"])
+    @app.route("/read-file", methods=["OPTIONS"])
+    @app.route("/write-file", methods=["OPTIONS"])
+    @app.route("/grants", methods=["OPTIONS"])
+    def _preflight() -> Response:
+        # Preflights carry no credentials and no envelope; the after_request
+        # hook stamps the CORS headers when the Origin is the chrome's.
+        return Response(status=204)
 
     def _authenticate() -> None:
         """Verify the request's signed envelope, raising ExecAuthError on failure."""
