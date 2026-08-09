@@ -55,15 +55,13 @@ from imbue.system_interface.harnesses.claude.launch_defaults import read_workspa
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
-from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import ModelChoice
-from imbue.system_interface.harnesses.model import ModelChoiceSource
 from imbue.system_interface.harnesses.model import match_option
-from imbue.system_interface.harnesses.model import merge_identities
+from imbue.system_interface.harnesses.model import read_model_identity
 from imbue.system_interface.harnesses.path_watch import PathWatcher
-from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import build_tracker
 from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
@@ -338,14 +336,11 @@ class AgentManager:
     # backstop). Both are dropped when activity tracking stops.
     _queued_messages_by_agent: dict[str, tuple[QueuedMessageState, ...]]
     _queue_idle_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]]]]
-    # Per-agent model resolver (built from the agent's harness), the last computed
-    # model choice, and the filesystem watcher that re-derives it when the agent's
-    # settings/rollout changes. Parallel to the activity trio, but the resolver is
-    # built independent of the local state dir (a remote agent still shows its GUESS),
-    # and only the live watch needs the state dir.
-    _model_resolver_by_agent: dict[str, HarnessModelResolver]
-    # None = the harness has no model to show yet (no launch default and nothing live,
-    # e.g. pi before its session records a model) -> the bar renders logo-only.
+    # The last computed model choice per agent, and the filesystem watcher that
+    # re-derives it when the agent's minds_model_state.json changes. The live read is
+    # harness-neutral (the shared reader + the harness's registered state-file path), so
+    # there is no per-agent resolver to cache -- the switch endpoint builds one inline.
+    # None = the harness has recorded no model yet -> the bar renders logo-only.
     _model_choice_by_agent: dict[str, ModelChoice | None]
     _model_watcher_by_agent: dict[str, PathWatcher]
     # Assist chats whose tab we have already auto-opened (or that existed at
@@ -402,7 +397,6 @@ class AgentManager:
         manager._activity_state_by_agent = {}
         manager._queued_messages_by_agent = {}
         manager._queue_idle_handler_by_agent = {}
-        manager._model_resolver_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
         manager._auto_opened_assist_ids = set()
@@ -453,7 +447,6 @@ class AgentManager:
             self._activity_state_by_agent.clear()
             self._queued_messages_by_agent.clear()
             self._queue_idle_handler_by_agent.clear()
-            self._model_resolver_by_agent.clear()
             self._model_choice_by_agent.clear()
 
     @property
@@ -1237,25 +1230,24 @@ class AgentManager:
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
-        """Build the agent's model resolver and, when its state dir exists, watch it.
+        """Watch the agent's live model-state file once its state dir exists.
 
-        The resolver is built even for a remote or not-yet-materialised agent, so the
-        composer shows its launch GUESS immediately; only the live watch -- which
-        reflects on-disk changes -- needs the local state dir, so it starts (and is
-        retried on later calls) once that dir is present. Idempotent.
+        The live read is harness-neutral -- the shared reader over the harness's
+        registered ``minds_model_state.json`` -- so there is nothing to build per agent;
+        this just derives the current choice and, when the local state dir is present,
+        starts the one watch that drives every later recompute. Idempotent (the watch is
+        retried on later calls until the dir appears).
         """
-        agent_info = self.get_agent_info_by_id(agent_id)
-        if agent_info is None:
+        agent_state = self.get_agent_by_id(agent_id)
+        if agent_state is None:
             return
         with self._lock:
-            if agent_id not in self._model_resolver_by_agent:
-                self._model_resolver_by_agent[agent_id] = build_resolver(agent_info)
-            resolver = self._model_resolver_by_agent[agent_id]
             needs_watcher = agent_id not in self._model_watcher_by_agent
         self._recompute_model_choice(agent_id, broadcast_on_change=False)
         if needs_watcher and self._get_agent_state_dir(agent_id).exists():
+            state_path = get_model_state_path(agent_state.harness, self._get_agent_state_dir(agent_id))
             new_watcher = PathWatcher.build(
-                resolver.watched_paths(),
+                (state_path,),
                 lambda: self._recompute_model_choice(agent_id, broadcast_on_change=True),
             )
             with self._lock:
@@ -1266,16 +1258,15 @@ class AgentManager:
                 new_watcher.start()
 
     def _stop_model_tracking(self, agent_id: str) -> None:
-        """Stop the model watcher and clear the cached resolver + choice for an agent."""
+        """Stop the model watcher and clear the cached choice for an agent."""
         with self._lock:
             watcher = self._model_watcher_by_agent.pop(agent_id, None)
-            self._model_resolver_by_agent.pop(agent_id, None)
             self._model_choice_by_agent.pop(agent_id, None)
         if watcher is not None:
             watcher.stop()
 
     def _recompute_model_choice(self, agent_id: str, *, broadcast_on_change: bool, force: bool = False) -> None:
-        """Recompute an agent's model choice from its resolver, then cache/broadcast it.
+        """Recompute an agent's model choice from its live state file, then cache/broadcast it.
 
         Mirrors ``_recompute_activity_state``: the disk read runs outside the lock,
         the no-op guard suppresses an unchanged broadcast, and ``model_copy`` updates
@@ -1284,28 +1275,26 @@ class AgentManager:
         the derived value unchanged -- otherwise an optimistic pending pick that
         resolves to the same value would never be superseded on the frontend.
         """
+        # Resolve the harness first (like the activity recompute resolves its tracker): it
+        # names the state file to read, and the read must stay outside the lock.
         with self._lock:
-            resolver = self._model_resolver_by_agent.get(agent_id)
-        if resolver is None:
+            harness_state = self._agents.get(agent_id)
+        if harness_state is None:
             return
-        # Disk reads (settings.json / rollout) stay outside the lock.
-        live = resolver.read_live()
-        guess = resolver.guess_from_launch()
-        identity = merge_identities(live, guess)
-        source = ModelChoiceSource.LIVE if live is not None else ModelChoiceSource.GUESS
+        # The disk read (minds_model_state.json) stays outside the lock. Only harness +
+        # state dir are needed -- not claude_config_dir, which would cost an env-file read.
+        identity = read_model_identity(get_model_state_path(harness_state.harness, self._get_agent_state_dir(agent_id)))
         with self._lock:
-            if agent_id not in self._model_resolver_by_agent:
-                return
             agent_state = self._agents.get(agent_id)
             if agent_state is None:
                 return
-            # identity is None when the harness has nothing to show yet (no launch
-            # default and nothing live, e.g. pi pre-first-model) -> no choice, logo-only.
+            # identity is None when the harness has recorded no model yet (e.g. before a
+            # session's first statusline fire, or a remote agent) -> no choice, logo-only.
             if identity is None:
                 choice: ModelChoice | None = None
             else:
                 matched = match_option(identity, get_catalog(agent_state.harness).options)
-                choice = ModelChoice(identity=identity, source=source, matched=matched)
+                choice = ModelChoice(identity=identity, matched=matched)
             old_choice = self._model_choice_by_agent.get(agent_id)
             if not force and old_choice == choice and agent_state.model_choice == choice:
                 return
@@ -1315,11 +1304,6 @@ class AgentManager:
             )
         if broadcast_on_change:
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
-
-    def get_model_resolver(self, agent_id: str) -> HarnessModelResolver | None:
-        """The model resolver for ``agent_id``, or None when the agent is not tracked."""
-        with self._lock:
-            return self._model_resolver_by_agent.get(agent_id)
 
     def refresh_model_choice(self, agent_id: str) -> None:
         """Force one authoritative model-choice broadcast (bypassing the no-op guard).
