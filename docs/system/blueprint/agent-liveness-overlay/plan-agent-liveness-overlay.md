@@ -1,7 +1,8 @@
 # Plan: agent liveness overlay (the "if you can interact, it's live" contract)
 
-Status: v3 -- explored, adversarially reviewed (2 passes), amendments folded.
-Pending user go.
+Status: v4 -- explored, adversarially reviewed (2 passes), user feedback folded
+(light UI treatment, no suppression machinery, per-element inert). Pending user
+go.
 
 ## The contract
 
@@ -70,36 +71,45 @@ pending resume                                    -> overlay: "Starting agent...
 resume failed                                     -> overlay: "Couldn't start" + detail + [Retry]
 ```
 
-- Mechanics of "covered": the footer stays MOUNTED with the `inert` attribute
-  set (blocks pointer AND keyboard/focus; blur any focused element inside on
-  raise) -- a visual cover alone is bypassable from the keyboard (review
-  finding: a user typing when the agent dies still has focus; Enter would
-  send). Composer draft and staged attachments survive (localStorage +
-  module-keyed state, verified).
-- The resume affordance is a DISCRETE button inside the overlay, not a
-  whole-footer click target (misclick/scroll-overshoot must not boot
-  processes; also the mobile thumb zone).
+- UI treatment (user direction: nice, compact, not dark): NO full-region
+  scrim. The gated elements (`MessageInput`, `ModelBar`, the
+  `conversation-before-input` slot) get the `inert` attribute plus a light
+  dim (reduced opacity, no dark backdrop), and a COMPACT centered capsule
+  floats over the input area carrying the state -- "Agent stopped [Resume]" /
+  "Starting agent..." spinner / "Couldn't start [Retry]" + detail. The
+  capsule is the only new visual chrome; everything else keeps its normal
+  look. Match the app's existing pill/button styling; both themes.
+- Exemption mechanics: `inert` is PER-ELEMENT, so there is no overlay
+  geometry problem -- the `composer-under-bar-actions` group ("Open agent
+  terminal", "Agent auth") simply never gets `inert` or the dim, stays fully
+  live in the same row. No polygon, no cutouts.
+- Why `inert` and not just a visual cover: a cover alone is bypassable from
+  the keyboard (a user typing when the agent dies still has focus; Enter
+  would send). `inert` blocks pointer AND keyboard/focus; blur any focused
+  element inside on raise. Composer draft and staged attachments survive
+  (localStorage + module-keyed state, verified).
 - `pending resume` is frontend-local per-agent state: set on click, cleared by
   an alive push (authoritative). After the POST resolves 200, a non-alive push
   arriving past a short grace (~10s) flips to the failed state (start
   succeeded then crashed). POST error -> failed state immediately. ~90s
   failsafe backstops a wedged start.
-- Restart-transient suppression (review finding): the stop/interrupt button
-  and shoulder-tap SIGKILL-then-relaunch the agent; the STOPPED push in that
-  window must not flash the overlay under the user's cursor. Suppress the
-  stopped overlay for a short window (~15s) after any UI-initiated
-  restart/flush for that agent (same class of fix as QueuedMessageView's
-  anti-blip freeze, `QueuedMessageView.ts:7-11`).
+- Flash story (user decision -- NO suppression machinery): the transient
+  sources are UI-initiated restarts (interrupt button, shoulder-tap), and the
+  native-interrupt redesign removes those restarts at the source. SEQUENCING:
+  land the native interrupt before (or with) this overlay. After that, a
+  raised capsule always reflects a genuine stop -- and an explicit
+  force-restart SHOWING "Starting agent..." is honest, desired feedback, not
+  a flash to hide. New-chat creation never shows the capsule at all: the
+  proto-agent phase renders no footer (`ChatPanel.ts:865`), and the agent
+  joins the store already RUNNING (`agent_manager.py:766`).
 - External transitions: another surface starting the agent clears via the
   push; external `mngr stop` raises via the push. An internal auto-start
   (welcome resend, cross-agent send) may briefly stream transcript under a
-  raised overlay until its alive push lands -- accepted, self-heals in one
+  raised capsule until its alive push lands -- accepted, self-heals in one
   push.
-- Drag-and-drop / paste-to-attach keeps working while the overlay is up
-  (attachments are draft state, like composer text); overlay copy should not
+- Drag-and-drop / paste-to-attach keeps working while the capsule is up
+  (attachments are draft state, like composer text); the copy should not
   imply the composer is dead.
-- The `conversation-before-input` EmptySlot sits under the overlay (inert with
-  the rest); plugin UI there is composing-adjacent.
 
 ## Backend changes (revised by review -- NO 409 belt)
 
@@ -130,18 +140,20 @@ resume failed                                     -> overlay: "Couldn't start" +
 
 ## Verification (build time)
 
-- Unit: derivation table (each lifecycle value x pending x suppression x
-  no-snapshot).
+- Unit: derivation table (each lifecycle value x pending x no-snapshot).
 - Manual, desktop AND mobile layout:
-  - `mngr stop` a scratch agent -> stopped overlay; transcript scrolls; chip
+  - `mngr stop` a scratch agent -> capsule appears; transcript scrolls; chip
     shows last-known model; drafts/attachments preserved; Tab cannot reach
-    covered controls; Resume -> spinner -> unlock on push.
-  - Kill the harness process inside its pane (DONE) -> overlay -> Resume
+    inert controls; terminal/auth stay live and undimmed; Resume -> spinner ->
+    unlock on push.
+  - Kill the harness process inside its pane (DONE) -> capsule -> Resume
     actually revives (the F1 case; must go through revive_done_agent).
-  - Interrupt and shoulder-tap on a RUNNING agent -> NO overlay flash.
-  - Terminal + auth buttons work while the overlay is up.
-  - Stop observe (kill the subprocess) -> agents degrade to UNKNOWN, overlay
+  - (After the native-interrupt change lands) interrupt and shoulder-tap on a
+    RUNNING agent -> no capsule; an explicit force-restart shows the
+    "Starting agent..." capsule during the restart, honestly.
+  - Stop observe (kill the subprocess) -> agents degrade to UNKNOWN, capsule
     says unavailable, recovers when observe returns.
+  - Visual: capsule is compact, light (no dark scrim), matches both themes.
 
 ## Build mechanics (when approved)
 
