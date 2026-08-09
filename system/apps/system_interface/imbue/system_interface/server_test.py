@@ -740,13 +740,31 @@ def _fake_queue_watcher(block: str) -> SimpleNamespace:
     """A stand-in watcher exposing just the queue methods the endpoints call.
 
     ``clear_calls`` records each ``clear_queue`` invocation so a test can assert
-    the tracked set was cleared, without pulling in ``unittest.mock``.
+    the tracked set was cleared, without pulling in ``unittest.mock``. ``method_calls``
+    records the ordered method names so a test can assert the pi override refreshes
+    (``get_all_events``) BEFORE it captures the block (``get_queued_block``).
     """
     clear_calls: list[bool] = []
+    method_calls: list[str] = []
+
+    def _clear() -> None:
+        method_calls.append("clear_queue")
+        clear_calls.append(True)
+
+    def _get_all_events() -> list[dict[str, Any]]:
+        method_calls.append("get_all_events")
+        return []
+
+    def _get_queued_block() -> str:
+        method_calls.append("get_queued_block")
+        return block
+
     return SimpleNamespace(
-        get_queued_block=lambda: block,
-        clear_queue=lambda: clear_calls.append(True),
+        get_all_events=_get_all_events,
+        get_queued_block=_get_queued_block,
+        clear_queue=_clear,
         clear_calls=clear_calls,
+        method_calls=method_calls,
     )
 
 
@@ -993,6 +1011,12 @@ def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(
     lines = (tmp_path / "pi_inbox").read_text().splitlines()
     assert lines == ['{"minds_interrupt_retract": true}']
     assert fake_watcher.clear_calls == [True]
+    # Refresh-first: the mirror is brought current (get_all_events) BEFORE the block is
+    # captured, so the running turn's own initiating message -- an enqueue whose leave has
+    # landed -- is popped rather than handed back to the composer with the parked steers.
+    assert fake_watcher.method_calls.index("get_all_events") < fake_watcher.method_calls.index(
+        "get_queued_block"
+    )
 
 
 def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
