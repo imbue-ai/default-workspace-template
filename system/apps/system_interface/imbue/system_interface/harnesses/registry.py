@@ -133,11 +133,14 @@ def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
     return get_harness_spec(agent_info.harness).resolver_class.build(agent_info)
 
 
-def get_model_state_path(agent_info: AgentInfo) -> Path:
+def get_model_state_path(harness: HarnessType, agent_state_dir: Path) -> Path:
     """The agent's live ``minds_model_state.json`` -- the file the shared reader parses and
-    the model watcher watches -- under its harness's registered relative directory."""
-    spec = get_harness_spec(agent_info.harness)
-    return model_state_path(agent_info.agent_state_dir, spec.model_state_relative_path)
+    the model watcher watches -- under its harness's registered relative directory.
+
+    Takes the harness + state dir (not the whole ``AgentInfo``) so the hot recompute path
+    need not resolve ``claude_config_dir``, which costs an extra env-file read it never uses.
+    """
+    return model_state_path(agent_state_dir, get_harness_spec(harness).model_state_relative_path)
 
 
 # Built once per process from each harness's factory. The parsed catalogs (pi)

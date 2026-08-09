@@ -1238,15 +1238,16 @@ class AgentManager:
         starts the one watch that drives every later recompute. Idempotent (the watch is
         retried on later calls until the dir appears).
         """
-        agent_info = self.get_agent_info_by_id(agent_id)
-        if agent_info is None:
+        agent_state = self.get_agent_by_id(agent_id)
+        if agent_state is None:
             return
         with self._lock:
             needs_watcher = agent_id not in self._model_watcher_by_agent
         self._recompute_model_choice(agent_id, broadcast_on_change=False)
         if needs_watcher and self._get_agent_state_dir(agent_id).exists():
+            state_path = get_model_state_path(agent_state.harness, self._get_agent_state_dir(agent_id))
             new_watcher = PathWatcher.build(
-                (get_model_state_path(agent_info),),
+                (state_path,),
                 lambda: self._recompute_model_choice(agent_id, broadcast_on_change=True),
             )
             with self._lock:
@@ -1274,11 +1275,15 @@ class AgentManager:
         the derived value unchanged -- otherwise an optimistic pending pick that
         resolves to the same value would never be superseded on the frontend.
         """
-        agent_info = self.get_agent_info_by_id(agent_id)
-        if agent_info is None:
+        # Resolve the harness first (like the activity recompute resolves its tracker): it
+        # names the state file to read, and the read must stay outside the lock.
+        with self._lock:
+            harness_state = self._agents.get(agent_id)
+        if harness_state is None:
             return
-        # The disk read (minds_model_state.json) stays outside the lock.
-        identity = read_model_identity(get_model_state_path(agent_info))
+        # The disk read (minds_model_state.json) stays outside the lock. Only harness +
+        # state dir are needed -- not claude_config_dir, which would cost an env-file read.
+        identity = read_model_identity(get_model_state_path(harness_state.harness, self._get_agent_state_dir(agent_id)))
         with self._lock:
             agent_state = self._agents.get(agent_id)
             if agent_state is None:
