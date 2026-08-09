@@ -25,6 +25,7 @@ from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
+from imbue.system_interface.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
@@ -33,6 +34,7 @@ from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
+from imbue.system_interface.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import get_catalog as get_pi_catalog
 from imbue.system_interface.harnesses.pi_coding.watcher import PiSessionWatcher
@@ -78,7 +80,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=ClaudeActivityTracker,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
-        model_state_relative_path=Path("."),
+        model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
         # Claude Code's transcript has no turn boundaries; activity is inferred from an
         # unmatched tool_use plus the transcript tail.
         special_kinds=frozenset(),
@@ -107,7 +109,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=PiActivityTracker,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
-        model_state_relative_path=Path("."),
+        model_state_relative_path=PI_STATE_RELATIVE_PATH,
         special_kinds=frozenset(),
     ),
 }

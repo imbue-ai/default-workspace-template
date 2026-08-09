@@ -257,8 +257,10 @@ class HarnessModelResolver(ABC):
     """Applies (for a switchable harness) ONE agent's model choice.
 
     The live READ is harness-neutral -- every harness writes the uniform
-    ``minds_model_state.json`` that :func:`read_model_identity` parses -- so the
-    resolver only owns the harness-specific WRITE side:
+    ``minds_model_state.json`` that :func:`read_model_identity` parses, at the directory
+    the harness registers as ``HarnessSpec.model_state_relative_path`` (read-side data on
+    the spec, beside ``catalog_factory`` -- deliberately NOT on this resolver, which is
+    now write-only) -- so the resolver only owns the harness-specific WRITE side:
 
     * :meth:`switch` -- apply a selection (a no-op for a display-only harness)
     * :meth:`list_offered_models` -- the picker's offer set (only pi overrides it;

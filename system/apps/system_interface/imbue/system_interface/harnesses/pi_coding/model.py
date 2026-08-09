@@ -48,6 +48,10 @@ from imbue.system_interface.harnesses.model import to_options
 # and applies via pi.setModel / pi.setThinkingLevel (kept in sync with the extension).
 _CONTROL_NAME: str = "pi_control.jsonl"
 
+# The lifecycle extension writes minds_model_state.json at the agent state-dir root; the
+# registry wires this as the harness's model_state_relative_path (the shared reader reads there).
+PI_STATE_RELATIVE_PATH: Path = Path(".")
+
 # pi's thinking ladder, in pi's own order (pi-ai's getSupportedThinkingLevels iterates
 # this order). This is pi's ordering, not a curated effort set -- which levels a given
 # model actually offers comes from that model's own data below, verbatim as strings.
