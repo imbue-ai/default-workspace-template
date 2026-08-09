@@ -19,7 +19,6 @@ import type { QueuedMessage } from "../models/AgentManager";
 import { getHarnessCatalog } from "../models/HarnessCatalog";
 import { getFlushFreeze, releaseFlushFreeze, startFlushFreeze } from "../models/OutgoingMessages";
 import { flushQueue, shoulderTapAtomic } from "../models/Response";
-import { requestTailFollow } from "../models/tailFollowRequest";
 import { describeRequestError } from "../models/request-error";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
@@ -38,9 +37,6 @@ function isAtomicShoulderTapAgent(agentId: string): boolean {
 }
 
 async function flushQueuedMessages(agentId: string): Promise<void> {
-  // Snap the transcript to the bottom so the user follows the interrupted/merged turn
-  // as it lands, even if they'd scrolled up while it was working.
-  requestTailFollow(agentId);
   if (inFlightAgentIds.has(agentId)) {
     return;
   }
