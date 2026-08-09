@@ -12,8 +12,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.system_interface.harnesses.pi_coding.watcher import PiSessionWatcher
 
 
@@ -130,6 +134,39 @@ def test_queue_enqueues_from_inbox_and_leaves_on_drained_user_turn(tmp_path: Pat
     # The message drains into the transcript as a user turn -> it leaves the queue.
     _append_session(session, [_message_record("u", _user("please do X"))])
     assert watcher.get_queued_messages() == []
+
+
+@pytest.mark.parametrize("sentinel_key", [PI_INTERRUPT_KEY, PI_RETRACT_KEY])
+def test_sentinel_line_clears_the_tracked_queue(tmp_path: Path, sentinel_key: str) -> None:
+    # A flush or retract sentinel replays as a positional clear: every message before it was
+    # committed (flush) or discarded (retract) in the live session, so the mirror is empty at
+    # the sentinel's position -- keeping the ledger balanced across a backend restart.
+    session = tmp_path / "s.jsonl"
+    _write_session(session, [])
+    _point_marker(tmp_path, session)
+    inbox = tmp_path / "pi_inbox"
+    inbox.write_text(
+        json.dumps("first") + "\n" + json.dumps("second") + "\n" + json.dumps({sentinel_key: True}) + "\n"
+    )
+    watcher = _build(tmp_path)
+    assert watcher.get_queued_messages() == []
+
+
+@pytest.mark.parametrize("sentinel_key", [PI_INTERRUPT_KEY, PI_RETRACT_KEY])
+def test_strings_after_a_sentinel_re_enqueue(tmp_path: Path, sentinel_key: str) -> None:
+    # A message sent after the tap/stop enqueues normally: the sentinel cleared the prior set,
+    # and the following string is a fresh queued entry.
+    session = tmp_path / "s.jsonl"
+    _write_session(session, [])
+    _point_marker(tmp_path, session)
+    inbox = tmp_path / "pi_inbox"
+    inbox.write_text(json.dumps("stale") + "\n" + json.dumps({sentinel_key: True}) + "\n")
+    watcher = _build(tmp_path)
+    assert watcher.get_queued_messages() == []
+
+    with inbox.open("a") as handle:
+        handle.write(json.dumps("brand new") + "\n")
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["brand new"]
 
 
 def test_drain_older_than_process_start_does_not_pop(tmp_path: Path) -> None:

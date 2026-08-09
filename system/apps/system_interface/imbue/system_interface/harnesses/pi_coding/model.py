@@ -38,6 +38,13 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import start_agent
+from imbue.system_interface.harnesses.interrupt import InterruptToComposer
+from imbue.system_interface.harnesses.interrupt import RestartProcess
+from imbue.system_interface.harnesses.interrupt import SettleActivity
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_RETRACT_KEY
+from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
+from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import ModelAxis
@@ -263,3 +270,34 @@ class PiModelResolver(HarnessModelResolver):
         # state file once the extension applies (200ms poll when running; session start
         # after a wake).
         return SwitchResult(ok=True)
+
+
+class PiInterruptToComposer(InterruptToComposer):
+    """pi's stop button: append the retract sentinel to the inbox, hand the block back, no restart.
+
+    The lifecycle extension interrupts the running turn natively and DISCARDS its parked steers
+    (the retract sibling of the shipped flush), so there is no SIGKILL mid-tool-call, no
+    session-resume cost, and no ``reset_activity_state`` patch-up: the abort's ``agent_end``
+    settles the indicator on its own. The block is captured FIRST so it reaches the composer; the
+    tracked mirror is cleared here for immediacy, and the watcher's replay-side clear at the
+    sentinel keeps that durable across a backend restart. The base restart-drain's
+    ``restart_process`` / ``settle_activity`` are unused.
+    """
+
+    _inbox_path: Path
+
+    @classmethod
+    def build(cls, agent_info: AgentInfo) -> "PiInterruptToComposer":
+        self = cls.__new__(cls)
+        self._inbox_path = agent_info.agent_state_dir / PI_INBOX_NAME
+        return self
+
+    def drain_to_composer(
+        self, watcher: AgentSessionWatcher, restart_process: RestartProcess, settle_activity: SettleActivity
+    ) -> str:
+        # Capture before writing the sentinel: the sentinel is what clears the queue (both here
+        # and, durably, on the watcher's replay), so the block must be read first.
+        block = watcher.get_queued_block()
+        append_pi_inbox_sentinel(self._inbox_path, PI_RETRACT_KEY)
+        watcher.clear_queue()
+        return block

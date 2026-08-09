@@ -43,6 +43,7 @@ from loguru import logger as _loguru_logger
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.path_watch import PathWatcher
+from imbue.system_interface.harnesses.pi_coding.inbox import is_sentinel_object
 from imbue.system_interface.harnesses.pi_coding.queue_tracker import PiQueueTracker
 from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
@@ -302,7 +303,12 @@ class PiSessionWatcher(AgentSessionWatcher):
         """Read new lines from ``pi_inbox`` and enqueue each into the queue populator. Must
         hold ``_lock``. The inbox is append-only and mngr-owned; a shrink (unexpected)
         re-reads from the start, and the queue set is rebuilt from position on the next
-        leaves."""
+        leaves.
+
+        A flush/retract sentinel object line clears the tracked queue at its replay position:
+        every message before it was committed (flush) or discarded (retract) by the extension,
+        so clearing at the sentinel keeps the ledger balanced across backend restarts. The
+        endpoint's own ``clear_queue`` is for immediacy; this replay-side clear makes it durable."""
         path = self._inbox_path
         try:
             size = path.stat().st_size
@@ -334,6 +340,11 @@ class PiSessionWatcher(AgentSessionWatcher):
                 content = json.loads(stripped)
             except json.JSONDecodeError as exc:
                 logger.warning("pi watcher: skipping malformed inbox line: {}", exc)
+                continue
+            if is_sentinel_object(content):
+                # A shoulder-tap flush or stop retract: everything queued before it left the
+                # live session (committed or discarded), so drop the tracked queue positionally.
+                self._queue_tracker.clear()
                 continue
             if not isinstance(content, str):
                 continue
