@@ -437,7 +437,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
           m("div", { class: "message-input-row flex flex-row items-center" }, [
             m("textarea", {
               class: "message-input-textbox flex-1 resize-none focus:outline-none",
-              placeholder: "Type a message...",
+              placeholder: isAgentWorking ? "Type to queue more messages..." : "Type a message...",
               rows: 1,
               value: messageText,
               oncreate: (textareaVnode: m.VnodeDOM) => {
