@@ -41,3 +41,14 @@ message's paste and its Enter. Keystroke-driven agents (`SendKeysAgent` / the in
 agents) implement it via the new `SupportsKeyChordMixin.press_key_chord`; agents whose input is an
 API rather than a tmux pane (pi, opencode) are refused per-agent with a clear error. The Minds
 workspace UI uses this to deliver claude's native queue-flush chord.
+
+`mngr create` now waits for a newly-created agent's readiness signal even when there is no
+initial message to deliver. Previously the ready-signal wait only ran on the with-a-message
+path; a no-message create (how the Minds chat UI creates every chat) returned the instant the
+process was spawned. For a slow-booting harness that meant the agent surfaced as live before it
+could accept input -- most visibly pi, which writes its session and model-state files several
+seconds after launch, so a fresh pi chat showed a wrong status and an empty model bar and
+dropped an early message into a race. The wait uses the same per-harness `wait_for_ready_signal`
+the message path already uses (claude/codex poll for the composer prompt in the pane; pi waits
+for its session-started sentinel file). Its base implementation only runs the start action, so a
+plain `command` agent that does not override readiness detection still starts with no added wait.

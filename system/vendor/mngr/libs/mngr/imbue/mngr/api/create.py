@@ -393,9 +393,21 @@ def create(
                         agent.stage_initial_message(initial_message)
                     logger.info("Starting agent {} ...", agent.name)
                     host.start_agents([agent.id])
-                elif initial_message is not None:
-                    # Start agent with signal-based readiness detection
-                    # Raises AgentStartError if the agent doesn't signal readiness in time
+                else:
+                    # Start the agent and wait for its readiness signal BEFORE returning,
+                    # whether or not there is an initial message to send. Waiting even in
+                    # the no-message case means callers -- including the chat UI, which
+                    # always creates with no initial message -- only ever see the agent
+                    # once it can actually accept input. Otherwise a no-message create
+                    # returns the instant the process spawns, which for a slow-booting
+                    # harness (pi writes its session + model-state files several seconds
+                    # after launch) surfaces a live-looking agent that cannot yet take a
+                    # message. wait_for_ready_signal is the same per-harness check the
+                    # message path uses (claude/codex poll for the composer prompt in the
+                    # pane; pi waits for its session-started sentinel file); its base
+                    # implementation just runs start_action, so a plain command agent that
+                    # does not override it starts exactly as before, with no wait.
+                    # Raises AgentStartError if the agent doesn't signal readiness in time.
                     logger.info("Starting agent {} ...", agent.name)
                     timeout = (
                         agent_options.ready_timeout_seconds
@@ -407,12 +419,9 @@ def create(
                         start_action=lambda: host.start_agents([agent.id]),
                         timeout=timeout,
                     )
-                    logger.info("Sending initial message...")
-                    send_message_with_resend_guidance(agent, initial_message, "created and started")
-                else:
-                    # No initial message - just start the agent
-                    logger.info("Starting agent {} ...", agent.name)
-                    host.start_agents([agent.id])
+                    if initial_message is not None:
+                        logger.info("Sending initial message...")
+                        send_message_with_resend_guidance(agent, initial_message, "created and started")
 
                 # Build and return the result
                 result = CreateAgentResult(agent=agent, host=host)
