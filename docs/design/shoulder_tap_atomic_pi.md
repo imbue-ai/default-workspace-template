@@ -1,193 +1,161 @@
-# `shoulder_tap_atomic` for pi — deep spec
+# `shoulder_tap_atomic` for pi — minimal spec (post-adversarial-review)
 
-Status: DESIGN (no code yet). Companion to `docs/design/shoulder_tap_atomic.md` (the
-codex one, now shipped). This ports the same capability to pi.
+Status: DESIGN. Companion to `docs/design/shoulder_tap_atomic.md` (codex, shipped).
+Rewritten after three adversarial reviews collapsed the first draft ~4x. The earlier draft
+(turn counter + `pi_turn_state.json` + payload + outcome marker + second poller) was almost
+entirely an artifact of one wrong early choice. This is the minimal version.
 
-## 0. The headline: pi needs NO fork and NO binary build
+## 0. First, the honest scope question (decide this before building)
 
-Codex required forking the Rust binary (patch + EC2 rebuild + release + pinned reinstall),
-because the interrupt path lives in codex core. **Pi does not.** Pi's entire lifecycle is
-already driven by an extension we own and ship — `mngr_pi_lifecycle.ts`
-(`system/vendor/mngr/libs/mngr_pi_coding/.../resources/`) — loaded with `pi -e`. pi's
-extension API exposes everything we need (`ctx.abort()`, `ctx.isIdle()`, `ctx.ui` editor
-access, `pi.sendUserMessage`, `agent_start`/`agent_end` events). So the whole feature is a
-TypeScript change to code we already vendor: no fork, no `build.sh`, no EC2, no release, no
-sha-pinned reinstall. Deployment is the normal mngr vendor path.
+**pi already ships a working shoulder-tap.** We deliver mid-turn messages as
+`deliverAs:"steer"`, and pi's agent loop injects steers greedily before the next model
+response and re-polls after **every** tool-call round (`agent-loop.ts:167,182-190,259`). Tool
+boundaries arrive every few seconds, so greedy steering already covers ~90-95% of cases at
+zero cost. The atomic interrupt's *only* marginal win is **cutting one long, uninterrupted
+generation / long thinking block short** (no tool call to provide a boundary) — and even then
+it trades "keep the partial, act at the next boundary" for "discard the partial, act now" (the
+partial isn't committed to the transcript, same as codex §5).
 
-## 1. What "atomic shoulder-tap for pi" means
+The restart-flush this "replaces" was never pi's path anyway — that fallback exists for
+harnesses without native steer (claude). So the real comparison is **atomic-interrupt vs.
+greedy-steer-that-already-ships.**
 
-Same contract as codex: an external, race-free trigger that interrupts the running turn so
-the already-queued messages are delivered now, **gated on the turn the caller observed still
-being the live one** (ABA-safe). It replaces the SIGKILL-restart flush for pi (the
-`native_atomic_shoulder_tap_possible` flag flips pi to this once it's built).
+**Decision 1:** ship the ~40-line version below purely as latency polish for the long-thinking
+case, or declare greedy steering sufficient for pi and close this. (My lean: the small version
+is cheap enough to ship; it is not urgent.)
 
-But note pi's baseline is different: we already deliver messages to a running pi agent as
-`deliverAs: "steer"` (shipped), and pi's agent loop injects steers greedily at the next
-tool-call boundary. So for pi the *only* thing the interrupt adds is **cutting a long single
-model generation / long thinking short** so the queued steer is taken up immediately instead
-of after the current model response finishes.
+## 1. The minimal mechanism (design A — read the editor back)
 
-## 2. Three ways pi is harder than codex (and the resolutions)
+The key realization from review: **do not have Minds hand back the queued text.** When
+`ctx.abort()` runs, pi *synchronously* drains its own parked steers into the TUI editor, and
+the extension can read them straight back. So the extension is self-sufficient — no payload,
+no turn counter, no state file, no outcome marker.
 
-### 2.1 Pi has no turn id → we mint a turn counter
-Codex emits `TurnStarted.turn_id` in its rollout, which Minds already observes; the gate
-compared against it. Pi's transcript carries **no turn markers** (`special_kinds` is empty),
-only a binary `active` marker. So there is no id to gate on.
+Chain (all confirmed against source):
+- `ctx.abort()` → `_extensionAbortHandler` synchronously (`agent-session.ts:2420-2423`) →
+  `restoreQueuedMessagesToEditor({abort:true})` (`interactive-mode.ts:1819-1824`) →
+  `clearAllQueues()` (empties the steering queue) → `editor.setText(<steers concatenated>)` →
+  `agent.abort()` (`interactive-mode.ts:4209-4227`). mngr runs pi in interactive TUI mode, so
+  this handler is always bound (`plugin.py:509,616-667`).
+- The held `latestCtx` is a live `ExtensionContext`; `ctx.ui.getEditorText()/setEditorText()`
+  are wired to the live editor (`types.ts:307-338,216,219`; `interactive-mode.ts:2367-2368`).
+- `isIdle === !isStreaming === !_isAgentRunActive`, and it stays **false for the whole user
+  turn incl. tool rounds and internal continuations**, true only when fully settled
+  (`agent-session.ts:597,883-884`). So `isIdle()` is the correct "safe to resubmit" signal.
+- `pi.sendUserMessage(text)` to an **idle** agent starts one fresh turn; a single concatenated
+  string = one turn (`agent-session.ts:1167-1180`; `agent.ts:390-407`).
 
-**Resolution.** The extension already handles `agent_start` / `agent_end` (it maintains the
-`active` marker there). Add a monotonic counter incremented on `agent_start`, and write it to
-a new state file `pi_turn_state.json` (`{"turn": N, "running": true|false}`) atomically on
-`agent_start`/`agent_end`. Minds reads that file for the gate target — the same "the harness
-is the single source of truth for the id it will compare" trick we considered for codex.
-Because both the observed id (via the file) and the compared id (in the handler) are the
-extension's own counter, the id spaces align by construction.
+### The code (one file, ~25 lines)
+In `mngr_pi_lifecycle.ts`, reuse the existing `pi_inbox` drain (append-only, byte-offset
+tailed, already holds `latestCtx`, already on a 200ms timer — `:395-435`). Accept one control
+record shape alongside the existing string-message case (`:415`):
 
-### 2.2 `ctx.abort()` drains the steers into the editor — it does NOT flush them to a turn
-This is the crux, and it's the opposite of codex. In the way mngr runs pi (interactive TUI),
-`ctx.abort()` routes to pi's `_extensionAbortHandler`, which interactive-mode sets to
-`restoreQueuedMessagesToEditor({abort:true})`
-(`agent-session.ts:2420-2426` → `interactive-mode.ts` bindExtensions). That handler:
-`clearAllQueues()` (pulls the parked steers OUT of the steering queue), `editor.setText(<the
-steers, concatenated>)`, then `agent.abort()` (stops the model stream). So after
-`ctx.abort()`:
-- the model stream is aborted (good), but
-- the queued steers are sitting **in pi's TUI editor buffer, unsent** (in a headless mngr
-  agent nobody types Enter, so they never go anywhere), and
-- pi's steering queue is now empty.
-
-So unlike codex (whose core merges its own `pending_steers` into one committed turn on
-interrupt), pi's interrupt *loses* the queue into an editor buffer. We must re-deliver.
-
-**Resolution — resubmit after abort.** Two viable sources for the text to resubmit; pick one:
-- **(A) Editor read-back (self-contained).** After `ctx.abort()`, read the drained text with
-  `ctx.ui.getEditorText()`, clear it with `ctx.ui.setEditorText("")`, and resubmit via
-  `pi.sendUserMessage(text)` once idle. `ctx.ui` on the event-handler context IS the full
-  `ExtensionUIContext` (`types.ts:307,309` → `getEditorText`/`setEditorText` at 216/219,
-  wired to the live editor at `interactive-mode.ts:2367`).
-- **(B) Caller supplies the contents.** Minds already tracks the pending-steer *content* (it
-  renders the queued bubbles). The shoulder-tap intent carries `{target_turn, contents:[...]}`;
-  the extension aborts and resubmits the provided contents, and clears the editor
-  (`ctx.ui.setEditorText("")`) so nothing stale lingers. This needs no editor read and no
-  extension-side queue tracking.
-
-**Recommendation: (B).** It sidesteps the fragile parts of (A) (does a *held* `latestCtx.ui`
-still point at the live editor from inside the poll timer? does `getEditorText` reflect the
-post-drain state synchronously?) and mirrors how Minds already owns the queued content. It
-does mean pi's intent carries a payload, which is an **intentional asymmetry with codex**
-(codex is no-payload because its core flushes its own queue; pi can't cleanly flush, so the
-owner of the content — Minds — hands it back). Document that asymmetry.
-
-There is **no double-delivery**: `ctx.abort()`'s `clearAllQueues()` empties the steering
-queue, and we resubmit exactly the caller's captured contents once; the editor copy is
-cleared. If the editor clear is skipped (or unavailable in some ctx), the stale editor text
-is benign in the headless flow (mngr injects via the inbox, never submits the editor).
-
-### 2.3 Pi has no "merge into one turn"
-Codex's `on_interrupted_turn` merges N `pending_steers` into ONE turn. Pi injects steers
-individually. For parity we resubmit the captured contents **concatenated into a single
-`sendUserMessage`** (one merged turn), matching codex's user-visible behavior. (Sequential
-resubmission is the alternative but diverges from codex; prefer the merge.)
-
-## 3. The mechanism (chosen design)
-
-All in `mngr_pi_lifecycle.ts` + the Minds wireup.
-
-1. **Turn counter + state file.** On `agent_start`: `turn++`, write `pi_turn_state.json`
-   `{turn, running:true}` atomically. On `agent_end`/`session_shutdown`: write
-   `{turn, running:false}`. (Mirror the existing `pi_model_state.json` write.)
-2. **Control channel.** mngr/Minds appends one JSON line to
-   `$MNGR_AGENT_STATE_DIR/pi_shoulder_tap_atomic.jsonl`:
-   `{"target_turn": N, "contents": ["...", "..."]}`. The extension polls it on a
-   `setInterval` (exactly like the existing `pi_control.jsonl` model-switch drain and the
-   `pi_inbox` drain — same held-`latestCtx`, same byte-offset tailing).
-3. **Handler (atomic gate).** For each new intent, in ONE synchronous tick:
+1. On `{ "minds_interrupt": true }`, in ONE synchronous tick (no `await` between — the
+   atomicity guarantee):
    ```
    const ctx = latestCtx;
-   if (ctx && currentTurn === intent.target_turn && !ctx.isIdle()) {
-       ctx.abort();                 // stops the stream; drains steers to editor
-       pendingResubmit = intent.contents;   // deliver after idle (below)
-   }  // else: stale/idle → no-op
+   if (ctx && !ctx.isIdle()) {
+     ctx.abort();                          // drains pi's real queue into the editor
+     resubmitText = ctx.ui.getEditorText(); // read what pi drained
+     ctx.ui.setEditorText("");              // clear the (inert) editor copy
+     inboxPaused = true;                    // serialize: hold further inbox injects until resubmit
+   }
    ```
-   The check and `ctx.abort()` are one uninterruptible JS tick (no `await` between) — the same
-   single-threaded-event-loop atomicity argument as codex. ABA is defeated by the counter:
-   if the turn we observed already ended and a new one began, `currentTurn !== target` and we
-   no-op.
-4. **Resubmit after idle.** `waitForIdle()` is not on the base event-handler ctx, so don't
-   await it inline. Instead, once a `pendingResubmit` is set, deliver it when the agent goes
-   idle — either by polling `ctx.isIdle()` in the same drain timer, or on the next
-   `agent_end` event. Then: `ctx.ui.setEditorText("")` (clear the drained copy) and
-   `pi.sendUserMessage(pendingResubmit.join("\n\n"))` (one merged fresh turn), clearing
-   `pendingResubmit`.
-5. **Outcome marker.** Write a line to a result file (or reuse the queue tracker) so Minds can
-   report interrupted-vs-idle, analogous to codex's `queued_committed`/`queued_retracted`.
+2. In the same timer body, once the abort has settled:
+   ```
+   if (resubmitText != null && ctx && ctx.isIdle()) {
+     const t = resubmitText; resubmitText = null; inboxPaused = false;
+     if (t.trim()) pi.sendUserMessage(t, { deliverAs: "steer" });  // one merged fresh turn
+   }
+   ```
+3. While `inboxPaused`, `drainInbox` skips injecting further lines (so a not-yet-injected inbox
+   line can't start a competing turn between abort and resubmit).
 
-## 4. Atomicity & ABA correctness (same spine as codex)
+### Minds wireup (~12 lines)
+- `_shoulder_tap_atomic_endpoint` for pi: append one line `{"minds_interrupt":true}` to
+  `$MNGR_AGENT_STATE_DIR/pi_inbox` (pi's home is the state-dir root). No turn-state read, no
+  content gathering, no activity reset, no restart.
+- Flip `native_atomic_shoulder_tap_possible = True` for `PI_CODING` on the **`HarnessCatalog`**
+  (both catalog constructions). The button already branches on the flag.
 
-- **Atomic:** the extension runs in pi's single-threaded JS event loop. The `if
-  (currentTurn===target && !isIdle) ctx.abort()` executes to completion with nothing (not
-  `agent_end`, not the loop) interleaving — one "instruction". If the turn ended first,
-  `isIdle()` is already true (or the counter advanced) and we skip.
-- **ABA-safe:** the gate compares a monotonic generation (the counter), not a bare boolean,
-  so a stale intent for turn N never interrupts turn N+1.
-- **Counter persistence caveat (learned from codex review):** the counter resets when the pi
-  process restarts (mngr resume). Seed it so it never re-aliases an id: persist the last
-  counter in `pi_turn_state.json` and resume from it on load (the extension already seeds
-  other counters from `countLines(...)` for exactly this reason). A stale pre-restart intent
-  then can't match a fresh turn.
+## 2. What review CUT (and why each cut is safe)
 
-## 5. Transcript implications (identical to codex — and no net loss)
+- **The Minds-supplied `contents` payload → gone.** Editor read-back reads pi's *actual*
+  drained queue, which is always consistent with what pi really had (Minds' view can lag the
+  ~200ms inbox pipeline). Also removes the payload asymmetry with codex — pi's intent is now
+  payload-free too.
+- **The turn counter + `pi_turn_state.json` + restart seeding → gone (see Decision 2).** Under
+  read-back a stale tap that hits the *next* turn simply aborts it and resubmits *that* turn's
+  own editor content — self-consistent, no duplication. So the ABA counter guards almost
+  nothing.
+- **The outcome marker → gone.** The resubmit is a plain user message; this extension's
+  `message_end` already writes it to the common transcript Minds renders (`:588-621`), and the
+  `active` marker already brackets it. Minds reconciles from what it already watches.
+- **The second file + second poller → gone.** One record shape on the existing `pi_inbox`
+  drain. (`pi_control.json` is the wrong thing to reuse — single-slot last-wins; the inbox is
+  append-only, which is what a trigger wants.)
 
-When pi's model stream is aborted mid-generation, the partial/streamed output is not committed
-to pi's session file, so Minds (which renders from that file) shows nothing for the
-interrupted attempt — exactly the codex situation. As we confirmed for codex, the old
-restart-flush loses the same partial, so this is **no net regression**; the completed content
-before the interrupt is still in the transcript. Not worth chasing unless we later make Minds
-consume a live stream.
+## 3. The ABA gate — optional for pi (Decision 2)
 
-## 6. Minds wireup (once built)
+Codex's gate mattered because a stale interrupt could hit turn N+1. For pi under read-back,
+hitting N+1 is *self-consistent* (abort N+1, resubmit N+1's own steers) — the only "harm" is
+interrupting a turn the user didn't consciously target, and they clicked *because* they saw
+something running. So the minimal design uses a bare `!isIdle()` guard, no id.
 
-- Flip `native_atomic_shoulder_tap_possible = True` for `PI_CODING` in
-  `harnesses/pi_coding/model.py` (both catalog constructions). The button already branches on
-  the flag (shipped for codex).
-- The endpoint (currently codex-only, `_shoulder_tap_atomic_endpoint`) generalizes: for pi,
-  read `pi_turn_state.json` for the open `target_turn`, gather the pending-steer contents from
-  the pi queue tracker, and append `{"target_turn", "contents"}` to
-  `$MNGR_AGENT_STATE_DIR/pi_shoulder_tap_atomic.jsonl` (pi's home is the state-dir root, per
-  the registered `model_state_relative_path`). No restart, no activity reset.
-- Minds already reads `minds_model_state.json` from pi's state dir, so writing/reading these
-  sibling files is the same path.
+**If you want the strict "don't touch a turn newer than the one I saw" semantics anyway**
+(you insisted on it for codex): it costs the counter back, and review found the naive version
+is *wrong* — you must use pi's real per-user-turn boundaries, not the raw loop events:
+- Increment on **`before_agent_start`** (fires once per user prompt, `types.ts:698-709`), NOT
+  `agent_start` (which fires per internal loop — retry, compaction, queued continuation —
+  `agent-loop.ts:109,138`; `agent-session.ts:1067-1104`). Using `agent_start` over-counts
+  mid-turn and silently drops taps exactly on the long turns this targets.
+- Write `running:false` on an **`agent_settled`** / true-idle transition, NOT `agent_end`
+  (which also fires per loop, while `isIdle` is still false).
+- Seed the counter from the parsed last-turn value, NOT `countLines()` of a single-object file
+  (that resets to 1 on restart and re-aliases ids).
 
-## 7. Open risks / to verify before/with implementation
+My recommendation: **skip the gate** (bare `!isIdle()`); the counter's cost isn't worth pi's
+tiny, low-harm race. But it's your call given the codex precedent.
 
-1. **Held-ctx validity in the timer.** The drain timer uses a captured `latestCtx`. Verify
-   `latestCtx.abort()` / `latestCtx.isIdle()` / `latestCtx.ui.setEditorText` still act on the
-   live session/editor when called from the timer (the existing model-switch drain already
-   relies on held-ctx for `modelRegistry`, which is evidence it's fine, but abort/editor are
-   new uses).
-2. **`agent_start` granularity.** Confirm `agent_start` fires once per user turn (so the
-   counter == "turn"), not once per internal continuation. If it fires more often, key the
-   counter on the coarser boundary.
-3. **Abort with an empty queue.** Interrupting with nothing queued (just "cut the long
-   generation") must be a clean abort with no spurious resubmit.
-4. **Payload asymmetry.** pi's intent carries `contents`; codex's does not. This is
-   deliberate (§2.2) but the endpoint/flag/docs must not assume a uniform no-payload shape.
-5. **Double-submit.** Ensure exactly-once: queue cleared by abort, editor cleared, one
-   resubmit. Test the "3 queued → tap → one merged turn, no dupes" path.
-6. **Outcome reporting.** Decide the marker so Minds can distinguish interrupted vs
-   already-idle (parity with the codex ledger).
+## 4. Bugs review caught (already folded into §1)
+
+- **"Resubmit on `agent_end`" is broken** — at `agent_end`, `_isAgentRunActive` is still true,
+  so `isIdle()` is false: an `isIdle`-gated resubmit never fires, and an ungated
+  `sendUserMessage` throws "Agent is already processing" and the message is dropped
+  (`agent-session.ts:597,1167-1172`). Use the `isIdle()` poll only.
+- **Double-delivery vs the inbox timer** — solved by putting the trigger *in* the ordered
+  `pi_inbox` (so all prior messages are seen first) **and** the `inboxPaused` serialization, so
+  a line can't be both resubmitted and re-injected.
+- **Editor copy is inert** — `restoreQueuedMessagesToEditor` never submits; in headless mngr
+  nobody presses Enter, so the drained editor text is harmless (we clear it anyway).
+
+## 5. Open implementation risks (verify while building)
+
+1. **Async-enqueue timing (the one real subtlety).** `pi.sendUserMessage` is async; a steer
+   injected microseconds before the interrupt may not be in the steering queue yet when
+   `ctx.abort()` drains it, so read-back could miss it. Because the trigger sits *after* those
+   messages in the same ordered inbox, they were already `sendUserMessage`-called — but confirm
+   they've actually enqueued (they steer to a *running* turn synchronously enough), or add a
+   one-tick settle before reading the editor. This is the thing to nail in code.
+2. **Held-ctx staleness in a reload/`/new` window** — `ctx` accessors throw once the runner is
+   invalidated (before the next `session_start` refreshes `latestCtx`); a tap in that window is
+   caught by `safe()` and silently dropped. Acceptable (rare), but note it.
+3. **Empty-queue guard** — after abort with nothing queued, `getEditorText()` may hold a real
+   user draft; only resubmit if it's the drained steers. Simplest: if the agent had pending
+   steers at abort time, resubmit; else treat as a bare interrupt and resubmit nothing.
+
+## 6. Deployment (the whole point)
+No pi fork, no `build.sh`, no EC2, no release, no sha-pinned reinstall — it's a TypeScript
+change to the extension we already vendor, plus the Minds endpoint + flag. Total ~40 LOC.
+
+## 7. Transcript parity
+Interrupting pi mid-generation loses the partial from pi's session file, so Minds shows nothing
+for the interrupted attempt — identical to codex, and no net loss vs the old restart (as we
+confirmed). Completed content before the interrupt is still in the transcript.
 
 ## 8. Build order
-
-1. Extension: turn counter + `pi_turn_state.json` (smallest, independently useful).
-2. Extension: the `pi_shoulder_tap_atomic.jsonl` drain + atomic gate + `ctx.abort()`.
-3. Extension: resubmit-after-idle (merge into one `sendUserMessage`) + editor clear + outcome
-   marker.
-4. Minds: generalize `_shoulder_tap_atomic_endpoint` to pi (read turn-state, gather contents,
-   write control file); flip the pi flag.
-5. Verify end-to-end on a live pi agent (send long turn, queue, tap, confirm merged turn +
-   no dupes + ABA on a fast turn change).
-
-## 9. Non-goals
-- No pi fork / binary build (the whole point — §0).
-- No live-streaming of pi partials (separate, like codex §5).
-- Claude stays on restart.
+1. Extension: the `pi_inbox` `{minds_interrupt:true}` branch — abort + read-back + clear +
+   `isIdle`-gated resubmit + `inboxPaused` serialization. Nail risk §5.1.
+2. Minds: pi branch of `_shoulder_tap_atomic_endpoint` (append the sentinel) + flip the flag.
+3. Live E2E on a real pi agent: long thinking turn, queue 3, tap, confirm one merged turn, no
+   dupes, no drop.
