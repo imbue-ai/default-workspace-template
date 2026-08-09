@@ -116,39 +116,50 @@ def _facts(*, sentinel: bool, answer: bool) -> Any:
 
 
 def test_poll_verdict_early_flushed_on_drained_with_answer() -> None:
-    assert poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True)) == TapVerdict.FLUSHED
+    assert (
+        poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True), turn_came_alive=False)
+        == TapVerdict.FLUSHED
+    )
 
 
-def test_poll_verdict_waits_when_drained_but_no_answer() -> None:
-    """A drained mirror with a dangling sentinel keeps watching (never an early FLUSHED)."""
-    assert poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False)) is None
+def test_poll_verdict_early_flushed_when_turn_came_alive() -> None:
+    """A drained mirror where a turn was seen alive is an early FLUSHED, even before any answer."""
+    assert (
+        poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=True)
+        == TapVerdict.FLUSHED
+    )
+
+
+def test_poll_verdict_waits_when_drained_but_no_answer_and_no_live_turn() -> None:
+    """A drained mirror with a dangling sentinel and no turn seen alive keeps watching."""
+    assert poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=False) is None
 
 
 def test_poll_verdict_waits_when_mirror_not_empty() -> None:
-    assert poll_verdict(mirror_is_empty=False, facts=_facts(sentinel=True, answer=True)) is None
+    assert poll_verdict(mirror_is_empty=False, facts=_facts(sentinel=True, answer=True), turn_came_alive=True) is None
 
 
 def test_deadline_verdict_not_flushed_when_mirror_nonempty() -> None:
     assert (
-        deadline_verdict(mirror_is_empty=False, facts=_facts(sentinel=False, answer=False), is_turn_active=False)
+        deadline_verdict(mirror_is_empty=False, facts=_facts(sentinel=False, answer=False), turn_came_alive=False)
         == TapVerdict.NOT_FLUSHED
     )
 
 
-def test_deadline_verdict_needs_recovery_when_turn_ended_without_answer() -> None:
-    """Drained mirror + a dangling sentinel + the turn no longer active = the chord cancelled the
-    flushed follow-on turn and it ended without answering."""
+def test_deadline_verdict_needs_recovery_when_no_turn_ever_came_alive() -> None:
+    """Drained mirror + a dangling sentinel + no turn ever seen alive = the flush committed the
+    messages but nothing ran to answer them (the cancelled follow-on)."""
     assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), is_turn_active=False)
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=False)
         == TapVerdict.NEEDS_RECOVERY
     )
 
 
-def test_deadline_verdict_flushed_when_turn_still_active() -> None:
-    """Drained mirror + a dangling sentinel but the turn is STILL active = a slow-but-successful
-    flush (the agent just has not answered yet), NOT a cancelled follow-on. No recovery."""
+def test_deadline_verdict_flushed_when_a_turn_came_alive() -> None:
+    """Drained mirror + a dangling sentinel but a turn WAS seen alive in the window = a successful
+    flush (the turn started, maybe already finished), NOT a cancelled follow-on. No recovery."""
     assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), is_turn_active=True)
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=True)
         == TapVerdict.FLUSHED
     )
 
@@ -156,14 +167,14 @@ def test_deadline_verdict_flushed_when_turn_still_active() -> None:
 def test_deadline_verdict_flushed_on_idle_gap_variant() -> None:
     """Drained mirror with no sentinel (natural flush already happened) = FLUSHED, not failure."""
     assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=False, answer=False), is_turn_active=False)
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=False, answer=False), turn_came_alive=False)
         == TapVerdict.FLUSHED
     )
 
 
 def test_deadline_verdict_flushed_when_sentinel_answered() -> None:
     assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True), is_turn_active=False)
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True), turn_came_alive=False)
         == TapVerdict.FLUSHED
     )
 
@@ -364,20 +375,21 @@ def test_execute_flushed_presses_chord_and_returns_tapped(tmp_path: Path) -> Non
 
 
 def test_execute_needs_recovery_sends_notification_and_returns_tapped(tmp_path: Path) -> None:
-    """Mirror drains, a dangling sentinel persists, AND the turn ends (active marker cleared) ->
-    the flushed follow-on was cancelled and answered nothing -> recovery sent, tapped."""
+    """Mirror drains, a dangling sentinel persists, and NO turn is ever seen alive during the watch
+    (the marker is gone before the first poll) -> the flush committed the messages but nothing ran
+    to answer them -> recovery sent, tapped."""
     state_dir, keybindings_path = _make_agent_paths(tmp_path)
     session = tmp_path / "session.jsonl"
     session.write_text(_user_line("hello") + "\n")
 
-    def grow_with_sentinel_and_end_turn(events_call: int) -> None:
+    def grow_with_sentinel_no_live_turn(events_call: int) -> None:
         if events_call == 2:
             with session.open("a") as f:
                 f.write(_SENTINEL_LINE + "\n")
-            # The cancelled follow-on turn ends: its RUNNING marker clears.
+            # Clear the marker before the watch's first poll reads it: no turn is ever seen alive.
             (state_dir / "active").unlink()
 
-    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_and_end_turn)
+    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_no_live_turn)
     recoveries: list[str] = []
     result = execute_claude_shoulder_tap(
         agent_state_dir=state_dir,
@@ -393,9 +405,9 @@ def test_execute_needs_recovery_sends_notification_and_returns_tapped(tmp_path: 
     assert recoveries[0].startswith("<task-notification>")
 
 
-def test_execute_still_active_turn_is_flushed_without_recovery(tmp_path: Path) -> None:
-    """A dangling sentinel but the turn is STILL active at the deadline = a slow-but-successful
-    flush (the agent just has not answered yet), not a cancelled follow-on -> no recovery."""
+def test_execute_flushed_when_a_turn_is_seen_alive_without_answer(tmp_path: Path) -> None:
+    """A dangling sentinel with no answer, but a turn IS seen alive during the watch = a successful
+    flush (the turn started -- fast or slow), not a cancelled follow-on -> no recovery."""
     state_dir, keybindings_path = _make_agent_paths(tmp_path)
     session = tmp_path / "session.jsonl"
     session.write_text(_user_line("hello") + "\n")
@@ -404,7 +416,7 @@ def test_execute_still_active_turn_is_flushed_without_recovery(tmp_path: Path) -
         if events_call == 2:
             with session.open("a") as f:
                 f.write(_SENTINEL_LINE + "\n")
-        # The ``active`` marker stays: the flushed turn is still running (mid-answer).
+        # The ``active`` marker stays: a turn is seen alive (the flush started one).
 
     watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel)
     recoveries: list[str] = []
@@ -418,7 +430,7 @@ def test_execute_still_active_turn_is_flushed_without_recovery(tmp_path: Path) -
         sleep=lambda _s: None,
     )
     assert result.status == ClaudeTapStatus.TAPPED
-    # The turn was still running, so no cancelled-follow-on nudge is sent.
+    # A turn was seen alive, so no cancelled-follow-on nudge is sent.
     assert recoveries == []
 
 
