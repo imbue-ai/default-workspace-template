@@ -185,6 +185,10 @@ const MODEL_STATE_NAME = "minds_model_state.json";
 // line into the live session via pi.sendUserMessage (no tmux keystrokes). Kept
 // in sync with _INBOX_FILE_NAME in plugin.py.
 const INBOX_NAME = "pi_inbox";
+// Where prior-generation inbox lines are archived at load (raw history preserved
+// verbatim), so `pi_inbox` itself only ever holds current-generation lines. The
+// Minds queue mirror replays `pi_inbox` from zero and relies on this scoping.
+const INBOX_HISTORY_NAME = "pi_inbox_history";
 const INBOX_POLL_MS = 200;
 // Atomic shoulder-tap control record. Minds appends one JSON OBJECT line
 // `{"minds_interrupt": true}` to pi_inbox (a normal message is a JSON *string*, so
@@ -406,11 +410,11 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // Input injection. mngr delivers messages by appending one JSON-encoded string
   // per line to <state>/pi_inbox; we inject each new line via pi.sendUserMessage
   // so the agent receives input without tmux keystroke simulation, while the TUI
-  // stays viewable. The offset is seeded from the current line count *now* (at
-  // load, before session_start writes the readiness sentinel mngr waits on), so
-  // a resumed restart never re-injects the prior session's already-delivered
-  // messages, and -- because mngr only writes after seeing the sentinel -- no
-  // message sent right after readiness is skipped.
+  // stays viewable. At load (before session_start writes the readiness sentinel
+  // mngr waits on) the prior generation's lines are archived to pi_inbox_history
+  // and the inbox is truncated, so a resumed restart never re-injects the prior
+  // session's already-delivered messages, and -- because mngr only writes after
+  // seeing the sentinel -- no message sent right after readiness is skipped.
   //
   // Delivered as `steer`, not `followUp`: pi's agent loop re-polls its steering queue
   // after every tool-call round and injects steered messages before the next model
@@ -423,6 +427,22 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   let latestCtx: ExtensionContext | undefined;
 
   const inboxPath = join(stateDir, INBOX_NAME);
+  // Generation-scope the durable inbox: any lines present at load were written for a
+  // prior process generation (mngr only appends after the readiness sentinel, which
+  // `session_start` writes AFTER this load, so nothing can land concurrently here).
+  // Archive them to the sibling history file (raw history preserved verbatim) and
+  // truncate the inbox in place, so the inbox holds current-generation lines only BY
+  // CONSTRUCTION -- the offset seed below then reads 0, and the Minds queue mirror's
+  // replay-from-zero of `pi_inbox` is generation-scoped with no extra bookkeeping.
+  safe("inbox generation reset", () => {
+    if (existsSync(inboxPath)) {
+      const prior = readFileSync(inboxPath, "utf-8");
+      if (prior.length > 0) {
+        appendFileSync(join(stateDir, INBOX_HISTORY_NAME), prior);
+        writeFileSync(inboxPath, "");
+      }
+    }
+  });
   let processedInbox = countLines(inboxPath);
   // Holds the parked-steer text between an atomic shoulder-tap's abort and its
   // resubmit. While non-null the inbox drain is PAUSED (no new steer is injected), so
