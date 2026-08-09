@@ -6,10 +6,13 @@ vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 
 import {
   addOutgoing,
+  awaitPendingSends,
   dropOutgoing,
   getFlushFreeze,
   getOutgoingMessages,
+  hasPendingSends,
   noteBackendArrivals,
+  registerPendingSend,
   releaseFlushFreeze,
   resolveOutgoing,
   startFlushFreeze,
@@ -110,5 +113,67 @@ describe("OutgoingMessages", () => {
     startFlushFreeze(agent, [QM("q1", "one")]);
     releaseFlushFreeze(agent);
     expect(getFlushFreeze(agent)).toBeUndefined();
+  });
+});
+
+describe("OutgoingMessages pending-send registry", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports a send in flight and clears it on settle", async () => {
+    const agent = `a-${Math.random()}`;
+    let resolve: () => void = () => {};
+    const send = new Promise<void>((r) => (resolve = r));
+    registerPendingSend(agent, send);
+    expect(hasPendingSends(agent)).toBe(true);
+    resolve();
+    await send;
+    await Promise.resolve(); // let the self-removing .then run
+    expect(hasPendingSends(agent)).toBe(false);
+  });
+
+  it("clears a send from the registry even when it fails", async () => {
+    const agent = `a-${Math.random()}`;
+    const send = Promise.reject(new Error("nope"));
+    registerPendingSend(agent, send);
+    await send.catch(() => {});
+    await Promise.resolve();
+    expect(hasPendingSends(agent)).toBe(false);
+  });
+
+  it("awaitPendingSends is an immediate no-op when nothing is in flight", async () => {
+    const agent = `a-${Math.random()}`;
+    let done = false;
+    await awaitPendingSends(agent).then(() => (done = true));
+    expect(done).toBe(true);
+  });
+
+  it("awaitPendingSends resolves once the in-flight send parks", async () => {
+    const agent = `a-${Math.random()}`;
+    let resolve: () => void = () => {};
+    registerPendingSend(agent, new Promise<void>((r) => (resolve = r)));
+    let done = false;
+    const waited = awaitPendingSends(agent).then(() => (done = true));
+    await Promise.resolve();
+    expect(done).toBe(false); // still waiting for the send
+    resolve();
+    await waited;
+    expect(done).toBe(true);
+  });
+
+  it("awaitPendingSends gives up after the cap if a send hangs (never resolves)", async () => {
+    const agent = `a-${Math.random()}`;
+    registerPendingSend(agent, new Promise<void>(() => {})); // never settles
+    let done = false;
+    const waited = awaitPendingSends(agent).then(() => (done = true));
+    await Promise.resolve();
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(5000); // the bounded cap fires
+    await waited;
+    expect(done).toBe(true);
   });
 });

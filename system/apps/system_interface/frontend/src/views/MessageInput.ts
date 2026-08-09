@@ -12,7 +12,7 @@ import {
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, sendMessage } from "../models/Response";
-import { addOutgoing, dropOutgoing, resolveOutgoing } from "../models/OutgoingMessages";
+import { addOutgoing, dropOutgoing, registerPendingSend, resolveOutgoing } from "../models/OutgoingMessages";
 import { describeRequestError } from "../models/request-error";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
@@ -196,10 +196,14 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // committed bubble). The backend stays fully decoupled; it is never told
         // about this state.
         const outgoingId = addOutgoing(agentId, sentText);
+        // Track the in-flight send so Stop can wait for it to park (and so the shoulder
+        // tap greys out and folds it in) rather than racing it -- see OutgoingMessages.
+        const sendPromise = sendMessage(agentId, finalText);
+        registerPendingSend(agentId, sendPromise);
         m.redraw();
 
         try {
-          await sendMessage(agentId, finalText);
+          await sendPromise;
           // Delivered (the backend confirms before resolving). Removal is
           // arrival-driven; this only arms an anti-strand fallback.
           resolveOutgoing(agentId, outgoingId);
