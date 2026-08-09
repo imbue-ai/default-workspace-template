@@ -31,6 +31,38 @@ def test_grep_quotes_the_pattern() -> None:
     assert caption == 'Searching "TODO"'
 
 
+def test_web_search_labels() -> None:
+    # pi-web-access extension: header matches claude/codex "WebSearch", caption quotes the query.
+    header, caption = tool_labels("web_search", _preview(query="pi coding agent"))
+    assert header == "Tool: WebSearch"
+    assert caption == 'Searching the web "pi coding agent"'
+
+
+def test_web_search_without_a_single_query_drops_to_bare_verb() -> None:
+    # A multi-query call carries `queries` (an array), not `query`, so there is no single target.
+    header, caption = tool_labels("web_search", _preview(queries=["a", "b"]))
+    assert header == "Tool: WebSearch"
+    assert caption == "Searching the web…"
+
+
+def test_fetch_content_captions_the_url() -> None:
+    header, caption = tool_labels("fetch_content", _preview(url="https://pi.dev/docs"))
+    assert header == "Tool: WebFetch"
+    assert caption == "Fetching page https://pi.dev/docs"
+
+
+def test_source_check_captions_the_claim() -> None:
+    header, caption = tool_labels("source_check", _preview(claim="The earth is round"))
+    assert header == "Tool: SourceCheck"
+    assert caption == "Checking sources The earth is round"
+
+
+def test_get_search_content_bare_verb_when_only_a_response_id() -> None:
+    header, caption = tool_labels("get_search_content", _preview(responseId="abc123"))
+    assert header == "Tool: SearchContent"
+    assert caption == "Retrieving results…"
+
+
 def test_unknown_tool_falls_back_to_name_and_generic() -> None:
     header, caption = tool_labels("weirdtool", _preview())
     assert header == "Tool: weirdtool"

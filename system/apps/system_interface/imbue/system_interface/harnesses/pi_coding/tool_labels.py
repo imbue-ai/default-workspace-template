@@ -22,6 +22,13 @@ from imbue.system_interface.harnesses.tool_labels import shorten
 
 # pi's built-in tool names are lowercase; title-case them for the header so it reads
 # like claude's ("Tool: Read"). A tool absent from this table falls back to its raw name.
+#
+# The web_* entries are the pi-web-access extension (npm:pi-web-access), not built-ins.
+# Their header nouns match claude's WebSearch/WebFetch (and codex's web__run -> WebSearch)
+# so the three harnesses read alike. Names verified live against pi-web-access 0.19.0:
+# web_search {query|queries}, fetch_content {url|urls}, source_check {claim},
+# get_search_content {responseId,...}. These are the package's default tool names; a
+# web-search.json `toolNames` override would rename them and skip this table.
 _HEADER_NOUN_BY_TOOL: dict[str, str] = {
     "read": "Read",
     "write": "Write",
@@ -30,6 +37,10 @@ _HEADER_NOUN_BY_TOOL: dict[str, str] = {
     "grep": "Grep",
     "find": "Find",
     "ls": "List",
+    "web_search": "WebSearch",
+    "fetch_content": "WebFetch",
+    "source_check": "SourceCheck",
+    "get_search_content": "SearchContent",
 }
 
 # Caption verb per tool. Absent -> the generic path (mcp / "Running <target>" / fallback).
@@ -41,13 +52,19 @@ _VERB_BY_TOOL_NAME: dict[str, str] = {
     "grep": "Searching",
     "find": "Searching",
     "ls": "Listing",
+    "web_search": "Searching the web",
+    "fetch_content": "Fetching page",
+    "source_check": "Checking sources",
+    "get_search_content": "Retrieving results",
 }
 
 # Input keys that name what a call acts on, most specific first (mirrors claude's order).
+# ``url`` covers fetch_content; ``query`` covers web_search / get_search_content; ``claim``
+# covers source_check's assertion (read like claude's plain ``description`` target).
 _TARGET_PATH_KEYS = ("file_path", "path")
 _TARGET_TEXT_KEYS = ("command", "url")
 _TARGET_QUOTED_KEYS = ("pattern", "query")
-_TARGET_PLAIN_KEYS = ("description",)
+_TARGET_PLAIN_KEYS = ("claim", "description")
 
 # tk lifecycle verbs whose Bash command must survive input truncation, so the chat
 # progress view can read the ``--step`` titles / close summaries out of the command
