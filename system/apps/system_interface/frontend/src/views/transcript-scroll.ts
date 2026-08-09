@@ -67,6 +67,9 @@ export interface TranscriptScroll {
   /** Pin scrollTop to an exact position once (ChatPanel: land an offset jump at the
    *  top of the freshly loaded rows), syncing the follow bookkeeping. */
   pinTo(element: HTMLElement, top: number): void;
+  /** Re-engage tail following and snap to the bottom now (e.g. after a Shoulder tap,
+   *  so the user follows the interrupted/merged turn as it lands even if scrolled up). */
+  followTail(element: HTMLElement): void;
   /** Refresh the cached viewport height and schedule a measure pass. */
   scheduleMeasure(): void;
   /** Reset scroll + follow state (e.g. switching to a different agent). */
@@ -219,6 +222,21 @@ export function createTranscriptScroll(config: TranscriptScrollConfig = {}): Tra
 
     pinTo(element: HTMLElement, top: number): void {
       element.scrollTop = top;
+      scrollTop = element.scrollTop;
+      previousScrollTop = element.scrollTop;
+      lastScrollHeight = element.scrollHeight;
+    },
+
+    followTail(element: HTMLElement): void {
+      // Re-engage following and snap to the bottom immediately. Sync every follow
+      // bookkeeping value to the bottom so the next applyTailFollow's wheel-up guard
+      // reads "still at the tail" and keeps following rather than bailing to
+      // userScrolledUp on the jump we just made.
+      userScrolledUp = false;
+      if (!isVisible()) {
+        return;
+      }
+      element.scrollTop = element.scrollHeight;
       scrollTop = element.scrollTop;
       previousScrollTop = element.scrollTop;
       lastScrollHeight = element.scrollHeight;

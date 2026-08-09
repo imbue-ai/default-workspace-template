@@ -26,6 +26,7 @@ import {
 } from "../models/Response";
 import { computeTranscriptSlices } from "../models/virtualWindow";
 import { isSelectionActiveWithin } from "../models/scrollFollow";
+import { consumeTailFollow } from "../models/tailFollowRequest";
 import { OVERSCAN_PX } from "./row-measurement";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
@@ -544,6 +545,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (pendingPinToWindowTop) {
       pendingPinToWindowTop = false;
       scroll.pinTo(element, phantomTopHeight);
+      return;
+    }
+    // A Shoulder tap asked to follow the tail again (watch the interrupted/merged turn
+    // land) -- snap to the bottom now even if the user had scrolled up.
+    if (currentAgentId !== null && consumeTailFollow(currentAgentId)) {
+      scroll.followTail(element);
       return;
     }
     scroll.applyScrollPosition(element);
