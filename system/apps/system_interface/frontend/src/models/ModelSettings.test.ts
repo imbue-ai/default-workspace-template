@@ -21,6 +21,7 @@ const OPUS: CatalogModelOption = {
   ],
   supports_fast: true,
   in_picker: true,
+  harness_reported_model_id: "claude-opus-4-8",
 };
 const SONNET: CatalogModelOption = {
   id: "sonnet",
@@ -28,10 +29,19 @@ const SONNET: CatalogModelOption = {
   efforts: [{ level: "medium", in_picker: true }],
   supports_fast: false,
   in_picker: true,
+  harness_reported_model_id: "claude-sonnet-5",
 };
 
-function live(modelId: string, effort: string | null, fast: boolean, matched: CatalogModelOption | null): ModelChoice {
-  return { identity: { model_id: modelId, effort, fast }, source: "live", matched };
+// A pushed live choice: the identity carries the raw REPORTED id (as the backend sends
+// it), plus the option the backend matched it to. `reportedId` defaults to the matched
+// option's reported id, so a settle test uses a realistic raw id.
+function live(
+  reportedId: string,
+  effort: string | null,
+  fast: boolean,
+  matched: CatalogModelOption | null,
+): ModelChoice {
+  return { identity: { model_id: reportedId, effort, fast }, matched };
 }
 
 interface RequestOptions {
@@ -75,13 +85,15 @@ describe("changedAxes", () => {
     ).toContain("effort");
   });
 
-  it("ignores a model variant suffix", () => {
+  it("counts no model change when the catalog id is unchanged", () => {
+    // Callers pass the matched option's catalog id as `prev` (never a raw reported id),
+    // so an effort/fast pick keeps the same id and does not re-send /model.
     expect(
       changedAxes(
-        { model_id: "opus", effort: "high", fast: false },
         { model_id: "opus[1m]", effort: "high", fast: false },
+        { model_id: "opus[1m]", effort: "high", fast: true },
       ),
-    ).toEqual([]);
+    ).toEqual(["fast"]);
   });
 
   it("reports model and fast together when a model switch drops fast", () => {
@@ -96,9 +108,9 @@ describe("changedAxes", () => {
 
 describe("effectiveChoice", () => {
   it("returns the live choice when nothing is pending", () => {
-    const choice = effectiveChoice("a1", live("opus[1m]", "medium", true, OPUS));
+    const choice = effectiveChoice("a1", live("claude-opus-4-8", "medium", true, OPUS));
     expect(choice).toEqual({
-      identity: { model_id: "opus[1m]", effort: "medium", fast: true },
+      identity: { model_id: "claude-opus-4-8", effort: "medium", fast: true },
       matched: OPUS,
       isPending: false,
     });
@@ -112,18 +124,19 @@ describe("effectiveChoice", () => {
     setModelChoice("a3", { model_id: "sonnet", effort: "medium", fast: false }, SONNET, ["model"]);
 
     // While pending, the bar shows the pick even though the live value is still opus.
-    const pending = effectiveChoice("a3", live("opus[1m]", "medium", true, OPUS));
+    const pending = effectiveChoice("a3", live("claude-opus-4-8", "medium", true, OPUS));
     expect(pending).toEqual({
       identity: { model_id: "sonnet", effort: "medium", fast: false },
       matched: SONNET,
       isPending: true,
     });
 
-    // The matching live choice clears the overlay.
-    const settled = effectiveChoice("a3", live("sonnet", "medium", false, SONNET));
+    // The live choice settles the overlay via the MATCHED option (its raw reported id
+    // differs from the catalog id), plus effort/fast agreement.
+    const settled = effectiveChoice("a3", live("claude-sonnet-5", "medium", false, SONNET));
     expect(settled?.isPending).toBe(false);
     // Pending is cleared: a fresh render now reflects live, not the overlay.
-    expect(effectiveChoice("a3", live("sonnet", "medium", false, SONNET))?.isPending).toBe(false);
+    expect(effectiveChoice("a3", live("claude-sonnet-5", "medium", false, SONNET))?.isPending).toBe(false);
     await flush();
   });
 

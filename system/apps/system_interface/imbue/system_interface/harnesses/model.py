@@ -10,8 +10,8 @@ strictly apart:
   those show in the picker), whether each supports fast, the harness's switch
   mode, and its "powered by" credit label. Served once via ``GET /api/harnesses``.
 * the **choice** (:class:`ModelChoice`) -- live, per-agent, runtime: which
-  ``(model, effort, fast)`` one agent is on, its provenance, and the catalog
-  option it matched. Rides the agents WebSocket beside ``activity_state``.
+  ``(model, effort, fast)`` one agent is on and the catalog option it matched.
+  Rides the agents WebSocket beside ``activity_state``.
 
 Adding a harness is one :class:`HarnessCatalog` + one :class:`HarnessModelResolver`
 subclass + one registry entry -- nothing here changes. The resolver is the model
@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
 
 
@@ -58,8 +59,7 @@ class EffortChoice(FrozenModel):
 class ModelOption(FrozenModel):
     """One model in a harness's catalog. Static -- never per-agent."""
 
-    # What ``switch()`` sends and what a live read is matched against (e.g.
-    # ``opus[1m]``, ``gpt-5.6-sol``).
+    # What ``switch()`` sends (e.g. ``opus[1m]``, ``gpt-5.6-sol``).
     id: str
     # Human name shown in the bar (e.g. ``Opus 5 (1M)``, ``GPT-5.6-Sol``).
     label: str
@@ -71,6 +71,12 @@ class ModelOption(FrozenModel):
     # False = a hidden model: matchable (a live read of it still displays) but not
     # offered in the dropdown.
     in_picker: bool = True
+    # The raw model id the harness reports in its live state file, matched against a
+    # live read (:func:`match_option`). ``None`` means "same as ``id``" -- for a harness
+    # whose reported id equals its switch id (codex, pi). Claude reports a suffix-free
+    # API id (``claude-fable-5``) that differs from the ``[1m]``-suffixed switch id, so
+    # its options set this explicitly.
+    harness_reported_model_id: str | None = None
 
 
 class ModelIdentity(FrozenModel):
@@ -99,16 +105,6 @@ class ModelAxis(StrEnum):
     FAST = "fast"
 
 
-class ModelChoiceSource(StrEnum):
-    """Where a :class:`ModelChoice` came from. The backend emits only these two;
-    the frontend adds a local ``pending`` for an optimistic pick."""
-
-    # From launch config, before the first turn.
-    GUESS = "guess"
-    # Read from disk after the harness wrote real state.
-    LIVE = "live"
-
-
 class ModelChoice(FrozenModel):
     """The live, per-agent selection sent to the browser. The runtime half.
 
@@ -119,7 +115,6 @@ class ModelChoice(FrozenModel):
     """
 
     identity: ModelIdentity
-    source: ModelChoiceSource
     matched: ModelOption | None
 
 
@@ -148,33 +143,16 @@ class PickerMode(StrEnum):
     SEARCH = "search"
 
 
-class QueueBehavior(StrEnum):
-    """How a harness commits parked messages when a turn ends -- the single declared
-    bias a queue populator's ``leave`` applies. Backend-only in effect: the frontend
-    just renders ``queued_messages`` and never branches on this."""
-
-    # One drained user turn commits one parked message (claude/codex/pi).
-    NORMAL = "normal"
-    # The harness joins ALL parked messages into ONE newline-joined user turn at
-    # turn-end, so one drained turn commits a whole front-run.
-    COALESCES = "coalesces"
-
-
 class HarnessCatalog(FrozenModel):
     """The serializable, per-harness static half. IS the ``/api/harnesses`` wire
     shape (dumped verbatim -- no endpoint-side field selection)."""
 
     # The catalog, in display order.
     options: tuple[ModelOption, ...]
-    # Shown before config/disk says otherwise.
-    default_model_id: str
     # One mode; applies to model, effort, AND fast.
     switch_mode: SwitchMode
     # How the model picker renders (list vs search); orthogonal to switch_mode.
     picker_mode: PickerMode
-    # How the harness commits parked messages (see QueueBehavior); read only by the
-    # harness's own queue populator, inert on the wire.
-    queue_behavior: QueueBehavior = QueueBehavior.NORMAL
     # The harness's product name, shown as a non-clickable "Powered by <label>" credit beside
     # the composer's "Open agent terminal" button (e.g. "Claude Code", "Codex", "Pi Coding").
     powered_by_label: str
@@ -188,53 +166,64 @@ class SwitchResult(FrozenModel):
     detail: str | None = None
 
 
-def base_alias(model: str) -> str:
-    """Reduce a model string to its bare alias for matching.
+# The one live model-state file every harness writes ({model, effort, fast}), read by
+# the shared reader below. The harness's directory for it is per-harness DATA (its
+# ``model_state_relative_path`` on the registry); the file NAME is uniform.
+MODEL_STATE_NAME: str = "minds_model_state.json"
 
-    Harnesses stamp context/variant suffixes onto the alias (claude's
-    ``opus[1m]``), so stripping the ``[...]`` suffix lets a stored ``opus`` or
-    ``opus[1m]`` both match the catalog's Opus option. Harness-neutral: a model id
-    with no suffix (codex's ``gpt-5.6-sol``) is returned unchanged (lowercased).
+
+def model_state_path(state_dir: Path, relative_path: Path) -> Path:
+    """The agent's live model-state file: ``<state_dir>/<relative_path>/minds_model_state.json``.
+
+    ``relative_path`` is the harness's registered directory for the file (state-dir root
+    for claude/pi, ``plugin/codex/home`` for codex) -- the one per-harness difference the
+    shared read/watch path takes as data.
     """
-    return model.split("[", 1)[0].strip().lower()
+    return state_dir / relative_path / MODEL_STATE_NAME
+
+
+def read_model_identity(state_path: Path) -> ModelIdentity | None:
+    """The live selection from a harness's ``minds_model_state.json``, or None.
+
+    Reads the uniform ``{"model", "effort", "fast"}`` schema every harness writes. Returns
+    None when the file is absent, unparseable, or records no model yet (the bar shows
+    logo-only). Unknown keys are ignored, so an older writer emitting a different effort/tier
+    schema still lights the model chip (``model`` is unchanged) with effort None / fast off
+    rather than crashing.
+    """
+    data = read_json_dict(state_path)
+    model = data.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    return ModelIdentity(
+        model_id=model,
+        effort=parse_effort_level(data.get("effort")),
+        fast=data.get("fast") is True,
+    )
 
 
 def match_option(identity: ModelIdentity, options: tuple[ModelOption, ...]) -> ModelOption | None:
-    """The catalog option ``identity`` resolves to, or None (the shrug case).
+    """The catalog option a live ``identity`` resolves to, or None (the shrug case).
 
-    Matches iff the model aliases agree, the identity's effort is declared by the
-    option (or is None, which a no-effort model requires), and fast is not on for a
-    model that does not support it. Uses the full declared effort set, so a
-    live-read hidden level still matches. One implementation, shared by the
-    ``POST /model`` validation and the pushed :class:`ModelChoice`.
+    Matches the harness-reported model id (``harness_reported_model_id``, or ``id`` when
+    that is None) exactly, then -- for drift tolerance -- by a single prefix pass so a
+    dated variant (``claude-haiku-4-5-<date>``) still matches its suffix-free key. Effort
+    and fast validity are then checked against the matched option: an effort the option
+    does not declare, or fast on a model without fast, is a shrug. Uses the full declared
+    effort set, so a live-read hidden level (``ultra``) still matches.
     """
-    alias = base_alias(identity.model_id)
-    for option in options:
-        if base_alias(option.id) != alias:
-            continue
-        declared = {choice.level for choice in option.efforts}
-        if identity.effort is not None and identity.effort not in declared:
-            continue
-        if identity.fast and not option.supports_fast:
-            continue
-        return option
-    return None
-
-
-def merge_identities(live: ModelIdentity | None, guess: ModelIdentity | None) -> ModelIdentity | None:
-    """Merge a live read over the guess, per field.
-
-    Live wins where it has a value; the guess fills the one field a live read may
-    leave unset (effort, before the harness has recorded one). ``model_id`` and
-    ``fast`` come straight from the live read when it exists. When ``live`` is None the
-    guess stands alone, and when BOTH are None (a harness with no launch default and
-    nothing live yet -- pi before its model is recorded) the result is None, which the
-    bar renders as logo-only rather than inventing a model.
-    """
-    if live is None:
-        return guess
-    effort = live.effort if live.effort is not None else (guess.effort if guess is not None else None)
-    return ModelIdentity(model_id=live.model_id, effort=effort, fast=live.fast)
+    by_key = {option.harness_reported_model_id or option.id: option for option in options}
+    matched = by_key.get(identity.model_id)
+    if matched is None:
+        matched = next((option for key, option in by_key.items() if identity.model_id.startswith(key)), None)
+    if matched is None:
+        return None
+    declared = {choice.level for choice in matched.efforts}
+    if identity.effort is not None and identity.effort not in declared:
+        return None
+    if identity.fast and not matched.supports_fast:
+        return None
+    return matched
 
 
 def to_options(entries: tuple[tuple[str, tuple[str, ...]], ...]) -> tuple[ModelOption, ...]:
@@ -265,18 +254,15 @@ def to_options(entries: tuple[tuple[str, tuple[str, ...]], ...]) -> tuple[ModelO
 
 
 class HarnessModelResolver(ABC):
-    """Resolves and (for a switchable harness) applies ONE agent's model choice.
+    """Applies (for a switchable harness) ONE agent's model choice.
 
-    Two reads plus one write, all harness-specific and all contained to the
-    harness's ``model.py``:
+    The live READ is harness-neutral -- every harness writes the uniform
+    ``minds_model_state.json`` that :func:`read_model_identity` parses -- so the
+    resolver only owns the harness-specific WRITE side:
 
-    * :meth:`guess_from_launch` -- the pre-turn selection from launch config
-    * :meth:`read_live` -- the current on-disk selection, or None when disk is
-      silent so far
     * :meth:`switch` -- apply a selection (a no-op for a display-only harness)
-
-    plus :meth:`watched_paths`, which names the files/dirs whose change means a
-    fresh :meth:`read_live` may differ, driving the live recompute.
+    * :meth:`list_offered_models` -- the picker's offer set (only pi overrides it;
+      its offer set is per-agent and auth-gated)
 
     ``build`` takes the whole :class:`AgentInfo` (like the watcher) so each harness
     reads the paths IT needs and the caller never learns which.
@@ -286,35 +272,6 @@ class HarnessModelResolver(ABC):
     @abstractmethod
     def build(cls, agent_info: AgentInfo) -> "HarnessModelResolver":
         """Construct for one agent, not yet reading anything."""
-
-    @abstractmethod
-    def guess_from_launch(self) -> ModelIdentity | None:
-        """The launch-config selection, read from the config file directly.
-
-        Returns a concrete identity when the harness has a knowable launch model
-        (claude, codex), or ``None`` when it does not (pi: many-auth, no default --
-        the model only becomes known once its session records it). A returned identity
-        should be fully concrete (effort filled from config or omitted for a
-        no-effort model), so :func:`merge_identities` never leaves a field missing.
-        """
-
-    @abstractmethod
-    def read_live(self) -> ModelIdentity | None:
-        """The current on-disk selection, or None when disk has recorded nothing.
-
-        Individual fields MAY be None (claude's effort before the first
-        ``/effort``); :func:`merge_identities` fills those from the guess. Returning
-        None for the whole identity means "nothing live yet, use the guess".
-        """
-
-    @abstractmethod
-    def watched_paths(self) -> tuple[Path, ...]:
-        """Files/dirs whose change means :meth:`read_live` may now differ.
-
-        Drives the sole live recompute trigger. A path that does not exist yet is
-        fine (the watcher retries once it appears). A path that is a directory is
-        watched recursively; a file is watched via its parent directory.
-        """
 
     def list_offered_models(self) -> tuple[str, ...] | None:
         """The model ids to OFFER in the picker right now, or None to offer the whole catalog.

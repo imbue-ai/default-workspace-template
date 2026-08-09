@@ -13,11 +13,13 @@ strings from pi's data) and the label for whatever model an agent is on. Which m
 are *offered* to a user is a separate, live concern (``pi --list-models`` for the
 authed subset), handled at picker-open time, not here.
 
-The resolver reads the live selection from the state file the pi lifecycle extension
-writes (``pi_model_state.json``), which the extension refreshes at session start
-(before the first turn), on every ``/model`` or thinking-level change, and on resume.
-There is no launch default -- pi is many-provider/many-auth, so ``guess_from_launch``
-returns None and the bar shows logo-only until the extension records a model.
+The live selection is read by the shared reader
+(:func:`~imbue.system_interface.harnesses.model.read_model_identity`) from the uniform
+``minds_model_state.json`` the pi lifecycle extension writes at the agent state-dir root,
+refreshed at session start (before the first turn), on every ``/model`` or thinking-level
+change, and on resume. There is no launch default -- pi is many-provider/many-auth -- so
+the bar shows logo-only until the extension records a model. This resolver only owns the
+WRITE (switch) side and the auth-gated picker offer set (:meth:`list_offered_models`).
 """
 
 import json
@@ -40,12 +42,8 @@ from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
-from imbue.system_interface.harnesses.model import parse_effort_level
 from imbue.system_interface.harnesses.model import to_options
 
-# The state file the pi lifecycle extension writes: {provider, model, thinking_level}.
-# Kept in sync with MODEL_STATE_NAME in mngr_pi_lifecycle.ts.
-_MODEL_STATE_NAME: str = "pi_model_state.json"
 # The control file the resolver appends a switch intent to; the pi extension watches it
 # and applies via pi.setModel / pi.setThinkingLevel (kept in sync with the extension).
 _CONTROL_NAME: str = "pi_control.jsonl"
@@ -142,8 +140,6 @@ def build_catalog(data_dir: Path) -> HarnessCatalog:
                     entries.append((f"{provider_id}/{model_id}", _supported_thinking_levels(model)))
     return HarnessCatalog(
         options=to_options(tuple(entries)),
-        # No launch default -- pi is many-auth; the live model comes from the extension.
-        default_model_id="",
         switch_mode=SwitchMode.ON_CHANGE,
         picker_mode=PickerMode.SEARCH,
         powered_by_label="Pi Coding",
@@ -158,7 +154,6 @@ def get_catalog() -> HarnessCatalog:
         logger.warning("pi provider data not found; pi's model catalog will be empty")
         return HarnessCatalog(
             options=(),
-            default_model_id="",
             switch_mode=SwitchMode.ON_CHANGE,
             picker_mode=PickerMode.SEARCH,
             powered_by_label="Pi Coding",
@@ -167,8 +162,8 @@ def get_catalog() -> HarnessCatalog:
 
 
 class PiModelResolver(HarnessModelResolver):
-    """Reads a pi agent's live model/effort from the extension's state file, and applies a
-    switch by writing a control file the extension consumes."""
+    """Applies a pi agent's switch by writing a control file the extension consumes, and
+    reports its auth-gated picker offer set (the live read is shared)."""
 
     _state_dir: Path
 
@@ -177,27 +172,6 @@ class PiModelResolver(HarnessModelResolver):
         self = cls.__new__(cls)
         self._state_dir = agent_info.agent_state_dir
         return self
-
-    def guess_from_launch(self) -> ModelIdentity | None:
-        # pi is many-provider / many-auth: there is no knowable launch default. The model
-        # only becomes known once the extension records it (read_live), so the pre-turn
-        # guess is None -> the bar shows logo-only until then, never a made-up default.
-        return None
-
-    def read_live(self) -> ModelIdentity | None:
-        # The extension writes {provider, model, thinking_level} at session start (before
-        # the first turn), on every model/thinking change, and on resume -- so this is the
-        # current selection, refreshed durably each session.
-        data = read_json_dict(self._state_dir / _MODEL_STATE_NAME)
-        provider = data.get("provider")
-        model = data.get("model")
-        if not isinstance(provider, str) or not provider or not isinstance(model, str) or not model:
-            return None
-        return ModelIdentity(
-            model_id=f"{provider}/{model}",
-            effort=parse_effort_level(data.get("thinking_level")),
-            fast=False,
-        )
 
     def list_offered_models(self) -> tuple[str, ...] | None:
         # pi's offer set is account-gated and dynamic: exactly the provider/model pairs the
@@ -231,9 +205,6 @@ class PiModelResolver(HarnessModelResolver):
             )
             return None
         return _parse_list_models(finished.stdout)
-
-    def watched_paths(self) -> tuple[Path, ...]:
-        return (self._state_dir / _MODEL_STATE_NAME,)
 
     def switch(
         self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
