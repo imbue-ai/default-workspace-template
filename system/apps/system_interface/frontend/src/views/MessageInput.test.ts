@@ -29,7 +29,10 @@ const mocks = vi.hoisted(() => {
       );
     },
   } as unknown as Document;
-  return { sendMessage: vi.fn(async () => {}), listeners };
+  // Mutable holder for the agent's activity state, flipped per-test to drive the
+  // working/idle branch of the composer. Undefined means "not working".
+  const agent: { activity_state: string | undefined } = { activity_state: undefined };
+  return { sendMessage: vi.fn(async () => {}), listeners, agent };
 });
 
 vi.mock("../models/Response", () => ({
@@ -53,7 +56,7 @@ vi.mock("../models/attachments", () => ({
 }));
 vi.mock("../models/PendingMessages", () => ({
   addPendingMessage: vi.fn(() => 1),
-  getEffectiveActivityState: () => "idle",
+  getEffectiveActivityState: () => mocks.agent.activity_state,
   markPendingMessageQueued: vi.fn(),
   removePendingMessage: vi.fn(),
 }));
@@ -66,7 +69,6 @@ vi.mock("../models/ModelSettings", () => ({
   setModel: vi.fn(),
 }));
 vi.mock("../models/ClaudeAuth", () => ({ openLoginModal: vi.fn() }));
-vi.mock("./ActivityIndicator", () => ({ isWorkingActivityState: () => false }));
 vi.mock("./icons", () => ({ icon: () => "", stopIcon: () => "" }));
 
 import { MessageInput } from "./MessageInput";
@@ -123,6 +125,7 @@ async function typeAndSend(component: m.Component<{ agentId: string | null }>, a
 describe("MessageInput send guard", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
+    mocks.agent.activity_state = undefined;
     localStorage.clear();
   });
 
@@ -191,5 +194,23 @@ describe("MessageInput send guard", () => {
 
     const switched = component.view!({ attrs: { agentId: "agent-2" } } as never);
     expect(renderedText(switched)).not.toContain("can't be sent from chat");
+  });
+});
+
+describe("MessageInput placeholder", () => {
+  beforeEach(() => {
+    mocks.agent.activity_state = undefined;
+    localStorage.clear();
+  });
+
+  it("shows the base wording while the agent is idle", () => {
+    const textarea = findByTag(MessageInput().view!({ attrs: { agentId: "agent-1" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("Type a message...");
+  });
+
+  it("teaches queueing while the agent has a turn in flight", () => {
+    mocks.agent.activity_state = "THINKING";
+    const textarea = findByTag(MessageInput().view!({ attrs: { agentId: "agent-1" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
   });
 });
