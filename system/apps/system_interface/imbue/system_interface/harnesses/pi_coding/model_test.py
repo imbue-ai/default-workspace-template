@@ -72,8 +72,6 @@ def test_build_catalog_tags_and_string_efforts(tmp_path: Path) -> None:
     catalog = build_catalog(data_dir)
     assert catalog.picker_mode == PickerMode.SEARCH
     assert catalog.switch_mode == SwitchMode.ON_CHANGE
-    # No launch default -- pi is many-auth.
-    assert catalog.default_model_id == ""
     by_id = {opt.id: opt for opt in catalog.options}
     # id == label == provider/model
     assert by_id["anthropic/claude-sonnet-5"].label == "anthropic/claude-sonnet-5"
@@ -121,32 +119,6 @@ def test_list_offered_models_defaults_to_whole_catalog_for_non_pi(tmp_path: Path
     # The base resolver hook returns None (offer the whole catalog); only a dynamic,
     # account-gated harness overrides it.
     assert ClaudeModelResolver.build(_agent_info(tmp_path)).list_offered_models() is None
-
-
-def test_guess_from_launch_is_none(tmp_path: Path) -> None:
-    # pi has no knowable launch default -> logo-only until the live model is recorded.
-    assert PiModelResolver.build(_agent_info(tmp_path)).guess_from_launch() is None
-
-
-def test_read_live_is_none_before_the_state_file_exists(tmp_path: Path) -> None:
-    assert PiModelResolver.build(_agent_info(tmp_path)).read_live() is None
-
-
-def test_read_live_reads_the_state_file(tmp_path: Path) -> None:
-    (tmp_path / "pi_model_state.json").write_text(
-        json.dumps({"provider": "anthropic", "model": "claude-opus-4-8", "thinking_level": "high"})
-    )
-    live = PiModelResolver.build(_agent_info(tmp_path)).read_live()
-    assert live == ModelIdentity(model_id="anthropic/claude-opus-4-8", effort="high", fast=False)
-
-
-def test_read_live_off_is_a_real_effort_not_dropped(tmp_path: Path) -> None:
-    (tmp_path / "pi_model_state.json").write_text(
-        json.dumps({"provider": "google", "model": "gemini-flash", "thinking_level": "off"})
-    )
-    live = PiModelResolver.build(_agent_info(tmp_path)).read_live()
-    assert live is not None
-    assert live.effort == "off"
 
 
 def test_switch_writes_the_control_file(tmp_path: Path) -> None:

@@ -17,7 +17,6 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import { getAgentById } from "./AgentManager";
 import type { CatalogModelOption } from "./HarnessCatalog";
-import { baseAlias } from "./HarnessCatalog";
 
 export interface ModelIdentity {
   model_id: string;
@@ -27,7 +26,7 @@ export interface ModelIdentity {
 
 export interface ModelChoice {
   identity: ModelIdentity;
-  source: string; // "guess" | "live"
+  // The catalog option the live identity matched (computed on the backend), or null (shrug).
   matched: CatalogModelOption | null;
 }
 
@@ -47,10 +46,11 @@ const applyChainByAgent = new Map<string, Promise<void>>();
 // interactive meanwhile -- this is only the last-resort self-heal.
 const PENDING_TIMEOUT_MS = 5 * 60 * 1000;
 
-function identityEquals(a: ModelIdentity, b: ModelIdentity): boolean {
-  return (
-    baseAlias(a.model_id) === baseAlias(b.model_id) && (a.effort ?? null) === (b.effort ?? null) && a.fast === b.fast
-  );
+// Two picks are the same axis-for-axis. The model id is compared exactly because a
+// pick always carries a catalog id (never a raw reported id); used only to expire the
+// right pending overlay, not to reconcile against the live choice (see effectiveChoice).
+function pickIdentityEquals(a: ModelIdentity, b: ModelIdentity): boolean {
+  return a.model_id === b.model_id && (a.effort ?? null) === (b.effort ?? null) && a.fast === b.fast;
 }
 
 export interface EffectiveChoice {
@@ -69,8 +69,16 @@ export interface EffectiveChoice {
 export function effectiveChoice(agentId: string, liveChoice: ModelChoice | null | undefined): EffectiveChoice | null {
   const pending = pendingByAgent.get(agentId);
   if (pending) {
+    // The pushed identity carries a raw reported id, so we reconcile against the option the
+    // backend matched it to (not the raw id): the overlay settles once the matched option is
+    // the one the user clicked and effort/fast agree. A live read that matched nothing (shrug)
+    // never settles a pick -- the overlay holds until it does, or the timeout fires.
     const settled =
-      liveChoice != null && liveChoice.source === "live" && identityEquals(liveChoice.identity, pending.identity);
+      liveChoice != null &&
+      liveChoice.matched != null &&
+      liveChoice.matched.id === pending.option.id &&
+      (liveChoice.identity.effort ?? null) === (pending.identity.effort ?? null) &&
+      liveChoice.identity.fast === pending.identity.fast;
     if (settled) {
       pendingByAgent.delete(agentId);
     } else {
@@ -87,11 +95,13 @@ export function effectiveChoice(agentId: string, liveChoice: ModelChoice | null 
  *  one they just picked (`next`). Sent to the backend so it applies only those --
  *  computed here, against the optimistic overlay, so re-picking the value you
  *  started on (medium -> xhigh -> medium) still sends /effort medium rather than
- *  being suppressed by a disk read that has not caught up. Model uses baseAlias so
- *  a variant suffix (opus vs opus[1m]) is not counted as a change. */
+ *  being suppressed by a disk read that has not caught up. Both model ids are catalog
+ *  ids here (the caller passes the matched option's id as `prev`, never the raw
+ *  reported id), so an exact compare is correct -- an effort/fast click keeps the same
+ *  model id and does NOT re-send /model. */
 export function changedAxes(prev: ModelIdentity, next: ModelIdentity): string[] {
   const axes: string[] = [];
-  if (baseAlias(prev.model_id) !== baseAlias(next.model_id)) {
+  if (prev.model_id !== next.model_id) {
     axes.push("model");
   }
   if ((prev.effort ?? null) !== (next.effort ?? null)) {
@@ -156,7 +166,7 @@ async function postModelChoice(agentId: string, identity: ModelIdentity, axes: s
 function schedulePendingTimeout(agentId: string, identity: ModelIdentity): void {
   setTimeout(() => {
     const pending = pendingByAgent.get(agentId);
-    if (pending && identityEquals(pending.identity, identity)) {
+    if (pending && pickIdentityEquals(pending.identity, identity)) {
       pendingByAgent.delete(agentId);
       m.redraw();
     }
@@ -181,6 +191,9 @@ export function setFastMode(agentId: string, enabled: boolean): void {
   if (!choice || choice.matched === null || !choice.matched.supports_fast) {
     return;
   }
+  // Diff against the matched option's catalog id (choice.identity.model_id is the raw
+  // reported id), so only the fast axis is sent -- not a spurious /model.
+  const prev = { model_id: choice.matched.id, effort: choice.identity.effort, fast: choice.identity.fast };
   const next = { model_id: choice.matched.id, effort: choice.identity.effort, fast: enabled };
-  setModelChoice(agentId, next, choice.matched, changedAxes(choice.identity, next));
+  setModelChoice(agentId, next, choice.matched, changedAxes(prev, next));
 }

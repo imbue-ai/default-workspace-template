@@ -24,11 +24,13 @@ export interface CatalogModelOption {
   efforts: EffortChoice[];
   supports_fast: boolean;
   in_picker: boolean;
+  // The raw model id the harness reports in its live state file (or null = same as `id`).
+  // Matched on the backend; the frontend reconciles against the matched option, not this.
+  harness_reported_model_id: string | null;
 }
 
 export interface HarnessCatalog {
   options: CatalogModelOption[];
-  default_model_id: string;
   switch_mode: string; // "eager_then_reconcile" | "on_change" | "read_only"
   picker_mode: string; // "list" | "search" -- how the model dropdown renders (orthogonal to switch_mode)
 }
@@ -66,16 +68,4 @@ export async function ensureHarnessCatalogs(): Promise<void> {
   } finally {
     isLoading = false;
   }
-}
-
-/** Bare alias of a model string, matching the backend's `base_alias`
- *  (`opus[1m]` -> `opus`), so a stored `opus` or `opus[1m]` both map to one option. */
-export function baseAlias(model: string): string {
-  return model.split("[")[0].trim().toLowerCase();
-}
-
-/** The catalog option a model id resolves to, by bare alias, or null. */
-export function findOption(catalog: HarnessCatalog, modelId: string): CatalogModelOption | null {
-  const alias = baseAlias(modelId);
-  return catalog.options.find((option) => baseAlias(option.id) === alias) ?? null;
 }
