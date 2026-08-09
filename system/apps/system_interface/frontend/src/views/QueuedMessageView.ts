@@ -29,11 +29,19 @@ const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a bre
 // stays the source of truth for what is shown.
 const inFlightAgentIds = new Set<string>();
 
-/** True when this agent's harness can flush the queue atomically (codex), so the
- *  "Shoulder tap" merges into the live turn instead of restarting-and-resending. */
+/** True when this agent's harness can flush the queue atomically (codex / pi / claude), so
+ *  the "Shoulder tap" merges into the live turn instead of restarting-and-resending. */
 function isAtomicShoulderTapAgent(agentId: string): boolean {
   const catalog = getHarnessCatalog(getAgentById(agentId)?.harness);
   return catalog?.native_atomic_shoulder_tap_possible === true;
+}
+
+// Atomic-tap statuses that commit nothing (no turn to flush into, or an already-empty queue).
+// They release the flush freeze immediately, since no backend arrival ever will.
+const TERMINAL_NOOP_TAP_STATUSES: ReadonlySet<string> = new Set(["no_open_turn", "nothing_queued"]);
+
+function isTerminalNoopStatus(status: string): boolean {
+  return TERMINAL_NOOP_TAP_STATUSES.has(status);
 }
 
 async function flushQueuedMessages(agentId: string): Promise<void> {
@@ -54,9 +62,19 @@ async function flushQueuedMessages(agentId: string): Promise<void> {
   }
   m.redraw();
   try {
-    // Codex merges the queue into the live turn without a restart; the other harnesses
-    // restart and resend. The flag comes from the agent's harness catalog.
-    await (isAtomic ? shoulderTapAtomic(agentId) : flushQueue(agentId));
+    // The native harnesses (codex / pi / claude) flush into the live turn without a restart;
+    // the rest restart and resend. The flag comes from the agent's harness catalog.
+    if (isAtomic) {
+      const { status } = await shoulderTapAtomic(agentId);
+      // A terminal no-op commits nothing, so no backend arrival will release the freeze --
+      // drop it now instead of holding to the 20s cap. A real ``tapped`` stays arrival-released
+      // so the freeze clears exactly as the merged turn renders.
+      if (isTerminalNoopStatus(status)) {
+        releaseFlushFreeze(agentId);
+      }
+    } else {
+      await flushQueue(agentId);
+    }
   } catch (err) {
     const detail = describeRequestError(err);
     console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);

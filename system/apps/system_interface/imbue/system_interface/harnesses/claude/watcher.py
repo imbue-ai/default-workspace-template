@@ -1191,6 +1191,26 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         """Register the sink the watcher pushes each new queued-message snapshot to."""
         self._queue_snapshot_callback = callback
 
+    def get_latest_main_session_file(self) -> Path | None:
+        """Return the JSONL path of the latest main session (the live process's session), or None.
+
+        The live claude process's queue and in-flight turn live in the newest main
+        session file -- a restart always rotates into a fresh session id (see
+        ``_is_latest_main_session_locked``). The shoulder tap uses this to take a
+        byte-size baseline before delivering the flush chord and to read the raw
+        post-chord tail afterwards. Runs discovery first so a session that rotated in
+        since the last poll is seen. Returns None when no main session is known or its
+        file is not (yet) on disk.
+        """
+        self._discover_sessions()
+        with self._lock:
+            if not self._main_session_ids:
+                return None
+            latest_state = self._session_states.get(self._main_session_ids[-1])
+        if latest_state is not None and latest_state.file_path.exists():
+            return latest_state.file_path
+        return None
+
     def get_queued_messages(self) -> list[dict[str, Any]]:
         with self._lock:
             return self._queue_tracker.snapshot()

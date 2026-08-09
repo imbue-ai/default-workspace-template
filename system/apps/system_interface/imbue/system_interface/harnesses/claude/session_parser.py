@@ -58,7 +58,7 @@ _AGENT_ID_PATTERN = re.compile(r"agentId:\s*(\S+)")
 # input -- emitting it as a ``user_message`` event would pin the activity
 # indicator on "Thinking..." after every interrupt, since the transcript-tail
 # heuristic would treat it as "user just spoke, Claude hasn't replied yet."
-_INTERRUPT_SENTINEL_TEXT = "[Request interrupted by user]"
+INTERRUPT_SENTINEL_TEXT = "[Request interrupted by user]"
 
 # Claude Code's resume bookkeeping. Whenever ``claude --resume`` reloads a
 # session whose previous turn did not finish cleanly (the turn was interrupted,
@@ -133,7 +133,7 @@ def _normalize_slash_command(text: str) -> str:
     return f"{command} {args}".strip()
 
 
-def _extract_text_content(content: str | list[dict[str, Any]] | Any) -> str:
+def extract_text_content(content: str | list[dict[str, Any]] | Any) -> str:
     """Extract plain text from a message content field (string or list of blocks)."""
     if isinstance(content, str):
         return content
@@ -236,7 +236,7 @@ def _is_resume_no_response_reply(message: dict[str, Any]) -> bool:
     """
     if message.get("model") != _SYNTHETIC_MODEL:
         return False
-    return _extract_text_content(message.get("content")).strip() == _NO_RESPONSE_REQUESTED_TEXT
+    return extract_text_content(message.get("content")).strip() == _NO_RESPONSE_REQUESTED_TEXT
 
 
 def parse_lines(
@@ -444,8 +444,8 @@ def _parse_user_message(
     if not _has_tool_results_only(content):
         event_id = _make_event_id(uuid, "user")
         if event_id not in existing_event_ids:
-            text = _normalize_slash_command(_extract_text_content(content))
-            if text and text.strip() != _INTERRUPT_SENTINEL_TEXT:
+            text = _normalize_slash_command(extract_text_content(content))
+            if text and text.strip() != INTERRUPT_SENTINEL_TEXT:
                 event: dict[str, Any] = {
                     "timestamp": timestamp,
                     "type": "user_message",

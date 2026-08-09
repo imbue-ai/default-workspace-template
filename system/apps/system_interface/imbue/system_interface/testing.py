@@ -43,20 +43,27 @@ from imbue.system_interface.wsgi import make_threaded_server
 
 
 class RecordingMngrMessenger(MngrMessenger):
-    """A `MngrMessenger` that records sends and never contacts mngr.
+    """A `MngrMessenger` that records sends and key-chord presses and never contacts mngr.
 
-    Overrides `send_to_agent` to record each `(agent_id, message)` and return a
-    fixed result, so a test exercises the manager's send path without building a
+    Overrides `send_to_agent` (records each `(agent_id, message)`) and
+    `press_key_chord_to_agent` (records each `(agent_id, key)`), returning fixed
+    results, so a test exercises the manager's send / keypress paths without building a
     real mngr context or hitting the network. Inject via
     `AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())`.
     """
 
     sent: list[tuple[str, str]] = []
+    pressed: list[tuple[str, str]] = []
     succeeds: bool = True
+    press_succeeds: bool = True
 
     def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.sent.append((str(agent_id), message))
         return self.succeeds
+
+    def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
+        self.pressed.append((str(agent_id), key))
+        return self.press_succeeds
 
 
 def build_test_state(
