@@ -295,6 +295,13 @@ class PiInterruptToComposer(InterruptToComposer):
     def drain_to_composer(
         self, watcher: AgentSessionWatcher, restart_process: RestartProcess, settle_activity: SettleActivity
     ) -> str:
+        # Refresh the mirror before capturing (codex's refresh-first posture,
+        # plan-codex-interrupt): the running turn's own initiating message is an inbox enqueue
+        # whose matching leave (its drained ``user_message``) may not have been consumed into
+        # the tracker yet, so a stale read hands that already-consumed message back to the
+        # composer alongside the genuinely parked steers. ``get_all_events`` drives the
+        # watcher's consume so the captured block is only the still-queued messages.
+        watcher.get_all_events()
         # Capture before writing the sentinel: the sentinel is what clears the queue (both here
         # and, durably, on the watcher's replay), so the block must be read first.
         block = watcher.get_queued_block()
