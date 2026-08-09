@@ -961,6 +961,36 @@ def test_drain_to_composer_is_a_noop_when_the_queue_is_empty(client: FlaskClient
     mock_run.assert_not_called()
 
 
+def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> None:
+    """Transcript-signal seeding runs BEFORE the watcher thread starts.
+
+    The watcher's priming pass can push a replayed queued-message snapshot as
+    soon as its thread runs, and the manager's pre-broadcast sweep derives
+    activity from the seeded signals -- an unseeded tracker derives IDLE even
+    for a live mid-turn agent, so seeding after ``start`` would let that first
+    snapshot sweep a genuine queue. ``get_all_events`` reads synchronously, so
+    seeding needs no running watcher thread.
+    """
+    calls: list[str] = []
+
+    def _record_get_all_events() -> list[dict[str, Any]]:
+        calls.append("get_all_events")
+        return []
+
+    fake_watcher = SimpleNamespace(
+        set_queue_snapshot_callback=lambda _callback: None,
+        notify_idle=lambda: [],
+        get_all_events=_record_get_all_events,
+        start=lambda: calls.append("start"),
+    )
+    state = build_test_state()
+    with patch("imbue.system_interface.app_context.build_watcher", return_value=fake_watcher):
+        state.get_or_create_watcher(_agent_info())
+
+    assert "get_all_events" in calls and "start" in calls
+    assert calls.index("get_all_events") < calls.index("start")
+
+
 def test_list_layouts_exposes_defaults(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A fresh workspace lists the two default layout names, both empty."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
