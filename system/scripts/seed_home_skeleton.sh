@@ -42,3 +42,25 @@ mkdir -p /home/user/.mngr
 if [ ! -e /home/user/.mngr/layout-version ]; then
     printf '2\n' > /home/user/.mngr/layout-version
 fi
+
+# Register the pi coding extensions that bring the pi agent up to parity with
+# the claude/codex agents: pi-subagents (delegate to subagents) and
+# pi-web-access (fetch/search the web). `pi install` appends each to the
+# `packages` list in ~/.pi/agent/settings.json, merging rather than clobbering
+# any other settings; mngr's pi_coding plugin then syncs that list into every
+# per-agent config dir and pi auto-installs the packages on first launch. This
+# runs here -- at runtime, on the persistent volume -- rather than beside the pi
+# CLI install in setup_system.sh, because ~/.pi lives under HOME and the runtime
+# volume mount shadows the build-time HOME (/root). Versions are pinned to match
+# the pinned CLI toolchain; bump deliberately. PI_CODING_AGENT_DIR pins the
+# config dir so this does not depend on HOME being set. Best-effort: a
+# registration failure (e.g. transient npm) must not abort the rest of the seed,
+# and the grep guard skips the network fetch when the entry is already present.
+if command -v pi >/dev/null 2>&1; then
+    for pi_ext in npm:pi-subagents@0.45.0 npm:pi-web-access@0.19.0; do
+        if ! grep -q "\"${pi_ext}\"" /home/user/.pi/agent/settings.json 2>/dev/null; then
+            PI_CODING_AGENT_DIR=/home/user/.pi/agent pi install "${pi_ext}" \
+                || echo "seed_home_skeleton: warning: failed to register pi extension ${pi_ext}" >&2
+        fi
+    done
+fi
