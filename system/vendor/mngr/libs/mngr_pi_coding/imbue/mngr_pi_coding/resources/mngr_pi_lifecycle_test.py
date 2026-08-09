@@ -464,10 +464,12 @@ def test_unknown_content_and_roles_degrade_gracefully(tmp_path: Path) -> None:
 
 
 # Drives the inbox watcher: a fake pi captures sendUserMessage calls; the inbox is
-# pre-seeded with one already-delivered line BEFORE load (so the offset is seeded
-# past it), then new/malformed lines are appended and we wait for the poll.
+# pre-seeded with one already-delivered line BEFORE load (archived to
+# pi_inbox_history and truncated at load, so it is never re-injected), then
+# new/malformed lines are appended and we wait for the poll. The inbox content
+# right after load is captured so the truncation itself is observable.
 _INBOX_DRIVER_MJS = """
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const STATE = process.env.MNGR_AGENT_STATE_DIR;
 const inbox = STATE + "/pi_inbox";
 const injected = [];
@@ -475,11 +477,12 @@ const pi = { on: () => {}, sendUserMessage: (c) => injected.push(c) };
 writeFileSync(inbox, JSON.stringify("OLD: already delivered") + "\\n");
 const mod = await import("./mngr_pi_lifecycle.ts");
 mod.default(pi);
+const inboxAtLoad = readFileSync(inbox, "utf-8");
 appendFileSync(inbox, JSON.stringify("first\\nmultiline") + "\\n");
 appendFileSync(inbox, "{not json}\\n");
 appendFileSync(inbox, JSON.stringify("second") + "\\n");
 await new Promise((r) => setTimeout(r, 600));
-writeFileSync(STATE + "/injected.json", JSON.stringify(injected));
+writeFileSync(STATE + "/injected.json", JSON.stringify({ injected, inboxAtLoad }));
 """
 
 
@@ -504,10 +507,15 @@ def test_inbox_watcher_injects_only_new_lines(tmp_path: Path) -> None:
         env={"PATH": os.environ.get("PATH", ""), "MNGR_AGENT_STATE_DIR": str(state_dir)},
     )
     assert result.returncode == 0, f"inbox driver failed:\n{result.stdout}\n{result.stderr}"
-    injected = json.loads((state_dir / "injected.json").read_text())
-    # Pre-existing line not re-injected (offset seeded at load); new lines injected
-    # in order with the embedded newline preserved; the malformed line is skipped.
-    assert injected == ["first\nmultiline", "second"]
+    outcome = json.loads((state_dir / "injected.json").read_text())
+    # Pre-existing line not re-injected; new lines injected in order with the
+    # embedded newline preserved; the malformed line is skipped.
+    assert outcome["injected"] == ["first\nmultiline", "second"]
+    # The prior generation's line was archived verbatim to pi_inbox_history and the
+    # inbox truncated in place at load, so the durable inbox holds only
+    # current-generation lines (the offset seed reads 0 from the empty file).
+    assert outcome["inboxAtLoad"] == ""
+    assert (state_dir / "pi_inbox_history").read_text() == json.dumps("OLD: already delivered") + "\n"
 
 
 # pi's real sendUserMessage returns a Promise; this fake rejects it. The watcher

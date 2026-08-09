@@ -30,3 +30,13 @@ steers pi drains into the composer -- clearing and restoring any user draft arou
 drain so the resubmit is sourced purely from pi's own queue -- then, once the turn
 settles, resubmits them as one merged turn. Injection is paused between the interrupt and
 the resubmit so nothing opens a competing turn. Delivery to an idle agent is a no-op.
+
+The lifecycle extension now generation-scopes the durable inbox at load: any `pi_inbox`
+lines present when the extension loads belong to a prior process generation, so they are
+archived verbatim to a sibling `pi_inbox_history` (raw history preserved) and `pi_inbox`
+is truncated in place before the injection offset is seeded. The inbox therefore only
+ever holds current-generation lines, so the Minds queue mirror's replay of `pi_inbox`
+from zero can no longer resurrect dead generations' messages as phantom queued entries.
+Safe against races: mngr appends to the inbox only after the readiness sentinel, which
+`session_start` writes after load. Behavior toward pi is unchanged -- pre-existing lines
+were already never re-injected (the offset seed skipped them).

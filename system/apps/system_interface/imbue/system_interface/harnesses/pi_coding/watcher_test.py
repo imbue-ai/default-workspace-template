@@ -7,6 +7,8 @@ are deterministic.
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +28,12 @@ def _agent_info(state_dir: Path) -> AgentInfo:
     )
 
 
-def _message_record(record_id: str, message: dict[str, Any]) -> dict:
+def _message_record(record_id: str, message: dict[str, Any], timestamp: str = "2026-08-07T11:50:00.000Z") -> dict:
     return {
         "type": "message",
         "id": record_id,
         "parentId": None,
-        "timestamp": "2026-08-07T11:50:00.000Z",
+        "timestamp": timestamp,
         "message": message,
     }
 
@@ -49,6 +51,15 @@ def _append_session(session_file: Path, records: list[dict]) -> None:
 
 def _point_marker(state_dir: Path, session_file: Path) -> None:
     (state_dir / "pi_session_file").write_text(str(session_file))
+
+
+def _touch_process_started(state_dir: Path, mtime_iso: str) -> None:
+    """Create the ``pi_process_started`` boundary marker with its mtime pinned to
+    ``mtime_iso``, the way mngr's launch prelude touches it on every launch/resume."""
+    marker = state_dir / "pi_process_started"
+    marker.write_text("")
+    epoch = datetime.fromisoformat(mtime_iso).timestamp()
+    os.utime(marker, (epoch, epoch))
 
 
 def _build(state_dir: Path) -> PiSessionWatcher:
@@ -119,6 +130,85 @@ def test_queue_enqueues_from_inbox_and_leaves_on_drained_user_turn(tmp_path: Pat
     # The message drains into the transcript as a user turn -> it leaves the queue.
     _append_session(session, [_message_record("u", _user("please do X"))])
     assert watcher.get_queued_messages() == []
+
+
+def test_drain_older_than_process_start_does_not_pop(tmp_path: Path) -> None:
+    # A user turn replayed from a dead process generation (its timestamp predates the
+    # pi_process_started marker) must not eat a current-generation queued entry.
+    session = tmp_path / "s.jsonl"
+    _write_session(session, [])
+    _point_marker(tmp_path, session)
+    _touch_process_started(tmp_path, "2026-08-07T12:00:00+00:00")
+    (tmp_path / "pi_inbox").write_text(json.dumps("parked now") + "\n")
+    watcher = _build(tmp_path)
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["parked now"]
+
+    _append_session(
+        session, [_message_record("old", _user("drained long ago"), timestamp="2026-08-07T11:50:00.000Z")]
+    )
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["parked now"]
+
+
+def test_drain_at_or_after_process_start_pops(tmp_path: Path) -> None:
+    # A current-generation drain (timestamp >= the marker mtime) pops as before.
+    session = tmp_path / "s.jsonl"
+    _write_session(session, [])
+    _point_marker(tmp_path, session)
+    _touch_process_started(tmp_path, "2026-08-07T12:00:00+00:00")
+    (tmp_path / "pi_inbox").write_text(json.dumps("please do X") + "\n")
+    watcher = _build(tmp_path)
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["please do X"]
+
+    _append_session(session, [_message_record("u", _user("please do X"), timestamp="2026-08-07T12:10:00.000Z")])
+    assert watcher.get_queued_messages() == []
+
+
+def test_missing_process_start_marker_pops(tmp_path: Path) -> None:
+    # No marker on disk -> every drain pops (today's behavior; over-popping errs
+    # toward an empty mirror, the contract-safe direction).
+    session = tmp_path / "s.jsonl"
+    _write_session(session, [])
+    _point_marker(tmp_path, session)
+    (tmp_path / "pi_inbox").write_text(json.dumps("queued") + "\n")
+    watcher = _build(tmp_path)
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["queued"]
+
+    _append_session(session, [_message_record("u", _user("queued"), timestamp="2020-01-01T00:00:00.000Z")])
+    assert watcher.get_queued_messages() == []
+
+
+def test_unparseable_drain_timestamp_pops(tmp_path: Path) -> None:
+    # A drain whose timestamp cannot be parsed also pops (the contract-safe direction),
+    # even when the marker exists.
+    session = tmp_path / "s.jsonl"
+    _write_session(session, [])
+    _point_marker(tmp_path, session)
+    _touch_process_started(tmp_path, "2026-08-07T12:00:00+00:00")
+    (tmp_path / "pi_inbox").write_text(json.dumps("queued") + "\n")
+    watcher = _build(tmp_path)
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["queued"]
+
+    _append_session(session, [_message_record("u", _user("queued"), timestamp="not-a-timestamp")])
+    assert watcher.get_queued_messages() == []
+
+
+def test_truncation_then_append_replays_only_appended_lines(tmp_path: Path) -> None:
+    # The extension archives-and-truncates pi_inbox at load; the watcher's existing
+    # shrink-reset must then replay exactly the newly-appended lines, with queued ids
+    # re-based from index 0 (identical to a from-scratch replay of the same file).
+    session = tmp_path / "s.jsonl"
+    _write_session(session, [])
+    _point_marker(tmp_path, session)
+    inbox = tmp_path / "pi_inbox"
+    inbox.write_text(json.dumps("stale one") + "\n" + json.dumps("stale two") + "\n")
+    watcher = _build(tmp_path)
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["stale one", "stale two"]
+
+    inbox.write_text(json.dumps("fresh") + "\n")
+    snapshot = watcher.get_queued_messages()
+    assert [entry["content"] for entry in snapshot] == ["fresh"]
+    # Ids are re-based from 0: the surviving watcher agrees with a fresh replay.
+    assert snapshot == _build(tmp_path).get_queued_messages()
 
 
 def test_notify_idle_clears_the_queue(tmp_path: Path) -> None:
