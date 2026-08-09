@@ -1,8 +1,8 @@
 # Plan: agent liveness overlay (the "if you can interact, it's live" contract)
 
-Status: v4 -- explored, adversarially reviewed (2 passes), user feedback folded
-(light UI treatment, no suppression machinery, per-element inert). Pending user
-go.
+Status: v5 -- explored, adversarially reviewed (2 passes), user feedback folded
+(light capsule UI, per-element inert, native interrupt vetoed, pending-restart
+flash protection). Mocks: `data/images/liveness-capsule-*.png`. Pending user go.
 
 ## The contract
 
@@ -62,14 +62,16 @@ the dot today; a resume must revive it exactly like DONE anyway).
 ## Overlay state machine
 
 ```
-agent absent from snapshot / WS not yet connected -> NO overlay (never flash
+agent absent from snapshot / WS not yet connected -> NO capsule (never flash
                                                      before data exists)
-alive                                             -> no overlay
-STOPPED | DONE | REPLACED                         -> overlay: "Agent stopped" + [Resume agent] button
-UNKNOWN                                           -> overlay: "Agent unavailable" + [Retry] button
-pending resume                                    -> overlay: "Starting agent..." (spinner)
-resume failed                                     -> overlay: "Couldn't start" + detail + [Retry]
+alive                                             -> no capsule
+STOPPED | DONE | REPLACED                         -> capsule: "Agent stopped" + [Resume] button
+UNKNOWN                                           -> capsule: "Agent unavailable" + [Retry] button
+pending resume OR pending restart                 -> capsule: "Starting agent..." (spinner)
+resume failed                                     -> capsule: "Couldn't start" + detail + [Retry]
 ```
+
+`pending restart` is the flash protection -- see below.
 
 - UI treatment (user direction: nice, compact, not dark): NO full-region
   scrim. The gated elements (`MessageInput`, `ModelBar`, the
@@ -93,15 +95,25 @@ resume failed                                     -> overlay: "Couldn't start" +
   arriving past a short grace (~10s) flips to the failed state (start
   succeeded then crashed). POST error -> failed state immediately. ~90s
   failsafe backstops a wedged start.
-- Flash story (user decision -- NO suppression machinery): the transient
-  sources are UI-initiated restarts (interrupt button, shoulder-tap), and the
-  native-interrupt redesign removes those restarts at the source. SEQUENCING:
-  land the native interrupt before (or with) this overlay. After that, a
-  raised capsule always reflects a genuine stop -- and an explicit
-  force-restart SHOWING "Starting agent..." is honest, desired feedback, not
-  a flash to hide. New-chat creation never shows the capsule at all: the
-  proto-agent phase renders no footer (`ChatPanel.ts:865`), and the agent
-  joins the store already RUNNING (`agent_manager.py:766`).
+- Flash protection (`pending restart` -- needed because the interrupt stays
+  restart-based; the native-interrupt idea is DEAD, user veto). Mechanism:
+  relabel, don't hide. When the UI itself initiates a restart -- the
+  interrupt/stop button or the shoulder-tap, both of which SIGKILL-then-
+  relaunch (`server.py:708-725`) -- the frontend marks that agent
+  `pending restart` locally at the moment of the POST. While the mark is set,
+  a non-alive push renders the "Starting agent..." spinner capsule instead of
+  the "Agent stopped [Resume]" capsule -- the composer is correctly gated
+  (the agent really is down for a moment) but the user sees restart progress,
+  not a scary stopped state with a Resume button racing the in-flight
+  restart. The mark clears on the next alive push (authoritative), or falls
+  through to the stopped capsule after a failsafe (~30s) if the restart never
+  lands. So: no flash of "stopped", no suppression window hiding truth, no
+  double-start race (the spinner capsule has no button). This is the same
+  class of fix as QueuedMessageView's anti-blip freeze
+  (`QueuedMessageView.ts:7-11`), applied to the capsule.
+- New-chat creation never shows the capsule at all: the proto-agent phase
+  renders no footer (`ChatPanel.ts:865`), and the agent joins the store
+  already RUNNING (`agent_manager.py:766`).
 - External transitions: another surface starting the agent clears via the
   push; external `mngr stop` raises via the push. An internal auto-start
   (welcome resend, cross-agent send) may briefly stream transcript under a
@@ -136,7 +148,10 @@ resume failed                                     -> overlay: "Couldn't start" +
   draft-preserving copy, reuse of `AgentTerminalPanel`'s start-spinner
   pattern).
 - Auto-start on tab visit: rejected; browsing must not boot processes.
-- Interrupt-button redesign, pi consume-by-rename: separate follow-ups.
+- Native in-TUI interrupt (Esc keypress instead of restart): VETOED by the
+  user -- will not work out; do not build. Interrupt stays restart-based,
+  which is why the `pending restart` flash protection above exists.
+- pi consume-by-rename: separate follow-up.
 
 ## Verification (build time)
 
@@ -148,9 +163,9 @@ resume failed                                     -> overlay: "Couldn't start" +
     unlock on push.
   - Kill the harness process inside its pane (DONE) -> capsule -> Resume
     actually revives (the F1 case; must go through revive_done_agent).
-  - (After the native-interrupt change lands) interrupt and shoulder-tap on a
-    RUNNING agent -> no capsule; an explicit force-restart shows the
-    "Starting agent..." capsule during the restart, honestly.
+  - Interrupt and shoulder-tap on a RUNNING agent -> the "Starting agent..."
+    spinner capsule shows during the restart window (never the stopped
+    capsule, never a Resume button), then clears on the alive push.
   - Stop observe (kill the subprocess) -> agents degrade to UNKNOWN, capsule
     says unavailable, recovers when observe returns.
   - Visual: capsule is compact, light (no dark scrim), matches both themes.
