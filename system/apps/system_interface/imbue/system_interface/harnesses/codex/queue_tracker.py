@@ -13,12 +13,15 @@ which is cleaner than Claude's positional resolve (Claude's ledger names no id).
 codex steers are all real user messages, so there is no phantom concept: every
 enqueue is added visible.
 
-Conservation holds (each enqueue gets exactly one terminating record), so feeding
-the whole ledger from the start is self-correcting -- every enqueue nets against
-its leave, leaving exactly the still-parked entries, no durable cursor needed. The
-ledger also self-cleans on ``codex resume`` (the fork retracts every live entry),
-so unlike Claude no session/rotation reset is required; the ``on_idle`` backstop
-is retained purely as a coarse safety net.
+Conservation holds only while the process lives (each enqueue gets exactly one
+terminating record), so feeding the whole ledger from the start nets every enqueue
+against its leave, leaving exactly the still-parked entries -- no durable cursor
+needed. A kill-based death breaks conservation: the dying process writes no
+terminating records, and the fork's restore-time retraction only closes entries
+held in the *current* process's memory, so the on-disk records are orphaned
+forever. The watcher therefore scopes the replay to the current process generation
+(an enqueue predating the ``codex_process_started`` marker mtime is not fed here),
+and the ``on_idle`` backstop sweeps any survivor.
 """
 
 from imbue.system_interface.harnesses.codex.session_parser import CodexQueueSignal
@@ -51,9 +54,8 @@ class CodexQueueTracker:
         """Clear the queue -- the working->IDLE backstop.
 
         At a genuine IDLE the queue is drained (a parked steer would have injected),
-        so any survivor is stale and is dropped. codex's ledger already retracts live
-        entries on resume, so this is a coarse safety net (a crash that skipped the
-        retract records), matching the Claude backstop.
+        so any survivor is stale and is dropped -- e.g. an orphan of a process that
+        died without writing its terminating records, matching the Claude backstop.
         """
         self._queued_set.clear()
 

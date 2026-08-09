@@ -177,6 +177,29 @@ ACTIVE_MARKER_FILENAME: str = "active"
 # whole time.
 WAITING_LIFECYCLE_STATE: str = "WAITING"
 
+# The lifecycle verdict meaning "could not observe", not "dead": mngr maps provider and probe
+# failures here (see mngr's ``AgentLifecycleState.UNKNOWN``). Consumers treat it as
+# non-evidence, so live state (the activity dot, the queued-message mirror) must never be
+# wiped on its account.
+UNKNOWN_LIFECYCLE_STATE: str = "UNKNOWN"
+
+
+@pure
+def is_lifecycle_dead(lifecycle_state: str) -> bool:
+    """True iff the observe-reported lifecycle positively says the agent process is dead.
+
+    Dead is everything outside the RUNNING states, WAITING (alive between turns), and
+    UNKNOWN (unobservable -- non-evidence, never treated as death). A dead process's
+    in-memory queue and in-flight turn died with it, so its activity must settle to IDLE
+    no matter what the transcript tail says; the manager applies that override in
+    ``_recompute_activity_state``.
+    """
+    if lifecycle_state in RUNNING_LIFECYCLE_STATES:
+        return False
+    if lifecycle_state == WAITING_LIFECYCLE_STATE:
+        return False
+    return lifecycle_state != UNKNOWN_LIFECYCLE_STATE
+
 
 @pure
 def resolve_is_agent_running(lifecycle_state: str, is_active_marker_present: bool) -> bool:
