@@ -28,8 +28,10 @@ blank check that decides phantom-ness, and salting the ``queued_id`` hash.
 
 Feeding the whole ledger from the start is self-correcting: every enqueue nets
 against its one leave, leaving exactly the still-parked entries, so no durable
-cursor is needed. A new session file (session id change) resets the set, since a
-new session means the process restarted and its in-memory queue is gone.
+cursor is needed. The watcher scopes the feed to the LATEST main session's
+ledger only (a new session file means the process restarted and its in-memory
+queue is gone) and calls ``reset`` when a new latest session is registered, so
+``consume`` never sees a dead session's signals.
 """
 
 import hashlib
@@ -60,12 +62,9 @@ def _is_phantom_content(content: str) -> bool:
 class ClaudeQueueTracker:
     """Populates one agent's :class:`QueuedSet` from Claude's queue ledger."""
 
+    # Declared at class level so ``build`` (no ``__init__``, matching the other
+    # live-state holders) can assign it.
     _queued_set: QueuedSet
-    # The session id of the ledger currently being tracked. A change means a new
-    # session file (Claude rotates a resumed session into a new file), so the live
-    # queue is gone and the set resets. Declared at class level so ``build`` (no
-    # ``__init__``, matching the other live-state holders) can assign it.
-    _session_id: str | None
 
     @classmethod
     def build(cls) -> "ClaudeQueueTracker":
@@ -74,13 +73,12 @@ class ClaudeQueueTracker:
         return tracker
 
     def consume(self, signal: QueueSignal) -> None:
-        """Fold one recognized queue-ledger transition into the queued set."""
-        # A new session file means the process restarted; its in-memory queue is
-        # gone, so start the set fresh before applying this session's signals.
-        if signal.session_id and signal.session_id != self._session_id:
-            self._session_id = signal.session_id
-            self._queued_set.clear()
+        """Fold one recognized queue-ledger transition into the queued set.
 
+        The watcher only ever feeds the latest main session's signals, and resets
+        this tracker when a new latest session is registered, so no session
+        discrimination happens here.
+        """
         match signal.kind:
             case QueueSignalKind.ENQUEUE:
                 # Task-notifications / blank enqueues are added as PHANTOM slots:
@@ -110,9 +108,8 @@ class ClaudeQueueTracker:
         self._queued_set.clear()
 
     def reset(self) -> None:
-        """Reset to an empty set and unknown session (a re-attach or truncation)."""
+        """Reset to an empty set (a truncation, or a new latest main session)."""
         self._queued_set = QueuedSet.build()
-        self._session_id = None
 
     def snapshot(self) -> list[dict[str, str]]:
         """The full wire snapshot of currently-queued messages, in enqueue order."""

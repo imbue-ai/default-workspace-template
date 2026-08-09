@@ -496,6 +496,18 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         with self._lock:
             return session_id in self._main_session_ids
 
+    def _is_latest_main_session_locked(self, session_id: str) -> bool:
+        """True if ``session_id`` is the most recently registered main session (lock held).
+
+        The queue-feed gate: the live claude process's in-memory queue can only
+        live in the LATEST main session's ledger (a restart always rotates into a
+        new session file), so only that session feeds the queue populator -- a
+        dead session's dangling enqueues must never re-derive. Event routing
+        (:meth:`is_main_session_event`) keeps plain membership; only the queue
+        feed is scoped to the latest session.
+        """
+        return bool(self._main_session_ids) and self._main_session_ids[-1] == session_id
+
     def _selected_states_current(self, session_id: str | None) -> list[SessionFileState]:
         """Discover sessions, bring the selected files' caches current, return them.
 
@@ -726,10 +738,12 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                 state.byte_offset_consumed = 0
                 state.locators = []
                 state.emitted_count = 0
-                # A rewritten main-session file is re-read from the start below, so
-                # the queue populator must re-derive from scratch too; otherwise
-                # re-feeding the same enqueues would double the pending set.
-                if state.session_id in self._main_session_ids:
+                # A rewritten latest-main-session file is re-read from the start
+                # below, so the queue populator must re-derive from scratch too;
+                # otherwise re-feeding the same enqueues would double the pending
+                # set. Only the latest main session feeds the populator, so only
+                # its truncation resets it.
+                if self._is_latest_main_session_locked(state.session_id):
                     self._queue_tracker.reset()
 
             if current_size == state.byte_offset_consumed and current_mtime == state.last_mtime:
@@ -753,9 +767,13 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                     state.emitted_count = len(state.locators)
                 return
 
-            # Queue signals ride the main session's ledger, never a subagent's, so
-            # only main-session lines feed the populator. Computed once per refresh.
-            is_main_session = state.session_id in self._main_session_ids
+            # Queue signals ride the main session's ledger, never a subagent's,
+            # and only the LATEST main session's ledger mirrors the live process's
+            # queue (see ``_is_latest_main_session_locked``), so only its lines
+            # feed the populator. This is the single feed point, so every replay
+            # path -- priming, the truncation reset above, HTTP-read feeds, and
+            # the poll loop -- inherits the scope. Computed once per refresh.
+            is_latest_main_session = self._is_latest_main_session_locked(state.session_id)
             for byte_offset, byte_len, line_bytes in _iter_line_spans(complete, state.byte_offset_consumed):
                 try:
                     decoded_line = line_bytes.decode("utf-8")
@@ -765,7 +783,7 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                 # Feed the queued-message populator in the same forward-consume
                 # pass. queue-operation records carry no uuid, so parse_lines drops
                 # them; this recognizes exactly the lines that move the live queue.
-                if is_main_session:
+                if is_latest_main_session:
                     queue_signal = parse_queue_signals(decoded_line)
                     if queue_signal is not None:
                         self._queue_tracker.consume(queue_signal)
@@ -1019,6 +1037,12 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                     continue
                 self._session_states[session_id] = SessionFileState(session_id, file_path)
                 self._main_session_ids.append(session_id)
+                # A NEW latest main session means the claude process restarted,
+                # so anything the previous session's ledger fed is a dead
+                # process's residue -- purge it now, within one discovery cycle,
+                # rather than waiting for the new session to emit a queue signal.
+                # The poll loop broadcasts the emptied snapshot if it changed.
+                self._queue_tracker.reset()
 
             # Set up watchdog for the new file
             if self._observer is not None:

@@ -1213,6 +1213,14 @@ class AgentManager:
         The full snapshot replaces the cached one wholesale (the frontend does the
         same). No-op for an agent that is no longer tracked (a callback racing with
         destruction). Only broadcasts when the snapshot actually changed.
+
+        A replayed snapshot can arrive with no recompute ever following it (e.g. a
+        priming replay for a stopped agent, whose lifecycle never changes again),
+        so the level-triggered idle sweep is run here, after caching and BEFORE the
+        broadcast: an idle agent's stale snapshot is drained via its idle handler
+        and the single broadcast below carries the post-sweep state, so phantoms
+        are never rendered. A live mid-turn agent derives non-IDLE (its transcript
+        signals are seeded before the watcher starts) and the snapshot stands.
         """
         queued = tuple(QueuedMessageState.model_validate(entry) for entry in snapshot)
         with self._lock:
@@ -1227,6 +1235,7 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(
                 to_update(agent_state.field_ref().queued_messages, queued)
             )
+        self._recompute_activity_state(agent_id, broadcast_on_change=False)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
