@@ -86,7 +86,7 @@ def test_codex_refusal_gives_the_verbatim_signin_instructions(monkeypatch: pytes
     reason = find_unauthenticated_harness_reason(HarnessType.CODEX)
     assert reason is not None
     assert "Codex is not signed in on this workspace." in reason
-    assert "Go to New tab (+) -> New terminal -> run `codex`" in reason
+    assert "Go to New tab (+) → New terminal → run `codex`" in reason
 
 
 def test_pi_refusal_gives_the_verbatim_signin_instructions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,4 +100,4 @@ def test_pi_refusal_gives_the_verbatim_signin_instructions(monkeypatch: pytest.M
     reason = find_unauthenticated_harness_reason(HarnessType.PI_CODING)
     assert reason is not None
     assert "Pi is not signed in on this workspace." in reason
-    assert "Go to New tab (+) -> New terminal -> run `pi` -> type `/login`" in reason
+    assert "Go to New tab (+) → New terminal → run `pi` → type `/login`" in reason

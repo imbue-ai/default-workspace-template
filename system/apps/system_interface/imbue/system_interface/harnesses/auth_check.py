@@ -54,12 +54,12 @@ HARNESS_AUTH_CHECKS: dict[HarnessType, HarnessAuthCheck] = {
     HarnessType.CODEX: HarnessAuthCheck(
         command=("codex", "login", "status"),
         display_name="Codex",
-        signin_instructions="Go to New tab (+) -> New terminal -> run `codex`",
+        signin_instructions="Go to New tab (+) → New terminal → run `codex`",
     ),
     HarnessType.PI_CODING: HarnessAuthCheck(
         command=("pi", "--list-models"),
         display_name="Pi",
-        signin_instructions="Go to New tab (+) -> New terminal -> run `pi` -> type `/login`",
+        signin_instructions="Go to New tab (+) → New terminal → run `pi` → type `/login`",
         unauthenticated_output_pattern=r"No models available",
     ),
 }
