@@ -39,3 +39,12 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
   (`get_search_content`). Names verified live against pi-web-access 0.19.0; they
   are the package defaults, so a `web-search.json` `toolNames` override renames
   them.
+
+- The pi queued-message mirror is now scoped to the live process generation: a
+  drained `user_message` only pops a queued entry when its timestamp is at or
+  after the `pi_process_started` marker's mtime, so a dead generation's drains
+  (replayed from the durable session file after a backend restart) can no longer
+  eat current-generation entries or leave phantom "queued" residue. Pairs with
+  the mngr-side pi extension change that archives `pi_inbox` to
+  `pi_inbox_history` and truncates it at load, which generation-scopes the
+  enqueue side by construction.
