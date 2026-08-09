@@ -890,28 +890,58 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
         return None
 
 
+def _send_terminal_signal(ws: Any, message: dict[str, Any]) -> None:
+    """Deliver a terminal control message as a WS TEXT frame, just BEFORE the socket closes.
+
+    The close CODE alone is NOT a reliable terminal signal on this server: the daemon serves
+    flask-sock over werkzeug's dev server, which -- when a handler returns right after an
+    explicit ``ws.close(code)`` -- writes a trailing HTTP response onto the already-hijacked
+    socket. That corrupts the close handshake, so the browser's WebSocket reports 1006
+    "Invalid frame header" and never sees the intended 4001/1008 code. The viewer's onclose
+    then falls through to its generic-reconnect branch and loops forever on "Starting
+    browser…" instead of showing the terminal overlay.
+
+    A data frame sent BEFORE the close is delivered intact (this is exactly how the live
+    ``{"type":"closed"}`` broadcast in ``LiveBrowser.close`` already works), so the viewer
+    acts on the message regardless of the lost close code. Best-effort: a socket the client
+    already dropped just raises here and there's nothing terminal left to say."""
+    try:
+        ws.send(json.dumps(message))
+    except (ConnectionClosed, OSError):
+        pass
+
+
 def _close_unresolved_ws(ws: Any, browser_id: str) -> None:
-    """Close a /cast or /stream WS whose browser didn't resolve, with the close code that tells
-    the viewer how to react (both handlers share this one contract):
-    - launch FAILED -> 1008 terminal ("failed to start"); a late optimistic viewer that missed
-      the launch_failed broadcast otherwise retries forever.
-    - the browser was explicitly CLOSED by an agent -> 4001 terminal, so the viewer shows the
-      "terminated by an agent" overlay rather than the generic "reopen" text.
+    """Close a /cast or /stream WS whose browser didn't resolve, telling the viewer how to
+    react (both handlers share this one contract). The terminal reason rides a TEXT frame
+    (see :func:`_send_terminal_signal` for why the close code can't be trusted here); the
+    matching close code is still sent for spec-compliant clients and for the retryable case:
+    - launch FAILED -> ``launch_failed`` + 1008 terminal ("failed to start"); a late
+      optimistic viewer that missed the launch_failed broadcast otherwise retries forever.
+    - the browser was explicitly CLOSED by an agent -> ``closed`` + 4001 terminal, so the
+      viewer shows the "terminated by an agent" overlay rather than the generic "reopen" text.
     - a syntactically valid name not registered YET:
-        * while the fleet is still restoring (init not done) -> 1013 retryable; it may still come
-          up, so the viewer backs off and reconnects.
+        * while the fleet is still restoring (init not done) -> 1013 retryable, NO terminal
+          frame; it may still come up, so the viewer backs off and reconnects.
         * once restore is done -> the name resolves to nothing and never will (e.g. a
           layout-restored tab of a browser closed in a PRIOR daemon life, whose in-memory
-          close memory didn't survive the restart) -> 4001 terminal, so the viewer shows the
-          terminated overlay instead of looping forever on "Starting browser…".
-    - an invalid name (could never exist) -> 1008 terminal (shows "browser closed -- reopen")."""
+          close memory didn't survive the restart) -> ``closed`` + 4001 terminal, so the
+          viewer shows the terminated overlay instead of looping forever on "Starting browser…".
+    - an invalid name (could never exist) -> ``closed`` + 1008 terminal."""
     if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
+        _send_terminal_signal(ws, {"type": "launch_failed", "browser_id": browser_id})
         ws.close(1008)
     elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):
+        _send_terminal_signal(ws, {"type": "closed", "browser_id": browser_id})
         ws.close(_WS_CLOSE_TERMINATED)
     elif is_valid_browser_name(browser_id):
-        ws.close(_WS_CLOSE_TERMINATED if _init_done.is_set() else 1013)
+        if _init_done.is_set():
+            _send_terminal_signal(ws, {"type": "closed", "browser_id": browser_id})
+            ws.close(_WS_CLOSE_TERMINATED)
+        else:
+            ws.close(1013)  # still restoring -- retryable, so the viewer reconnects
     else:
+        _send_terminal_signal(ws, {"type": "closed", "browser_id": browser_id})
         ws.close(1008)
 
 
