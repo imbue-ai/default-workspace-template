@@ -63,10 +63,16 @@ from imbue.system_interface.layout_ops import parse_tmux_sessions_output
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
+from imbue.system_interface.harnesses.interrupt import restart_drain
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
+from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
 from imbue.system_interface.harnesses.registry import HARNESS_SPECS
+from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import get_catalog
 from imbue.system_interface.harnesses.registry import get_harness_spec
+from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
@@ -746,30 +752,22 @@ def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Respo
     return None
 
 
-def _drain_queue(agent_info: AgentInfo) -> str:
-    """Shared prefix for both queue actions: capture the block, restart, clear.
+def _interrupt_capabilities(
+    agent_info: AgentInfo,
+) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
+    """The harness-neutral capabilities a queue action binds for one agent: the queue mirror,
+    a process restart (``mngr start --restart --no-resume``), and an activity-settle.
 
-    Returns the queued messages as one concatenated block (empty when the queue
-    was already drained -- a no-op). The block is captured BEFORE the restart,
-    which drops the harness queue; the restart is then run and the tracked queued
-    set (which it invalidated) is cleared, emptying the frontend group at once.
-    Raises :class:`AgentRestartError` if the restart fails. The two endpoints
-    differ only in what they do with the returned block.
+    Shared by the restart-drain flush and the (per-harness) stop button, mirroring how the
+    switch endpoint binds its ``send`` callback.
     """
     state = get_state()
     watcher = state.get_or_create_watcher(agent_info)
-    block = watcher.get_queued_block()
-    if not block:
-        return ""
-    is_restarted, output = _restart_agent_process(agent_info.name)
-    if not is_restarted:
-        raise AgentRestartError(f"Failed to restart agent '{agent_info.name}': {output}")
-    # The restart abandoned the transcript mid-turn, so settle the derived
-    # activity (the flush's own send re-drives it), then drop the tracked queued
-    # set the SIGKILL invalidated -- this also pushes the now-empty group.
-    state.agent_manager.reset_activity_state(agent_info.id)
-    watcher.clear_queue()
-    return block
+    return (
+        watcher,
+        lambda: _restart_agent_process(agent_info.name),
+        lambda: state.agent_manager.reset_activity_state(agent_info.id),
+    )
 
 
 def _flush_queue_endpoint(agent_id: str) -> Response:
@@ -787,8 +785,15 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
     if refusal is not None:
         return refusal
 
+    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+    # Empty-queue short-circuit lives HERE (not in the shared restart-drain): a flush with
+    # nothing queued would resend nothing, so it is a clean no-op. The stop button, by contrast,
+    # still interrupts an empty-queue turn -- so the restart-drain no longer short-circuits.
+    if not watcher.get_queued_block():
+        return _json_response(SendMessageResponse(status="ok").model_dump())
+
     try:
-        block = _drain_queue(agent_info)
+        block = restart_drain(agent_info, watcher, restart_process, settle_activity)
     except AgentRestartError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
 
@@ -807,12 +812,10 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
 # messages into one merged turn only if the live turn id still equals ``target_turn_id`` (an
 # ABA gate), so the flush lands in the exact turn the user tapped and no other.
 _SHOULDER_TAP_ATOMIC_CONTROL_NAME: str = "shoulder_tap_atomic.jsonl"
-# pi's message inbox (state-dir root) and the interrupt sentinel we append to it. The pi
-# lifecycle extension recognizes a JSON *object* line `{"minds_interrupt": true}` (a normal
-# message is a JSON *string*) and interrupts + resubmits; the queue watcher ignores non-string
-# inbox lines, so the sentinel never enters the tracked queue. Kept in sync with the extension.
-_PI_INBOX_NAME: str = "pi_inbox"
-_PI_INTERRUPT_KEY: str = "minds_interrupt"
+# pi's inbox name + the flush sentinel key live in harnesses/pi_coding/inbox.py, the shared
+# pi_inbox protocol (a JSON *object* line the extension reads; a normal message is a JSON
+# *string*, so the two never collide, and the queue watcher treats the object as a positional
+# clear rather than a queued message).
 
 
 def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
@@ -850,13 +853,11 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     if agent_info.harness == HarnessType.PI_CODING:
         # pi has no per-turn id, so there is no ABA target to compute here: the lifecycle
         # extension gates the interrupt on "a turn is actually running" itself (a no-op when
-        # idle). Append one interrupt sentinel to pi's inbox; the extension interrupts the
+        # idle). Append one flush sentinel to pi's inbox; the extension interrupts the
         # running turn and resubmits the parked steers as one merged turn.
-        inbox_path = agent_info.agent_state_dir / _PI_INBOX_NAME
+        inbox_path = agent_info.agent_state_dir / PI_INBOX_NAME
         try:
-            inbox_path.parent.mkdir(parents=True, exist_ok=True)
-            with inbox_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps({_PI_INTERRUPT_KEY: True}) + "\n")
+            append_pi_inbox_sentinel(inbox_path, PI_INTERRUPT_KEY)
         except OSError as e:
             logger.opt(exception=e).error("Failed to write pi interrupt sentinel at {}", inbox_path)
             error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
@@ -886,13 +887,14 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
 
 
 def _drain_to_composer_endpoint(agent_id: str) -> Response:
-    """Interrupt to composer: restart the agent and hand the queued block back, unsent.
+    """Interrupt to composer: interrupt the running turn and hand the queued block back, unsent.
 
-    Same restart-and-clear prefix as the flush, but the concatenated block is
-    returned to the frontend to drop into the composer for the user to edit and
-    send, rather than resent. Returns 404 for an unknown agent, 400 for the
-    primary services agent, 500 if the restart fails, 200 with ``{block}``
-    otherwise (``block`` empty when the queue was already drained).
+    Dispatches through the harness's registered interrupt-to-composer implementation (the base
+    restart-drain for claude/codex, a native override for pi), which returns the concatenated
+    block the frontend drops into the composer for the user to edit and send, rather than resent.
+    Unlike the flush there is NO empty-queue short-circuit: a stop mid-turn with nothing queued
+    still interrupts (block comes back empty). Returns 404 for an unknown agent, 400 for the
+    primary services agent, 500 if the interrupt fails, 200 with ``{block}`` otherwise.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
@@ -901,10 +903,16 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
     if refusal is not None:
         return refusal
 
+    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+    interrupter = build_interrupt_to_composer(agent_info)
     try:
-        block = _drain_queue(agent_info)
+        block = interrupter.drain_to_composer(watcher, restart_process, settle_activity)
     except AgentRestartError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+    except OSError as e:
+        logger.opt(exception=e).error("Failed to record the interrupt for agent {}", agent_info.name)
+        error = ErrorResponse(detail=f"Failed to record the interrupt for agent '{agent_info.name}'")
+        return _json_response(error.model_dump(), status_code=500)
 
     return _json_response(DrainToComposerResponse(block=block).model_dump())
 
