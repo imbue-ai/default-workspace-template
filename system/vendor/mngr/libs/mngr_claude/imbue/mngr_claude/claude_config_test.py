@@ -21,6 +21,7 @@ from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
 from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
 from imbue.mngr_claude.claude_config import find_project_config
 from imbue.mngr_claude.claude_config import is_tap_binding_active
+from imbue.mngr_claude.claude_config import mark_claude_agent_idle
 from imbue.mngr_claude.claude_config import find_user_config_in_isolated_mode
 from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
 from imbue.mngr_claude.claude_config import get_claude_config_dir
@@ -1137,3 +1138,45 @@ def test_build_permission_auto_allow_hooks_config_has_permission_request_hook() 
     assert inner_hook["timeout"] == 5
     assert "allow" in inner_hook["command"]
     assert "PermissionRequest" in inner_hook["command"]
+
+
+def test_mark_claude_agent_idle_clears_markers_and_emits_activity_event(tmp_path: Path) -> None:
+    """mark_claude_agent_idle removes both markers and appends one format-conformant activity event.
+
+    It runs the same shell snippet the Notification / SessionStart / Stop hooks run, so the
+    emitted line must match the hooks' activity-event format exactly."""
+    state_dir = tmp_path / "agent"
+    state_dir.mkdir()
+    (state_dir / "active").write_text("")
+    (state_dir / "permissions_waiting").write_text("")
+    host_dir = tmp_path / "host"
+    host_dir.mkdir()
+
+    mark_claude_agent_idle(state_dir, host_dir)
+
+    # Both markers are cleared, so the agent stops reporting RUNNING.
+    assert not (state_dir / "active").exists()
+    assert not (state_dir / "permissions_waiting").exists()
+    # Exactly one activity event was appended, in the hooks' own format.
+    events_file = host_dir / "events" / "mngr" / "activity" / "events.jsonl"
+    lines = events_file.read_text().splitlines()
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["source"] == "mngr/activity"
+    assert event["type"] == "activity"
+    assert event["event_id"].startswith("evt-")
+    assert event["timestamp"].endswith("Z")
+
+
+def test_mark_claude_agent_idle_is_idempotent_on_absent_markers(tmp_path: Path) -> None:
+    """Absent markers are a no-op (``rm -f``); the activity event is still emitted."""
+    state_dir = tmp_path / "agent"
+    state_dir.mkdir()
+    host_dir = tmp_path / "host"
+    host_dir.mkdir()
+
+    mark_claude_agent_idle(state_dir, host_dir)
+
+    assert not (state_dir / "active").exists()
+    events_file = host_dir / "events" / "mngr" / "activity" / "events.jsonl"
+    assert len(events_file.read_text().splitlines()) == 1

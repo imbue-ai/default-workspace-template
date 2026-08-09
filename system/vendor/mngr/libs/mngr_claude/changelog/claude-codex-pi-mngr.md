@@ -34,3 +34,11 @@ isolated mode the per-agent config dir inherits it via the existing keybindings 
 `is_tap_binding_active` reports whether the chord is live for the running claude process (bound
 on disk, and written no later than the process-start marker, since claude reads keybindings only
 at launch).
+
+Added `mark_claude_agent_idle`, a small primitive that clears a claude agent's `active` and
+`permissions_waiting` markers and emits one activity event, out-of-band. It runs the exact shell
+snippet the Notification / SessionStart / Stop hooks already run, so the marker semantics and the
+activity-event format have a single source of truth. The Minds workspace stop button calls it
+after a native (chord) interrupt: claude fires no hook when the user interrupts a turn, so the
+`active` marker is otherwise stranded and the agent keeps reporting RUNNING for ~60s; clearing it
+drops the activity indicator immediately and the emitted event pokes `mngr observe` to re-probe.

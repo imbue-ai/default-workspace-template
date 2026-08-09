@@ -37,9 +37,9 @@ from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
+from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.system_interface.harnesses.codex.model import CodexInterruptToComposer
 from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.harnesses.interrupt import RestartDrainInterruptToComposer
 from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.server import create_application
@@ -1063,36 +1063,52 @@ def test_shoulder_tap_atomic_no_open_turn_writes_nothing(client: FlaskClient, tm
     assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
 
 
-def test_drain_to_composer_claude_restarts_and_returns_the_block_unsent(client: FlaskClient) -> None:
-    """The base restart-drain (claude/codex): interrupt-to-composer restarts and hands the block
-    back without sending it."""
-    fake_watcher = _fake_queue_watcher("edit me before sending")
-    with (
-        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
-        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()),
-        patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent") as mock_send,
-    ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
+def _fake_claude_interrupt_watcher(
+    *,
+    block: str,
+    queued: list[dict[str, Any]],
+    session_file: Path | None = None,
+    append_on_second_refresh: str | None = None,
+) -> SimpleNamespace:
+    """A claude-shaped watcher stand-in for the stop override: mirror + session + block methods.
 
-    assert response.status_code == 200
-    assert response.get_json()["block"] == "edit me before sending"
-    # The block is handed back, never sent.
-    mock_send.assert_not_called()
-    assert fake_watcher.clear_calls == [True]
-
-
-def test_drain_to_composer_claude_restarts_even_with_an_empty_queue(client: FlaskClient) -> None:
-    """Changed behavior pinned: the empty-block short-circuit is hoisted to the flush only, so a
-    claude stop mid-turn with nothing queued now RESTARTS (a pure interrupt) and returns ''.
-
-    (Superseded for claude by plan-claude-interrupt's chord branch and its dispatch tests; the
-    hoist itself stays load-bearing for that plan's delegations to the base.)
+    ``get_queued_messages`` drives the empty/non-empty branch; ``get_latest_main_session_file``
+    anchors the abort watch. When ``append_on_second_refresh`` is set, that raw line is appended
+    to ``session_file`` on the SECOND ``get_all_events`` (the under-lock re-check, after the
+    baseline) so the abort watch reads it as post-baseline evidence.
     """
-    fake_watcher = _fake_queue_watcher("")
+    state = {"events": 0}
+    clear_calls: list[bool] = []
+
+    def _get_all_events(session_id: str | None = None) -> list[dict[str, Any]]:
+        state["events"] += 1
+        if state["events"] == 2 and append_on_second_refresh is not None and session_file is not None:
+            with session_file.open("a") as handle:
+                handle.write(append_on_second_refresh + "\n")
+        return []
+
+    return SimpleNamespace(
+        get_all_events=_get_all_events,
+        get_queued_messages=lambda: list(queued),
+        get_queued_block=lambda: block,
+        get_latest_main_session_file=lambda: session_file,
+        clear_queue=lambda: clear_calls.append(True),
+        clear_calls=clear_calls,
+    )
+
+
+def test_drain_to_composer_claude_nonempty_queue_delegates_to_base_restart(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """A NONEMPTY claude queue keeps the base restart-drain: restart, hand the block back unsent,
+    clear the mirror -- a chord there would commit the very messages stop promises to retract."""
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    agent_info = _agent_info(agent_state_dir=state_dir, claude_config_dir=config_dir)
+    fake_watcher = _fake_claude_interrupt_watcher(
+        block="edit me before sending", queued=[{"queued_id": "q1", "content": "edit me before sending"}]
+    )
     with (
-        patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
@@ -1101,10 +1117,53 @@ def test_drain_to_composer_claude_restarts_even_with_an_empty_queue(client: Flas
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
     assert response.status_code == 200
-    assert response.get_json()["block"] == ""
+    assert response.get_json()["block"] == "edit me before sending"
     assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    # The block is handed back, never sent.
     mock_send.assert_not_called()
     assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_claude_empty_queue_uses_the_chord_not_a_restart(tmp_path: Path) -> None:
+    """Replaces the pi plan's pinned claude-empty-queue-restarts test: a claude stop mid-turn with
+    NOTHING queued now interrupts via the meta+q chord (routed through mngr), confirms the abort by
+    the interrupt sentinel, marks the stranded agent idle, and returns '' -- never restarting."""
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+    agent_id = "agent-00000000000000000000000000000042"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    # The mid-tool sentinel shape (the dominant stop scenario), appended past the baseline.
+    sentinel = json.dumps(
+        {"type": "user", "message": {"role": "user", "content": "[Request interrupted by user for tool use]"}}
+    )
+    fake_watcher = _fake_claude_interrupt_watcher(
+        block="", queued=[], session_file=session, append_on_second_refresh=sentinel
+    )
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    app = create_application(build_test_state(agent_manager=manager))
+    idle_marks: list[bool] = []
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch(
+            "imbue.system_interface.harnesses.claude.tap.mark_claude_agent_idle",
+            side_effect=lambda *_a, **_k: idle_marks.append(True),
+        ),
+    ):
+        response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    # Interrupted via the chord (routed through mngr's locked keypress), never a restart.
+    mock_run.assert_not_called()
+    assert messenger.pressed == [(agent_id, "M-q")]
+    # The stranded active marker was cleared via the mngr_claude idle-marking primitive.
+    assert idle_marks == [True]
+    # Nothing was queued, so the mirror is not cleared here (the chord path leaves it alone).
+    assert fake_watcher.clear_calls == []
 
 
 def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(
@@ -1160,14 +1219,14 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
 
 def test_drain_to_composer_dispatches_per_harness(tmp_path: Path) -> None:
     """The stop button resolves the interrupt-to-composer implementation from the harness: codex
-    to its native retract override, pi to its own native override, and claude (the default) to the
-    base restart-drain -- so the codex override plugs in without disturbing the pi/claude arms."""
+    to its native retract override, pi to its own native override, and claude to its native
+    empty-queue chord override -- each plugs in without disturbing the others."""
     codex = build_interrupt_to_composer(_agent_info(harness=HarnessType.CODEX, agent_state_dir=tmp_path))
     pi = build_interrupt_to_composer(_agent_info(harness=HarnessType.PI_CODING, agent_state_dir=tmp_path))
     claude = build_interrupt_to_composer(_agent_info(harness=HarnessType.CLAUDE))
     assert isinstance(codex, CodexInterruptToComposer)
     assert isinstance(pi, PiInterruptToComposer)
-    assert isinstance(claude, RestartDrainInterruptToComposer)
+    assert isinstance(claude, ClaudeInterruptToComposer)
 
 
 def test_drain_to_composer_codex_appends_retract_line_and_returns_block(

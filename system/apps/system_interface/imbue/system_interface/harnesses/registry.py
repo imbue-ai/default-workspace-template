@@ -27,6 +27,7 @@ from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTrack
 from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
+from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
@@ -92,6 +93,10 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # Claude Code's transcript has no turn boundaries; activity is inferred from an
         # unmatched tool_use plus the transcript tail.
         special_kinds=frozenset(),
+        # claude interrupts an EMPTY-queue turn natively via the meta+q cancel chord (a pure
+        # interrupt, confirm-then-clear of the stranded active marker); a NONEMPTY queue keeps
+        # the base restart-drain. See harnesses/claude/tap.py.
+        interrupt_to_composer_class=ClaudeInterruptToComposer,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
