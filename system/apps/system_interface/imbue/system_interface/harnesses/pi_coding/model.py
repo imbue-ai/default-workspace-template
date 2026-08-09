@@ -1,4 +1,4 @@
-"""pi's model catalog and its (ON_CHANGE) model resolver.
+"""pi's model catalog and its (EAGER_THEN_RECONCILE) model resolver.
 
 claude and codex declare a handful of models by hand. pi exposes over a thousand
 across dozens of providers, each with its own reasoning ("thinking") levels no human
@@ -34,8 +34,10 @@ from loguru import logger
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.utils.file_utils import atomic_write
+from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import ModelAxis
@@ -149,7 +151,11 @@ def build_catalog(data_dir: Path) -> HarnessCatalog:
                     entries.append((f"{provider_id}/{model_id}", _supported_thinking_levels(model)))
     return HarnessCatalog(
         options=to_options(tuple(entries)),
-        switch_mode=SwitchMode.ON_CHANGE,
+        # EAGER_THEN_RECONCILE: the mailbox consume is guaranteed (single-slot,
+        # rename-apply-delete) and switch() wakes a stopped agent, so an optimistic
+        # chip reconciles promptly; the picker is auth-filtered, so an eager pick
+        # that cannot apply is rare.
+        switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
         picker_mode=PickerMode.SEARCH,
         powered_by_label="Pi Coding",
         # pi is not ready for atomic shoulder-tap; keep the restart-based flush.
@@ -165,7 +171,7 @@ def get_catalog() -> HarnessCatalog:
         logger.warning("pi provider data not found; pi's model catalog will be empty")
         return HarnessCatalog(
             options=(),
-            switch_mode=SwitchMode.ON_CHANGE,
+            switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
             picker_mode=PickerMode.SEARCH,
             powered_by_label="Pi Coding",
             # pi is not ready for atomic shoulder-tap; keep the restart-based flush.
@@ -176,14 +182,21 @@ def get_catalog() -> HarnessCatalog:
 
 class PiModelResolver(HarnessModelResolver):
     """Applies a pi agent's switch by writing a single-slot control mailbox the extension
-    consumes, and reports its auth-gated picker offer set (the live read is shared)."""
+    consumes (waking the agent so it consumes promptly), and reports its auth-gated picker
+    offer set (the live read is shared)."""
 
     _state_dir: Path
+    _agent_name: str
+    _start_agent: Callable[[str], None]
 
     @classmethod
-    def build(cls, agent_info: AgentInfo) -> "PiModelResolver":
+    def build(
+        cls, agent_info: AgentInfo, start_agent_fn: Callable[[str], None] = start_agent
+    ) -> "PiModelResolver":
         self = cls.__new__(cls)
         self._state_dir = agent_info.agent_state_dir
+        self._agent_name = agent_info.name
+        self._start_agent = start_agent_fn
         return self
 
     def list_offered_models(self) -> tuple[str, ...] | None:
@@ -226,8 +239,7 @@ class PiModelResolver(HarnessModelResolver):
         # through ``send``. Instead the resolver writes the intent to a single-slot control
         # mailbox the lifecycle extension consumes and applies via pi.setModel /
         # pi.setThinkingLevel. The write atomically OVERWRITES the file, so the newest
-        # intent replaces any unconsumed older one (last wins). ON_CHANGE: the chip
-        # reconciles from the state file once the extension applies it.
+        # intent replaces any unconsumed older one (last wins).
         if ModelAxis.MODEL not in axes and ModelAxis.EFFORT not in axes:
             return SwitchResult(ok=True)
         intent = {"model_id": identity.model_id, "thinking_level": identity.effort}
@@ -237,4 +249,17 @@ class PiModelResolver(HarnessModelResolver):
         except OSError as e:
             logger.warning("pi switch: failed to write control file {}: {}", control_path, e)
             return SwitchResult(ok=False, detail="Failed to record the model switch")
+        # Wake a stopped agent so the parked intent applies now instead of at some future
+        # start -- matching claude/codex, whose send-delivered switches auto-start. Written
+        # AFTER the mailbox so the extension's session-start consume sees the intent. The
+        # wake is token-free: it boots the TUI process; the extension applies the switch
+        # via pi's native setters, and no turn runs. A start failure only parks the intent
+        # (it applies on the next start), so the switch itself still succeeded.
+        try:
+            self._start_agent(self._agent_name)
+        except MngrError as e:
+            logger.warning("pi switch: could not wake agent {}: {}", self._agent_name, e)
+        # EAGER_THEN_RECONCILE: the chip moves optimistically on click and snaps to the
+        # state file once the extension applies (200ms poll when running; session start
+        # after a wake).
         return SwitchResult(ok=True)

@@ -71,7 +71,7 @@ def test_build_catalog_tags_and_string_efforts(tmp_path: Path) -> None:
     )
     catalog = build_catalog(data_dir)
     assert catalog.picker_mode == PickerMode.SEARCH
-    assert catalog.switch_mode == SwitchMode.ON_CHANGE
+    assert catalog.switch_mode == SwitchMode.EAGER_THEN_RECONCILE
     by_id = {opt.id: opt for opt in catalog.options}
     # id == label == provider/model
     assert by_id["anthropic/claude-sonnet-5"].label == "anthropic/claude-sonnet-5"
@@ -121,14 +121,18 @@ def test_list_offered_models_defaults_to_whole_catalog_for_non_pi(tmp_path: Path
     assert ClaudeModelResolver.build(_agent_info(tmp_path)).list_offered_models() is None
 
 
-def test_switch_writes_the_control_file(tmp_path: Path) -> None:
-    resolver = PiModelResolver.build(_agent_info(tmp_path))
+def test_switch_writes_the_control_file_and_wakes_the_agent(tmp_path: Path) -> None:
+    woken: list[str] = []
+    resolver = PiModelResolver.build(_agent_info(tmp_path), start_agent_fn=woken.append)
     result = resolver.switch(
         ModelIdentity(model_id="anthropic/claude-opus-4-8", effort="high", fast=False),
         frozenset({ModelAxis.MODEL}),
         lambda line: True,
     )
     assert result.ok
+    # The wake happens AFTER the mailbox write (a stopped agent's session-start
+    # consume must see the intent) and is token-free (process start, no message).
+    assert woken == [_agent_info(tmp_path).name]
     # The mailbox is a single JSON object, not a JSONL log line.
     assert json.loads((tmp_path / "pi_control.json").read_text()) == {
         "model_id": "anthropic/claude-opus-4-8",
@@ -139,7 +143,7 @@ def test_switch_writes_the_control_file(tmp_path: Path) -> None:
 def test_switch_twice_leaves_only_the_latest_intent(tmp_path: Path) -> None:
     # Single-slot mailbox: a second switch atomically overwrites the first (last wins),
     # so the file holds exactly one intent -- the newest -- rather than an appended log.
-    resolver = PiModelResolver.build(_agent_info(tmp_path))
+    resolver = PiModelResolver.build(_agent_info(tmp_path), start_agent_fn=lambda name: None)
     resolver.switch(
         ModelIdentity(model_id="anthropic/claude-opus-4-8", effort="low", fast=False),
         frozenset({ModelAxis.MODEL}),
