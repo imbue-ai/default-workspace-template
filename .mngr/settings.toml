@@ -86,13 +86,6 @@ yes = true
 auto_dismiss_dialogs = true
 auto_allow_permissions = true
 auto_disable_questions = true
-# Auto-accept blocking confirmation selectors (e.g. the /model switch prompt) by
-# pressing Enter on the highlighted default -- depth 2 clears a chained pair
-# (confirm + follow-up callout). Covers both dialogs opened BY a just-sent
-# message and one already up when a send starts. Permission prompts are never
-# auto-accepted by these knobs.
-auto_accept_prompt_depth = 2
-auto_accept_preflight_prompt_depth = 2
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
 # fastMode defaults OFF here so every NON-interactive agent runs at standard
 # speed -- every claude role (caretaker, automation, worker) resolves to this
