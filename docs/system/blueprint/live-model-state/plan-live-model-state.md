@@ -211,20 +211,29 @@ installed OVER the npm-vendored codex at Docker IMAGE BUILD only
 does have `MNGR_AGENT_STATE_DIR` (agent env file is sourced into the pane before
 launch -- verified).
 
-Plan:
+Plan (AS IMPLEMENTED -- one deliberate deviation):
 
-- In codex-in-minds: change the mirror writer to the unified schema
-  (`service_tier` -> `fast` mapped inside the patch) at
-  `$MNGR_AGENT_STATE_DIR/minds_model_state.json`; cut a release.
-- In dwt: bump `CODEX_PATCH_RELEASE` + both sha256s in `setup_system.sh`.
+- DECISION taken at implementation: codex KEEPS writing at
+  `$CODEX_HOME/minds_model_state.json`. `CODEX_HOME` is
+  `<state_dir>/plugin/codex/home`, i.e. inside the agent state dir -- so the
+  uniform contract holds with the state file's RELATIVE PATH as per-harness
+  DATA on the reader side (claude/pi: state-dir root; codex:
+  `plugin/codex/home`). Rationale: an env-var path in the Rust patch is
+  untestable there (process-global env in parallel tests) and breaks plain
+  non-mngr codex runs; a relative-path constant is data, not code.
+- codex-in-minds (patch regenerated from an applied upstream tree, applies
+  clean to the pristine `rust-v0.146.0` tag; committed locally on its
+  `claude-codex-pi-mngr` branch, NOT pushed): writer emits the unified
+  `{model, effort, fast}` schema, tier -> fast mapped in the patch
+  (`"priority"` == fast), effort always present (null when none); docs updated.
+- Release/binary bump DEFERRED (build.sh needs authenticated AWS EC2). Until a
+  new release is pinned in `setup_system.sh`, installed binaries write the OLD
+  schema at the same path: the chip still shows the right model (the `model`
+  key is unchanged), effort shows none and fast shows off. Graceful, self-heals
+  on the next image bake.
 - In system_interface: delete `guess_from_launch` + the config.toml read; update
   docstrings (including the stale `pi_model_state.json` mention in
   `codex/model.py:18`).
-- Reach: new image bakes only. Existing containers (including this one) keep the
-  old binary -> codex bars logo-only there (accepted: flag-gated). To verify in
-  THIS workspace: manually download the new release binary and `mv` it over the
-  path `find /usr/local/lib/node_modules/@openai -path '*/vendor/*/bin/codex'`
-  yields (same operation setup_system.sh performs).
 
 ## Phase 5 -- verify + ship
 
