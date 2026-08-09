@@ -47,6 +47,11 @@ from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
 from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
 from imbue.system_interface.harnesses.claude.launch_defaults import write_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.tap import KEYBINDINGS_FILENAME
+from imbue.system_interface.harnesses.claude.tap import OK_TAP_STATUSES
+from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
+from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
+from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
@@ -863,6 +868,12 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
             return _json_response(error.model_dump(), status_code=500)
         return _json_response(ShoulderTapAtomicResponse(status="tapped").model_dump())
 
+    if agent_info.harness == HarnessType.CLAUDE:
+        # claude has no control-file channel: it flushes its parked queue by cancelling the
+        # live turn. Delegate the whole flow (refresh-first gate, chord delivery via mngr's
+        # locked keypress, the bounded verdict watch, and the recovery send) to the executor.
+        return _claude_shoulder_tap(agent_info)
+
     watcher = get_state().get_or_create_watcher(agent_info)
     target_turn_id = current_open_turn_id(watcher.get_all_events())
     if target_turn_id is None:
@@ -883,6 +894,35 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
         return _json_response(error.model_dump(), status_code=500)
 
     return _json_response(ShoulderTapAtomicResponse(status="tapped").model_dump())
+
+
+def _claude_shoulder_tap(agent_info: AgentInfo) -> Response:
+    """Run claude's native shoulder tap and map the executor's status to an HTTP response.
+
+    The keypress and the recovery send both route through the agent manager (which delegates
+    to mngr's in-process message API, holding the per-agent ``message.lock``): dwt never drives
+    raw tmux. Terminal no-op / success statuses (``nothing_queued`` / ``no_open_turn`` /
+    ``tapped``) return 200; a dialog block returns 409; every other error returns 500.
+    """
+    state = get_state()
+    # The base watcher structurally satisfies the tap's watcher protocol (its shoulder-tap
+    # surface carries get_all_events / get_queued_messages / get_latest_main_session_file),
+    # so no narrowing is needed; the claude watcher supplies the real live-session file.
+    watcher = state.get_or_create_watcher(agent_info)
+    agent_manager: AgentManager = state.agent_manager
+    agent_id = AgentId(agent_info.id)
+
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=agent_info.agent_state_dir,
+        keybindings_path=agent_info.claude_config_dir / KEYBINDINGS_FILENAME,
+        watcher=watcher,
+        press_chord=lambda: agent_manager.press_key_chord_on_agent(agent_id, TAP_CHORD),
+        send_recovery=lambda text: agent_manager.send_message_to_agent(agent_id, text),
+    )
+    if result.status in OK_TAP_STATUSES:
+        return _json_response(ShoulderTapAtomicResponse(status=result.status.value).model_dump())
+    status_code = 409 if result.status == ClaudeTapStatus.PERMISSIONS_WAITING else 500
+    return _json_response(ErrorResponse(detail=result.detail).model_dump(), status_code=status_code)
 
 
 def _drain_to_composer_endpoint(agent_id: str) -> Response:

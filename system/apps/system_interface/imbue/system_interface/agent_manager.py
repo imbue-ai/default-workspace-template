@@ -536,6 +536,16 @@ class AgentManager:
         """
         return self._messenger.send_to_agent(agent_id, message, self.get_agent_matches_by_id(str(agent_id)))
 
+    def press_key_chord_on_agent(self, agent_id: AgentId, key: str) -> bool:
+        """Press a tmux key token (e.g. ``"M-q"``) into the agent's pane, using the live cache.
+
+        The key-chord peer of ``send_message_to_agent``: it reads this manager's event-fed
+        location for the id and hands it to the ``MngrMessenger``, which delivers the press
+        through mngr's in-process message API (holding the per-agent ``message.lock``, so the
+        chord never interleaves with a text send). Returns True on success.
+        """
+        return self._messenger.press_key_chord_to_agent(agent_id, key, self.get_agent_matches_by_id(str(agent_id)))
+
     def remove_agent(self, agent_id: str) -> None:
         """Remove an agent from the tracked state and broadcast the update.
 
