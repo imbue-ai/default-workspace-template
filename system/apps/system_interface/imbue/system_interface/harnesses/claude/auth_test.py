@@ -515,13 +515,27 @@ def test_restart_raises_when_start_fails(isolated_claude_config: Path) -> None:
 
 def test_submit_credentials_writes_settings_and_restarts_in_background(isolated_claude_config: Path) -> None:
     command_log: list[tuple[str, ...]] = []
-    service = _build_restart_recording_service(command_log)
+    release_start = threading.Event()
+
+    def _runner(cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        command_log.append(tuple(cmd))
+        if cmd[1] == "list":
+            return FakeFinishedProcess(stdout=_LIST_PAYLOAD)
+        if cmd[1] == "start":
+            # Hold the apply thread at the restart until released, so the
+            # initial-progress assertion below cannot race a fast apply to DONE.
+            release_start.wait(timeout=10)
+        return FakeFinishedProcess(returncode=0, stdout='{"loggedIn": true}')
+
+    service = auth.ClaudeAuthService(command_runner=_runner)
     completions: list[str] = []
     status = service.submit_credentials("ANTHROPIC_API_KEY=sk-ant-fresh", lambda: completions.append("done"))
-    # The submit returns immediately with the apply's initial progress.
+    # The submit returns immediately with the apply's initial progress (the gated
+    # runner keeps the apply mid-restart until released).
     assert status.restart_phase == auth.RestartPhase.RESTARTING.value
     assert status.restart_reason == auth.RestartReason.CREDENTIALS_SAVED.value
     assert status.auth_mode is auth.AuthMode.API_KEY
+    release_start.set()
     progress = wait_for_background_apply(service)
     assert progress.phase is auth.RestartPhase.DONE
     settings = json.loads((isolated_claude_config / "settings.json").read_text())
