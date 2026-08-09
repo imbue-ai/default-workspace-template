@@ -161,3 +161,13 @@ Added OpenAI Codex CLI support to the workspace image.
   and the OOM self-tag + git-identity rewrite never applied. The flag adds that decision; claude
   runs the script without it (there a PreToolUse `allow` would auto-approve the tool and skip the
   permission prompt). The block guards are unaffected. See `system/scripts/POLICY_HOOKS.md`.
+
+- The tk workflow-discipline guards (step-tracking reminder, non-standalone `tk start`/`close`
+  block, open-steps carryover, stop nudge) now run on codex and pi too, not just claude, so the
+  chat progress view is enforced identically across all three harnesses. Two shared scripts were
+  hardened while wiring this: `claude_open_tickets_stop_nudge.sh` now guards its step count with
+  `|| true` (it previously exited non-zero when there were no steps, breaking its "exits 0 always"
+  contract -- and on codex an exit 2 on Stop re-engages the agent), and
+  `claude_open_tickets_reminder.sh` gained a `--codex` flag that emits the reminder as
+  `additionalContext` JSON (codex rejects UserPromptSubmit stdout that begins with `[`, which this
+  reminder does). `POLICY_HOOKS.md` documents the full per-harness mapping.
