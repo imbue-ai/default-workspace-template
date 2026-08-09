@@ -43,8 +43,6 @@ from imbue.system_interface.harnesses.model import SwitchResult
 from imbue.system_interface.harnesses.model import parse_effort_level
 from imbue.system_interface.harnesses.model import to_options
 
-_ICON: str = (Path(__file__).parent / "icon.svg").read_text()
-
 # The state file the pi lifecycle extension writes: {provider, model, thinking_level}.
 # Kept in sync with MODEL_STATE_NAME in mngr_pi_lifecycle.ts.
 _MODEL_STATE_NAME: str = "pi_model_state.json"
@@ -148,7 +146,7 @@ def build_catalog(data_dir: Path) -> HarnessCatalog:
         default_model_id="",
         switch_mode=SwitchMode.ON_CHANGE,
         picker_mode=PickerMode.SEARCH,
-        icon_svg=_ICON,
+        powered_by_label="Pi Coding",
     )
 
 
@@ -163,7 +161,7 @@ def get_catalog() -> HarnessCatalog:
             default_model_id="",
             switch_mode=SwitchMode.ON_CHANGE,
             picker_mode=PickerMode.SEARCH,
-            icon_svg=_ICON,
+            powered_by_label="Pi Coding",
         )
     return build_catalog(data_dir)
 

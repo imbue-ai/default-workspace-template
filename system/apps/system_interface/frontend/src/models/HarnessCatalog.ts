@@ -3,10 +3,11 @@
  *
  * Fetched once from `GET /api/harnesses` and cached by harness. Holds everything
  * the bar needs that does not vary per agent: the selectable models (and which
- * efforts each declares, which are shown), the switch mode, and the harness logo
- * SVG. The per-agent live selection arrives separately, on the agents WebSocket as
- * each agent's `model_choice` (see AgentManager.ts). The backend already computes
- * which catalog option a live choice matched, so the frontend never re-matches.
+ * efforts each declares, which are shown) and the switch mode. The per-agent live
+ * selection arrives separately, on the agents WebSocket as each agent's
+ * `model_choice` (see AgentManager.ts). The backend already computes which catalog
+ * option a live choice matched, so the frontend never re-matches. The harness's
+ * "Powered by" credit is fetched per agent (see PoweredByCredit.ts), not from here.
  */
 
 import m from "mithril";
@@ -30,7 +31,6 @@ export interface HarnessCatalog {
   default_model_id: string;
   switch_mode: string; // "eager_then_reconcile" | "on_change" | "read_only"
   picker_mode: string; // "list" | "search" -- how the model dropdown renders (orthogonal to switch_mode)
-  icon_svg: string;
 }
 
 const catalogByHarness = new Map<string, HarnessCatalog>();

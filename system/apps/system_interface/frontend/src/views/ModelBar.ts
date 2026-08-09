@@ -305,12 +305,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         return null;
       }
 
-      // The harness logo lives on its own path now (HarnessLogo, mounted beside this bar), so
-      // it never blinks with the model choice. This component renders ONLY the model/effort/fast
-      // slots and is free to return null before a choice resolves without taking the logo down.
+      // This component renders ONLY the model/effort/fast slots. The harness "Powered by"
+      // credit lives on its own per-agent path (PoweredByCredit, in the composer actions row),
+      // so this bar is free to return null before a choice resolves without taking it down.
       const choice = effectiveChoice(agentId, agent?.model_choice);
       if (choice === null) {
-        // The live selection has not resolved yet; render no slots (the logo shows separately).
+        // The live selection has not resolved yet; render no slots.
         return null;
       }
       const matched = choice.matched;
