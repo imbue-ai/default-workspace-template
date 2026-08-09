@@ -111,8 +111,9 @@ Edge cases, resolved by existing mechanisms:
   string and a sentinel appended together are handled across two ticks (steer injected first).
 - `server_test.py` (beside `:931-957` and `:881`): pi drain-to-composer appends the sentinel,
   returns the block, never restarts; pi empty mirror still appends and returns `""`; claude
-  drain-to-composer with an EMPTY queue now restarts (changed behavior pinned); flush with an
-  empty queue still no-ops.
+  drain-to-composer with an EMPTY queue now restarts (changed behavior pinned -- SUPERSEDED
+  for claude by plan-claude-interrupt's chord branch and its dispatch tests; the hoist itself
+  stays load-bearing for that plan's delegations); flush with an empty queue still no-ops.
 - `harnesses/pi_coding/watcher_test.py`: replaying strings then a sentinel (either key)
   yields an empty tracked queue; strings after the sentinel re-enqueue.
 - `frontend/src/views/MessageInput.test.ts`: handback with a non-empty draft prepends the

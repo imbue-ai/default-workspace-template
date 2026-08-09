@@ -147,10 +147,11 @@ executor in dwt.
   change it. Failure mode: a spurious recovery message or a spurious 500 -- visible, never loss.
   Likewise 3s can expire before records land on a loaded host -> `NOT_FLUSHED` 500 while the
   flush arrives anyway: an error popup and a truthful mirror; nothing was resent.
-- Stop button during the 3s watch (`/drain-to-composer` restart-drain) clears the mirror
-  mid-watch: the watch reads it as flushed/no-op, but the messages are in the composer -- a
-  status confusion, never a loss (series-accepted cross-caller class; the chord lands
-  pre-watch, or post-relaunch is a harmless `chat:cancel` on an idle Chat).
+- Stop button during the 3s watch: without a guard the stop matches NEEDS_RECOVERY's exact
+  signature (mirror drained + post-baseline sentinel) and the recovery send would re-drive the
+  just-stopped messages. plan-claude-interrupt amends this module: the stop override records
+  an in-process per-agent stop timestamp and the recovery arm suppresses its send when a stop
+  ran since the tap's baseline.
 - ESC+q rides one pty write, but if the reader ever splits the bytes while a Confirmation dialog
   is up, the lone ESC is `confirm:no` -- the wrong-opcode hazard reappearing via byte-splitting;
   the `permissions_waiting` gate keeps the tap out of the known dialog states.
@@ -159,8 +160,8 @@ executor in dwt.
 
 ## Non-goals
 
-- Contracts A and B for claude (sibling plans; the stop button stays on the shared restart-drain
-  base implementation).
+- Contracts A and B for claude (sibling plans; Contract B is plan-claude-interrupt: the chord
+  serves the empty-queue stop, the restart-drain base keeps the nonempty branch).
 - Removing `native_atomic_shoulder_tap_possible` or `/flush-queue` (base path stays -- user
   decision).
 - The codex and pi tap paths: untouched, not even relocated (any per-harness registry for the
