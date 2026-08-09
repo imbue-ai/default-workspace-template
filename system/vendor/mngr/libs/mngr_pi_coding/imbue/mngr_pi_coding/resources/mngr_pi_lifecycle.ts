@@ -375,6 +375,12 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // a resumed restart never re-injects the prior session's already-delivered
   // messages, and -- because mngr only writes after seeing the sentinel -- no
   // message sent right after readiness is skipped.
+  //
+  // Delivered as `steer`, not `followUp`: pi's agent loop re-polls its steering queue
+  // after every tool-call round and injects steered messages before the next model
+  // response, so a message sent to a busy agent reaches it greedily at the next tool
+  // boundary rather than waiting for the whole turn to end (followUp). Sent to an idle
+  // agent, steer starts a turn the same as followUp would.
   const inboxPath = join(stateDir, INBOX_NAME);
   let processedInbox = countLines(inboxPath);
   const drainInbox = (): void => {
@@ -405,7 +411,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
             // bare `void promise` would surface as an unhandled rejection, which
             // on modern Node terminates the process and would take pi down with
             // it (the one thing this extension must never do).
-            const sent = pi.sendUserMessage(content, { deliverAs: "followUp" });
+            const sent = pi.sendUserMessage(content, { deliverAs: "steer" });
             if (sent != null && typeof (sent as Promise<void>).catch === "function") {
               (sent as Promise<void>).catch((error) => logDiagnostic("inbox inject", error));
             }

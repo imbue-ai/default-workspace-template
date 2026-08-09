@@ -543,10 +543,10 @@ class PiCodingAgent(
 
         Delivery is confirmed by the turn starting (the ``active`` marker
         appearing), the same signal lifecycle detection uses. If the marker is
-        already present (a steering message to an already-running agent), the
-        injected message is queued (``deliverAs: followUp``) and we return without
-        a marker-based confirmation. The message lock serializes concurrent sends
-        so their inbox appends don't interleave.
+        already present (a message to an already-running agent), the extension
+        steers the message into the live turn (``deliverAs: steer``) and we
+        return without a marker-based confirmation. The message lock serializes
+        concurrent sends so their inbox appends don't interleave.
         """
         with self._message_lock(), log_span("Sending message to agent {} (length={})", self.name, len(message)):
             self._append_to_inbox(message)
@@ -568,7 +568,7 @@ class PiCodingAgent(
         """Wait for the injected message to start a turn (the ``active`` marker appearing)."""
         marker_path = self._get_agent_dir() / _ACTIVE_MARKER_NAME
         if self._check_file_exists(marker_path):
-            # Already running: the followUp message is queued; no marker-based confirmation.
+            # Already running: the message is steered into the live turn; no marker-based confirmation.
             return
         if poll_until(
             lambda: self._check_file_exists(marker_path),

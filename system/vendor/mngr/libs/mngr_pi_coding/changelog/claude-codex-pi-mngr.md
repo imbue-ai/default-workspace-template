@@ -5,3 +5,9 @@ the pre-turn-1 selection is available immediately -- and refreshes on `model_sel
 `thinking_level_select` as the user switches. This gives the chat model bar a low-latency,
 on-disk source for pi's current model and effort, which pi otherwise exposes only through
 its extension API.
+
+Messages sent to a running pi agent are now delivered as `steer` rather than `followUp`.
+pi's agent loop re-polls its steering queue after every tool-call round and injects steered
+messages before the next model response, so a message sent mid-run reaches the agent greedily
+at the next tool boundary instead of waiting for the whole turn to end. Delivery to an idle
+agent is unchanged (it starts a turn either way).
