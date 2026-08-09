@@ -253,8 +253,8 @@ command -v codex >/dev/null
 # it embeds V8 and is left alone, which is what keeps this patch cheap to carry.
 codex_patch_arch="$(dpkg --print-architecture)"
 case "${codex_patch_arch}" in
-    arm64) codex_patch_sha256="7ca92b4d6368caebbca7a63597be6d3271b65699e37005684ece18bd5392d024" ;;
-    amd64) codex_patch_sha256="3b7522281c925a44733b2d8516123cfe46cd905505f85540fce814074c69fb92" ;;
+    arm64) codex_patch_sha256="25486fbc797e60d2ef9103a0c9d6ed7b22328f55ae371faecd62307c75e9d9e6" ;;
+    amd64) codex_patch_sha256="17b34c09fe2937df29fe2b27d16bf1497fa74f2cb129e9db1ebaf05ee4afe227" ;;
     *) echo "Unsupported architecture for patched codex: ${codex_patch_arch}" >&2; exit 1 ;;
 esac
 # npm nests the platform subpackage, and the exact path differs between npm
