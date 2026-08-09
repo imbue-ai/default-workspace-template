@@ -91,16 +91,21 @@ parameter. Only the verdict path differs:
      plan's rejected fallback this wires nothing new: the base is already in hand for branch 2.
    Confirm-before-clear holds on every path: markers are cleared only on abort evidence; the
    restart paths settle via their own `reset_activity_state`.
-5. The two marker-clear file ops run directly in the dwt executor: unlink
-   `<agent_state_dir>/active` + `permissions_waiting` (`ACTIVE_MARKER_FILENAME`,
-   `activity_state.py:172`) and append one activity line to
-   `get_host_dir()/events/mngr/activity/events.jsonl` (`agent_discovery.py:37-44`), with
-   `claude_config.py:650-652` as the format contract (an mngr helper would cross-repo-sequence
-   this plan for a format three shell snippets already fix; dwt-direct is genuinely smaller).
-   The event is load-bearing: it pokes `mngr observe` to re-probe; lifecycle flips
-   RUNNING->WAITING; that observe change triggers `_recompute_activity_state`
-   (`agent_manager.py:1061-1071`), which stats the now-absent marker (`:1357`) ->
-   `is_agent_running` False -> derive rule 0 -> IDLE. No dwt derivation change.
+5. The marker-clear is an mngr_claude primitive, not dwt-direct file ops. Clearing the
+   `active` marker and emitting the observe-poke activity event is claude-lifecycle
+   machinery -- the exact ops the claude hooks already own
+   (`_CLEAR_ACTIVE_MARKERS_AND_EMIT_ACTIVITY_EVENT`, `claude_config.py:650-652`, shared by the
+   Stop / idle_prompt / SessionStart hooks). Per the same boundary the tap's keypress follows
+   (harness-native mechanics live in mngr; dwt orchestrates), add a "mark this claude agent
+   idle" primitive in mngr_claude that unlinks `<agent_state_dir>/active` + `permissions_waiting`
+   and appends one activity line to the host activity log -- reusing the hooks' shared snippet as
+   the single source of truth for the format -- and have the dwt executor CALL it (through the
+   same in-process mngr boundary the keypress uses) once the abort is confirmed. This makes the
+   interrupt executor the fourth caller of the hooks' own idle-marking, in the repo that owns it,
+   rather than re-expressing the marker semantics in dwt. The event is load-bearing: it pokes
+   `mngr observe` to re-probe; lifecycle flips RUNNING->WAITING; that observe change triggers
+   `_recompute_activity_state` (`agent_manager.py:1061-1071`), which stats the now-absent marker
+   (`:1357`) -> `is_agent_running` False -> derive rule 0 -> IDLE. No dwt derivation change.
 6. Extend the sentinel suppression at `session_parser.py:448` to both variants
    (prefix-anchored exact records, matching its existing posture) -- without it every mid-tool
    stop leaves a phantom user bubble in chat.
