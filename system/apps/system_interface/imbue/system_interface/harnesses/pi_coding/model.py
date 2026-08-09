@@ -39,6 +39,7 @@ from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.harnesses.interrupt import InterruptToComposer
+from imbue.system_interface.harnesses.interrupt import PressChord
 from imbue.system_interface.harnesses.interrupt import RestartProcess
 from imbue.system_interface.harnesses.interrupt import SettleActivity
 from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
@@ -293,7 +294,11 @@ class PiInterruptToComposer(InterruptToComposer):
         return self
 
     def drain_to_composer(
-        self, watcher: AgentSessionWatcher, restart_process: RestartProcess, settle_activity: SettleActivity
+        self,
+        watcher: AgentSessionWatcher,
+        restart_process: RestartProcess,
+        settle_activity: SettleActivity,
+        press_chord: PressChord,
     ) -> str:
         # Refresh the mirror before capturing (codex's refresh-first posture,
         # plan-codex-interrupt): the running turn's own initiating message is an inbox enqueue

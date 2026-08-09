@@ -14,6 +14,7 @@ from typing import Final
 
 from loguru import logger
 
+from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import ConfigError
 from imbue.mngr.utils.file_utils import atomic_write
@@ -775,6 +776,31 @@ _CLAIM_MAIN_PID: Final[str] = (
 _CLEAR_ACTIVE_MARKERS_AND_EMIT_ACTIVITY_EVENT: Final[str] = (
     """rm -f "$MNGR_AGENT_STATE_DIR/active" "$MNGR_AGENT_STATE_DIR/permissions_waiting" && mkdir -p $MNGR_HOST_DIR/events/mngr/activity && echo '{"source": "mngr/activity", "type": "activity", "event_id": "'"evt-$(head -c 16 /dev/urandom | xxd -p)"'", "timestamp": "'"$(date -u +"%Y-%m-%dT%H:%M:%S.000000000Z")"'"}' >> $MNGR_HOST_DIR/events/mngr/activity/events.jsonl"""
 )
+
+
+def mark_claude_agent_idle(agent_state_dir: Path, host_dir: Path) -> None:
+    """Mark a claude agent idle out-of-band: clear the ``active`` + ``permissions_waiting``
+    markers and emit one activity event.
+
+    The programmatic sibling of the Notification / SessionStart / Stop hooks' own idle-marking:
+    it runs the exact ``_CLEAR_ACTIVE_MARKERS_AND_EMIT_ACTIVITY_EVENT`` snippet those hooks run,
+    with ``MNGR_AGENT_STATE_DIR`` / ``MNGR_HOST_DIR`` bound to the passed paths, so the marker
+    ops and the activity-event format have a single source of truth rather than a Python
+    re-expression that could drift from the shell one.
+
+    The caller is the system-interface stop button on a native (chord) interrupt: claude fires
+    NO hook when the user interrupts a turn, so the ``active`` marker UserPromptSubmit created is
+    stranded and the agent keeps reporting RUNNING. This clears it (dropping the indicator) and
+    the emitted event pokes ``mngr observe`` to re-probe. Idempotent -- ``rm -f`` no-ops on
+    already-absent markers. Raises ``ProcessError`` if the snippet cannot run.
+    """
+    env = {**os.environ, "MNGR_AGENT_STATE_DIR": str(agent_state_dir), "MNGR_HOST_DIR": str(host_dir)}
+    run_local_command_modern_version(
+        ["bash", "-c", _CLEAR_ACTIVE_MARKERS_AND_EMIT_ACTIVITY_EVENT],
+        is_checked=True,
+        env=env,
+        name="mark_claude_agent_idle",
+    )
 
 
 @pure

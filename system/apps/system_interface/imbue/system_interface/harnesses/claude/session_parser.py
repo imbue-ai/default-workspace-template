@@ -60,6 +60,25 @@ _AGENT_ID_PATTERN = re.compile(r"agentId:\s*(\S+)")
 # heuristic would treat it as "user just spoke, Claude hasn't replied yet."
 INTERRUPT_SENTINEL_TEXT = "[Request interrupted by user]"
 
+# The interrupt sentinel has TWO shapes on disk: the plain streaming-abort form above,
+# and this mid-tool form Claude writes when the interrupt lands while a tool is running
+# (the dominant stop scenario). The plain constant is NOT a substring of it, so both are
+# recognized by anchoring on the shared opening rather than the plain string alone.
+MID_TOOL_INTERRUPT_SENTINEL_TEXT = "[Request interrupted by user for tool use]"
+_INTERRUPT_SENTINEL_PREFIX = "[Request interrupted by user"
+
+
+def is_interrupt_sentinel_text(text: str) -> bool:
+    """True iff ``text`` is one of Claude's interrupt sentinels (either shape).
+
+    Prefix-anchored on the shared opening so both ``[Request interrupted by user]`` and the
+    mid-tool ``[Request interrupted by user for tool use]`` variant are matched. Callers pass
+    the PARSED text of a user record (not a raw line), so a ``tool_result`` merely quoting the
+    sentinel -- whose text is not extracted as user text -- can never be mistaken for one.
+    """
+    return text.strip().startswith(_INTERRUPT_SENTINEL_PREFIX)
+
+
 # Claude Code's resume bookkeeping. Whenever ``claude --resume`` reloads a
 # session whose previous turn did not finish cleanly (the turn was interrupted,
 # or the process was stopped or crashed mid-turn), the framework injects a
@@ -445,7 +464,7 @@ def _parse_user_message(
         event_id = _make_event_id(uuid, "user")
         if event_id not in existing_event_ids:
             text = _normalize_slash_command(extract_text_content(content))
-            if text and text.strip() != INTERRUPT_SENTINEL_TEXT:
+            if text and not is_interrupt_sentinel_text(text):
                 event: dict[str, Any] = {
                     "timestamp": timestamp,
                     "type": "user_message",
