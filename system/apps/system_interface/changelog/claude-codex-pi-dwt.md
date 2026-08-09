@@ -30,3 +30,12 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
   "Thinking..." until the user sent another message. The restart-boundary check
   looked for claude's marker file on every agent, so it never fired for codex
   (which writes its own).
+
+- pi's tool labels now name the `pi-web-access` extension's tools instead of
+  showing a raw `Tool: web_search` / "Running ...". The four tools read like
+  their claude/codex peers -- `web_search` -> "Tool: WebSearch" / "Searching the
+  web <query>", `fetch_content` -> "Tool: WebFetch" / "Fetching page <url>",
+  plus "Checking sources <claim>" (`source_check`) and "Retrieving results"
+  (`get_search_content`). Names verified live against pi-web-access 0.19.0; they
+  are the package defaults, so a `web-search.json` `toolNames` override renames
+  them.
