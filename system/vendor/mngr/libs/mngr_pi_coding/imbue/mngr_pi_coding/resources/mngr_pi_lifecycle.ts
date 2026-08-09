@@ -130,6 +130,15 @@ interface ModelRegistry {
   hasConfiguredAuth?: (model: PiModel) => boolean;
 }
 
+// Minimal structural view of pi's editor (composer) accessors, exposed on ctx.ui.
+// Used by the atomic shoulder-tap: on abort pi drains its parked steers INTO the
+// editor, so we read them back and restore any pre-existing draft. Optional so the
+// test's fake ctx still type-checks; every use is guarded on presence.
+interface ExtensionUi {
+  getEditorText?: () => string;
+  setEditorText?: (text: string) => void;
+}
+
 interface ExtensionContext {
   sessionManager?: SessionManager;
   // Active model and its current effective thinking level (pi's effort axis). pi
@@ -140,6 +149,15 @@ interface ExtensionContext {
   // pi's model registry (see above); used to resolve a control-file switch's
   // "provider/model" slug into the Model object ``pi.setModel`` requires.
   modelRegistry?: ModelRegistry;
+  // Whether the agent is idle (not streaming). Used to gate the atomic shoulder-tap
+  // (only interrupt a running turn) and to know when it is safe to resubmit.
+  isIdle?: () => boolean;
+  // Abort the current agent operation. In interactive mode (how mngr runs pi) this
+  // routes to pi's own handler, which drains the parked steers into the editor and
+  // stops the model stream -- both synchronously.
+  abort?: () => void;
+  // Editor (composer) accessors; see ExtensionUi.
+  ui?: ExtensionUi;
 }
 
 // pi's ExtensionAPI -- `on`, `sendUserMessage` (input injection without tmux
@@ -168,6 +186,13 @@ const MODEL_STATE_NAME = "minds_model_state.json";
 // in sync with _INBOX_FILE_NAME in plugin.py.
 const INBOX_NAME = "pi_inbox";
 const INBOX_POLL_MS = 200;
+// Atomic shoulder-tap control record. Minds appends one JSON OBJECT line
+// `{"minds_interrupt": true}` to pi_inbox (a normal message is a JSON *string*, so
+// the two never collide). Because it rides the same ordered append-only inbox, every
+// message queued before it has already been injected by the time we see it. On it we
+// interrupt the running turn and resubmit its parked steers as one merged turn. Kept
+// in sync with the Minds pi endpoint. */
+const INTERRUPT_KEY = "minds_interrupt";
 // Single-slot switch mailbox: the chat model bar's resolver atomically
 // OVERWRITES this file with one JSON intent ({model_id: "provider/model",
 // thinking_level: "high"|null}) -- a newer pick replaces an unconsumed older
@@ -392,10 +417,69 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // response, so a message sent to a busy agent reaches it greedily at the next tool
   // boundary rather than waiting for the whole turn to end (followUp). Sent to an idle
   // agent, steer starts a turn the same as followUp would.
+  // The latest ExtensionContext, captured in the handlers below. Held here so the
+  // inbox/control drain timers can reach ctx.abort()/isIdle()/ui and modelRegistry.
+  // pi's ctx getters read live runner state, so a held ctx stays valid.
+  let latestCtx: ExtensionContext | undefined;
+
   const inboxPath = join(stateDir, INBOX_NAME);
   let processedInbox = countLines(inboxPath);
+  // Holds the parked-steer text between an atomic shoulder-tap's abort and its
+  // resubmit. While non-null the inbox drain is PAUSED (no new steer is injected), so
+  // nothing can open a competing turn between the interrupt and the resubmit.
+  let pendingResubmit: string | null = null;
+
+  const injectSteer = (content: string): void => {
+    // Delivery is best-effort. pi.sendUserMessage is async (returns a Promise), so the
+    // offset advances right after the call is initiated, not after the message lands --
+    // an async rejection is logged and not retried. We must attach a rejection handler:
+    // a bare `void promise` would surface as an unhandled rejection, which on modern
+    // Node terminates the process and would take pi down with it (the one thing this
+    // extension must never do).
+    const sent = pi.sendUserMessage?.(content, { deliverAs: "steer" });
+    if (sent != null && typeof (sent as Promise<void>).catch === "function") {
+      (sent as Promise<void>).catch((error) => logDiagnostic("inbox inject", error));
+    }
+  };
+
+  // The atomic half of the shoulder-tap. If a turn is running, interrupt it and capture
+  // its parked steers for resubmission. Runs in ONE synchronous tick -- no await between
+  // the isIdle check and the abort -- so nothing (agent_end, the agent loop) can
+  // interleave; this is the anti-race guarantee. Returns true iff it interrupted.
+  //
+  // pi's abort (in interactive mode) drains the parked steers INTO the composer and
+  // stops the stream, both synchronously. Since it APPENDS onto whatever is typed, we
+  // clear any draft first and restore it after -- so the resubmit is sourced purely from
+  // pi's own queue (authoritative; no Minds-view lag) and no draft leaks into the tap.
+  const beginShoulderTap = (): boolean => {
+    const ctx = latestCtx;
+    if (!ctx || typeof ctx.isIdle !== "function" || ctx.isIdle() || typeof ctx.abort !== "function") {
+      return false; // idle / no live turn -> nothing to interrupt
+    }
+    const draft = ctx.ui?.getEditorText?.() ?? "";
+    ctx.ui?.setEditorText?.("");
+    ctx.abort();
+    const steers = ctx.ui?.getEditorText?.() ?? "";
+    ctx.ui?.setEditorText?.(draft);
+    pendingResubmit = steers;
+    return true;
+  };
+
   const drainInbox = (): void => {
     safe("inbox", () => {
+      // Waiting to resubmit after an interrupt: hold ALL injection until the aborted
+      // turn settles (isIdle), then send the captured steers as one merged fresh turn.
+      if (pendingResubmit !== null) {
+        const ctx = latestCtx;
+        if (ctx && typeof ctx.isIdle === "function" && ctx.isIdle()) {
+          const text = pendingResubmit;
+          pendingResubmit = null;
+          if (text.trim() !== "") {
+            injectSteer(text);
+          }
+        }
+        return;
+      }
       if (typeof pi.sendUserMessage !== "function" || !existsSync(inboxPath)) {
         return;
       }
@@ -403,32 +487,30 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       const total = lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
       while (processedInbox < total) {
         const raw = lines[processedInbox];
-        if (raw !== "") {
-          let content: unknown;
-          try {
-            content = JSON.parse(raw);
-          } catch {
-            // Skip a malformed line rather than inject garbage or stall.
-            processedInbox++;
-            continue;
-          }
-          if (typeof content === "string") {
-            // Delivery is best-effort. pi.sendUserMessage is async (returns a
-            // Promise), so the offset advances right after the call is initiated
-            // (line below), not after the message actually lands -- an async
-            // rejection is logged and the message is not retried. A *synchronous*
-            // throw, by contrast, propagates before the offset advances and so
-            // retries on the next tick. We must attach a rejection handler: a
-            // bare `void promise` would surface as an unhandled rejection, which
-            // on modern Node terminates the process and would take pi down with
-            // it (the one thing this extension must never do).
-            const sent = pi.sendUserMessage(content, { deliverAs: "steer" });
-            if (sent != null && typeof (sent as Promise<void>).catch === "function") {
-              (sent as Promise<void>).catch((error) => logDiagnostic("inbox inject", error));
-            }
-          }
+        processedInbox++; // consume this line (advance before handling, like before)
+        if (raw === "") {
+          continue;
         }
-        processedInbox++;
+        let content: unknown;
+        try {
+          content = JSON.parse(raw);
+        } catch {
+          // Skip a malformed line rather than inject garbage or stall.
+          continue;
+        }
+        if (typeof content === "string") {
+          injectSteer(content);
+        } else if (
+          content !== null &&
+          typeof content === "object" &&
+          (content as Record<string, unknown>)[INTERRUPT_KEY] === true
+        ) {
+          // Every prior message rode the same ordered inbox, so it is already injected.
+          if (beginShoulderTap()) {
+            return; // interrupted -> pause the drain until the resubmit lands
+          }
+          // else: agent was idle, nothing to interrupt -> keep draining.
+        }
       }
     });
   };
@@ -450,7 +532,6 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // agent was stopped) is applied exactly once, never dropped.
   const controlPath = join(stateDir, CONTROL_NAME);
   const controlConsumePath = controlPath + ".consuming";
-  let latestCtx: ExtensionContext | undefined;
 
   const applySwitch = (intent: unknown, ctx: ExtensionContext): void => {
     if (intent == null || typeof intent !== "object") {
