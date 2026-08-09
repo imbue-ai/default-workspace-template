@@ -51,8 +51,8 @@ basis, queue_tracker.py:41-49.)
   when the `user_message` timestamp (session_parser.py:134-137) parses to >= the
   `pi_process_started` marker mtime (plugin.py:162, touched by the launch prelude at
   plugin.py:651-661) -- the exact boundary and comparison the activity path already uses
-  (`is_transcript_tail_stale`, activity_state.py:200-223; plan-claude-queue does the same for
-  claude). Stat the marker once per refresh. Missing marker or unparseable timestamp -> pop
+  (`is_transcript_tail_stale`, activity_state.py:200-223; plan-codex-queue does the same for
+  codex). Stat the marker once per refresh. Missing marker or unparseable timestamp -> pop
   (today's behavior; over-popping errs toward an empty mirror, the contract-safe direction).
 - Enqueue side: unchanged. The generation reset is the EXISTING shrink-reset
   (watcher.py:280-284): the truncation shrinks the file; the reset runs at the top of the
