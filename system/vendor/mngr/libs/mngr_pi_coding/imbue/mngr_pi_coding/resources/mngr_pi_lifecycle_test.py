@@ -623,14 +623,16 @@ def test_usage_writer_is_inert_without_the_gate_marker(tmp_path: Path) -> None:
     assert not (state / _USAGE_EVENTS).exists()
 
 
-# Drives the control-file switch consumer: a fake pi captures setModel/setThinkingLevel and
+# Drives the switch-mailbox consumer: a fake pi captures setModel/setThinkingLevel and
 # stores handlers so the driver can fire session_start (which the consumer needs to capture a
-# ctx for ctx.modelRegistry). Then a switch intent is appended and we wait for the poll.
+# ctx for ctx.modelRegistry). The intent is written BEFORE session_start -- modeling a switch
+# parked while the agent was stopped -- and must be applied exactly once and the mailbox
+# consumed (deleted) afterwards.
 _CONTROL_DRIVER_MJS = """
-import { appendFileSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import mngrPiLifecycle from "./mngr_pi_lifecycle.ts";
 const STATE = process.env.MNGR_AGENT_STATE_DIR;
-const control = STATE + "/pi_control.jsonl";
+const control = STATE + "/pi_control.json";
 const calls = { setModel: [], setThinkingLevel: [] };
 const handlers = {};
 const targetModel = { provider: "anthropic", id: "claude-opus-4-8", label: "opus" };
@@ -647,10 +649,14 @@ const pi = {
   setModel: (m) => { calls.setModel.push({ provider: m.provider, id: m.id }); return Promise.resolve(true); },
   setThinkingLevel: (l) => { calls.setThinkingLevel.push(l); },
 };
+// Parked intent: written before the extension loads (stopped-agent case). A stale
+// pick it replaced is gone by construction -- the mailbox holds one intent.
+writeFileSync(control, JSON.stringify({ model_id: "anthropic/claude-opus-4-8", thinking_level: "high" }));
 mngrPiLifecycle(pi);
 handlers["session_start"]({}, ctx);
-appendFileSync(control, JSON.stringify({ model_id: "anthropic/claude-opus-4-8", thinking_level: "high" }) + "\\n");
-setTimeout(() => { writeFileSync(STATE + "/switch_calls.json", JSON.stringify(calls)); }, 600);
+setTimeout(() => {
+  writeFileSync(STATE + "/switch_calls.json", JSON.stringify({ ...calls, mailboxConsumed: !existsSync(control) }));
+}, 600);
 """
 
 
@@ -676,6 +682,8 @@ def test_control_watcher_applies_model_and_effort_switch(tmp_path: Path) -> None
     )
     assert result.returncode == 0, f"control driver failed:\n{result.stdout}\n{result.stderr}"
     calls = json.loads((state_dir / "switch_calls.json").read_text())
-    # The slug resolved to pi's Model via the registry and was applied; the effort passed through.
+    # The parked (pre-session_start) intent resolved via the registry and applied exactly once;
+    # the effort passed through; the mailbox was consumed so it cannot re-apply.
     assert calls["setModel"] == [{"provider": "anthropic", "id": "claude-opus-4-8"}]
     assert calls["setThinkingLevel"] == ["high"]
+    assert calls["mailboxConsumed"] is True

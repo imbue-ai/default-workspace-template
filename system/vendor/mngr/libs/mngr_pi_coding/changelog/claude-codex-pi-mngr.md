@@ -16,3 +16,9 @@ The lifecycle extension's model-state mirror moves to the harness-uniform contra
 writes `$MNGR_AGENT_STATE_DIR/minds_model_state.json` with the shared `{model: "provider/id",
 effort, fast}` schema (previously `pi_model_state.json` with pi-specific keys), atomically via
 tmp + rename. The system interface reads the same file name and schema for every harness.
+
+The model-switch control channel becomes a single-slot mailbox (`pi_control.json`): the model
+bar's resolver atomically overwrites it with the newest intent (an unconsumed older pick is
+replaced -- last wins), and the extension consumes it (rename, apply, delete) at session start
+and on its poll. A switch made while the agent is stopped now applies on the next start instead
+of being silently swallowed by the old append-log's startup baseline.

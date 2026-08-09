@@ -168,11 +168,14 @@ const MODEL_STATE_NAME = "minds_model_state.json";
 // in sync with _INBOX_FILE_NAME in plugin.py.
 const INBOX_NAME = "pi_inbox";
 const INBOX_POLL_MS = 200;
-// The chat model bar appends one JSON switch intent per line here
-// ({model_id: "provider/model", thinking_level: "high"|null}); we apply each new
-// line's selection via pi.setModel / pi.setThinkingLevel. Kept in sync with
+// Single-slot switch mailbox: the chat model bar's resolver atomically
+// OVERWRITES this file with one JSON intent ({model_id: "provider/model",
+// thinking_level: "high"|null}) -- a newer pick replaces an unconsumed older
+// one (buffer of size 1, last wins). We consume it (rename, apply, delete),
+// so anything present at startup is by definition pending: a switch parked
+// while the agent was stopped applies on the next start. Kept in sync with
 // _CONTROL_NAME in the pi harness resolver (harnesses/pi_coding/model.py).
-const CONTROL_NAME = "pi_control.jsonl";
+const CONTROL_NAME = "pi_control.json";
 const CONTROL_POLL_MS = 200;
 
 const INPUT_PREVIEW_LIMIT = 200;
@@ -434,18 +437,19 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     inboxTimer.unref();
   }
 
-  // Model/effort switching from the chat model bar. The bar's resolver appends a switch
-  // intent per line to <state>/pi_control.jsonl ({model_id: "provider/model",
-  // thinking_level}); we apply the newest one natively via pi.setModel / pi.setThinkingLevel.
-  // Applying fires model_select / thinking_level_select, whose handlers below write
-  // minds_model_state.json, so the bar reconciles (ON_CHANGE) with no extra wiring.
+  // Model/effort switching from the chat model bar: a single-slot mailbox (see
+  // CONTROL_NAME). We apply the intent natively via pi.setModel /
+  // pi.setThinkingLevel; applying fires model_select / thinking_level_select,
+  // whose handlers below write minds_model_state.json, so the bar reconciles
+  // (ON_CHANGE) with no extra wiring.
   //
   // Model resolution needs ctx.modelRegistry, which pi hands to event handlers, not to this
   // timer -- so we hold the latest ctx (captured in the handlers). The registry's getters read
-  // live runner state, so a held ctx stays valid. We do not consume any control line until a
-  // ctx exists, so a switch issued before session_start is applied once, not dropped.
+  // live runner state, so a held ctx stays valid. Nothing is consumed until a
+  // ctx exists, so a switch parked before session_start (including while the
+  // agent was stopped) is applied exactly once, never dropped.
   const controlPath = join(stateDir, CONTROL_NAME);
-  let processedControl = countLines(controlPath);
+  const controlConsumePath = controlPath + ".consuming";
   let latestCtx: ExtensionContext | undefined;
 
   const applySwitch = (intent: unknown, ctx: ExtensionContext): void => {
@@ -496,26 +500,25 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     safe("control", () => {
       const ctx = latestCtx;
       if (ctx === undefined || !existsSync(controlPath)) {
-        // No ctx yet (before session_start): leave the offset so the intent applies once ctx exists.
+        // No ctx yet (before session_start): leave the mailbox so the intent
+        // applies once ctx exists.
         return;
       }
-      const lines = readFileSync(controlPath, "utf-8").split("\n");
-      const total = lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
-      // Only the newest intent matters; superseded ones are stale, so apply just the last.
-      let latestIntent: unknown = null;
-      while (processedControl < total) {
-        const raw = lines[processedControl];
-        if (raw !== "") {
-          try {
-            latestIntent = JSON.parse(raw);
-          } catch {
-            // Skip a malformed line rather than stall the offset.
-          }
-        }
-        processedControl++;
+      // Consume by rename: the resolver's atomic overwrite either lands before
+      // the rename (we apply it) or after (it creates a fresh mailbox for the
+      // next drain). Reading the renamed copy means a concurrent overwrite can
+      // never be half-read or silently deleted unapplied.
+      renameSync(controlPath, controlConsumePath);
+      const raw = readFileSync(controlConsumePath, "utf-8");
+      rmSync(controlConsumePath, { force: true });
+      let intent: unknown = null;
+      try {
+        intent = JSON.parse(raw);
+      } catch {
+        // Malformed mailbox: drop it rather than stall (the next pick rewrites it).
       }
-      if (latestIntent !== null) {
-        applySwitch(latestIntent, ctx);
+      if (intent !== null) {
+        applySwitch(intent, ctx);
       }
     });
   };
