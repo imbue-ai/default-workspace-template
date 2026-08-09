@@ -53,6 +53,7 @@ import {
   removeAgentLocally,
   removeAgentsUpdatedListener,
   reportClientState,
+  whenAppsLoaded,
   type AgentsUpdatedListener,
   type LayoutOpEvent,
   type LayoutOpListener,
@@ -1733,7 +1734,17 @@ function displayNameForSlug(slug: string): string {
  * (or the empty-state overlay waits for it). Mirrors the restore semantics
  * that previously lived inline in ``initializeDockview``.
  */
-function applyLayoutContent(saved: SavedLayout | null): void {
+async function applyLayoutContent(saved: SavedLayout | null): Promise<void> {
+  if (!dockview) return;
+  // A restored layout re-derives every service/terminal origin from its
+  // service label below. On a share those labels only resolve once the app
+  // list has loaded (locally the bare name routes, so it never mattered
+  // before), so wait for it first -- bounded, so a workspace that reports no
+  // apps still proceeds -- to avoid mounting an unroutable ``<name>.<domain>``
+  // origin that the gateway 403s. A null (fresh-workspace) layout derives
+  // nothing, so it never waits.
+  if (saved) await whenAppsLoaded();
+  // ``dockview`` may have been torn down while awaiting; re-check before use.
   if (!dockview) return;
   const dv = dockview;
   awaitingInitialChat = false;
@@ -1838,7 +1849,7 @@ async function initializeActiveLayout(): Promise<void> {
   if (chosen === null) {
     // No layouts at all (server unreachable / no primary agent): run with
     // the fresh-workspace state; nothing persists.
-    applyLayoutContent(null);
+    await applyLayoutContent(null);
     m.redraw();
     return;
   }
@@ -1846,7 +1857,7 @@ async function initializeActiveLayout(): Promise<void> {
   reportClientState();
   const saved = (await fetchLayoutContent(chosen.slug)) as SavedLayout | null;
   markServerContent(saved);
-  applyLayoutContent(saved);
+  await applyLayoutContent(saved);
   m.redraw();
 }
 
@@ -1864,7 +1875,7 @@ async function switchToLayout(slug: string): Promise<void> {
   reportClientState(previousSlug);
   const saved = (await fetchLayoutContent(slug)) as SavedLayout | null;
   markServerContent(saved);
-  applyLayoutContent(saved);
+  await applyLayoutContent(saved);
   m.redraw();
 }
 
@@ -1915,7 +1926,7 @@ function handleLayoutSyncEvent(event: LayoutSyncEvent): void {
         const saved = (await fetchLayoutContent(event.layoutSlug)) as SavedLayout | null;
         markServerContent(saved);
         beginRemoteApplySuppression();
-        applyLayoutContent(saved);
+        await applyLayoutContent(saved);
         m.redraw();
       })();
     }
