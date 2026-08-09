@@ -101,3 +101,23 @@ no-op (nothing was queued, or no turn was running) instead of holding it to the 
   only: the frontend keeps one stop button and one endpoint. Requires the rebuilt
   codex binary that reads the retract line; an older binary safely skips the
   unknown key.
+
+- The stop button now interrupts claude natively when nothing is queued, instead
+  of SIGKILL-restarting it. claude registers its own stop-button override that
+  branches on the queue: with an EMPTY queue mid-turn it delivers the same
+  Chat-only meta+q cancel chord the shoulder tap uses (through mngr's locked
+  keypress; dwt never drives raw tmux), confirms the abort by the interrupt
+  sentinel appearing (both the plain and the mid-tool "for tool use" shapes,
+  matched on the parsed user record so a tool_result quoting the text cannot false
+  confirm), then marks the agent idle so the activity indicator drops immediately
+  rather than lying for ~60s (claude fires no hook on a user interrupt). With a
+  NONEMPTY queue -- or a permission dialog, an inactive binding, or an unconfirmed
+  abort -- it falls back to the base restart-drain, which both interrupts and hands
+  the queued messages back to the composer. A stop pressed while a shoulder tap is
+  watching the same agent now suppresses that tap's recovery resend, so the tap can
+  no longer re-drive the just-stopped turn. Backend only: one stop button, one
+  endpoint, no rebuild.
+
+- Fixed: interrupting claude while a tool was running left a phantom "[Request
+  interrupted by user for tool use]" bubble in the chat. The transcript parser now
+  suppresses that mid-tool interrupt sentinel alongside the plain one.

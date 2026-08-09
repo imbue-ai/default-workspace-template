@@ -27,6 +27,7 @@ from imbue.mngr_codex.codex_config import CODEX_HOME_RELATIVE_PATH
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
 from imbue.system_interface.harnesses.interrupt import InterruptToComposer
+from imbue.system_interface.harnesses.interrupt import PressChord
 from imbue.system_interface.harnesses.interrupt import RestartProcess
 from imbue.system_interface.harnesses.interrupt import SettleActivity
 from imbue.system_interface.harnesses.model import EffortChoice
@@ -144,7 +145,11 @@ class CodexInterruptToComposer(InterruptToComposer):
         return self
 
     def drain_to_composer(
-        self, watcher: AgentSessionWatcher, restart_process: RestartProcess, settle_activity: SettleActivity
+        self,
+        watcher: AgentSessionWatcher,
+        restart_process: RestartProcess,
+        settle_activity: SettleActivity,
+        press_chord: PressChord,
     ) -> str:
         # Refresh-first: get_all_events drives the watcher's consume of the queued-input sidecar
         # (a bare get_queued_block does not), so the captured block is the currently-parked set.
