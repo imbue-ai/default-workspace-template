@@ -18,10 +18,12 @@ lattice are factored so the sibling plan-claude-interrupt path can reuse them.
 
 The watch is biased toward *never losing* a message: its only fast exit is a positive
 FLUSHED signal (the mirror drained and the flushed turn produced an answer). A drained
-mirror with a dangling interrupt sentinel (the chord cancelled the flushed follow-on turn)
-is held to the deadline and resolved as NEEDS_RECOVERY, and a mirror that never drains as
-NOT_FLUSHED -- so the accepted failure modes are a spurious recovery message or a spurious
-500 (both visible), never a silently stranded queue.
+mirror with a dangling interrupt sentinel is held to the deadline; there it is FLUSHED if the
+turn is still active (the flush went through and the agent is just mid-answer -- the common
+case, since a real turn routinely answers slower than the watch window) and NEEDS_RECOVERY
+only if the turn has ended without answering (the chord cancelled the flushed follow-on turn).
+A mirror that never drains is NOT_FLUSHED -- so the accepted failure modes are a spurious
+recovery message or a spurious 500 (both visible), never a silently stranded queue.
 
 This module ALSO owns claude's stop button (Contract B) for the EMPTY-queue case
 (:class:`ClaudeInterruptToComposer` / :func:`execute_claude_stop_to_composer`): the same
@@ -176,9 +178,11 @@ class TapWatcher(Protocol):
 class TapVerdict(StrEnum):
     """The terminal reading of the post-chord watch.
 
-    - FLUSHED: mirror drained and the flushed turn produced an answer (or there was nothing to recover).
-    - NEEDS_RECOVERY: mirror drained but a post-baseline interrupt sentinel has no answer after it -- the
-      chord cancelled the follow-on turn the flush started, so the committed messages need a nudge.
+    - FLUSHED: mirror drained and EITHER the flushed turn produced an answer, OR it is still running
+      at the deadline (an answer just has not landed yet -- a slow turn, not a cancelled one).
+    - NEEDS_RECOVERY: mirror drained, a post-baseline interrupt sentinel has no answer after it, AND the
+      turn is no longer active -- so the chord cancelled the follow-on turn the flush started and it
+      ended without answering; the committed messages need a nudge.
     - NOT_FLUSHED: the deadline passed with the mirror still non-empty; the flush did not go through.
     """
 
@@ -317,11 +321,19 @@ def poll_verdict(mirror_is_empty: bool, facts: _TailFacts) -> TapVerdict | None:
     return None
 
 
-def deadline_verdict(mirror_is_empty: bool, facts: _TailFacts) -> TapVerdict:
-    """The verdict once the watch window elapses, from the last poll's observations."""
+def deadline_verdict(mirror_is_empty: bool, facts: _TailFacts, is_turn_active: bool) -> TapVerdict:
+    """The verdict once the watch window elapses, from the last poll's observations.
+
+    A drained mirror with a dangling interrupt sentinel and no answer is NEEDS_RECOVERY ONLY when
+    the turn is no longer active. If a turn is still active, the flush went through and the agent is
+    simply mid-answer (the common case -- a real turn routinely takes longer than the watch window
+    to emit its first assistant record); that is FLUSHED, not a cancelled follow-on. Keying on
+    "turn ended without answering" instead of "no answer yet" is what keeps the recovery nudge from
+    firing on every slow-but-successful flush.
+    """
     if not mirror_is_empty:
         return TapVerdict.NOT_FLUSHED
-    if facts.has_interrupt_sentinel and not facts.has_assistant_answer:
+    if facts.has_interrupt_sentinel and not facts.has_assistant_answer and not is_turn_active:
         return TapVerdict.NEEDS_RECOVERY
     return TapVerdict.FLUSHED
 
@@ -341,43 +353,51 @@ def resolve_live_session_baseline(watcher: TapWatcher) -> tuple[Path, int] | Non
         return None
 
 
-def _poll_tap_state(watcher: TapWatcher, session_file: Path, baseline_size: int) -> tuple[bool, _TailFacts]:
-    """One observation: re-drive the mirror, then classify the raw post-baseline tail.
+def _poll_tap_state(
+    watcher: TapWatcher, session_file: Path, baseline_size: int, active_marker: Path
+) -> tuple[bool, _TailFacts, bool]:
+    """One observation: re-drive the mirror, classify the raw post-baseline tail, read liveness.
 
     Re-driving via ``get_all_events`` is the single queue-feed point, so a queue already
-    flushed at natural turn end drains the mirror here. Returns ``(mirror_is_empty, facts)``.
+    flushed at natural turn end drains the mirror here. ``is_turn_active`` is the ``active``
+    marker's presence -- claude's RUNNING signal (a live turn keeps it; a turn that ended
+    clears it), read at the source mngr derives RUNNING/WAITING from. Returns
+    ``(mirror_is_empty, facts, is_turn_active)``.
     """
     watcher.get_all_events()
     mirror_is_empty = len(watcher.get_queued_messages()) == 0
     facts = compute_tail_facts(read_raw_tail(session_file, baseline_size))
-    return mirror_is_empty, facts
+    is_turn_active = active_marker.exists()
+    return mirror_is_empty, facts, is_turn_active
 
 
 def watch_for_flush_verdict(
     watcher: TapWatcher,
     session_file: Path,
     baseline_size: int,
+    active_marker: Path,
     *,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     watch_deadline_seconds: float = _WATCH_DEADLINE_SECONDS,
     poll_interval_seconds: float = _POLL_INTERVAL_SECONDS,
 ) -> TapVerdict:
-    """Poll the mirror + raw tail until a terminal verdict or the deadline.
+    """Poll the mirror + raw tail + turn liveness until a terminal verdict or the deadline.
 
     Exits early only on a positive FLUSHED; otherwise keeps polling until the deadline and
-    finalizes from the last observation. Shared with the sibling interrupt path.
+    finalizes from the last observation -- where a still-active turn reads as FLUSHED rather than
+    NEEDS_RECOVERY. Shared with the sibling interrupt path.
     """
     deadline = now() + watch_deadline_seconds
-    mirror_is_empty, facts = _poll_tap_state(watcher, session_file, baseline_size)
+    mirror_is_empty, facts, is_turn_active = _poll_tap_state(watcher, session_file, baseline_size, active_marker)
     while now() < deadline:
         verdict = poll_verdict(mirror_is_empty, facts)
         if verdict is not None:
             return verdict
         sleep(poll_interval_seconds)
-        mirror_is_empty, facts = _poll_tap_state(watcher, session_file, baseline_size)
+        mirror_is_empty, facts, is_turn_active = _poll_tap_state(watcher, session_file, baseline_size, active_marker)
     verdict = poll_verdict(mirror_is_empty, facts)
-    return verdict if verdict is not None else deadline_verdict(mirror_is_empty, facts)
+    return verdict if verdict is not None else deadline_verdict(mirror_is_empty, facts, is_turn_active)
 
 
 def execute_claude_shoulder_tap(
@@ -447,6 +467,7 @@ def execute_claude_shoulder_tap(
         watcher,
         session_file,
         baseline_size,
+        agent_state_dir / ACTIVE_MARKER_FILENAME,
         now=now,
         sleep=sleep,
         watch_deadline_seconds=watch_deadline_seconds,
@@ -460,8 +481,9 @@ def execute_claude_shoulder_tap(
             detail="The queue did not flush within the expected window; nothing was resent.",
         )
 
-    # NEEDS_RECOVERY: the chord cancelled the flushed follow-on turn. Nudge the agent to
-    # address the already-committed messages via the confirmed send path -- UNLESS a stop-button
+    # NEEDS_RECOVERY: the chord cancelled the flushed follow-on turn AND it ended without an
+    # answer (a still-active turn would have resolved to FLUSHED). Nudge the agent to address
+    # the already-committed messages via the confirmed send path -- UNLESS a stop-button
     # interrupt fired for this agent since the tap began. A stop delivers its own cancel chord,
     # whose post-baseline sentinel is indistinguishable from the tap's own cancelled-follow-on
     # signature; resending here would re-drive the very turn the user just stopped. Suppress it.

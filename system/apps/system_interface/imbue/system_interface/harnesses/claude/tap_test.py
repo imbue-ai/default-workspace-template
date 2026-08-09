@@ -129,24 +129,43 @@ def test_poll_verdict_waits_when_mirror_not_empty() -> None:
 
 
 def test_deadline_verdict_not_flushed_when_mirror_nonempty() -> None:
-    assert deadline_verdict(mirror_is_empty=False, facts=_facts(sentinel=False, answer=False)) == TapVerdict.NOT_FLUSHED
-
-
-def test_deadline_verdict_needs_recovery_on_pre_baseline_leaves_race() -> None:
-    """Drained mirror + a dangling sentinel = the chord cancelled the flushed follow-on turn."""
     assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False))
+        deadline_verdict(mirror_is_empty=False, facts=_facts(sentinel=False, answer=False), is_turn_active=False)
+        == TapVerdict.NOT_FLUSHED
+    )
+
+
+def test_deadline_verdict_needs_recovery_when_turn_ended_without_answer() -> None:
+    """Drained mirror + a dangling sentinel + the turn no longer active = the chord cancelled the
+    flushed follow-on turn and it ended without answering."""
+    assert (
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), is_turn_active=False)
         == TapVerdict.NEEDS_RECOVERY
+    )
+
+
+def test_deadline_verdict_flushed_when_turn_still_active() -> None:
+    """Drained mirror + a dangling sentinel but the turn is STILL active = a slow-but-successful
+    flush (the agent just has not answered yet), NOT a cancelled follow-on. No recovery."""
+    assert (
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), is_turn_active=True)
+        == TapVerdict.FLUSHED
     )
 
 
 def test_deadline_verdict_flushed_on_idle_gap_variant() -> None:
     """Drained mirror with no sentinel (natural flush already happened) = FLUSHED, not failure."""
-    assert deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=False, answer=False)) == TapVerdict.FLUSHED
+    assert (
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=False, answer=False), is_turn_active=False)
+        == TapVerdict.FLUSHED
+    )
 
 
 def test_deadline_verdict_flushed_when_sentinel_answered() -> None:
-    assert deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True)) == TapVerdict.FLUSHED
+    assert (
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True), is_turn_active=False)
+        == TapVerdict.FLUSHED
+    )
 
 
 # --- read_raw_tail -------------------------------------------------------------------
@@ -345,17 +364,20 @@ def test_execute_flushed_presses_chord_and_returns_tapped(tmp_path: Path) -> Non
 
 
 def test_execute_needs_recovery_sends_notification_and_returns_tapped(tmp_path: Path) -> None:
-    """Mirror drains but a dangling sentinel persists to the deadline -> recovery sent, tapped."""
+    """Mirror drains, a dangling sentinel persists, AND the turn ends (active marker cleared) ->
+    the flushed follow-on was cancelled and answered nothing -> recovery sent, tapped."""
     state_dir, keybindings_path = _make_agent_paths(tmp_path)
     session = tmp_path / "session.jsonl"
     session.write_text(_user_line("hello") + "\n")
 
-    def grow_with_sentinel(events_call: int) -> None:
+    def grow_with_sentinel_and_end_turn(events_call: int) -> None:
         if events_call == 2:
             with session.open("a") as f:
                 f.write(_SENTINEL_LINE + "\n")
+            # The cancelled follow-on turn ends: its RUNNING marker clears.
+            (state_dir / "active").unlink()
 
-    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel)
+    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_and_end_turn)
     recoveries: list[str] = []
     result = execute_claude_shoulder_tap(
         agent_state_dir=state_dir,
@@ -369,6 +391,35 @@ def test_execute_needs_recovery_sends_notification_and_returns_tapped(tmp_path: 
     assert result.status == ClaudeTapStatus.TAPPED
     assert len(recoveries) == 1
     assert recoveries[0].startswith("<task-notification>")
+
+
+def test_execute_still_active_turn_is_flushed_without_recovery(tmp_path: Path) -> None:
+    """A dangling sentinel but the turn is STILL active at the deadline = a slow-but-successful
+    flush (the agent just has not answered yet), not a cancelled follow-on -> no recovery."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def grow_with_sentinel(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n")
+        # The ``active`` marker stays: the flushed turn is still running (mid-answer).
+
+    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel)
+    recoveries: list[str] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=lambda: True,
+        send_recovery=lambda text: recoveries.append(text) or True,
+        now=_stepping_now([0.0, 0.0, 100.0]),
+        sleep=lambda _s: None,
+    )
+    assert result.status == ClaudeTapStatus.TAPPED
+    # The turn was still running, so no cancelled-follow-on nudge is sent.
+    assert recoveries == []
 
 
 def test_execute_not_flushed_when_mirror_never_drains(tmp_path: Path) -> None:
@@ -409,15 +460,17 @@ def test_execute_recovery_send_failure_returns_error(tmp_path: Path) -> None:
     session = tmp_path / "session.jsonl"
     session.write_text(_user_line("hello") + "\n")
 
-    def grow_with_sentinel(events_call: int) -> None:
+    def grow_with_sentinel_and_end_turn(events_call: int) -> None:
         if events_call == 2:
             with session.open("a") as f:
                 f.write(_SENTINEL_LINE + "\n")
+            # End the turn (clear the marker) so this reaches the NEEDS_RECOVERY resend.
+            (state_dir / "active").unlink()
 
     result = execute_claude_shoulder_tap(
         agent_state_dir=state_dir,
         keybindings_path=keybindings_path,
-        watcher=_FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel),
+        watcher=_FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_and_end_turn),
         press_chord=lambda: True,
         send_recovery=lambda _text: False,
         now=_stepping_now([0.0, 0.0, 100.0]),
@@ -764,16 +817,19 @@ def test_tap_recovery_suppressed_when_a_stop_ran_since_the_baseline(tmp_path: Pa
     # falls after the baseline.
     _record_stop(str(state_dir), now=lambda: 50.0)
 
-    def grow_with_sentinel(events_call: int) -> None:
+    def grow_with_sentinel_and_end_turn(events_call: int) -> None:
         if events_call == 2:
             with session.open("a") as f:
                 f.write(_SENTINEL_LINE + "\n")
+            # The stop's own abort ends the turn (marker cleared) -- so this reaches the
+            # NEEDS_RECOVERY branch, where the stop-since-baseline check then suppresses the resend.
+            (state_dir / "active").unlink()
 
     recoveries: list[str] = []
     result = execute_claude_shoulder_tap(
         agent_state_dir=state_dir,
         keybindings_path=keybindings_path,
-        watcher=_FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel),
+        watcher=_FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_and_end_turn),
         press_chord=lambda: True,
         send_recovery=lambda text: recoveries.append(text) or True,
         now=_stepping_now([0.0, 0.0, 100.0]),
