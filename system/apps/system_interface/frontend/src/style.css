@@ -374,13 +374,14 @@ body {
   container-type: inline-size;
 }
 
-/* Left cell: the model bar, aligned to the start of its column; clips before overflowing. */
+/* Left cell: the model bar, aligned to the start of its column. No `overflow` here -- the
+   model/effort pickers open upward as absolutely-positioned children that overflow this cell,
+   so clipping it would hide the dropdowns (leaving only a shadow at the clip edge). */
 .composer-under-bar-model {
   justify-self: start;
   display: flex;
   align-items: center;
   min-width: 0;
-  overflow: hidden;
 }
 
 /* Center cell: holds the credit. min-width:0 + overflow lets the credit truncate when the
