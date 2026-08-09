@@ -14,10 +14,11 @@
  */
 
 import m from "mithril";
-import { getQueuedMessagesForAgent } from "../models/AgentManager";
+import { getAgentById, getQueuedMessagesForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
+import { getHarnessCatalog } from "../models/HarnessCatalog";
 import { getFlushFreeze, releaseFlushFreeze, startFlushFreeze } from "../models/OutgoingMessages";
-import { flushQueue } from "../models/Response";
+import { flushQueue, shoulderTapAtomic } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
@@ -28,15 +29,24 @@ const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a bre
 // stays the source of truth for what is shown.
 const inFlightAgentIds = new Set<string>();
 
+/** True when this agent's harness can flush the queue atomically (codex), so the
+ *  "Shoulder tap" merges into the live turn instead of restarting-and-resending. */
+function isAtomicShoulderTapAgent(agentId: string): boolean {
+  const catalog = getHarnessCatalog(getAgentById(agentId)?.harness);
+  return catalog?.native_atomic_shoulder_tap_possible === true;
+}
+
 async function flushQueuedMessages(agentId: string): Promise<void> {
   if (inFlightAgentIds.has(agentId)) {
     return;
   }
-  // Capture the messages BEFORE the restart empties the backend snapshot, and hold
-  // them greyed until a backend arrival releases the freeze (arrival-driven, like a
-  // "Sending…" bubble; a 20s cap is the only fallback). We deliberately do NOT
-  // release on the POST resolving -- that would clear the hold before the resent
-  // turn renders, reopening the blip. The arrival is the release.
+  const isAtomic = isAtomicShoulderTapAgent(agentId);
+  // Capture the messages BEFORE the backend snapshot empties, and hold them greyed
+  // until a backend arrival releases the freeze (arrival-driven, like a "Sending…"
+  // bubble; a 20s cap is the only fallback). We deliberately do NOT release on the
+  // POST resolving -- that would clear the hold before the merged/resent turn renders,
+  // reopening the blip. The arrival is the release. This holds for both paths: the
+  // restart-based flush and the atomic tap both empty the queue snapshot.
   const captured = getQueuedMessagesForAgent(agentId);
   inFlightAgentIds.add(agentId);
   if (captured.length > 0) {
@@ -44,7 +54,9 @@ async function flushQueuedMessages(agentId: string): Promise<void> {
   }
   m.redraw();
   try {
-    await flushQueue(agentId);
+    // Codex merges the queue into the live turn without a restart; the other harnesses
+    // restart and resend. The flag comes from the agent's harness catalog.
+    await (isAtomic ? shoulderTapAtomic(agentId) : flushQueue(agentId));
   } catch (err) {
     const detail = describeRequestError(err);
     console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);

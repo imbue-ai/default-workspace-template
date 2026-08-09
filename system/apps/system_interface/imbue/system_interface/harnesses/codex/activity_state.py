@@ -46,6 +46,32 @@ def turn_open(events: Sequence[dict[str, Any]]) -> bool:
 
 
 @pure
+def current_open_turn_id(events: Sequence[dict[str, Any]]) -> str | None:
+    """The codex ``turn_id`` of the turn still open at the end of ``events``, or None.
+
+    Scans in order: a ``turn_started`` special event sets the open id to its ``turn_id``; a
+    ``turn_completed`` / ``turn_aborted`` clears it when the boundary's ``turn_id`` matches
+    the open one (a stale boundary for some other turn is ignored). Returns whatever id is
+    still open after the whole scan, or None if none is. The atomic shoulder-tap uses this
+    to ABA-gate the flush: it writes the live open turn id so the patched codex only merges
+    the parked messages into that exact turn.
+    """
+    open_turn_id: str | None = None
+    for event in events:
+        if event.get("type") != SPECIAL_EVENT_TYPE:
+            continue
+        kind = event.get("kind")
+        turn_id = event.get("turn_id")
+        if kind == SpecialEventKind.TURN_STARTED.value:
+            open_turn_id = turn_id if isinstance(turn_id, str) and turn_id else None
+            continue
+        is_boundary = kind in (SpecialEventKind.TURN_COMPLETED.value, SpecialEventKind.TURN_ABORTED.value)
+        if is_boundary and open_turn_id is not None and turn_id == open_turn_id:
+            open_turn_id = None
+    return open_turn_id
+
+
+@pure
 def derive(
     *,
     turn_open: bool,

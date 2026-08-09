@@ -712,14 +712,17 @@ def _agent_info(
     agent_id: str = "agent-00000000000000000000000000000001",
     name: str = "claude-agent",
     labels: dict[str, str] | None = None,
+    harness: HarnessType = HarnessType.CLAUDE,
+    agent_state_dir: Path = Path("/tmp/test"),
 ) -> AgentInfo:
     return AgentInfo(
         id=agent_id,
         name=name,
         state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
+        agent_state_dir=agent_state_dir,
         claude_config_dir=Path("/tmp/.claude"),
         labels=labels if labels is not None else {},
+        harness=harness,
     )
 
 
@@ -825,6 +828,87 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     assert response.status_code == 500
     # The restart failed, so nothing is resent.
     mock_send.assert_not_called()
+
+
+def _events_watcher(events: list[dict[str, Any]]) -> SimpleNamespace:
+    """A stand-in watcher exposing just ``get_all_events`` for the atomic shoulder tap."""
+    return SimpleNamespace(get_all_events=lambda: events)
+
+
+def _codex_open_turn_events(turn_id: str) -> list[dict[str, Any]]:
+    return [{"type": "special", "kind": "turn_started", "turn_id": turn_id}]
+
+
+def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
+    with patch("imbue.system_interface.server._find_agent", return_value=None):
+        response = client.post("/api/agents/nonexistent/shoulder-tap-atomic")
+    assert response.status_code == 404
+
+
+def test_shoulder_tap_atomic_writes_control_line_for_codex_open_turn(client: FlaskClient, tmp_path: Path) -> None:
+    """A codex agent with a live turn gets exactly one control line naming that turn, and the
+    agent is NOT restarted (the point of the atomic tap is that it stays alive)."""
+    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(
+            SystemInterfaceState, "get_or_create_watcher", return_value=_events_watcher(_codex_open_turn_events("tid-7"))
+        ),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "tapped"
+    # No restart -- the atomic tap merges into the live turn.
+    mock_run.assert_not_called()
+    control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
+    lines = control_path.read_text().splitlines()
+    assert lines == ['{"target_turn_id": "tid-7"}']
+
+
+def test_shoulder_tap_atomic_rejects_non_codex_harness(client: FlaskClient, tmp_path: Path) -> None:
+    """The endpoint is codex-only; a claude agent gets a 400 with a clear message and no write."""
+    agent_info = _agent_info(name="claude-agent", harness=HarnessType.CLAUDE, agent_state_dir=tmp_path)
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+
+    assert response.status_code == 400
+    assert "codex-only" in response.get_json()["detail"]
+    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
+
+
+def test_shoulder_tap_atomic_rejects_is_primary_agent(client: FlaskClient, tmp_path: Path) -> None:
+    agent_info = _agent_info(
+        agent_id="services-1",
+        name="system-services",
+        labels={"is_primary": "true"},
+        harness=HarnessType.CODEX,
+        agent_state_dir=tmp_path,
+    )
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.post("/api/agents/services-1/shoulder-tap-atomic")
+
+    assert response.status_code == 400
+    assert "is_primary" in response.get_json()["detail"]
+
+
+def test_shoulder_tap_atomic_no_open_turn_writes_nothing(client: FlaskClient, tmp_path: Path) -> None:
+    """With no turn running there is nothing to merge into, so no control line is written."""
+    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
+    completed = [
+        {"type": "special", "kind": "turn_started", "turn_id": "tid-1"},
+        {"type": "special", "kind": "turn_completed", "turn_id": "tid-1"},
+    ]
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=_events_watcher(completed)),
+    ):
+        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "no_open_turn"
+    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
 
 
 def test_drain_to_composer_restarts_and_returns_the_block_unsent(client: FlaskClient) -> None:

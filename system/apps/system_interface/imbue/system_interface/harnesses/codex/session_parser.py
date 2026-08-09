@@ -223,6 +223,18 @@ def _marker_event_id(payload: dict[str, Any], payload_type: str, line_index: int
     return f"codex-{line_index}-{payload_type}"
 
 
+def _marker_turn_id(payload: dict[str, Any]) -> str | None:
+    """Codex's own ``turn_id`` for a turn-lifecycle marker, or None when absent.
+
+    The id already rides inside the event_id (``codex-turn-<turn_id>-<payload_type>``), but
+    the atomic shoulder-tap needs it directly to ABA-gate the flush against the live open
+    turn (see ``activity_state.current_open_turn_id``), so it is surfaced as an explicit
+    field on the ``turn_started`` / ``turn_completed`` / ``turn_aborted`` special events.
+    """
+    turn_id = payload.get("turn_id")
+    return turn_id if isinstance(turn_id, str) and turn_id else None
+
+
 def _user_message_events(timestamp: str, text: str | None) -> list[dict[str, Any]]:
     """The single user-bubble event for a human prompt, or ``[]`` when there is no text.
 
@@ -383,6 +395,7 @@ def parse_lines(
                     "type": SPECIAL_EVENT_TYPE,
                     "kind": SpecialEventKind.TURN_ABORTED.value,
                     "event_id": event_id,
+                    "turn_id": _marker_turn_id(payload),
                     "source": SOURCE,
                     "message_uuid": event_id,
                 }
@@ -406,6 +419,7 @@ def parse_lines(
                     "type": SPECIAL_EVENT_TYPE,
                     "kind": kind.value,
                     "event_id": event_id,
+                    "turn_id": _marker_turn_id(payload),
                     "source": SOURCE,
                     "message_uuid": event_id,
                 }

@@ -61,6 +61,10 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
     switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
     picker_mode=PickerMode.LIST,
     powered_by_label="Codex",
+    # Codex's patched binary watches shoulder_tap_atomic.jsonl and merges parked steer
+    # messages into the live turn (ABA-gated on the turn id), so the "Shoulder tap" button
+    # can flush atomically without a restart. Only codex supports this today.
+    native_atomic_shoulder_tap_possible=True,
 )
 
 # Codex writes its live state under CODEX_HOME (``<state_dir>/plugin/codex/home``), not at

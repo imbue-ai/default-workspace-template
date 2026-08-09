@@ -726,6 +726,18 @@ export async function flushQueue(agentId: string): Promise<void> {
   });
 }
 
+/** Atomic shoulder tap (codex only): merge the queued messages into the live turn
+ *  without restarting the agent. The backend appends a control line naming the open
+ *  turn; the patched codex binary picks it up on its next main loop. Fire-and-forget --
+ *  the next WS snapshot reflects the result; nothing is painted locally. */
+export async function shoulderTapAtomic(agentId: string): Promise<void> {
+  await m.request({
+    method: "POST",
+    url: apiUrl("/api/agents/:agentId/shoulder-tap-atomic"),
+    params: { agentId },
+  });
+}
+
 /** Interrupt to composer: restart the agent and get the queued messages back as
  *  one concatenated block to drop into the composer, unsent. */
 export async function drainToComposer(agentId: string): Promise<{ block: string }> {

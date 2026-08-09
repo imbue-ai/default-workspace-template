@@ -11,14 +11,22 @@ const mocks = vi.hoisted(() => {
   return {
     queued: [] as QueuedMessage[],
     flushQueue: vi.fn(async () => {}),
+    shoulderTapAtomic: vi.fn(async () => {}),
+    // Whether the current agent's harness supports the atomic shoulder tap (codex).
+    atomicFlag: false,
   };
 });
 
 vi.mock("../models/AgentManager", () => ({
   getQueuedMessagesForAgent: () => mocks.queued,
+  getAgentById: () => ({ harness: "test-harness" }),
+}));
+vi.mock("../models/HarnessCatalog", () => ({
+  getHarnessCatalog: () => ({ native_atomic_shoulder_tap_possible: mocks.atomicFlag }),
 }));
 vi.mock("../models/Response", () => ({
   flushQueue: mocks.flushQueue,
+  shoulderTapAtomic: mocks.shoulderTapAtomic,
 }));
 vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
@@ -67,7 +75,9 @@ function queuedMessage(queued_id: string, content: string): QueuedMessage {
 describe("renderQueuedMessages", () => {
   beforeEach(() => {
     mocks.queued = [];
+    mocks.atomicFlag = false;
     mocks.flushQueue.mockClear();
+    mocks.shoulderTapAtomic.mockClear();
   });
 
   it("renders nothing when the queue is empty", () => {
@@ -103,11 +113,24 @@ describe("renderQueuedMessages", () => {
     );
   });
 
-  it("fires the flush intent when Shoulder tap is clicked", async () => {
+  it("fires the restart-based flush intent when the harness lacks atomic shoulder tap", async () => {
+    // Distinct agent id per flush test: the freeze it leaves is module-level and
+    // keyed by agent id, so reusing one would hide the next test's button.
+    mocks.atomicFlag = false;
     mocks.queued = [queuedMessage("q1", "hi")];
-    const button = findByClass(renderQueuedMessages("agent-1"), "queued-action--flush");
+    const button = findByClass(renderQueuedMessages("agent-restart"), "queued-action--flush");
     await (button?.attrs?.onclick as () => Promise<void>)();
-    expect(mocks.flushQueue).toHaveBeenCalledWith("agent-1");
+    expect(mocks.flushQueue).toHaveBeenCalledWith("agent-restart");
+    expect(mocks.shoulderTapAtomic).not.toHaveBeenCalled();
+  });
+
+  it("fires the atomic shoulder-tap intent when the harness supports it (codex)", async () => {
+    mocks.atomicFlag = true;
+    mocks.queued = [queuedMessage("q1", "hi")];
+    const button = findByClass(renderQueuedMessages("agent-atomic"), "queued-action--flush");
+    await (button?.attrs?.onclick as () => Promise<void>)();
+    expect(mocks.shoulderTapAtomic).toHaveBeenCalledWith("agent-atomic");
+    expect(mocks.flushQueue).not.toHaveBeenCalled();
   });
 
   it("freezes the queued group during the flush and releases it on a backend arrival (no blip, no countdown)", async () => {

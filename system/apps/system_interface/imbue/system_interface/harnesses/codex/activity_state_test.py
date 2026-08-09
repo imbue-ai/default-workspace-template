@@ -3,8 +3,47 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
 from imbue.system_interface.harnesses.codex.activity_state import turn_open
 from imbue.system_interface.harnesses.codex.activity_state import derive
+
+
+def _started(turn_id: str) -> dict[str, Any]:
+    return {"type": "special", "kind": "turn_started", "turn_id": turn_id}
+
+
+def _completed(turn_id: str) -> dict[str, Any]:
+    return {"type": "special", "kind": "turn_completed", "turn_id": turn_id}
+
+
+def _aborted(turn_id: str) -> dict[str, Any]:
+    return {"type": "special", "kind": "turn_aborted", "turn_id": turn_id}
+
+
+@pytest.mark.parametrize(
+    "events, expected",
+    [
+        pytest.param([], None, id="empty_has_no_open_turn"),
+        pytest.param([_started("t1")], "t1", id="started_is_open"),
+        pytest.param([_started("t1"), _completed("t1")], None, id="completed_clears"),
+        pytest.param([_started("t1"), _aborted("t1")], None, id="aborted_clears"),
+        # A completed boundary for a DIFFERENT turn does not clear the open one.
+        pytest.param([_started("t1"), _completed("t2")], "t1", id="stale_boundary_ignored"),
+        # Second turn opens after the first closes -> the newest open id wins.
+        pytest.param([_started("t1"), _completed("t1"), _started("t2")], "t2", id="reopen_new_id"),
+        # Non-boundary events between the start and end are skipped.
+        pytest.param(
+            [_started("t1"), {"type": "assistant_message"}, {"type": "tool_result"}],
+            "t1",
+            id="mid_turn_still_open",
+        ),
+        pytest.param([{"type": "assistant_message"}], None, id="no_markers_has_no_open_turn"),
+        # A turn_started without a turn_id cannot be gated -> None (nothing to write).
+        pytest.param([{"type": "special", "kind": "turn_started"}], None, id="started_without_id"),
+    ],
+)
+def test_current_open_turn_id(events: list[dict[str, Any]], expected: str | None) -> None:
+    assert current_open_turn_id(events) == expected
 
 
 @pytest.mark.parametrize(
