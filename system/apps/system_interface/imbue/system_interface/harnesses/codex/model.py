@@ -72,7 +72,7 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
     # (the frontend's 5-minute pending fallback only fires if the switch never lands).
     switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
     picker_mode=PickerMode.LIST,
-    icon_svg=(Path(__file__).parent / "icon.svg").read_text(),
+    powered_by_label="Codex",
 )
 
 

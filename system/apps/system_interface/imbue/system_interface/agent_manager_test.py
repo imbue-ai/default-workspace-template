@@ -286,7 +286,7 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
     monkeypatch.setitem(
         HARNESS_AUTH_CHECKS,
         HarnessType.CODEX,
-        HarnessAuthCheck(command=("true",), display_name="Codex"),
+        HarnessAuthCheck(command=("true",), display_name="Codex", signin_instructions="Sign in."),
     )
     q = broadcaster.register()
 

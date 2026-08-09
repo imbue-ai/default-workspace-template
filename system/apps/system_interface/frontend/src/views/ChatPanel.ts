@@ -42,7 +42,7 @@ import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { HarnessLogo } from "./HarnessLogo";
+import { PoweredByCredit } from "./PoweredByCredit";
 import { ModelBar } from "./ModelBar";
 import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
@@ -874,13 +874,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       events: getEventsForAgent(agentId),
                     }),
                 m(MessageInput, { agentId }),
-                // Below the chat input: the model bar on the left, the agent-terminal
-                // and harness-auth actions right-aligned. One row, shared font, no
-                // background of its own.
+                // Below the chat input: the model bar on the left, the "Powered by" credit
+                // and the agent-terminal and harness-auth actions right-aligned. One row,
+                // shared font, no background of its own.
                 m("div", { class: "composer-under-bar" }, [
-                  m(HarnessLogo, { agentId }),
                   m(ModelBar, { agentId }),
                   m("div", { class: "composer-under-bar-actions" }, [
+                    // A non-clickable credit, immediately left of the terminal button.
+                    m(PoweredByCredit, { agentId }),
                     m(
                       "button",
                       {
