@@ -807,19 +807,30 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
 # messages into one merged turn only if the live turn id still equals ``target_turn_id`` (an
 # ABA gate), so the flush lands in the exact turn the user tapped and no other.
 _SHOULDER_TAP_ATOMIC_CONTROL_NAME: str = "shoulder_tap_atomic.jsonl"
+# pi's message inbox (state-dir root) and the interrupt sentinel we append to it. The pi
+# lifecycle extension recognizes a JSON *object* line `{"minds_interrupt": true}` (a normal
+# message is a JSON *string*) and interrupts + resubmits; the queue watcher ignores non-string
+# inbox lines, so the sentinel never enters the tracked queue. Kept in sync with the extension.
+_PI_INBOX_NAME: str = "pi_inbox"
+_PI_INTERRUPT_KEY: str = "minds_interrupt"
 
 
 def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     """Atomic shoulder tap: merge the queue into the live turn without restarting the agent.
 
-    The codex-only counterpart to :func:`_flush_queue_endpoint`. Rather than SIGKILL-restart
-    the agent and resend the queue, it appends one control line naming the currently-open turn
-    to codex's ``shoulder_tap_atomic.jsonl``; the patched binary picks it up on its next main
-    loop and merges the parked steer messages into that turn (ABA-gated on the turn id), so the
-    agent stays alive. Returns 404 for an unknown agent, 400 for a non-codex harness or the
-    primary services agent, 500 if the control write fails, 200 otherwise -- with status
-    ``no_open_turn`` (and no write) when no turn is running, or ``tapped`` when the turn was
-    targeted.
+    The gentle counterpart to :func:`_flush_queue_endpoint` for the harnesses that can interrupt
+    natively. Rather than SIGKILL-restart the agent and resend the queue, it drops a control
+    signal the harness picks up on its own loop and merges the parked steer messages into one
+    turn, so the agent stays alive:
+
+    - codex: append one control line naming the currently-open turn to
+      ``shoulder_tap_atomic.jsonl``; the patched binary merges the parked steers into that turn,
+      ABA-gated on the turn id. Status ``no_open_turn`` (no write) when no turn is running.
+    - pi: append an interrupt sentinel to ``pi_inbox``; the lifecycle extension interrupts the
+      running turn (a no-op when idle) and resubmits the parked steers as one merged turn.
+
+    Returns 404 for an unknown agent, 400 for a non-atomic harness (claude) or the primary
+    services agent, 500 if the write fails, 200 otherwise (``tapped``, or codex ``no_open_turn``).
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
@@ -828,13 +839,29 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
         error = ErrorResponse(
             detail=(
                 f"Agent '{agent_info.name}' runs the {agent_info.harness.value} harness, which does not "
-                "support an atomic shoulder tap (this endpoint is codex-only for now)"
+                "support an atomic shoulder tap"
             )
         )
         return _json_response(error.model_dump(), status_code=400)
     refusal = _refuse_queue_action_on_primary(agent_info, "shoulder-tap the queue of")
     if refusal is not None:
         return refusal
+
+    if agent_info.harness == HarnessType.PI_CODING:
+        # pi has no per-turn id, so there is no ABA target to compute here: the lifecycle
+        # extension gates the interrupt on "a turn is actually running" itself (a no-op when
+        # idle). Append one interrupt sentinel to pi's inbox; the extension interrupts the
+        # running turn and resubmits the parked steers as one merged turn.
+        inbox_path = agent_info.agent_state_dir / _PI_INBOX_NAME
+        try:
+            inbox_path.parent.mkdir(parents=True, exist_ok=True)
+            with inbox_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({_PI_INTERRUPT_KEY: True}) + "\n")
+        except OSError as e:
+            logger.opt(exception=e).error("Failed to write pi interrupt sentinel at {}", inbox_path)
+            error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
+            return _json_response(error.model_dump(), status_code=500)
+        return _json_response(ShoulderTapAtomicResponse(status="tapped").model_dump())
 
     watcher = get_state().get_or_create_watcher(agent_info)
     target_turn_id = current_open_turn_id(watcher.get_all_events())

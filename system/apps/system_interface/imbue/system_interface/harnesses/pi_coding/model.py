@@ -158,8 +158,8 @@ def build_catalog(data_dir: Path) -> HarnessCatalog:
         switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
         picker_mode=PickerMode.SEARCH,
         powered_by_label="Pi Coding",
-        # pi is not ready for atomic shoulder-tap; keep the restart-based flush.
-        native_atomic_shoulder_tap_possible=False,
+        # pi interrupts natively via the lifecycle extension (interrupt + resubmit).
+        native_atomic_shoulder_tap_possible=True,
     )
 
 
@@ -174,8 +174,8 @@ def get_catalog() -> HarnessCatalog:
             switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
             picker_mode=PickerMode.SEARCH,
             powered_by_label="Pi Coding",
-            # pi is not ready for atomic shoulder-tap; keep the restart-based flush.
-            native_atomic_shoulder_tap_possible=False,
+            # pi interrupts natively via the lifecycle extension (interrupt + resubmit).
+            native_atomic_shoulder_tap_possible=True,
         )
     return build_catalog(data_dir)
 
