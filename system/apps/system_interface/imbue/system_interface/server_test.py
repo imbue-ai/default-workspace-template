@@ -37,7 +37,11 @@ from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
+from imbue.system_interface.harnesses.codex.model import CodexInterruptToComposer
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.interrupt import RestartDrainInterruptToComposer
+from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
+from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
@@ -737,13 +741,15 @@ def _restart_ok() -> FinishedProcess:
     )
 
 
-def _fake_queue_watcher(block: str) -> SimpleNamespace:
+def _fake_queue_watcher(block: str, events: list[dict[str, Any]] | None = None) -> SimpleNamespace:
     """A stand-in watcher exposing just the queue methods the endpoints call.
 
     ``clear_calls`` records each ``clear_queue`` invocation so a test can assert
     the tracked set was cleared, without pulling in ``unittest.mock``. ``method_calls``
-    records the ordered method names so a test can assert the pi override refreshes
-    (``get_all_events``) BEFORE it captures the block (``get_queued_block``).
+    records the ordered method names so a test can assert the native overrides refresh
+    (``get_all_events``) BEFORE they capture the block (``get_queued_block``). ``events``
+    is what ``get_all_events`` returns -- empty by default (pi ignores the value; codex
+    reads the turn markers from it), or open/closed-turn markers for a codex drain test.
     """
     clear_calls: list[bool] = []
     method_calls: list[str] = []
@@ -754,7 +760,7 @@ def _fake_queue_watcher(block: str) -> SimpleNamespace:
 
     def _get_all_events() -> list[dict[str, Any]]:
         method_calls.append("get_all_events")
-        return []
+        return events if events is not None else []
 
     def _get_queued_block() -> str:
         method_calls.append("get_queued_block")
@@ -1149,6 +1155,94 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
     mock_run.assert_not_called()
     lines = (tmp_path / "pi_inbox").read_text().splitlines()
     assert lines == ['{"minds_interrupt_retract": true}']
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_dispatches_per_harness(tmp_path: Path) -> None:
+    """The stop button resolves the interrupt-to-composer implementation from the harness: codex
+    to its native retract override, pi to its own native override, and claude (the default) to the
+    base restart-drain -- so the codex override plugs in without disturbing the pi/claude arms."""
+    codex = build_interrupt_to_composer(_agent_info(harness=HarnessType.CODEX, agent_state_dir=tmp_path))
+    pi = build_interrupt_to_composer(_agent_info(harness=HarnessType.PI_CODING, agent_state_dir=tmp_path))
+    claude = build_interrupt_to_composer(_agent_info(harness=HarnessType.CLAUDE))
+    assert isinstance(codex, CodexInterruptToComposer)
+    assert isinstance(pi, PiInterruptToComposer)
+    assert isinstance(claude, RestartDrainInterruptToComposer)
+
+
+def test_drain_to_composer_codex_appends_retract_line_and_returns_block(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """codex's native override: with a live turn, append a ``retract_turn_id`` line to the same
+    ``shoulder_tap_atomic.jsonl`` the flush writes, clear the mirror, and hand the block back --
+    without restarting the agent."""
+    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
+    fake_watcher = _fake_queue_watcher("bring me back to edit", events=_codex_open_turn_events("tid-9"))
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "bring me back to edit"
+    # Native retract -> no restart.
+    mock_run.assert_not_called()
+    control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
+    assert control_path.read_text().splitlines() == ['{"retract_turn_id": "tid-9"}']
+    assert fake_watcher.clear_calls == [True]
+    # Refresh-first: the mirror is brought current (get_all_events) BEFORE the block is captured.
+    assert fake_watcher.method_calls.index("get_all_events") < fake_watcher.method_calls.index(
+        "get_queued_block"
+    )
+
+
+def test_drain_to_composer_codex_no_open_turn_returns_empty_and_writes_nothing(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """With no turn running there is nothing to retract, so codex writes no control line, leaves
+    the mirror untouched, and returns an empty block (the parked steers commit on their own)."""
+    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
+    completed = [
+        {"type": "special", "kind": "turn_started", "turn_id": "tid-1"},
+        {"type": "special", "kind": "turn_completed", "turn_id": "tid-1"},
+    ]
+    fake_watcher = _fake_queue_watcher("still queued", events=completed)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    mock_run.assert_not_called()
+    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
+    # No open turn -> the mirror is left alone (no clear).
+    assert fake_watcher.clear_calls == []
+
+
+def test_drain_to_composer_codex_empty_queue_open_turn_writes_line_and_returns_empty(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """A codex stop mid-turn with nothing queued still writes the retract line -- a pure turn abort
+    (fixes the empty-queue no-op) -- clears the mirror, and returns '', still without a restart."""
+    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
+    fake_watcher = _fake_queue_watcher("", events=_codex_open_turn_events("tid-3"))
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    mock_run.assert_not_called()
+    control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
+    assert control_path.read_text().splitlines() == ['{"retract_turn_id": "tid-3"}']
     assert fake_watcher.clear_calls == [True]
 
 
