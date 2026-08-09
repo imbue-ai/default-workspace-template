@@ -86,7 +86,7 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     default_model_id="opus[1m]",
     switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
     picker_mode=PickerMode.LIST,
-    icon_svg=(Path(__file__).parent / "icon.svg").read_text(),
+    powered_by_label="Claude Code",
 )
 
 

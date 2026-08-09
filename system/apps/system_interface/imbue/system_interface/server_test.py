@@ -410,7 +410,7 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     assert [option["id"] for option in claude["options"]] == ["opus[1m]", "fable", "sonnet", "haiku"]
     assert claude["default_model_id"] == "opus[1m]"
     assert claude["switch_mode"] == "eager_then_reconcile"
-    assert claude["icon_svg"].startswith("<svg")
+    assert claude["powered_by_label"] == "Claude Code"
 
 
 def test_get_harnesses_excludes_alt_harnesses_without_the_flag(
@@ -430,6 +430,33 @@ def test_get_harnesses_includes_alt_harnesses_with_the_flag(
     data = client.get("/api/harnesses").get_json()
     assert "claude" in data
     assert "codex" in data
+
+
+def test_powered_by_returns_the_harness_product_name(client: FlaskClient, tmp_path: Path) -> None:
+    """The per-agent powered-by endpoint returns the agent harness's product-name label."""
+    agent_id = "agent-00000000000000000000000000000010"
+    agent_info = _model_agent_info(agent_id, tmp_path)
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.get(f"/api/agents/{agent_id}/powered-by")
+    assert response.status_code == 200
+    assert response.get_json() == {"label": "Claude Code"}
+
+
+def test_powered_by_resolves_the_label_per_harness(client: FlaskClient, tmp_path: Path) -> None:
+    """The label is a pure function of the agent's harness (codex -> "Codex")."""
+    agent_id = "agent-00000000000000000000000000000011"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.get(f"/api/agents/{agent_id}/powered-by")
+    assert response.status_code == 200
+    assert response.get_json() == {"label": "Codex"}
+
+
+def test_powered_by_unknown_agent_returns_404(client: FlaskClient) -> None:
+    """A proto-agent (not yet discoverable) 404s, so the frontend shows no credit."""
+    with patch("imbue.system_interface.server._find_agent", return_value=None):
+        response = client.get("/api/agents/nonexistent/powered-by")
+    assert response.status_code == 404
 
 
 def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:

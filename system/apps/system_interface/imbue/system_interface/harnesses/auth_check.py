@@ -41,6 +41,9 @@ class HarnessAuthCheck(FrozenModel):
     command: tuple[str, ...]
     # Human-readable harness name, used in the refusal message shown to the user.
     display_name: str
+    # Step-by-step, user-facing instructions for signing this harness's CLI in, appended to the
+    # refusal so the user knows exactly what to do (the harnesses sign in through different flows).
+    signin_instructions: str
     # When set, the harness is signed OUT iff this regex is found in the command's combined
     # stdout+stderr (the CLI exits 0 either way). When None, signed OUT iff the command exits
     # non-zero.
@@ -51,10 +54,12 @@ HARNESS_AUTH_CHECKS: dict[HarnessType, HarnessAuthCheck] = {
     HarnessType.CODEX: HarnessAuthCheck(
         command=("codex", "login", "status"),
         display_name="Codex",
+        signin_instructions="Go to New tab (+) -> New terminal -> run `codex`",
     ),
     HarnessType.PI_CODING: HarnessAuthCheck(
         command=("pi", "--list-models"),
         display_name="Pi",
+        signin_instructions="Go to New tab (+) -> New terminal -> run `pi` -> type `/login`",
         unauthenticated_output_pattern=r"No models available",
     ),
 }
@@ -100,7 +105,4 @@ def find_unauthenticated_harness_reason(harness: HarnessType) -> str | None:
         return None
     if _is_signed_in(check):
         return None
-    return (
-        f"{check.display_name} is not signed in on this workspace. "
-        f"Sign in to the {check.display_name} CLI, then create the agent again."
-    )
+    return f"{check.display_name} is not signed in on this workspace. {check.signin_instructions}"
