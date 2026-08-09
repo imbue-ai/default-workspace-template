@@ -51,6 +51,7 @@ from typing import Protocol
 from loguru import logger
 from pydantic import Field
 
+from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
 from imbue.mngr_claude.claude_config import is_tap_binding_active
@@ -656,7 +657,13 @@ def execute_claude_stop_to_composer(
     if verdict == _AbortVerdict.CONFIRMED:
         # The abort is on disk; clear the stranded markers and poke observe to re-probe. The
         # mirror was empty, so the block is empty. Confirm-before-clear: markers move only here.
-        mark_idle()
+        # Best-effort: the interrupt already succeeded, so a marker-cleanup failure (the activity
+        # log append, say) must not turn a completed stop into a 500 -- log and still return "".
+        # The indicator then recovers on the next idle_prompt hook instead of clearing promptly.
+        try:
+            mark_idle()
+        except (ConcurrencyGroupError, OSError) as e:
+            logger.opt(exception=e).warning("claude stop: abort confirmed but marking idle failed; indicator will lag")
         return ""
     if verdict == _AbortVerdict.TURN_ENDED:
         # The turn ended naturally in the gap and its own Stop hook settled it; nothing to do.
