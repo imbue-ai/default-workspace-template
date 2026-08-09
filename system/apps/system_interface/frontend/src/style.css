@@ -354,11 +354,13 @@ body {
   border: none;
 }
 
-/* The row below the chat input: model bar on the left, agent-terminal + harness-auth
-   actions right-aligned. Shares the model bar's font; no background of its own; text
-   kept at the visible secondary color (not the old faint links). */
+/* The row below the chat input: a 3-column grid -- model bar on the left, the "Powered by"
+   credit centered, agent-terminal + harness-auth actions right-aligned. The two side columns
+   are equal (1fr) so the auto-width center column stays visually centered in the bar. Shares
+   the model bar's font; no background of its own; text at the visible secondary color. */
 .composer-under-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 8px;
   margin-top: 4px;
@@ -367,13 +369,45 @@ body {
   margin-left: auto;
   margin-right: auto;
   width: 100%;
+  /* Query container: the credit hides itself (below) once the BAR -- not the viewport --
+     is too narrow to seat it without crowding the buttons, so it works in split panes too. */
+  container-type: inline-size;
+}
+
+/* Left cell: the model bar, aligned to the start of its column; clips before overflowing. */
+.composer-under-bar-model {
+  justify-self: start;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Center cell: holds the credit. min-width:0 + overflow lets the credit truncate when the
+   row gets narrow, rather than pushing into the model bar or the action buttons. */
+.composer-under-bar-center {
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .composer-under-bar-actions {
-  margin-left: auto;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+/* When the bar is too narrow to center the credit without crowding the model bar or the
+   action buttons, drop the decorative credit entirely (verified: this protects the buttons
+   down to a ~170px bar). The model bar stays left and the actions stay right. */
+@container (max-width: 520px) {
+  .composer-under-bar-center {
+    display: none;
+  }
 }
 
 .composer-under-bar-action {
@@ -409,6 +443,10 @@ body {
   color: var(--color-text-secondary);
   white-space: nowrap;
   user-select: none;
+  /* Truncate rather than overflow the center cell when the row is narrow. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .message-input {

@@ -874,13 +874,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       events: getEventsForAgent(agentId),
                     }),
                 m(MessageInput, { agentId }),
-                // Below the chat input: the "Powered by" credit on the far left, the model
-                // bar next to it, and the agent-terminal and harness-auth actions
-                // right-aligned. One row, shared font, no background of its own.
+                // Below the chat input: a 3-column grid -- the model bar on the left, the
+                // "Powered by" credit centered, and the agent-terminal + harness-auth actions
+                // right-aligned. Each section is its own always-present cell so the credit stays
+                // centered even when the model bar renders nothing. Shared font, no background.
                 m("div", { class: "composer-under-bar" }, [
-                  // A non-clickable credit, to the left of the model bar.
-                  m(PoweredByCredit, { agentId }),
-                  m(ModelBar, { agentId }),
+                  m("div", { class: "composer-under-bar-model" }, m(ModelBar, { agentId })),
+                  // A non-clickable credit, centered in the row (truncates before it crowds the sides).
+                  m("div", { class: "composer-under-bar-center" }, m(PoweredByCredit, { agentId })),
                   m("div", { class: "composer-under-bar-actions" }, [
                     m(
                       "button",
