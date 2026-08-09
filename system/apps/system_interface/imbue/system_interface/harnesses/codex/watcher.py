@@ -41,6 +41,7 @@ from typing import Callable
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
@@ -48,6 +49,7 @@ from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.codex.queue_tracker import CodexQueueTracker
+from imbue.system_interface.harnesses.codex.session_parser import CodexQueueSignalKind
 from imbue.system_interface.harnesses.codex.session_parser import SOURCE as _SOURCE
 from imbue.system_interface.harnesses.codex.session_parser import parse_codex_queue_signals
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
@@ -74,6 +76,11 @@ _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
 # queued mid-turn surfaces as a bubble immediately, rather than only when it drains into
 # the rollout at the end of the running turn.
 _QUEUED_INPUT_RELATIVE = Path("plugin") / "codex" / "home" / "queued_input.jsonl"
+# The per-launch marker mngr_codex touches on every codex startup/resume -- the same
+# boundary the activity staleness guard compares transcript tails against. Its mtime
+# scopes the queued-input replay to the current process generation (see
+# ``_consume_queued_input``). Kept local like the other constants above.
+_PROCESS_STARTED_MARKER_RELATIVE = Path("codex_process_started")
 
 
 def read_marker_rollout_path(marker_path: Path) -> Path | None:
@@ -135,6 +142,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
     _queued_input_path: Path
     _queued_offset: int
     _queued_partial: bytes
+    # The ``codex_process_started`` marker for this agent: its mtime is the current
+    # process generation's launch boundary, against which ledger enqueue timestamps
+    # are compared (see ``_consume_queued_input``).
+    _process_started_marker_path: Path
     # The codex queued-message populator + the snapshot sink (set by app_context) and the
     # last snapshot pushed to it, so a pure-enqueue cycle (which produces no transcript
     # events) still broadcasts the queued snapshot, and only when it actually changed.
@@ -198,6 +209,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # Queued-input sidecar cursor (see the attribute docs above).
         self._queued_offset = 0
         self._queued_partial = b""
+        self._process_started_marker_path = agent_state_dir / _PROCESS_STARTED_MARKER_RELATIVE
         # The codex queued-message populator, its snapshot sink, and the last snapshot
         # pushed (starts empty so the first non-empty snapshot broadcasts).
         self._queue_tracker = CodexQueueTracker.build()
@@ -373,11 +385,30 @@ class CodexSessionWatcher(AgentSessionWatcher):
         self._queued_offset += len(raw)
         byte_lines = (self._queued_partial + raw).split(b"\n")
         self._queued_partial = byte_lines.pop()
+        # Scope the replay to the CURRENT codex process generation: skip folding any
+        # ENQUEUE whose ledger timestamp predates the ``codex_process_started`` marker
+        # mtime (touched by mngr on every codex launch). Conservation fails across a
+        # kill-based death -- the dying process writes no terminating records, and the
+        # fork's restore-time retraction only closes entries held in the live process's
+        # memory -- so a prior generation's open entries would otherwise resurrect on
+        # every full replay. Nothing live is ever dropped (a live entry postdates its
+        # own launch). LEAVE records still fold unconditionally (an unknown-id resolve
+        # is a no-op). Missing marker or unparseable timestamp folds: override only on
+        # positive evidence, as in ``is_transcript_tail_stale``.
+        try:
+            process_started_at: float | None = self._process_started_marker_path.stat().st_mtime
+        except OSError:
+            process_started_at = None
         for byte_line in byte_lines:
             decoded = byte_line.decode("utf-8", errors="replace")
             signal = parse_codex_queue_signals(decoded)
-            if signal is not None:
-                self._queue_tracker.consume(signal)
+            if signal is None:
+                continue
+            if signal.kind == CodexQueueSignalKind.ENQUEUE and process_started_at is not None:
+                enqueued_at = parse_iso_timestamp_to_epoch(signal.timestamp)
+                if enqueued_at is not None and enqueued_at < process_started_at:
+                    continue
+            self._queue_tracker.consume(signal)
 
     def _ingest_event(self, event: dict[str, Any], new_events: list[dict[str, Any]]) -> None:
         """Add one parsed event to the view: append a new id, supersede a changed one in
