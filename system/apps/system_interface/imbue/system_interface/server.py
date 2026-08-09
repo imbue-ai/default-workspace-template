@@ -68,6 +68,7 @@ from imbue.system_interface.layout_ops import parse_tmux_sessions_output
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
+from imbue.system_interface.harnesses.codex.model import CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
 from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
@@ -812,11 +813,10 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
-# The control file the patched codex binary watches under CODEX_HOME. Each line is a single
-# JSON object ``{"target_turn_id": "<id>"}``; codex, on its main loop, flushes the parked steer
-# messages into one merged turn only if the live turn id still equals ``target_turn_id`` (an
-# ABA gate), so the flush lands in the exact turn the user tapped and no other.
-_SHOULDER_TAP_ATOMIC_CONTROL_NAME: str = "shoulder_tap_atomic.jsonl"
+# The atomic shoulder-tap control file (``CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME``) is codex's,
+# so it lives with the codex harness; the flush endpoint below and the stop-button override
+# (harnesses/codex/model.py) share that one filename, distinguishing flush vs retract by the
+# JSON key on each line rather than by a separate file.
 # pi's inbox name + the flush sentinel key live in harnesses/pi_coding/inbox.py, the shared
 # pi_inbox protocol (a JSON *object* line the extension reads; a normal message is a JSON
 # *string*, so the two never collide, and the queue watcher treats the object as a positional
@@ -884,7 +884,7 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
 
     control_path = (
         agent_info.agent_state_dir / get_harness_spec(agent_info.harness).model_state_relative_path
-    ) / _SHOULDER_TAP_ATOMIC_CONTROL_NAME
+    ) / CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
     try:
         control_path.parent.mkdir(parents=True, exist_ok=True)
         with control_path.open("a", encoding="utf-8") as f:

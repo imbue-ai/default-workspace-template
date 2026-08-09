@@ -86,3 +86,18 @@ just-flushed follow-on turn, sends one recovery nudge so the committed messages 
 addressed. The agent is never restarted and the queue mirror is never torn down. The tap
 button now also releases the "Sending queued messages..." freeze immediately on a terminal
 no-op (nothing was queued, or no turn was running) instead of holding it to the fallback cap.
+
+- The stop button now interrupts codex natively instead of SIGKILL-restarting it,
+  matching pi. codex registers its own stop-button override: with a turn running,
+  it appends a `{"retract_turn_id": "<id>"}` line to the same
+  `shoulder_tap_atomic.jsonl` control file the shoulder-tap flush writes -- a
+  distinct key from the flush's `target_turn_id`, so the patched binary aborts that
+  exact turn (ABA-gated on the id) and discards its parked steers while Minds hands
+  the queued messages back to the composer, with no process restart, no
+  session-resume cost, and no abandoned-transcript patch-up. With no turn running
+  it writes nothing and returns an empty block (the parked steers commit on their
+  own); with a turn running but an empty queue it still writes the line, so a stop
+  mid-turn with nothing queued is a clean turn abort rather than a no-op. Backend
+  only: the frontend keeps one stop button and one endpoint. Requires the rebuilt
+  codex binary that reads the retract line; an older binary safely skips the
+  unknown key.

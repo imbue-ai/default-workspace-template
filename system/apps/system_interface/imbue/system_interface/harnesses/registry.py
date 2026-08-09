@@ -30,6 +30,7 @@ from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
+from imbue.system_interface.harnesses.codex.model import CodexInterruptToComposer
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -106,6 +107,10 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 SpecialEventKind.TURN_ABORTED,
             }
         ),
+        # codex interrupts natively via a retract control line on its shoulder-tap channel (the
+        # patched binary aborts the live turn and discards its parked steers), so it overrides the
+        # base restart-drain rather than SIGKILL-relaunching.
+        interrupt_to_composer_class=CodexInterruptToComposer,
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
