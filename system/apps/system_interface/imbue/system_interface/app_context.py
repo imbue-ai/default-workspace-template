@@ -122,13 +122,18 @@ class SystemInterfaceState(MutableModel):
             )
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
             self.watchers[agent_info.id] = watcher
-            watcher.start()
 
-        # Seed transcript-derived activity signals once at watcher creation so
-        # the indicator does not lag a turn behind on first connect. Done
-        # outside the watchers lock to avoid holding it across the agent
-        # manager's own lock.
+        # Seed transcript-derived activity signals BEFORE starting the watcher
+        # thread (seeding needs no running thread -- ``get_all_events`` reads
+        # synchronously). The watcher's priming pass may broadcast a queued
+        # snapshot as soon as the thread runs, and the manager's pre-broadcast
+        # sweep derives activity from these signals -- an unseeded tracker would
+        # derive IDLE for a live mid-turn agent and sweep its genuine queue.
+        # Seeding also keeps the indicator from lagging a turn behind on first
+        # connect. Done outside the watchers lock to avoid holding it across the
+        # agent manager's own lock.
         self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
+        watcher.start()
         return watcher
 
     def stop_all_watchers(self) -> None:
