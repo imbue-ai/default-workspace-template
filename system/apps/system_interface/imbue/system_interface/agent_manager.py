@@ -41,6 +41,7 @@ from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.activity_state import resolve_is_agent_running
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
@@ -1227,6 +1228,13 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(
                 to_update(agent_state.field_ref().queued_messages, queued)
             )
+        # Evaluate the level-triggered idle sweep before this snapshot is ever rendered:
+        # a replayed snapshot can arrive with no later recompute trigger (the event
+        # fan-out runs strictly before the snapshot push, and a permanently-dead agent
+        # never re-enters the observe delta), so a dead generation's orphans would
+        # otherwise broadcast and stick. ``broadcast_on_change=False`` keeps the single
+        # broadcast below authoritative -- it carries the post-sweep state.
+        self._recompute_activity_state(agent_id, broadcast_on_change=False)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
@@ -1365,6 +1373,15 @@ class AgentManager:
                 is_agent_running=resolve_is_agent_running(agent_state.state, is_active_marker_present),
                 process_started_at=process_started_at,
             )
+            # A positively-dead lifecycle (STOPPED and friends -- never UNKNOWN, which is
+            # non-evidence) overrides whatever the transcript derives: the process's
+            # in-memory queue and in-flight turn died with it. Claude and pi already
+            # gate their derive on ``is_agent_running``; codex deliberately ignores the
+            # lifecycle there (its turn latch owns the RUNNING/WAITING flap, not the
+            # dead/alive axis), so without this override a dead codex agent keeps a
+            # phantom "Thinking" dot and the level-triggered sweep below never fires.
+            if is_lifecycle_dead(agent_state.state):
+                new_state = ActivityState.IDLE
             old_state = self._activity_state_by_agent.get(agent_id)
             # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
             # IDLE agent's harness queue is drained by definition, so ANY queued
