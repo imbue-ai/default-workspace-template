@@ -31,6 +31,7 @@ from imbue.mngr.agents.tui_utils import SubmissionConfirmationPolicy
 from imbue.mngr.agents.tui_utils import SubmissionEvidenceProbe
 from imbue.mngr.agents.update_policy import AgentUpdatePolicy
 from imbue.mngr.api.message import MessageResult
+from imbue.mngr.api.message import _deliver_text
 from imbue.mngr.api.message import _send_message_to_agent
 from imbue.mngr.api.preservation import get_local_preserved_agent_dir
 from imbue.mngr.api.preservation import preserve_agent_data
@@ -2158,6 +2159,7 @@ def test_send_message_routes_delivered_but_blocked_to_blocked_agents(
         agent=agent,
         host=host,
         message_content="/model fable",
+        deliver=_deliver_text,
         result=result,
         result_lock=Lock(),
         error_behavior=ErrorBehavior.CONTINUE,

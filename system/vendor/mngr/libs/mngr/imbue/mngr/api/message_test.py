@@ -9,7 +9,9 @@ from imbue.mngr.agents.base_agent import SendKeysAgent
 from imbue.mngr.api.create import CreateAgentOptions
 from imbue.mngr.api.find import find_all_agents
 from imbue.mngr.api.message import MessageResult
+from imbue.mngr.api.message import _deliver_text
 from imbue.mngr.api.message import _send_message_to_agent
+from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.cli.testing import create_test_agent
 from imbue.mngr.config.data_types import AgentTypeConfig
@@ -57,6 +59,20 @@ def test_send_message_to_agents_returns_empty_result_when_no_agents(
     result = send_message_to_agents(
         mngr_ctx=temp_mngr_ctx,
         message_content="Hello",
+        agents_to_message=[],
+    )
+
+    assert result.successful_agents == []
+    assert result.failed_agents == []
+
+
+def test_send_key_chord_to_agents_returns_empty_result_when_no_agents(
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """send_key_chord_to_agents returns an empty result when no agents are provided."""
+    result = send_key_chord_to_agents(
+        mngr_ctx=temp_mngr_ctx,
+        key="M-q",
         agents_to_message=[],
     )
 
@@ -329,6 +345,7 @@ def test_send_message_records_failure_when_revive_fails(
         agent=agent,
         host=agent.host,
         message_content="hello",
+        deliver=_deliver_text,
         result=result,
         result_lock=Lock(),
         error_behavior=ErrorBehavior.CONTINUE,

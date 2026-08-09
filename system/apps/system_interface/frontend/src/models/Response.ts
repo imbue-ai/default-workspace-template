@@ -726,12 +726,13 @@ export async function flushQueue(agentId: string): Promise<void> {
   });
 }
 
-/** Atomic shoulder tap (codex only): merge the queued messages into the live turn
- *  without restarting the agent. The backend appends a control line naming the open
- *  turn; the patched codex binary picks it up on its next main loop. Fire-and-forget --
- *  the next WS snapshot reflects the result; nothing is painted locally. */
-export async function shoulderTapAtomic(agentId: string): Promise<void> {
-  await m.request({
+/** Atomic shoulder tap (codex / pi / claude): flush the queued messages into the live turn
+ *  without restarting the agent. Returns the backend status so the caller can release the
+ *  flush freeze on a terminal no-op (``no_open_turn`` / ``nothing_queued``) that commits
+ *  nothing -- otherwise the next WS snapshot / committed turn reflects the result and the
+ *  freeze is arrival-released. */
+export async function shoulderTapAtomic(agentId: string): Promise<{ status: string }> {
+  return await m.request<{ status: string }>({
     method: "POST",
     url: apiUrl("/api/agents/:agentId/shoulder-tap-atomic"),
     params: { agentId },

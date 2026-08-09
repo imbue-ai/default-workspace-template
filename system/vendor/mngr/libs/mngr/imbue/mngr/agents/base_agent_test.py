@@ -18,6 +18,7 @@ from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import SendMessageError
 from imbue.mngr.errors import UserInputError
+from imbue.mngr.hosts.common import get_agent_state_dir_path
 from imbue.mngr.hosts.tmux import TmuxSessionTarget
 from imbue.mngr.hosts.tmux import TmuxWindowTarget
 from imbue.mngr.interfaces.data_types import CommandResult
@@ -1319,6 +1320,58 @@ def test_send_message_simple_raises_on_enter_failure(
 
     with pytest.raises(SendMessageError, match="send-keys Enter failed"):
         agent._send_message_simple(TmuxWindowTarget(session_name="mngr-test", window=0), "hello")
+
+
+# =========================================================================
+# press_key_chord tests
+# =========================================================================
+
+
+def test_press_key_chord_sends_tmux_key(
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """press_key_chord issues a single tmux send-keys with the key token (NOT -l literal)."""
+    stub = _StubHost()
+    stub.is_local = False  # skip the message-lock filesystem path; exercise only the send
+    agent = _create_agent_with_stub_host(temp_mngr_ctx, stub)
+
+    agent.press_key_chord("M-q")
+
+    assert len(stub.executed_commands) == 1
+    command = stub.executed_commands[0]
+    assert "send-keys" in command
+    assert "M-q" in command
+    assert "-l" not in command
+
+
+def test_press_key_chord_raises_on_failure(
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """A failed send-keys surfaces as SendMessageError naming the key."""
+    stub = _StubHost(command_results=[CommandResult(success=False, stdout="", stderr="no session")])
+    stub.is_local = False
+    agent = _create_agent_with_stub_host(temp_mngr_ctx, stub)
+
+    with pytest.raises(SendMessageError, match="send-keys M-q failed"):
+        agent.press_key_chord("M-q")
+
+
+def test_press_key_chord_holds_message_lock(
+    temp_mngr_ctx: MngrContext,
+    tmp_path: Path,
+) -> None:
+    """On a local host the chord runs through the per-agent message.lock (serializing sends)."""
+    stub = _StubHost()
+    stub.is_local = True
+    stub.host_dir = tmp_path
+    agent = _create_agent_with_stub_host(temp_mngr_ctx, stub)
+
+    agent.press_key_chord("M-q")
+
+    lock_path = get_agent_state_dir_path(tmp_path, agent.id) / "message.lock"
+    assert lock_path.exists()
+    assert len(stub.executed_commands) == 1
+    assert "send-keys" in stub.executed_commands[0]
 
 
 # =========================================================================

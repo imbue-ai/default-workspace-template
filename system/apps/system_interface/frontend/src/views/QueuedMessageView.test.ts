@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => {
   return {
     queued: [] as QueuedMessage[],
     flushQueue: vi.fn(async () => {}),
-    shoulderTapAtomic: vi.fn(async () => {}),
-    // Whether the current agent's harness supports the atomic shoulder tap (codex).
+    shoulderTapAtomic: vi.fn(async () => ({ status: "tapped" })),
+    // Whether the current agent's harness supports the atomic shoulder tap (codex / pi / claude).
     atomicFlag: false,
   };
 });
@@ -131,6 +131,33 @@ describe("renderQueuedMessages", () => {
     await (button?.attrs?.onclick as () => Promise<void>)();
     expect(mocks.shoulderTapAtomic).toHaveBeenCalledWith("agent-atomic");
     expect(mocks.flushQueue).not.toHaveBeenCalled();
+  });
+
+  it("releases the freeze immediately on a terminal no-op atomic status (no hang to the cap)", async () => {
+    const agent = "agent-noop-tap";
+    mocks.atomicFlag = true;
+    mocks.queued = [queuedMessage("q1", "hi")];
+    mocks.shoulderTapAtomic.mockResolvedValueOnce({ status: "no_open_turn" });
+
+    const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
+    await (button?.attrs?.onclick as () => Promise<void>)();
+
+    // Nothing was committed, so the freeze is dropped now rather than held to the 20s cap.
+    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeUndefined();
+  });
+
+  it("keeps the freeze arrival-released on a real ``tapped`` atomic status", async () => {
+    const agent = "agent-tapped";
+    mocks.atomicFlag = true;
+    mocks.queued = [queuedMessage("q1", "hi")];
+    mocks.shoulderTapAtomic.mockResolvedValueOnce({ status: "tapped" });
+
+    const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
+    await (button?.attrs?.onclick as () => Promise<void>)();
+
+    // A real tap commits a merged turn, so the freeze stays until that turn arrives.
+    mocks.queued = [];
+    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
   });
 
   it("freezes the queued group during the flush and releases it on a backend arrival (no blip, no countdown)", async () => {

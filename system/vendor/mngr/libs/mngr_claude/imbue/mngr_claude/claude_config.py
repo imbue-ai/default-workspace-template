@@ -489,6 +489,131 @@ def find_project_config(projects: Mapping[str, Any], path: Path) -> dict[str, An
 
 
 # =============================================================================
+# Shoulder-tap keybinding (native queue flush via chat:cancel)
+# =============================================================================
+
+# Filename of Claude Code's user-scope keybindings file (beside settings.json in
+# the config dir). mngr syncs it into per-agent config dirs and, for the native
+# shoulder tap, merges the flush chord into it (see below).
+KEYBINDINGS_FILENAME: Final[str] = "keybindings.json"
+
+# The Chat-only chord the dwt shoulder tap delivers via ``tmux send-keys M-q`` to
+# make claude flush its parked message queue into the live session. ``meta+q`` is
+# used rather than raw Esc because it is unbound (hence inert) in every non-Chat
+# context, so a stray delivery can never be reinterpreted as ``confirm:no`` /
+# ``autocomplete:dismiss`` / etc. Cancelling the live turn makes claude flush its
+# parked queue immediately -- the same auto-flush it performs at natural turn end.
+_TAP_KEYBINDING_CHORD: Final[str] = "meta+q"
+_TAP_KEYBINDING_ACTION: Final[str] = "chat:cancel"
+
+# The only two contexts whose bindings can claim the Chat chord: the Chat context
+# itself and Global (which applies across contexts). A ``meta+q`` already bound in
+# either is left untouched; the tap then reports itself unavailable rather than
+# clobbering the user's binding.
+_CHAT_KEYBINDING_CONTEXT: Final[str] = "Chat"
+_GLOBAL_KEYBINDING_CONTEXT: Final[str] = "Global"
+
+
+def _find_keybinding_context_entry(entries: list[Any], context: str) -> dict[str, Any] | None:
+    """Return the ``{"context": ..., "bindings": {...}}`` entry for ``context``, or None."""
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("context") == context:
+            return entry
+    return None
+
+
+def _keybinding_entries(keybindings: Mapping[str, Any]) -> list[Any]:
+    """Return the list of context entries under the top-level ``bindings`` key.
+
+    Returns an empty list when the key is missing or is not a list (a malformed
+    file we decline to interpret rather than trust).
+    """
+    entries = keybindings.get("bindings")
+    if isinstance(entries, list):
+        return entries
+    return []
+
+
+def _read_chord_action(keybindings: Mapping[str, Any], context: str, chord: str) -> str | None:
+    """Return the action bound to ``chord`` in ``context``, or None if unbound."""
+    entry = _find_keybinding_context_entry(_keybinding_entries(keybindings), context)
+    if entry is None:
+        return None
+    bindings = entry.get("bindings")
+    if not isinstance(bindings, dict):
+        return None
+    return bindings.get(chord)
+
+
+def ensure_chat_cancel_tap_keybinding(keybindings_path: Path) -> None:
+    """Merge ``meta+q`` -> ``chat:cancel`` into the Chat context of keybindings.json.
+
+    Idempotent and non-destructive:
+    - Creates the file, its ``bindings`` list, and/or the Chat context entry when
+      absent (preserving any ``$schema``/``$docs`` metadata and every other entry).
+    - Leaves an existing ``meta+q`` binding untouched whether it already lives in
+      the Chat context (ours or the user's) or in the Global context -- the only
+      contexts whose bindings can shadow a Chat chord. When ``meta+q`` is already
+      claimed there, this writes nothing and the tap reports itself unavailable via
+      ``is_tap_binding_active`` instead of clobbering the user's binding.
+
+    Uses the same ``_claude_config_lock`` + ``atomic_write`` (with ``.bak``) pattern
+    as the other config writers. A file that exists but does not parse as JSON is
+    left as-is (a warning is logged) rather than overwritten.
+    """
+    with _claude_config_lock(keybindings_path):
+        try:
+            keybindings = read_claude_config(keybindings_path)
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to read keybindings for tap chord at {}: {}", keybindings_path, e)
+            return
+
+        for context in (_CHAT_KEYBINDING_CONTEXT, _GLOBAL_KEYBINDING_CONTEXT):
+            if _read_chord_action(keybindings, context, _TAP_KEYBINDING_CHORD) is not None:
+                logger.trace("Tap chord {} already bound in {} context; leaving untouched", _TAP_KEYBINDING_CHORD, context)
+                return
+
+        entries = _keybinding_entries(keybindings)
+        chat_entry = _find_keybinding_context_entry(entries, _CHAT_KEYBINDING_CONTEXT)
+        if chat_entry is None:
+            chat_entry = {"context": _CHAT_KEYBINDING_CONTEXT, "bindings": {}}
+            entries.append(chat_entry)
+        chat_bindings = chat_entry.setdefault("bindings", {})
+        chat_bindings[_TAP_KEYBINDING_CHORD] = _TAP_KEYBINDING_ACTION
+        keybindings["bindings"] = entries
+        _write_claude_config_atomic(keybindings_path, keybindings)
+
+    logger.trace("Ensured tap chord {} -> {} in {}", _TAP_KEYBINDING_CHORD, _TAP_KEYBINDING_ACTION, keybindings_path)
+
+
+def is_tap_binding_active(keybindings_path: Path, process_started_marker_path: Path) -> bool:
+    """Whether the shoulder-tap chord is live for the currently running claude process.
+
+    Both conditions must hold:
+    1. The Chat context binds ``meta+q`` to ``chat:cancel`` on disk.
+    2. keybindings.json was last modified no later than the ``claude_process_started``
+       marker -- i.e. the live claude process was launched with the binding already
+       on disk. claude reads keybindings once at launch (no hot-reload), so a binding
+       written after the process started is not yet in effect. This is deliberately
+       conservative: a keybindings.json edited after launch reads as not-active until
+       the next restart, never as a false positive.
+
+    Returns False if either file is missing (a marker is written on every startup /
+    resume, so its absence means no live process to tap).
+    """
+    if _read_chord_action(read_claude_config(keybindings_path), _CHAT_KEYBINDING_CONTEXT, _TAP_KEYBINDING_CHORD) != (
+        _TAP_KEYBINDING_ACTION
+    ):
+        return False
+    try:
+        keybindings_mtime = keybindings_path.stat().st_mtime
+        marker_mtime = process_started_marker_path.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    return keybindings_mtime <= marker_mtime
+
+
+# =============================================================================
 # Project Directory Encoding
 # =============================================================================
 

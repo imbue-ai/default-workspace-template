@@ -32,3 +32,12 @@ always-wrong request and now fails naming the conflicting templates. Aliases are
 first (so two names for the same base do not conflict), templates that leave `type` unset
 never participate, and an explicit `--type` on the command line still overrides every
 template's type (it is authoritative), so only the templates-decide-the-type case is guarded.
+
+The in-process message API gains `send_key_chord_to_agents`, the keystroke sibling of
+`send_message_to_agents`: it presses a single tmux key token (e.g. `M-q`) into a resolved set of
+agents' panes with the same host-grouped concurrent fan-out and the same per-agent `message.lock`
+serialization as a text send. The lock is what keeps a chord from landing between a concurrent
+message's paste and its Enter. Keystroke-driven agents (`SendKeysAgent` / the interactive TUI
+agents) implement it via the new `SupportsKeyChordMixin.press_key_chord`; agents whose input is an
+API rather than a tmux pane (pi, opencode) are refused per-agent with a clear error. The Minds
+workspace UI uses this to deliver claude's native queue-flush chord.

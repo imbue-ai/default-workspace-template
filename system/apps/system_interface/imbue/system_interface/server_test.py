@@ -714,13 +714,14 @@ def _agent_info(
     labels: dict[str, str] | None = None,
     harness: HarnessType = HarnessType.CLAUDE,
     agent_state_dir: Path = Path("/tmp/test"),
+    claude_config_dir: Path = Path("/tmp/.claude"),
 ) -> AgentInfo:
     return AgentInfo(
         id=agent_id,
         name=name,
         state="RUNNING",
         agent_state_dir=agent_state_dir,
-        claude_config_dir=Path("/tmp/.claude"),
+        claude_config_dir=claude_config_dir,
         labels=labels if labels is not None else {},
         harness=harness,
     )
@@ -886,14 +887,124 @@ def test_shoulder_tap_atomic_writes_control_line_for_codex_open_turn(client: Fla
 
 
 def test_shoulder_tap_atomic_rejects_non_atomic_harness(client: FlaskClient, tmp_path: Path) -> None:
-    """A non-atomic harness (claude) gets a 400 with a clear message and no write."""
-    agent_info = _agent_info(name="claude-agent", harness=HarnessType.CLAUDE, agent_state_dir=tmp_path)
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    """A harness whose catalog reports no native tap gets a 400 with a clear message and no write.
+
+    All shipping harnesses now support the atomic tap, so this exercises the defensive branch
+    for a hypothetical future non-atomic harness by forcing the catalog flag off.
+    """
+    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch(
+            "imbue.system_interface.server.get_catalog",
+            return_value=SimpleNamespace(native_atomic_shoulder_tap_possible=False),
+        ),
+    ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
     assert response.status_code == 400
     assert "does not support an atomic shoulder tap" in response.get_json()["detail"]
     assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
+
+
+class _FakeClaudeTapWatcher:
+    """A claude watcher stand-in for the shoulder-tap arm: scripts the mirror + session growth.
+
+    Records ``clear_queue`` calls (there must be none -- the native tap never clears the mirror).
+    """
+
+    def __init__(
+        self,
+        queue_snapshots: list[list[dict[str, str]]],
+        session_file: Path | None = None,
+        answer_on_refresh: bool = False,
+    ) -> None:
+        self._queue_snapshots = queue_snapshots
+        self._session_file = session_file
+        self._answer_on_refresh = answer_on_refresh
+        self._events_calls = 0
+        self._queue_calls = 0
+        self.clear_calls: list[bool] = []
+
+    def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        self._events_calls += 1
+        if self._answer_on_refresh and self._events_calls == 2 and self._session_file is not None:
+            with self._session_file.open("a") as f:
+                f.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": "ok"}}) + "\n")
+        return []
+
+    def get_queued_messages(self) -> list[dict[str, str]]:
+        index = min(self._queue_calls, len(self._queue_snapshots) - 1)
+        self._queue_calls += 1
+        return self._queue_snapshots[index]
+
+    def get_latest_main_session_file(self) -> Path | None:
+        return self._session_file
+
+    def clear_queue(self) -> None:
+        self.clear_calls.append(True)
+
+
+def _claude_tap_dirs(tmp_path: Path) -> tuple[Path, Path]:
+    """State dir with the active + process-started markers and a config dir with an active binding."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+    keybindings = config_dir / "keybindings.json"
+    keybindings.write_text(json.dumps({"bindings": [{"context": "Chat", "bindings": {"meta+q": "chat:cancel"}}]}))
+    marker = state_dir / "claude_process_started"
+    marker.write_text("")
+    os.utime(keybindings, (1000, 1000))
+    os.utime(marker, (2000, 2000))
+    (state_dir / "active").write_text("")
+    return state_dir, config_dir
+
+
+def test_shoulder_tap_atomic_claude_nothing_queued_is_a_noop(client: FlaskClient, tmp_path: Path) -> None:
+    """An empty claude mirror short-circuits to nothing_queued, never restarting the agent."""
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    agent_info = _agent_info(agent_state_dir=state_dir, claude_config_dir=config_dir)
+    watcher = _FakeClaudeTapWatcher([[]])
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "nothing_queued"
+    mock_run.assert_not_called()
+    assert watcher.clear_calls == []
+
+
+def test_shoulder_tap_atomic_claude_flushed_presses_chord_and_never_restarts(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """A claude tap flushes via the meta+q chord (routed through mngr), never restarting or clearing."""
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+    agent_id = "agent-00000000000000000000000000000042"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    watcher = _FakeClaudeTapWatcher([[{"queued_id": "q1", "content": "hi"}], []], session, answer_on_refresh=True)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "tapped"
+    # The chord is delivered via mngr's locked keypress -- never a raw restart, never a clear.
+    mock_run.assert_not_called()
+    assert messenger.pressed == [(agent_id, "M-q")]
+    assert watcher.clear_calls == []
 
 
 def test_shoulder_tap_atomic_writes_sentinel_for_pi(client: FlaskClient, tmp_path: Path) -> None:
