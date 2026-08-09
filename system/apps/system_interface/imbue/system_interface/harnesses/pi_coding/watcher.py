@@ -22,7 +22,11 @@ file mngr appends each outgoing message to before the extension injects it -- vi
 alongside the session file: each new inbox line is an enqueue, each drained
 ``user_message`` a leave. This needs no binary patch (unlike codex's queued-input
 sidecar) and no ledger reconstruction (unlike claude): the inbox already is the
-enqueue ledger.
+enqueue ledger. Both sides are scoped to the live process generation: the lifecycle
+extension archives-and-truncates ``pi_inbox`` at load (so the enqueue replay only
+ever sees current-generation lines), and leaves only pop when the ``user_message``
+timestamp is at or after the ``pi_process_started`` marker's mtime (so a dead
+generation's drains never pop current entries).
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from typing import Callable
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.pi_coding.queue_tracker import PiQueueTracker
@@ -56,6 +61,12 @@ _SESSIONS_RELATIVE = Path("plugin") / "pi_coding" / "sessions"
 # mngr's outgoing-message ledger (the enqueue source for the queue). Kept in sync with
 # _INBOX_FILE_NAME in plugin.py.
 _INBOX_RELATIVE = Path("pi_inbox")
+# Process-start boundary marker, touched by mngr_pi_coding's launch prelude on every
+# launch/resume. Drained ``user_message`` timestamps are compared against its mtime so a
+# dead generation's drains never pop current-generation queue entries -- the same
+# boundary the activity path uses (``is_transcript_tail_stale``). Kept in sync with
+# _PROCESS_STARTED_MARKER_NAME in plugin.py / ``PiActivityTracker.marker_filename``.
+_PROCESS_STARTED_MARKER_RELATIVE = Path("pi_process_started")
 
 # The live queue snapshot is only pushed to the frontend once it has been STABLE for this
 # long, so a message sent to an idle agent -- which lands in the inbox and then drains into
@@ -75,6 +86,22 @@ def read_marker_session_path(marker_path: Path) -> Path | None:
     return Path(raw) if raw else None
 
 
+def _is_current_generation_drain(event_timestamp: str | None, process_started_at: float | None) -> bool:
+    """Whether a drained ``user_message`` belongs to the current pi process generation.
+
+    ``process_started_at`` is the ``pi_process_started`` marker's mtime; a drain whose
+    timestamp parses to before it was performed by a dead generation and must not pop a
+    current-generation queue entry. Missing marker or an unparseable timestamp reads as
+    current (pop): over-popping errs toward an empty mirror, the contract-safe direction.
+    """
+    if process_started_at is None:
+        return True
+    event_at = parse_iso_timestamp_to_epoch(event_timestamp)
+    if event_at is None:
+        return True
+    return event_at >= process_started_at
+
+
 class PiSessionWatcher(AgentSessionWatcher):
     """Watches a pi agent's native session file (+ inbox) and emits parsed UI events."""
 
@@ -82,6 +109,7 @@ class PiSessionWatcher(AgentSessionWatcher):
     # __init__) can assign them while the type checker still resolves every access.
     _agent_id: str
     _marker_path: Path
+    _process_started_marker_path: Path
     _sessions_dir: Path
     _inbox_path: Path
     _on_events: Callable[[str, list[dict[str, Any]]], None]
@@ -119,6 +147,7 @@ class PiSessionWatcher(AgentSessionWatcher):
         self = cls.__new__(cls)
         self._agent_id = agent_info.id
         self._marker_path = agent_state_dir / _MARKER_RELATIVE
+        self._process_started_marker_path = agent_state_dir / _PROCESS_STARTED_MARKER_RELATIVE
         self._sessions_dir = agent_state_dir / _SESSIONS_RELATIVE
         self._inbox_path = agent_state_dir / _INBOX_RELATIVE
         self._on_events = on_events
@@ -257,6 +286,9 @@ class PiSessionWatcher(AgentSessionWatcher):
                 return
             self._byte_offset += len(raw)
 
+            # Stat the process-start boundary once per refresh; every user_message
+            # ingested below is compared against the same mtime.
+            process_started_at = self._read_process_started_at()
             byte_lines = (self._partial + raw).split(b"\n")
             self._partial = byte_lines.pop()
             for byte_line in byte_lines:
@@ -264,7 +296,7 @@ class PiSessionWatcher(AgentSessionWatcher):
                 if not stripped:
                     continue
                 for event in self._adapt_line(stripped):
-                    self._ingest_event(event)
+                    self._ingest_event(event, process_started_at)
 
     def _consume_inbox(self) -> None:
         """Read new lines from ``pi_inbox`` and enqueue each into the queue populator. Must
@@ -308,10 +340,19 @@ class PiSessionWatcher(AgentSessionWatcher):
             self._queue_tracker.enqueue(self._inbox_line_count, content, "")
             self._inbox_line_count += 1
 
-    def _ingest_event(self, event: dict[str, Any]) -> None:
+    def _read_process_started_at(self) -> float | None:
+        """The ``pi_process_started`` marker's mtime, or None when it is absent."""
+        try:
+            return self._process_started_marker_path.stat().st_mtime
+        except OSError:
+            return None
+
+    def _ingest_event(self, event: dict[str, Any], process_started_at: float | None) -> None:
         """Add one parsed event: append a new id, supersede a changed one in place, drop an
-        identical duplicate. A newly-appended ``user_message`` is a drained turn, so it pops
-        one queue head (a supersede/duplicate never does)."""
+        identical duplicate. A newly-appended ``user_message`` from the current process
+        generation (per ``process_started_at``) is a drained turn, so it pops one queue
+        head; a dead generation's drain leaves the queue untouched, and a
+        supersede/duplicate never pops."""
         event_id = event["event_id"]
         existing_idx = self._event_index.get(event_id)
         if existing_idx is not None:
@@ -322,7 +363,9 @@ class PiSessionWatcher(AgentSessionWatcher):
             return
         self._event_index[event_id] = len(self._events)
         self._events.append(event)
-        if event.get("type") == "user_message":
+        if event.get("type") == "user_message" and _is_current_generation_drain(
+            event.get("timestamp"), process_started_at
+        ):
             self._queue_tracker.leave()
 
     def _adapt_line(self, line: str) -> list[dict[str, Any]]:
