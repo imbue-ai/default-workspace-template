@@ -78,7 +78,7 @@ capture-then-retract -- no confirmation machinery):**
   No poll, no restart fallback, no `reset_activity_state`: the rollout's `turn_aborted`
   settles activity (`codex/watcher.py:337`) and the `queued_retracted` records also clear the
   mirror via the existing tracker path.
-- Optimistic handback is the series-wide race posture (`plan-pi-interrupt.md:57-61`): if the
+- Optimistic handback is the series-wide race posture (`plan-pi-interrupt.md:86-88`): if the
   turn ends between capture and the tap, codex ABA-ignores the line and the steers commit --
   worst case the same text is in the transcript AND back as an unsent, user-reviewed draft. A
   visible duplicate, never a silent double-commit; the identical window exists in today's
@@ -113,7 +113,7 @@ capture-then-retract -- no confirmation machinery):**
 - Version skew (new server, old binary): the old binary skips the unknown line, so the turn
   keeps running while Minds cleared its mirror and handed back the block, and the pure abort
   silently no-ops. Self-heals on the next process start; same accepted posture as pi
-  (`plan-pi-interrupt.md:104-106`). No restart fallback: that would wire two interrupt
+  (`plan-pi-interrupt.md:138-140`). No restart fallback: that would wire two interrupt
   mechanisms into one endpoint forever to cover a transient window the series accepts elsewhere.
 - A steer sent between capture and the tap is injected then retracted-and-discarded, absent
   from the handback. Same-width window as today's capture-vs-kill; inherited, not introduced.

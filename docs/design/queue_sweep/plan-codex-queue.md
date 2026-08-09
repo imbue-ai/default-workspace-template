@@ -129,5 +129,6 @@ repin in `system/scripts/setup_system.sh`.
 
 - Contracts B and C for codex (stop button and atomic shoulder tap already ship; any
   gaps are sibling plans in this series).
-- The pi and claude mirrors (sibling plans). Moves 2-3 are shared infrastructure; if a
-  sibling proposes the same override or trigger, the change is one and the same.
+- The pi and claude mirrors (sibling plans). Move 2 is shared infrastructure owned here;
+  move 3 is the same single edit plan-claude-queue owns and lands first (specified in
+  both plans for their own rationales, landed once).
