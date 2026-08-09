@@ -572,6 +572,189 @@ def test_inbox_watcher_swallows_rejected_inject(tmp_path: Path) -> None:
     assert injected == ["boom", "after"]
 
 
+# Drives the interrupt/retract sentinels. A fake ctx exposes isIdle/abort/ui: abort
+# APPENDS the parked steers into the editor (as pi does in interactive mode) and records
+# an ordered "abort" marker; sendUserMessage records an ordered "inject:<text>" marker.
+# session_start is fired so the extension captures the ctx (latestCtx). The scenario JSON
+# drives the sequence: an optional pre-load inbox seed, initial idle/draft/parked-steer
+# values, then a list of timed actions (append a JSON value / raw text, flip idle, sleep).
+# The ordered `log`, the abort count, and the final editor text are written out for assertions.
+_SENTINEL_DRIVER_MJS = """
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import mngrPiLifecycle from "./mngr_pi_lifecycle.ts";
+const STATE = process.env.MNGR_AGENT_STATE_DIR;
+const inbox = STATE + "/pi_inbox";
+const scenario = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const log = [];
+let editorText = scenario.draft || "";
+let idle = scenario.idle === true;
+let aborted = 0;
+const handlers = {};
+const ctx = {
+  isIdle: () => idle,
+  abort: () => { aborted++; log.push("abort"); editorText += (scenario.parkedSteers || ""); },
+  ui: { getEditorText: () => editorText, setEditorText: (t) => { editorText = t; } },
+};
+const pi = {
+  on: (evt, h) => { (handlers[evt] ||= []).push(h); },
+  sendUserMessage: (c) => { log.push("inject:" + c); return Promise.resolve(); },
+};
+if (scenario.preSeed !== undefined) writeFileSync(inbox, JSON.stringify(scenario.preSeed) + "\\n");
+mngrPiLifecycle(pi);
+for (const h of (handlers["session_start"] || [])) h({}, ctx);
+// Drive the timed action list with a recursive setTimeout (a non-unref'd timer keeps the
+// process alive so the extension's own inbox poll fires); the driver stays synchronous.
+const actions = scenario.actions || [];
+let i = 0;
+const step = () => {
+  if (i >= actions.length) {
+    writeFileSync(STATE + "/outcome.json", JSON.stringify({ log, aborted, editorText }));
+    return;
+  }
+  const action = actions[i++];
+  if (action.append !== undefined) appendFileSync(inbox, JSON.stringify(action.append) + "\\n");
+  if (action.appendRaw !== undefined) appendFileSync(inbox, action.appendRaw);
+  if (action.setIdle !== undefined) idle = action.setIdle;
+  setTimeout(step, action.sleep || 0);
+};
+step();
+"""
+
+_RETRACT_KEY = {"minds_interrupt_retract": True}
+_FLUSH_KEY = {"minds_interrupt": True}
+
+
+def _run_sentinel_scenario(tmp_path: Path, scenario: dict[str, Any]) -> Path:
+    """Run the sentinel driver over ``scenario`` under a fresh state dir; return the state dir."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(exist_ok=True)
+    if not _node_supports_typescript(node, work_dir):
+        pytest.skip("node does not support importing TypeScript modules")
+    (work_dir / _LIFECYCLE_EXTENSION_NAME).write_text(_load_resource(_LIFECYCLE_EXTENSION_NAME))
+    driver = work_dir / "sentinel_driver.mjs"
+    driver.write_text(_SENTINEL_DRIVER_MJS)
+    scenario_path = work_dir / "scenario.json"
+    scenario_path.write_text(json.dumps(scenario))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    result = subprocess.run(
+        [node, str(driver), str(scenario_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": os.environ.get("PATH", ""), "MNGR_AGENT_STATE_DIR": str(state_dir)},
+    )
+    assert result.returncode == 0, f"sentinel driver failed:\n{result.stdout}\n{result.stderr}"
+    return state_dir
+
+
+def test_retract_during_a_turn_aborts_discards_and_restores_draft(tmp_path: Path) -> None:
+    """A retract sentinel while a turn runs interrupts it, restores the pre-existing draft, and
+    resubmits nothing -- the parked steers are discarded (Minds hands them back to the composer)."""
+    state = _run_sentinel_scenario(
+        tmp_path,
+        {
+            "idle": False,
+            "draft": "my draft",
+            "parkedSteers": "PARKED STEER",
+            "actions": [{"append": _RETRACT_KEY}, {"sleep": 600}],
+        },
+    )
+    outcome = json.loads((state / "outcome.json").read_text())
+    assert outcome["aborted"] == 1
+    # Nothing was resubmitted: the only recorded op is the abort.
+    assert outcome["log"] == ["abort"]
+    # The draft is restored after the abort drained the steers into (and out of) the editor.
+    assert outcome["editorText"] == "my draft"
+
+
+def test_retract_while_idle_no_ops_and_later_strings_still_inject(tmp_path: Path) -> None:
+    """A retract with no live turn is a no-op (no abort), and the drain keeps running so a later
+    message still injects."""
+    state = _run_sentinel_scenario(
+        tmp_path,
+        {
+            "idle": True,
+            "actions": [
+                {"append": _RETRACT_KEY},
+                {"sleep": 400},
+                {"append": "later message"},
+                {"sleep": 400},
+            ],
+        },
+    )
+    outcome = json.loads((state / "outcome.json").read_text())
+    assert outcome["aborted"] == 0
+    assert outcome["log"] == ["inject:later message"]
+
+
+def test_pre_existing_retract_line_is_never_processed(tmp_path: Path) -> None:
+    """A retract sentinel already on disk at load is archived with the prior generation and never
+    interrupts the fresh turn (the generation-reset truncates the inbox at load)."""
+    state = _run_sentinel_scenario(
+        tmp_path,
+        {
+            "idle": False,
+            "draft": "d",
+            "parkedSteers": "PARKED",
+            "preSeed": _RETRACT_KEY,
+            "actions": [{"sleep": 600}],
+        },
+    )
+    outcome = json.loads((state / "outcome.json").read_text())
+    assert outcome["aborted"] == 0
+    # The pre-existing sentinel was archived verbatim, not processed (driver writes it with
+    # JS's compact JSON, so compare against the same separators).
+    archived = (state / "pi_inbox_history").read_text()
+    assert json.loads(archived) == _RETRACT_KEY
+    assert archived == json.dumps(_RETRACT_KEY, separators=(",", ":")) + "\n"
+
+
+def test_string_then_sentinel_in_one_write_defers_the_sentinel(tmp_path: Path) -> None:
+    """A string line and a retract sentinel appended together are handled across two ticks: the
+    steer injects first, and only on a later tick (once it has parked) does the abort fire."""
+    both = json.dumps("steer msg") + "\n" + json.dumps(_RETRACT_KEY) + "\n"
+    state = _run_sentinel_scenario(
+        tmp_path,
+        {
+            "idle": False,
+            "parkedSteers": "PARKED",
+            "actions": [{"appendRaw": both}, {"sleep": 800}],
+        },
+    )
+    outcome = json.loads((state / "outcome.json").read_text())
+    # The steer was injected before the abort ran, and the sentinel was still processed.
+    assert outcome["log"] == ["inject:steer msg", "abort"]
+    assert outcome["aborted"] == 1
+
+
+def test_flush_sentinel_still_resubmits_the_parked_steers(tmp_path: Path) -> None:
+    """The flush sibling is unchanged by the shared-core refactor: it interrupts, then resubmits
+    the parked steers as one merged turn once the aborted turn settles."""
+    state = _run_sentinel_scenario(
+        tmp_path,
+        {
+            "idle": False,
+            "draft": "d",
+            "parkedSteers": "PARKED",
+            "actions": [
+                {"append": _FLUSH_KEY},
+                {"sleep": 400},
+                {"setIdle": True},
+                {"sleep": 400},
+            ],
+        },
+    )
+    outcome = json.loads((state / "outcome.json").read_text())
+    assert outcome["aborted"] == 1
+    # Abort first, then the captured steers resubmitted once idle; the draft is restored.
+    assert outcome["log"] == ["abort", "inject:PARKED"]
+    assert outcome["editorText"] == "d"
+
+
 _USAGE_EVENTS = Path("events") / "pi-coding" / "usage" / "events.jsonl"
 
 

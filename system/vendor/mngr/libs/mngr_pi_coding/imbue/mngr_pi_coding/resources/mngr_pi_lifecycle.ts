@@ -190,13 +190,20 @@ const INBOX_NAME = "pi_inbox";
 // Minds queue mirror replays `pi_inbox` from zero and relies on this scoping.
 const INBOX_HISTORY_NAME = "pi_inbox_history";
 const INBOX_POLL_MS = 200;
-// Atomic shoulder-tap control record. Minds appends one JSON OBJECT line
-// `{"minds_interrupt": true}` to pi_inbox (a normal message is a JSON *string*, so
-// the two never collide). Because it rides the same ordered append-only inbox, every
-// message queued before it has already been injected by the time we see it. On it we
-// interrupt the running turn and resubmit its parked steers as one merged turn. Kept
-// in sync with the Minds pi endpoint. */
+// Atomic shoulder-tap control records. Minds appends one JSON OBJECT line to pi_inbox
+// (a normal message is a JSON *string*, so the two never collide). Because it rides the
+// same ordered append-only inbox, every message queued before it has already been injected
+// by the time we see it. There are two sentinels, one distinct key each -- a separate key,
+// not a field on one, so an old extension treats the unknown key as inert rather than
+// mistaking a retract for a flush and double-sending. Kept in sync with the Minds pi
+// endpoint (harnesses/pi_coding/inbox.py).
+//   * Flush (shoulder tap): interrupt the running turn and RESUBMIT its parked steers as
+//     one merged turn.
 const INTERRUPT_KEY = "minds_interrupt";
+//   * Retract (stop button): interrupt the running turn and DISCARD its parked steers --
+//     Minds hands the queued messages back to the user's composer, so resubmitting them
+//     here would double-deliver.
+const RETRACT_KEY = "minds_interrupt_retract";
 // Single-slot switch mailbox: the chat model bar's resolver atomically
 // OVERWRITES this file with one JSON intent ({model_id: "provider/model",
 // thinking_level: "high"|null}) -- a newer pick replaces an unconsumed older
@@ -462,27 +469,27 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     }
   };
 
-  // The atomic half of the shoulder-tap. If a turn is running, interrupt it and capture
-  // its parked steers for resubmission. Runs in ONE synchronous tick -- no await between
-  // the isIdle check and the abort -- so nothing (agent_end, the agent loop) can
-  // interleave; this is the anti-race guarantee. Returns true iff it interrupted.
+  // The shared abort-and-capture core of both sentinels. If a turn is running, interrupt it
+  // and return its parked steers; returns null when idle (nothing to interrupt). Runs in ONE
+  // synchronous tick -- no await between the isIdle check and the abort -- so nothing
+  // (agent_end, the agent loop) can interleave; this is the anti-race guarantee.
   //
-  // pi's abort (in interactive mode) drains the parked steers INTO the composer and
-  // stops the stream, both synchronously. Since it APPENDS onto whatever is typed, we
-  // clear any draft first and restore it after -- so the resubmit is sourced purely from
-  // pi's own queue (authoritative; no Minds-view lag) and no draft leaks into the tap.
-  const beginShoulderTap = (): boolean => {
+  // pi's abort (in interactive mode) drains the parked steers INTO the composer and stops the
+  // stream, both synchronously. Since it APPENDS onto whatever is typed, we clear any draft
+  // first and restore it after -- so the captured steers are sourced purely from pi's own
+  // queue (authoritative; no Minds-view lag) and no draft leaks in. The two sentinel branches
+  // differ ONLY in the returned steers' fate: flush resubmits them, retract discards them.
+  const abortAndCaptureSteers = (): string | null => {
     const ctx = latestCtx;
     if (!ctx || typeof ctx.isIdle !== "function" || ctx.isIdle() || typeof ctx.abort !== "function") {
-      return false; // idle / no live turn -> nothing to interrupt
+      return null; // idle / no live turn -> nothing to interrupt
     }
     const draft = ctx.ui?.getEditorText?.() ?? "";
     ctx.ui?.setEditorText?.("");
     ctx.abort();
     const steers = ctx.ui?.getEditorText?.() ?? "";
     ctx.ui?.setEditorText?.(draft);
-    pendingResubmit = steers;
-    return true;
+    return steers;
   };
 
   const drainInbox = (): void => {
@@ -505,10 +512,15 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       }
       const lines = readFileSync(inboxPath, "utf-8").split("\n");
       const total = lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
+      // Whether this tick has already injected a string line. injectSteer initiates an ASYNC
+      // send, so a sentinel encountered after one must be DEFERRED to the next tick (below) --
+      // otherwise the abort could fire before the just-injected steer has parked, and the
+      // steer would escape the flush/retract.
+      let injectedStringThisTick = false;
       while (processedInbox < total) {
         const raw = lines[processedInbox];
-        processedInbox++; // consume this line (advance before handling, like before)
         if (raw === "") {
+          processedInbox++;
           continue;
         }
         let content: unknown;
@@ -516,21 +528,42 @@ export default function mngrPiLifecycle(pi: PiApi): void {
           content = JSON.parse(raw);
         } catch {
           // Skip a malformed line rather than inject garbage or stall.
+          processedInbox++;
           continue;
         }
         if (typeof content === "string") {
+          processedInbox++;
           injectSteer(content);
-        } else if (
-          content !== null &&
-          typeof content === "object" &&
-          (content as Record<string, unknown>)[INTERRUPT_KEY] === true
-        ) {
-          // Every prior message rode the same ordered inbox, so it is already injected.
-          if (beginShoulderTap()) {
-            return; // interrupted -> pause the drain until the resubmit lands
-          }
-          // else: agent was idle, nothing to interrupt -> keep draining.
+          injectedStringThisTick = true;
+          continue;
         }
+        const isFlush = content !== null && typeof content === "object" && (content as Record<string, unknown>)[INTERRUPT_KEY] === true;
+        const isRetract = content !== null && typeof content === "object" && (content as Record<string, unknown>)[RETRACT_KEY] === true;
+        if (isFlush || isRetract) {
+          // Tick-deferral: never consume a sentinel in a tick that already injected a string
+          // line. Return WITHOUT advancing processedInbox so this sentinel is re-read next
+          // tick, by which point the injected steer has parked and is thus flushable/retractable.
+          if (injectedStringThisTick) {
+            return;
+          }
+          processedInbox++;
+          // Every prior message rode the same ordered inbox, so it is already injected.
+          const steers = abortAndCaptureSteers();
+          if (steers === null) {
+            // Agent was idle, nothing to interrupt -> keep draining.
+            continue;
+          }
+          if (isFlush) {
+            // Flush: resubmit the parked steers as one merged turn (pause the drain until idle).
+            pendingResubmit = steers;
+          }
+          // Retract: discard the steers -- Minds hands them back to the user's composer, so
+          // resubmitting them here would double-deliver. pendingResubmit stays null, so the
+          // drain simply resumes on the next tick.
+          return; // interrupted -> end this tick
+        }
+        // An unknown object line (a foreign/future sentinel) is inert under skew: skip it.
+        processedInbox++;
       }
     });
   };

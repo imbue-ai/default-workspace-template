@@ -40,3 +40,16 @@ from zero can no longer resurrect dead generations' messages as phantom queued e
 Safe against races: mngr appends to the inbox only after the readiness sentinel, which
 `session_start` writes after load. Behavior toward pi is unchanged -- pre-existing lines
 were already never re-injected (the offset seed skipped them).
+
+The lifecycle extension now handles a second inbox sentinel for the stop button:
+`{"minds_interrupt_retract": true}` is the retract sibling of the shipped
+`{"minds_interrupt": true}` flush. On it the extension interrupts the running turn using the
+same shared abort-and-capture core (interrupt only when a turn runs, clear and restore the
+user's draft around pi's own steer drain) but DISCARDS the captured steers instead of
+resubmitting them -- Minds hands the queued messages back to the user's composer, so
+resubmitting here would double-deliver. A distinct key (not a field on the flush sentinel)
+means an older extension treats it as inert rather than mistaking a retract for a flush. Both
+sentinels are now tick-deferred: a sentinel is never consumed in a drain tick that already
+injected a string line (the async send must park the steer first), so the steer is always
+flushable/retractable before the abort. Delivery to an idle agent is a no-op, and a
+retract discards nothing then keeps draining so later messages still inject.

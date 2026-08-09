@@ -37,12 +37,17 @@ const mocks = vi.hoisted(() => {
     harness: "claude",
     activity_state: undefined,
   };
-  return { sendMessage: vi.fn(async () => {}), listeners, agent };
+  return {
+    sendMessage: vi.fn(async () => {}),
+    drainToComposer: vi.fn(async () => ({ block: "" })),
+    listeners,
+    agent,
+  };
 });
 
 vi.mock("../models/Response", () => ({
   sendMessage: mocks.sendMessage,
-  drainToComposer: vi.fn(async () => ({ block: "" })),
+  drainToComposer: mocks.drainToComposer,
 }));
 vi.mock("../models/ComposerAttachments", () => ({
   clearComposerAttachments: vi.fn(),
@@ -229,5 +234,57 @@ describe("MessageInput placeholder", () => {
     mocks.agent.activity_state = "THINKING";
     const textarea = findByTag(MessageInput().view!({ attrs: { agentId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+});
+
+describe("MessageInput stop-to-composer handback", () => {
+  beforeEach(() => {
+    mocks.drainToComposer.mockReset();
+    mocks.drainToComposer.mockResolvedValue({ block: "" });
+    mocks.agent.harness = "claude";
+    // Working -> the stop button is rendered.
+    mocks.agent.activity_state = "THINKING";
+    localStorage.clear();
+  });
+
+  function typeDraft(component: m.Component<{ agentId: string | null }>, agentId: string, text: string): void {
+    const render = () => component.view!({ attrs: { agentId } } as never);
+    const textarea = findByTag(render(), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)?.({ target: { value: text, style: {}, scrollHeight: 10 } });
+  }
+
+  async function clickStop(
+    component: m.Component<{ agentId: string | null }>,
+    agentId: string,
+  ): Promise<AnyVnode | undefined> {
+    const render = () => component.view!({ attrs: { agentId } } as never);
+    const stopButton = findByClass(render(), "message-input-stop-button");
+    const onclick = stopButton?.attrs?.onclick as (() => Promise<void>) | undefined;
+    expect(onclick, "stop button should be present while the agent works").toBeTruthy();
+    await onclick!();
+    return findByTag(render(), "textarea");
+  }
+
+  it("prepends the handed-back block above a non-empty draft", async () => {
+    mocks.drainToComposer.mockResolvedValueOnce({ block: "queued one\nqueued two" });
+    const component = MessageInput();
+    typeDraft(component, "agent-1", "my draft");
+    const textarea = await clickStop(component, "agent-1");
+    expect(textarea?.attrs?.value).toBe("queued one\nqueued two\n\nmy draft");
+  });
+
+  it("drops the block straight in when the composer is empty", async () => {
+    mocks.drainToComposer.mockResolvedValueOnce({ block: "queued one" });
+    const component = MessageInput();
+    const textarea = await clickStop(component, "agent-1");
+    expect(textarea?.attrs?.value).toBe("queued one");
+  });
+
+  it("leaves a non-empty draft untouched on an empty handback", async () => {
+    mocks.drainToComposer.mockResolvedValueOnce({ block: "" });
+    const component = MessageInput();
+    typeDraft(component, "agent-1", "keep me");
+    const textarea = await clickStop(component, "agent-1");
+    expect(textarea?.attrs?.value).toBe("keep me");
   });
 });

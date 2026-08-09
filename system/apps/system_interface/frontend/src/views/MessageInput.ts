@@ -244,18 +244,19 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         isInterruptInFlight = true;
         m.redraw();
         try {
-          // Interrupt (restart) the agent and pull any queued messages back into
-          // the composer, unsent, for the user to edit and send. Empty block =
-          // nothing was queued (a clean no-op).
+          // Interrupt the agent and pull any queued messages back into the composer,
+          // unsent, for the user to edit and send. Empty block = nothing was queued
+          // (a clean no-op).
           const { block } = await drainToComposer(agentId);
           if (block) {
-            // Drop the block into the composer, guarded by the same composer-empty
-            // check the send-failure restore uses so it never clobbers a draft.
-            const isComposerEmpty = messageText.trim().length === 0 && getComposerAttachments(agentId).length === 0;
-            if (isComposerEmpty) {
-              messageText = block;
-              localStorage.setItem(messageTextKey(agentId), block);
-            }
+            // Merge instead of drop: prepend the handed-back block above any existing draft
+            // (block, blank line, draft) rather than dropping it when the composer is
+            // non-empty. Under pi's native retract the messages survive nowhere else, so
+            // dropping them here would lose them outright.
+            const draft = messageText;
+            const merged = draft.trim().length === 0 ? block : `${block}\n\n${draft}`;
+            messageText = merged;
+            localStorage.setItem(messageTextKey(agentId), merged);
           }
         } catch (err) {
           const detail = describeRequestError(err);

@@ -33,8 +33,11 @@ from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PA
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.interrupt import InterruptToComposer
+from imbue.system_interface.harnesses.interrupt import RestartDrainInterruptToComposer
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.system_interface.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
+from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import get_catalog as get_pi_catalog
 from imbue.system_interface.harnesses.pi_coding.watcher import PiSessionWatcher
@@ -71,6 +74,10 @@ class HarnessSpec(FrozenModel):
     # own declaration is a bug; an empty set is the honest statement that a harness's
     # transcript carries no markers, not an omission.
     special_kinds: frozenset[SpecialEventKind]
+    # The stop-button (interrupt-to-composer) implementation. Defaults to the base restart-drain
+    # (SIGKILL-relaunch) that claude and any future harness use; a harness that can interrupt its
+    # live turn natively registers an override (pi does). Backend-only: no wire-visible flag.
+    interrupt_to_composer_class: type[InterruptToComposer] = RestartDrainInterruptToComposer
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -111,6 +118,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         catalog_factory=get_pi_catalog,
         model_state_relative_path=PI_STATE_RELATIVE_PATH,
         special_kinds=frozenset(),
+        # pi interrupts natively via the lifecycle extension (retract sentinel on pi_inbox), so
+        # it overrides the base restart-drain rather than SIGKILL-relaunching.
+        interrupt_to_composer_class=PiInterruptToComposer,
     ),
 }
 
@@ -133,6 +143,11 @@ def build_tracker(harness: HarnessType) -> HarnessActivityTracker:
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
     """Build the model resolver for ``agent_info``'s harness."""
     return get_harness_spec(agent_info.harness).resolver_class.build(agent_info)
+
+
+def build_interrupt_to_composer(agent_info: AgentInfo) -> InterruptToComposer:
+    """Build the stop-button (interrupt-to-composer) implementation for ``agent_info``'s harness."""
+    return get_harness_spec(agent_info.harness).interrupt_to_composer_class.build(agent_info)
 
 
 def get_model_state_path(harness: HarnessType, agent_state_dir: Path) -> Path:

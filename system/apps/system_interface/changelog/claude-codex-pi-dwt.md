@@ -48,3 +48,29 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
   the mngr-side pi extension change that archives `pi_inbox` to
   `pi_inbox_history` and truncates it at load, which generation-scopes the
   enqueue side by construction.
+
+- The stop button now interrupts pi natively instead of SIGKILL-restarting it.
+  Each harness registers its own stop-button (interrupt-to-composer) behavior:
+  claude and codex keep the base restart-drain, while pi appends a
+  `{"minds_interrupt_retract": true}` sentinel to `pi_inbox` -- the retract
+  sibling of the shoulder-tap flush -- so the running turn is interrupted and its
+  queued messages handed back to the composer with no process restart, no
+  session-resume cost, and no abandoned-transcript patch-up. It is backend-only:
+  the frontend keeps one stop button and one endpoint.
+
+- The stop button now works even when nothing is queued: the empty-queue no-op
+  moved off the shared restart-drain and onto the shoulder-tap flush only (a
+  flush with nothing to resend is still a no-op), so a stop mid-turn with an empty
+  queue now interrupts the turn (claude/codex restart; pi writes the retract
+  sentinel) instead of silently doing nothing.
+
+- The pi queue mirror now treats a flush or retract sentinel line in `pi_inbox`
+  as a positional clear of the tracked queue, so the visible queue empties
+  consistently across a backend restart (every message before the sentinel was
+  committed or discarded in the live session) -- repairing both the flush
+  phantom-residue case and any risk of a retract resurrecting discarded messages.
+
+- The composer no longer drops the handed-back messages when a draft is already
+  typed: a stop prepends the reclaimed block above the existing draft (block,
+  blank line, draft) rather than discarding it, closing the only path where
+  retracted messages could be lost outright.
