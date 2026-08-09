@@ -1,102 +1,122 @@
 # Plan: agent liveness overlay (the "if you can interact, it's live" contract)
 
-Status: plan only, not approved for build yet.
+Status: explored and specified; pending adversarial review + user go.
 
 ## The contract
 
 If the user can touch an interactive control (composer, model bar picker,
-effort/fast, interrupt, shoulder-tap), the agent is RUNNING and ready to
-receive. Reading the transcript is always allowed. Liveness is made visible
-instead of implicit.
+effort/fast, interrupt/stop, shoulder-tap, under-bar actions), the agent is
+alive and ready to receive. Reading the transcript is always allowed. Liveness
+is visible, never implicit.
 
-Motivating cases: a container restart leaves agents stopped and not
-auto-resumed; a manual `mngr stop` for testing; any future path that stops an
-agent. Today the composer on a stopped agent silently auto-starts on send
-(works, but indistinguishable from a hang), and a model switch on a stopped pi
-agent is silently dropped (`pi_control.jsonl` baseline swallows pre-start
-intents).
+Motivating cases: container restart leaves agents stopped and un-resumed;
+manual `mngr stop`; process death mid-session. Today the composer on a stopped
+agent silently auto-starts on send (works, but reads as a hang), and a model
+switch on a stopped pi agent is silently dropped.
 
-## Overlay states (exactly three, derived, no timers driving UI)
+## Ground truth from exploration (verified file:line)
 
-The overlay covers the ENTIRE bottom interaction region of the chat panel:
-composer, attach/send controls, and the under-bar row (model bar, powered-by
-credit, "Open agent terminal", "Agent auth"). The transcript above stays fully
-readable and scrollable.
+- The frontend ALREADY receives lifecycle state: `AgentState.state`
+  (`frontend/src/models/AgentManager.ts:18`), pushed on every `agents_updated`.
+  Fed by `mngr observe` (`agent_manager.py:978-1046`): event-driven upserts
+  carrying `AgentDetails.state.value`, including RUNNING -> STOPPED on process
+  death. Nothing in the frontend reads it today -- this feature is its first
+  consumer.
+- Full state alphabet (`mngr/primitives.py:282-297`): STOPPED, RUNNING,
+  WAITING, REPLACED, RUNNING_UNKNOWN_AGENT_TYPE, DONE, UNKNOWN.
+- mngr's own liveness predicate (`agents/base_agent.py:204-212`): alive =
+  {RUNNING, WAITING, REPLACED, RUNNING_UNKNOWN_AGENT_TYPE}. The overlay MUST
+  mirror this exact predicate (do not invent a second liveness definition).
+  Buckets:
+  - alive set above -> no overlay
+  - STOPPED, DONE -> stopped overlay ("Agent stopped -- click to resume")
+  - UNKNOWN (provider unreachable, sticky) -> stopped overlay with generic
+    copy ("Agent unavailable -- click to retry"); a start attempt will fail
+    into the retry state, which is the honest surface for it.
+- Start path exists end-to-end: `POST /api/agents/:id/start`
+  (`server.py:1652-1677`) -> `agent_discovery.start_agent` -> mngr's
+  `ensure_agent_started` (same in-process path message delivery uses; no-op
+  when already running). Synchronous: 200 means started (or already running),
+  500 carries the error detail.
+- The overlay target is exactly the `footer.app-footer` block
+  (`ChatPanel.ts:868-903`): ActivityIndicator + MessageInput +
+  `composer-under-bar` (ModelBar, "Open agent terminal", "Agent auth",
+  PoweredByCredit). One region, one overlay.
+- Proto-agents already render NO footer (`isProtoAgent` guard,
+  `ChatPanel.ts:865`) -- out of scope for free.
+- Saved-layout terminal tabs start agents themselves
+  (`AgentTerminalPanel.ts:29` `ensureAgentStarted`) -- unaffected by gating
+  the chat footer.
+- Model chip on a stopped agent keeps rendering last-known state (the
+  `minds_model_state.json` file persists) -- desired; the overlay makes it
+  read-only rather than hidden.
+
+## Overlay state machine (pure derivation, no UI-driving timers)
 
 ```
-state = f(pushed_lifecycle, local_pending_start)
+alive(state)        = state in {RUNNING, WAITING, REPLACED, RUNNING_UNKNOWN_AGENT_TYPE}
 
-RUNNING and no pending start   -> no overlay; everything interactive
-STOPPED and no pending start   -> "Agent stopped -- click to resume" (whole
-                                  region is one click target)
-pending start (any pushed
-state until RUNNING arrives)   -> "Starting agent..." loading overlay
-start failed                   -> "Couldn't start -- click to retry" + detail
+no pending start:
+  alive             -> no overlay
+  STOPPED | DONE    -> overlay: "Agent stopped -- click to resume"
+  UNKNOWN           -> overlay: "Agent unavailable -- click to retry"
+pending start:      -> overlay: "Starting agent..." (spinner; not clickable)
+start POST failed   -> overlay: "Couldn't start -- click to retry" + detail
 ```
 
-- `pushed_lifecycle` is `AgentState.state` -- ALREADY on the frontend store,
-  pushed on every `agents_updated` (fed by `mngr observe`, real probed
-  lifecycle incl. RUNNING -> STOPPED on process death). Nothing reads it today;
-  this feature is its first consumer.
-- `local_pending_start`: set when the overlay click fires
-  `POST /api/agents/:id/start` (endpoint exists; same in-process mngr start
-  path as message delivery; no-op when already running). Cleared when a push
-  reports RUNNING, or on POST error (-> retry state), or by a failsafe timeout
-  (~90s -> retry state; mngr starts can legitimately take a while on a cold
-  container).
-- If something ELSE starts the agent (terminal open, internal resend, another
-  client), the RUNNING push clears the overlay with no local involvement.
-  Symmetric: an external `mngr stop` flips the composer to the stopped overlay
-  on the next push.
+- `pending start` is a frontend-local `Set<agentId>`: set on overlay click
+  (fires `POST /api/agents/:id/start`), cleared by EITHER an alive push OR the
+  POST resolving (error -> retry state). The push is authoritative for
+  clearing to "no overlay"; the POST 200 alone keeps the spinner until the
+  push lands (observe latency is small; a ~90s failsafe flips to retry so a
+  wedged start cannot spin forever -- the only timer, and it only affects the
+  failure surface).
+- External transitions need no local involvement: another surface starting the
+  agent (terminal open, internal resend, another client) clears the overlay
+  via the push; an external `mngr stop` raises it the same way.
+- The stopped overlay is ONE click target covering the whole footer, keyboard
+  reachable (a real button), aria-labelled.
 
 ## Scope
 
 Frontend (the bulk):
 
-- `ChatPanel.ts`: derive the overlay state, render the overlay over the
-  interaction region, wire the click -> `startAgent(agentId)` (new tiny
-  `Response.ts` helper hitting the existing endpoint), hold
-  `pendingStartAgentIds` locally.
-- No new wire fields, no new WebSocket events, no backend polling.
+- `ChatPanel.ts`: derive the overlay state, wrap/cover the footer block,
+  render the three overlay variants, `pendingStartAgentIds` module state, and
+  a small `startAgent(agentId)` helper in `models/Response.ts` hitting the
+  existing endpoint.
+- ActivityIndicator inside the covered region: when the overlay is up the
+  indicator is stale by definition (backend already re-gates activity on
+  lifecycle change, `agent_manager.py:1058-1066`) -- covered, not special-cased.
 
-Backend (small, contract belt-and-braces -- the UI can no longer reach these,
-but the API can):
+Backend (belt-and-braces; the UI can no longer reach these, the API still can):
 
 - `POST /api/agents/:id/model` and the shoulder-tap/flush endpoint return 409
-  when the agent's lifecycle state is not RUNNING (message send keeps its
-  auto-start behavior -- internal senders like the welcome resend rely on it).
+  when the agent is not in the alive set. Message send keeps its auto-start
+  (internal senders -- welcome resend, cross-agent messaging -- rely on it).
+  Reuse the same alive predicate server-side; do not fork it.
 
-Out of scope (deliberately, "bit by bit"):
+Out of scope (bit by bit):
 
-- The interrupt-button redesign (native in-TUI keypress instead of process
-  restart) -- separate proposal, pending approval.
-- Pi control-file consume-by-rename (the crash-window between append and
-  apply). The overlay structurally prevents the UI-originated stopped-switch;
-  the residual window is a live-agent crash mid-switch, rare. Follow-up.
-- Auto-start-on-tab-visit. Rejected: browsing history should not boot
-  processes.
-- Proto-agents (mid-creation) -- they already have their own creation UI flow.
+- Interrupt-button redesign (native in-TUI keypress) -- separate proposal.
+- Pi control-file consume-by-rename (residual crash-window) -- follow-up;
+  the overlay structurally prevents the UI-originated stopped-switch.
+- Auto-start on tab visit -- rejected: browsing must not boot processes.
+- Any change to internal auto-start semantics.
 
-## Open items to verify at build time
+## Verification (build time)
 
-1. Enumerate the exact `state` strings mngr observe pushes (RUNNING/STOPPED
-   confirmed; check for CREATING/UNKNOWN/others) and decide the overlay bucket
-   for each non-RUNNING value (default: treat as stopped, label generically
-   "Agent not running -- click to resume").
-2. Whether `POST /start` blocks long enough that its 200 can race the RUNNING
-   push (harmless either way -- both clear pending -- but decide which one is
-   authoritative; recommendation: the push).
-3. The under-bar links ("Open agent terminal") currently trigger their own
-   start -- under the overlay they are unreachable when stopped; confirm the
-   terminal-tab restore path (saved layouts) still starts agents itself.
-4. Stopped-agent model bar: chip renders last-known state from
-   `minds_model_state.json` (already the case); confirm the picker is inert
-   under the overlay rather than hidden (keep the chip visible, read-only).
+- Unit: overlay derivation table (each lifecycle value x pending flag).
+- Manual, against a real stopped agent (`mngr stop` a scratch chat agent):
+  stopped overlay renders, transcript scrolls, chip shows last-known model,
+  click -> spinner -> footer unlocks on the RUNNING push; `mngr stop` again
+  while viewing -> overlay returns; kill the start mid-flight -> retry state.
+- The 409 guards: switch a stopped agent via curl -> 409; message send on a
+  stopped agent still auto-starts.
 
 ## Build mechanics (when approved)
 
-system_interface change -> isolated worker via update-system-interface flow,
-self-verified preview against a really-stopped agent (`mngr stop` a scratch
-chat agent, view its tab, click resume, watch the three states), then merge +
-reveal (frontend-only reveal: bundle rebuild + tab reload broadcast; backend
-409 guards restart the service). Estimated: small -- one worker pass.
+system_interface change -> isolated worker (update-system-interface flow),
+self-verified preview against a genuinely stopped agent, merge + reveal
+(frontend bundle rebuild + tab reload; backend guard change restarts the
+service). One worker pass, small.
