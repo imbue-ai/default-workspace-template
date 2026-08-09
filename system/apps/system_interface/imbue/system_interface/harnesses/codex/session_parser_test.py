@@ -184,9 +184,23 @@ def test_turn_markers_key_on_turn_id() -> None:
     assert parse_lines(started, 999, {})[0]["event_id"] == "codex-turn-tid1-task_started"
 
 
+def test_turn_markers_expose_turn_id_field() -> None:
+    """The turn_id rides in the event_id, but is also surfaced as an explicit field on the
+    three turn-lifecycle markers so the atomic shoulder-tap can ABA-gate on the live turn."""
+    started = {"timestamp": "t", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "tid1"}}
+    complete = {"timestamp": "t", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "tid1"}}
+    aborted = {"timestamp": "t", "type": "event_msg", "payload": {"type": "turn_aborted", "turn_id": "tid1"}}
+    assert parse_lines(started, 5, {})[0]["turn_id"] == "tid1"
+    assert parse_lines(complete, 9, {})[0]["turn_id"] == "tid1"
+    assert parse_lines(aborted, 2, {})[0]["turn_id"] == "tid1"
+
+
 def test_marker_without_turn_id_falls_back_to_line_index() -> None:
     started = {"timestamp": "t", "type": "event_msg", "payload": {"type": "task_started"}}
-    assert parse_lines(started, 7, {})[0]["event_id"] == "codex-7-task_started"
+    event = parse_lines(started, 7, {})[0]
+    assert event["event_id"] == "codex-7-task_started"
+    # No codex turn_id on the raw marker -> the explicit field is None (nothing to gate on).
+    assert event["turn_id"] is None
 
 
 def test_failed_script_output_sets_is_error() -> None:

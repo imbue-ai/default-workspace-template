@@ -118,6 +118,17 @@ class DrainToComposerResponse(FrozenModel):
     block: str = Field(description="The queued messages as one concatenated block, or '' if the queue was empty")
 
 
+class ShoulderTapAtomicResponse(FrozenModel):
+    """Response from POST /api/agents/{id}/shoulder-tap-atomic.
+
+    ``status`` is ``"tapped"`` when a control line targeting the live open turn was written
+    (the patched codex will merge the parked messages into that turn), or ``"no_open_turn"``
+    when no turn was running, so nothing was interrupted and no control line was written.
+    """
+
+    status: str = Field(description="'tapped' when the live turn was targeted, 'no_open_turn' when nothing was running")
+
+
 class AgentRestartError(RuntimeError):
     """Raised when the ``mngr start --restart`` a queue action depends on fails."""
 

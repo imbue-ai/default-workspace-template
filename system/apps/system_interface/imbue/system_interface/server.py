@@ -62,9 +62,11 @@ from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import SwitchMode
+from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
 from imbue.system_interface.harnesses.registry import HARNESS_SPECS
 from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
@@ -85,6 +87,7 @@ from imbue.system_interface.models import PoweredByResponse
 from imbue.system_interface.models import RandomNameResponse
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
+from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import SetModelChoiceRequest
 from imbue.system_interface.models import SetWorkspaceFastModeRequest
 from imbue.system_interface.models import StartAgentResponse
@@ -797,6 +800,62 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
             return _json_response(error.model_dump(), status_code=500)
 
     return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+# The control file the patched codex binary watches under CODEX_HOME. Each line is a single
+# JSON object ``{"target_turn_id": "<id>"}``; codex, on its main loop, flushes the parked steer
+# messages into one merged turn only if the live turn id still equals ``target_turn_id`` (an
+# ABA gate), so the flush lands in the exact turn the user tapped and no other.
+_SHOULDER_TAP_ATOMIC_CONTROL_NAME: str = "shoulder_tap_atomic.jsonl"
+
+
+def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
+    """Atomic shoulder tap: merge the queue into the live turn without restarting the agent.
+
+    The codex-only counterpart to :func:`_flush_queue_endpoint`. Rather than SIGKILL-restart
+    the agent and resend the queue, it appends one control line naming the currently-open turn
+    to codex's ``shoulder_tap_atomic.jsonl``; the patched binary picks it up on its next main
+    loop and merges the parked steer messages into that turn (ABA-gated on the turn id), so the
+    agent stays alive. Returns 404 for an unknown agent, 400 for a non-codex harness or the
+    primary services agent, 500 if the control write fails, 200 otherwise -- with status
+    ``no_open_turn`` (and no write) when no turn is running, or ``tapped`` when the turn was
+    targeted.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    if not get_catalog(agent_info.harness).native_atomic_shoulder_tap_possible:
+        error = ErrorResponse(
+            detail=(
+                f"Agent '{agent_info.name}' runs the {agent_info.harness.value} harness, which does not "
+                "support an atomic shoulder tap (this endpoint is codex-only for now)"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+    refusal = _refuse_queue_action_on_primary(agent_info, "shoulder-tap the queue of")
+    if refusal is not None:
+        return refusal
+
+    watcher = get_state().get_or_create_watcher(agent_info)
+    target_turn_id = current_open_turn_id(watcher.get_all_events())
+    if target_turn_id is None:
+        # No turn is running, so there is nothing to merge into -- do NOT write a control line
+        # (a stale target_turn_id would gate against a turn that never comes).
+        return _json_response(ShoulderTapAtomicResponse(status="no_open_turn").model_dump())
+
+    control_path = (
+        agent_info.agent_state_dir / get_harness_spec(agent_info.harness).model_state_relative_path
+    ) / _SHOULDER_TAP_ATOMIC_CONTROL_NAME
+    try:
+        control_path.parent.mkdir(parents=True, exist_ok=True)
+        with control_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"target_turn_id": target_turn_id}) + "\n")
+    except OSError as e:
+        logger.opt(exception=e).error("Failed to write atomic shoulder-tap control line at {}", control_path)
+        error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
+        return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(ShoulderTapAtomicResponse(status="tapped").model_dump())
 
 
 def _drain_to_composer_endpoint(agent_id: str) -> Response:
@@ -2011,6 +2070,11 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/agents/<agent_id>/interrupt", view_func=_interrupt_agent_endpoint, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/flush-queue", view_func=_flush_queue_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/agents/<agent_id>/shoulder-tap-atomic",
+        view_func=_shoulder_tap_atomic_endpoint,
+        methods=["POST"],
+    )
     application.add_url_rule(
         "/api/agents/<agent_id>/drain-to-composer", view_func=_drain_to_composer_endpoint, methods=["POST"]
     )

@@ -156,6 +156,11 @@ class HarnessCatalog(FrozenModel):
     # The harness's product name, shown as a non-clickable "Powered by <label>" credit beside
     # the composer's "Open agent terminal" button (e.g. "Claude Code", "Codex", "Pi Coding").
     powered_by_label: str
+    # Whether this harness can flush a queued "shoulder tap" atomically -- merging the parked
+    # messages into the currently-running turn without a restart. True only for codex, whose
+    # patched binary watches shoulder_tap_atomic.jsonl and ABA-gates the flush on the live turn
+    # id. False harnesses (claude, pi) keep the restart-based flush.
+    native_atomic_shoulder_tap_possible: bool = False
 
 
 class SwitchResult(FrozenModel):

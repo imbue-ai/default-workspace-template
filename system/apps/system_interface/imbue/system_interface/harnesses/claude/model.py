@@ -83,6 +83,8 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
     picker_mode=PickerMode.LIST,
     powered_by_label="Claude Code",
+    # Claude has no atomic-flush mechanism; the "Shoulder tap" button restarts and resends.
+    native_atomic_shoulder_tap_possible=False,
 )
 
 # The statusline writes minds_model_state.json at the agent state-dir root; the registry
