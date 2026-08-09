@@ -48,3 +48,15 @@ Added codex as a peer harness in the workspace chat UI, alongside claude.
   the mngr-side pi extension change that archives `pi_inbox` to
   `pi_inbox_history` and truncates it at load, which generation-scopes the
   enqueue side by construction.
+
+The claude "Shoulder tap" now flushes queued messages into the live turn natively, instead
+of the SIGKILL-restart-and-resend it fell back to before. It cancels claude's running turn
+via a Chat-only meta+q -> chat:cancel chord (provisioned by mngr), which makes claude commit
+its parked queue as a fresh merged turn -- the same auto-flush it does at natural turn end.
+The keypress is delivered through mngr's in-process message API (holding the per-agent message
+lock, so it never interleaves with a text send); dwt never drives raw tmux. A short bounded
+watch confirms the flush went through and, in the rare race where the chord also cancels the
+just-flushed follow-on turn, sends one recovery nudge so the committed messages are still
+addressed. The agent is never restarted and the queue mirror is never torn down. The tap
+button now also releases the "Sending queued messages..." freeze immediately on a terminal
+no-op (nothing was queued, or no turn was running) instead of holding it to the fallback cap.

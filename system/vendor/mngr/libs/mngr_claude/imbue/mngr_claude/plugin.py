@@ -109,6 +109,7 @@ from imbue.mngr_claude import resources as _claude_resources
 from imbue.mngr_claude.claude_config import ClaudeDirectoryNotTrustedError
 from imbue.mngr_claude.claude_config import ClaudeEffortCalloutNotDismissedError
 from imbue.mngr_claude.claude_config import ClaudeOnboardingNotCompletedError
+from imbue.mngr_claude.claude_config import KEYBINDINGS_FILENAME
 from imbue.mngr_claude.claude_config import MANAGED_SETTINGS_RELATIVE_PATH
 from imbue.mngr_claude.claude_config import acknowledge_cost_threshold
 from imbue.mngr_claude.claude_config import add_claude_trust_for_path
@@ -120,6 +121,7 @@ from imbue.mngr_claude.claude_config import check_claude_dialogs_dismissed
 from imbue.mngr_claude.claude_config import complete_onboarding
 from imbue.mngr_claude.claude_config import dismiss_effort_callout
 from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
+from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
 from imbue.mngr_claude.claude_config import find_project_config
 from imbue.mngr_claude.claude_config import find_user_config_in_isolated_mode
 from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
@@ -2218,6 +2220,14 @@ class ClaudeCoreAgent(
             # shared mode this targets the user's global config (the file claude
             # actually reads); in isolated mode the per-agent config inherits it.
             acknowledge_cost_threshold(self._dialog_dismissal_config_path())
+
+            # Provision the Chat-only meta+q -> chat:cancel chord the dwt shoulder tap
+            # delivers to flush the parked message queue natively. Merged into the
+            # user-scope keybindings.json (idempotent, never clobbering an existing
+            # meta+q): in shared mode claude reads it directly; in isolated mode the
+            # per-agent config dir inherits it via _sync_user_resources, the same way
+            # keybindings.json is already synced.
+            ensure_chat_cancel_tap_keybinding(get_user_claude_config_dir() / KEYBINDINGS_FILENAME)
 
             # Transfer plugin data from source agent before config setup (if cloning via --from).
             # This copies sessions, memory, transcript offsets, etc. The subsequent config setup

@@ -23,3 +23,14 @@ message, and refresh tick -- strictly more reactive than the hook (which could n
 framework-generated transcript messages. The statusline writes the harness-uniform
 `$MNGR_AGENT_STATE_DIR/minds_model_state.json` snapshot that the system interface reads for
 every harness.
+
+Claude provisioning now installs a Chat-only `meta+q` -> `chat:cancel` keybinding that the
+Minds workspace UI uses to flush a claude agent's queued messages into its live turn without a
+SIGKILL-restart. `ensure_chat_cancel_tap_keybinding` merges the chord into the user-scope
+`keybindings.json` (creating the file/entry when absent); it is idempotent and never clobbers a
+`meta+q` already bound in the Chat or Global context, so a user's own binding wins and the tap
+simply reports itself unavailable. In shared-config mode claude reads the file directly; in
+isolated mode the per-agent config dir inherits it via the existing keybindings sync.
+`is_tap_binding_active` reports whether the chord is live for the running claude process (bound
+on disk, and written no later than the process-start marker, since claude reads keybindings only
+at launch).

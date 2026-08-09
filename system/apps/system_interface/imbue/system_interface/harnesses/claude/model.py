@@ -83,8 +83,9 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
     picker_mode=PickerMode.LIST,
     powered_by_label="Claude Code",
-    # Claude has no atomic-flush mechanism; the "Shoulder tap" button restarts and resends.
-    native_atomic_shoulder_tap_possible=False,
+    # The "Shoulder tap" flushes claude's queue natively (a meta+q -> chat:cancel chord
+    # delivered via mngr) instead of the SIGKILL-restart base path. See harnesses/claude/tap.py.
+    native_atomic_shoulder_tap_possible=True,
 )
 
 # The statusline writes minds_model_state.json at the agent state-dir root; the registry

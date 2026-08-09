@@ -19,6 +19,7 @@ here and none in the caller.
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -101,6 +102,15 @@ class AgentSessionWatcher(ABC):
     def get_queued_messages(self) -> list[dict[str, Any]]:
         """The current queued-message snapshot; empty for a harness with no populator."""
         return []
+
+    def get_latest_main_session_file(self) -> Path | None:
+        """The live process's (latest main) session file, for the native tap's byte baseline.
+
+        None by default (a harness whose tap needs no on-disk session anchor -- codex writes a
+        control line, pi an inbox sentinel). The Claude watcher overrides it: its tap cancels
+        the live turn and reads the raw post-chord tail from this file.
+        """
+        return None
 
     def get_queued_block(self) -> str:
         """The queued messages as one concatenated turn; empty for a harness with no populator."""

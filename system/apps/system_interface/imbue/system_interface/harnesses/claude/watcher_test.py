@@ -1560,3 +1560,44 @@ def test_body_cache_capacity_respected_while_paging_full_history(tmp_path: Path)
 
     # Despite eviction, paging recovered the entire transcript in order.
     assert seen == all_ids
+
+
+def test_get_latest_main_session_file_returns_the_only_session(tmp_path: Path) -> None:
+    """With a single main session, the accessor resolves that session's JSONL file."""
+    agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, [_user_event(1)])
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+
+    resolved = watcher.get_latest_main_session_file()
+
+    assert resolved is not None
+    assert resolved.name == f"{session_id}.jsonl"
+    assert resolved.exists()
+
+
+def test_get_latest_main_session_file_prefers_the_newest_session(tmp_path: Path) -> None:
+    """When the agent has resumed into a newer session, the accessor returns the latest one."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    projects_dir = claude_config_dir / "projects"
+    _write_session_file(projects_dir, "old-session", [_user_event(1)])
+    _write_session_file(projects_dir, "new-session", [_user_event(2)])
+    # History order is chronological; the newest main session is last.
+    (agent_state_dir / "claude_session_id_history").write_text("old-session\nnew-session\n")
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+
+    resolved = watcher.get_latest_main_session_file()
+
+    assert resolved is not None
+    assert resolved.name == "new-session.jsonl"
+
+
+def test_get_latest_main_session_file_none_without_history(tmp_path: Path) -> None:
+    """No main session known -> None (there is no live process to tap)."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    (claude_config_dir / "projects").mkdir(parents=True)
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+
+    assert watcher.get_latest_main_session_file() is None
