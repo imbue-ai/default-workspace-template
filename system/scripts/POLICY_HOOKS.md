@@ -21,10 +21,10 @@ codex reuses those scripts verbatim, pi re-expresses them in TypeScript.
 | 1 | Block a command piping into `tail`/`head` | PreToolUse | safety | live | live | live |
 | 2 | Block `git rebase` / `commit --amend`/`--fixup` / `pull --rebase` | PreToolUse | safety | live | live | live |
 | 3 | Rewrite every Bash command: OOM self-tag + git identity | PreToolUse | safety | live | live | live |
-| 4 | Nudge when doing substantive work with no in-progress step | PreToolUse | workflow | live | planned | planned |
-| 5 | Block a `tk start`/`close` that is chained or redirected | PreToolUse | workflow | live | planned | planned |
-| 6 | Carry over still-open steps into the next turn | UserPromptSubmit | workflow | live | planned | planned |
-| 7 | Log a stop that leaves steps open | Stop | workflow | live | planned | planned |
+| 4 | Nudge when doing substantive work with no in-progress step | PreToolUse | workflow | live | live | live |
+| 5 | Block a `tk start`/`close` that is chained or redirected | PreToolUse | workflow | live | live | live |
+| 6 | Carry over still-open steps into the next turn | UserPromptSubmit | workflow | live | live | live |
+| 7 | Log a stop that leaves steps open | Stop | workflow | live | live | live |
 | 8 | Session-start setup (`uv sync`, tk-on-path, plugin update, shed notice) | SessionStart | setup | live | n/a | n/a |
 | 9 | Force the agent back to the repo root before it stops | Stop | workflow | live | n/a | n/a |
 
@@ -114,9 +114,12 @@ command verbatim.
 
 ## Category B — tk workflow-discipline policies
 
-These enforce the `tk` step discipline that the chat progress view is built from. They are
-**live in claude**; codex and pi read the same shared `AGENTS.md` that mandates `tk`, so parity
-is intended — the channels below are verified and the wiring is the remaining work (**planned**).
+These enforce the `tk` step discipline that the chat progress view is built from, and are now
+**live on all three** harnesses (codex and pi read the same shared `AGENTS.md` that mandates
+`tk`). codex reuses the exact claude scripts; pi re-expresses them against its SDK. Two
+codex-specific output-channel quirks were found and handled while wiring these (noted inline
+below): the carryover reminder needs a `--codex` flag, and the stop nudge must never exit
+non-zero.
 
 ### 4. Require a step before substantive work — `claude_require_steps_pretool.sh`
 A **soft** reminder (never blocks) when a substantive tool call happens with no in-progress
@@ -137,16 +140,21 @@ tokenizing lives in `claude_tk_standalone_check.py` (uses `shlex`, which a bash 
 reliably).
 - **claude / codex**: the `.sh`, which execs the `.py`; stderr + `exit 2` blocks. Codex honors
   the exit-2 block identically.
-- **pi**: `on("tool_call")` runs the **same** `claude_tk_standalone_check.py` via a synchronous
-  `execFileSync` and maps its exit-2/stderr to `{block, reason}` — reusing the checker keeps the
-  shlex tokenizer single-sourced.
+- **pi**: `on("tool_call")` runs the **same** `claude_tk_standalone_check.py` synchronously
+  (`spawnSync("python3", [checker, command])`, only when the command mentions `tk`/`ticket`) and
+  maps its exit-2/stderr to `{block, reason}` — reusing the checker keeps the shlex tokenizer
+  single-sourced. Step state for the other guards comes from `spawnSync("bash", [ticket, ...])`
+  (via `bash` so it runs regardless of the mount's exec bit).
 
 ### 6. Carry over open steps into the next turn — `claude_open_tickets_reminder.sh`
 When a new user message arrives and this agent has still-open step records, inject a reminder
 listing them so the agent reconciles before acting.
 - **claude**: UserPromptSubmit, prints the reminder to stdout (added to context).
-- **codex**: the **same** script — codex adds a UserPromptSubmit hook's **plain stdout** to
-  context, so it reuses it verbatim.
+- **codex**: the **same** script, invoked with `--codex`. codex adds a UserPromptSubmit hook's
+  plain stdout to context — *except* it first tries to JSON-parse stdout that begins with `[`
+  or `{`, and this reminder starts with `[Open task reminder...]`, so plain text is rejected as
+  a hook failure (verified live). `--codex` makes the script emit the reminder as
+  `hookSpecificOutput.additionalContext` JSON instead, which codex adds to context cleanly.
 - **pi**: `on("before_agent_start")` — if `tk steps` reports open steps, return
   `{systemPrompt: event.systemPrompt + "\n\n" + reminder}` (the guaranteed-visible channel).
 
@@ -157,8 +165,10 @@ Real follow-up is handled by hook 6 on the next turn.
 - **codex**: the **same** script — stderr only, `exit 0`, no stdout. Codex accepts an
   empty-stdout, exit-0 Stop hook as a clean no-op (confirmed live on 0.146.0 and against the
   generated `stop.command.output` schema, which has no `additionalContext` and defaults to a
-  normal stop). It must **not** use `exit 2`/`decision: "block"` on Stop, which on codex would
-  re-engage the agent rather than hold the stop.
+  normal stop). This exposed a latent bug: `tk steps` exits non-zero when there are no steps,
+  which under `set -euo pipefail` made the script exit non-zero — and on codex an exit 2 on
+  Stop is a *continuation* request that re-engages the agent. The script now guards that count
+  with `|| true`, honoring its "exits 0 always" contract on every harness.
 - **pi**: `on("agent_settled")` — the true "run fully settled" signal; stderr only.
 
 ## Category C — claude-only, not ported (by construction)

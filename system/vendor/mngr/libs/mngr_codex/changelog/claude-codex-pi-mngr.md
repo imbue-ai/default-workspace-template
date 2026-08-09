@@ -44,3 +44,10 @@ requires a hook that returns `updatedInput` to also carry an explicit `permissio
 `build_codex_hooks_config` now invokes the rewrite script with a `--codex` flag that adds that
 decision. The two block guards are unaffected (they return no `updatedInput`), and the rewriter's
 `allow` does not weaken them -- codex honors an earlier block over a later allow (verified live).
+
+Codex agents now also run the tk workflow-discipline guards, matching claude: `build_codex_hooks_config`
+adds the require-steps soft reminder and the non-standalone `tk start`/`close` block to `PreToolUse`,
+the open-steps carryover reminder to `UserPromptSubmit` (with a `--codex` flag so it is emitted as
+`additionalContext` JSON -- codex rejects UserPromptSubmit stdout that starts with `[`), and the
+open-steps stop nudge to `Stop`. All are the same dwt scripts claude runs, from the work dir. Verified
+live against codex-cli 0.146.0. See `system/scripts/POLICY_HOOKS.md`.

@@ -62,3 +62,11 @@ sentinels are now tick-deferred: a sentinel is never consumed in a drain tick th
 injected a string line (the async send must park the steer first), so the steer is always
 flushable/retractable before the abort. Delivery to an idle agent is a no-op, and a
 retract discards nothing then keeps draining so later messages still inject.
+
+The pi lifecycle extension now enforces the tk workflow-discipline guards, matching claude/codex: a
+non-standalone `tk start`/`close` is blocked in the `tool_call` handler (reusing the shared
+`claude_tk_standalone_check.py`); a require-steps reminder is appended to the `tool_result` content when
+a substantive tool ran with no in-progress step; an open-steps carryover reminder is appended to the
+turn's system prompt in `before_agent_start`; and an open-steps stop nudge is written to stderr on
+`agent_settled`. Step state is read from the vendored `ticket` binary (invoked via `bash`, so it works
+on a noexec mount). See `system/scripts/POLICY_HOOKS.md`.

@@ -582,13 +582,15 @@ _SUBAGENT_STOPPED_COMMAND: str = f'bash "$MNGR_AGENT_STATE_DIR/commands/{SUBAGEN
 _SET_PERMISSIONS_WAITING_COMMAND: str = f'touch "$MNGR_AGENT_STATE_DIR/{PERMISSIONS_WAITING_FILENAME}"'
 _CLEAR_PERMISSIONS_WAITING_COMMAND: str = f'rm -f "$MNGR_AGENT_STATE_DIR/{PERMISSIONS_WAITING_FILENAME}"'
 
-# PreToolUse policy guards. Codex speaks claude's hook protocol -- same PreToolUse
-# event, the same stdin payload (``tool_name``/``tool_input.command``, claude-shaped
-# even under code mode), the same block convention (write reason to stderr, ``exit 2``)
-# and the same ``updatedInput`` rewrite channel -- so codex reuses the EXACT dwt guard
-# scripts claude runs, from the work dir (``$MNGR_AGENT_WORK_DIR``, set for every agent).
-# No copy into the state dir: the scripts already live in the repo checkout. These enforce
-# the same policies pi enforces via its tool_call handler; see system/scripts/POLICY_HOOKS.md.
+# Policy guards. Codex speaks claude's hook protocol -- same events, the same stdin payload
+# (``tool_name``/``tool_input.command``, claude-shaped even under code mode), the same block
+# convention (write reason to stderr, ``exit 2``), the same ``updatedInput`` rewrite channel,
+# the same PreToolUse ``additionalContext`` soft-reminder channel, and the same
+# UserPromptSubmit "plain stdout is added to context" behavior -- so codex reuses the EXACT dwt
+# guard scripts claude runs, from the work dir (``$MNGR_AGENT_WORK_DIR``, set for every agent).
+# No copy into the state dir: the scripts already live in the repo checkout. These enforce the
+# same policies pi enforces via its extension handlers; see system/scripts/POLICY_HOOKS.md for
+# the full hook-by-hook mapping and the codex/pi output-contract tables.
 #
 # The one protocol divergence: codex (verified against codex-cli 0.146.0) rejects a
 # PreToolUse hook that returns ``updatedInput`` without an explicit
@@ -596,18 +598,37 @@ _CLEAR_PERMISSIONS_WAITING_COMMAND: str = f'rm -f "$MNGR_AGENT_STATE_DIR/{PERMIS
 # updatedInput without permissionDecision:allow"), and runs nothing. The rewrite guard
 # therefore gets the ``--codex`` flag, which makes it emit that decision; claude runs the
 # same script WITHOUT the flag (where the decision would instead auto-approve the tool).
-# The block guards return no ``updatedInput``, so they are unaffected and unflagged -- and
-# the rewriter's ``allow`` does not weaken them, since codex honors an earlier block over a
+# The block/reminder guards return no ``updatedInput``, so they are unaffected and unflagged --
+# and the rewriter's ``allow`` does not weaken them, since codex honors an earlier block over a
 # later allow (verified live).
 _POLICY_SCRIPTS_DIR: str = "$MNGR_AGENT_WORK_DIR/system/scripts"
+# Safety guards (block bad commands / rewrite the rest).
 _BLOCK_PIPE_TAIL_HEAD_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_block_pipe_tail_head.sh"'
 _PREVENT_COMMIT_REWRITE_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_prevent_commit_rewrite.sh"'
 _REWRITE_BASH_COMMAND: str = f'python3 "{_POLICY_SCRIPTS_DIR}/claude_rewrite_bash_command.py" --codex'
+# tk workflow-discipline guards (drive the chat progress view; block a chained/redirected
+# ``tk start``/``close``, soft-nudge for a step before substantive work, carry over open steps
+# on a new prompt, and log a stop that leaves steps open).
+_TK_STANDALONE_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_tk_standalone.sh"'
+_REQUIRE_STEPS_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_require_steps_pretool.sh"'
+# ``--codex``: emit the carryover reminder as ``additionalContext`` JSON rather than plain
+# stdout. codex JSON-parses UserPromptSubmit stdout that starts with ``[`` (this reminder
+# begins with ``[Open task reminder...]``), so plain text would be rejected as a hook failure.
+_OPEN_TICKETS_REMINDER_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_open_tickets_reminder.sh" --codex'
+_OPEN_TICKETS_STOP_NUDGE_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_open_tickets_stop_nudge.sh"'
 
 
 @pure
 def build_codex_hooks_config() -> dict[str, Any]:
     """Build the per-agent ``hooks.json`` body for the codex agent.
+
+    Alongside the lifecycle-marker handlers below, this wires the dwt policy guards
+    from ``$MNGR_AGENT_WORK_DIR/system/scripts`` -- the same scripts claude runs: the
+    three shell-command safety guards (two blockers + the ``--codex`` rewriter) and the
+    four tk workflow-discipline guards (the ``tk``-standalone block and require-steps
+    reminder on ``PreToolUse``, the open-steps carryover on ``UserPromptSubmit``, and the
+    open-steps nudge on ``Stop``). See ``system/scripts/POLICY_HOOKS.md`` for the full
+    hook-by-hook mapping.
 
     Four handlers maintain the ``active`` lifecycle marker. Because codex
     subagents run *asynchronously* -- the root's ``Stop`` fires while subagents
@@ -652,20 +673,42 @@ def build_codex_hooks_config() -> dict[str, Any]:
     """
     return {
         "hooks": {
-            # PreToolUse policy guards (block bad commands, rewrite the rest); the two
-            # blockers run first, then the rewriter. All three are the dwt scripts claude
-            # uses, run from the work dir. See system/scripts/POLICY_HOOKS.md.
+            # PreToolUse policy guards, in order: the two blockers, the tk-standalone block,
+            # the require-steps soft reminder, then the rewriter last (the only ``updatedInput``
+            # emitter). All are the dwt scripts claude uses, run from the work dir.
+            # See system/scripts/POLICY_HOOKS.md.
             "PreToolUse": [
                 {
                     "hooks": [
                         {"type": "command", "command": _BLOCK_PIPE_TAIL_HEAD_COMMAND},
                         {"type": "command", "command": _PREVENT_COMMIT_REWRITE_COMMAND},
+                        {"type": "command", "command": _TK_STANDALONE_COMMAND},
+                        {"type": "command", "command": _REQUIRE_STEPS_COMMAND},
                         {"type": "command", "command": _REWRITE_BASH_COMMAND},
                     ]
                 }
             ],
-            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": _SET_ACTIVE_COMMAND}]}],
-            "Stop": [{"hooks": [{"type": "command", "command": _CLEAR_ACTIVE_COMMAND}]}],
+            # UserPromptSubmit: set the active marker (lifecycle), then the open-steps carryover
+            # reminder (its plain stdout is added to the model's context by codex).
+            "UserPromptSubmit": [
+                {
+                    "hooks": [
+                        {"type": "command", "command": _SET_ACTIVE_COMMAND},
+                        {"type": "command", "command": _OPEN_TICKETS_REMINDER_COMMAND},
+                    ]
+                }
+            ],
+            # Stop: clear the active marker (lifecycle), then the open-steps nudge. The nudge is
+            # stderr-only + exit 0 (a clean no-op on codex's Stop, which -- unlike claude -- treats
+            # exit 2 / decision:block as a continuation, not a held stop).
+            "Stop": [
+                {
+                    "hooks": [
+                        {"type": "command", "command": _CLEAR_ACTIVE_COMMAND},
+                        {"type": "command", "command": _OPEN_TICKETS_STOP_NUDGE_COMMAND},
+                    ]
+                }
+            ],
             "SubagentStart": [{"hooks": [{"type": "command", "command": _SUBAGENT_STARTED_COMMAND}]}],
             "SubagentStop": [{"hooks": [{"type": "command", "command": _SUBAGENT_STOPPED_COMMAND}]}],
             "PermissionRequest": [{"hooks": [{"type": "command", "command": _SET_PERMISSIONS_WAITING_COMMAND}]}],
