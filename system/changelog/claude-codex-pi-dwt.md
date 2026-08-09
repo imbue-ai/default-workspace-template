@@ -153,3 +153,11 @@ Added OpenAI Codex CLI support to the workspace image.
   stack resolved to, so no role names a harness, and `__extend` makes stacked roles each
   contribute a block instead of the last one replacing the rest. Requires the vendored mngr
   synced here; the keys do not resolve without it.
+
+- The shared PreToolUse command-rewrite guard (`system/scripts/claude_rewrite_bash_command.py`)
+  gained a `--codex` flag. Recent codex (verified against codex-cli 0.146.0) rejects a hook that
+  returns `updatedInput` unless it also carries `permissionDecision: "allow"`, so without the flag
+  codex logged repeated `PreToolUse hook returned updatedInput without permissionDecision:allow`
+  and the OOM self-tag + git-identity rewrite never applied. The flag adds that decision; claude
+  runs the script without it (there a PreToolUse `allow` would auto-approve the tool and skip the
+  permission prompt). The block guards are unaffected. See `system/scripts/POLICY_HOOKS.md`.

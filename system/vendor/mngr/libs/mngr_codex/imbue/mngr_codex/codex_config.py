@@ -589,10 +589,20 @@ _CLEAR_PERMISSIONS_WAITING_COMMAND: str = f'rm -f "$MNGR_AGENT_STATE_DIR/{PERMIS
 # scripts claude runs, from the work dir (``$MNGR_AGENT_WORK_DIR``, set for every agent).
 # No copy into the state dir: the scripts already live in the repo checkout. These enforce
 # the same policies pi enforces via its tool_call handler; see system/scripts/POLICY_HOOKS.md.
+#
+# The one protocol divergence: codex (verified against codex-cli 0.146.0) rejects a
+# PreToolUse hook that returns ``updatedInput`` without an explicit
+# ``permissionDecision: "allow"`` in the same output ("PreToolUse hook returned
+# updatedInput without permissionDecision:allow"), and runs nothing. The rewrite guard
+# therefore gets the ``--codex`` flag, which makes it emit that decision; claude runs the
+# same script WITHOUT the flag (where the decision would instead auto-approve the tool).
+# The block guards return no ``updatedInput``, so they are unaffected and unflagged -- and
+# the rewriter's ``allow`` does not weaken them, since codex honors an earlier block over a
+# later allow (verified live).
 _POLICY_SCRIPTS_DIR: str = "$MNGR_AGENT_WORK_DIR/system/scripts"
 _BLOCK_PIPE_TAIL_HEAD_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_block_pipe_tail_head.sh"'
 _PREVENT_COMMIT_REWRITE_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_prevent_commit_rewrite.sh"'
-_REWRITE_BASH_COMMAND: str = f'python3 "{_POLICY_SCRIPTS_DIR}/claude_rewrite_bash_command.py"'
+_REWRITE_BASH_COMMAND: str = f'python3 "{_POLICY_SCRIPTS_DIR}/claude_rewrite_bash_command.py" --codex'
 
 
 @pure

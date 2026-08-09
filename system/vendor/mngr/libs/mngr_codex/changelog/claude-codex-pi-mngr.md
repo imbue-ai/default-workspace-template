@@ -36,3 +36,11 @@ adds a `PreToolUse` entry that runs the workspace's existing guard scripts from 
 with the OOM self-tag + the agent's git identity. Codex speaks claude's hook protocol (same
 `PreToolUse` payload and the exit-2+stderr block convention, verified live under code mode), so it
 reuses the exact same scripts with no new logic. See `system/scripts/POLICY_HOOKS.md`.
+
+Fixed the command-rewrite guard failing under recent codex (verified against codex-cli 0.146.0),
+which surfaced as repeated `PreToolUse hook returned updatedInput without permissionDecision:allow`
+errors and meant the OOM self-tag + git-identity rewrite never applied on codex. Newer codex
+requires a hook that returns `updatedInput` to also carry an explicit `permissionDecision: "allow"`;
+`build_codex_hooks_config` now invokes the rewrite script with a `--codex` flag that adds that
+decision. The two block guards are unaffected (they return no `updatedInput`), and the rewriter's
+`allow` does not weaken them -- codex honors an earlier block over a later allow (verified live).

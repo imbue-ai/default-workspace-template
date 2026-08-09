@@ -31,10 +31,21 @@ implementation and needs no changes.
 ### codex  (wiring: `mngr_codex/.../codex_config.py` → `build_codex_hooks_config()`)
 Codex speaks the **same hook protocol** as claude: same `PreToolUse` event, same payload
 (`tool_name:"Bash"`, `.tool_input.command`, verified live under code-mode), same block
-convention (stderr + `exit 2`) and rewrite channel (`updated_input`). So codex **reuses the
+convention (stderr + `exit 2`) and rewrite channel (`updatedInput`). So codex **reuses the
 exact same scripts** — the plugin just adds a `PreToolUse` entry pointing at them via
 `$MNGR_AGENT_WORK_DIR/system/scripts/…`. No new logic. Editing a script updates claude AND
 codex at once.
+
+**One protocol divergence (codex ≥ ~0.146):** a hook that returns `updatedInput` must also
+carry an explicit `permissionDecision: "allow"` in the same `hookSpecificOutput`, or codex
+rejects it — `PreToolUse hook returned updatedInput without permissionDecision:allow` — and
+runs nothing. Only the rewriter (`claude_rewrite_bash_command.py`) returns `updatedInput`, so
+only it is affected. It takes a `--codex` flag that adds the `allow` decision; codex wires it
+with the flag, claude without (in claude a PreToolUse `allow` would auto-approve the tool and
+skip the permission prompt). The `allow` does **not** weaken the block guards: they are
+separate earlier `PreToolUse` hooks and codex honors an earlier block over a later allow
+(verified live — a blocked `git commit --amend` / `| head` does not run even with the
+rewriter allowing).
 
 ### pi  (wiring: `mngr_pi_coding/.../resources/mngr_pi_lifecycle.ts` → `pi.on("tool_call")`)
 Pi has **no shell-hook surface** — its only extension point is a TypeScript handler loaded

@@ -289,12 +289,14 @@ def test_build_codex_hooks_config_maps_lifecycle_events_to_the_marker_scripts() 
         "PostToolUse",
     }
     # PreToolUse runs the three dwt policy scripts from the work dir, in order:
-    # the two blockers then the rewriter.
+    # the two blockers then the rewriter. The rewriter carries ``--codex``, which
+    # makes it emit ``permissionDecision: "allow"`` alongside ``updatedInput`` --
+    # required by codex (it rejects an updatedInput-only rewrite), unlike claude.
     pre_commands = [h["command"] for h in pre_tool_use[0]["hooks"]]
     assert pre_commands == [
         'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_block_pipe_tail_head.sh"',
         'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_prevent_commit_rewrite.sh"',
-        'python3 "$MNGR_AGENT_WORK_DIR/system/scripts/claude_rewrite_bash_command.py"',
+        'python3 "$MNGR_AGENT_WORK_DIR/system/scripts/claude_rewrite_bash_command.py" --codex',
     ]
     assert SET_ACTIVE_MARKER_SCRIPT_NAME in user_prompt[0]["hooks"][0]["command"]
     assert user_prompt[0]["hooks"][0]["type"] == "command"
