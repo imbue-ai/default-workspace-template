@@ -324,6 +324,88 @@ function partsFromContent(content: ContentBlock[] | undefined): Array<Record<str
   return parts;
 }
 
+// --- Policy guards (see system/scripts/POLICY_HOOKS.md). --------------------
+//
+// The same shell-command policies claude/codex enforce via PreToolUse hooks, in
+// the form pi's extension API allows: a `tool_call` handler that returns
+// `{block, reason}` to refuse a command, or mutates `event.input.command` to
+// rewrite it. Kept in step with the claude scripts of the same purpose:
+//   claude_block_pipe_tail_head.sh, claude_prevent_commit_rewrite.sh,
+//   claude_rewrite_bash_command.py.
+
+// Block: a command that pipes into tail/head (mirrors claude_block_pipe_tail_head.sh).
+const PIPE_TAIL_HEAD_RE = /\|\s*(tail|head)(\s|$)/;
+// Block: git history-rewriting commands (mirrors claude_prevent_commit_rewrite.sh).
+const GIT_REBASE_RE = /^git\s+rebase/;
+const GIT_COMMIT_RE = /^git\s+commit\b/;
+const GIT_COMMIT_REWRITE_RE = /--(amend|fixup)/;
+const GIT_PULL_RE = /^git\s+pull\b/;
+const GIT_PULL_REBASE_RE = /(--rebase|\s-r(\s|$))/;
+// The OOM self-tag band for agent subprocesses (kept in sync with
+// oom_priority.bands.AGENT_SUBPROCESS == 900).
+const OOM_SUBPROCESS_BAND = 900;
+
+/** Single-quote a value for safe interpolation into a shell command. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/** The reason to block a command, or null if it is allowed. Cannot throw. */
+function commandBlockReason(command: string): string | null {
+  if (PIPE_TAIL_HEAD_RE.test(command)) {
+    return "Do not pipe commands through tail or head. Redirect to a temp file (e.g. cmd > /tmp/out.txt) and read that instead.";
+  }
+  if (GIT_REBASE_RE.test(command)) return "git rebase is not allowed.";
+  if (GIT_COMMIT_RE.test(command) && GIT_COMMIT_REWRITE_RE.test(command)) {
+    return "git commit with --amend or --fixup is not allowed.";
+  }
+  if (GIT_PULL_RE.test(command) && GIT_PULL_REBASE_RE.test(command)) {
+    return "git pull --rebase is not allowed (use git pull --merge instead).";
+  }
+  return null;
+}
+
+/** Read a string field from a mngr data.json, or null. */
+function readDataField(path: string, field: string): string | null {
+  try {
+    const value = (JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>)[field];
+    return typeof value === "string" && value ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The `export GIT_AUTHOR_.../GIT_COMMITTER_...; ` prefix, or "" when unresolved.
+ * Mirrors claude_rewrite_bash_command.py's resolve_commit_identity: name from
+ * <state_dir>/data.json (fallback MNGR_AGENT_NAME), email <agent_id>@<host_id>. */
+function gitIdentityPrefix(): string {
+  const agentId = process.env.MNGR_AGENT_ID;
+  const stateDir = process.env.MNGR_AGENT_STATE_DIR;
+  const hostDir = process.env.MNGR_HOST_DIR;
+  const name =
+    (stateDir ? readDataField(join(stateDir, "data.json"), "name") : null) ??
+    process.env.MNGR_AGENT_NAME ??
+    null;
+  const hostId = hostDir ? readDataField(join(hostDir, "data.json"), "host_id") : null;
+  if (!name || !agentId || !hostId) return "";
+  const email = `${agentId}@${hostId}`;
+  const q = shellQuote;
+  return (
+    `export GIT_AUTHOR_NAME=${q(name)} GIT_COMMITTER_NAME=${q(name)} ` +
+    `GIT_AUTHOR_EMAIL=${q(email)} GIT_COMMITTER_EMAIL=${q(email)}; `
+  );
+}
+
+/** The guarded oom self-tag prefix (mirrors build_oom_tag_prefix). */
+function oomTagPrefix(): string {
+  return `test -w /proc/self/oom_score_adj && echo ${OOM_SUBPROCESS_BAND} > /proc/self/oom_score_adj 2>/dev/null; `;
+}
+
+/** Prepend the git-identity (if resolvable) + oom-tag prefixes to a command. */
+function rewriteBashCommand(command: string): string {
+  return gitIdentityPrefix() + oomTagPrefix() + command;
+}
+
 // --- Extension. -------------------------------------------------------------
 
 export default function mngrPiLifecycle(pi: PiApi): void {
@@ -669,6 +751,29 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     safe("agent_start", () => {
       writeFileSync(markerPath, "1");
     });
+  });
+
+  // Policy guard: block disallowed bash commands and rewrite the rest with the
+  // oom self-tag + git identity (see the "Policy guards" section above and
+  // system/scripts/POLICY_HOOKS.md). NOT wrapped in safe() -- a guard that
+  // swallowed its error would fail OPEN. The block check is a pure regex over a
+  // string and cannot throw; the best-effort rewrite is isolated so a failure
+  // leaves the command unchanged rather than blocking a legitimate command.
+  // `event`/return are loosely typed here to match PiApi.on's shim signature; at
+  // runtime pi passes a BashToolCallEvent with a mutable `input` and honors a
+  // returned `{block, reason}` (see the SDK's ToolCallEvent/ToolCallEventResult).
+  pi.on("tool_call", (event: any) => {
+    if (event?.toolName !== "bash") return;
+    const input = event.input as { command?: string };
+    const command = input?.command;
+    if (typeof command !== "string" || !command) return;
+    const reason = commandBlockReason(command);
+    if (reason !== null) return { block: true, reason };
+    try {
+      input.command = rewriteBashCommand(command);
+    } catch {
+      // Rewrite is best-effort (matches claude's pass-through-on-failure); never block on it.
+    }
   });
 
   pi.on("agent_end", (_event, _ctx) => {

@@ -28,3 +28,11 @@ of submission -- does not advance until the turn finishes. Send confirmation now
 queued-input sidecar the patched codex binary appends to on every enqueue, so a queued message
 confirms immediately (the two probes are OR-ed; a started message still trips the marker). Agents
 on an older codex binary without the sidecar are unaffected: that probe simply never fires.
+
+Codex agents now enforce the same PreToolUse policy guards claude does. `build_codex_hooks_config`
+adds a `PreToolUse` entry that runs the workspace's existing guard scripts from the work dir
+(`$MNGR_AGENT_WORK_DIR/system/scripts/`): block a command that pipes into `tail`/`head`, block
+`git rebase` / `git commit --amend|--fixup` / `git pull --rebase`, and rewrite every bash command
+with the OOM self-tag + the agent's git identity. Codex speaks claude's hook protocol (same
+`PreToolUse` payload and the exit-2+stderr block convention, verified live under code mode), so it
+reuses the exact same scripts with no new logic. See `system/scripts/POLICY_HOOKS.md`.

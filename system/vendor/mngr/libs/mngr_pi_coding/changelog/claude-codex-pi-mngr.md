@@ -40,3 +40,12 @@ from zero can no longer resurrect dead generations' messages as phantom queued e
 Safe against races: mngr appends to the inbox only after the readiness sentinel, which
 `session_start` writes after load. Behavior toward pi is unchanged -- pre-existing lines
 were already never re-injected (the offset seed skipped them).
+
+Pi agents now enforce the same shell-command policy guards claude/codex do. The lifecycle
+extension gains a `tool_call` handler that, for the bash tool, blocks a command piping into
+`tail`/`head` and the git history-rewriting commands (`rebase`, `commit --amend|--fixup`,
+`pull --rebase`) by returning `{block, reason}`, and otherwise rewrites the command in place with
+the OOM self-tag + the agent's git identity (name from the agent's `data.json`, email
+`<agent_id>@<host_id>`). Pi has no shell-hook surface, so the same rules the claude/codex scripts
+apply are re-expressed in ~20 lines of TypeScript; the handler fails closed. Loaded only via the
+per-agent `pi -e` flag, so a user's normal `pi` is unaffected. See `system/scripts/POLICY_HOOKS.md`.

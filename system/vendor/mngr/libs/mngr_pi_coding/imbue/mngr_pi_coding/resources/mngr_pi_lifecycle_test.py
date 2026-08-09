@@ -695,3 +695,81 @@ def test_control_watcher_applies_model_and_effort_switch(tmp_path: Path) -> None
     assert calls["setModel"] == [{"provider": "anthropic", "id": "claude-opus-4-8"}]
     assert calls["setThinkingLevel"] == ["high"]
     assert calls["mailboxConsumed"] is True
+
+
+# Driver for the policy-guard tool_call handler: fire one bash tool_call and report
+# the handler's return value plus the (possibly mutated) command, as JSON on stdout.
+_GUARD_DRIVER_MJS = """
+import mngrPiLifecycle from "./mngr_pi_lifecycle.ts";
+const command = process.argv[2];
+const handlers = {};
+mngrPiLifecycle({ on: (name, handler) => { (handlers[name] ||= []).push(handler); } });
+const event = { toolName: "bash", input: { command } };
+let result;
+for (const handler of (handlers["tool_call"] || [])) { result = handler(event, {}); }
+process.stdout.write(JSON.stringify({ result: result ?? null, command: event.input.command }));
+"""
+
+
+def _run_tool_call(tmp_path: Path, command: str, env: dict[str, str] | None = None) -> dict[str, Any]:
+    """Fire one bash ``tool_call`` through the extension; return ``{result, command}``."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(exist_ok=True)
+    if not _node_supports_typescript(node, work_dir):
+        pytest.skip("node does not support importing TypeScript modules")
+    (work_dir / _LIFECYCLE_EXTENSION_NAME).write_text(_load_resource(_LIFECYCLE_EXTENSION_NAME))
+    driver_path = work_dir / "guard_driver.mjs"
+    driver_path.write_text(_GUARD_DRIVER_MJS)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    full_env = {"PATH": os.environ.get("PATH", ""), "MNGR_AGENT_STATE_DIR": str(state_dir)}
+    full_env.update(env or {})
+    result = subprocess.run(
+        [node, str(driver_path), command], capture_output=True, text=True, timeout=60, env=full_env
+    )
+    assert result.returncode == 0, f"guard driver failed:\n{result.stdout}\n{result.stderr}"
+    return json.loads(result.stdout)
+
+
+def test_guard_blocks_pipe_to_pager(tmp_path: Path) -> None:
+    out = _run_tool_call(tmp_path, "cat f.txt | " + "tail -5")
+    assert out["result"] is not None and out["result"]["block"] is True
+    assert "tail or head" in out["result"]["reason"]
+
+
+def test_guard_blocks_git_commit_amend(tmp_path: Path) -> None:
+    out = _run_tool_call(tmp_path, "git commit --amend -m x")
+    assert out["result"] is not None and out["result"]["block"] is True
+
+
+def test_guard_blocks_git_rebase(tmp_path: Path) -> None:
+    out = _run_tool_call(tmp_path, "git rebase -i HEAD~2")
+    assert out["result"] is not None and out["result"]["block"] is True
+
+
+def test_guard_allows_and_rewrites_a_normal_command(tmp_path: Path) -> None:
+    # An allowed command is not blocked, and is rewritten with the oom self-tag.
+    out = _run_tool_call(tmp_path, "ls -la")
+    assert out["result"] is None
+    assert "oom_score_adj" in out["command"]
+    assert out["command"].endswith("; ls -la")
+
+
+def test_guard_rewrites_with_git_identity_when_resolvable(tmp_path: Path) -> None:
+    host_dir = tmp_path / "host"
+    host_dir.mkdir()
+    (host_dir / "data.json").write_text(json.dumps({"host_id": "host-9"}))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    (state_dir / "data.json").write_text(json.dumps({"name": "test-agent"}))
+    out = _run_tool_call(
+        tmp_path,
+        "git commit -m hi",
+        env={"MNGR_AGENT_ID": "agent-x", "MNGR_HOST_DIR": str(host_dir)},
+    )
+    assert out["result"] is None
+    assert "GIT_AUTHOR_NAME='test-agent'" in out["command"]
+    assert "GIT_AUTHOR_EMAIL='agent-x@host-9'" in out["command"]

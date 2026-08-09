@@ -582,6 +582,18 @@ _SUBAGENT_STOPPED_COMMAND: str = f'bash "$MNGR_AGENT_STATE_DIR/commands/{SUBAGEN
 _SET_PERMISSIONS_WAITING_COMMAND: str = f'touch "$MNGR_AGENT_STATE_DIR/{PERMISSIONS_WAITING_FILENAME}"'
 _CLEAR_PERMISSIONS_WAITING_COMMAND: str = f'rm -f "$MNGR_AGENT_STATE_DIR/{PERMISSIONS_WAITING_FILENAME}"'
 
+# PreToolUse policy guards. Codex speaks claude's hook protocol -- same PreToolUse
+# event, the same stdin payload (``tool_name``/``tool_input.command``, claude-shaped
+# even under code mode), the same block convention (write reason to stderr, ``exit 2``)
+# and the same ``updatedInput`` rewrite channel -- so codex reuses the EXACT dwt guard
+# scripts claude runs, from the work dir (``$MNGR_AGENT_WORK_DIR``, set for every agent).
+# No copy into the state dir: the scripts already live in the repo checkout. These enforce
+# the same policies pi enforces via its tool_call handler; see system/scripts/POLICY_HOOKS.md.
+_POLICY_SCRIPTS_DIR: str = "$MNGR_AGENT_WORK_DIR/system/scripts"
+_BLOCK_PIPE_TAIL_HEAD_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_block_pipe_tail_head.sh"'
+_PREVENT_COMMIT_REWRITE_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_prevent_commit_rewrite.sh"'
+_REWRITE_BASH_COMMAND: str = f'python3 "{_POLICY_SCRIPTS_DIR}/claude_rewrite_bash_command.py"'
+
 
 @pure
 def build_codex_hooks_config() -> dict[str, Any]:
@@ -630,6 +642,18 @@ def build_codex_hooks_config() -> dict[str, Any]:
     """
     return {
         "hooks": {
+            # PreToolUse policy guards (block bad commands, rewrite the rest); the two
+            # blockers run first, then the rewriter. All three are the dwt scripts claude
+            # uses, run from the work dir. See system/scripts/POLICY_HOOKS.md.
+            "PreToolUse": [
+                {
+                    "hooks": [
+                        {"type": "command", "command": _BLOCK_PIPE_TAIL_HEAD_COMMAND},
+                        {"type": "command", "command": _PREVENT_COMMIT_REWRITE_COMMAND},
+                        {"type": "command", "command": _REWRITE_BASH_COMMAND},
+                    ]
+                }
+            ],
             "UserPromptSubmit": [{"hooks": [{"type": "command", "command": _SET_ACTIVE_COMMAND}]}],
             "Stop": [{"hooks": [{"type": "command", "command": _CLEAR_ACTIVE_COMMAND}]}],
             "SubagentStart": [{"hooks": [{"type": "command", "command": _SUBAGENT_STARTED_COMMAND}]}],

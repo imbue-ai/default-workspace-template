@@ -274,10 +274,13 @@ def test_build_codex_hooks_config_maps_lifecycle_events_to_the_marker_scripts() 
     subagent_stop = hooks["hooks"]["SubagentStop"]
     permission_request = hooks["hooks"]["PermissionRequest"]
     post_tool_use = hooks["hooks"]["PostToolUse"]
+    pre_tool_use = hooks["hooks"]["PreToolUse"]
     # Subagents run asynchronously, so SubagentStart/Stop ARE hooked now: they
     # track in-flight subagents to keep the marker RUNNING after the root Stop.
     # PermissionRequest/PostToolUse maintain the permissions_waiting marker.
+    # PreToolUse runs the dwt policy guards (block + rewrite).
     assert set(hooks["hooks"]) == {
+        "PreToolUse",
         "UserPromptSubmit",
         "Stop",
         "SubagentStart",
@@ -285,6 +288,14 @@ def test_build_codex_hooks_config_maps_lifecycle_events_to_the_marker_scripts() 
         "PermissionRequest",
         "PostToolUse",
     }
+    # PreToolUse runs the three dwt policy scripts from the work dir, in order:
+    # the two blockers then the rewriter.
+    pre_commands = [h["command"] for h in pre_tool_use[0]["hooks"]]
+    assert pre_commands == [
+        'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_block_pipe_tail_head.sh"',
+        'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_prevent_commit_rewrite.sh"',
+        'python3 "$MNGR_AGENT_WORK_DIR/system/scripts/claude_rewrite_bash_command.py"',
+    ]
     assert SET_ACTIVE_MARKER_SCRIPT_NAME in user_prompt[0]["hooks"][0]["command"]
     assert user_prompt[0]["hooks"][0]["type"] == "command"
     assert CLEAR_ACTIVE_MARKER_SCRIPT_NAME in stop[0]["hooks"][0]["command"]
