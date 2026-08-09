@@ -1086,6 +1086,16 @@ _QUEUED_SESSION_EVENTS: list[dict[str, Any]] = [
             "usage": {"input_tokens": 5, "output_tokens": 4},
         },
     },
+    # A second turn is IN FLIGHT (user tail, no reply yet): a queued message only
+    # stays parked while the agent is working -- an idle agent's queue is drained
+    # by definition (the arrival-time sweep enforces exactly that), so the fixture
+    # must model the mid-turn state or the queued group is correctly swept away.
+    {
+        "type": "user",
+        "uuid": "uuid-q-3",
+        "timestamp": "2026-01-01T00:00:03Z",
+        "message": {"role": "user", "content": "Now run the tests"},
+    },
     {
         "type": "queue-operation",
         "operation": "enqueue",
