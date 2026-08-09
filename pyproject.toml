@@ -17,6 +17,7 @@ dependencies = [
     "litellm>=1.88.1",
     "browser",
     "eval-worker",
+    "geopolitical-dashboard",
 ]
 
 [dependency-groups]
@@ -91,6 +92,7 @@ imbue-mngr-codex = { path = "system/vendor/mngr/libs/mngr_codex", editable = tru
 imbue-mngr-pi-coding = { path = "system/vendor/mngr/libs/mngr_pi_coding", editable = true }
 resource-guards = { path = "system/vendor/mngr/libs/resource_guards", editable = true }
 concurrency-group = { path = "system/vendor/mngr/libs/concurrency_group", editable = true }
+geopolitical-dashboard = {workspace = true}
 
 [tool.pytest.ini_options]
 testpaths = ["."]
