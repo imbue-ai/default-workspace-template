@@ -10,12 +10,14 @@ every other context, unlike raw Esc (context-aliased to `confirm:no`, `autocompl
 same auto-flush it performs at natural turn end, which the mirror already tracks -- so the tap
 merely triggers that flush early.
 
-**Decision gate (verify FIRST, before any code):** what `chat:cancel` does to a non-empty queue
-on claude 2.1.207 is UNVERIFIED. One manual session settles it: spawn a claude agent, open a
-long turn, queue 2 messages, `tmux send-keys -t '=mngr-<name>:agent' M-q`, observe. Also record
-the raw JSONL ordering (`[Request interrupted by user]` record vs the flushed `queue-operation`
-leaves), what an unbound `M-q` does, and whether a running claude hot-reloads keybindings.json
-(assumed not). If cancel RETURNS the queue to claude's composer, see Open risks (pivot).
+**Decision gate: RESOLVED (verified 2026-08-09, claude 2.1.207).** A live scratch agent, a
+long generation, two queued messages, `tmux send-keys -t <session>:agent M-q`: the running
+turn showed `Interrupted` and BOTH queued messages committed as a fresh merged turn the agent
+answered -- the composer was left empty. So `chat:cancel` FLUSHES the queue through (it does
+NOT return it to the composer); the plan lands as written for Contract C. The interrupt
+sentinel written was the plain `[Request interrupted by user]` (a streaming abort; the
+mid-tool variant is the `for tool use` form, per plan-claude-interrupt). The pivot branch in
+Open risks is therefore NOT taken.
 
 ## Today's behavior and what is wrong
 

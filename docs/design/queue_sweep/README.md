@@ -83,16 +83,17 @@ idle-sweep trigger for the dead-process case.
    provisioning, executor module, and gate trace); plan-composer-hint any time (its
    dead-codex correctness completes when plan-codex-queue move 2 is in).
 
-## The one open decision point
+## The decision point (RESOLVED 2026-08-09)
 
-plan-claude-tap gates on a single manual verification: what `chat:cancel` does to a
-non-empty queued-message box on claude 2.1.207 (the gate trace must include a mid-tool
-interrupt, pinning both interrupt-sentinel shapes). If cancel flushes the queue through
-(the expected outcome), the tap and interrupt plans land as written. If cancel instead
-returns the queue to claude's own composer, the chord serves Contract B in full: the
-tap keeps restart-flush (flag stays False for claude) and plan-claude-interrupt's
-nonempty branch also goes chord-native, retiring the restart-drain's last claude
-caller -- the pivot is recorded in both plans' Open risks; no dual design.
+plan-claude-tap gated on one manual verification: what `chat:cancel` does to a
+non-empty queued-message box on claude 2.1.207. Verified on a live agent: cancel
+FLUSHES the queue through (both queued messages committed as a fresh merged turn; the
+composer was left empty), the expected outcome -- so the tap and interrupt plans land
+as written (tap = Contract C via the chord; claude's stop = chord on an empty queue,
+restart-drain on a non-empty one). The pivot branch (cancel returns the queue to the
+composer -> chord serves Contract B in full) is NOT taken. The mid-tool interrupt
+sentinel (`[Request interrupted by user for tool use]`) still needs pinning in the
+claude-interrupt implementation, but it does not change the decision.
 
 `native_atomic_shoulder_tap_possible` stays in the catalog in every outcome: it is the
 dispatch point for the tap's base (restart) path, which future harnesses may need.
