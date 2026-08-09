@@ -13,8 +13,9 @@ is backend-only: there is no wire-visible catalog flag, so the frontend keeps on
 one endpoint, and an unregistered harness legitimately falls through to the base.
 
 The endpoint binds the harness-neutral capabilities the implementation may need -- the queue
-watcher, a process restart, and an activity-settle -- exactly as the switch endpoint binds its
-``send`` callback. A native override that needs none of them (pi) simply ignores them.
+watcher, a process restart, an activity-settle, and the native cancel keypress -- exactly as
+the switch endpoint binds its ``send`` callback. A native override that needs only some of them
+(pi, codex) simply ignores the rest.
 """
 
 from abc import ABC
@@ -31,6 +32,10 @@ RestartProcess = Callable[[], tuple[bool, str]]
 # Settle the derived activity state after a mid-turn restart abandons the transcript. Bound by
 # the endpoint to the specific agent.
 SettleActivity = Callable[[], None]
+# Press the harness's native cancel key chord into the agent's pane (under mngr's per-agent
+# ``message.lock``); returns success. Bound by the endpoint to the specific agent -- claude's
+# empty-queue chord path uses it; the base restart-drain and the other overrides ignore it.
+PressChord = Callable[[], bool]
 
 
 class InterruptToComposer(ABC):
@@ -47,13 +52,18 @@ class InterruptToComposer(ABC):
 
     @abstractmethod
     def drain_to_composer(
-        self, watcher: AgentSessionWatcher, restart_process: RestartProcess, settle_activity: SettleActivity
+        self,
+        watcher: AgentSessionWatcher,
+        restart_process: RestartProcess,
+        settle_activity: SettleActivity,
+        press_chord: PressChord,
     ) -> str:
         """Interrupt the turn and return the queued messages as one block (``""`` = nothing queued).
 
         ``watcher`` is the agent's live queue mirror; ``restart_process`` / ``settle_activity``
-        are the base restart-drain's capabilities (a native override may ignore them). Raises
-        :class:`AgentRestartError` if a restart-based implementation cannot restart.
+        are the base restart-drain's capabilities; ``press_chord`` delivers the harness's native
+        cancel chord under mngr's lock (claude's empty-queue path uses it, the others ignore it).
+        Raises :class:`AgentRestartError` if a restart-based implementation cannot restart.
         """
 
 
@@ -94,6 +104,11 @@ class RestartDrainInterruptToComposer(InterruptToComposer):
         return self
 
     def drain_to_composer(
-        self, watcher: AgentSessionWatcher, restart_process: RestartProcess, settle_activity: SettleActivity
+        self,
+        watcher: AgentSessionWatcher,
+        restart_process: RestartProcess,
+        settle_activity: SettleActivity,
+        press_chord: PressChord,
     ) -> str:
+        # The base restart-drain interrupts via SIGKILL-relaunch; it has no use for the chord.
         return restart_drain(self._agent_info, watcher, restart_process, settle_activity)

@@ -930,11 +930,14 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
     """Interrupt to composer: interrupt the running turn and hand the queued block back, unsent.
 
     Dispatches through the harness's registered interrupt-to-composer implementation (the base
-    restart-drain for claude/codex, a native override for pi), which returns the concatenated
-    block the frontend drops into the composer for the user to edit and send, rather than resent.
-    Unlike the flush there is NO empty-queue short-circuit: a stop mid-turn with nothing queued
-    still interrupts (block comes back empty). Returns 404 for an unknown agent, 400 for the
-    primary services agent, 500 if the interrupt fails, 200 with ``{block}`` otherwise.
+    restart-drain by default; native overrides for pi, codex, and claude's empty-queue chord),
+    which returns the concatenated block the frontend drops into the composer for the user to
+    edit and send, rather than resent. Unlike the flush there is NO empty-queue short-circuit: a
+    stop mid-turn with nothing queued still interrupts (block comes back empty). The endpoint
+    binds the harness-neutral capabilities -- watcher, restart, activity-settle, and the native
+    cancel keypress (routed through mngr's locked message API, like the tap) -- and the
+    implementation uses whichever it needs. Returns 404 for an unknown agent, 400 for the primary
+    services agent, 500 if the interrupt fails, 200 with ``{block}`` otherwise.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
@@ -944,9 +947,15 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
         return refusal
 
     watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+    agent_manager: AgentManager = get_state().agent_manager
     interrupter = build_interrupt_to_composer(agent_info)
     try:
-        block = interrupter.drain_to_composer(watcher, restart_process, settle_activity)
+        block = interrupter.drain_to_composer(
+            watcher,
+            restart_process,
+            settle_activity,
+            lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+        )
     except AgentRestartError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
     except OSError as e:

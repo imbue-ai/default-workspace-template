@@ -350,6 +350,52 @@ def test_interrupt_sentinel_user_message_not_emitted() -> None:
     assert events == []
 
 
+def test_mid_tool_interrupt_sentinel_user_message_not_emitted() -> None:
+    """The mid-tool ``[Request interrupted by user for tool use]`` variant is also suppressed.
+
+    Claude writes this shape when the interrupt lands while a tool is running (the dominant stop
+    scenario). Like the plain sentinel it is a control marker, not real user input, so it must not
+    surface as a user_message (which would leave a phantom user bubble and pin the tail
+    heuristic). Both the string and array content forms are covered.
+    """
+    string_form = json.dumps(
+        {
+            "type": "user",
+            "uuid": "uuid-1",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "[Request interrupted by user for tool use]"},
+        }
+    )
+    array_form = json.dumps(
+        {
+            "type": "user",
+            "uuid": "uuid-2",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}],
+            },
+        }
+    )
+    events = parse_lines([string_form, array_form])
+    assert events == []
+
+
+def test_ordinary_user_text_resembling_the_sentinel_still_passes() -> None:
+    """Only the interrupt-sentinel opening is suppressed; ordinary user text still surfaces.
+
+    A prompt that merely mentions the phrase mid-sentence (not as the sentinel's leading form)
+    is a real user turn and must render.
+    """
+    line = _make_user_line(
+        "uuid-1", "2026-01-01T00:00:00Z", "Please explain what [Request interrupted by user] means"
+    )
+    events = parse_lines([line])
+    assert len(events) == 1
+    assert events[0]["type"] == "user_message"
+    assert events[0]["content"] == "Please explain what [Request interrupted by user] means"
+
+
 def test_events_sorted_by_timestamp() -> None:
     lines = [
         _make_assistant_line("uuid-2", "2026-01-01T00:00:02Z", "Second"),
