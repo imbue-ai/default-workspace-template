@@ -62,7 +62,8 @@ handlers. Normal pi behavior and the pi SDK are untouched.
 
 ## Output contracts (the reference the mapping below relies on)
 
-**codex** (verified against codex-cli 0.146.0, per its manual — the "release behavior reference"):
+**codex** (verified against codex-cli 0.146.0 — its manual, the generated hook output schemas
+in `openai/codex` under `codex-rs/hooks/schema/generated/`, and live runs):
 
 | Need | Channel codex honors |
 |------|----------------------|
@@ -72,7 +73,8 @@ handlers. Normal pi behavior and the pi SDK are untouched.
 | Reminder on a new prompt | UserPromptSubmit — **plain stdout is added as developer context** (also accepts `additionalContext`) |
 | Stop | plain stdout is **invalid**; `exit 2` / `decision: "block"` **continues** the agent (creates a new prompt), it does **not** hold the stop |
 
-**pi** (from `types.d.ts` + the compiled runtime):
+**pi** (from `types.d.ts`, the installed compiled runtime, and the public `earendil-works/pi`
+source — all in agreement):
 
 | Need | Channel |
 |------|---------|
@@ -152,9 +154,11 @@ listing them so the agent reconciles before acting.
 A non-blocking, log-only note (exit 0 always) when the agent stops with steps still open.
 Real follow-up is handled by hook 6 on the next turn.
 - **claude**: Stop, writes to stderr, `exit 0`.
-- **codex**: the **same** script — stderr only, `exit 0`, no stdout. It must **not** use
-  `exit 2`/`decision: "block"` on Stop, which on codex would re-engage the agent rather than
-  hold the stop. (When wiring, confirm codex accepts an empty-stdout Stop hook as a no-op.)
+- **codex**: the **same** script — stderr only, `exit 0`, no stdout. Codex accepts an
+  empty-stdout, exit-0 Stop hook as a clean no-op (confirmed live on 0.146.0 and against the
+  generated `stop.command.output` schema, which has no `additionalContext` and defaults to a
+  normal stop). It must **not** use `exit 2`/`decision: "block"` on Stop, which on codex would
+  re-engage the agent rather than hold the stop.
 - **pi**: `on("agent_settled")` — the true "run fully settled" signal; stderr only.
 
 ## Category C — claude-only, not ported (by construction)
