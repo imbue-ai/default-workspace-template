@@ -51,16 +51,22 @@ tailed, already holds `latestCtx`, already on a 200ms timer — `:395-435`). Acc
 record shape alongside the existing string-message case (`:415`):
 
 1. On `{ "minds_interrupt": true }`, in ONE synchronous tick (no `await` between — the
-   atomicity guarantee):
+   atomicity guarantee). NOTE: `restoreQueuedMessagesToEditor` *appends* the drained steers to
+   whatever text is already in the composer (`interactive-mode.ts:4220-4221`), so we must
+   clear-then-restore around the drain, or a user's composer draft would be resent too:
    ```
    const ctx = latestCtx;
    if (ctx && !ctx.isIdle()) {
-     ctx.abort();                          // drains pi's real queue into the editor
-     resubmitText = ctx.ui.getEditorText(); // read what pi drained
-     ctx.ui.setEditorText("");              // clear the (inert) editor copy
+     const draft = ctx.ui.getEditorText();  // usually "" in Minds (you type in the web chat)
+     ctx.ui.setEditorText("");              // clear so the drain lands into an empty box
+     ctx.abort();                           // pi appends its real queue into the now-empty box
+     resubmitText = ctx.ui.getEditorText(); // == exactly the queued steers, nothing else
+     ctx.ui.setEditorText(draft);           // restore the user's draft; box left as it was
      inboxPaused = true;                    // serialize: hold further inbox injects until resubmit
    }
    ```
+   The resent text is thus sourced from pi's *own* queue (authoritative, no Minds-view lag),
+   the composer draft is preserved, and no stray draft can leak into the shoulder tap.
 2. In the same timer body, once the abort has settled:
    ```
    if (resubmitText != null && ctx && ctx.isIdle()) {
@@ -140,9 +146,9 @@ tiny, low-harm race. But it's your call given the codex precedent.
 2. **Held-ctx staleness in a reload/`/new` window** — `ctx` accessors throw once the runner is
    invalidated (before the next `session_start` refreshes `latestCtx`); a tap in that window is
    caught by `safe()` and silently dropped. Acceptable (rare), but note it.
-3. **Empty-queue guard** — after abort with nothing queued, `getEditorText()` may hold a real
-   user draft; only resubmit if it's the drained steers. Simplest: if the agent had pending
-   steers at abort time, resubmit; else treat as a bare interrupt and resubmit nothing.
+3. **Empty-queue guard** — handled by the clear-then-restore in §1: we clear the box before
+   the drain, so with nothing queued the post-abort box is `""` (→ `resubmitText.trim()` empty
+   → resubmit nothing, a bare interrupt) and the user's draft is restored regardless.
 
 ## 6. Deployment (the whole point)
 No pi fork, no `build.sh`, no EC2, no release, no sha-pinned reinstall — it's a TypeScript
