@@ -33,6 +33,7 @@ from loguru import logger
 
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.model import HarnessCatalog
@@ -44,9 +45,13 @@ from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
 from imbue.system_interface.harnesses.model import to_options
 
-# The control file the resolver appends a switch intent to; the pi extension watches it
-# and applies via pi.setModel / pi.setThinkingLevel (kept in sync with the extension).
-_CONTROL_NAME: str = "pi_control.jsonl"
+# The single-slot switch mailbox this resolver writes: switch() atomically OVERWRITES
+# it with one JSON intent, so a newer pick replaces an unconsumed older one (buffer of
+# size 1, last wins). The pi lifecycle extension consumes it (rename, apply, delete) at
+# session start and on its 200ms poll, so a switch parked while the agent is stopped
+# applies on the next start. Kept in sync with CONTROL_NAME in the extension
+# (mngr_pi_coding/resources/mngr_pi_lifecycle.ts).
+_CONTROL_NAME: str = "pi_control.json"
 
 # The lifecycle extension writes minds_model_state.json at the agent state-dir root; the
 # registry wires this as the harness's model_state_relative_path (the shared reader reads there).
@@ -170,8 +175,8 @@ def get_catalog() -> HarnessCatalog:
 
 
 class PiModelResolver(HarnessModelResolver):
-    """Applies a pi agent's switch by writing a control file the extension consumes, and
-    reports its auth-gated picker offer set (the live read is shared)."""
+    """Applies a pi agent's switch by writing a single-slot control mailbox the extension
+    consumes, and reports its auth-gated picker offer set (the live read is shared)."""
 
     _state_dir: Path
 
@@ -218,16 +223,17 @@ class PiModelResolver(HarnessModelResolver):
         self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
     ) -> SwitchResult:
         # pi's inbox delivers user messages, not slash commands, so a switch cannot go
-        # through ``send``. Instead the resolver appends the intent to a control file the
-        # lifecycle extension watches and applies via pi.setModel / pi.setThinkingLevel.
-        # ON_CHANGE: the chip reconciles from the state file once the extension applies it.
+        # through ``send``. Instead the resolver writes the intent to a single-slot control
+        # mailbox the lifecycle extension consumes and applies via pi.setModel /
+        # pi.setThinkingLevel. The write atomically OVERWRITES the file, so the newest
+        # intent replaces any unconsumed older one (last wins). ON_CHANGE: the chip
+        # reconciles from the state file once the extension applies it.
         if ModelAxis.MODEL not in axes and ModelAxis.EFFORT not in axes:
             return SwitchResult(ok=True)
         intent = {"model_id": identity.model_id, "thinking_level": identity.effort}
         control_path = self._state_dir / _CONTROL_NAME
         try:
-            with control_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(intent) + "\n")
+            atomic_write(control_path, json.dumps(intent))
         except OSError as e:
             logger.warning("pi switch: failed to write control file {}: {}", control_path, e)
             return SwitchResult(ok=False, detail="Failed to record the model switch")

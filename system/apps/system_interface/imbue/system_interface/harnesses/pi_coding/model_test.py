@@ -129,5 +129,29 @@ def test_switch_writes_the_control_file(tmp_path: Path) -> None:
         lambda line: True,
     )
     assert result.ok
-    control = (tmp_path / "pi_control.jsonl").read_text().splitlines()
-    assert json.loads(control[0]) == {"model_id": "anthropic/claude-opus-4-8", "thinking_level": "high"}
+    # The mailbox is a single JSON object, not a JSONL log line.
+    assert json.loads((tmp_path / "pi_control.json").read_text()) == {
+        "model_id": "anthropic/claude-opus-4-8",
+        "thinking_level": "high",
+    }
+
+
+def test_switch_twice_leaves_only_the_latest_intent(tmp_path: Path) -> None:
+    # Single-slot mailbox: a second switch atomically overwrites the first (last wins),
+    # so the file holds exactly one intent -- the newest -- rather than an appended log.
+    resolver = PiModelResolver.build(_agent_info(tmp_path))
+    resolver.switch(
+        ModelIdentity(model_id="anthropic/claude-opus-4-8", effort="low", fast=False),
+        frozenset({ModelAxis.MODEL}),
+        lambda line: True,
+    )
+    result = resolver.switch(
+        ModelIdentity(model_id="openai/gpt-5", effort="high", fast=False),
+        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
+        lambda line: True,
+    )
+    assert result.ok
+    control_path = tmp_path / "pi_control.json"
+    # Exactly one intent in the file (a JSONL append would leave two lines).
+    assert len(control_path.read_text().splitlines()) == 1
+    assert json.loads(control_path.read_text()) == {"model_id": "openai/gpt-5", "thinking_level": "high"}
