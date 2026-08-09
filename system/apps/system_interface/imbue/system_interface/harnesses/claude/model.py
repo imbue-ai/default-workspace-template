@@ -85,6 +85,10 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     powered_by_label="Claude Code",
 )
 
+# The statusline writes minds_model_state.json at the agent state-dir root; the registry
+# wires this as the harness's model_state_relative_path (the shared reader reads there).
+CLAUDE_STATE_RELATIVE_PATH: Path = Path(".")
+
 
 class FastModeSettingsError(RuntimeError):
     """Raised when an agent's Claude settings file cannot be updated safely."""
