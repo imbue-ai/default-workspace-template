@@ -1126,6 +1126,136 @@ def test_subagent_discovered_after_history_file_disappears(tmp_path: Path) -> No
     assert upgraded["subagent_metadata"]["session_id"] == "agent-rotsubid"
 
 
+# --- Queue replay scoped to the latest main session ---
+
+
+def _queue_enqueue_record(content: str, session_id: str) -> dict[str, Any]:
+    return {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "timestamp": "2026-01-01T00:00:05.000Z",
+        "sessionId": session_id,
+        "content": content,
+    }
+
+
+def _queue_dequeue_record(session_id: str) -> dict[str, Any]:
+    return {"type": "queue-operation", "operation": "dequeue", "timestamp": "t", "sessionId": session_id}
+
+
+def _queued_contents(watcher: ClaudeSessionWatcher) -> list[str]:
+    return [entry["content"] for entry in watcher.get_queued_messages()]
+
+
+def test_dead_session_dangling_enqueues_do_not_replay_alongside_a_newer_session(tmp_path: Path) -> None:
+    """A fresh replay over a dead session's dangling enqueues plus a newer main
+    session snapshots empty.
+
+    The stopped-agent / restarted-claude case: the old session's parked enqueues
+    (no matching leaves) sit in its ledger forever, but the live process's queue
+    is exactly the LATEST main session's queue signals, so the priming replay
+    must not resurrect them.
+    """
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    projects_dir = claude_config_dir / "projects"
+    _write_session_file(
+        projects_dir,
+        "session-1",
+        [_user_event(0), _queue_enqueue_record("stranded in the dead process", "session-1")],
+    )
+    _write_session_file(projects_dir, "session-2", [_user_event(1)])
+    (agent_state_dir / "claude_session_id_history").write_text("session-1\nsession-2\n")
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+    watcher._prime_caches()
+
+    assert watcher.get_queued_messages() == []
+
+
+def test_latest_session_parked_enqueues_replay_on_a_fresh_start(tmp_path: Path) -> None:
+    """The backend-restart-mid-turn case: the latest main session's parked
+    enqueues (a queue cannot span sessions) are rebuilt by the priming replay,
+    netting enqueues against leaves; older sessions contribute nothing."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    projects_dir = claude_config_dir / "projects"
+    # The old session's queue history fully netted out while it was alive.
+    _write_session_file(
+        projects_dir,
+        "session-1",
+        [_queue_enqueue_record("long committed", "session-1"), _queue_dequeue_record("session-1")],
+    )
+    # The live session has one committed and one still-parked message.
+    _write_session_file(
+        projects_dir,
+        "session-2",
+        [
+            _queue_enqueue_record("committed", "session-2"),
+            _queue_dequeue_record("session-2"),
+            _queue_enqueue_record("parked mid-turn", "session-2"),
+        ],
+    )
+    (agent_state_dir / "claude_session_id_history").write_text("session-1\nsession-2\n")
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+    watcher._prime_caches()
+
+    assert _queued_contents(watcher) == ["parked mid-turn"]
+
+
+def test_new_latest_session_registered_mid_watch_purges_residue(tmp_path: Path) -> None:
+    """A new main session registered mid-watch (claude restarted outside minds)
+    purges residue on the next discovery cycle, without waiting for the new
+    session to emit a queue signal, and the poll broadcasts the empty snapshot."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    snapshots: list[list[dict[str, Any]]] = []
+    watcher.set_queue_snapshot_callback(snapshots.append)
+    watcher._discover_sessions()
+
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_enqueue_record("live for now", "test-session")) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+    assert _queued_contents(watcher) == ["live for now"]
+    assert [entry["content"] for entry in snapshots[-1]] == ["live for now"]
+
+    # The restart rotates into a new session file; its ledger emits no queue
+    # signal, yet registering it as the new latest must purge the residue.
+    _write_session_file(claude_config_dir / "projects", "session-next", [_user_event(1)])
+    with open(agent_state_dir / "claude_session_id_history", "a") as f:
+        f.write("session-next\n")
+
+    watcher._discover_sessions()
+    assert watcher.get_queued_messages() == []
+    watcher._poll_for_changes()
+    assert snapshots[-1] == []
+
+
+def test_truncated_latest_session_re_derives_queue_from_scratch(tmp_path: Path) -> None:
+    """An atomic save-rewrite of the latest session file re-derives the queue
+    from the rewritten contents instead of double-feeding the same enqueues."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_enqueue_record("first", "test-session")) + "\n").encode("utf-8"))
+        f.write((json.dumps(_queue_enqueue_record("second", "test-session")) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+    assert _queued_contents(watcher) == ["first", "second"]
+
+    # Rewritten shorter: only the first enqueue survives. Without the truncation
+    # reset the replay would append a duplicate onto the stale entries.
+    session_file.write_bytes((json.dumps(_queue_enqueue_record("first", "test-session")) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+    assert _queued_contents(watcher) == ["first"]
+
+
 def test_is_main_session_event_excludes_subagent_sessions(tmp_path: Path) -> None:
     """The predicate that keeps subagent-session events out of the main stream."""
     agent_state_dir, claude_config_dir, session_id = _setup_agent(tmp_path, [])

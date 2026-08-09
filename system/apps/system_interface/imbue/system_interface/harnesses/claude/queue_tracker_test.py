@@ -151,13 +151,30 @@ def test_duplicate_content_two_entries_one_leave_leaves_one() -> None:
     assert _contents(tracker) == ["same"]
 
 
-def test_new_session_file_resets_the_queue() -> None:
+def test_single_session_replay_reproduces_the_true_queue() -> None:
+    # The tracker is a pure function of the one (latest) session's ledger it is
+    # fed: a full replay from byte 0 nets enqueues against leaves, leaving
+    # exactly the still-parked entries -- the backend-restart rebuild case.
     tracker = ClaudeQueueTracker.build()
-    _feed(tracker, _enqueue_line("stale from old session", session_id="old"))
+    _feed(
+        tracker,
+        _enqueue_line("committed"),
+        _enqueue_line("still parked"),
+        _dequeue_line(),
+        _enqueue_line("also parked"),
+    )
+    assert _contents(tracker) == ["still parked", "also parked"]
+
+
+def test_reset_clears_the_queue() -> None:
+    # The watcher resets the tracker when a new latest main session is
+    # registered (the process restarted); the tracker itself does no session
+    # discrimination -- reset just empties the set.
+    tracker = ClaudeQueueTracker.build()
+    _feed(tracker, _enqueue_line("residue from the dead process"))
     assert len(tracker.snapshot()) == 1
-    # A record from a new session file (process restarted) resets the set.
-    _feed(tracker, _enqueue_line("fresh", session_id="new"))
-    assert _contents(tracker) == ["fresh"]
+    tracker.reset()
+    assert tracker.snapshot() == []
 
 
 def test_user_records_and_attachments_are_not_queue_signals() -> None:
