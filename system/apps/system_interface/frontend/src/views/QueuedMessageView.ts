@@ -17,13 +17,7 @@ import m from "mithril";
 import { getAgentById, getQueuedMessagesForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
 import { getHarnessCatalog } from "../models/HarnessCatalog";
-import {
-  awaitPendingSends,
-  getFlushFreeze,
-  hasPendingSends,
-  releaseFlushFreeze,
-  startFlushFreeze,
-} from "../models/OutgoingMessages";
+import { getFlushFreeze, hasPendingSends, releaseFlushFreeze, startFlushFreeze } from "../models/OutgoingMessages";
 import { flushQueue, shoulderTapAtomic } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 
@@ -51,22 +45,18 @@ function isTerminalNoopStatus(status: string): boolean {
 }
 
 async function flushQueuedMessages(agentId: string): Promise<void> {
-  if (inFlightAgentIds.has(agentId)) {
+  // Never flush while the tap is already running, or while a message is still sending: a
+  // mid-send message is not in the queue yet, so a flush would race it. The button is
+  // greyed for both, but ``disabled`` only takes effect on the next redraw, so a click
+  // can beat it -- this synchronous re-check at click time is the actual guarantee that a
+  // flush never runs with a send in flight.
+  if (inFlightAgentIds.has(agentId) || hasPendingSends(agentId)) {
     return;
   }
   const isAtomic = isAtomicShoulderTapAgent(agentId);
   inFlightAgentIds.add(agentId);
-  // A message the user just sent may still be in flight (not yet parked in the harness
-  // queue). Wait for it so it is part of THIS flush instead of racing it -- the button
-  // is greyed out while a send is pending, but a click can still land in the frame
-  // before that takes effect. Bounded, so a stuck send cannot hang the tap. Only awaited
-  // when something is actually in flight, so the common case stays synchronous.
-  if (hasPendingSends(agentId)) {
-    m.redraw();
-    await awaitPendingSends(agentId);
-  }
-  // Capture the messages BEFORE the backend snapshot empties -- now including any
-  // just-parked in-flight message -- and hold them greyed until a backend arrival
+  // Capture the messages BEFORE the backend snapshot empties, and hold them greyed
+  // until a backend arrival
   // releases the freeze (arrival-driven, like a "Sending…" bubble; a 20s cap is the
   // only fallback). We deliberately do NOT release on the POST resolving -- that would
   // clear the hold before the merged/resent turn renders, reopening the blip. The
