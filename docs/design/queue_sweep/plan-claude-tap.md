@@ -42,24 +42,30 @@ Open risks is therefore NOT taken.
 Tear out: nothing destructively -- `_flush_queue_endpoint` stays as the base path (flag stays,
 per decision). The claude tear-out is the frontend routing claude to it (the flag flip).
 
-**mngr side (`libs/mngr_claude/claude_config.py`) -- provisioning only.** Unlike pi/codex, whose
-native machinery must live outside dwt because it runs INSIDE the harness process, nothing here
-executes in claude: the tap is dwt-backend Python invoked in-process either way, and its whole
-verdict vocabulary (queue-operation leaves, interrupt sentinel, live-session resolution) already
-exists tested on the dwt side -- placing it in mngr would maintain the claude record signature
-in two repos on two branches. So the split the boundary decision allows: provisioning in mngr,
-executor in dwt.
+**mngr side -- provisioning AND the keypress primitive.** The tap's *orchestration* (verdict
+vocabulary: queue-operation leaves, interrupt sentinel, live-session resolution) stays dwt
+because it reads dwt-only derived state; putting it in mngr would maintain the claude record
+signature in two repos. But the *keypress itself* belongs in mngr with the rest of the send
+machinery -- dwt NEVER does raw tmux (text sends route through `imbue.mngr.api.message`
+`send_message_to_agents`, and mngr owns the flock + tmux; agent_discovery.py:22,193-215). A raw
+`tmux send-keys` + `flock` in dwt would duplicate mngr's lock convention in the wrong repo. So:
 
-1. `ensure_chat_cancel_tap_keybinding()`: merge `"meta+q": "chat:cancel"` into the Chat entry of
-   the user-scope `keybindings.json`, creating file/entry if absent, via the existing
-   `_claude_config_lock` + `atomic_write` pattern (claude_config.py:195-237). Never clobber a
-   `meta+q` already assigned in the Chat or Global entry -- the only contexts a Chat chord can
-   conflict with (contexts are otherwise disjoint); the gate below then reports it unavailable.
-   Called from `provision()` alongside `auto_dismiss_claude_dialogs` (user-scope precedent,
-   claude_config.py:449-461). Isolated-mode agents inherit via the existing sync.
+1. `ensure_chat_cancel_tap_keybinding()` (`libs/mngr_claude/claude_config.py`): merge
+   `"meta+q": "chat:cancel"` into the Chat entry of the user-scope `keybindings.json`, creating
+   file/entry if absent, via the existing `_claude_config_lock` + `atomic_write` pattern
+   (claude_config.py:195-237). Never clobber a `meta+q` already assigned in the Chat or Global
+   entry (the only contexts a Chat chord can conflict with); the gate below then reports it
+   unavailable. Called from `provision()` alongside `auto_dismiss_claude_dialogs`
+   (claude_config.py:449-461). Isolated-mode agents inherit via the existing sync. (NOTE:
+   idempotent against an already-present binding -- this workspace's shared keybindings.json
+   already carries it from a manual gate test.)
 2. `is_tap_binding_active()`: Chat `meta+q` -> `chat:cancel` AND keybindings.json mtime older
-   than the `claude_process_started` marker's (the live process launched with the binding on
-   disk; no hot-reload assumption). mngr changelog entry per convention.
+   than the `claude_process_started` marker's (no hot-reload assumption).
+3. A GENERIC keypress primitive in `imbue/mngr/api/message.py`, beside `send_message_to_agents`:
+   "press a raw tmux key token (e.g. `M-q`) in the agent's pane, holding the same per-agent
+   `message.lock`" (base_agent.py:368-394,697,709-766 -- the send holds the lock across its
+   text+Enter, so an unserialized chord could split a half-delivered message). It presses
+   whatever token it is given; the CHOICE of `M-q` is the dwt caller's. mngr changelog entry.
 
 **dwt side (`system/apps/system_interface`):**
 
@@ -81,13 +87,13 @@ executor in dwt.
      watcher.py:981-1021, via the `_find_session_file` walk, watcher.py:1091-1099 -- small
      accessor; NOT the `encode_claude_project_dir_name` path, whose divergence risk its own
      docstring documents, mngr claude_config.py:505-520). Record its byte size as baseline.
-   - Deliver ONE `tmux send-keys M-q` (ESC+q, one pty write) while holding mngr's per-agent send
-     lock -- flock on `<agent_state_dir>/message.lock`, the lock every mngr send takes
-     (base_agent.py:368-394,:697): a send is literal text plus a SEPARATE Enter (:709-766), so
-     an unserialized chord could land between them and cancel a half-delivered message. Target:
-     session `f"{MNGR_PREFIX}{name}"` (pane-capture precedent, server.py:1387-1391), window
-     `mngr_ctx.config.tmux.primary_window_name` via the existing in-process context
-     (agent_discovery.py:63; mirrors mngr's `tmux_target`, base_agent.py:356-365).
+   - Deliver ONE `M-q` (ESC+q, one pty write) by CALLING the mngr keypress primitive (piece 3
+     above) through the same in-process boundary dwt uses for text sends -- add a dwt method
+     mirroring `send_message_to_agent` (on `AgentManager` / `MngrMessenger`) that routes to it,
+     so the executor and its tests inject a fake exactly like the text-send fake in testing.py.
+     NOT raw `tmux send-keys` / `flock` from dwt: mngr owns the lock + tmux, dwt only decides
+     when to press. The lock matters because a send is text plus a SEPARATE Enter, so an
+     unserialized chord could split a half-delivered message.
    - Watch (poll ~200ms, <=3s): each poll re-calls `get_all_events()` and classifies the RAW
      post-baseline tail (`parse_queue_signals` session_parser.py:646, `_LEAVE_OPERATIONS` :608,
      `_INTERRUPT_SENTINEL_TEXT` :61 -- raw, since parsed events drop the sentinel, :448).
