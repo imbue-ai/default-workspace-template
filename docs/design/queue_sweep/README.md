@@ -57,6 +57,12 @@ idle-sweep trigger for the dead-process case.
   for the cancelled-follow-on race; keybinding provisioning in mngr
   (`claude-codex-pi-mngr`), tap executor in dwt (`claude-codex-pi-dwt`); flips
   `native_atomic_shoulder_tap_possible` True for claude; no rebuild. Gated (below).
+- **plan-claude-interrupt.md** -- stop button goes half-native for claude: an EMPTY
+  queue mid-turn gets the tap plan's `meta+q` chord (pure interrupt, confirm-then-clear
+  of the stranded `active` marker, both interrupt-sentinel shapes suppressed in the
+  parser); a NONEMPTY queue keeps the restart-drain base. Amends plan-pi-interrupt's
+  pinned claude-empty-queue test and adds the tap's recovery-suppression guard. dwt only
+  (`claude-codex-pi-dwt`); no rebuild.
 - **plan-composer-hint.md** -- mid-turn composer placeholder becomes "Type to queue
   more messages..." -- the contracts' user-facing legend. dwt frontend only
   (`claude-codex-pi-dwt`); no rebuild.
@@ -72,18 +78,21 @@ idle-sweep trigger for the dead-process case.
 4. **plan-codex-interrupt strictly after plan-codex-queue (hard edge two):** the
    handback trusts the mirror, so prior-generation orphans must already be scoped out.
    It also follows plan-pi-interrupt, whose registry it registers into.
-5. plan-claude-tap once its decision gate passes; plan-composer-hint any time (its
+5. plan-claude-tap once its decision gate passes; plan-claude-interrupt after
+   plan-claude-queue, plan-pi-interrupt, AND plan-claude-tap (it reuses the tap's
+   provisioning, executor module, and gate trace); plan-composer-hint any time (its
    dead-codex correctness completes when plan-codex-queue move 2 is in).
 
 ## The one open decision point
 
 plan-claude-tap gates on a single manual verification: what `chat:cancel` does to a
-non-empty queued-message box on claude 2.1.207. If cancel flushes the queue through
-(the expected outcome), the plan lands as written (Contract C). If cancel instead
-returns the queue to claude's own composer, the chord serves Contract B: the tap keeps
-restart-flush, the flag stays False for claude, and the chord becomes claude's native
-/drain-to-composer override -- the pivot is recorded in that plan's Open risks; no dual
-design.
+non-empty queued-message box on claude 2.1.207 (the gate trace must include a mid-tool
+interrupt, pinning both interrupt-sentinel shapes). If cancel flushes the queue through
+(the expected outcome), the tap and interrupt plans land as written. If cancel instead
+returns the queue to claude's own composer, the chord serves Contract B in full: the
+tap keeps restart-flush (flag stays False for claude) and plan-claude-interrupt's
+nonempty branch also goes chord-native, retiring the restart-drain's last claude
+caller -- the pivot is recorded in both plans' Open risks; no dual design.
 
 `native_atomic_shoulder_tap_possible` stays in the catalog in every outcome: it is the
 dispatch point for the tap's base (restart) path, which future harnesses may need.
