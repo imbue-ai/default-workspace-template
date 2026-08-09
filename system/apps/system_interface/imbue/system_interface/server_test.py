@@ -867,15 +867,32 @@ def test_shoulder_tap_atomic_writes_control_line_for_codex_open_turn(client: Fla
     assert lines == ['{"target_turn_id": "tid-7"}']
 
 
-def test_shoulder_tap_atomic_rejects_non_codex_harness(client: FlaskClient, tmp_path: Path) -> None:
-    """The endpoint is codex-only; a claude agent gets a 400 with a clear message and no write."""
+def test_shoulder_tap_atomic_rejects_non_atomic_harness(client: FlaskClient, tmp_path: Path) -> None:
+    """A non-atomic harness (claude) gets a 400 with a clear message and no write."""
     agent_info = _agent_info(name="claude-agent", harness=HarnessType.CLAUDE, agent_state_dir=tmp_path)
     with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
     assert response.status_code == 400
-    assert "codex-only" in response.get_json()["detail"]
+    assert "does not support an atomic shoulder tap" in response.get_json()["detail"]
     assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
+
+
+def test_shoulder_tap_atomic_writes_sentinel_for_pi(client: FlaskClient, tmp_path: Path) -> None:
+    """A pi agent gets one interrupt sentinel appended to its inbox (a JSON object, so the queue
+    watcher ignores it), the status is ``tapped``, and the agent is NOT restarted."""
+    agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "tapped"
+    mock_run.assert_not_called()
+    lines = (tmp_path / "pi_inbox").read_text().splitlines()
+    assert lines == ['{"minds_interrupt": true}']
 
 
 def test_shoulder_tap_atomic_rejects_is_primary_agent(client: FlaskClient, tmp_path: Path) -> None:
