@@ -246,13 +246,13 @@ body {
 }
 
 /* A queued bubble reuses the user-bubble view but is marked as not-yet-sent: a
-   dashed outline and slightly muted fill distinguish it from a committed turn. */
+   slightly muted fill distinguishes it from a committed turn (the labeled 'Queued
+   messages' group is what sets it apart; no outline). */
 .queued-message {
   margin-bottom: 0;
 }
 
 .queued-message .message-user-bubble {
-  border: 1px dashed var(--color-border);
   opacity: 0.85;
 }
 
@@ -354,13 +354,13 @@ body {
   border: none;
 }
 
-/* The row below the chat input: a 3-column grid -- model bar on the left, the "Powered by"
-   credit centered, agent-terminal + harness-auth actions right-aligned. The two side columns
-   are equal (1fr) so the auto-width center column stays visually centered in the bar. Shares
-   the model bar's font; no background of its own; text at the visible secondary color. */
+/* The row below the chat input: model bar on the left, agent-terminal + harness-auth actions
+   right-aligned -- the original flex row, undisturbed. The "Powered by" credit is centered over
+   the bar as a non-interactive overlay (see .composer-under-bar-credit) rather than as a flow
+   element, so it never reshapes the row or clips the pickers. Shares the model bar's font; no
+   background of its own; text at the visible secondary color. */
 .composer-under-bar {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 4px;
@@ -369,46 +369,15 @@ body {
   margin-left: auto;
   margin-right: auto;
   width: 100%;
-  /* Query container: the credit hides itself (below) once the BAR -- not the viewport --
-     is too narrow to seat it without crowding the buttons, so it works in split panes too. */
-  container-type: inline-size;
-}
-
-/* Left cell: the model bar, aligned to the start of its column. No `overflow` here -- the
-   model/effort pickers open upward as absolutely-positioned children that overflow this cell,
-   so clipping it would hide the dropdowns (leaving only a shadow at the clip edge). */
-.composer-under-bar-model {
-  justify-self: start;
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-/* Center cell: holds the credit. min-width:0 + overflow lets the credit truncate when the
-   row gets narrow, rather than pushing into the model bar or the action buttons. */
-.composer-under-bar-center {
-  justify-self: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  overflow: hidden;
+  /* Containing block for the centered credit overlay. */
+  position: relative;
 }
 
 .composer-under-bar-actions {
-  justify-self: end;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 2px;
-}
-
-/* When the bar is too narrow to center the credit without crowding the model bar or the
-   action buttons, drop the decorative credit entirely (verified: this protects the buttons
-   down to a ~170px bar). The model bar stays left and the actions stay right. */
-@container (max-width: 520px) {
-  .composer-under-bar-center {
-    display: none;
-  }
 }
 
 .composer-under-bar-action {
@@ -435,6 +404,17 @@ body {
 /* A non-clickable credit sharing the action buttons' font, but static: no hover,
    no pointer cursor, not focusable. */
 .composer-under-bar-credit {
+  /* Centered over the bar as an overlay: pointer-events:none so it never intercepts clicks on
+     the model bar or buttons beneath it, and being out of flow it leaves the original flex row
+     unchanged. max-width keeps it clear of the side groups; it ellipsizes if it would collide. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   display: inline-flex;
   align-items: center;
   height: 30px;
@@ -444,10 +424,6 @@ body {
   color: var(--color-text-secondary);
   white-space: nowrap;
   user-select: none;
-  /* Truncate rather than overflow the center cell when the row is narrow. */
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .message-input {

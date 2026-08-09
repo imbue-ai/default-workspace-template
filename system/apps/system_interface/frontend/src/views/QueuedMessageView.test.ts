@@ -99,7 +99,7 @@ describe("renderQueuedMessages", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
     const info = findByClass(renderQueuedMessages("agent-info"), "queued-info");
     expect(info?.attrs?.["data-tooltip"]).toBe(
-      "Messages below are sent when your agent takes a breather or finishes a turn.",
+      "Messages below are sent when your agent takes a breather mid-work or finishes a turn.",
     );
   });
 

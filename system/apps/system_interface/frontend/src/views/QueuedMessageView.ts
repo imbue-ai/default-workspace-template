@@ -21,7 +21,7 @@ import { flushQueue } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
-const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather or finishes a turn.";
+const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
 
 // Agents with the flush action in flight. While it runs the button is disabled so
 // it cannot double-fire; cleared when the request settles. The snapshot itself
