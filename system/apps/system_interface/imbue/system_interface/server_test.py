@@ -38,7 +38,6 @@ from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
@@ -392,11 +391,10 @@ def _model_agent_info(agent_id: str, tmp_path: Path, harness: HarnessType = Harn
 
 
 def _manager_with_resolver(agent_info: AgentInfo) -> tuple[AgentManager, RecordingMngrMessenger]:
-    """A manager whose model resolver for ``agent_info`` is pre-built, so the switch
-    endpoint can reach it without full agent discovery."""
+    """A recording-messenger manager for the switch endpoint. The endpoint builds the
+    resolver inline from the ``_find_agent`` result, so nothing needs pre-seeding here."""
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
-    manager._model_resolver_by_agent[agent_info.id] = build_resolver(agent_info)
     return manager, messenger
 
 
@@ -408,7 +406,8 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     assert "claude" in data
     claude = data["claude"]
     assert [option["id"] for option in claude["options"]] == ["opus[1m]", "fable", "sonnet", "haiku"]
-    assert claude["default_model_id"] == "opus[1m]"
+    # Each option carries the suffix-free reported id the matcher keys on.
+    assert claude["options"][1]["harness_reported_model_id"] == "claude-fable-5"
     assert claude["switch_mode"] == "eager_then_reconcile"
     assert claude["powered_by_label"] == "Claude Code"
 

@@ -16,6 +16,7 @@ would mean two places to edit for one harness, which is how the split drifts.
 """
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -27,6 +28,7 @@ from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
+from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -36,6 +38,7 @@ from imbue.system_interface.harnesses.pi_coding.model import get_catalog as get_
 from imbue.system_interface.harnesses.pi_coding.watcher import PiSessionWatcher
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
+from imbue.system_interface.harnesses.model import model_state_path
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
@@ -53,6 +56,10 @@ class HarnessSpec(FrozenModel):
     # The model resolver class -- a true peer of watcher_class/tracker_class, so it
     # sits flat here and AgentManager calls ``.build(agent_info)`` on it the same way.
     resolver_class: type[HarnessModelResolver]
+    # Where the harness writes its uniform ``minds_model_state.json``, RELATIVE to the agent
+    # state dir -- the one per-harness difference the shared live read/watch takes as data.
+    # ``Path(".")`` = the state-dir root (claude, pi); codex writes under its CODEX_HOME.
+    model_state_relative_path: Path
     # A factory for the per-harness model catalog, called (once, cached) by ``get_catalog``.
     # Behind a factory rather than a value because pi PARSES thousands of models off
     # disk -- too much for import time, and importing this module must not fail on an image
@@ -71,6 +78,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=ClaudeActivityTracker,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
+        model_state_relative_path=Path("."),
         # Claude Code's transcript has no turn boundaries; activity is inferred from an
         # unmatched tool_use plus the transcript tail.
         special_kinds=frozenset(),
@@ -81,6 +89,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=CodexActivityTracker,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
+        model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
         special_kinds=frozenset(
             {
                 SpecialEventKind.TURN_STARTED,
@@ -98,6 +107,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=PiActivityTracker,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
+        model_state_relative_path=Path("."),
         special_kinds=frozenset(),
     ),
 }
@@ -121,6 +131,13 @@ def build_tracker(harness: HarnessType) -> HarnessActivityTracker:
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
     """Build the model resolver for ``agent_info``'s harness."""
     return get_harness_spec(agent_info.harness).resolver_class.build(agent_info)
+
+
+def get_model_state_path(agent_info: AgentInfo) -> Path:
+    """The agent's live ``minds_model_state.json`` -- the file the shared reader parses and
+    the model watcher watches -- under its harness's registered relative directory."""
+    spec = get_harness_spec(agent_info.harness)
+    return model_state_path(agent_info.agent_state_dir, spec.model_state_relative_path)
 
 
 # Built once per process from each harness's factory. The parsed catalogs (pi)

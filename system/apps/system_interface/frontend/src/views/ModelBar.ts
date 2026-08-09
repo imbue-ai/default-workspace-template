@@ -329,6 +329,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       const optimistic = catalog.switch_mode === "eager_then_reconcile";
       const currentEffort = choice.identity.effort;
       const currentFast = choice.identity.fast;
+      // The value a pick is diffed against: the matched option's catalog id (NOT
+      // choice.identity.model_id, which is the raw reported id), so changedAxes counts a
+      // model change iff the picked catalog id differs -- an effort/fast click keeps this id.
+      const currentIdentity: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: currentFast };
 
       // A searchable picker offers only the account-gated set fetched on open (matched
       // back to the catalog for labels/efforts); everything else offers the whole catalog.
@@ -363,7 +367,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             effort: clampEffort(option, currentEffort),
             fast: option.supports_fast ? currentFast : false,
           };
-          setModelChoice(agentId, nextIdentity, option, changedAxes(choice.identity, nextIdentity), optimistic);
+          setModelChoice(agentId, nextIdentity, option, changedAxes(currentIdentity, nextIdentity), optimistic);
         },
       });
 
@@ -380,7 +384,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               tooltip: "Select reasoning effort",
               onPick: (level) => {
                 const nextIdentity: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                setModelChoice(agentId, nextIdentity, matched, changedAxes(choice.identity, nextIdentity), optimistic);
+                setModelChoice(agentId, nextIdentity, matched, changedAxes(currentIdentity, nextIdentity), optimistic);
               },
             })
           : null;
@@ -408,7 +412,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                   effort: currentEffort,
                   fast: !currentFast,
                 };
-                setModelChoice(agentId, nextIdentity, matched, changedAxes(choice.identity, nextIdentity), optimistic);
+                setModelChoice(agentId, nextIdentity, matched, changedAxes(currentIdentity, nextIdentity), optimistic);
               },
             },
             m.trust(icon("zap", { size: 16 })),

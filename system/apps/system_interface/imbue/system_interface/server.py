@@ -62,8 +62,8 @@ from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import SwitchMode
-from imbue.system_interface.harnesses.model import base_alias
 from imbue.system_interface.harnesses.registry import HARNESS_SPECS
+from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import get_catalog
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
@@ -483,8 +483,8 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
 
     req = SetModelChoiceRequest.model_validate(request.get_json())
     catalog = get_catalog(agent_info.harness)
-    alias = base_alias(req.model_id)
-    option = next((opt for opt in catalog.options if base_alias(opt.id) == alias), None)
+    # The picker only ever sends a catalog id, so validation is an exact id lookup.
+    option = next((opt for opt in catalog.options if opt.id == req.model_id), None)
     if option is None:
         return _json_response(ErrorResponse(detail=f"Unknown model '{req.model_id}'").model_dump(), status_code=400)
 
@@ -505,9 +505,9 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
         return _json_response(ErrorResponse(detail=f"'{req.model_id}' does not support fast mode").model_dump(), 400)
 
     agent_manager: AgentManager = get_state().agent_manager
-    resolver = agent_manager.get_model_resolver(agent_info.id)
-    if resolver is None:
-        return _agent_not_found_response(agent_id)
+    # The live read is harness-neutral (shared reader), so the resolver -- which now owns
+    # only the switch/offer side -- is built inline from agent_info rather than cached.
+    resolver = build_resolver(agent_info)
 
     identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
     result = resolver.switch(
@@ -536,10 +536,7 @@ def _get_model_options_endpoint(agent_id: str) -> Response:
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
-    resolver = get_state().agent_manager.get_model_resolver(agent_info.id)
-    if resolver is None:
-        return _agent_not_found_response(agent_id)
-    offered = resolver.list_offered_models()
+    offered = build_resolver(agent_info).list_offered_models()
     return _json_response(ModelOptionsResponse(models=offered).model_dump())
 
 
