@@ -9,8 +9,10 @@ now does the same, without the thread ever running.
 """
 
 import json
+import os
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import Callable
@@ -409,3 +411,84 @@ def test_invalid_queued_input_lines_are_skipped(tmp_path: Path) -> None:
     watcher, _ = _build_watcher(tmp_path)
     watcher.get_all_events()
     assert watcher.get_queued_messages() == []
+
+
+# --- generation scoping (the codex_process_started marker bounds the replay) -----------
+
+
+def _touch_process_started_marker(agent_state_dir: Path, mtime_iso: str) -> None:
+    """Create ``codex_process_started`` with its mtime pinned to ``mtime_iso`` -- the
+    launch boundary mngr touches on every codex start."""
+    marker = agent_state_dir / "codex_process_started"
+    marker.touch()
+    epoch = datetime.fromisoformat(mtime_iso).timestamp()
+    os.utime(marker, (epoch, epoch))
+
+
+def test_replay_scopes_out_enqueues_from_a_prior_process_generation(tmp_path: Path) -> None:
+    """A ledger mixing a dead generation's open entry with the live generation's
+    open/committed/retracted records snapshots to exactly the CURRENT open set.
+
+    The dead process wrote no terminating record for q0 (a SIGKILL writes none), so a
+    full replay would resurrect it forever; the launch marker's mtime sits between the
+    generations and scopes it out.
+    """
+    _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
+    _write_queued_input(
+        tmp_path,
+        [
+            _queued_line("q0", "orphaned by the dead process", timestamp="2026-08-03T00:00:01Z"),
+            _queued_line("q1", "parked now", timestamp="2026-08-03T00:00:10Z"),
+            _queued_line("q2", "committed now", timestamp="2026-08-03T00:00:11Z"),
+            _leave_line("queued_committed", "q2"),
+            _queued_line("q3", "retracted now", timestamp="2026-08-03T00:00:12Z"),
+            _leave_line("queued_retracted", "q3"),
+        ],
+    )
+    _touch_process_started_marker(tmp_path, "2026-08-03T00:00:05Z")
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+
+    assert [(m["queued_id"], m["content"]) for m in watcher.get_queued_messages()] == [("q1", "parked now")]
+
+
+def test_replay_without_a_marker_folds_every_enqueue(tmp_path: Path) -> None:
+    """No marker means no positive evidence of a generation boundary: everything folds,
+    exactly as before the guard existed (e.g. an agent predating the marker)."""
+    _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
+    _write_queued_input(tmp_path, [_queued_line("q1", "old but unbounded", timestamp="2020-01-01T00:00:00Z")])
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+
+    assert [m["queued_id"] for m in watcher.get_queued_messages()] == ["q1"]
+
+
+def test_leave_for_a_generation_filtered_id_is_a_no_op(tmp_path: Path) -> None:
+    """LEAVE records fold unconditionally; one naming a scoped-out id resolves nothing
+    and leaves the live generation's entries untouched."""
+    _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
+    _write_queued_input(
+        tmp_path,
+        [
+            _queued_line("q0", "dead generation", timestamp="2026-08-03T00:00:01Z"),
+            _leave_line("queued_committed", "q0"),
+            _queued_line("q1", "parked now", timestamp="2026-08-03T00:00:10Z"),
+        ],
+    )
+    _touch_process_started_marker(tmp_path, "2026-08-03T00:00:05Z")
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+
+    assert [m["queued_id"] for m in watcher.get_queued_messages()] == ["q1"]
+
+
+def test_unparseable_enqueue_timestamp_folds(tmp_path: Path) -> None:
+    """An enqueue whose timestamp cannot be parsed folds -- the guard drops entries only
+    on positive evidence that they predate the current launch."""
+    _write_rollout(tmp_path, [_user_line("running prompt", "2026-08-03T00:00:01Z")])
+    _write_queued_input(tmp_path, [_queued_line("q1", "no clock", timestamp="not-a-timestamp")])
+    _touch_process_started_marker(tmp_path, "2026-08-03T00:00:05Z")
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+
+    assert [m["queued_id"] for m in watcher.get_queued_messages()] == ["q1"]

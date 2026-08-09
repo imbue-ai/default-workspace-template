@@ -16,6 +16,7 @@ from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
 from imbue.mngr.api.observe import make_full_agent_state_event
@@ -53,13 +54,18 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 pytestmark = pytest.mark.flaky
 
 
-def _seed_agent(manager: AgentManager, agent_id: str, harness: HarnessType = HarnessType.CLAUDE) -> None:
+def _seed_agent(
+    manager: AgentManager,
+    agent_id: str,
+    harness: HarnessType = HarnessType.CLAUDE,
+    state: str = "RUNNING",
+) -> None:
     """Insert a placeholder ``AgentStateItem`` directly into the tracked map."""
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id,
             name=f"agent-{agent_id}",
-            state="RUNNING",
+            state=state,
             labels={},
             work_dir=None,
             harness=harness,
@@ -1542,8 +1548,10 @@ def test_working_to_idle_drains_the_queue_via_the_registered_handler(
     agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
 
     try:
-        # The agent is mid-turn (THINKING) when the queued message arrives, so
-        # the arrival-time sweep in ``update_queued_messages`` leaves it alone.
+        # A queued message is showing while the agent is thinking. The transcript goes
+        # THINKING first: a snapshot arriving on an idle agent is swept at arrival by
+        # ``update_queued_messages``'s pre-broadcast recompute, and in production the
+        # enqueue only ever happens mid-turn.
         agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
         agent_manager.update_queued_messages(
             "agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}]
@@ -1569,10 +1577,12 @@ def test_idle_agent_with_a_stale_queue_is_swept_without_a_transition(
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     """The backstop is level-triggered: an already-IDLE agent that shows a queued
-    survivor (e.g. a harness ledger hole) is swept on the next recompute, even
-    with no working->IDLE edge. The cache is seeded by hand -- bypassing the
-    arrival-time sweep in ``update_queued_messages`` -- to isolate the recompute
-    path itself."""
+    survivor is swept on the next recompute, even with no working->IDLE edge.
+
+    The survivor is seeded straight into the caches -- the shape of residue that
+    reached the manager with no trigger having run (a snapshot arriving through
+    ``update_queued_messages`` is already swept at arrival by its own pre-broadcast
+    recompute, covered separately)."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1")
@@ -1641,6 +1651,62 @@ def test_queued_snapshot_arriving_while_idle_is_swept_before_broadcast(
         agent_manager.stop()
 
 
+def test_stopped_codex_agent_snapshot_is_swept_before_any_broadcast(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A replayed snapshot arriving via ``update_queued_messages`` AFTER the last
+    recompute, for a STOPPED codex agent whose transcript still derives non-IDLE (an
+    open turn latch), is swept before its broadcast: no broadcast ever contains the
+    phantoms, and activity broadcasts IDLE.
+
+    The arrival order is the point -- the watcher's event fan-out (and its recompute)
+    runs strictly before the snapshot push, and a permanently-dead agent never
+    re-enters the observe delta, so ``update_queued_messages`` itself must trigger the
+    sweep. Seeding the cache by hand would pass without that trigger. Codex is the
+    harness whose derive ignores the lifecycle (the turn latch owns the turn flap), so
+    only the dead-lifecycle override settles it to IDLE.
+    """
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="STOPPED")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        # The dead process left an open turn latch (no turn_completed will ever come).
+        # The turn latch alone would derive THINKING; the dead lifecycle forces IDLE.
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
+        )
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+
+        listener = broadcaster.register()
+        # The dead generation's orphans arrive from the replayed ledger.
+        agent_manager.update_queued_messages(
+            "agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}]
+        )
+
+        messages = _drain(listener)
+        updates = [message for message in messages if message.get("type") == "agents_updated"]
+        assert updates, "the snapshot arrival still broadcasts (the swept state)"
+        for update in updates:
+            assert update["agents"][0]["queued_messages"] == []
+        assert updates[-1]["agents"][0]["activity_state"] == ActivityState.IDLE.value
+        assert idle_calls == [True]
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+    finally:
+        agent_manager.stop()
+
+
 def test_queued_snapshot_arriving_mid_turn_is_kept(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -1676,6 +1742,83 @@ def test_queued_snapshot_arriving_mid_turn_is_kept(
         agents = latest["agents"]
         assert isinstance(agents, list)
         assert agents[0]["queued_messages"] == snapshot
+    finally:
+        agent_manager.stop()
+
+
+def test_unknown_lifecycle_neither_sweeps_nor_forces_idle(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """UNKNOWN is non-evidence (an unreachable provider, not a death): a codex agent
+    mid-turn under an UNKNOWN lifecycle keeps its THINKING dot and its queued snapshot."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="UNKNOWN")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
+        )
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+
+        listener = broadcaster.register()
+        snapshot = [{"queued_id": "q1", "content": "still parked", "timestamp": "t"}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        assert latest["agents"][0]["queued_messages"] == snapshot
+        assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
+        assert idle_calls == []
+        with agent_manager._lock:
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+    finally:
+        agent_manager.stop()
+
+
+def test_running_mid_turn_agent_snapshot_passes_through_unchanged(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A RUNNING codex agent mid-turn keeps its queued snapshot: the pre-broadcast
+    recompute derives non-IDLE, so no sweep fires and the broadcast carries it."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="RUNNING")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
+        )
+        listener = broadcaster.register()
+        snapshot = [{"queued_id": "q1", "content": "queued mid-turn", "timestamp": "t"}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        assert latest["agents"][0]["queued_messages"] == snapshot
+        assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
+        assert idle_calls == []
+        with agent_manager._lock:
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
     finally:
         agent_manager.stop()
 
