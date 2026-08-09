@@ -815,8 +815,11 @@ function buildDropdownItems(
 
   // --- "New ..." items ---
 
+  // The claude launcher. When the alt harnesses are enabled it is labeled explicitly
+  // ("New Claude agent") to sit alongside the codex/pi launchers below; otherwise it keeps
+  // its plain "New chat" label since it is the only launcher shown.
   items.push({
-    label: "New chat",
+    label: areOtherHarnessesEnabled() ? "New Claude agent" : "New chat",
     action: () => {
       newTabTargetGroup = targetGroup ?? null;
       showNewChatModal = true;
@@ -830,7 +833,7 @@ function buildDropdownItems(
   // alt harnesses can be dark-launched; hidden unless the host explicitly enables them.
   if (areOtherHarnessesEnabled()) {
     items.push({
-      label: "New Codex Agent",
+      label: "New Codex agent",
       action: () => {
         newTabTargetGroup = targetGroup ?? null;
         showNewCodexModal = true;
@@ -839,7 +842,7 @@ function buildDropdownItems(
     });
 
     items.push({
-      label: "New Pi Agent",
+      label: "New Pi agent",
       action: () => {
         newTabTargetGroup = targetGroup ?? null;
         showNewPiModal = true;

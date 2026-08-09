@@ -397,6 +397,20 @@ body {
   background: var(--color-bg-hover);
 }
 
+/* A non-clickable credit sharing the action buttons' font, but static: no hover,
+   no pointer cursor, not focusable. */
+.composer-under-bar-credit {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+
 .message-input {
   gap: 0;
   max-width: calc(var(--width-message-column) + 2 * var(--radius-composer));
@@ -789,14 +803,6 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-}
-
-.model-bar-logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-secondary);
-  padding: 0 4px;
 }
 
 .model-bar-shrug {

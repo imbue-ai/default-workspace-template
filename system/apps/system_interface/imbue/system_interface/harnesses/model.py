@@ -2,13 +2,13 @@
 interface every harness implements, and the one matcher both validation and
 display agree on.
 
-The model bar renders ``[Logo][Model][Effort][Fast]`` from two data sources kept
+The model bar renders ``[Model][Effort][Fast]`` from two data sources kept
 strictly apart:
 
 * the **catalog** (:class:`HarnessCatalog`) -- static, per-harness, compile-time:
   which models exist, their labels, which efforts each declares (and which of
   those show in the picker), whether each supports fast, the harness's switch
-  mode, and its logo. Served once via ``GET /api/harnesses``.
+  mode, and its "powered by" credit label. Served once via ``GET /api/harnesses``.
 * the **choice** (:class:`ModelChoice`) -- live, per-agent, runtime: which
   ``(model, effort, fast)`` one agent is on, its provenance, and the catalog
   option it matched. Rides the agents WebSocket beside ``activity_state``.
@@ -175,8 +175,9 @@ class HarnessCatalog(FrozenModel):
     # How the harness commits parked messages (see QueueBehavior); read only by the
     # harness's own queue populator, inert on the wire.
     queue_behavior: QueueBehavior = QueueBehavior.NORMAL
-    # Harness logo, currentColor monochrome.
-    icon_svg: str
+    # The harness's product name, shown as a non-clickable "Powered by <label>" credit beside
+    # the composer's "Open agent terminal" button (e.g. "Claude Code", "Codex", "Pi Coding").
+    powered_by_label: str
 
 
 class SwitchResult(FrozenModel):
