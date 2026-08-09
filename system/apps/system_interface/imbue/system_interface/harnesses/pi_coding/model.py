@@ -300,15 +300,11 @@ class PiInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
     ) -> str:
-        # Refresh the mirror before capturing (codex's refresh-first posture,
-        # plan-codex-interrupt): the running turn's own initiating message is an inbox enqueue
-        # whose matching leave (its drained ``user_message``) may not have been consumed into
-        # the tracker yet, so a stale read hands that already-consumed message back to the
-        # composer alongside the genuinely parked steers. ``get_all_events`` drives the
-        # watcher's consume so the captured block is only the still-queued messages.
-        watcher.get_all_events()
         # Capture before writing the sentinel: the sentinel is what clears the queue (both here
-        # and, durably, on the watcher's replay), so the block must be read first.
+        # and, durably, on the watcher's replay), so the block must be read first. No separate
+        # refresh-first is needed: pi's ``get_queued_block`` calls ``_refresh`` itself (unlike
+        # codex's), so the running turn's own initiating message is popped by its own drained
+        # ``user_message`` as soon as that leave has landed -- the block is the still-queued set.
         block = watcher.get_queued_block()
         append_pi_inbox_sentinel(self._inbox_path, PI_RETRACT_KEY)
         watcher.clear_queue()

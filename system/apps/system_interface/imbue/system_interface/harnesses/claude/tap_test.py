@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from imbue.concurrency_group.errors import ProcessError
 from imbue.system_interface.harnesses.claude.session_parser import INTERRUPT_SENTINEL_TEXT
 from imbue.system_interface.harnesses.claude.session_parser import MID_TOOL_INTERRUPT_SENTINEL_TEXT
 from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
@@ -622,6 +623,38 @@ def test_stop_confirmed_marks_idle_and_returns_empty(tmp_path: Path, sentinel_li
     assert block == ""
     assert recorder.presses == [True]
     assert recorder.mark_idle_calls == 1
+    assert recorder.base_calls == 0
+
+
+def test_stop_confirmed_still_returns_empty_when_mark_idle_raises(tmp_path: Path) -> None:
+    """A marker-cleanup failure after a CONFIRMED abort is best-effort: the interrupt already
+    succeeded, so the executor logs and still returns '' rather than surfacing a 500 (the
+    indicator just recovers later on the idle_prompt hook)."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def append_sentinel_after_baseline(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n")
+
+    def _raise() -> None:
+        raise ProcessError(("bash", "-c", "..."), stdout="", stderr="activity log append failed", returncode=1)
+
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[], []], session, on_refresh=append_sentinel_after_baseline),
+        press_chord=recorder.press_chord,
+        mark_idle=_raise,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        message_lock=nullcontext(),
+        now=_stepping_now([0.0, 0.0, 1.0]),
+        sleep=lambda _s: None,
+    )
+    assert block == ""
     assert recorder.base_calls == 0
 
 

@@ -1187,12 +1187,11 @@ def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(
     lines = (tmp_path / "pi_inbox").read_text().splitlines()
     assert lines == ['{"minds_interrupt_retract": true}']
     assert fake_watcher.clear_calls == [True]
-    # Refresh-first: the mirror is brought current (get_all_events) BEFORE the block is
-    # captured, so the running turn's own initiating message -- an enqueue whose leave has
-    # landed -- is popped rather than handed back to the composer with the parked steers.
-    assert fake_watcher.method_calls.index("get_all_events") < fake_watcher.method_calls.index(
-        "get_queued_block"
-    )
+    # pi captures the block via ``get_queued_block``, which refreshes the mirror itself
+    # (unlike codex's) -- so the running turn's own initiating message is popped by its own
+    # landed leave with no separate refresh-first call.
+    assert "get_queued_block" in fake_watcher.method_calls
+    assert "get_all_events" not in fake_watcher.method_calls
 
 
 def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(

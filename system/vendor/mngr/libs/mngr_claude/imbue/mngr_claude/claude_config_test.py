@@ -1123,6 +1123,17 @@ def test_is_tap_binding_active_false_when_keybindings_missing(tmp_path: Path) ->
     assert is_tap_binding_active(tmp_path / "missing.json", marker_path) is False
 
 
+def test_is_tap_binding_active_false_when_keybindings_malformed(tmp_path: Path) -> None:
+    """A corrupt keybindings.json reads as not-active, never raises. ``ensure_chat_cancel_tap_keybinding``
+    tolerates (and does not repair) a malformed file, so the gate must not raise on it -- the stop
+    button then falls back to the base restart-drain instead of 500ing."""
+    keybindings_path = tmp_path / "keybindings.json"
+    keybindings_path.write_text("{ this is not valid json")
+    marker_path = tmp_path / "claude_process_started"
+    marker_path.write_text("")
+    assert is_tap_binding_active(keybindings_path, marker_path) is False
+
+
 def test_build_permission_auto_allow_hooks_config_has_permission_request_hook() -> None:
     """build_permission_auto_allow_hooks_config should produce a PermissionRequest hook with wildcard matcher."""
     config = build_permission_auto_allow_hooks_config()

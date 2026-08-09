@@ -600,11 +600,16 @@ def is_tap_binding_active(keybindings_path: Path, process_started_marker_path: P
        the next restart, never as a false positive.
 
     Returns False if either file is missing (a marker is written on every startup /
-    resume, so its absence means no live process to tap).
+    resume, so its absence means no live process to tap). A malformed keybindings.json
+    also reads as not-active: ``ensure_chat_cancel_tap_keybinding`` tolerates (and does
+    not repair) a corrupt file, so this gate must not raise on it -- returning False lets
+    the stop button fall back to the base restart-drain instead of 500ing.
     """
-    if _read_chord_action(read_claude_config(keybindings_path), _CHAT_KEYBINDING_CONTEXT, _TAP_KEYBINDING_CHORD) != (
-        _TAP_KEYBINDING_ACTION
-    ):
+    try:
+        keybindings = read_claude_config(keybindings_path)
+    except json.JSONDecodeError:
+        return False
+    if _read_chord_action(keybindings, _CHAT_KEYBINDING_CONTEXT, _TAP_KEYBINDING_CHORD) != _TAP_KEYBINDING_ACTION:
         return False
     try:
         keybindings_mtime = keybindings_path.stat().st_mtime
