@@ -47,6 +47,52 @@ const seenArrivalIds: Record<string, Set<string>> = {};
 const fallbackTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 let nextId = 0;
 
+// In-flight send promises per agent. A send is not truly "done" until the backend
+// confirms it (the message durably parked in the harness queue). Stop waits on these
+// so a just-sent message parks in time to be drained back to the composer, and the
+// shoulder tap waits so it folds into the flush -- rather than either racing the send
+// and silently dropping it. Each promise drops itself from the set on settle.
+const pendingSendsByAgent: Record<string, Set<Promise<unknown>>> = {};
+
+// A stuck send must never hang Stop or the shoulder tap; after this cap the waiting
+// action proceeds regardless. The backend confirms delivery before a send resolves, so
+// this only bites a pathological hang, and the residual (a send that parks just after
+// the action proceeds) is the same narrow capture window the backend already accepts.
+const PENDING_SEND_WAIT_CAP_MS = 5000;
+
+/** Register a just-started send so Stop / the shoulder tap can wait for it to park. The
+ *  promise removes itself on settle (success or failure) and redraws so the greyed
+ *  shoulder-tap button re-enables. */
+export function registerPendingSend(agentId: string, promise: Promise<unknown>): void {
+  const set = (pendingSendsByAgent[agentId] ??= new Set());
+  set.add(promise);
+  const forget = (): void => {
+    set.delete(promise);
+    m.redraw();
+  };
+  promise.then(forget, forget);
+}
+
+/** True while at least one send for this agent is still in flight (its message may not
+ *  be parked yet). Used to grey out the shoulder tap so it cannot fire mid-send. */
+export function hasPendingSends(agentId: string): boolean {
+  const set = pendingSendsByAgent[agentId];
+  return set !== undefined && set.size > 0;
+}
+
+/** Wait for the sends in flight for this agent AT CALL TIME to settle -- each parks its
+ *  message durably before resolving -- bounded by a cap so a stuck send cannot hang the
+ *  caller. Sends started after this call are not awaited. */
+export async function awaitPendingSends(agentId: string): Promise<void> {
+  const set = pendingSendsByAgent[agentId];
+  if (set === undefined || set.size === 0) {
+    return;
+  }
+  const settled = Promise.allSettled([...set]);
+  const capped = new Promise<void>((resolve) => setTimeout(resolve, PENDING_SEND_WAIT_CAP_MS));
+  await Promise.race([settled, capped]);
+}
+
 function clearFallback(id: string): void {
   const timer = fallbackTimers[id];
   if (timer !== undefined) {

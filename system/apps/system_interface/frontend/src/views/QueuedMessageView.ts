@@ -17,7 +17,13 @@ import m from "mithril";
 import { getAgentById, getQueuedMessagesForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
 import { getHarnessCatalog } from "../models/HarnessCatalog";
-import { getFlushFreeze, releaseFlushFreeze, startFlushFreeze } from "../models/OutgoingMessages";
+import {
+  awaitPendingSends,
+  getFlushFreeze,
+  hasPendingSends,
+  releaseFlushFreeze,
+  startFlushFreeze,
+} from "../models/OutgoingMessages";
 import { flushQueue, shoulderTapAtomic } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 
@@ -49,14 +55,24 @@ async function flushQueuedMessages(agentId: string): Promise<void> {
     return;
   }
   const isAtomic = isAtomicShoulderTapAgent(agentId);
-  // Capture the messages BEFORE the backend snapshot empties, and hold them greyed
-  // until a backend arrival releases the freeze (arrival-driven, like a "Sending…"
-  // bubble; a 20s cap is the only fallback). We deliberately do NOT release on the
-  // POST resolving -- that would clear the hold before the merged/resent turn renders,
-  // reopening the blip. The arrival is the release. This holds for both paths: the
-  // restart-based flush and the atomic tap both empty the queue snapshot.
-  const captured = getQueuedMessagesForAgent(agentId);
   inFlightAgentIds.add(agentId);
+  // A message the user just sent may still be in flight (not yet parked in the harness
+  // queue). Wait for it so it is part of THIS flush instead of racing it -- the button
+  // is greyed out while a send is pending, but a click can still land in the frame
+  // before that takes effect. Bounded, so a stuck send cannot hang the tap. Only awaited
+  // when something is actually in flight, so the common case stays synchronous.
+  if (hasPendingSends(agentId)) {
+    m.redraw();
+    await awaitPendingSends(agentId);
+  }
+  // Capture the messages BEFORE the backend snapshot empties -- now including any
+  // just-parked in-flight message -- and hold them greyed until a backend arrival
+  // releases the freeze (arrival-driven, like a "Sending…" bubble; a 20s cap is the
+  // only fallback). We deliberately do NOT release on the POST resolving -- that would
+  // clear the hold before the merged/resent turn renders, reopening the blip. The
+  // arrival is the release. This holds for both paths: the restart-based flush and the
+  // atomic tap both empty the queue snapshot.
+  const captured = getQueuedMessagesForAgent(agentId);
   if (captured.length > 0) {
     startFlushFreeze(agentId, captured);
   }
@@ -132,7 +148,10 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   if (queued.length === 0) {
     return [];
   }
-  const isInFlight = inFlightAgentIds.has(agentId);
+  // Grey the button while the tap is running OR a message is still sending: a mid-send
+  // message is not yet in the queue, so tapping now would race it. Waiting until the
+  // send parks (or the user cancels it) keeps the tap's "commit what's queued" honest.
+  const isInFlight = inFlightAgentIds.has(agentId) || hasPendingSends(agentId);
 
   const header = m("div", { class: "queued-header", key: "queued-header" }, [
     m("span", { class: "queued-header-title" }, [

@@ -31,7 +31,7 @@ vi.mock("../models/Response", () => ({
 vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
 import { renderQueuedMessages } from "./QueuedMessageView";
-import { noteBackendArrivals } from "../models/OutgoingMessages";
+import { noteBackendArrivals, registerPendingSend } from "../models/OutgoingMessages";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -158,6 +158,16 @@ describe("renderQueuedMessages", () => {
     // A real tap commits a merged turn, so the freeze stays until that turn arrives.
     mocks.queued = [];
     expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
+  });
+
+  it("greys the shoulder-tap button while a message is still in flight (cannot tap mid-send)", () => {
+    const agent = "agent-pending-send";
+    mocks.queued = [queuedMessage("q1", "hi")];
+    // Nothing in flight -> the button is live.
+    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);
+    // A message is mid-send -> the button greys out so the tap cannot race the send.
+    registerPendingSend(agent, new Promise<void>(() => {})); // stays in flight for the assertion
+    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(true);
   });
 
   it("freezes the queued group during the flush and releases it on a backend arrival (no blip, no countdown)", async () => {
