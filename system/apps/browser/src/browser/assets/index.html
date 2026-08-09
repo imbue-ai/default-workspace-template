@@ -356,6 +356,15 @@
     terminatedOverlay.classList.add("show");
   }
 
+  // The browser's background launch never came up (Chromium failed to start). Terminal, like
+  // a close: freeze the init cover on a static "failed to start" message and stop reconnecting.
+  function showLaunchFailed() {
+    closedForGood = true;
+    stopIdleTimer();
+    initOverlay.classList.add("show", "static");
+    initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the + menu.";
+  }
+
   // ---- pixel plane: per-stripe H.264 decoder over /stream ----
   // Each horizontal stripe row is its own H.264 chain, decoded by its own WebCodecs
   // VideoDecoder and composited at its y-offset; the viewer acks every stripe as it
@@ -465,6 +474,18 @@
     };
     streamWs.onmessage = (event) => {
       if (typeof event.data === "string") {
+        // Terminal control the daemon also sends on /stream just before closing a viewer of a
+        // gone browser (closed / crashed / launch-failed). The close CODE can't be trusted --
+        // werkzeug corrupts it into a generic 1006 -- and streamWs.onclose blindly reconnects,
+        // so honor the message here too instead of relying on /cast alone to stop the loop.
+        if (event.data.charCodeAt(0) === 123) {  // '{' -> a JSON control frame, not a media/text control
+          try {
+            const m = JSON.parse(event.data);
+            if (m.type === "closed") { showTerminated(); return; }
+            if (m.type === "crashed") { showCrashed(); return; }
+            if (m.type === "launch_failed") { showLaunchFailed(); return; }
+          } catch (_) {}
+        }
         if (event.data === "paused") { showPaused(); return; }   // conductor paused this viewer
         if (event.data === "active") { hidePaused(); return; }   // resumed as the active viewer
         if (event.data === "mem,high") { memWarn.classList.add("show"); return; }     // box > half committed
@@ -964,11 +985,7 @@ registerProcessor('pb', PB);`;
       if (m.type === "crashed") showCrashed();
       else if (m.type === "closed") showTerminated();  // agent closed this browser -> terminal overlay
       else if (crashed || closedForGood) return;
-      else if (m.type === "launch_failed") {
-        closedForGood = true;
-        initOverlay.classList.add("static");
-        initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the + menu.";
-      }
+      else if (m.type === "launch_failed") showLaunchFailed();
       else if (m.type === "initializing") { if (lifecycle !== "running") setLifecycle("init"); }
       else if (m.type === "control") {
         setLifecycle(m.lifecycle); setControl(m);
