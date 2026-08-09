@@ -132,7 +132,7 @@ def test_in_memory_session_does_not_clobber_recorded_file(tmp_path: Path) -> Non
     assert (state / "pi_session_file").read_text() == "/s/s1.jsonl"
 
 
-_MODEL_STATE = Path("pi_model_state.json")
+_MODEL_STATE = Path("minds_model_state.json")
 
 
 def test_model_state_written_on_session_start(tmp_path: Path) -> None:
@@ -151,9 +151,9 @@ def test_model_state_written_on_session_start(tmp_path: Path) -> None:
         ],
     )
     assert json.loads((state / _MODEL_STATE).read_text()) == {
-        "provider": "anthropic",
-        "model": "claude-opus-4-8",
-        "thinking_level": "high",
+        "model": "anthropic/claude-opus-4-8",
+        "effort": "high",
+        "fast": False,
     }
 
 
@@ -185,9 +185,9 @@ def test_model_state_tracks_model_and_thinking_switches(tmp_path: Path) -> None:
         ],
     )
     assert json.loads((state / _MODEL_STATE).read_text()) == {
-        "provider": "openai",
-        "model": "gpt-5.2",
-        "thinking_level": "low",
+        "model": "openai/gpt-5.2",
+        "effort": "low",
+        "fast": False,
     }
 
 

@@ -1173,7 +1173,7 @@ def test_build_readiness_hooks_config_has_session_start_hook() -> None:
     assert "SessionStart" in config["hooks"]
     assert len(config["hooks"]["SessionStart"]) == 1
     hooks = config["hooks"]["SessionStart"][0]["hooks"]
-    assert len(hooks) == 6
+    assert len(hooks) == 5
 
     # First hook: creates session_started file for polling-based detection
     assert hooks[0]["type"] == "command"
@@ -1225,11 +1225,6 @@ def test_build_readiness_hooks_config_has_session_start_hook() -> None:
     assert "compact" not in reset_markers_hook
     assert 'rm -f "$MNGR_AGENT_STATE_DIR/active"' in reset_markers_hook
     assert "permissions_waiting" in reset_markers_hook
-
-    # Sixth hook: snapshots the live model/effort/fast for the chat model bar.
-    model_state_hook = hooks[5]["command"]
-    assert hooks[5]["type"] == "command"
-    assert "model_state_hook.py" in model_state_hook
 
 
 @pytest.mark.parametrize(

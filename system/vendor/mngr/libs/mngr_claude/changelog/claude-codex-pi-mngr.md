@@ -14,3 +14,12 @@ launch flag: claude's flag is last-wins (verified against 2.1.220), so passing i
 would deliver only the final one and silently drop every role stacked before it. Create
 templates that previously spelled this out as `agent_args = ["--append-system-prompt", "..."]`
 can use the setting instead.
+
+The `model_state_hook.py` Claude Code hook (and its SessionStart/UserPromptSubmit/PostToolUse/Stop
+registrations) is removed. The chat model bar's live model/effort/fast now comes from the
+workspace's statusline command, which Claude Code re-runs on every session start, assistant
+message, and refresh tick -- strictly more reactive than the hook (which could not see idle
+`/model` switches) and immune to the `<synthetic>` model ids the hook could record from
+framework-generated transcript messages. The statusline writes the harness-uniform
+`$MNGR_AGENT_STATE_DIR/minds_model_state.json` snapshot that the system interface reads for
+every harness.

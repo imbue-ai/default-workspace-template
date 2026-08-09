@@ -11,3 +11,8 @@ pi's agent loop re-polls its steering queue after every tool-call round and inje
 messages before the next model response, so a message sent mid-run reaches the agent greedily
 at the next tool boundary instead of waiting for the whole turn to end. Delivery to an idle
 agent is unchanged (it starts a turn either way).
+
+The lifecycle extension's model-state mirror moves to the harness-uniform contract: it now
+writes `$MNGR_AGENT_STATE_DIR/minds_model_state.json` with the shared `{model: "provider/id",
+effort, fast}` schema (previously `pi_model_state.json` with pi-specific keys), atomically via
+tmp + rename. The system interface reads the same file name and schema for every harness.

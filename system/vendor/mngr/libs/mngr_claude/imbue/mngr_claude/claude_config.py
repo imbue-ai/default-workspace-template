@@ -651,15 +651,6 @@ _CLEAR_ACTIVE_MARKERS_AND_EMIT_ACTIVITY_EVENT: Final[str] = (
     """rm -f "$MNGR_AGENT_STATE_DIR/active" "$MNGR_AGENT_STATE_DIR/permissions_waiting" && mkdir -p $MNGR_HOST_DIR/events/mngr/activity && echo '{"source": "mngr/activity", "type": "activity", "event_id": "'"evt-$(head -c 16 /dev/urandom | xxd -p)"'", "timestamp": "'"$(date -u +"%Y-%m-%dT%H:%M:%S.000000000Z")"'"}' >> $MNGR_HOST_DIR/events/mngr/activity/events.jsonl"""
 )
 
-# Writes claude_model_state.json (the live model/effort/fast the chat model bar reads) out of
-# band. Runs on SessionStart / UserPromptSubmit / Stop so the bar reconciles at every session
-# start, every submit (the user's latest preference), and every response (the effective model +
-# fast service tier from the transcript). Reads the hook JSON on stdin; best-effort (|| true)
-# so it can never fail Claude's hook chain. See resources/model_state_hook.py.
-_WRITE_MODEL_STATE: Final[str] = (
-    MAIN_SESSION_ONLY_GUARD + 'python3 "$MNGR_AGENT_STATE_DIR/commands/model_state_hook.py" || true'
-)
-
 
 @pure
 def build_readiness_hooks_config() -> dict[str, Any]:
@@ -801,10 +792,6 @@ def build_readiness_hooks_config() -> dict[str, Any]:
                                 + " ;; esac"
                             ),
                         },
-                        {
-                            "type": "command",
-                            "command": _WRITE_MODEL_STATE,
-                        },
                     ]
                 }
             ],
@@ -830,10 +817,6 @@ def build_readiness_hooks_config() -> dict[str, Any]:
                             "command": MAIN_SESSION_ONLY_GUARD
                             + "tmux wait-for -S \"mngr-submit-$(tmux display-message -p '#S')\" 2>/dev/null || true",
                         },
-                        {
-                            "type": "command",
-                            "command": _WRITE_MODEL_STATE,
-                        },
                     ]
                 }
             ],
@@ -853,13 +836,6 @@ def build_readiness_hooks_config() -> dict[str, Any]:
                         {
                             "type": "command",
                             "command": MAIN_SESSION_ONLY_GUARD + 'rm -f "$MNGR_AGENT_STATE_DIR/permissions_waiting"',
-                        },
-                        {
-                            # Refresh the model-state snapshot mid-turn (after every tool call) so
-                            # the bar reflects the effective model/fast within the turn, not only
-                            # when it ends. The transcript's last assistant message is the truth.
-                            "type": "command",
-                            "command": _WRITE_MODEL_STATE,
                         },
                     ],
                 }
@@ -888,10 +864,6 @@ def build_readiness_hooks_config() -> dict[str, Any]:
             "Stop": [
                 {
                     "hooks": [
-                        {
-                            "type": "command",
-                            "command": _WRITE_MODEL_STATE,
-                        },
                         {
                             "type": "command",
                             "command": MAIN_SESSION_ONLY_GUARD
