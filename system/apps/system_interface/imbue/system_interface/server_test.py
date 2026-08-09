@@ -928,8 +928,9 @@ def test_shoulder_tap_atomic_no_open_turn_writes_nothing(client: FlaskClient, tm
     assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
 
 
-def test_drain_to_composer_restarts_and_returns_the_block_unsent(client: FlaskClient) -> None:
-    """Interrupt-to-composer restarts and hands the block back without sending it."""
+def test_drain_to_composer_claude_restarts_and_returns_the_block_unsent(client: FlaskClient) -> None:
+    """The base restart-drain (claude/codex): interrupt-to-composer restarts and hands the block
+    back without sending it."""
     fake_watcher = _fake_queue_watcher("edit me before sending")
     with (
         patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
@@ -947,10 +948,62 @@ def test_drain_to_composer_restarts_and_returns_the_block_unsent(client: FlaskCl
     assert fake_watcher.clear_calls == [True]
 
 
-def test_drain_to_composer_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:
+def test_drain_to_composer_claude_restarts_even_with_an_empty_queue(client: FlaskClient) -> None:
+    """Changed behavior pinned: the empty-block short-circuit is hoisted to the flush only, so a
+    claude stop mid-turn with nothing queued now RESTARTS (a pure interrupt) and returns ''.
+
+    (Superseded for claude by plan-claude-interrupt's chord branch and its dispatch tests; the
+    hoist itself stays load-bearing for that plan's delegations to the base.)
+    """
     fake_watcher = _fake_queue_watcher("")
     with (
         patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent") as mock_send,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    mock_send.assert_not_called()
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """pi's native override: append the retract sentinel to pi_inbox, hand the block back, and do
+    NOT restart the agent."""
+    agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
+    fake_watcher = _fake_queue_watcher("bring me back to edit")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "bring me back to edit"
+    # Native retract -> no restart.
+    mock_run.assert_not_called()
+    lines = (tmp_path / "pi_inbox").read_text().splitlines()
+    assert lines == ['{"minds_interrupt_retract": true}']
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """A pi stop mid-turn with nothing queued still writes the retract sentinel (interrupting the
+    bare turn -- fixes the empty-queue no-op) and returns '', still without a restart."""
+    agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
+    fake_watcher = _fake_queue_watcher("")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
     ):
@@ -959,6 +1012,9 @@ def test_drain_to_composer_is_a_noop_when_the_queue_is_empty(client: FlaskClient
     assert response.status_code == 200
     assert response.get_json()["block"] == ""
     mock_run.assert_not_called()
+    lines = (tmp_path / "pi_inbox").read_text().splitlines()
+    assert lines == ['{"minds_interrupt_retract": true}']
+    assert fake_watcher.clear_calls == [True]
 
 
 def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> None:

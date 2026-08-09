@@ -49,3 +49,16 @@ the OOM self-tag + the agent's git identity (name from the agent's `data.json`, 
 `<agent_id>@<host_id>`). Pi has no shell-hook surface, so the same rules the claude/codex scripts
 apply are re-expressed in ~20 lines of TypeScript; the handler fails closed. Loaded only via the
 per-agent `pi -e` flag, so a user's normal `pi` is unaffected. See `system/scripts/POLICY_HOOKS.md`.
+
+The lifecycle extension now handles a second inbox sentinel for the stop button:
+`{"minds_interrupt_retract": true}` is the retract sibling of the shipped
+`{"minds_interrupt": true}` flush. On it the extension interrupts the running turn using the
+same shared abort-and-capture core (interrupt only when a turn runs, clear and restore the
+user's draft around pi's own steer drain) but DISCARDS the captured steers instead of
+resubmitting them -- Minds hands the queued messages back to the user's composer, so
+resubmitting here would double-deliver. A distinct key (not a field on the flush sentinel)
+means an older extension treats it as inert rather than mistaking a retract for a flush. Both
+sentinels are now tick-deferred: a sentinel is never consumed in a drain tick that already
+injected a string line (the async send must park the steer first), so the steer is always
+flushable/retractable before the abort. Delivery to an idle agent is a no-op, and a
+retract discards nothing then keeps draining so later messages still inject.
