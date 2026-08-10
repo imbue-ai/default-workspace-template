@@ -757,7 +757,11 @@ def _restart_ok() -> FinishedProcess:
     )
 
 
-def _fake_queue_watcher(block: str, events: list[dict[str, Any]] | None = None) -> SimpleNamespace:
+def _fake_queue_watcher(
+    block: str,
+    events: list[dict[str, Any]] | None = None,
+    events_after_clear: list[dict[str, Any]] | None = None,
+) -> SimpleNamespace:
     """A stand-in watcher exposing just the queue methods the endpoints call.
 
     ``clear_calls`` records each ``clear_queue`` invocation so a test can assert
@@ -766,6 +770,9 @@ def _fake_queue_watcher(block: str, events: list[dict[str, Any]] | None = None) 
     (``get_all_events``) BEFORE they capture the block (``get_queued_block``). ``events``
     is what ``get_all_events`` returns -- empty by default (pi ignores the value; codex
     reads the turn markers from it), or open/closed-turn markers for a codex drain test.
+    ``events_after_clear``, when set, is what ``get_all_events`` returns once ``clear_queue``
+    has run -- scripting the patched codex binary's abort landing in the rollout so the
+    stop's post-retract marker settle sees the turn end on its first poll.
     """
     clear_calls: list[bool] = []
     method_calls: list[str] = []
@@ -776,6 +783,8 @@ def _fake_queue_watcher(block: str, events: list[dict[str, Any]] | None = None) 
 
     def _get_all_events() -> list[dict[str, Any]]:
         method_calls.append("get_all_events")
+        if clear_calls and events_after_clear is not None:
+            return events_after_clear
         return events if events is not None else []
 
     def _get_queued_block() -> str:
@@ -803,7 +812,9 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
     with (
         patch("imbue.system_interface.server._find_agent", return_value=_agent_info()),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch(
+            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+        ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent", return_value=True) as mock_send,
     ):
@@ -893,7 +904,9 @@ def test_shoulder_tap_atomic_writes_control_line_for_codex_open_turn(client: Fla
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(
-            SystemInterfaceState, "get_or_create_watcher", return_value=_events_watcher(_codex_open_turn_events("tid-7"))
+            SystemInterfaceState,
+            "get_or_create_watcher",
+            return_value=_events_watcher(_codex_open_turn_events("tid-7")),
         ),
         patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
     ):
@@ -1079,6 +1092,45 @@ def test_shoulder_tap_atomic_no_open_turn_writes_nothing(client: FlaskClient, tm
     assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
 
 
+def test_shoulder_tap_atomic_codex_fails_when_a_send_is_in_flight(client: FlaskClient, tmp_path: Path) -> None:
+    """The codex flush writer takes the same ``message.lock`` a send holds: with a send in
+    flight past the bounded wait, no control line is written and the endpoint reports an
+    explicit, retryable failure (frontend button-greying alone used to guard this race)."""
+    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
+    with (
+        _hold_message_lock(tmp_path),
+        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(
+            SystemInterfaceState,
+            "get_or_create_watcher",
+            return_value=_events_watcher(_codex_open_turn_events("tid-7")),
+        ),
+    ):
+        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+
+    assert response.status_code == 500
+    assert "in flight" in response.get_json()["detail"]
+    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
+
+
+def test_shoulder_tap_atomic_pi_fails_when_a_send_is_in_flight(client: FlaskClient, tmp_path: Path) -> None:
+    """The pi flush writer takes the same ``message.lock`` a send holds: with a send in flight
+    past the bounded wait, no sentinel is written and the endpoint reports an explicit,
+    retryable failure (frontend button-greying alone used to guard this race)."""
+    agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
+    with (
+        _hold_message_lock(tmp_path),
+        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+    ):
+        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
+
+    assert response.status_code == 500
+    assert "in flight" in response.get_json()["detail"]
+    assert not (tmp_path / "pi_inbox").exists()
+
+
 def _fake_claude_interrupt_watcher(
     *,
     block: str,
@@ -1126,7 +1178,9 @@ def test_drain_to_composer_claude_nonempty_queue_delegates_to_base_restart(
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch(
+            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+        ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
@@ -1182,9 +1236,7 @@ def test_drain_to_composer_claude_empty_queue_uses_the_chord_not_a_restart(tmp_p
     assert fake_watcher.clear_calls == []
 
 
-def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(
-    client: FlaskClient, tmp_path: Path
-) -> None:
+def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(client: FlaskClient, tmp_path: Path) -> None:
     """pi's native override: append the retract sentinel to pi_inbox, hand the block back, and do
     NOT restart the agent."""
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
@@ -1244,18 +1296,34 @@ def test_drain_to_composer_dispatches_per_harness(tmp_path: Path) -> None:
     assert isinstance(claude, ClaudeInterruptToComposer)
 
 
-def test_drain_to_composer_codex_appends_retract_line_and_returns_block(
-    client: FlaskClient, tmp_path: Path
-) -> None:
+def _codex_aborted_turn_events(turn_id: str) -> list[dict[str, Any]]:
+    return [
+        {"type": "special", "kind": "turn_started", "turn_id": turn_id},
+        {"type": "special", "kind": "turn_aborted", "turn_id": turn_id},
+    ]
+
+
+def test_drain_to_composer_codex_appends_retract_line_and_returns_block(client: FlaskClient, tmp_path: Path) -> None:
     """codex's native override: with a live turn, append a ``retract_turn_id`` line to the same
     ``shoulder_tap_atomic.jsonl`` the flush writes, clear the mirror, and hand the block back --
-    without restarting the agent."""
+    without restarting the agent. Once the abort lands in the rollout, the stranded lifecycle
+    markers are cleared via the mngr_codex idle-marking primitive (codex fires no Stop hook on
+    an abort, so without this the agent reports RUNNING forever)."""
     agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    fake_watcher = _fake_queue_watcher("bring me back to edit", events=_codex_open_turn_events("tid-9"))
+    fake_watcher = _fake_queue_watcher(
+        "bring me back to edit",
+        events=_codex_open_turn_events("tid-9"),
+        events_after_clear=_codex_aborted_turn_events("tid-9"),
+    )
+    idle_marks: list[bool] = []
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch(
+            "imbue.system_interface.harnesses.codex.model.mark_codex_agent_idle",
+            side_effect=lambda *_a, **_k: idle_marks.append(True),
+        ),
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -1266,17 +1334,18 @@ def test_drain_to_composer_codex_appends_retract_line_and_returns_block(
     control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
     assert control_path.read_text().splitlines() == ['{"retract_turn_id": "tid-9"}']
     assert fake_watcher.clear_calls == [True]
+    # The abort was observed, so the stranded active/codex_root_active markers were cleared.
+    assert idle_marks == [True]
     # Refresh-first: the mirror is brought current (get_all_events) BEFORE the block is captured.
-    assert fake_watcher.method_calls.index("get_all_events") < fake_watcher.method_calls.index(
-        "get_queued_block"
-    )
+    assert fake_watcher.method_calls.index("get_all_events") < fake_watcher.method_calls.index("get_queued_block")
 
 
-def test_drain_to_composer_codex_no_open_turn_returns_empty_and_writes_nothing(
+def test_drain_to_composer_codex_no_open_turn_hands_back_queued_block_and_clears_mirror(
     client: FlaskClient, tmp_path: Path
 ) -> None:
-    """With no turn running there is nothing to retract, so codex writes no control line, leaves
-    the mirror untouched, and returns an empty block (the parked steers commit on their own)."""
+    """With no turn running there is nothing to retract, so codex writes no control line -- but
+    queued messages have nothing running to commit them, so the stop hands them back to the
+    composer and clears the mirror rather than stranding them as ghost chips."""
     agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
     completed = [
         {"type": "special", "kind": "turn_started", "turn_id": "tid-1"},
@@ -1291,11 +1360,11 @@ def test_drain_to_composer_codex_no_open_turn_returns_empty_and_writes_nothing(
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
     assert response.status_code == 200
-    assert response.get_json()["block"] == ""
+    assert response.get_json()["block"] == "still queued"
     mock_run.assert_not_called()
     assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
-    # No open turn -> the mirror is left alone (no clear).
-    assert fake_watcher.clear_calls == []
+    # The handed-back messages leave the mirror, so nothing lingers as a ghost chip.
+    assert fake_watcher.clear_calls == [True]
 
 
 def test_drain_to_composer_codex_empty_queue_open_turn_writes_line_and_returns_empty(
@@ -1304,11 +1373,18 @@ def test_drain_to_composer_codex_empty_queue_open_turn_writes_line_and_returns_e
     """A codex stop mid-turn with nothing queued still writes the retract line -- a pure turn abort
     (fixes the empty-queue no-op) -- clears the mirror, and returns '', still without a restart."""
     agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    fake_watcher = _fake_queue_watcher("", events=_codex_open_turn_events("tid-3"))
+    fake_watcher = _fake_queue_watcher(
+        "", events=_codex_open_turn_events("tid-3"), events_after_clear=_codex_aborted_turn_events("tid-3")
+    )
+    idle_marks: list[bool] = []
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+        patch(
+            "imbue.system_interface.harnesses.codex.model.mark_codex_agent_idle",
+            side_effect=lambda *_a, **_k: idle_marks.append(True),
+        ),
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -1318,6 +1394,7 @@ def test_drain_to_composer_codex_empty_queue_open_turn_writes_line_and_returns_e
     control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
     assert control_path.read_text().splitlines() == ['{"retract_turn_id": "tid-3"}']
     assert fake_watcher.clear_calls == [True]
+    assert idle_marks == [True]
 
 
 @contextmanager
@@ -1347,7 +1424,9 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch(
+            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+        ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
@@ -1373,7 +1452,9 @@ def test_drain_to_composer_codex_falls_back_to_restart_when_a_send_is_in_flight(
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch(
+            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+        ) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
@@ -1382,6 +1463,39 @@ def test_drain_to_composer_codex_falls_back_to_restart_when_a_send_is_in_flight(
     assert response.get_json()["block"] == "bring me back to edit"
     assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "codex-agent", "--restart", "--no-resume"]
     assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_claude_falls_back_to_restart_when_a_send_is_in_flight(tmp_path: Path) -> None:
+    """A send holding ``message.lock`` past the bounded wait blocks claude's chord path, so the
+    stop falls back to the base restart hammer instead of stalling behind the send's turn-confirm:
+    it restarts, hands the (empty) block back, and delivers NO chord."""
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+    agent_id = "agent-00000000000000000000000000000042"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    fake_watcher = _fake_claude_interrupt_watcher(block="", queued=[], session_file=session)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        _hold_message_lock(state_dir),
+        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch(
+            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
+        ) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+    ):
+        response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+    # The hammer fell: a restart ran, and NO chord was delivered.
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
+    assert messenger.pressed == []
     assert fake_watcher.clear_calls == [True]
 
 
@@ -1724,7 +1838,9 @@ def test_index_enable_other_harnesses_meta_tag_off_by_default(tmp_path: Path, mo
         assert '<meta name="system-interface-enable-other-harnesses" content="false">' in response.text
 
 
-def test_index_enable_other_harnesses_meta_tag_on_when_flag_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_index_enable_other_harnesses_meta_tag_on_when_flag_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Setting FEATURE_FLAG_ENABLE_OTHER_HARNESSES to a truthy value flips the injected flag on."""
     monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
     static_dir = tmp_path / "static"

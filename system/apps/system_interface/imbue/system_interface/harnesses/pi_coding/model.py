@@ -26,6 +26,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +34,8 @@ from loguru import logger
 
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
-from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.errors import MngrError
+from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import start_agent
@@ -44,10 +45,6 @@ from imbue.system_interface.harnesses.interrupt import RestartProcess
 from imbue.system_interface.harnesses.interrupt import SettleActivity
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
-from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
-from imbue.system_interface.harnesses.pi_coding.inbox import PI_RETRACT_KEY
-from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
-from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import ModelAxis
@@ -56,6 +53,11 @@ from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
 from imbue.system_interface.harnesses.model import to_options
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_RETRACT_KEY
+from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
+from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 
 # The single-slot switch mailbox this resolver writes: switch() atomically OVERWRITES
 # it with one JSON intent, so a newer pick replaces an unconsumed older one (buffer of
@@ -200,9 +202,7 @@ class PiModelResolver(HarnessModelResolver):
     _start_agent: Callable[[str], None]
 
     @classmethod
-    def build(
-        cls, agent_info: AgentInfo, start_agent_fn: Callable[[str], None] = start_agent
-    ) -> "PiModelResolver":
+    def build(cls, agent_info: AgentInfo, start_agent_fn: Callable[[str], None] = start_agent) -> "PiModelResolver":
         self = cls.__new__(cls)
         self._state_dir = agent_info.agent_state_dir
         self._agent_name = agent_info.name
@@ -242,9 +242,7 @@ class PiModelResolver(HarnessModelResolver):
             return None
         return _parse_list_models(finished.stdout)
 
-    def switch(
-        self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
-    ) -> SwitchResult:
+    def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
         # pi's inbox delivers user messages, not slash commands, so a switch cannot go
         # through ``send``. Instead the resolver writes the intent to a single-slot control
         # mailbox the lifecycle extension consumes and applies via pi.setModel /
@@ -273,6 +271,38 @@ class PiModelResolver(HarnessModelResolver):
         # state file once the extension applies (200ms poll when running; session start
         # after a wake).
         return SwitchResult(ok=True)
+
+
+class PiFlushTapStatus(StrEnum):
+    """The atomic flush writer's outcome; the server maps it to an HTTP response.
+
+    TAPPED: the flush sentinel was appended (the extension gates on a running turn itself, so
+    an idle tap is a harmless no-op there). SEND_IN_FLIGHT: a message send held ``message.lock``
+    past the bounded wait, so nothing was written -- the caller reports an explicit, retryable
+    failure rather than racing the send.
+    """
+
+    TAPPED = "tapped"
+    SEND_IN_FLIGHT = "send_in_flight"
+
+
+def flush_pi_queue_atomic(agent_state_dir: Path) -> PiFlushTapStatus:
+    """Append the atomic shoulder-tap flush sentinel to ``pi_inbox`` under mngr's ``message.lock``.
+
+    The write is taken under the SAME lock mngr's send holds -- the discipline the retract path
+    below already follows -- so the sentinel is ordered AFTER any in-flight send's inbox append:
+    the extension injects that just-landed message as a steer before the sentinel interrupts, and
+    the flush resubmits it with the rest of the parked queue instead of racing it. Before this
+    only the frontend's button-greying guarded the flush-vs-send race. When a send is still in
+    flight past the bounded wait (an idle-start send in its turn-confirm), nothing is written and
+    the caller surfaces an explicit failure -- the flush is retryable; a silently misordered
+    sentinel is not. Raises :class:`OSError` if the inbox write fails.
+    """
+    with try_hold_message_lock(agent_state_dir) as held:
+        if not held:
+            return PiFlushTapStatus.SEND_IN_FLIGHT
+        append_pi_inbox_sentinel(agent_state_dir / PI_INBOX_NAME, PI_INTERRUPT_KEY)
+    return PiFlushTapStatus.TAPPED
 
 
 class PiInterruptToComposer(InterruptToComposer):
