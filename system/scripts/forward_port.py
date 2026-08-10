@@ -65,7 +65,9 @@ RESERVED_NAMES = frozenset({"localhost", "auth"})
 
 def mint_service_label(name: str) -> str:
     """Mint an unguessable ``<name>-<rand>`` origin label for a freshly-registered service."""
-    suffix = "".join(secrets.choice(_LABEL_RANDOM_ALPHABET) for _ in range(_LABEL_RANDOM_LENGTH))
+    suffix = "".join(
+        secrets.choice(_LABEL_RANDOM_ALPHABET) for _ in range(_LABEL_RANDOM_LENGTH)
+    )
     return f"{name}-{suffix}"
 
 
@@ -180,9 +182,7 @@ def _remove(path: Path, name: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Register or remove an app port"
-    )
+    parser = argparse.ArgumentParser(description="Register or remove an app port")
     parser.add_argument(
         "--name", required=True, help="App name (e.g. 'terminal', 'browser')"
     )

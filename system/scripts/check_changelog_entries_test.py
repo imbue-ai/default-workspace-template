@@ -42,7 +42,11 @@ def _init_repo(tmp_path: Path) -> Path:
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
     # Two real projects (pyproject.toml present) plus the dev bucket layout.
-    for rel in ("system/libs/alpha/pyproject.toml", "system/apps/beta/pyproject.toml", "system/services/gamma/pyproject.toml"):
+    for rel in (
+        "system/libs/alpha/pyproject.toml",
+        "system/apps/beta/pyproject.toml",
+        "system/services/gamma/pyproject.toml",
+    ):
         p = repo / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("[project]\nname='x'\n")

@@ -18,8 +18,9 @@ that stayed registered would sit in front of them empty forever. It is started
 on demand by ``render_markdown_preview.py`` and stopped by that script's
 ``--close``; supervisord does not autostart it.
 
-Standard library only (plus the renderer's markdown-it), so it starts instantly
-and cannot break boot on a dependency.
+Standard library only -- the shared paths live in `markdown_preview_paths` so
+this never imports the renderer, and therefore never imports markdown-it, a
+library it would only be pulling in to learn a file path.
 """
 
 import argparse
@@ -33,14 +34,13 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from render_markdown_preview import (
+from markdown_preview_paths import (
+    DEFAULT_PORT,
     PREVIEW_STATE_DIR,
     RENDERED_PAGE_NAME,
+    SERVICE_NAME,
     SOURCE_RECORD_NAME,
 )
-
-DEFAULT_PORT = 1897
-SERVICE_NAME = "markdown-preview"
 
 _EMPTY_PAGE = b"""<!doctype html>
 <meta charset="utf-8">
