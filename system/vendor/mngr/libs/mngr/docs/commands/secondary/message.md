@@ -1,0 +1,128 @@
+<!-- This file is auto-generated. Do not edit directly. -->
+<!-- To modify, edit the command's help metadata and run: uv run python scripts/make_cli_docs.py -->
+
+# mngr message
+
+**Synopsis:**
+
+```text
+mngr [message|msg] [AGENTS...|-] [--agent <AGENT>] [-m <MESSAGE>] [--message-file <FILE>] [--[no-]start] [--on-error <MODE>]
+```
+
+Send a message to one or more agents.
+
+Agent IDs can be specified as positional arguments for convenience. The
+message is sent to the agent's stdin.
+
+If no message is specified with --message or --message-file, reads from stdin
+(if not a tty) or opens an editor (if interactive).
+
+Use '-' in place of agent names to read them from stdin, one per line.
+
+Delivery guarantee: for interactive TUI agents (claude, codex, antigravity)
+the command succeeds only after durable evidence shows the agent accepted the
+message (for claude, the message's own content appearing in its transcript;
+for codex/antigravity, their turn marker advancing). If no evidence appears
+within the confirmation window -- with the Enter keystroke re-sent a bounded
+number of times along the way -- the command fails with diagnostics instead of
+silently dropping the message. Messages starting with '/' (TUI slash commands
+such as /clear) are best-effort: they succeed even when no evidence is
+observable, logging a warning and an agent event instead.
+
+Exit codes: 0 = delivered and no unresolved dialog; 7 = delivered, but a
+blocking interactive dialog (e.g. Claude's /model confirmation) could not be
+resolved and the agent is now stuck on it (see the agent-type auto_accept_*
+settings); any other non-zero = the message was not delivered.
+
+Alias: msg
+
+**Usage:**
+
+```text
+mngr message [OPTIONS] [AGENTS]...
+```
+## Arguments
+
+- `AGENTS`: The agents (optional)
+
+**Options:**
+
+## Target Selection
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--agent` | agent_address | Agent address (NAME[@HOST[.PROVIDER]]) to send message to (can be specified multiple times) | None |
+| `--start`, `--no-start` | boolean | Automatically start offline hosts and stopped or exited agents before sending | `False` |
+
+## Message Content
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `-m`, `--message` | text | The message content to send | None |
+| `--message-file` | path | File containing the message content to send | None |
+
+## Error Handling
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--on-error` | choice (`abort` &#x7C; `continue`) | What to do when errors occur: abort (stop immediately) or continue (keep going) | `continue` |
+
+## Common
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--format` | text | Output format (human, json, jsonl, FORMAT): Output format for results. When a template is provided, fields use standard python templating like 'name: {agent.name}' See below for available fields. | `human` |
+| `-q`, `--quiet` | boolean | Suppress all console output | `False` |
+| `-v`, `--verbose` | integer range | Increase verbosity (default: BUILD); -v for DEBUG, -vv for TRACE | `0` |
+| `--log-file` | path | Path to log file (overrides default ~/.mngr/events/logs/<timestamp>-<pid>.json) | None |
+| `--log-commands`, `--no-log-commands` | boolean | Log commands that were executed | None |
+| `--headless` | boolean | Disable all interactive behavior (prompts, TUI, editor). Also settable via MNGR_HEADLESS env var or 'headless' config key. | `False` |
+| `--safe` | boolean | Always query all providers during discovery (disable event-stream optimization). Use this when interfacing with mngr from multiple machines. | `False` |
+| `--plugin`, `--enable-plugin` | text | Enable a plugin [repeatable] | None |
+| `--disable-plugin` | text | Disable a plugin [repeatable] | None |
+| `-S`, `--setting` | text | Override a config setting for this invocation (KEY=VALUE, dot-separated paths; append __extend to the leaf key to extend list/dict/set fields) [repeatable] | None |
+| `-h`, `--help` | boolean | Show this message and exit. | `False` |
+
+## See Also
+
+- [mngr connect](../primary/connect.md) - Connect to an agent interactively
+- [mngr list](../primary/list.md) - List available agents
+- [mngr help multi_target](../generic/multi_target.md) - Behavior when some agents fail to receive the message
+
+## Examples
+
+**Send a message to an agent**
+
+```bash
+$ mngr message my-agent --message "Hello"
+```
+
+**Send to multiple agents**
+
+```bash
+$ mngr message agent1 agent2 --message "Hello to all"
+```
+
+**Send to all agents via stdin**
+
+```bash
+$ mngr list --ids | mngr message - --message 'Hello everyone'
+```
+
+**Send message from a file**
+
+```bash
+$ mngr message my-agent --message-file prompt.txt
+```
+
+**Pipe message from stdin**
+
+```bash
+$ echo "Hello" | mngr message my-agent
+```
+
+**Use --agent flag (repeatable)**
+
+```bash
+$ mngr message --agent my-agent --agent another-agent --message "Hello"
+```

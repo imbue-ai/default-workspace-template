@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Browser</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; background: #1e1e1e; color: #ddd; }
+  #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+
+  /* Persistent status bar shown whenever the human can drive the browser (resting or
+     explicitly taken). Always-on "You have control"; the hand-back button appears only
+     when an agent is queued for it. This is the ONLY chrome the viewer draws -- the
+     browser's own tab strip and address bar are in the streamed pixels, not rebuilt here. */
+  #returnbar { display: none; align-items: center; gap: 10px; padding: 6px 10px; background: #2a2a2a; border-bottom: 1px solid #333; font-size: 12px; color: #4ec9b0; }
+  #returnbar.show { display: flex; }
+  #returnbar.handoff { background: #5a3a1a; color: #ffcc66; }
+  /* The status text (esp. a long "agents waiting: ..." queue) truncates with an ellipsis so it
+     can't push the buttons off-screen; the warning and buttons keep their size. */
+  #returnqueue { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #memwarn, #returnbtn, #tipsbtn { flex: 0 0 auto; }
+  #returnbtn { padding: 5px 12px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+  /* "View tips" is pushed to the far right of the bar; margin-left:auto absorbs the free
+     space to its left regardless of what else is shown. */
+  #tipsbtn { padding: 5px 12px; background: #444; border: none; color: #ddd; border-radius: 4px; cursor: pointer; margin-left: auto; }
+  .hidden { display: none !important; }
+
+  #stage { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  /* The stripe compositor draws the whole browser window (native tabs + omnibox + page)
+     onto this canvas; object-fit keeps it crisp and letterboxed inside the pane. */
+  #screen { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; cursor: default; outline: none; }
+
+  /* Tips modal: a centered card over the pane, opened from the bar's "View tips". */
+  #tipsmodal { display: none; position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center; padding: 24px; }
+  #tipsmodal.show { display: flex; }
+  #tipscard { background: #252526; border: 1px solid #3a3a3a; border-radius: 8px; max-width: 560px; max-height: 82%; overflow: auto; padding: 20px 22px; color: #ddd; font-size: 13px; line-height: 1.5; }
+  #tipscard h2 { margin: 0 0 12px; font-size: 16px; color: #fff; }
+  #tipscard ul { margin: 0; padding-left: 18px; }
+  #tipscard li ul { margin: 6px 0 0; }  /* nested sub-bullets sit tight under their lead */
+  #tipscard li { margin: 9px 0; }
+  #tipscard b { color: #4ec9b0; }
+  #tipsclose { margin-top: 18px; padding: 6px 14px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+
+  /* Shown once when the guardian closes a Ctrl+N / torn-out window the capture can't show. */
+  #multiwinmodal { display: none; position: absolute; inset: 0; z-index: 31; background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center; padding: 24px; }
+  #multiwinmodal.show { display: flex; }
+  #multiwinmodal .card { background: #252526; border: 1px solid #3a3a3a; border-radius: 8px; max-width: 420px; padding: 20px 22px; color: #ddd; font-size: 13px; line-height: 1.5; text-align: center; }
+  #multiwinclose { margin-top: 16px; padding: 6px 14px; background: #0e639c; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+
+  /* Full-stage grey overlay while an agent has control (sits above the canvas and
+     swallows pointer events; the server also drops input, this blocks it locally too). */
+  #overlay { display: none; position: absolute; inset: 0; z-index: 10; background: rgba(30, 30, 30, 0.72); flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 20px; }
+  #overlay.show { display: flex; }
+  #overlay .msg { font-size: 15px; color: #e2b340; font-weight: 600; max-width: 80%; word-break: break-word; }
+  #overlay .sub { font-size: 12px; color: #aaa; max-width: 80%; min-height: 14px; }
+  #takecontrol { padding: 8px 16px; background: #b5462b; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  #takecontrol:disabled { opacity: .6; cursor: default; }
+
+  /* Terminal near-opaque cover for a crashed/OOM-killed browser. */
+  #crashoverlay { display: none; position: absolute; inset: 0; z-index: 20; background: rgba(20, 20, 20, 0.92); flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px; }
+  #crashoverlay.show { display: flex; }
+  #crashoverlay .msg { font-size: 19px; line-height: 1.4; color: #fff; font-weight: 700; max-width: 90%; }
+  #crashoverlay .sub { font-size: 14px; color: rgba(255, 255, 255, 0.75); max-width: 90%; }
+
+  /* Paused-stream overlay: a translucent tint + label OVER the frozen last frame while
+     this viewer isn't the active stream (another pane/device is). Click anywhere to resume. */
+  #pausedoverlay { display: none; position: absolute; inset: 0; z-index: 14; cursor: pointer;
+    background: rgba(12, 15, 22, 0.62); align-items: center; justify-content: center; padding: 20px; }
+  #pausedoverlay.show { display: flex; }
+  /* Solid card so the control bar behind it never bleeds through; a soft shadow makes it pop. */
+  #pausedoverlay .card { display: flex; flex-direction: column; gap: 9px; align-items: center; text-align: center;
+    max-width: 82%; padding: 18px 24px; border-radius: 14px;
+    background: #1b2230; border: 1px solid rgba(255, 255, 255, 0.10); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55); }
+  #pausedoverlay .title { font-size: 15px; font-weight: 700; color: #f2f5fa; letter-spacing: 0.2px; }
+  #pausedoverlay .body { font-size: 13px; line-height: 1.45; color: #aab8cc; max-width: 36ch; }
+
+  /* Memory-pressure warning: RED text inline at the left of the status bar, before the
+     control text, shown while the box is over its RAM warn threshold, hidden when it recovers. */
+  #memwarn { display: none; align-items: center; gap: 4px; color: #ff6b6b; font-weight: 600; margin-right: 4px; }
+  #memwarn.show { display: inline-flex; }
+  #memwarn .tri { color: #ff5252; font-size: 13px; }
+
+  /* Cover shown until the FIRST streamed frame paints. Removed on first paint (NOT on
+     the lifecycle=running control message): running means Chromium is up, but pixels
+     may not be flowing yet, so revealing on running would show a blank canvas. */
+  #initoverlay { display: none; position: absolute; inset: 0; z-index: 15; background: #1e1e1e; flex-direction: column; align-items: center; justify-content: center; gap: 16px; text-align: center; padding: 24px; }
+  #initoverlay.show { display: flex; }
+  /* Loading progress bar: the fill width tracks the real stage (Chromium coming up ->
+     view loading -> painted), with a moving shimmer so the wait reads as alive. Hidden
+     on terminal states (failed/closed) via the `.static` class -- there's no progress then. */
+  #initoverlay .bar { width: 220px; max-width: 60%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
+  #initoverlay.static .bar { display: none; }
+  #initoverlay .bar .fill { height: 100%; width: 0; border-radius: 3px; background: linear-gradient(90deg, #0e639c, #4ec9b0); transition: width 0.4s ease; position: relative; }
+  #initoverlay .bar .fill::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent); animation: shimmer 1.2s linear infinite; }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  #initoverlay .msg { font-size: 15px; color: #ccc; font-weight: 600; }
+
+  /* Transient clipboard status chip ("Pasting…", "Copied from remote", errors). Bottom
+     of the pane, fades in on activity and out after a moment. */
+  #clipchip { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 12;
+    padding: 6px 12px; border-radius: 14px; font-size: 12px; background: #333; color: #ddd;
+    opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  #clipchip.show { opacity: 1; }
+  #clipchip.err { background: #7a1f1f; color: #fff; }
+  #clipchip.ok { background: #1f5c33; color: #fff; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="returnbar">
+    <span id="memwarn"><span class="tri">&#9888;</span><span>Warning: box is over 75% of its RAM. Close some tabs.</span></span>
+    <span id="returnqueue">You have control.</span>
+    <button id="returnbtn">Return control to agents</button>
+    <button id="tipsbtn">View tips</button>
+  </div>
+  <div id="stage">
+    <canvas id="screen" tabindex="0"></canvas>
+    <div id="overlay">
+      <div class="msg" id="overlaymsg">An agent has control.</div>
+      <div class="sub" id="overlaysub"></div>
+      <button id="takecontrol">Take control</button>
+    </div>
+    <div id="crashoverlay">
+      <div class="msg">This browser crashed.<br />Chromium was killed (for example, out of memory).</div>
+      <div class="sub">Open a new browser from the + menu.</div>
+    </div>
+    <div id="initoverlay">
+      <div class="bar"><div class="fill" id="initfill"></div></div>
+      <div class="msg">Starting browser…</div>
+    </div>
+    <div id="pausedoverlay">
+      <div class="card">
+        <div class="title">Livestream paused</div>
+        <div class="body" id="pausedbody">Browser is still running, livestream is just paused to save resources.</div>
+      </div>
+    </div>
+    <div id="clipchip"></div>
+    <div id="tipsmodal">
+      <div id="tipscard">
+        <h2>Using this browser</h2>
+        <ul>
+          <li><b>Copy and paste, both ways.</b> You can copy both images and text out of the browser, and can paste them in too.</li>
+          <li><b>Keyboard shortcuts.</b>
+            <ul>
+              <li>If you're on a Mac, you can use Cmd + C, V, X for cut, copy, and paste with the remote browser. However, no other Cmd keyboard shortcuts will work — use Ctrl instead, such as Ctrl + R for reload.</li>
+              <li>If you're on Windows or Linux, Ctrl keyboard shortcuts won't work in the browser.</li>
+            </ul>
+          </li>
+          <li><b>Use it like a normal browser.</b> Click, type, scroll, manage tabs, and watch videos (with sound) — it all works.</li>
+          <li><b>You share each browser with agents, through a queue.</b> Only one of you drives at a time; whoever else wants it waits in line. Click “Return control to agents” to hand it back when you're done.</li>
+          <li><b>An agent may hand a browser to you</b> for something it can't do itself — a captcha or a login check. Control comes to you and this bar turns amber; finish the step, then return control.</li>
+          <li><b>Logins are saved.</b> Each browser keeps its own cookies and sign-ins, and they persist across restarts — so you stay logged in.</li>
+        </ul>
+        <button id="tipsclose">Got it</button>
+      </div>
+    </div>
+    <div id="multiwinmodal">
+      <div class="card">
+        <div>Sorry, multiple windows are not supported.</div>
+        <button id="multiwinclose">Got it</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  const app = document.getElementById("app");
+  const stage = document.getElementById("stage");
+  const canvas = document.getElementById("screen");
+  const context = canvas.getContext("2d", { desynchronized: true });
+  const overlay = document.getElementById("overlay");
+  const crashOverlay = document.getElementById("crashoverlay");
+  const initOverlay = document.getElementById("initoverlay");
+  const pausedOverlay = document.getElementById("pausedoverlay");
+  const memWarn = document.getElementById("memwarn");
+  const overlayMsg = document.getElementById("overlaymsg");
+  const overlaySub = document.getElementById("overlaysub");
+  const takeControlBtn = document.getElementById("takecontrol");
+  const returnBar = document.getElementById("returnbar");
+  const returnBtn = document.getElementById("returnbtn");
+  const returnQueue = document.getElementById("returnqueue");
+  const tipsBtn = document.getElementById("tipsbtn");
+  const tipsModal = document.getElementById("tipsmodal");
+  const tipsCloseBtn = document.getElementById("tipsclose");
+  const multiWinModal = document.getElementById("multiwinmodal");
+  document.getElementById("multiwinclose").addEventListener("click", () => multiWinModal.classList.remove("show"));
+
+  const HEADER_LEN = 10;
+  const FRAME_TYPE_IDR = 1;
+
+  // ---- control plane (unchanged): ownership, overlay, lifecycle, over /cast ----
+  let controlOwner = "human";
+  let castWs = null;
+  let browserId = null;
+  let reconnectTimer = null;
+  let closedForGood = false;
+  let crashed = false;
+  let lifecycle = "init";
+  let firstFramePainted = false;
+  let handoffReason = null, handoffAgent = null;
+  let lastControlState = { owner: "human", human_pinned: false, waiting: [] };
+
+  function wsUrl(path) {
+    const u = new URL(path, document.baseURI);
+    u.protocol = (u.protocol === "https:") ? "wss:" : "ws:";
+    return u.toString();
+  }
+
+  let idleTimer = null, idleSeconds = 0, releaseSeconds = null, waitingList = [];
+  function renderOverlaySub() {
+    const parts = [];
+    if (releaseSeconds !== null) parts.push("idle " + idleSeconds + "s · releases control in " + releaseSeconds + "s");
+    if (waitingList.length) parts.push(waitingList.length + " waiting: " + waitingList.join(", "));
+    overlaySub.textContent = parts.join("   ·   ");
+  }
+  function startIdleTimer() {
+    if (idleTimer) return;
+    idleTimer = setInterval(() => {
+      idleSeconds += 1;
+      if (releaseSeconds !== null) releaseSeconds = Math.max(0, releaseSeconds - 1);
+      renderOverlaySub();
+    }, 1000);
+  }
+  function stopIdleTimer() { if (idleTimer) { clearInterval(idleTimer); idleTimer = null; } }
+
+  function setControl(state) {
+    lastControlState = state;
+    const prevOwner = controlOwner;
+    controlOwner = state.owner;
+    const agentDriving = state.owner === "agent";
+    if (prevOwner === "agent" && state.owner === "human") {
+      // Control just came back to us. While the agent held it, any resize we sent only
+      // moved the capture crop -- the server gates the real Chromium window reshape on
+      // human control -- so the page never reflowed to the size we picked. Re-assert the
+      // pane size now that input is ours, so the window reshapes and the page reflows
+      // without waiting for a fresh manual resize (the belt would otherwise dedup it).
+      lastSentSize = "";
+      sendPaneSize();
+    }
+    const humanPinned = state.owner === "human" && !!state.human_pinned;
+    if (agentDriving) {
+      handoffReason = null; handoffAgent = null;
+      releaseHeldInput();  // agent took over: release any keys/buttons we were holding
+      const who = state.owner_name || state.owner_agent_id || "an agent";
+      overlayMsg.textContent = "Agent has control: " + who;
+      returnQueue.textContent = "Agent " + who + " has control.";  // the status bar reads it too
+      returnBtn.style.display = "none";  // can't hand back control you don't hold
+      if (!pausedOverlay.classList.contains("show")) overlay.classList.add("show");  // stay hidden behind the paused card
+      takeControlBtn.disabled = false;
+      waitingList = Array.isArray(state.waiting) ? state.waiting : [];
+      if (typeof state.idle_release_seconds === "number") {
+        idleSeconds = state.idle_seconds || 0;
+        releaseSeconds = state.idle_release_seconds;
+        startIdleTimer();
+      } else {
+        releaseSeconds = null;
+        stopIdleTimer();
+      }
+      renderOverlaySub();
+    } else {
+      overlay.classList.remove("show");
+      stopIdleTimer();
+      releaseSeconds = null;
+      waitingList = [];
+    }
+    if (!agentDriving) {
+      const waiting = Array.isArray(state.waiting) ? state.waiting : [];
+      if (humanPinned && handoffReason) {
+        returnQueue.textContent = (handoffAgent || "An agent") + " needs your help: " + handoffReason +
+          ". Do it in this pane, then click “Return to agent” to hand control back.";
+        returnBtn.style.display = "";
+      } else {
+        returnQueue.textContent = waiting.length
+          ? "You have control. Agents waiting to use this browser: " + waiting.join(", ")
+          : "You have control.";
+        returnBtn.style.display = waiting.length ? "" : "none";
+      }
+    }
+    returnBar.classList.add("show");  // the status bar is always on -- text switches with control
+    returnBar.classList.toggle("handoff", !agentDriving && !!handoffReason);
+    refreshPausedAgent();  // keep the paused overlay's agent line in sync if control flips
+  }
+
+  // Lifecycle drives the crash overlay + the init overlay's PRESENCE, but NOT its
+  // removal on running: the init cover comes down only when the first streamed frame
+  // paints (see revealOnFirstFrame), so the pane never reveals a blank canvas.
+  // Drive the init overlay's progress bar + label through the real load stages. Clearing
+  // `static` re-shows the bar (a terminal message may have hidden it).
+  function setInitStage(pct, label) {
+    initOverlay.classList.remove("static");
+    const fill = document.getElementById("initfill");
+    if (fill) fill.style.width = pct + "%";
+    initOverlay.querySelector(".msg").textContent = label;
+  }
+
+  function setLifecycle(next) {
+    if (!next || next === lifecycle) return;
+    lifecycle = next;
+    if (next === "crashed") { showCrashed(); return; }
+    if (next === "init") {
+      // Chromium is still coming up; the agent can't drive it yet.
+      firstFramePainted = false;
+      initOverlay.classList.add("show");
+      setInitStage(35, "Starting browser…");
+    } else if (next === "running") {
+      // The browser is up and drivable now -- only the pixel view is still loading, so the
+      // cover stays up (revealed on the first painted frame) but the label reflects reality.
+      setInitStage(75, "Loading browser view…");
+    }
+  }
+
+  function revealOnFirstFrame() {
+    if (firstFramePainted) return;
+    firstFramePainted = true;
+    const fill = document.getElementById("initfill");
+    if (fill) fill.style.width = "100%";
+    initOverlay.classList.remove("show");
+  }
+
+  function showCrashed() {
+    crashed = true;
+    lifecycle = "crashed";
+    stopIdleTimer();
+    overlay.classList.remove("show");
+    returnBar.classList.remove("show");
+    initOverlay.classList.remove("show");
+    crashOverlay.classList.add("show");
+  }
+
+  // ---- pixel plane: per-stripe H.264 decoder over /stream ----
+  // Each horizontal stripe row is its own H.264 chain, decoded by its own WebCodecs
+  // VideoDecoder and composited at its y-offset; the viewer acks every stripe as it
+  // leaves its decoder (credit-ack flow control). From the
+  // client; the only adaptations are the /browsers/<id>/stream URL and revealing the
+  // fleet's init overlay (instead of a status pill) on first paint.
+  let streamWs = null, streamRetry = 500, lastSentSize = "";
+
+  // ---- Rung 2 client telemetry: buffer per-stripe decode/paint timings and POST them
+  // in small batches OFF the render path (requestIdleCallback), so the server-side lens
+  // can subtract client render from the round trip and show pure network. The tap in the
+  // decoder callback is a bare array push; nothing here touches the ack or the paint.
+  let telemetryBuf = [];
+  function telemetryPush(rec) {
+    if (browserId === null) return;
+    telemetryBuf.push(rec);
+    if (telemetryBuf.length > 512) telemetryBuf.shift();  // bound if a flush stalls
+  }
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+  function flushTelemetry() {
+    if (telemetryBuf.length && browserId !== null) {
+      const batch = telemetryBuf; telemetryBuf = [];
+      try {
+        fetch(new URL("browsers/" + browserId + "/telemetry/client", document.baseURI), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(batch), keepalive: true,
+        }).catch(() => {});
+      } catch (_) {}
+    }
+    setTimeout(() => idle(flushTelemetry), 500);
+  }
+  idle(flushTelemetry);
+
+  function connectStream() {
+    if (browserId === null) return;
+    const url = new URL("browsers/" + browserId + "/stream", document.baseURI);
+    url.protocol = (url.protocol === "https:") ? "wss:" : "ws:";
+    // Pane size up front, IN the connect URL, so the first frame is already pane-sized
+    // (no flash, no resize round-trip; a post-connect r, would race the socket open).
+    // Measure #stage (the plain flex container that always fills the pane), NOT the
+    // canvas -- the canvas is object-fit:contain over a bitmap, so before layout / when
+    // the capture is small its box can read small and lock the capture at the floor.
+    const rect = stage.getBoundingClientRect();
+    const initW = Math.max(320, (Math.round(rect.width) || window.innerWidth) & ~1);
+    const initH = Math.max(240, (Math.round(rect.height) || window.innerHeight) & ~1);
+    url.searchParams.set("w", initW);
+    url.searchParams.set("h", initH);
+    lastSentSize = initW + "," + initH;
+    streamWs = new WebSocket(url);
+    streamWs.binaryType = "arraybuffer";
+
+    const rows = {};
+
+    function rowFor(yStart) {
+      let row = rows[yStart];
+      if (row === undefined) row = rows[yStart] = { decoder: null, needKey: true, seq: 0, pendingAcks: [], arriveInfo: {} };
+      return row;
+    }
+    function makeDecoder(yStart) {
+      const row = rows[yStart];
+      const created = new VideoDecoder({
+        output: (frame) => {
+          const tDecoded = performance.now();  // frame is out of the decoder now
+          const needW = frame.displayWidth;
+          const needH = yStart + frame.displayHeight;
+          if (canvas.width < needW || canvas.height < needH) {
+            canvas.width = Math.max(canvas.width, needW);
+            canvas.height = Math.max(canvas.height, needH);
+          }
+          context.drawImage(frame, 0, yStart);
+          frame.close();
+          const tPainted = performance.now();  // painted to the canvas; the ack (below) means "on screen"
+          revealOnFirstFrame();
+          const frameId = row.pendingAcks.shift();
+          if (frameId !== undefined && streamWs.readyState === WebSocket.OPEN) {
+            streamWs.send(`ack,${frameId},${yStart}`);  // hot path: ack first, telemetry after
+            // Rung 2 telemetry: record this stripe's client-side journey so the server-side
+            // round trip can have client render subtracted out (a bare push; flushed off-path).
+            const arr = row.arriveInfo[frameId];
+            if (arr !== undefined) {
+              delete row.arriveInfo[frameId];
+              telemetryPush({ fid: frameId, y: yStart, t_arrived: arr.t, t_decoded: tDecoded, t_painted: tPainted, dq: arr.dq });
+            }
+          }
+        },
+        error: (error) => {
+          telemetryPush({ y: yStart, err: true, t_arrived: performance.now() });
+          // Release the server's credit for this row before dropping our pending acks:
+          // otherwise those stripes stay unacked forever and the row's window never reopens
+          // (the server's stall watchdog is the backstop, but this recovers immediately).
+          if (streamWs && streamWs.readyState === WebSocket.OPEN)
+            for (const fid of row.pendingAcks) streamWs.send(`ack,${fid},${yStart}`);
+          row.needKey = true; row.pendingAcks.length = 0; row.arriveInfo = {}; row.decoder = null;
+        },
+      });
+      created.configure({ codec: "avc1.42C028", optimizeForLatency: true, hardwareAcceleration: "prefer-software" });
+      return created;
+    }
+
+    streamWs.onopen = () => {
+      streamRetry = 500;
+      // The server starts this connection PAUSED. Report our attention: if this pane is
+      // visible (you're looking at it / just opened it), claim the single active stream;
+      // if it's off-screen (a background reconnect), stay paused.
+      wasVisible = paneVisible();
+      if (wasVisible) claimActive(); else releaseActive();
+    };
+    streamWs.onmessage = (event) => {
+      if (typeof event.data === "string") {
+        if (event.data === "paused") { showPaused(); return; }   // conductor paused this viewer
+        if (event.data === "active") { hidePaused(); return; }   // resumed as the active viewer
+        if (event.data === "mem,high") { memWarn.classList.add("show"); return; }     // box > half committed
+        if (event.data === "mem,ok") { memWarn.classList.remove("show"); return; }    // recovered -> auto-hide
+        if (event.data === "multiwin") { multiWinModal.classList.add("show"); return; }  // guardian closed a stray window
+        if (event.data.startsWith("res,")) {
+          const [, w, h] = event.data.split(",");
+          for (const y in rows) { try { rows[y].decoder?.close(); } catch (_) {} }
+          for (const y in rows) delete rows[y];
+          canvas.width = parseInt(w, 10);
+          canvas.height = parseInt(h, 10);
+          return;
+        }
+        if (event.data.startsWith("cursor,")) {
+          const [, hotX, hotY, png] = event.data.split(",");
+          canvas.style.cursor = `url(data:image/png;base64,${png}) ${hotX} ${hotY}, default`;
+        } else if (event.data.startsWith("clip,txt,")) {
+          // A remote copy of small text: write it to the local clipboard directly.
+          const bytes = Uint8Array.from(atob(event.data.slice(9)), (c) => c.charCodeAt(0));
+          writeLocalText(new TextDecoder().decode(bytes));
+        } else if (event.data.startsWith("clip,out,")) {
+          // A remote copy of an image / large text: fetch the bytes over HTTP (may be >1 MiB).
+          // Show a chip immediately -- a right-click "Copy image" on the remote arrives here
+          // with no prior "Copying…", and the fetch + local write can lag.
+          const [, , mime] = event.data.split(",");
+          showChip("Copying image…", "");
+          fetch(clipUrl("out")).then((r) => r.blob()).then((blob) => writeLocalImage(blob, mime))
+            .catch(() => showChip("Copy failed", "err"));
+        }
+        return;  // "hb" heartbeat and anything else: ignore
+      }
+      const packet = new Uint8Array(event.data);
+      if (packet[0] === 0x01) { playAudio(packet.subarray(1)); return; }  // Opus chunk (magic 0x01)
+      if (packet.byteLength <= HEADER_LEN || packet[0] !== 0x04) return;
+      const view = new DataView(event.data);
+      const isKey = view.getUint8(1) === FRAME_TYPE_IDR;
+      const frameId = view.getUint16(2);
+      const yStart = view.getUint16(4);
+      const row = rowFor(yStart);
+      if (row.needKey && !isKey) return;
+      row.needKey = false;
+      if (row.decoder === null) row.decoder = makeDecoder(yStart);
+      row.pendingAcks.push(frameId);
+      // Stamp arrival + decoder backlog now, keyed by frameId, for the output callback to
+      // pair with decode/paint times (Rung 2 client telemetry).
+      row.arriveInfo[frameId] = { t: performance.now(), dq: row.decoder.decodeQueueSize };
+      row.decoder.decode(new EncodedVideoChunk({
+        type: isKey ? "key" : "delta",
+        timestamp: row.seq++ * 16667,
+        data: packet.subarray(HEADER_LEN),
+      }));
+    };
+    streamWs.onclose = () => {
+      if (closedForGood || crashed) return;
+      setTimeout(connectStream, streamRetry);
+      streamRetry = Math.min(streamRetry * 2, 5000);
+    };
+    streamWs.onerror = () => { try { streamWs.close(); } catch (_) {} };
+  }
+
+  // Report the pane size to the stream so the remote window resizes to fill it (only
+  // committed once the socket is OPEN so a dropped send retries; verbatim sizing).
+  function sendPaneSize() {
+    if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
+    const rect = stage.getBoundingClientRect();
+    // Skip ONLY a collapsed pane (a display:none dockview tab reads a 0x0 box): reporting that
+    // clamps to the 320x240 minimum and poisons the capture region. A REAL size is always
+    // reported -- even if the app tab is momentarily backgrounded (document.hidden) -- so a
+    // resize is never dropped and the browser reliably grows to fill the pane.
+    if (rect.width < 5 || rect.height < 5) return;
+    const w = Math.max(320, Math.round(rect.width) & ~1);
+    const h = Math.max(240, Math.round(rect.height) & ~1);
+    const key = w + "," + h;
+    if (key === lastSentSize) return;
+    lastSentSize = key;
+    streamWs.send("r," + key);
+  }
+  let resizeTimer = null;
+  new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(sendPaneSize, 150);
+  }).observe(stage);
+
+  // Stream conductor client: exactly ONE viewer streams across the whole app and every
+  // device -- the pane you're attending to. We tell the server "i" (I'm the attended pane
+  // -> make me the sole active stream) or "h" (I went off-screen -> pause me, 0 CPU / 0
+  // bandwidth). The server arbitrates (last interaction wins, ordered by its own receive
+  // time so multi-device clocks don't matter) and pauses everyone else.
+  // "Visible" = the whole workspace tab isn't backgrounded (Page Visibility) AND this pane
+  // isn't a non-active dockview tab (display:none -> the canvas box is 0x0, read reliably).
+  function paneVisible() {
+    if (document.hidden) return false;
+    const r = stage.getBoundingClientRect();
+    return r.width > 4 && r.height > 4;  // display:none / detached pane -> 0x0
+  }
+  function sendStream(msg) { if (streamWs && streamWs.readyState === WebSocket.OPEN) streamWs.send(msg); }
+  let claimedActive = false, wasVisible = false;
+  function claimActive() { if (paneVisible()) { claimedActive = true; sendStream("i"); } }  // I'm attended -> stream me
+  function releaseActive() { claimedActive = false; sendStream("h"); }                       // off-screen -> pause me
+  // Only a visibility TRANSITION auto-(un)claims: becoming visible (you switched to this
+  // tab, or the app returned to the foreground) claims; going off-screen releases. A pane
+  // merely sitting visible in a split view does NOT auto-claim -- you click it (below).
+  function onVisibilityTransition() {
+    const vis = paneVisible();
+    if (vis && !wasVisible) {
+      claimActive();
+      // The pane just became visible (or its layout settled): re-report the true size so the
+      // browser resizes to fill it, correcting any stale/early initial measurement.
+      lastSentSize = "";
+      sendPaneSize();
+    } else if (!vis && wasVisible) {
+      releaseActive();
+    }
+    wasVisible = vis;
+  }
+  document.addEventListener("visibilitychange", onVisibilityTransition);
+  new IntersectionObserver(onVisibilityTransition, { threshold: [0, 0.01] }).observe(stage);
+  setInterval(onVisibilityTransition, 1500);  // belt: catches a display:none<->visible flip the observer missed
+  // Belt for sizing: unconditionally re-assert the true pane size on a cadence. The
+  // ResizeObserver/visibility re-report can miss on a fresh reconnect (it runs before the
+  // pane has laid out, then never fires again since the pane doesn't change), leaving the
+  // capture stuck at the floor until a manual resize re-triggers a send. sendPaneSize dedups
+  // on lastSentSize and skips a collapsed (<5px) pane, so this is a no-op once correct.
+  setInterval(sendPaneSize, 1500);
+  // Genuine attention (click/key/wheel/focus this pane) claims the active stream immediately.
+  for (const ev of ["pointerdown", "keydown", "wheel", "focus"]) canvas.addEventListener(ev, claimActive, true);
+  window.addEventListener("focus", () => { if (paneVisible()) claimActive(); });
+
+  // Paused overlay: a dimmed backdrop over the FROZEN last frame with a solid card; clicking
+  // resumes. The message is conditional on whether an agent is driving -- the stream is a
+  // separate layer, so the browser (and any agent in it) keeps running while paused. While the
+  // card is up we hide the agent control bar behind it so its text can't bleed through.
+  const pausedBody = document.getElementById("pausedbody");
+  const PAUSED_BODY_AGENT = "Browser is still running and an agent is still working on it. Livestream is just paused to save resources. Click to resume.";
+  const PAUSED_BODY_IDLE = "Browser is still running, livestream is just paused to save resources. Click to resume.";
+  function refreshPausedAgent() {
+    pausedBody.textContent = controlOwner === "agent" ? PAUSED_BODY_AGENT : PAUSED_BODY_IDLE;
+  }
+  function showPaused() {
+    if (!firstFramePainted) return;
+    refreshPausedAgent();
+    overlay.classList.remove("show");  // tuck the control bar away behind the card
+    pausedOverlay.classList.add("show");
+  }
+  function hidePaused() {
+    pausedOverlay.classList.remove("show");
+    if (controlOwner === "agent") overlay.classList.add("show");  // restore the control bar on resume
+  }
+  pausedOverlay.addEventListener("pointerdown", claimActive, true);
+
+  // ---- audio playback (Opus over WebCodecs -> AudioWorklet) ----
+  // The server sends mono Opus chunks (magic byte 0x01)
+  // interleaved on the SAME /stream socket, only while the tab actually makes sound
+  // (pcmflux's sample-level silence gate), so this stays idle otherwise. WebCodecs
+  // AudioDecoder outputs f32-planar; we duplicate mono to L/R and hand it to a tiny
+  // worklet with a bounded drop-oldest jitter buffer that absorbs decode/network jitter.
+  let audioCtx = null, audioNode = null, audioDecoder = null, audioReady = false, audioTs = 0;
+  const AUDIO_WORKLET = `
+class PB extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.cap = 48000 * 2 * 2;          // ~2s stereo
+    this.ring = new Float32Array(this.cap);
+    this.read = 0; this.write = 0; this.size = 0;
+    this.priming = true;
+    this.PRIME = 48000 * 2 * 0.06;      // ~60ms before playback starts
+    this.port.onmessage = (e) => {
+      const f = e.data;
+      for (let i = 0; i < f.length; i++) { this.ring[this.write] = f[i]; this.write = (this.write + 1) % this.cap; }
+      this.size += f.length;
+      if (this.size > this.cap) { const drop = this.size - this.cap; this.read = (this.read + drop) % this.cap; this.size = this.cap; }
+      if (this.priming && this.size >= this.PRIME) this.priming = false;
+    };
+  }
+  process(_inputs, outputs) {
+    const o = outputs[0], n = o[0].length;
+    for (let i = 0; i < n; i++) {
+      if (!this.priming && this.size >= 2) {
+        o[0][i] = this.ring[this.read]; this.read = (this.read + 1) % this.cap;
+        o[1][i] = this.ring[this.read]; this.read = (this.read + 1) % this.cap;
+        this.size -= 2;
+      } else {
+        o[0][i] = 0; o[1][i] = 0;
+        if (this.size < 2) this.priming = true;  // ran dry -> re-prime before resuming
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('pb', PB);`;
+  async function ensureAudio() {
+    if (audioCtx) return;
+    audioCtx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+    const url = URL.createObjectURL(new Blob([AUDIO_WORKLET], { type: "application/javascript" }));
+    await audioCtx.audioWorklet.addModule(url);
+    audioNode = new AudioWorkletNode(audioCtx, "pb", { outputChannelCount: [2] });
+    audioNode.connect(audioCtx.destination);
+    audioDecoder = new AudioDecoder({
+      output: (data) => {
+        const frames = data.numberOfFrames, out = new Float32Array(frames * 2), plane = new Float32Array(frames);
+        data.copyTo(plane, { planeIndex: 0, format: "f32-planar" });
+        for (let i = 0; i < frames; i++) out[2 * i] = plane[i];
+        if (data.numberOfChannels > 1) data.copyTo(plane, { planeIndex: 1, format: "f32-planar" });
+        for (let i = 0; i < frames; i++) out[2 * i + 1] = plane[i];  // mono -> duplicate to both channels
+        data.close();
+        audioNode.port.postMessage(out, [out.buffer]);
+      },
+      error: () => {},
+    });
+    audioDecoder.configure({ codec: "opus", sampleRate: 48000, numberOfChannels: 1 });
+    audioReady = true;
+  }
+  function playAudio(opus) {
+    if (!("AudioDecoder" in window)) return;
+    if (!audioReady) { ensureAudio(); return; }  // first chunk primes it; a few ms of audio dropped is fine
+    if (audioCtx.state === "suspended") return;   // waiting for the gesture unlock
+    if (audioDecoder.decodeQueueSize > 12) return;  // link stalled -> drop, don't queue latency
+    audioDecoder.decode(new EncodedAudioChunk({ type: "key", timestamp: audioTs, data: opus }));
+    audioTs += 20000;  // 20ms frames
+  }
+  // Browsers suspend AudioContext until a gesture; the pane is click-driven.
+  window.addEventListener("pointerdown", () => { audioCtx?.resume?.(); }, true);
+
+  // ---- input capture: Selkies grammar over /stream, gated on human control ----
+  // Ported from Selkies (keysym map, letterbox-aware coords, coalesced
+  // pointer moves #26, held-key heartbeat #12, release-on-blur), with two fleet
+  // adaptations: input is sent ONLY while the human holds control (client-side
+  // suppression; the server gates too), and Cmd/Meta combos stay local (#30).
+  // Clipboard is NOT handled here as keys -- copy/cut/paste ride the browser's own
+  // OS-agnostic DOM ClipboardEvents (see the clipboard section below), so Ctrl+C/V/X
+  // fall through untouched instead of being forwarded as keystrokes.
+  const NAMED_KEYSYMS = {
+    Backspace: 0xff08, Tab: 0xff09, Enter: 0xff0d, Escape: 0xff1b, Delete: 0xffff,
+    Home: 0xff50, End: 0xff57, PageUp: 0xff55, PageDown: 0xff56,
+    ArrowLeft: 0xff51, ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54,
+    Insert: 0xff63, Menu: 0xff67, Pause: 0xff13, ScrollLock: 0xff14, PrintScreen: 0xff61,
+    CapsLock: 0xffe5, NumLock: 0xff7f,
+    Shift: 0xffe1, Control: 0xffe3, Alt: 0xffe9, AltGraph: 0xfe03, Meta: 0xffe7,
+    F1: 0xffbe, F2: 0xffbf, F3: 0xffc0, F4: 0xffc1, F5: 0xffc2, F6: 0xffc3,
+    F7: 0xffc4, F8: 0xffc5, F9: 0xffc6, F10: 0xffc7, F11: 0xffc8, F12: 0xffc9,
+  };
+  const RIGHT_SIDE_KEYSYMS = { Shift: 0xffe2, Control: 0xffe4, Alt: 0xffea, Meta: 0xffe8 };
+  function keysymFor(event) {
+    const key = event.key;
+    if (key.length === 1) {
+      const cp = key.codePointAt(0);
+      return cp <= 0xff ? cp : 0x01000000 | cp;
+    }
+    if (event.location === 2 && key in RIGHT_SIDE_KEYSYMS) return RIGHT_SIDE_KEYSYMS[key];
+    return NAMED_KEYSYMS[key] ?? null;
+  }
+  let buttonMask = 0;
+  const heldKeysyms = new Set();
+  function driving() { return controlOwner !== "human"; }  // agent (or nobody) -> suppress input
+  function sendInput(message) { if (streamWs && streamWs.readyState === WebSocket.OPEN) streamWs.send(message); }
+  function releaseHeldInput() { buttonMask = 0; heldKeysyms.clear(); sendInput("kr"); }
+  // Un-pin stuck modifiers: on every key event, release any modifier we still think is
+  // held but whose event flag says it's up (its keyup was lost -- e.g. focus moved during
+  // a copy, or a synthetic combo raced it). This is the robust backstop against Ctrl/Alt/
+  // Shift/Meta "sticking down" on the remote (the heartbeat would otherwise keep re-pressing).
+  const MODIFIER_KEYSYMS = {
+    ctrlKey: [0xffe3, 0xffe4], shiftKey: [0xffe1, 0xffe2],
+    altKey: [0xffe9, 0xffea, 0xfe03], metaKey: [0xffe7, 0xffe8],
+  };
+  function reconcileModifiers(event) {
+    for (const flag in MODIFIER_KEYSYMS) {
+      if (event[flag]) continue;  // still physically held -> leave it down
+      for (const k of MODIFIER_KEYSYMS[flag]) if (heldKeysyms.has(k)) { heldKeysyms.delete(k); sendInput("ku," + k); }
+    }
+  }
+  function captureCoords(event) {
+    if (!canvas.width || !canvas.height) return null;
+    const rect = canvas.getBoundingClientRect();
+    const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+    const drawnW = canvas.width * scale, drawnH = canvas.height * scale;
+    const offX = rect.left + (rect.width - drawnW) / 2;
+    const offY = rect.top + (rect.height - drawnH) / 2;
+    const x = Math.round((event.clientX - offX) / scale);
+    const y = Math.round((event.clientY - offY) / scale);
+    if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return null;
+    return { x, y };
+  }
+  function sendPointer(event, mask, scrollMagnitude) {
+    const pos = captureCoords(event);
+    if (pos === null) return;
+    sendInput(`m,${pos.x},${pos.y},${mask},${scrollMagnitude || 0}`);
+  }
+  // Coalesce pointer moves to one per animation frame (#26): every raw move would
+  // otherwise cost an XTest inject + Chromium hit-test on the loaded server.
+  let pendingMove = null;
+  canvas.addEventListener("pointermove", (e) => {
+    if (driving()) return;
+    if (pendingMove === null) {
+      requestAnimationFrame(() => {
+        if (pendingMove !== null) sendPointer(pendingMove, buttonMask, 0);
+        pendingMove = null;
+      });
+    }
+    pendingMove = e;
+  });
+  canvas.addEventListener("pointerdown", (e) => {
+    if (driving()) return;
+    canvas.focus();
+    canvas.setPointerCapture(e.pointerId);
+    const bit = e.button === 1 ? 2 : e.button === 2 ? 4 : 1;  // left/middle/right -> mask bits 0/1/2
+    buttonMask |= bit;
+    sendPointer(e, buttonMask, 0);
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    if (driving()) return;
+    const bit = e.button === 1 ? 2 : e.button === 2 ? 4 : 1;
+    buttonMask &= ~bit;
+    sendPointer(e, buttonMask, 0);
+  });
+  canvas.addEventListener("wheel", (e) => {
+    if (driving()) return;
+    e.preventDefault();
+    const clicks = Math.max(1, Math.min(8, Math.round(Math.abs(e.deltaY) / 100)));
+    const bit = e.deltaY < 0 ? 8 : 16;  // mask bits 3 (up) / 4 (down), edge-triggered
+    sendPointer(e, buttonMask | bit, clicks);
+    sendPointer(e, buttonMask, 0);
+  }, { passive: false });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("keydown", (e) => {
+    if (driving()) return;
+    reconcileModifiers(e);  // release any modifier whose keyup we missed, before this key
+    if (e.metaKey) return;  // Cmd-combos stay LOCAL (#30): Mac muscle memory + workspace shortcuts
+    // Let Ctrl+C/X/V fall through to the native copy/cut/paste DOM events (handled in
+    // the clipboard section) instead of forwarding them as keystrokes -- no key
+    // interception, and it works the same on every OS.
+    if (e.ctrlKey && (e.key === "c" || e.key === "x" || e.key === "v")) return;
+    const keysym = keysymFor(e);
+    if (keysym === null) return;
+    e.preventDefault();
+    heldKeysyms.add(keysym);
+    sendInput("kd," + keysym);
+  });
+  canvas.addEventListener("keyup", (e) => {
+    if (driving()) return;
+    reconcileModifiers(e);  // backstop: sync held modifiers to the event's flags
+    if (e.metaKey || e.key === "Meta") return;
+    const keysym = keysymFor(e);
+    if (keysym === null) return;
+    e.preventDefault();
+    heldKeysyms.delete(keysym);
+    sendInput("ku," + keysym);
+  });
+  canvas.addEventListener("blur", () => releaseHeldInput());
+  window.addEventListener("pagehide", () => sendInput("kr"));
+  document.addEventListener("visibilitychange", () => { if (document.hidden) releaseHeldInput(); });
+  // Held-key heartbeat (#12, Selkies kh): report the full held set so the server can
+  // release anything whose keyup got lost in transit. Only while driving locally.
+  setInterval(() => { if (!driving()) sendInput("kh" + [...heldKeysyms].map((k) => "," + k).join("")); }, 2000);
+
+  // ---- clipboard: paste-in / copy-out (text + images), OS-agnostic, with a chip ----
+  // We hook the browser's own copy/cut/paste ClipboardEvents rather than intercepting
+  // keys, so it works identically on every OS and for menu/right-click too. Paste reads
+  // the event's clipboardData and POSTs it to the remote (the server sets the X selection
+  // and injects Ctrl+V). Copy/cut trigger a remote Ctrl+C/X; the server's XFixes monitor
+  // then pushes the new remote selection back over the stream and we write it locally.
+  const CLIP_MAX_BYTES = 10 * 1024 * 1024;
+  const clipchip = document.getElementById("clipchip");
+  let chipTimer = null;
+  function showChip(text, kind) {
+    clipchip.textContent = text;
+    clipchip.className = "show" + (kind ? " " + kind : "");
+    clearTimeout(chipTimer);
+    if (kind === "ok" || kind === "err") chipTimer = setTimeout(() => { clipchip.className = ""; }, 2200);
+  }
+  function clipUrl(kind) { return new URL("browsers/" + browserId + "/clipboard/" + kind, document.baseURI); }
+  function remoteClipCombo(keysym) {  // drive a remote Ctrl+<key> for copy/cut
+    // If the human is physically holding Ctrl (Win/Linux Ctrl+C), it's ALREADY down on the
+    // remote and kept down by the heartbeat -- just TAP the letter, so we don't release the
+    // modifier out from under them (the old always-wrap left Ctrl pinned). On the Mac Cmd
+    // path, Cmd is never forwarded, so synthesize the whole Ctrl+<key> combo.
+    const ctrlHeld = heldKeysyms.has(0xffe3) || heldKeysyms.has(0xffe4);
+    if (ctrlHeld) { sendInput("kd," + keysym); sendInput("ku," + keysym); }
+    else { sendInput("kd," + 0xffe3); sendInput("kd," + keysym); sendInput("ku," + keysym); sendInput("ku," + 0xffe3); }
+  }
+  // Copy/cut feedback: a remote copy that produced nothing (no selection) never sends a
+  // clip payload back, so arm a timeout when we ask for one and clear it the moment a
+  // payload arrives; if it fires first, the copy came back empty.
+  let copyTimer = null;
+  function armCopyFeedback() { clearTimeout(copyTimer); copyTimer = setTimeout(() => { copyTimer = null; showChip("Nothing to copy", "err"); }, 1500); }
+  function clearCopyFeedback() { clearTimeout(copyTimer); copyTimer = null; }
+
+  async function postPaste(blob, mime) {
+    if (blob.size > CLIP_MAX_BYTES) { showChip("Paste payload too large", "err"); return; }
+    showChip("Pasting…", "");
+    try {
+      const resp = await fetch(clipUrl("paste"), { method: "POST", headers: { "Content-Type": mime }, body: blob });
+      if (resp.status === 413) { showChip("Paste payload too large", "err"); return; }
+      showChip(resp.ok ? "Pasted" : "Paste failed", resp.ok ? "ok" : "err");
+    } catch (_) { showChip("Paste failed", "err"); }
+  }
+  // Native paste event: read the payload synchronously from the event (no permission
+  // prompt), preferring an image over text, and push it to the remote.
+  document.addEventListener("paste", (e) => {
+    if (driving()) return;
+    e.preventDefault();
+    const dt = e.clipboardData;
+    if (!dt) return;
+    for (const item of dt.items || []) {
+      if (item.type && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) { postPaste(file, file.type || "image/png"); return; }
+      }
+    }
+    const text = dt.getData("text/plain");
+    if (text) postPaste(new Blob([text], { type: "text/plain" }), "text/plain");
+  });
+  // Native copy/cut: nothing useful is selected locally (the page lives in the remote),
+  // so drive a remote copy/cut and let the monitor deliver the result to our clipboard.
+  document.addEventListener("copy", (e) => {
+    if (driving()) return;
+    e.preventDefault();
+    remoteClipCombo(0x0063); showChip("Copying…", ""); armCopyFeedback();  // remote Ctrl+C
+  });
+  document.addEventListener("cut", (e) => {
+    if (driving()) return;
+    e.preventDefault();
+    remoteClipCombo(0x0078); showChip("Cutting…", ""); armCopyFeedback();  // remote Ctrl+X
+  });
+
+  // Local clipboard WRITE with a deferred retry: a programmatic write needs the document
+  // focused, and a server-pushed copy can arrive while the user is elsewhere -- queue it
+  // and flush on the next focus.
+  let pendingWrite = null;
+  function flushPendingWrite() { if (pendingWrite) { const w = pendingWrite; pendingWrite = null; w(); } }
+  window.addEventListener("focus", flushPendingWrite);
+  function writeLocalText(text) {
+    clearCopyFeedback();  // a payload arrived -> not "nothing to copy"
+    const doWrite = () => navigator.clipboard.writeText(text)
+      .then(() => showChip("Copied from remote", "ok"))
+      .catch(() => { pendingWrite = doWrite; showChip("Copied — click the page to sync", "err"); });
+    doWrite();
+  }
+  async function writeLocalImage(blob, mime) {
+    clearCopyFeedback();  // a payload arrived -> not "nothing to copy"
+    // Chromium's clipboard only writes image/png; transcode anything else.
+    let png = blob;
+    if (mime !== "image/png") {
+      try {
+        const bmp = await createImageBitmap(blob);
+        const c = document.createElement("canvas");
+        c.width = bmp.width; c.height = bmp.height;
+        c.getContext("2d").drawImage(bmp, 0, 0);
+        png = await new Promise((res) => c.toBlob(res, "image/png"));
+      } catch (_) { showChip("Copy failed", "err"); return; }
+    }
+    const doWrite = () => navigator.clipboard.write([new ClipboardItem({ "image/png": png })])
+      .then(() => showChip("Image copied from remote", "ok"))
+      .catch(() => { pendingWrite = doWrite; showChip("Image copied — click the page to sync", "err"); });
+    doWrite();
+  }
+
+  // ---- tips (top-bar help card, ported from browser-fixes-v4.1) ----
+  tipsBtn.onclick = () => tipsModal.classList.add("show");
+  tipsCloseBtn.onclick = () => tipsModal.classList.remove("show");
+  tipsModal.addEventListener("click", (e) => { if (e.target === tipsModal) tipsModal.classList.remove("show"); });
+
+  // ---- controls (ownership only) ----
+  takeControlBtn.onclick = () => {
+    takeControlBtn.disabled = true;
+    overlay.classList.remove("show");
+    if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify({ type: "take_control" }));
+  };
+  returnBtn.onclick = () => {
+    returnBar.classList.remove("show");
+    if (castWs && castWs.readyState === 1) castWs.send(JSON.stringify({ type: "return_to_agents" }));
+  };
+
+  // ---- /cast: control/ownership only (no pixels, no tabs, no input) ----
+  // A wedged (half-open) /cast socket delivers no onclose, so a lost control-change
+  // message would strand this viewer thinking an agent still holds control -- input dead
+  // forever even after it's ours. Key a watchdog on the server's existing 10s keepalive
+  // ping: >28s of total silence means the backend->client direction is dead; force-close
+  // so onclose -> scheduleReconnect -> the daemon re-seeds the true control state. Only
+  // trip once "running" (no ping source exists during init/restore), and scope the timer
+  // to its own socket so it never closes a newer one.
+  const _CAST_SILENCE_MS = 28000;
+  function connect(id) {
+    browserId = id;
+    const ws = new WebSocket(wsUrl("browsers/" + id + "/cast"));
+    castWs = ws;
+    let watchdog = null;
+    function bumpWatchdog() {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        if (lifecycle === "running") { try { ws.close(); } catch (_) {} }
+        else { bumpWatchdog(); }  // still launching: no pings yet, just re-arm
+      }, _CAST_SILENCE_MS);
+    }
+    ws.onmessage = (ev) => {
+      bumpWatchdog();  // any inbound frame (ping included) proves the link is alive
+      let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+      if (m.type === "crashed") showCrashed();
+      else if (crashed) return;
+      else if (m.type === "launch_failed") {
+        closedForGood = true;
+        initOverlay.classList.add("static");
+        initOverlay.querySelector(".msg").textContent = "Browser failed to start — open a new one from the + menu.";
+      }
+      else if (m.type === "initializing") { if (lifecycle !== "running") setLifecycle("init"); }
+      else if (m.type === "control") {
+        setLifecycle(m.lifecycle); setControl(m);
+        // A cast RECONNECT onto an already-running, already-painted browser: setLifecycle
+        // no-ops (same value) and the reconnect's onclose re-showed the init cover, so it
+        // would sit opaque over the live page forever. Take it down here since pixels are
+        // already flowing. (First-ever load still reveals via revealOnFirstFrame.)
+        if (m.lifecycle === "running" && firstFramePainted) initOverlay.classList.remove("show");
+      }
+      else if (m.type === "handoff_request") {
+        handoffReason = m.reason || "human verification needed";
+        handoffAgent = m.agent_name || "An agent";
+        setControl(lastControlState);
+      }
+      // frame / tabs messages no longer exist on /cast (pixels ride /stream); ping ignored.
+    };
+    ws.onclose = (ev) => {
+      clearTimeout(watchdog);
+      if (ev.code === 1008) {
+        closedForGood = true;
+        overlay.classList.remove("show");
+        returnBar.classList.remove("show");
+        initOverlay.classList.add("show");
+        initOverlay.classList.add("static");
+        initOverlay.querySelector(".msg").textContent = "Browser closed — reopen it from the + menu.";
+        return;
+      }
+      if (ev.code === 1013) { setLifecycle("init"); initOverlay.classList.add("show"); scheduleReconnect(); return; }
+      initOverlay.classList.add("show");
+      scheduleReconnect();
+    };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+    bumpWatchdog();  // arm on connect so a socket that never speaks is caught too
+  }
+  function scheduleReconnect() {
+    if (reconnectTimer || browserId === null || closedForGood) return;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(browserId); }, 1000);
+  }
+
+  function boot() {
+    const params = new URLSearchParams(location.search);
+    const name = params.get("session");
+    if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the + menu."; return; }
+    initOverlay.classList.add("show");
+    if (!("VideoDecoder" in window)) { initOverlay.classList.add("static"); initOverlay.querySelector(".msg").textContent = "This browser can't play the stream (WebCodecs missing)."; return; }
+    setInitStage(15, "Starting browser…");  // seed the bar until the first control message lands
+    connect(name);        // control/ownership
+    connectStream();      // pixels
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

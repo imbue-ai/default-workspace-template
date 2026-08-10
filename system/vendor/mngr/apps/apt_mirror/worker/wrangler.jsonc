@@ -1,0 +1,36 @@
+// Cloudflare Worker config for the snapshot-pinned apt mirror.
+//
+// Deployed manually via `just deploy-apt-mirror` (see ../README.md). The
+// custom domain lives on the imbuepackages.com zone in the production
+// Cloudflare account; Cloudflare manages its DNS record automatically.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "apt-mirror",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-06",
+  "routes": [
+    {
+      "pattern": "apt.imbuepackages.com",
+      "custom_domain": true
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MIRROR_BUCKET",
+      "bucket_name": "apt-mirror"
+    }
+  ],
+  "vars": {
+    // Live archive bases read through on pool misses, keyed by archive name.
+    "UPSTREAM_BASE_BY_ARCHIVE": {
+      "debian": "https://deb.debian.org/debian",
+      "debian-security": "https://deb.debian.org/debian-security"
+    },
+    // snapshot.debian.org base used as the pool fallback for files the live
+    // archive has already dropped.
+    "SNAPSHOT_BASE": "https://snapshot.debian.org/archive"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

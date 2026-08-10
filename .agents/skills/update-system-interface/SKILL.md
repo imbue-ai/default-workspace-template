@@ -1,29 +1,29 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
 ---
 
 # Updating the system interface
 
-`apps/system_interface` is the live web UI the user is looking at right now
+`system/apps/system_interface` is the live web UI the user is looking at right now
 (the dockview shell, the chat panels, the progress view). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This
 skill is the single canonical path for that.
 
-This is the **system-interface specialization of the generic artifact
+This is the **system-interface specialization of the generic creation
 lifecycle.** It reuses the generic update orchestration -- the task file, the
-generic `harden-worker`, and the report poll -- from `update-artifact` with
-`artifact=system-interface`, and adds the one thing the system interface needs
-that no other artifact does: a `safe-reveal` go-live (pre-merge **preview**, then
+generic `harden-worker`, and the report poll -- from `update-creation` with
+`type=system-interface`, and adds the one thing the system interface needs
+that no other creation does: a `safe-reveal` go-live (pre-merge **preview**, then
 a reveal-or-roll-back script). The worker/orchestration core is shared; the
 preview and reveal are owned here.
 
 ## The hard rule
 
 **Never edit the system-interface tree that is being served to the user.** Do
-not run `Edit`/`Write` on files under `apps/system_interface/` in this (the
+not run `Edit`/`Write` on files under `system/apps/system_interface/` in this (the
 served) checkout, and do not rebuild or restart the live UI from uncommitted
 edits here. Every change is made in a separate, isolated clone of the source,
 built and tested there, and merged back only after it passes. The only things
@@ -39,9 +39,9 @@ is just the mechanism for that safe, separate place to work.
 
 ## Flow overview
 
-1. **Delegate** the change to the generic worker via the `update-artifact`
-   orchestration core (`artifact=system-interface`). The worker follows
-   `harden-artifact.md` + `op-update.md` + `artifact-system-interface.md`, which
+1. **Delegate** the change to the generic worker via the `update-creation`
+   orchestration core (`type=system-interface`). The worker follows
+   `harden-creation.md` + `op-update.md` + `type-system-interface.md`, which
    own how to build, test, and verify the change in isolation.
 2. The **worker** implements + builds + tests it on its own branch, then reports
    `done` (the system interface emits **no gate** -- approval is your preview).
@@ -58,15 +58,31 @@ is just the mechanism for that safe, separate place to work.
 
 ## 1-2. Delegate via the generic update orchestration
 
-Follow `update-artifact` Steps 1-3 (open a ticket, write the task file, launch
-the worker, background-poll the report) with these system-interface specifics:
+**Check for a concurrent system-interface pass first.** Passes here are named
+per-slug, so two can coexist without colliding on names -- but both edit
+`system/apps/system_interface`, so whichever merges second is guaranteed stale (see
+the freshness check in Step 4). Look for another pass in flight:
+
+```bash
+grep -l 'type: system-interface' data/.tasks/harden/update-*/task.md
+```
+
+For any hit, check whether its `update <slug>` tracking ticket is still
+open/in-progress in `tk ready` (and its worker alive, per `lead-proxy.md`'s
+liveness probe). If a live one exists, tell the user and let them decide --
+dispatching in parallel is allowed but means the second merge will have to
+rebase and re-verify. This is a warning, not a hard block.
+
+Then follow `update-creation` Steps 1-3 (open a ticket, write the task file,
+launch the worker, background-poll the report) with these system-interface
+specifics:
 
 - **Pick a slug** `$SLUG` for the change. The worker agent / branch is
   `update-$SLUG` / `mngr/update-$SLUG`; the runtime dir is
-  `runtime/harden/update-$SLUG/`.
-- **Task-file frontmatter:** `operation: update`, `artifact: system-interface`,
+  `data/.tasks/harden/update-$SLUG/`.
+- **Task-file frontmatter:** `operation: update`, `type: system-interface`,
   plus the standard `finish_report_path`
-  (`runtime/harden/update-$SLUG/reports/report.md`). Per the system-interface
+  (`data/.tasks/harden/update-$SLUG/reports/report.md`). Per the system-interface
   exception in `op-update.md`, there is **no `## Change origin` marker** -- the
   body is a plain change brief, not an absorb/verify incident.
 - **Task-file body:** `## What to do` (the actual UI change the user asked for),
@@ -75,8 +91,8 @@ the worker, background-poll the report) with these system-interface specifics:
   looks wrong in plain words -- see the next bullet; omit it, or write "no real
   scenario", for net-new work), and `## Success criteria` (what "done" looks
   like, plus the standing line: *follow the installed `harden-worker` sub-skill;
-  it composes `harden-artifact.md`, `op-update.md`, and
-  `artifact-system-interface.md` for how to run, test, verify, and what not to
+  it composes `harden-creation.md`, `op-update.md`, and
+  `type-system-interface.md` for how to run, test, verify, and what not to
   touch; report `done` only when its testing contract and the review gates all
   pass*).
 - **Judge whether a real scenario motivates the change, and if so point the
@@ -105,12 +121,12 @@ the worker, background-poll the report) with these system-interface specifics:
   A change can be partly both -- anchored in a real conversation but adding
   something new -- in which case name the real anchor and call out the new part.
   Use your judgment.
-- **Launch** with `--template subskill-worker` (installs the generic
-  `harden-worker`) per `update-artifact` Step 3, then background-poll per
+- **Launch** with `--template worker` (installs the generic
+  `harden-worker`) per `update-creation` Step 3, then background-poll per
   `.agents/shared/references/lead-proxy.md`.
 - **Terminal handling differs:** the system interface emits no gate, and on
-  `done` you do **not** merge here (that is `update-artifact` Step 4's behavior
-  for other artifacts). Instead, go to the preview below. On `stuck` or a
+  `done` you do **not** merge here (that is `update-creation` Step 4's behavior
+  for other creations). Instead, go to the preview below. On `stuck` or a
   dead-worker timeout, surface to the user per
   `.agents/skills/launch-task/references/worker-failure.md` -- do **not**
   preview, merge, or reveal, and do not retry silently.
@@ -142,12 +158,18 @@ service points at that wrapper (the inner instance is registered separately as
 **not** merge, touch the served tree, or modify the worker's folder. Exit `0`
 means the preview is up; a non-zero exit means it failed to boot (or the
 work_dir was wrong / the worker was already destroyed) and tore itself down --
-diagnose before retrying.
+diagnose before retrying. One boot-refusal case is deliberate: the `si-preview`
+tab can only show one pass at a time, so if another pass's preview is already
+up, `preview` refuses rather than hijacking it -- surface that to the user and
+coordinate with the other pass (its stderr says how to tear down an abandoned
+one).
 
-Open it as a tab and ask the user to explore:
+Open it as a tab and ask the user to explore. `open` requires `--layout` and
+only applies on clients with that layout active, so try both named layouts --
+the one the user is not on fails fast and harmlessly:
 
 ```bash
-python3 scripts/layout.py open si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
 
 **Self-verify against the real scenario before you ask the user.** The preview's
@@ -168,7 +190,7 @@ default. If a real conversation motivated the change:
   worker's empty agent; they switch via the `+` dropdown to the motivating
   agent).
 
-Then confirm with the user via `send-user-message`: a binary keep/discard *and*
+Then confirm with the user: a binary keep/discard *and*
 room for free-form notes (what looks off, what they'd change). Wait for their
 answer before doing anything else.
 
@@ -176,13 +198,45 @@ answer before doing anything else.
 
 If the user **approves** the preview:
 
-1. **Capture the known-good revision first** -- the served branch's current
+1. **Take the editing lease** so no other chat's merge or reveal interleaves
+   with yours -- the reveal's auto-rollback restores a captured revision, so a
+   foreign merge landing mid-motion could be swept away by it. Same advisory
+   mechanics as `update-app`'s "One editor at a time": first check
+   `tk ready` for another agent's `editing service system_interface` lease and
+   surface it to the user instead of proceeding if one is held; then
+
+   ```bash
+   LEASE_ID=$(tk create "editing service system_interface" -t chore \
+       -d "Held by $MNGR_AGENT_NAME across merge + reveal; released after teardown.")
+   ```
+
+   and `tk start "$LEASE_ID"` (as its own command). Unlike a live service
+   edit, this lease deliberately spans the whole merge + reveal motion; it is
+   released at the end of Step 5, never held across the wait for the user's
+   preview verdict (that wait happens *before* this step).
+
+2. **Freshness check** -- the branch is only mergeable if
+   `system/apps/system_interface/` has not changed since the worker branched (for
+   example, another pass merged in the meantime):
+
+   ```bash
+   BASE=$(git merge-base HEAD "mngr/update-$SLUG")
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/
+   ```
+
+   Empty output means fresh: continue. Any output means the pass is stale --
+   do **not** merge, and never hand-resolve a conflicted merge (the
+   principle in `.agents/shared/references/harden-contention.md`). Release
+   the lease, re-brief the worker to rebase onto the current tree and
+   re-verify, and come back through preview once it reports `done` again.
+
+3. **Capture the known-good revision** -- the served branch's current
    `HEAD`, *before* you merge. This is what the reveal rolls back to if the
    change breaks:
    ```bash
    ROLLBACK_TO=$(git rev-parse HEAD)
    ```
-2. **Merge** the worker's branch (`mngr/update-$SLUG`) into the working branch
+4. **Merge** the worker's branch (`mngr/update-$SLUG`) into the working branch
    the live UI is served from. Commit the merge so the tree is clean (the reveal
    refuses to run on a dirty tree, so a rollback can never clobber unrelated
    work).
@@ -211,7 +265,7 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Classifies** what the merge changed (frontend source, frontend manifest,
   backend source, backend manifest).
 - **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
-  frontend, `uv tool install -e apps/system_interface --reinstall` for the
+  frontend, `uv tool install -e system/apps/system_interface --reinstall` for the
   backend. This is essential: a plain restart does *not* re-resolve the
   editable-installed tool's dependencies, so a backend dependency addition would
   otherwise crash the service on restart.
@@ -250,16 +304,18 @@ way to clean up after a `preview` that failed partway.
 layout. The `si-preview` tab you opened earlier with `layout.py open` is a
 separate concern (a layout panel, not a service), so you must close it yourself
 -- otherwise the user is left with a stale tab pointing at a now-deregistered
-service:
+service (again once per named layout, since `close` requires `--layout`):
 
 ```bash
-python3 scripts/layout.py close si-preview
+for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
 ```
 
 Do this whenever you tear the preview down -- after a successful reveal *or*
 after a rejection where nothing was merged. Once the preview is down and its tab
 is closed, the worker can be destroyed per `launch-task`. Close the
-`update-$SLUG` ticket the orchestration opened.
+`update-$SLUG` ticket the orchestration opened, and release the editing lease
+taken in Step 4 with `tk close "$LEASE_ID" "Merge and reveal finished."` (on a
+rejection no lease was taken -- Step 4 never ran).
 
 Why this exists as a script and not a checklist: if the backend fails to start,
 the user loses their entire chat UI -- there is nowhere left to surface an error
@@ -267,7 +323,7 @@ message. The recover-or-revert logic must therefore run identically every time
 and can never be skipped, which is exactly what belongs in a deterministic script
 rather than agent prose.
 
-`scripts/layout.py refresh` (the `manage-layout` skill) is unrelated -- it only
+`system/scripts/layout.py refresh` (the `manage-layout` skill) is unrelated -- it only
 reloads a single inner iframe/panel for arranging the workspace, not the
 top-level page, so it does **not** reveal a system-interface code change.
 

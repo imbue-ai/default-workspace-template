@@ -1,0 +1,155 @@
+"""Pytest fixtures and session-finish leak detection for mngr_azure tests.
+
+Modeled after ``libs/mngr_aws/imbue/mngr_aws/conftest.py``. Provides a safety
+net for Azure release tests so killed test runs cannot leak VM cost:
+
+1. Per-test cleanup happens via ``mngr destroy --force`` in each test's
+   ``finally`` block (in ``test_release_azure.py``).
+2. ``pytest_sessionfinish`` here scans the mngr resource group for VMs tagged
+   ``mngr-pytest-launched=true`` at the end of the session, force-deletes any
+   matches older than the TTL, and fails the session.
+3. Cloud-init in each test VM runs ``shutdown -P +N`` (best-effort: on Azure an
+   OS shutdown leaves the VM Stopped-but-allocated, which still bills compute,
+   so layer 2 is the real cost backstop -- unlike AWS/GCP, Azure has no native
+   delete-after-duration).
+
+The scan filters on the ``mngr-pytest-launched`` tag and ignores anything
+younger than ``_TEST_LEAK_TTL`` (parsed from the ``mngr-created-at`` tag) so it
+never race-kills an in-flight test on a parallel worker.
+
+Also registers the shared plugin-test fixtures (including ``temp_mngr_ctx``) so
+backend-level unit tests can construct real provider instances.
+"""
+
+import os
+from collections.abc import Generator
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from pathlib import Path
+from typing import Final
+
+import pytest
+from azure.core.exceptions import AzureError
+from loguru import logger
+
+from imbue.mngr.utils.plugin_testing import register_plugin_test_fixtures
+from imbue.mngr.utils.testing import setup_mngr_test_environment
+from imbue.mngr_azure.cleanup import AZURE_REAPER_PROVIDER_NAME
+from imbue.mngr_azure.cleanup import azure_test_created_at
+from imbue.mngr_azure.client import AZURE_PYTEST_LAUNCHED_TAG
+from imbue.mngr_azure.testing import AZURE_DEFAULT_REGION
+from imbue.mngr_azure.testing import AZURE_DEFAULT_RESOURCE_GROUP
+from imbue.mngr_azure.testing import AZURE_RELEASE_TESTS_OPT_IN
+from imbue.mngr_azure.testing import AZURE_TEST_INSTANCE_AUTO_SHUTDOWN_SECONDS
+from imbue.mngr_azure.testing import azure_credentials_available
+from imbue.mngr_azure.testing import get_default_subscription_id
+from imbue.mngr_azure.testing import make_azure_reaper_client
+from imbue.mngr_vps.errors import VpsError
+from imbue.mngr_vps.leak_cleanup import destroy_leaked_instances
+from imbue.mngr_vps.leak_cleanup import find_old_test_instances
+
+register_plugin_test_fixtures(globals())
+
+
+@pytest.fixture(autouse=True)
+def setup_test_mngr_env(
+    tmp_home_dir: Path,
+    temp_host_dir: Path,
+    mngr_test_prefix: str,
+    mngr_test_root_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolate_tmux_server: None,
+) -> Generator[None, None, None]:
+    """Override mngr's autouse env setup to keep Azure CLI auth across HOME swap.
+
+    HOME isolation hides ``~/.azure`` from the test process, which makes
+    ``DefaultAzureCredential``'s ``AzureCliCredential`` fail (the ``az`` token
+    cache lives there) even when the real shell has working creds. Pin
+    ``AZURE_CONFIG_DIR`` to the real ``~/.azure`` *before* HOME is swapped so the
+    credential keeps resolving. A no-op when ``az login`` was never run (the
+    release-test ``skipif`` then takes over).
+    """
+    real_azure_config = os.environ.get("AZURE_CONFIG_DIR") or str(Path.home() / ".azure")
+    monkeypatch.setenv("AZURE_CONFIG_DIR", real_azure_config)
+    setup_mngr_test_environment(tmp_home_dir, temp_host_dir, mngr_test_prefix, mngr_test_root_name, monkeypatch)
+    yield
+
+
+# Orphan-scan grace period. A test-tagged VM younger than this is left alone to
+# avoid race-killing an in-flight test on a parallel worker. Derived from the
+# shared ``AZURE_TEST_INSTANCE_AUTO_SHUTDOWN_SECONDS`` constant (the same value
+# release tests propagate into cloud-init) so the two TTLs can never drift.
+_TEST_LEAK_TTL: Final[timedelta] = timedelta(seconds=AZURE_TEST_INSTANCE_AUTO_SHUTDOWN_SECONDS)
+
+
+def _mark_session_failed(session: pytest.Session) -> None:
+    """Fail the session, but only if it was otherwise passing.
+
+    Raising from ``pytest_sessionfinish`` is silently dropped by pytest, so
+    setting ``session.exitstatus`` is the supported way to signal failure.
+    """
+    if session.exitstatus == 0:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Detect and clean up leaked Azure resources at session end.
+
+    Implemented as a pytest hook (not a fixture) so it runs after every
+    session-scoped fixture teardown. No-ops when release tests were not opted
+    into (``MNGR_AZURE_RELEASE_TESTS`` is unset) -- an ordinary run that never
+    touches Azure. When the opt-in *is* set but credentials cannot be resolved
+    (or no subscription is resolvable, or the clients cannot be built), the
+    session is *failed* rather than skipped: a release run that cannot
+    authenticate could not have scanned for leaks. Leaked VMs also force-fail
+    the session (a real test bug); orphaned NICs / public IPs from
+    capacity-failed creates are reclaimed silently.
+    """
+    del exitstatus
+    if not AZURE_RELEASE_TESTS_OPT_IN:
+        return
+    if not azure_credentials_available():
+        logger.error(
+            "MNGR_AZURE_RELEASE_TESTS=1 is set but Azure credentials could not be resolved, so the "
+            "session-end leak scan cannot run. Configure credentials, or unset "
+            "MNGR_AZURE_RELEASE_TESTS to skip the Azure release tests."
+        )
+        _mark_session_failed(session)
+        return
+    subscription_id = get_default_subscription_id()
+    if subscription_id is None:
+        logger.error(
+            "MNGR_AZURE_RELEASE_TESTS=1 is set but no Azure subscription could be resolved, so the "
+            "session-end leak scan cannot run. Configure a subscription, or unset "
+            "MNGR_AZURE_RELEASE_TESTS."
+        )
+        _mark_session_failed(session)
+        return
+
+    try:
+        client = make_azure_reaper_client(subscription_id)
+        client.reclaim_orphaned_network_resources(AZURE_REAPER_PROVIDER_NAME)
+        instances = client.list_instances()
+    except (VpsError, AzureError) as e:
+        logger.error("Failed to scan for leaked Azure test VMs: {}", e)
+        _mark_session_failed(session)
+        return
+
+    orphans = find_old_test_instances(instances, azure_test_created_at, _TEST_LEAK_TTL, datetime.now(timezone.utc))
+    if not orphans:
+        return
+
+    destroy_leaked_instances(client, orphans)
+    message = (
+        "=" * 70
+        + "\nAZURE SESSION CLEANUP FOUND LEAKED RESOURCES!\n"
+        + "=" * 70
+        + f"\n\nLeaked Azure VMs tagged {AZURE_PYTEST_LAUNCHED_TAG}=true and "
+        + f"older than {AZURE_TEST_INSTANCE_AUTO_SHUTDOWN_SECONDS // 60} minutes in "
+        + f"resource group {AZURE_DEFAULT_RESOURCE_GROUP} (region {AZURE_DEFAULT_REGION}):\n  "
+        + "\n  ".join(inst["id"] for inst in orphans)
+        + "\n\nVMs have been force-deleted, but tests should not leak.\n"
+    )
+    logger.error(message)
+    _mark_session_failed(session)

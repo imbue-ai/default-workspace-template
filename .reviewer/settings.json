@@ -1,6 +1,8 @@
 {
     "stop_hook": {
-        "enabled_when": "false"
+        "enabled_when": "false",
+        "fetch_and_merge": false,
+        "base_branch": "claude-codex-pi-dwt"
     },
     "autofix": {
         "is_enabled": false,

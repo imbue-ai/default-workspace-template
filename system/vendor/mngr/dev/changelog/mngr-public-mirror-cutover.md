@@ -1,0 +1,1 @@
+Cut over to the private source-of-truth arrangement: the public repository is restricted to the open-source subset and becomes a bot-maintained mirror (read-only rulesets with the sync app as sole bypass), and the README notes the mirror arrangement.

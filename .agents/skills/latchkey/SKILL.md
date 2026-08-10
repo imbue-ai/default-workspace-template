@@ -58,6 +58,7 @@ latchkey curl http://latchkey-self.invalid/permissions/available/discord
 latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 
 # 3. Ask for the necessary missing permissions.
+# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "discord-api", "permissions": ["discord-read-all"]}, "rationale": "I'"'"'d like to access your Discord account to read server and channel information so I can help you summarize conversations."}'
@@ -66,13 +67,38 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 The body must be a JSON object with exactly four fields:
 `agent_id` (use `$MNGR_AGENT_ID`), `type` (use "predefined"), `payload`, and `rationale`.
 
-`payload` must be an object with exactly two fields: `scope` (string) and `permissions` (array of strings). `scope` needs to be one of the scopes specified in the response to the `/permissions/available/<service_name>` call.
+`payload` must be an object with at least two fields: `scope` (string) and `permissions` (array of strings). `scope` needs to be one of the scopes specified in the response to the `/permissions/available/<service_name>` call.
+
+When you need permissions for a specific account, you can
+specify the optional third field on the `payload`: `account` (which should be a string).
+For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": "bob@example.com"}}'.
 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
 
-After posting, wait for a system message indicating whether the user
+After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.
 
+
+### Git operations on GitHub (clone / fetch / push)
+
+The gateway natively proxies GitHub's git smart-HTTP endpoints, so plain
+`git` works through latchkey too: point git at the gateway's proxy URL and
+pass the gateway's auth headers (their values are already in this
+environment).
+
+```bash
+git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
+    ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
+    push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" <refspec>
+```
+
+(`clone`, `fetch`, and `ls-remote` take the same proxy URL and headers.) The
+GitHub credential is injected server-side -- no token enters the container.
+This is gated by the `github-git` scope: `github-git-read` covers clone and
+fetch, `github-git-write` covers push. Request them like any other permission
+(see "Ask for user permission" above). Only `https://github.com/<owner>/<repo>[.git]`
+URLs are supported; prefer one-shot `-c` options over persisting the gateway
+URL or headers into git config.
 
 ### List usable services
 
@@ -89,17 +115,45 @@ latchkey services info slack
 
 Returns auth options, credentials status, and developer notes about the service.
 
+### Using multiple accounts
 
-## Secondary gateway
+It is possible to associate credentials with a specific account
+(and have credentials for more than a single account per service).
+The user can do that by clicking "Add account" on the "Connectors" settings
+page in the Minds app.
 
-By default, most of the commands above are actually routed through a gateway that runs on the user's computer.
-For `latchkey curl` calls specifically, when the user's computer is offline, you would typically get "Exit code 7".
-Sometimes, there's a secondary Latchkey gateway available running in the cloud that you can use instead.
-To do that, repeat your call with the following env var overrides:
-    - `LATCHKEY_GATEWAY=$LATCHKEY_GATEWAY_SECONDARY`
-    - `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE=""`
-If you're still not able to connect, it means the secondary gateway hasn't actually been configured.
-Permission management, or any other commands other than `latchkey curl`, are not supported by the secondary gateway.
+Another way is for you to send a permission request with an "account"
+in the payload as described above - approving the permission request will prompt
+the user to sign in. Just double-check the actual resulting account; it may be
+different than the one requested by you.
+
+You can then reference it in curl calls:
+
+```bash
+latchkey --account alice@example.com curl ...
+```
+
+The `--account` option must go right after `latchkey`.
+
+You can see the existing accounts as keys in the credential
+dictionary produced by `latchkey services info`. An empty string
+as the key means "unknown account".
+
+### Expired or invalid credentials
+
+When the existing credentials are expired or invalid, there are currently two ways  to trigger a new login:
+
+- By re-sending the permission request to the user (use this when there's just a single account for the given service)
+- By disconnecting and reconnecting the account on the "Connectors" settings page (tell the user to do that if there are more than one account configured for the given service).
+
+
+## When the gateway is unreachable
+
+Every command above is routed through the Latchkey gateway at
+`$LATCHKEY_GATEWAY`. If it cannot be reached, treat it as
+a transient outage. It usually helps if the user restarts the
+Minds app. Requests to /permissions and /permission-requests are
+routed to the user's computer so they will fail if it's offline.
 
 
 ## Notes
@@ -113,5 +167,5 @@ Permission management, or any other commands other than `latchkey curl`, are not
 
 Latchkey currently offers varying levels of support for the
 following services: AWS, Calendly, Coolify, Discord, Dropbox, Figma, GitHub, GitLab,
-Gmail, Google Analytics, Google Calendar, Google Docs, Google Drive, Google Sheets,
+Gmail, Google Analytics, Google Calendar, Google Docs, Google Drive, Google Sheets, Google Slides,
 Linear, Mailchimp, Notion, Ramp, Sentry, Slack, Stripe, Telegram, Todoist, Umami, Yelp, Zoom, and more.

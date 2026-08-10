@@ -1,0 +1,22 @@
+{
+  "name": "apt-mirror-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker serving the snapshot-pinned apt mirror from R2 with pool read-through",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "workerd"]
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.19",
+    "@cloudflare/workers-types": "^4.20260610.0",
+    "typescript": "^5.5.4",
+    "vitest": "~3.0.9",
+    "wrangler": "^4.20.0"
+  }
+}

@@ -1,0 +1,1 @@
+Combined integration PR (carries mngr/break-apart-scripts): the post-commit auto-push hook moves from `system/scripts/git_hooks/` into this package (`system/libs/github_sync/git_hooks/post-commit`). See `mngr-break-apart-scripts.md` in this directory for details.

@@ -1,0 +1,274 @@
+"""Abstract handler for a single ``RequestEvent`` subtype.
+
+The desktop client supports multiple kinds of pending requests (sharing,
+latchkey-permission, ...). Each is rendered, granted, and denied through a
+type-specific ``RequestEventHandler`` so the route layer can stay a thin
+dispatcher: it authenticates, looks up the request event by id, picks the
+handler that claims the event's ``request_type``, and forwards the rest
+of the work.
+
+Adding a new request kind is now a matter of writing a new
+``RequestEventHandler`` subclass and registering it with the desktop
+client; no churn in ``app.py`` is required.
+"""
+
+from abc import ABC
+from abc import abstractmethod
+from collections.abc import Sequence
+from typing import Literal
+
+from flask import Request
+from flask import Response
+from pydantic import Field
+
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
+from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
+from imbue.minds.desktop_client.request_events import RequestEvent
+from imbue.mngr_latchkey.credential_commands import CredentialCommandParameter
+
+
+class UiManualCredentialsPrompt(FrozenModel):
+    """The credential form shown for a service that cannot be signed in to through a browser."""
+
+    parameters: tuple[CredentialCommandParameter, ...] = Field(
+        description=(
+            "One labeled input per value the service's credential command needs. Empty when Minds cannot "
+            "work out what to ask for, in which case the dialog shows the message as an error and offers "
+            "no Approve."
+        ),
+    )
+    message: str = Field(description="Instruction (or, after a failed attempt, the reason) shown above the inputs")
+
+
+class UiPermissionAccountChoice(FrozenModel):
+    """One selectable account in the predefined-permission detail payload."""
+
+    value: str = Field(description="Form value: latchkey account key ('' = unnamed default) or the new-account value")
+    label: str = Field(description="User-facing account label")
+    hint: str = Field(default="", description="Short qualifier shown next to the label (e.g. 'needs sign-in')")
+    is_credential_setup_needed: bool = Field(
+        default=False,
+        description="Whether picking this account has to establish credentials before the grant can apply",
+    )
+    is_account_name_needed: bool = Field(
+        default=False,
+        description="Whether picking this account also requires the user to name it (manual-credentials services)",
+    )
+
+
+class UiWorkspaceVerbChoice(FrozenModel):
+    """One grantable minds-workspaces verb in the workspace-permission detail payload."""
+
+    permission: str = Field(description="Detent permission-schema name submitted by the form")
+    display_name: str = Field(description="Human-readable label")
+    description: str = Field(description="Plain-English summary of what the verb allows")
+    is_targeted: bool = Field(description="Whether the verb is scoped to a target workspace id")
+
+
+class UiPredefinedPermissionDetail(FrozenModel):
+    """Typed twin of the predefined (catalog-backed) permission detail fragment."""
+
+    kind: Literal["predefined"] = "predefined"
+    request_id: str = Field(description="Request event id (grant/deny routes key on it)")
+    agent_id: str = Field(description="Requesting agent id")
+    ws_name: str = Field(description="Workspace display name")
+    rationale: str = Field(description="Agent's stated reason for the request")
+    scope: str = Field(description="Detent scope schema (e.g. 'slack-api')")
+    display_name: str = Field(description="Service display name for the dialog header")
+    permission_schemas: tuple[str, ...] = Field(description="All grantable permission schemas under the scope")
+    description_by_permission_name: dict[str, str] = Field(description="Permission descriptions keyed by schema name")
+    checked_permissions: tuple[str, ...] = Field(description="Schemas to pre-check")
+    account_choices: tuple[UiPermissionAccountChoice, ...] = Field(description="Accounts the grant can attach to")
+    selected_account_value: str = Field(description="Preselected account choice value")
+    new_account_value: str = Field(description="Form value of the sign-a-new-account-in choice")
+    wildcard_permission: str = Field(description="The catch-all permission's submitted value (e.g. 'any')")
+    wildcard_label: str = Field(description="User-facing label for the catch-all permission (e.g. 'all')")
+    will_open_browser: bool = Field(description="Whether approving is expected to pop a browser sign-in")
+    manual_credentials: UiManualCredentialsPrompt | None = Field(
+        description=(
+            "The credential form to show while an account that needs credential setup is selected. None when "
+            "the service signs in through a browser, so no form is ever needed."
+        ),
+    )
+
+
+class UiFileSharingPermissionDetail(FrozenModel):
+    """Typed twin of the file-sharing permission detail fragment."""
+
+    kind: Literal["file_sharing"] = "file_sharing"
+    request_id: str = Field(description="Request event id")
+    agent_id: str = Field(description="Requesting agent id")
+    ws_name: str = Field(description="Workspace display name")
+    rationale: str = Field(description="Agent's stated reason for the request")
+    file_path: str = Field(description="Absolute path the agent asked for")
+    access: str = Field(description="Requested access mode (READ or WRITE), verbatim")
+    access_human_label: str = Field(description="Human rendering of the access mode ('read-only' / 'read & write')")
+    allowed_roots: tuple[str, ...] = Field(description="Absolute WebDAV mount roots a shareable path must be under")
+    home_dir: str = Field(description="Absolute home directory used to expand a leading '~'")
+
+
+class UiWorkspacePermissionDetail(FrozenModel):
+    """Typed twin of the cross-workspace (minds-workspaces) permission detail fragment."""
+
+    kind: Literal["workspace"] = "workspace"
+    request_id: str = Field(description="Request event id")
+    agent_id: str = Field(description="Requesting agent id")
+    ws_name: str = Field(description="Workspace display name")
+    rationale: str = Field(description="Agent's stated reason for the request")
+    verbs: tuple[UiWorkspaceVerbChoice, ...] = Field(description="The grantable verbs, in dialog order")
+    checked_permissions: tuple[str, ...] = Field(description="Verb schemas to pre-check")
+    target_workspace_id: str | None = Field(description="Workspace the targeted verbs act on, when named")
+    target_workspace_name: str | None = Field(description="Display name of the target workspace, when resolvable")
+    show_target_choice: bool = Field(description="Whether to offer the all-vs-selected target radio")
+
+
+class UiAccountsPermissionDetail(FrozenModel):
+    """Typed twin of the accounts permission detail fragment (all-or-nothing approve)."""
+
+    kind: Literal["accounts"] = "accounts"
+    request_id: str = Field(description="Request event id")
+    agent_id: str = Field(description="Requesting agent id")
+    ws_name: str = Field(description="Workspace display name")
+    rationale: str = Field(description="Agent's stated reason for the request")
+
+
+class UiUnknownScopeDetail(FrozenModel):
+    """Deny-only detail for a predefined request whose scope is not in the catalog."""
+
+    kind: Literal["unknown_scope"] = "unknown_scope"
+    request_id: str = Field(description="Request event id")
+    scope: str = Field(description="The unrecognized scope the agent asked for")
+
+
+class UiUnsupportedDetail(FrozenModel):
+    """Fallback detail when a handler is asked about an event type it does not own."""
+
+    kind: Literal["unsupported"] = "unsupported"
+    message: str = Field(description="Short explanation for the UI")
+
+
+# The typed inbox-detail payload: exactly one shape per request kind (plus the
+# unknown-scope and wrong-type fallbacks), discriminated by ``kind``.
+RequestDetailPayload = (
+    UiPredefinedPermissionDetail
+    | UiFileSharingPermissionDetail
+    | UiWorkspacePermissionDetail
+    | UiAccountsPermissionDetail
+    | UiUnknownScopeDetail
+    | UiUnsupportedDetail
+)
+
+
+class RequestEventHandler(MutableModel, ABC):
+    """Per-``RequestType`` handler for the request inbox flow.
+
+    Each implementation owns rendering the request detail fragment,
+    applying a grant, applying a deny, and providing the human-readable
+    labels the inbox list uses to describe pending requests of its
+    kind. The route layer guarantees that ``req_event.request_type``
+    matches ``handles_request_type()`` before calling any of the
+    methods below, so subclasses may safely narrow ``req_event`` to
+    their concrete type.
+    """
+
+    @abstractmethod
+    def handles_request_type(self) -> str:
+        """Return the ``RequestType`` string this handler claims (e.g. ``"SHARING"``)."""
+
+    @abstractmethod
+    def kind_label(self) -> str:
+        """Short, lower-case label shown on inbox list cards (e.g. ``"sharing"``)."""
+
+    @abstractmethod
+    def display_name_for_event(self, req_event: RequestEvent) -> str:
+        """Human-readable secondary label for the inbox list card.
+
+        Typically the friendly service name (e.g. ``"Slack"`` rather than
+        ``"slack"``). Falls back to whatever raw identifier the event
+        carries when no nicer label is available.
+        """
+
+    @abstractmethod
+    def render_request_detail_fragment(
+        self,
+        req_event: RequestEvent,
+        backend_resolver: BackendResolverInterface,
+        mngr_forward_origin: str,
+    ) -> str:
+        """Render the right-pane HTML fragment for an inbox detail view.
+
+        The fragment is embedded inside the inbox modal's
+        ``#inbox-detail`` container (or innerHTML-swapped into it). It
+        must not include ``<html>``, a backdrop, a close button, or any
+        per-handler script tags: chrome and submission JS live in the
+        inbox shell and operate on shared element ids the fragment
+        emits (``#permissions-form``, ``#permissions-approve-btn``,
+        ``#permissions-error``, ``#permissions-progress``,
+        ``#permissions-manual-credentials``).
+
+        ``mngr_forward_origin`` is the bare-origin URL of the
+        ``mngr forward`` plugin (e.g. ``"http://localhost:8421"``);
+        handlers thread it into rendered templates so workspace links
+        target the plugin's ``/goto/<agent>/`` route rather than minds.
+        """
+
+    @abstractmethod
+    def build_request_detail_payload(
+        self,
+        req_event: RequestEvent,
+        backend_resolver: BackendResolverInterface,
+    ) -> RequestDetailPayload:
+        """Build the typed inbox-detail payload for the SPA's right pane.
+
+        The JSON twin of :meth:`render_request_detail_fragment`: same data,
+        typed instead of pre-rendered. The SPA renders the dialog client-side
+        and submits the same form fields to the legacy grant/deny routes, so
+        the values here must stay in lockstep with what
+        :meth:`apply_grant_request` parses.
+        """
+
+    @abstractmethod
+    def apply_grant_request(
+        self,
+        request: Request,
+        req_event: RequestEvent,
+    ) -> Response:
+        """Apply a grant from ``POST /requests/{id}/grant`` and return the response.
+
+        Implementations are responsible for parsing any form body, doing
+        the underlying work (rewriting permission files, enabling
+        sharing, ...), appending the corresponding response event to the
+        inbox, and producing whatever response shape the originating UI
+        expects (JSON for JS-driven dialogs, 303 redirects for plain
+        form posts -- the route layer is agnostic).
+        """
+
+    @abstractmethod
+    def apply_deny_request(
+        self,
+        request: Request,
+        req_event: RequestEvent,
+    ) -> Response:
+        """Apply a deny from ``POST /requests/{id}/deny`` and return the response.
+
+        Same contract as :meth:`apply_grant_request`, minus the underlying
+        grant work: the handler still appends the ``DENIED`` response
+        event so the request stops appearing as pending.
+        """
+
+
+def find_handler_for_event(
+    handlers: Sequence[RequestEventHandler],
+    req_event: RequestEvent,
+) -> RequestEventHandler | None:
+    """Return the handler that claims ``req_event.request_type``, or ``None``.
+
+    There is at most one handler per request type by construction (the
+    desktop client builds the tuple from a fixed set of handlers); if
+    two ever claimed the same type, the first registered one wins.
+    """
+    for handler in handlers:
+        if handler.handles_request_type() == req_event.request_type:
+            return handler
+    return None

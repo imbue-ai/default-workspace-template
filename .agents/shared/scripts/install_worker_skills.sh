@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Install the generic harden worker sub-skill into a worker's .agents/skills/
-# tree. Called at worker provision time by the subskill-worker create template
+# tree. Called at worker provision time by the worker create template
 # (see .mngr/settings.toml).
 #
 # There is exactly one worker source -- the generic worker at
@@ -10,8 +10,8 @@ set -euo pipefail
 # becomes loadable as a regular skill inside the worker. Homing it under
 # .agents/shared/ (rather than under a parent skill's assets/worker/) keeps any
 # worker-only material out of the auto-loaded .agents/skills/ tree, and means
-# every subskill-worker installs exactly this one worker -- it reads the
-# operation + artifact from its task file and composes the matching references.
+# every worker installs exactly this one worker -- it reads the
+# operation + creation from its task file and composes the matching references.
 #
 # The worker's references live at .agents/shared/worker/references/ and the
 # worker reads them from there (its checkout has the full repo). We deliberately

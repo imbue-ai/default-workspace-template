@@ -1,0 +1,213 @@
+import json
+from pathlib import Path
+
+import pytest
+from pydantic import AnyUrl
+
+from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthFailedCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudQuotaExceededCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import _CONNECTOR_URL_SUBPROCESS_ENV
+from imbue.minds.desktop_client.imbue_cloud_cli import _parse_conflict_stored
+from imbue.minds.desktop_client.imbue_cloud_cli import _parse_stderr_error_message
+from imbue.minds.utils.mngr_caller import MngrCallResult
+from imbue.minds.utils.testing import RecordingMngrCaller
+
+
+def test_expect_success_keeps_traceback_out_of_message_but_on_stderr() -> None:
+    """A failing ``mngr imbue_cloud`` subprocess must not leak its stderr traceback
+    into the exception *message* (routes surface ``str(exc)`` to API callers); the
+    full output is preserved on ``.stderr`` for server-side logging/debugging."""
+    cli = make_fake_imbue_cloud_cli()
+    traceback_stderr = (
+        "Traceback (most recent call last):\n"
+        '  File "/x/httpx/_transports/default.py", line 101, in map_httpcore_exceptions\n'
+        "httpx.ConnectError: [Errno -2] Name or service not known\n"
+    )
+    result = MngrCallResult(
+        returncode=1,
+        stdout="",
+        stderr=traceback_stderr,
+    )
+    with pytest.raises(ImbueCloudCliError) as exc_info:
+        cli._expect_success(result, "shares list")
+
+    message = str(exc_info.value)
+    assert "Traceback" not in message
+    assert "httpx.ConnectError" not in message
+    assert "shares list" in message
+    # The full subprocess output is still available for server-side logging.
+    assert "httpx.ConnectError" in exc_info.value.stderr
+
+
+def test_expect_success_raises_typed_quota_error_with_server_message() -> None:
+    """A structured quota refusal surfaces as the typed (terminal) error carrying the server's message."""
+    cli = make_fake_imbue_cloud_cli()
+    body = json.dumps(
+        {
+            "error": "Quota exceeded: this account allows 5 buckets and 5 are already in use.",
+            "error_class": "ImbueCloudQuotaExceededError",
+        },
+        indent=2,
+    )
+    result = MngrCallResult(returncode=1, stdout="", stderr="some log line\n" + body + "\n")
+    with pytest.raises(ImbueCloudQuotaExceededCliError) as exc_info:
+        cli._expect_success(result, "bucket create")
+    assert "allows 5 buckets" in str(exc_info.value)
+    assert "bucket create" in str(exc_info.value)
+
+
+def test_expect_success_raises_typed_auth_error_carrying_the_connector_status() -> None:
+    """A rejected sign-in keeps the connector's verdict instead of collapsing to the exit-code message.
+
+    ``mngr imbue_cloud auth signin`` exits 1 for a rejection, writing the
+    connector's status + message as its JSON error body. The sign-in page shows
+    real copy (and its "create one" sign-up path) only when that status
+    survives, so it must not fall through to the generic branch.
+    """
+    cli = make_fake_imbue_cloud_cli()
+    body = json.dumps(
+        {
+            "error": "Incorrect email or password",
+            "error_class": "AuthFailed",
+            "status": "WRONG_CREDENTIALS",
+            "needs_email_verification": False,
+        },
+        indent=2,
+    )
+    result = MngrCallResult(returncode=1, stdout="", stderr="a log line first\n" + body + "\n")
+
+    with pytest.raises(ImbueCloudAuthFailedCliError) as exc_info:
+        cli._expect_success(result, "auth signin")
+
+    assert exc_info.value.auth_status == "WRONG_CREDENTIALS"
+    assert exc_info.value.auth_message == "Incorrect email or password"
+
+
+def test_expect_success_auth_body_without_a_status_stays_a_plain_error() -> None:
+    """The plugin's own malformed-response guard emits no status; it is not a connector verdict."""
+    cli = make_fake_imbue_cloud_cli()
+    body = json.dumps({"error": "Auth response missing required fields", "error_class": "AuthFailed"}, indent=2)
+    result = MngrCallResult(returncode=1, stdout="", stderr=body + "\n")
+
+    with pytest.raises(ImbueCloudAuthFailedCliError) as exc_info:
+        cli._expect_success(result, "auth signin")
+
+    assert exc_info.value.auth_status == "ERROR"
+    assert exc_info.value.auth_message == "Auth response missing required fields"
+
+
+def test_expect_success_unstructured_failure_is_not_reported_as_an_auth_verdict() -> None:
+    """A crash / unreachable connector must not masquerade as a credential verdict."""
+    cli = make_fake_imbue_cloud_cli()
+    result = MngrCallResult(returncode=1, stdout="", stderr="httpx.ConnectError: Name or service not known\n")
+
+    with pytest.raises(ImbueCloudCliError) as exc_info:
+        cli._expect_success(result, "auth signin")
+
+    assert not isinstance(exc_info.value, ImbueCloudAuthFailedCliError)
+
+
+def test_parse_stderr_error_message_survives_surrounding_log_lines() -> None:
+    body = json.dumps({"error": "the message", "error_class": "SomeError"}, indent=2)
+    stderr = "2026-07-12 10:00:00 | WARNING | noisy {braced} log line\n" + body + "\ntrailing\n"
+    assert _parse_stderr_error_message(stderr) == "the message"
+    assert _parse_stderr_error_message("no json here\n") is None
+
+
+def test_run_routes_through_mngr_caller_with_home_cwd_and_connector_env() -> None:
+    """``ImbueCloudCli`` hands each subcommand to its ``MngrCaller`` prefixed with
+    ``imbue_cloud``, runs it from ``$HOME``, and layers the connector URL onto the
+    env so the plugin reaches the right backend."""
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps({"state": "none"})))
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    cli.get_share_status(account="owner@example.com", host_id="host-abc")
+
+    assert len(caller.recorded_calls) == 1
+    recorded = caller.recorded_calls[0]
+    assert recorded.argv == ("imbue_cloud", "shares", "status", "host-abc", "--account", "owner@example.com")
+    assert recorded.cwd == Path.home()
+    # The trailing slash is stripped so the plugin builds clean URLs.
+    assert recorded.env_overrides == {_CONNECTOR_URL_SUBPROCESS_ENV: "https://connector.example"}
+
+
+def test_parse_conflict_stored_survives_surrounding_log_lines() -> None:
+    """The indent-formatted error body may be preceded by log lines containing
+    braces and followed by trailing output; the stored row must still parse."""
+    body = json.dumps({"error": "conflict", "error_class": "X", "stored": {"host_id": "h1", "revision": 4}}, indent=2)
+    stderr = (
+        "2026-07-12 10:00:00 | WARNING | retrying {attempt 1} after HTTP 409\n" + body + "\nsome trailing log line\n"
+    )
+    assert _parse_conflict_stored(stderr) == {"host_id": "h1", "revision": 4}
+
+
+def test_parse_conflict_stored_returns_none_without_a_stored_row() -> None:
+    # The active-agent-conflict shape carries no stored row.
+    body = json.dumps({"error": "another ACTIVE record exists", "stored": None}, indent=2)
+    assert _parse_conflict_stored(body) is None
+    # Brace-free stderr (no JSON document at all) parses to None too.
+    assert _parse_conflict_stored("plain traceback text\nwithout any json\n") is None
+
+
+def test_create_share_malformed_output_error_omits_the_relay_token() -> None:
+    """A malformed shares-create payload (a body with a relay token but no
+    workspace_domain) must not leak the relay token into the exception
+    message -- it reaches the sharing UI's error body and the logs."""
+    body = {"host_id": "host-abc", "relay_token": "SECRET-RELAY-TOKEN"}
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps(body)))
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    with pytest.raises(ImbueCloudCliError) as exc_info:
+        cli.create_share(account="owner@example.com", host_id="host-abc")
+
+    message = str(exc_info.value)
+    assert "SECRET-RELAY-TOKEN" not in message
+    # The shape (keys) stays in the message so the failure is still debuggable.
+    assert "relay_token" in message
+    assert "host_id" in message
+
+
+def test_auth_is_email_verified_parses_promotion_result() -> None:
+    """``auth_is_email_verified`` wraps ``auth is-verified`` and parses the typed status."""
+    body = {"verified": True, "user_id": "user-1", "email": "a@b.com", "display_name": "A"}
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps(body)))
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    status = cli.auth_is_email_verified("a@b.com")
+
+    assert status.verified is True
+    assert status.user_id == "user-1"
+    assert caller.recorded_calls[0].argv == ("imbue_cloud", "auth", "is-verified", "--account", "a@b.com")
+
+
+def test_auth_resend_verification_reports_cooldown_suppression() -> None:
+    caller = RecordingMngrCaller(
+        result=MngrCallResult(returncode=0, stdout=json.dumps({"sent": False, "email": "a@b.com"}))
+    )
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    assert cli.auth_resend_verification("a@b.com") is False
+    assert caller.recorded_calls[0].argv == ("imbue_cloud", "auth", "resend-verification", "--account", "a@b.com")
+
+
+def test_auth_resend_verification_raises_on_malformed_output() -> None:
+    """A body without a 'sent' bool is a broken plugin contract, not a cooldown suppression."""
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps({"email": "a@b.com"})))
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    with pytest.raises(ImbueCloudCliError, match="Malformed auth resend-verification output"):
+        cli.auth_resend_verification("a@b.com")
+
+
+def test_auth_forgot_password_invokes_plugin_subcommand() -> None:
+    caller = RecordingMngrCaller(
+        result=MngrCallResult(returncode=0, stdout=json.dumps({"sent": True, "email": "a@b.com"}))
+    )
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    cli.auth_forgot_password("a@b.com")
+
+    assert caller.recorded_calls[0].argv == ("imbue_cloud", "auth", "forgot-password", "--account", "a@b.com")
