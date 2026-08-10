@@ -271,14 +271,13 @@ tk start <ticket-id>
 ```
 
 Write the task file. Use the two-heredoc form the other worker skills use: an
-**unquoted** frontmatter block so `$MNGR_AGENT_NAME` and `$REF` expand, then a
-**quoted** body so its backticks stay literal:
+**unquoted** frontmatter block so `$REF` expands, then a **quoted** body so its
+backticks stay literal:
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
