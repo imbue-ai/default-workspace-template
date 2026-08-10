@@ -1,21 +1,24 @@
-"""Shared primitives for per-agent activity state surfaced on the chat panel.
+"""Per-agent activity state surfaced on the chat panel.
 
-Holds the common building blocks both harnesses use: the ``ActivityState`` enum,
-the transcript walkers (``has_unmatched_tool_use``, ``last_event_type``,
-``last_event_timestamp``), the timestamp parser, and the ``is_transcript_tail_stale``
-restart guard. The actual IDLE / THINKING / TOOL_RUNNING *derivation* lives in the
-two harness peers -- :mod:`claude_activity_state` (lifecycle + transcript tail) and
-:mod:`codex_activity_state` (the ``task_started`` / ``task_complete`` turn latch) --
-and the harness dispatch is in ``agent_manager._recompute_activity_state``.
+The state is derived from three inputs:
+- the agent's mngr lifecycle state (RUNNING, STOPPED, etc.) -- a non-running
+  agent is always IDLE regardless of the other signals, which prevents a
+  STOPPED agent from appearing as "Thinking..." due to stale transcript data
+- the parsed transcript events from the agent's session JSONL files
+- the mtime of the ``claude_process_started`` marker (touched by mngr on every
+  startup/resume) -- a transcript tail older than the current process is left
+  over from a turn this process never ran, so it must not show "Thinking..."
 
-The ``*_process_started`` marker (touched by mngr on every startup/resume) is the
-boundary the stale-tail guard compares against: a transcript tail older than the
-current process is left over from a turn this process never ran and must not show
-"Thinking..." indefinitely after a mid-turn restart.
+We deliberately do *not* consult the legacy ``active`` marker file: it can
+become stale (e.g. when Claude exits abnormally and the ``Stop`` hook never
+runs to clear it), which would falsely show "Thinking..." indefinitely. The
+transcript is authoritative for IDLE / THINKING / TOOL_RUNNING *within* the
+current process; the ``claude_process_started`` boundary guards against a
+transcript abandoned mid-turn by a prior process (e.g. a container restart),
+which the transcript alone cannot distinguish from work still in flight.
 """
 
 import re
-from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from enum import auto
@@ -61,57 +64,44 @@ def has_unmatched_tool_use(events: Sequence[dict[str, Any]]) -> bool:
     return bool(pending - matched)
 
 
-# A model bar drives its harness by sending model/effort/fast slash commands (see
-# server.py). The harness handles each locally -- recording a normalized command line
-# plus a raw `<local-command-stdout>` confirmation, and NEVER a model reply -- so a
-# transcript ending on one is not "the user spoke and the agent is thinking". The
-# regexes below recognise a claude harness's form (`/model`, `/effort`, `/fast` and
-# their "Set model to ..." / "Set effort level to ..." / "Fast mode ..." confirmations);
-# they mirror the frontend detectors in message-classification.ts so the two agree.
-_COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
+# The composer's model picker / fast-mode toggle drive Claude Code by sending it
+# `/model ...` and `/fast ...` slash commands (see server.py). Claude Code handles
+# each locally -- it records a normalized command line plus a raw
+# `<local-command-stdout>` confirmation, and NEVER produces a model reply. Neither
+# line is a genuine conversational turn, so a transcript that ends on one is not
+# "the user spoke and Claude is thinking". Recognized here mirroring the frontend
+# detectors in message-classification.ts (matchModelFastCommand /
+# matchModelFastCommandOutput) so the two stay in agreement.
+_MODEL_FAST_COMMAND_RE = re.compile(r"^/(model|fast)\b")
 _LOCAL_COMMAND_STDOUT_MARKER = "<local-command-stdout>"
-_COMPOSER_STDOUT_RE = re.compile(r"Set model to|Set effort level to|Fast mode")
-
-
-def _is_framework_injected(event: dict[str, Any]) -> bool:
-    """A message the harness itself flags as framework-injected and model-only (a
-    resume-continuation marker, a ``<local-command-caveat>`` wrapper, an image
-    coordinate note, ...). A harness stamps ``is_meta`` on these in its parser; a
-    harness that has no such concept simply never sets it."""
-    return bool(event.get("is_meta"))
-
-
-def _is_model_bar_command(event: dict[str, Any]) -> bool:
-    """A model-bar slash command or its ``<local-command-stdout>`` confirmation. Not
-    flagged ``is_meta`` by the harness, so matched by content."""
-    if event.get("type") != "user_message":
-        return False
-    content = event.get("content")
-    text = content.strip() if isinstance(content, str) else ""
-    if _COMPOSER_COMMAND_RE.match(text):
-        return True
-    return text.startswith(_LOCAL_COMMAND_STDOUT_MARKER) and _COMPOSER_STDOUT_RE.search(text) is not None
-
-
-# The one shared list of "this tail is not a real turn" signals. Any harness's
-# markers slot in here; nothing gates on which harness produced the event (the
-# markers are distinctive enough not to collide), mirroring the frontend's shared
-# detector list. A signal only some harnesses emit simply never fires for the rest.
-_NON_TURN_TAIL_SIGNALS: tuple[Callable[[dict[str, Any]], bool], ...] = (
-    _is_framework_injected,
-    _is_model_bar_command,
-)
+_MODEL_FAST_STDOUT_RE = re.compile(r"Set model to|Fast mode")
 
 
 @pure
 def is_non_turn_tail_event(event: dict[str, Any]) -> bool:
     """True for a trailing transcript event that is NOT a genuine turn awaiting a reply.
 
-    A tail matching any :data:`_NON_TURN_TAIL_SIGNALS` (a framework injection, a
-    model-bar command / confirmation, ...) must not pin the indicator on
-    "Thinking...", since no model reply is coming for it.
+    Two families qualify:
+
+    - ``isMeta`` framework injections (the resume-continuation marker, the
+      ``<local-command-caveat>`` wrapper, image-coordinate notes, ...): Claude
+      flags these itself and never acts on them.
+    - the ``/model`` / ``/fast`` slash command the composer's model picker sends,
+      and its ``<local-command-stdout>`` confirmation. These are NOT flagged
+      ``isMeta`` by Claude (only the caveat wrapper is), so they must be matched
+      by content -- otherwise a picker change leaves the indicator stuck on
+      "Thinking..." because the command line / confirmation is the transcript tail
+      yet no model reply is ever coming.
     """
-    return any(signal(event) for signal in _NON_TURN_TAIL_SIGNALS)
+    if event.get("is_meta"):
+        return True
+    if event.get("type") != "user_message":
+        return False
+    content = event.get("content")
+    text = content.strip() if isinstance(content, str) else ""
+    if _MODEL_FAST_COMMAND_RE.match(text):
+        return True
+    return text.startswith(_LOCAL_COMMAND_STDOUT_MARKER) and _MODEL_FAST_STDOUT_RE.search(text) is not None
 
 
 @pure
@@ -119,8 +109,8 @@ def last_event_type(events: Sequence[dict[str, Any]]) -> str | None:
     """Return the ``type`` of the last genuine-turn transcript event, or ``None``.
 
     Trailing non-turn events (see :func:`is_non_turn_tail_event`) are skipped so
-    they cannot drive the THINKING fallback: a bar-sent ``/model`` / ``/effort`` /
-    ``/fast`` command and its confirmation, or an ``isMeta`` framework injection, leave the
+    they cannot drive the THINKING fallback: a picker-sent ``/model`` / ``/fast``
+    command and its confirmation, or an ``isMeta`` framework injection, leave the
     indicator on whatever the last real turn was rather than pinning it to
     "Thinking...". Returns ``None`` for an empty transcript or one that is entirely
     non-turn events.
@@ -165,59 +155,6 @@ def parse_iso_timestamp_to_epoch(timestamp: str | None) -> float | None:
 
 RUNNING_LIFECYCLE_STATES: frozenset[str] = frozenset({"RUNNING", "RUNNING_UNKNOWN_AGENT_TYPE"})
 
-# mngr's lifecycle reports RUNNING iff this marker file exists in the agent state dir while
-# the process is alive; every harness's plugin writes the same filename. Reading it directly
-# is a *timely* alternative to the observe-reported lifecycle state (see
-# :func:`resolve_is_agent_running`).
-ACTIVE_MARKER_FILENAME: str = "active"
-
-# The lifecycle state of an alive-but-idle agent (between turns). This is the ONLY state where
-# the observe-reported state can trail the real turn: a quick turn sets and clears the `active`
-# marker before the observe stream reports RUNNING, leaving the reported state at WAITING the
-# whole time.
-WAITING_LIFECYCLE_STATE: str = "WAITING"
-
-# The lifecycle verdict meaning "could not observe", not "dead": mngr maps provider and probe
-# failures here (see mngr's ``AgentLifecycleState.UNKNOWN``). Consumers treat it as
-# non-evidence, so live state (the activity dot, the queued-message mirror) must never be
-# wiped on its account.
-UNKNOWN_LIFECYCLE_STATE: str = "UNKNOWN"
-
-
-@pure
-def is_lifecycle_dead(lifecycle_state: str) -> bool:
-    """True iff the observe-reported lifecycle positively says the agent process is dead.
-
-    Dead is everything outside the RUNNING states, WAITING (alive between turns), and
-    UNKNOWN (unobservable -- non-evidence, never treated as death). A dead process's
-    in-memory queue and in-flight turn died with it, so its activity must settle to IDLE
-    no matter what the transcript tail says; the manager applies that override in
-    ``_recompute_activity_state``.
-    """
-    if lifecycle_state in RUNNING_LIFECYCLE_STATES:
-        return False
-    if lifecycle_state == WAITING_LIFECYCLE_STATE:
-        return False
-    return lifecycle_state != UNKNOWN_LIFECYCLE_STATE
-
-
-@pure
-def resolve_is_agent_running(lifecycle_state: str, is_active_marker_present: bool) -> bool:
-    """Whether the agent has a turn in flight, preferring the ``active`` marker over the
-    (laggy) observe-reported lifecycle state.
-
-    RUNNING states are authoritative. In the alive-but-idle WAITING state the marker breaks the
-    tie: the observe stream can miss a short turn, so the reported state stays WAITING while the
-    marker itself flips promptly -- trust the marker there. Any other state (STOPPED / EXITED /
-    ...) reads as not running, so a hard-crashed agent's stale marker is never mistaken for a
-    live turn (the launch-time marker clear covers the rest).
-    """
-    if lifecycle_state in RUNNING_LIFECYCLE_STATES:
-        return True
-    if lifecycle_state == WAITING_LIFECYCLE_STATE:
-        return is_active_marker_present
-    return False
-
 
 @pure
 def is_transcript_tail_stale(
@@ -244,3 +181,50 @@ def is_transcript_tail_stale(
     if tail_event_at is None or process_started_at is None:
         return False
     return tail_event_at < process_started_at
+
+
+@pure
+def derive_activity_state(
+    *,
+    is_agent_running: bool,
+    has_pending_tool_use: bool,
+    tail_event_type: str | None,
+    tail_event_at: float | None = None,
+    process_started_at: float | None = None,
+) -> ActivityState:
+    """Derive an ``ActivityState`` from lifecycle state and transcript signals.
+
+    ``is_agent_running`` reflects the mngr lifecycle state: ``True`` when the
+    agent is in a running state (RUNNING, RUNNING_UNKNOWN_AGENT_TYPE), ``False``
+    otherwise (STOPPED, WAITING, REPLACED, DONE, etc.). A non-running agent is
+    always IDLE regardless of transcript contents, which prevents a STOPPED agent
+    from appearing as "Thinking..." due to stale transcript data.
+
+    ``tail_event_type`` is the cached result of :func:`last_event_type` for the
+    agent's current transcript (named distinctly from the helper to avoid
+    shadowing it in this scope). ``tail_event_at`` and ``process_started_at`` feed
+    :func:`is_transcript_tail_stale` (see there): together they detect a tail left
+    over from before the current process started, which a running-but-idle agent
+    would otherwise show as "Thinking..." indefinitely after a mid-turn restart.
+
+    Priority:
+      0. agent not running -> IDLE.
+      1. transcript tail predates the current process (stale) -> IDLE.
+      2. unmatched ``tool_use`` -> TOOL_RUNNING.
+      3. last genuine-turn event is ``user_message`` or ``tool_result`` -> THINKING
+         (Claude has been handed input but hasn't replied yet). ``last_event_type``
+         has already skipped trailing non-turn events -- an ``isMeta`` injection or
+         the picker's ``/model`` / ``/fast`` command + confirmation -- so those do
+         not count as "handed input".
+      4. otherwise (last event is ``assistant_message`` or transcript is empty)
+         -> IDLE.
+    """
+    if not is_agent_running:
+        return ActivityState.IDLE
+    if is_transcript_tail_stale(tail_event_at=tail_event_at, process_started_at=process_started_at):
+        return ActivityState.IDLE
+    if has_pending_tool_use:
+        return ActivityState.TOOL_RUNNING
+    if tail_event_type in ("user_message", "tool_result"):
+        return ActivityState.THINKING
+    return ActivityState.IDLE
