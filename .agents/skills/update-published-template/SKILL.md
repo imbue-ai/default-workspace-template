@@ -1,40 +1,40 @@
 ---
-name: update-published-inspiration
-description: Create a NEW version of an inspiration you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of an inspiration they previously published.
+name: update-published-template
+description: Create a NEW version of an template you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of an template they previously published.
 ---
 
-# Update a published inspiration
+# Update a published template
 
-Version: v2 (inspirations flow). This is the PUBLISHER's re-publish path -- the
-companion to `publish-inspiration` (an inspiration's first publish),
-`use-inspiration` (adopt someone else's), and `update-installed-inspiration`
+Version: v2 (templates flow). This is the PUBLISHER's re-publish path -- the
+companion to `publish-template` (an template's first publish),
+`use-template` (adopt someone else's), and `update-installed-template`
 (pull a newer version of one you adopted). It produces the NEXT version of an
-inspiration THIS mind already published: it re-cuts the source workspace's
+template THIS mind already published: it re-cuts the source workspace's
 changes since the last version onto the published snapshot and fast-forwards
 `main` by exactly one commit, leaving every hand-crafted thing in the published
 repo (manifest prose, thumbnail, `/welcome`, adopters' "Adaptation history")
 exactly as published.
 
-Like `publish-inspiration`, this skill delegates the re-assembly to a
+Like `publish-template`, this skill delegates the re-assembly to a
 `launch-task` sub-agent worker (which builds the new snapshot in its own git
 worktree), confirms with the user in chat at TWO gates, obtains GitHub access via
 latchkey permissioning (never the `gh` CLI), and pushes -- directly from the
 worker's worktree.
 
 Two unrelated `v<n>` axes appear below -- the flow version (v2, the manifest
-format) and an inspiration's own publish count. See
+format) and an template's own publish count. See
 `references/v1-to-v2-migration.md`.
 
 > **THE ONE SAFETY REQUIREMENT ABOVE ALL OTHERS -- DO NOT REGENERATE, RE-ASSEMBLE
 > FROM THE PUBLISHED TIP.** An update is NOT a fresh publish. The published repo
 > already holds content that only exists because a human and an agent made it: the
 > finished "What it is" / "How it works" / "Requirements"
-> prose in `inspiration.md`, the bespoke `inspiration.svg`
-> thumbnail, the inspiration-specific `/welcome`, and the adopters' "Adaptation
-> history". A naive re-run of `build_inspiration.sh` RESETS to the raw `BASE_REF`
+> prose in `template.md`, the bespoke `template.svg`
+> thumbnail, the template-specific `/welcome`, and the adopters' "Adaptation
+> history". A naive re-run of `build_template.sh` RESETS to the raw `BASE_REF`
 > and REGENERATES all of that from scratch (FILL-IN placeholders, the generic
 > placeholder SVG, a fresh welcome, an empty adaptation history) -- it would
-> DESTROY every one of those. **NEVER run `build_inspiration.sh` for an update,
+> DESTROY every one of those. **NEVER run `build_template.sh` for an update,
 > and never reset the assembly worktree to `BASE_REF`.** The update worker resets
 > to the PUBLISHED TIP's tree (fetched from the repo) and overlays ONLY the
 > user-confirmed changed paths on top of it, so everything hand-crafted survives
@@ -46,12 +46,12 @@ format) and an inspiration's own publish count. See
 > - §2 does a **read-only object fetch** of the published repo into `/home/user/workspace`'s
 >   object store and reads the delta with `git diff`/`git show`. A fetch adds
 >   objects; it NEVER changes `/home/user/workspace`'s working tree or branch. This is safe, and
->   is the same read-only fetch `use-inspiration` §1 uses.
+>   is the same read-only fetch `use-template` §1 uses.
 > - Everything from §3's worker `done` through §7's push runs with **cwd = `$WT`**
 >   (the worker's worktree), NEVER `/home/user/workspace`. There is no merge-back: `$WT`'s tree,
 >   built by the worker on top of the fetched published tip, IS what gets pushed,
 >   as-is, from `$WT`. IGNORE `lead-proxy.md`'s default `done -> merge the
->   worker's branch` handling -- as in `publish-inspiration`, merging the assembly
+>   worker's branch` handling -- as in `publish-template`, merging the assembly
 >   branch into `/home/user/workspace` is forbidden (it once reset a live mind's tree to an old
 >   base). Do not reintroduce a merge, a `git checkout mngr/<slug>` in `/home/user/workspace`, or
 >   any step that mutates `/home/user/workspace`'s tree after assembly.
@@ -62,7 +62,7 @@ format) and an inspiration's own publish count. See
 >   merge, checkout, reset, or `git add -A`). If the push did not happen, it does
 >   not run at all.
 
-> **AN INSPIRATION MUST STAY BOOTABLE -- NEVER PUBLISH A PARTIAL OR BROKEN
+> **AN TEMPLATE MUST STAY BOOTABLE -- NEVER PUBLISH A PARTIAL OR BROKEN
 > UPDATE.** Every published version, including this one, must be the FULL bootable
 > tree: the published snapshot with only the confirmed app/feature changes laid
 > over it. If the fetch (§2), re-assembly (§3), the secret scan or boot check
@@ -75,8 +75,8 @@ format) and an inspiration's own publish count. See
 
 ## Shared conventions
 
-- **The ledger** is `docs/VERSION_HISTORY.md`. Its `## Inspirations` section is
-  where a publish/revise is recorded (the same format `publish-inspiration` §8
+- **The ledger** is `docs/VERSION_HISTORY.md`. Its `## Templates` section is
+  where a publish/revise is recorded (the same format `publish-template` §8
   step 4 and `update-self` §5b write); §1 reads it and §8 appends to it.
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees under
   `/home/user/worktrees/<name>-<uuid>/`; the path cannot be guessed -- resolve it from
@@ -85,16 +85,16 @@ format) and an inspiration's own publish count. See
 - **The published tip.** The current `main` of the published repo -- the tree the
   update is built ON TOP of, and the parent of the one new commit. Fetched in §2
   and handed to the worker (§3).
-- **The recipe** lives in the published `inspiration.toml`'s `[recipe]` table
+- **The recipe** lives in the published `template.toml`'s `[recipe]` table
   (`include` / `data_include` / `exclude` / `modification_rules`) -- or, on a v1
   tip, the markdown's `## Recipe` block. It, not a repo-vs-repo diff, defines
-  how the inspiration derives from its source; an update re-runs it.
-- **Slug / repo-name rules** are identical to `publish-inspiration`'s (match
+  how the template derives from its source; an update re-runs it.
+- **Slug / repo-name rules** are identical to `publish-template`'s (match
   `^[A-Za-z0-9._-]+$`, no leading `-`); an update never changes the slug or repo.
 
-## 1. Locate the published inspiration
+## 1. Locate the published template
 
-Read the ledger's `## Inspirations` section for the target slug's heading
+Read the ledger's `## Templates` section for the target slug's heading
 `### <slug>  --  <repo-url>` and the version lines under it:
 
 ```bash
@@ -112,7 +112,7 @@ From that block extract:
 - **the source sha version `n` was cut from** -- the 7-char sha ending the newest
   `v<n>` line. This is the **anchor** for the "what changed since" diff.
 
-**If there is no row for this slug** (the inspiration was published before this
+**If there is no row for this slug** (the template was published before this
 feature existed, from another workspace, or the ledger was lost): do not guess.
 Ask the user for the published repo's URL and confirm the slug, then reconstruct
 a minimal anchor -- since there is no recorded source sha, §2's forward diff is
@@ -127,7 +127,7 @@ delta, only the full current state of the recipe's paths.
 `/home/user/workspace`'s working tree changes).
 
 **2a. Get read access and fetch the published tip.** Route git through the
-latchkey gateway exactly as `use-inspiration` §1 does for a private fetch (the
+latchkey gateway exactly as `use-template` §1 does for a private fetch (the
 `github-git` / `github-git-read` permission; initiate it yourself via a latchkey
 permission request per the `latchkey` skill if the `permissions/self` probe shows
 it missing, and tell the user an approval is waiting in minds). A public repo may
@@ -144,16 +144,16 @@ PUBLISHED_TIP="$(git rev-parse FETCH_HEAD)"
 check).** The published tree should still be the clean v(n) snapshot this mind
 pushed. Read the manifest at the tip and confirm its front-matter `version:`
 equals `v<n>` (the ledger's current version), and that the tip is a single
-inspiration snapshot on a template base (`git rev-list --count "$PUBLISHED_TIP"`
-> 1, and its subject begins `inspiration:`):
+template snapshot on a template base (`git rev-list --count "$PUBLISHED_TIP"`
+> 1, and its subject begins `template:`):
 
 ```bash
-git show "$PUBLISHED_TIP:inspiration.md" | sed -n '1,20p'   # inspect: version: v<n>?
+git show "$PUBLISHED_TIP:template.md" | sed -n '1,20p'   # inspect: version: v<n>?
 ```
 
 If the published manifest's version is HIGHER than the ledger's `n` (someone
 published a newer version out of band), or the tip carries foreign commits an
-adopter pushed (its subject is not an `inspiration:` snapshot, or unexpected
+adopter pushed (its subject is not an `template:` snapshot, or unexpected
 paths changed), **STOP and surface it to the user** -- do not overwrite an
 out-of-band change. Reconcile first (re-read the ledger, or re-anchor on the
 actual published version) before any update. (The shipped ledger records the
@@ -165,11 +165,11 @@ the integrity gate in place of a recorded-snapshot-sha comparison.)
 the update's inputs: the paths whose changes are eligible, and the rules to
 re-apply.
 
-- **v2 tip** (`inspiration.toml` present): read the `[recipe]` table. Also note
+- **v2 tip** (`template.toml` present): read the `[recipe]` table. Also note
   `[environment]` and `[[lineage]]`, which carry through the update untouched
   unless the delta changes what the code needs installed.
 - **v1 tip** (no TOML): read the markdown's `## Recipe` block and migrate the
-  inspiration to v2 as part of this update -- `references/v1-to-v2-migration.md`
+  template to v2 as part of this update -- `references/v1-to-v2-migration.md`
   has exactly what that moves. Not optional, but it IS a user-visible change to
   their repo, so state it at §2e's scope gate rather than doing it silently.
 
@@ -186,7 +186,7 @@ v(n). NEVER diff the workspace against the published repo: the published tree ha
 had personal data stripped and modifications applied, so a workspace-vs-published
 diff would try to re-add exactly the things the recipe deliberately removed. Also
 note the **base delta**: compare the ledger's recorded base against the current
-resolved base (`publish-inspiration` §2's marker walk). If `BASE_REF` moved, the
+resolved base (`publish-template` §2's marker walk). If `BASE_REF` moved, the
 template substrate advanced too -- report it, but an app-delta update re-publishes
 on the existing published base; re-cutting on a newer base is a separate, larger
 operation (surface it as an option, default to not doing it).
@@ -202,7 +202,7 @@ message, in plain language:
 - **which of those changes will go into the update** -- the user may take the
   whole delta, a subset, or ALSO fold in a newly-created path that was not in the
   original recipe (adding a new path is a scope change to the recipe -- it
-  re-opens the same include-set judgment `publish-inspiration` §1 makes, including
+  re-opens the same include-set judgment `publish-template` §1 makes, including
   the personal-data question for any data it carries);
 - **what will NOT change** -- the recipe's existing exclusions still hold (they
   stay excluded even though they still exist in the workspace), the modifications
@@ -222,15 +222,15 @@ that implements the update: a `launch-task` sub-agent on its own worktree
 (`mngr/<slug>`). Per `launch-task`, the whole delegation is ONE step in your
 timeline.
 
-**There is no `build_inspiration.sh --update` mode** -- the assembly script only
+**There is no `build_template.sh --update` mode** -- the assembly script only
 knows how to reset to `BASE_REF` and regenerate everything, which is exactly what
 an update must NOT do. So the worker performs the re-assembly with explicit git
-steps (mirroring `build_inspiration.sh`'s mechanics -- stage-before-reset,
+steps (mirroring `build_template.sh`'s mechanics -- stage-before-reset,
 `read-tree`/`clean`, `rsync` overlay, hard secret scan, boot smoke-check, single
 `commit-tree`) but with the reset target and the overlay set changed.
 
 **3a. Hand the worker the published tip while keeping it OFFLINE.** The worker
-must assemble from the published tip's tree, but -- like `build_inspiration.sh` --
+must assemble from the published tip's tree, but -- like `build_template.sh` --
 it does no network fetch itself. Bundle the tip you already fetched in §2 and
 stage it into the worker via `launch-task`'s `source_artifacts_dir` mechanism (a
 gitignored file pushed into the worker's worktree):
@@ -244,8 +244,8 @@ git tag -d "_pub-tip-<slug>"
 
 Doing the fetch + integrity check in the lead (§2, in chat) and handing the tip
 over as a frozen bundle is deliberate: it keeps the worker offline (matching
-`build_inspiration.sh`'s no-fetch invariant), keeps all user-facing GitHub auth
-in the lead (matching `publish-inspiration`), and lets divergence (§2b) be
+`build_template.sh`'s no-fetch invariant), keeps all user-facing GitHub auth
+in the lead (matching `publish-template`), and lets divergence (§2b) be
 surfaced in chat rather than discovered deep inside the worker.
 
 **3b. Commit pending `/home/user/workspace` work, then write the task file and launch.** (`mngr
@@ -270,8 +270,8 @@ the bundle is pushed to the worker. The task body directs the worker to:
    ```
 3. **Snapshot the secret-scan tools and stage the approved changed paths BEFORE
    resetting** (the reset removes the current-source versions from the worktree,
-   exactly as `build_inspiration.sh` step 1 stages includes first). Copy
-   `.agents/skills/publish-inspiration/scripts/scan_secrets.sh` and its sibling
+   exactly as `build_template.sh` step 1 stages includes first). Copy
+   `.agents/skills/publish-template/scripts/scan_secrets.sh` and its sibling
    `betterleaks.toml` out to a scratch dir, and `rsync -aR` every ADDED/MODIFIED
    approved path (from the current-HEAD checkout) into a stage dir. Record the
    DELETED approved paths as a list.
@@ -303,14 +303,14 @@ the bundle is pushed to the worker. The task body directs the worker to:
    commit around it. This stays the authoritative, hard-failing blocker.
    Front matter is YAML: double-quote any value containing a `"`, a `: `, or a
    leading `#`/`&`/`*`/`%`, escaping inner quotes -- matching what
-   `build_inspiration.sh` emits, or validation fails.
+   `build_template.sh` emits, or validation fails.
 
 7. **Update the manifest -- append only, never regenerate.** Bump the version
-   to `v(n+1)` in BOTH `inspiration.md`'s front matter and `inspiration.toml`'s
-   `[inspiration].version`; add any newly-approved include path or
+   to `v(n+1)` in BOTH `template.md`'s front matter and `template.toml`'s
+   `[template].version`; add any newly-approved include path or
    `modification_rule` to the TOML's `[recipe]`; update `[environment]` only if
    the delta changes what the code needs installed. Append ONE entry to the END
-   of `inspiration.md`'s "## Publication history" section:
+   of `template.md`'s "## Publication history" section:
    `### v(n+1) (YYYY-MM-DD) -- <one line: what changed since v(n)>` (today's
    date). Newest last; NEVER rewrite an earlier Publication-history entry, and
    NEVER write into "Adaptation history" (that is the adopters' log). Leave the
@@ -318,17 +318,17 @@ the bundle is pushed to the worker. The task body directs the worker to:
 8. **Boot smoke-check** the result -- validate `system/supervisord.conf` via the
    supervisor lib (`ServerOptions().realize()` / `process_config()`), NEVER
    `supervisord -t` (which launches the daemon), the same method
-   `build_inspiration.sh` step 9 uses. If it fails, report `stuck`. Then run
-   `.agents/skills/publish-inspiration/scripts/validate_inspiration.py` (per
+   `build_template.sh` step 9 uses. If it fails, report `stuck`. Then run
+   `.agents/skills/publish-template/scripts/validate_template.py` (per
    that skill's §3 step 6), which must exit 0: it catches a markdown/TOML
    disagreement introduced by the version bump and re-resolves every declared
    apt package against the pinned mirror.
 9. **Mint ONE clean commit parented on the published tip:**
    ```bash
    git add -A
-   SNAPSHOT_COMMIT="$(git commit-tree "$(git write-tree)" -p "<PUBLISHED_TIP>" -m "inspiration: <slug> v(n+1)
+   SNAPSHOT_COMMIT="$(git commit-tree "$(git write-tree)" -p "<PUBLISHED_TIP>" -m "template: <slug> v(n+1)
 
-   Update of the <slug> inspiration on top of the published v(n) snapshot; app-delta re-cut, recipe re-applied.")"
+   Update of the <slug> template on top of the published v(n) snapshot; app-delta re-cut, recipe re-applied.")"
    git merge-base --is-ancestor "<PUBLISHED_TIP>" "$SNAPSHOT_COMMIT"   # must pass
    test "$(git rev-list --count "$SNAPSHOT_COMMIT")" -gt 1              # must pass
    git reset --soft "$SNAPSHOT_COMMIT"
@@ -344,7 +344,7 @@ the bundle is pushed to the worker. The task body directs the worker to:
     reintroduced (a correct update never regenerates those), and `git status` must
     be clean.
 
-Launch the worker and background-await its report exactly as `publish-inspiration`
+Launch the worker and background-await its report exactly as `publish-template`
 §3 / `launch-task` §2-§4 do. Handle the report per `lead-proxy.md` with the same
 override: on `done`, do NOT merge `mngr/<slug>`; resolve `$WT`, verify the
 worker's gates yourself, then proceed to §5 with cwd = `$WT`. On `stuck`, surface
@@ -358,7 +358,7 @@ every overlaid/modified path, the boot smoke-check passed, the manifest's
 Publication history gained exactly one new `v(n+1)` entry (earlier entries and
 Adaptation history untouched), and the single snapshot commit is parented on the
 published tip. A `stuck` report maps to the same causes as
-`publish-inspiration` §5 (secret scan, boot check) plus: bundle sha mismatch, or
+`publish-template` §5 (secret scan, boot check) plus: bundle sha mismatch, or
 the published tip could not be loaded -- all "fix the input and relaunch", never
 "publish something smaller".
 
@@ -373,20 +373,20 @@ not the GitHub permission approval. Present the proposal ONCE, in plain language
 - the **modifications re-applied** (so the user can verify their earlier removals
   still hold in the new version);
 - the **thumbnail** -- state it is unchanged from the published version, and embed
-  it only if the user asked to change it (`![<title> thumbnail]($WT/inspiration.svg)`);
+  it only if the user asked to change it (`![<title> thumbnail]($WT/template.svg)`);
 - the **visibility is unchanged** -- an update never changes it. Restate it so the
   user sees it is not silently flipping.
 
 Then END YOUR TURN and WAIT for the user's explicit go-ahead TO THIS message.
 Your own gate checks are verification, not confirmation. If the user asks for
 edits (e.g. a thumbnail tweak or a Publication-history wording change), apply them
-in `$WT` -- keeping the SVG safety rules from `publish-inspiration` §6 -- and
+in `$WT` -- keeping the SVG safety rules from `publish-template` §6 -- and
 commit in `$WT` before §7. If the user aborts, stop and leave the assembled
 commit intact.
 
 ## 6. Ensure GitHub push access (latchkey -- not the gh CLI)
 
-Reuse `publish-inspiration` §7's mechanics for the WRITE side. You already have
+Reuse `publish-template` §7's mechanics for the WRITE side. You already have
 `github-git-read` from §2a; the push needs `github-git-write`. Probe it and, if
 missing, initiate the permission request yourself (`payload.scope: github-git`,
 `permissions: ["github-git-write"]`), tell the user an approval is waiting in
@@ -399,7 +399,7 @@ create one or change its settings. Never fall back to a token-in-URL push.
 **cwd = `$WT`.** The push publishes the update.
 
 - **Pre-push checklist:** `(cd "$WT" && git status)` must be clean; the
-  placeholder-thumbnail / FILL-IN / SVG-safety greps from `publish-inspiration` §8
+  placeholder-thumbnail / FILL-IN / SVG-safety greps from `publish-template` §8
   must print NOTHING (a correct update never reintroduces a placeholder).
 - **Push as a fast-forward -- no force.** The minted commit descends from the
   current published tip, so `main` advances by one commit and no history is
@@ -419,20 +419,20 @@ create one or change its settings. Never fall back to a token-in-URL push.
   (a genuine out-of-band push) -- STOP and surface it; do NOT `--force`. Handle
   the other push-failure causes (permission, HTTP 413, `workflow` scope, GitHub
   push-protection on the baked-in Minds Google OAuth client) exactly as
-  `publish-inspiration` §8's "Failure handling" list does.
+  `publish-template` §8's "Failure handling" list does.
 
-- **Move / create the version tag** (the design's `inspiration/<slug>/v<n>` tag
+- **Move / create the version tag** (the design's `template/<slug>/v<n>` tag
   scheme -- the durable, adopter-facing version marker). Publish v1 did not push a
   v1 tag, so in practice this CREATES the tag at v(n+1); it is create-or-move and
   idempotent:
 
   ```bash
   ( cd "$WT" \
-      && git tag -f -a "inspiration/<slug>/v(n+1)" "$SNAPSHOT_COMMIT" -m "inspiration <slug> v(n+1)" \
+      && git tag -f -a "template/<slug>/v(n+1)" "$SNAPSHOT_COMMIT" -m "template <slug> v(n+1)" \
       && git \
       -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
       ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
-      push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" "refs/tags/inspiration/<slug>/v(n+1)" )
+      push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" "refs/tags/template/<slug>/v(n+1)" )
   ```
 
   If the tag push fails, the update itself already succeeded -- retry once, and
@@ -447,7 +447,7 @@ SKIP this entirely: an update that did not publish is never recorded.
 The full contract -- the exact line format, the computed `v<n+1>`, the
 per-slug idempotence rule, and the one-file commit -- is in
 `references/ledger-entry.md`. Follow it exactly; it is the same
-`## Inspirations` format `publish-inspiration` §8 step 4 owns.
+`## Templates` format `publish-template` §8 step 4 owns.
 
 ## 9. Close out
 

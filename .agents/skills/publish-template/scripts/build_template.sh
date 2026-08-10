@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Assemble a clean, shareable "inspiration" snapshot on top of the DEFAULT_WORKSPACE_TEMPLATE base the
+# Assemble a clean, shareable "template" snapshot on top of the DEFAULT_WORKSPACE_TEMPLATE base the
 # mind was created from, then commit it. Run by the launch-task WORKER the
-# publish-inspiration skill dispatches, from the worker's own git worktree
+# publish-template skill dispatches, from the worker's own git worktree
 # (cwd = worktree repo root); the live mind's /home/user/workspace is never touched. This is
-# v2 of the inspirations flow (see INSPIRATION_FLOW_VERSION below); the
+# v2 of the templates flow (see TEMPLATE_FLOW_VERSION below); the
 # generated manifest records it as `format: v2` in its front-matter and in the
-# sibling inspiration.toml.
+# sibling template.toml.
 #
 # The dev `create-new-mind-repo` recipe is NOT available in the VM, so this is
 # self-contained. It does the assembly + secret scan + manifest/thumbnail +
@@ -41,24 +41,24 @@
 
 set -euo pipefail
 
-# Version of the inspirations flow (and of the manifest format this script
+# Version of the templates flow (and of the manifest format this script
 # writes into the generated manifest's `format:` front-matter key).
 #
-# v2 is the split format: one slug-free inspiration.md/.toml/.svg per repo
+# v2 is the split format: one slug-free template.md/.toml/.svg per repo
 # (overriding rather than accumulating, with a [[lineage]] chain recording what
 # was superseded), the recipe and requirements moved into the TOML, an
 # [environment] declaration, and Holes + Prerequisites merged into one
 # Requirements list whose entries carry their own kind. v1 is the
-# original: slug-named inspiration-<slug>.md with a YAML recipe block inside it
-# and no TOML at all. Adopters still read v1 -- absence of inspiration.toml is
+# original: slug-named template-<slug>.md with a YAML recipe block inside it
+# and no TOML at all. Adopters still read v1 -- absence of template.toml is
 # what identifies it -- but nothing writes v1 any more.
-INSPIRATION_FLOW_VERSION="v2"
+TEMPLATE_FLOW_VERSION="v2"
 
-# The published version of THIS inspiration (front-matter `version:`), distinct
+# The published version of THIS template (front-matter `version:`), distinct
 # from the flow/manifest-format version above. A first publish is always v1; a
-# later update of the same inspiration publishes v2, v3, ... and the source
+# later update of the same template publishes v2, v3, ... and the source
 # workspace's docs/VERSION_HISTORY.md counts them.
-INSPIRATION_VERSION="v1"
+TEMPLATE_VERSION="v1"
 
 # Resolve this script's own directory up front, before any cd: the sibling
 # scan_secrets.sh + betterleaks.toml live next to this script, and the script
@@ -76,7 +76,7 @@ DATA_INCLUDE_PATHS=()
 
 usage() {
     cat >&2 <<'USAGE'
-Usage: build_inspiration.sh --base-ref <ref> --slug <slug> --title <title>
+Usage: build_template.sh --base-ref <ref> --slug <slug> --title <title>
                             --include <path> [--include <path> ...]
                             [--data-include <path> ...] [--description <text>]
 USAGE
@@ -113,47 +113,47 @@ while [ "$#" -gt 0 ]; do
             usage
             ;;
         *)
-            echo "build_inspiration.sh: unknown argument: $1" >&2
+            echo "build_template.sh: unknown argument: $1" >&2
             usage
             ;;
     esac
 done
 
 if [ -z "$BASE_REF" ] || [ -z "$SLUG" ] || [ -z "$TITLE" ]; then
-    echo "build_inspiration.sh: --base-ref, --slug, and --title are required" >&2
+    echo "build_template.sh: --base-ref, --slug, and --title are required" >&2
     usage
 fi
 if [ "${#INCLUDE_PATHS[@]}" -eq 0 ]; then
-    echo "build_inspiration.sh: at least one --include path is required" >&2
+    echo "build_template.sh: at least one --include path is required" >&2
     usage
 fi
 
 # Validate the slug the same way the backend does: ^[A-Za-z0-9._-]+$ and no
 # leading '-'. This names the manifest, thumbnail, and (via the caller) the repo.
 if ! printf '%s' "$SLUG" | grep -Eq '^[A-Za-z0-9._-]+$' || case "$SLUG" in -*) true ;; *) false ;; esac; then
-    echo "build_inspiration.sh: slug must match ^[A-Za-z0-9._-]+\$ and not start with '-': $SLUG" >&2
+    echo "build_template.sh: slug must match ^[A-Za-z0-9._-]+\$ and not start with '-': $SLUG" >&2
     exit 2
 fi
 
 REPO="$(git rev-parse --show-toplevel)"
 cd "$REPO"
 
-# One inspiration per repo: the manifest files carry no slug and a new publish
+# One template per repo: the manifest files carry no slug and a new publish
 # OVERRIDES whatever was here rather than accumulating beside it. What survives
 # an override is the [[lineage]] chain in the TOML -- each predecessor's repo
 # URL and commit -- so a superseded manifest stays retrievable in the repo where
 # it is authoritative. The slug is still the identity (it names the repo and
 # keys the version ledger); it just no longer names any file.
-MANIFEST="inspiration.md"
-MANIFEST_TOML="inspiration.toml"
-THUMBNAIL="inspiration.svg"
+MANIFEST="template.md"
+MANIFEST_TOML="template.toml"
+THUMBNAIL="template.svg"
 
-# Substituted by the lead in publish-inspiration §7 once the owner and repo name
+# Substituted by the lead in publish-template §7 once the owner and repo name
 # are both known -- the README's "Open in Minds" button and its copyable
 # fallback both need the repo URL, which does not exist when this script runs.
 # §8's pre-push gate greps for any leftover, exactly as it does for the
 # placeholder thumbnail.
-REPO_URL_PLACEHOLDER="MINDS_INSPIRATION_REPO_URL"
+REPO_URL_PLACEHOLDER="MINDS_TEMPLATE_REPO_URL"
 
 # --- 0. validate that BASE_REF is a real, bootable default workspace template tree ---------
 
@@ -164,7 +164,7 @@ REPO_URL_PLACEHOLDER="MINDS_INSPIRATION_REPO_URL"
 # runs BEFORE the destructive read-tree in step 2 so a bad ref aborts cleanly
 # without touching the worktree.
 if ! git rev-parse --verify --quiet "${BASE_REF}^{tree}" > /dev/null; then
-    echo "build_inspiration.sh: BASE REF INVALID: '${BASE_REF}' does not resolve to a tree in this repo" >&2
+    echo "build_template.sh: BASE REF INVALID: '${BASE_REF}' does not resolve to a tree in this repo" >&2
     exit 5
 fi
 base_missing=""
@@ -174,8 +174,8 @@ for required in pyproject.toml system/supervisord.conf; do
     fi
 done
 if [ -n "$base_missing" ]; then
-    echo "build_inspiration.sh: BASE REF INVALID: the tree of '${BASE_REF}' is missing:${base_missing}" >&2
-    echo "build_inspiration.sh: '${BASE_REF}' does not look like a bootable default-workspace-template base (a wrong root commit from a subtree merge?) -- pass the real DEFAULT_WORKSPACE_TEMPLATE seed commit as --base-ref" >&2
+    echo "build_template.sh: BASE REF INVALID: the tree of '${BASE_REF}' is missing:${base_missing}" >&2
+    echo "build_template.sh: '${BASE_REF}' does not look like a bootable default-workspace-template base (a wrong root commit from a subtree merge?) -- pass the real DEFAULT_WORKSPACE_TEMPLATE seed commit as --base-ref" >&2
     exit 5
 fi
 
@@ -183,7 +183,7 @@ fi
 
 # rsync -R preserves each relative path so it lands at the same location under
 # the stage dir; the reset in step 2 wipes the live paths, so we must capture
-# them first. Also stage any pre-existing accumulated inspiration manifests +
+# them first. Also stage any pre-existing accumulated template manifests +
 # thumbnails so they carry forward (step 4).
 STAGE="$(mktemp -d)"
 SCAN_TOOLS_DIR="$(mktemp -d)"
@@ -200,7 +200,7 @@ trap cleanup EXIT
 # scan_secrets.sh finds its sibling config without a --config flag.
 for scan_file in scan_secrets.sh betterleaks.toml; do
     if [ ! -f "$SCRIPT_DIR/$scan_file" ]; then
-        echo "build_inspiration.sh: $SCRIPT_DIR/$scan_file is missing (required for the secret scan; no fallback exists); aborting before touching the worktree" >&2
+        echo "build_template.sh: $SCRIPT_DIR/$scan_file is missing (required for the secret scan; no fallback exists); aborting before touching the worktree" >&2
         exit 1
     fi
     cp "$SCRIPT_DIR/$scan_file" "$SCAN_TOOLS_DIR/"
@@ -210,16 +210,16 @@ done
 # from the worktree (and takes .venv with it, which is why the validator runs
 # under `uv run --no-project` against a snapshotted copy of the schema module
 # rather than importing it from the workspace).
-for tool_file in write_inspiration_manifest.py validate_inspiration.py; do
+for tool_file in write_template_manifest.py validate_template.py; do
     if [ ! -f "$SCRIPT_DIR/$tool_file" ]; then
-        echo "build_inspiration.sh: $SCRIPT_DIR/$tool_file is missing (required to generate and validate the manifest); aborting before touching the worktree" >&2
+        echo "build_template.sh: $SCRIPT_DIR/$tool_file is missing (required to generate and validate the manifest); aborting before touching the worktree" >&2
         exit 1
     fi
     cp "$SCRIPT_DIR/$tool_file" "$SCAN_TOOLS_DIR/"
 done
-SCHEMA_MODULE="$REPO/system/services/env_converge/src/env_converge/inspiration_manifest.py"
+SCHEMA_MODULE="$REPO/system/services/env_converge/src/env_converge/template_manifest.py"
 if [ ! -f "$SCHEMA_MODULE" ]; then
-    echo "build_inspiration.sh: $SCHEMA_MODULE is missing (the manifest schema; no fallback exists); aborting before touching the worktree" >&2
+    echo "build_template.sh: $SCHEMA_MODULE is missing (the manifest schema; no fallback exists); aborting before touching the worktree" >&2
     exit 1
 fi
 cp "$SCHEMA_MODULE" "$SCAN_TOOLS_DIR/"
@@ -232,7 +232,7 @@ cp "$SCHEMA_MODULE" "$SCAN_TOOLS_DIR/"
 # matters.
 PREVIOUS_MANIFEST_TOML=""
 if [ -f "$MANIFEST_TOML" ]; then
-    PREVIOUS_MANIFEST_TOML="$SCAN_TOOLS_DIR/previous-inspiration.toml"
+    PREVIOUS_MANIFEST_TOML="$SCAN_TOOLS_DIR/previous-template.toml"
     cp "$MANIFEST_TOML" "$PREVIOUS_MANIFEST_TOML"
 fi
 
@@ -242,7 +242,7 @@ stage_one() {
     if [ -e "$rel" ]; then
         rsync -aR "$rel" "$STAGE/"
     else
-        echo "build_inspiration.sh: warning: include path not found, skipping: $rel" >&2
+        echo "build_template.sh: warning: include path not found, skipping: $rel" >&2
     fi
 }
 
@@ -304,7 +304,7 @@ rsync -a "$STAGE/" "$REPO/"
 # relative-to-scanned-dir finding paths ARE repo-root-relative.
 
 if ! bash "$SCAN_TOOLS_DIR/scan_secrets.sh" "$STAGE"; then
-    echo "build_inspiration.sh: aborting before commit -- the secret scan found credentials/tokens in the overlaid content, or a required scanner was missing or failed (see above)" >&2
+    echo "build_template.sh: aborting before commit -- the secret scan found credentials/tokens in the overlaid content, or a required scanner was missing or failed (see above)" >&2
     exit 1
 fi
 
@@ -318,14 +318,14 @@ git add -A
 ASSEMBLED_TREE="$(git write-tree)"
 BASE_TREE="$(git rev-parse "${BASE_REF}^{tree}")"
 if [ "$ASSEMBLED_TREE" = "$BASE_TREE" ]; then
-    echo "build_inspiration.sh: nothing to publish -- the selected apps/features add nothing beyond the base" >&2
+    echo "build_template.sh: nothing to publish -- the selected apps/features add nothing beyond the base" >&2
     exit 3
 fi
 
 # --- 6. generate the manifest ------------------------------------------------
 
 # The manifest is the single document the NEXT agent (in a mind created from
-# this inspiration) reads to understand, present, and adapt the inspiration.
+# this template) reads to understand, present, and adapt the template.
 # The deterministic parts (front-matter, included-path list, the "How to adapt
 # it" script, section skeletons) are generated here; the prose that requires
 # knowledge of the live mind is left as clearly-marked FILL-IN blocks that the
@@ -359,7 +359,7 @@ title_yaml="$(yaml_scalar "$TITLE")"
 description_yaml="$(yaml_scalar "$manifest_description")"
 thumbnail_yaml="$(yaml_scalar "$THUMBNAIL")"
 
-# The RECIPE now lives in inspiration.toml, not in this markdown. It is
+# The RECIPE now lives in template.toml, not in this markdown. It is
 # machine-read (only the publisher's own update flow reads it, and that flow
 # always runs on a template new enough to know the TOML), it was the last YAML
 # in the repo, and it is exactly the kind of structured data the split exists to
@@ -367,8 +367,8 @@ thumbnail_yaml="$(yaml_scalar "$THUMBNAIL")"
 manifest_toml_args=(
     --slug "$SLUG"
     --title "$TITLE"
-    --version "$INSPIRATION_VERSION"
-    --format "$INSPIRATION_FLOW_VERSION"
+    --version "$TEMPLATE_VERSION"
+    --format "$TEMPLATE_FLOW_VERSION"
     --thumbnail "$THUMBNAIL"
     --output "$MANIFEST_TOML"
 )
@@ -389,8 +389,8 @@ manifest_toml_args+=(--description "$manifest_description")
 # python3 is not guaranteed to be that new. uv supplies a managed interpreter,
 # which makes this work the same everywhere instead of failing only on older
 # machines.
-if ! uv run --no-project python "$SCAN_TOOLS_DIR/write_inspiration_manifest.py" "${manifest_toml_args[@]}"; then
-    echo "build_inspiration.sh: could not generate ${MANIFEST_TOML}" >&2
+if ! uv run --no-project python "$SCAN_TOOLS_DIR/write_template_manifest.py" "${manifest_toml_args[@]}"; then
+    echo "build_template.sh: could not generate ${MANIFEST_TOML}" >&2
     exit 6
 fi
 
@@ -399,16 +399,16 @@ cat > "$MANIFEST" <<MANIFEST_EOF
 title: ${title_yaml}
 description: ${description_yaml}
 thumbnail: ${thumbnail_yaml}
-version: ${INSPIRATION_VERSION}
-format: ${INSPIRATION_FLOW_VERSION}
+version: ${TEMPLATE_VERSION}
+format: ${TEMPLATE_FLOW_VERSION}
 ---
 
 # ${TITLE}
 
-This file is the manifest for the **${TITLE}** inspiration (slug:
+This file is the manifest for the **${TITLE}** template (slug:
 \`${SLUG}\`). It is the one document a future agent reads to understand,
-present, and adapt this inspiration. If you are an agent in a mind that was
-created from this inspiration, this file is your script: read all of it, then
+present, and adapt this template. If you are an agent in a mind that was
+created from this template, this file is your script: read all of it, then
 follow "How to adapt it" below.
 
 ## What it is
@@ -416,7 +416,7 @@ follow "How to adapt it" below.
 ${manifest_description}
 
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment
-with a one-paragraph overview of what this inspiration does for its user: the
+with a one-paragraph overview of what this template does for its user: the
 problem it solves, the main things it produces (pages, reports, automations),
 and what the user sees when it is running. Write for a reader who has never
 seen the original mind. -->
@@ -437,7 +437,7 @@ services that connect them. -->
 
 ## Recipe
 
-This inspiration is version \`${INSPIRATION_VERSION}\`. It is not a fork of the
+This template is version \`${TEMPLATE_VERSION}\`. It is not a fork of the
 workspace it came from -- it is DERIVED from it by a recipe: include these
 paths, leave these out, apply these published-version rules. An update re-runs
 the recipe against the current workspace and publishes the result as the next
@@ -446,12 +446,12 @@ source workspace.
 
 The recipe is machine-read, so it lives in the sibling
 [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}) -- its \`[recipe]\` table -- along with
-the structured requirements and the environment this inspiration needs
+the structured requirements and the environment this template needs
 installed. That file is authoritative for all of it; this one holds the prose.
 
 ## Requirements
 
-Everything the adopting mind must deal with before this inspiration is really
+Everything the adopting mind must deal with before this template is really
 theirs. Two kinds of entry, handled at different times:
 
 - **Activation** -- what must be SET UP before anything runs, in the
@@ -506,7 +506,7 @@ runs as published, with no external permissions or secrets." -->
 
 ## Environment
 
-What this inspiration needs INSTALLED, beyond what the template already has.
+What this template needs INSTALLED, beyond what the template already has.
 Declared in \`${MANIFEST_TOML}\`'s \`[environment]\` table; an adopting mind
 converges it at ITS OWN pinned apt snapshot timestamp, so package versions come
 out consistent with the rest of that mind's environment rather than frozen to
@@ -526,14 +526,14 @@ exactly: "Nothing extra -- runs on the stock workspace environment." -->
 
 ## How to adapt it
 
-Instructions for the NEXT agent -- the one adapting this inspiration into a
-new mind. This is the \`use-inspiration\` skill's template path; in short:
+Instructions for the NEXT agent -- the one adapting this template into a
+new mind. This is the \`use-template\` skill's template path; in short:
 
 1. Read this entire file first, especially "Requirements" below. It holds two
    kinds of entry and they are handled at different times: the machine-readable
    \`requires_\` lines are ACTIVATION (set them up before anything runs), and
    the prose bullets are ADAPTATION (decide or rewire them afterwards).
-2. Present the inspiration to the user in plain, non-technical language: what
+2. Present the template to the user in plain, non-technical language: what
    it is, what it does, and what it needs from them (name the activation
    requirements).
 3. Ask whether they want to use the same connectors (e.g. their own Slack).
@@ -554,19 +554,19 @@ new mind. This is the \`use-inspiration\` skill's template path; in short:
 
 ## Publication history
 
-This inspiration's changelog: what each published version changed. The PUBLISHER
+This template's changelog: what each published version changed. The PUBLISHER
 appends one entry per version (newest last); earlier entries are never rewritten.
 This is distinct from "Adaptation history" below, which is the ADOPTERS' log.
 
 <!-- FILL-IN (publishing agent): BEFORE reporting done, replace this comment with
 the first entry, in the form:
 ### v1 (YYYY-MM-DD) -- <one line: what this first version publishes>
-using today's date. A later update of this inspiration (the update-published-inspiration
+using today's date. A later update of this template (the update-published-template
 flow) appends "### v2 (date) -- what changed since v1", and so on. -->
 
 ## Adaptation history
 
-Each mind that adapts this inspiration appends one dated entry below. Earlier
+Each mind that adapts this template appends one dated entry below. Earlier
 entries are never rewritten.
 MANIFEST_EOF
 
@@ -584,20 +584,20 @@ cat > "$THUMBNAIL" <<THUMB_EOF
   <rect x="20" y="60" width="140" height="12" rx="6" fill="#52606d"/>
   <rect x="20" y="84" width="180" height="12" rx="6" fill="#52606d"/>
   <rect x="20" y="108" width="100" height="12" rx="6" fill="#52606d"/>
-  <text x="20" y="150" font-family="sans-serif" font-size="11" fill="#9aa5b1">inspiration</text>
+  <text x="20" y="150" font-family="sans-serif" font-size="11" fill="#9aa5b1">template</text>
 </svg>
 THUMB_EOF
 
-# --- 8. write the inspiration-specific /welcome into the SNAPSHOT ------------
+# --- 8. write the template-specific /welcome into the SNAPSHOT ------------
 
 # The published repo ships its OWN welcome skill, generated here by overwriting
 # .agents/skills/welcome/SKILL.md in the assembled tree. The TEMPLATE's welcome
-# skill is deliberately untouched by the inspirations feature -- no marker
-# region, no takeover branch; the inspiration handles changing the welcome
+# skill is deliberately untouched by the templates feature -- no marker
+# region, no takeover branch; the template handles changing the welcome
 # entirely within the snapshot it publishes. Deterministic full-file write,
 # never an LLM freeform edit; idempotent across accumulated publishes (each
 # publish regenerates it targeting the newly-published slug, the latest).
-welcome_description_yaml="$(yaml_scalar "Greet the user when a new project starts. This mind was created from the ${TITLE} inspiration, so the welcome introduces that inspiration and immediately starts the adaptation conversation.")"
+welcome_description_yaml="$(yaml_scalar "Greet the user when a new project starts. This mind was created from the ${TITLE} template, so the welcome introduces that template and immediately starts the adaptation conversation.")"
 WELCOME_FILE=".agents/skills/welcome/SKILL.md"
 mkdir -p "$(dirname "$WELCOME_FILE")"
 cat > "$WELCOME_FILE" <<WELCOME_EOF
@@ -606,9 +606,9 @@ name: welcome
 description: ${welcome_description_yaml}
 ---
 
-# Welcome the user (inspiration: ${TITLE})
+# Welcome the user (template: ${TITLE})
 
-This mind was created from an inspiration -- a published snapshot of apps
+This mind was created from an template -- a published snapshot of apps
 another mind built:
 
 - Title: ${TITLE}
@@ -624,29 +624,29 @@ waiting to be asked:
    greeting and do NOT offer a generic suggestions list.
 2. Immediately read \`${MANIFEST}\` at the repo root (reading the
    manifest in the first turn is required).
-3. In plain, non-technical language, present what the inspiration is and
+3. In plain, non-technical language, present what the template is and
    what it needs from the user -- name the manifest's activation requirements
    (the connectors/permissions it runs on). Then ask whether they want to hook it
    up to their own accounts now (e.g. "Want me to connect this to your own
    Slack?"). End your first response on THAT question. This is the
-   \`use-inspiration\` skill's template path; the manifest's "How to adapt
+   \`use-template\` skill's template path; the manifest's "How to adapt
    it" section is the full script: if they say yes, ACTIVATE FIRST -- initiate
    each \`requires_permission\` via a latchkey permission request, get the
    app showing THEIR OWN DATA (that is the definition of working; a running
    service is not), invite them to take a look -- and only then ask how they
    want to adapt it.
 
-This repo holds exactly one inspiration. If \`${MANIFEST_TOML}\` lists
-\`[[lineage]]\` entries, those are the inspirations this one was built on --
+This repo holds exactly one template. If \`${MANIFEST_TOML}\` lists
+\`[[lineage]]\` entries, those are the templates this one was built on --
 each with the repo URL and commit it was taken at, so you can go read any of
 them at the exact state that was used. They are provenance, not something to
 adapt here.
 WELCOME_EOF
 
-# --- 8.5 overwrite README.md to describe the inspiration ---------------------
+# --- 8.5 overwrite README.md to describe the template ---------------------
 
 # The clean base's README describes the generic default-workspace-template.
-# That is wrong for a published inspiration: the repo's landing page -- the
+# That is wrong for a published template: the repo's landing page -- the
 # thing that decides whether a person boots this at all -- must sell THIS
 # project. The structure below is the house recipe: hero graphic, the "Open in
 # Minds" call-to-action, why you care, how to use it, ideas for making it
@@ -670,7 +670,7 @@ cat > README.md <<README_EOF
 </p>
 
 Didn't work? Create a Minds workspace and paste this to your agent:
-\`/use-inspiration https://github.com/${REPO_URL_PLACEHOLDER}\`
+\`/use-template https://github.com/${REPO_URL_PLACEHOLDER}\`
 
 ## Why you care
 
@@ -701,7 +701,7 @@ two. -->
 
 ## What this is
 
-This repository is a published **minds inspiration**: a clean, bootable
+This repository is a published **minds template**: a clean, bootable
 snapshot of what a mind built, ready to adapt into your own. It is NOT the
 generic workspace template -- it is this specific project.
 
@@ -711,15 +711,15 @@ machine-readable half (recipe, requirements, and the environment it needs
 installed) in [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}).
 README_EOF
 
-# --- 8.6 remove the version history so it never ships in an inspiration ------
+# --- 8.6 remove the version history so it never ships in an template ------
 
-# docs/VERSION_HISTORY.md is WORKSPACE-only, never part of an inspiration: it records
-# where a mind came from and every inspiration it has published (slugs, repo
-# URLs, source commits). None of that belongs in a published inspiration -- and
+# docs/VERSION_HISTORY.md is WORKSPACE-only, never part of an template: it records
+# where a mind came from and every template it has published (slugs, repo
+# URLs, source commits). None of that belongs in a published template -- and
 # after an update-self, BASE_REF's tree can carry an accumulated copy of it --
-# so drop it from the snapshot entirely. A mind created from this inspiration
+# so drop it from the snapshot entirely. A mind created from this template
 # grows its OWN ledger when it first runs update-self or publishes (update-self
-# and publish-inspiration write the starter on demand if the file is absent), so
+# and publish-template write the starter on demand if the file is absent), so
 # nothing is lost by omitting it here. `rm -f` is safe whether or not the base
 # tree carried the file. This runs AFTER the no-diff guard so it can never make
 # an empty include set look like it had something to publish.
@@ -773,7 +773,7 @@ PYEOF
     fi
 fi
 if [ "$smoke_ok" -ne 1 ]; then
-    echo "build_inspiration.sh: boot smoke-check FAILED -- system/supervisord.conf did not realize cleanly" >&2
+    echo "build_template.sh: boot smoke-check FAILED -- system/supervisord.conf did not realize cleanly" >&2
     exit 4
 fi
 
@@ -791,9 +791,9 @@ fi
 # cold base rather than a full environment build that can fail on something
 # unrelated.
 if ! uv run --no-project --with 'pydantic>=2' python \
-    "$SCAN_TOOLS_DIR/validate_inspiration.py" "$REPO" \
+    "$SCAN_TOOLS_DIR/validate_template.py" "$REPO" \
     --skip-apt-check --allow-unfinished; then
-    echo "build_inspiration.sh: the generated ${MANIFEST_TOML} did not validate (see above)" >&2
+    echo "build_template.sh: the generated ${MANIFEST_TOML} did not validate (see above)" >&2
     exit 6
 fi
 
@@ -809,14 +809,14 @@ fi
 # the already-validated assembled tree with the base as parent; reset --soft
 # moves the branch there without touching the worktree or index.
 git add -A
-SNAPSHOT_COMMIT="$(git commit-tree "$(git write-tree)" -p "$BASE_REF" -m "inspiration: ${SLUG}
+SNAPSHOT_COMMIT="$(git commit-tree "$(git write-tree)" -p "$BASE_REF" -m "template: ${SLUG}
 
 Assembled on clean DEFAULT_WORKSPACE_TEMPLATE base ${BASE_REF} (provenance link only; no upstream fetch).")"
 git reset --soft "$SNAPSHOT_COMMIT"
 
 # --- 11. summary for the worker's done report --------------------------------
 
-echo "build_inspiration.sh: assembled inspiration '${SLUG}' on clean base ${BASE_REF}"
+echo "build_template.sh: assembled template '${SLUG}' on clean base ${BASE_REF}"
 echo "  included paths:"
 for rel in "${INCLUDE_PATHS[@]}"; do
     echo "    - ${rel}"
@@ -829,7 +829,7 @@ if [ "${#DATA_INCLUDE_PATHS[@]}" -gt 0 ]; then
 fi
 echo "  manifest:  ${MANIFEST} (prose) + ${MANIFEST_TOML} (machine-readable)"
 echo "  thumbnail: ${THUMBNAIL}"
-echo "  readme:    README.md (regenerated to describe this inspiration)"
+echo "  readme:    README.md (regenerated to describe this template)"
 echo "  boot smoke-check: passed"
 echo "  manifest validation: passed (skeleton)"
 echo "  NEXT, before reporting done:"
@@ -847,6 +847,6 @@ echo "    4. ${THUMBNAIL} is a generic placeholder (marker comment inside). Repl
 echo "       file with a bespoke SVG for this app; it is also the README's hero graphic."
 echo "    5. Re-run the validator with NO --skip-apt-check and NO --allow-unfinished:"
 echo "         uv run --no-project --with 'pydantic>=2' python \\"
-echo "             .agents/skills/publish-inspiration/scripts/validate_inspiration.py ."
+echo "             .agents/skills/publish-template/scripts/validate_template.py ."
 echo "       That run is the one that rejects an apt package which does not resolve in the"
 echo "       pinned mirror, and any placeholder you left behind. Then commit."

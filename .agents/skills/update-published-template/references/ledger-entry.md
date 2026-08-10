@@ -1,14 +1,14 @@
 # Recording the v(n+1) entry in the ledger
 
-The full recording contract for `update-published-inspiration` §8, and the
+The full recording contract for `update-published-template` §8, and the
 single sanctioned write back to `/home/user/workspace` -- read that skill's
 CWD-INVARIANT callout before running it. It runs ONLY after the push succeeded:
 if the push failed or the user aborted, skip it entirely, because an update
 that did not publish is never recorded.
 
 Write the entry directly into `docs/VERSION_HISTORY.md` (cwd `/home/user/workspace`) -- the same
-`## Inspirations` recording contract `publish-inspiration` §8 step 4 owns, just
-computing the NEXT version instead of v1. Append-only; every `## Inspirations`
+`## Templates` recording contract `publish-template` §8 step 4 owns, just
+computing the NEXT version instead of v1. Append-only; every `## Templates`
 line ends in a commit; a retried step is a no-op, never a duplicate. Inputs:
 `SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, `NOTE="<one line: what
 changed>"`, and `SOURCE_SHA` = the current `/home/user/workspace` HEAD the update was cut from
@@ -16,9 +16,9 @@ changed>"`, and `SOURCE_SHA` = the current `/home/user/workspace` HEAD the updat
 from `$WT`).
 
 - The slug's `### <slug>  --  <repo-url>` heading already exists (this mind
-  published v1 through `publish-inspiration`). In the unlikely event
+  published v1 through `publish-template`). In the unlikely event
   `docs/VERSION_HISTORY.md` is missing, recreate the shipped three-section
-  starter (`## Workspace`, `## Inspirations`, `## Adopted inspirations`; the exact
+  starter (`## Workspace`, `## Templates`, `## Adopted templates`; the exact
   heredoc lives in `update-self` §5b) and re-add the heading before appending.
 - Append one line under that heading:
 
@@ -38,7 +38,7 @@ Then commit that one file:
 ```bash
 ( cd /home/user/workspace \
     && git add docs/VERSION_HISTORY.md \
-    && git commit -m "version history: updated inspiration <slug> to v(n+1)" )
+    && git commit -m "version history: updated template <slug> to v(n+1)" )
 ```
 
 Exactly one file staged by name, one commit, on whatever branch `/home/user/workspace` is on.

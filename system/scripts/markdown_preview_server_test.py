@@ -15,9 +15,9 @@ def preview_server(tmp_path: Path):
     """A running preview server over a rendered README with a local image."""
     source_dir = tmp_path / "repo"
     source_dir.mkdir()
-    (source_dir / "inspiration.svg").write_text("<svg><rect/></svg>")
+    (source_dir / "template.svg").write_text("<svg><rect/></svg>")
     (source_dir / "README.md").write_text(
-        '<p align="center"><img src="inspiration.svg"></p>\n\n# Demo\n'
+        '<p align="center"><img src="template.svg"></p>\n\n# Demo\n'
     )
     state_dir = tmp_path / "state"
     write_preview(source_dir / "README.md", state_dir)
@@ -51,7 +51,7 @@ def test_a_relative_image_resolves_from_the_source_directory(preview_server) -> 
     # that could not serve it would hide exactly that class of bug.
     base_url, _, _ = preview_server
 
-    with urlopen(f"{base_url}/inspiration.svg") as response:
+    with urlopen(f"{base_url}/template.svg") as response:
         body = response.read().decode()
 
     assert response.status == 200
