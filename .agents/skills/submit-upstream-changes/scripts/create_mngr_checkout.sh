@@ -30,7 +30,7 @@ fi
 
 branch="${1:-$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)}"
 if [ "$branch" = "main" ] || [ "$branch" = "master" ] || [ "$branch" = "HEAD" ]; then
-    echo "ERROR: the workspace is on '$branch', which cannot name the mngr work branch." >&2
+    echo "ERROR: '$branch' cannot name the mngr work branch (base-branch names are refused)." >&2
     echo "usage: $0 <branch-name>" >&2
     exit 1
 fi
