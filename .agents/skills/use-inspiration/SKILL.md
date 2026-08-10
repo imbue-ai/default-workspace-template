@@ -6,12 +6,22 @@ description: Adapt an existing inspiration (a published snapshot of apps/feature
 # Adapting an inspiration
 
 Version: v2 (inspirations flow). This versions the publish/adopt flow and the
-`inspiration.md` manifest format.
+manifest format. This skill reads BOTH:
+
+- **v2** -- exactly one slug-free `inspiration.md` + `inspiration.toml` +
+  `inspiration.svg` per repo. The TOML is authoritative for the recipe, the
+  requirements, the environment to converge, and the lineage.
+- **v1** -- the older format, which could accumulate several slug-named
+  `inspiration-<slug>.md` (+ `.svg`) in one repo, the
+  recipe as a YAML block inside the markdown, and no TOML at all. Absence of
+  `inspiration.toml` is what identifies it. Still adopted exactly as before;
+  nothing writes this format any more.
 
 An inspiration is a publishable, reusable snapshot of the apps and features a mind
 has built. It lives in its own GitHub repo as a real default-workspace-template tree
-plus one or more `inspiration.md` manifests at the repo root (each with a
-sibling `inspiration.svg` thumbnail). Adapting an inspiration means bringing
+plus its manifest at the repo root -- `inspiration.md` with an
+`inspiration.svg` thumbnail (v2 adds `inspiration.toml`; a v1 repo instead has
+slug-named `inspiration-<slug>.md`, possibly several). Adapting an inspiration means bringing
 that snapshot into *this* mind and then working through its "requirements" — the parts
 the original author left stubbed or unwired — together with the user.
 
@@ -32,11 +42,11 @@ naming the inspiration's title and one-line description (instead of the generic
 "Welcome to Minds" message), followed in the same turn — without waiting to be
 asked — by reading the manifest and asking the user how they want to adapt it.
 The manifest's "How to adapt it" section is the script for that conversation.
-Default to adapting the **latest** inspiration — the `inspiration.md` for
-the most-recently-published slug named in that welcome skill. Older
-`inspiration.md` manifests are reference material and were likely already
-adapted by an earlier mind. If more than one manifest is present, you may ask
-the user which one they want to adapt. Skip step 1 below (the tree is already
+A v2 repo has exactly one `inspiration.md`, so there is nothing to choose:
+adapt it. (Only an older v1 repo can hold several slug-named
+`inspiration-<slug>.md` files; there, take the latest slug named in the welcome
+skill, treat the others as already-adapted reference material, and ask the user
+if it is ambiguous.) Skip step 1 below (the tree is already
 here) and go straight to reading the manifest.
 
 **B. Merge path — the user gave you an inspiration's git URL.** Bring the

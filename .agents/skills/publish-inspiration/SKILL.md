@@ -17,9 +17,10 @@ An "inspiration" is a clean, shareable, **bootable** snapshot of something this
 mind built -- an app or feature, but equally a chat customization or behavior, a
 skill, a workflow, a service, config, or seed data: anything committable that
 lives in the repo tree and can be snapshotted -- published to a new GitHub repo
-so another mind can be created FROM it (not just read its source). One repo can
-accumulate several inspirations (one manifest + thumbnail per inspiration, all at
-the repo root). This skill delegates the assembly to a `launch-task` sub-agent
+so another mind can be created FROM it (not just read its source). A repo holds
+EXACTLY ONE inspiration -- `inspiration.md`, `inspiration.toml`, and
+`inspiration.svg` at the repo root -- and publishing overrides whatever was
+there before, recording what it replaced as a `[[lineage]]` entry. This skill delegates the assembly to a `launch-task` sub-agent
 worker (which builds the snapshot, finishes the manifest, and designs the
 thumbnail in its own git worktree), confirms the publish with the user in
 chat, obtains GitHub access via latchkey permissioning (never the `gh` CLI),
@@ -224,8 +225,8 @@ dispatch anyway, handle it in place:
   the front-matter `title:` and the generated welcome's slug references,
   commit (in the worker's worktree). This preserves any FILL-IN prose and
   bespoke SVG already done. Do NOT re-run the script under a new slug in an
-  already-assembled worktree: its carry-forward step would keep the
-  old-slug files as if they were an accumulated earlier inspiration. A
+  already-assembled worktree: it would regenerate the manifest from scratch and
+  lose the FILL-IN prose and thumbnail already done. A
   display-title-only change is just the front-matter edit.
 
 ## 2. Resolve `BASE_REF` and `SOURCE_SHA` (in-repo, no network)
@@ -1337,8 +1338,10 @@ What it does, in order (see the script for the exact commands):
 4. Overlays the staged paths onto the clean base with
    `rsync -a "$STAGE/" "$REPO/"` (root-to-root contents merge) -- never a
    nesting copy like `cp -a "$STAGE/apps" "$REPO/apps"`.
-5. Carries forward any existing accumulated `inspiration.md` + `.svg` at the
-   repo root.
+5. Reads the outgoing `inspiration.toml` (staged before the reset) so its
+   identity and `[origin]` become the newest `[[lineage]]` entry. The old
+   manifest files themselves are NOT carried forward -- the new one overrides
+   them.
 6. Runs a deterministic secret scan that HARD-FAILS (non-zero, abort before any
    commit/push). The scan is the sibling `scan_secrets.sh` over the staged
    overlay: TWO scanners -- betterleaks (configured by the sibling

@@ -6,21 +6,24 @@ description: Create a NEW version of an inspiration you already published (v2, v
 # Update a published inspiration
 
 Version: v2 (inspirations flow). This is the PUBLISHER's re-publish path -- the
-companion to `publish-inspiration` (first publish, v1), `use-inspiration` (adopt
-someone else's), and `update-installed-inspiration` (pull a newer version of one you
-adopted). It produces the NEXT version (v2, v3, ...) of an
-inspiration THIS mind already published: it re-cuts the changes the source
-workspace has accumulated since the last version, lays them on top of the
-published snapshot, and fast-forwards the published repo's `main` by exactly one
-new commit -- while leaving every piece of hand-crafted content in the published
-repo (the finished manifest prose, the bespoke thumbnail, the generated
-`/welcome`, adopters' "Adaptation history") exactly as it was published.
+companion to `publish-inspiration` (an inspiration's first publish),
+`use-inspiration` (adopt someone else's), and `update-installed-inspiration`
+(pull a newer version of one you adopted). It produces the NEXT version of an
+inspiration THIS mind already published: it re-cuts the source workspace's
+changes since the last version onto the published snapshot and fast-forwards
+`main` by exactly one commit, leaving every hand-crafted thing in the published
+repo (manifest prose, thumbnail, `/welcome`, adopters' "Adaptation history")
+exactly as published.
 
 Like `publish-inspiration`, this skill delegates the re-assembly to a
 `launch-task` sub-agent worker (which builds the new snapshot in its own git
 worktree), confirms with the user in chat at TWO gates, obtains GitHub access via
 latchkey permissioning (never the `gh` CLI), and pushes -- directly from the
 worker's worktree.
+
+Two unrelated `v<n>` axes appear below -- the flow version (v2, the manifest
+format) and an inspiration's own publish count. See
+`references/v1-to-v2-migration.md`.
 
 > **THE ONE SAFETY REQUIREMENT ABOVE ALL OTHERS -- DO NOT REGENERATE, RE-ASSEMBLE
 > FROM THE PUBLISHED TIP.** An update is NOT a fresh publish. The published repo
@@ -437,50 +440,14 @@ create one or change its settings. Never fall back to a token-in-URL push.
 
 ## 8. Record the v(n+1) entry in the ledger (ONLY after the push succeeded)
 
-The single sanctioned write back to `/home/user/workspace` -- read the CWD-INVARIANT callout at
-the top before running it. If the push failed or the user aborted, SKIP this
-entirely: an update that did not publish is never recorded.
+The single sanctioned write back to `/home/user/workspace` -- read the CWD-INVARIANT
+callout at the top before running it. If the push failed or the user aborted,
+SKIP this entirely: an update that did not publish is never recorded.
 
-Write the entry directly into `docs/VERSION_HISTORY.md` (cwd `/home/user/workspace`) -- the same
-`## Inspirations` recording contract `publish-inspiration` §8 step 4 owns, just
-computing the NEXT version instead of v1. Append-only; every `## Inspirations`
-line ends in a commit; a retried step is a no-op, never a duplicate. Inputs:
-`SLUG=<slug>`, `REPO_URL="github.com/<owner>/<repo>"`, `NOTE="<one line: what
-changed>"`, and `SOURCE_SHA` = the current `/home/user/workspace` HEAD the update was cut from
-(the source anchor for v(n+1) -- NOT `BASE_REF`, NOT `PUBLISHED_TIP`, NOT anything
-from `$WT`).
-
-- The slug's `### <slug>  --  <repo-url>` heading already exists (this mind
-  published v1 through `publish-inspiration`). In the unlikely event
-  `docs/VERSION_HISTORY.md` is missing, recreate the shipped three-section
-  starter (`## Workspace`, `## Inspirations`, `## Adopted inspirations`; the exact
-  heredoc lives in `update-self` §5b) and re-add the heading before appending.
-- Append one line under that heading:
-
-  ```
-  - v<n+1>  <today, YYYY-MM-DD>  <NOTE>  <7-char SOURCE_SHA>
-  ```
-
-  where `<n+1>` is **computed**, never typed: one greater than the highest `v<k>`
-  already listed under this slug's heading. Pad the note to width 35 so the sha
-  lines up; compute the sha as `git rev-parse --short=7 "$SOURCE_SHA"`.
-  **Idempotence, scoped to this slug:** if a line already under this slug's
-  heading carries this exact note AND this exact 7-char sha, it is already
-  recorded -- change nothing and skip the commit.
-
-Then commit that one file:
-
-```bash
-( cd /home/user/workspace \
-    && git add docs/VERSION_HISTORY.md \
-    && git commit -m "version history: updated inspiration <slug> to v(n+1)" )
-```
-
-Exactly one file staged by name, one commit, on whatever branch `/home/user/workspace` is on.
-NEVER `git add -A`, never a merge/checkout/reset. If the idempotence check found
-the entry already recorded, nothing is staged and you skip the commit. If the
-commit fails (a hook rejects it), the update still succeeded -- say so and fix the
-entry rather than re-pushing anything.
+The full contract -- the exact line format, the computed `v<n+1>`, the
+per-slug idempotence rule, and the one-file commit -- is in
+`references/ledger-entry.md`. Follow it exactly; it is the same
+`## Inspirations` format `publish-inspiration` §8 step 4 owns.
 
 ## 9. Close out
 

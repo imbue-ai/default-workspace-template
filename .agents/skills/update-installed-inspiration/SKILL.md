@@ -7,7 +7,15 @@ description: Pull a newer version of an inspiration this mind already adopted fr
 
 Version: v2 (inspirations flow). This is the ADOPTER's update path -- the
 companion to `use-inspiration` (first adopt someone else's), `publish-inspiration`
-(first publish, v1), and `update-published-inspiration` (the PUBLISHER cuts v2, v3, ...).
+(an inspiration's first publish), and `update-published-inspiration` (the
+PUBLISHER cuts each later version).
+
+Two unrelated version numbers appear below. The **flow version** (v2, above) is
+the manifest FORMAT -- v2 is the slug-free `inspiration.md` + `inspiration.toml`
+pair, v1 the older slug-named markdown with no TOML, and this skill pulls either.
+An **inspiration's own version** (v1, v2, v3, ...) counts that inspiration's
+publishes; an adopter can jump v1 -> v3 by skipping one.
+
 This mind adopted an inspiration earlier -- either it was created FROM the
 inspiration repo, or it merged one in via `use-inspiration` -- the publisher has
 since shipped a newer version, and this skill pulls that newer version from the
@@ -38,8 +46,9 @@ telling the user you cannot vouch for the code, not certifying it is safe.
 - **Find the manifest.** The inspiration this mind adopted lives at the repo root
   as `inspiration.md` (plus its `inspiration.svg` thumbnail). Read
   its front-matter and its "Adaptation history" to see what this mind adopted and
-  what it has already changed. If several manifests are present, confirm with the
-  user which inspiration they mean.
+  what it has already changed. A v2 repo has exactly one; only an older v1 repo
+  can hold several slug-named manifests, and there you confirm which the user
+  means.
 - **Resolve the remote and the target version.** Determine the inspiration's
   remote repo URL. If the manifest or the `## Adopted inspirations` ledger section
   (see §5) does not record it, ask the user for the git URL (exactly as
