@@ -3,10 +3,12 @@
 Served at its own workspace origin (``browser.host-<hex>.localhost`` locally;
 share hostnames follow the same prefix rule). Serves one
 self-contained viewer page (assets/index.html) that renders a streamed browser
-and an "Agent has control" overlay; the page talks back over one WebSocket,
-``/browsers/{name}/cast`` (screencast frames out; human input, tab control, and
-take/return-control in). Browsers are addressed by NAME (a random ~2-word english
-name like ``alex-smith``), not a sequential int; there is no default browser.
+and an "Agent has control" overlay. The page talks over two WebSockets: the media
+plane ``/browsers/{name}/stream`` (pixelflux H.264 pixels + Opus audio out; XTEST
+input, resize, and attention (interact/hidden) in) and the control plane ``/browsers/{name}/cast``
+(control/ownership state out; take/return-control in). Browsers are addressed by NAME
+(a random ~2-word english name like ``alex-smith``), not a sequential int; there is
+no default browser.
 
 Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 
@@ -48,6 +50,7 @@ from flask_sock import Sock
 from loguru import logger
 from simple_websocket import ConnectionClosed
 
+from browser import mediastream, telemetry
 from browser.loop_bridge import AsyncLoopBridge, cancel_task
 from browser.names import is_valid_browser_name
 from browser.oom_retag import start_oom_retagging
@@ -58,9 +61,6 @@ from browser.session import (
     FleetFullError,
     InvalidBrowserNameError,
     LiveBrowser,
-    # PlaywrightError comes from the engine module (session.py owns all Playwright/
-    # browser_use interaction); the sync web layer never imports playwright itself.
-    PlaywrightError,
     anthropic_key_status,
     deferred_install_ready,
 )
@@ -69,7 +69,8 @@ from browser.wsgi import make_threaded_server
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 
 # Errors raised when Chromium can't be launched (install not finished, CDP failure).
-_STARTUP_ERRORS = (BrowserStartupError, PlaywrightError, RuntimeError, OSError, ConnectionError)
+# browser-use drives Chromium over cdp-use, whose failures surface as these built-ins.
+_STARTUP_ERRORS = (BrowserStartupError, RuntimeError, OSError, ConnectionError)
 
 # How long a state-changing route's bridge.run waits before giving up and (via the
 # bridge) cancelling the orphaned coroutine. The acquire/hold/task streaming paths
@@ -106,8 +107,9 @@ manager = BrowserSessionManager()
 
 application = Flask(__name__, static_folder=None)
 application.config["SOCK_SERVER_OPTIONS"] = {"ping_interval": 25}
-# Clipboard paste bodies carry raw image bytes (the WS proxy's ~1 MiB cap is why
-# clipboard rides HTTP, not the cast socket). Bound it so a giant paste can't OOM.
+# Clipboard paste-in bodies carry raw image bytes over HTTP (the WS proxy's ~1 MiB cap
+# is why clipboard rides HTTP, not the stream socket). Bound it so a giant paste is
+# rejected before it's read into memory rather than wedging Chromium.
 application.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 sock = Sock(application)
 
@@ -203,6 +205,12 @@ def _resolve_sync(browser_id: str) -> "LiveBrowser | Response":
 
 
 def _agent_identity() -> tuple[str | None, str | None]:
+    # ADVISORY ONLY: these are client-set headers, so a local caller can present any agent id.
+    # They drive ownership/accountability among cooperating in-container agents (all the same
+    # user -- one trust domain), NOT authentication. The cross-ORIGIN boundary (a web page riding
+    # the user's cookie) is enforced upstream by the system_interface proxy's same-origin check;
+    # a non-spoofable per-agent identity would require a token minted by the proxy/manager, which
+    # this daemon has no way to verify today.
     return request.headers.get("x-mngr-agent-id"), request.headers.get("x-mngr-agent-name")
 
 
@@ -305,6 +313,12 @@ def create_browser() -> Response:
 def close_browser(browser_id: str) -> Response:
     if (gate := _require_ready()) is not None:
         return gate
+    # Validate the name before it reaches manager.close / forget_profile_dir, which build a
+    # filesystem path from it and rmtree it. The route converter already rejects encoded
+    # slashes, but an explicit guard is the real defense against a crafted id escaping the
+    # profile directory (defense in depth for the delete path).
+    if not is_valid_browser_name(browser_id):
+        return jsonify({"error": "invalid browser name"}), 404
     bridge.run(manager.close(browser_id), timeout=_ROUTE_TIMEOUT)
     # Rewrite the manifest (name now gone) BEFORE deleting the profile, so a crash between
     # them leaves an orphan dir (swept next boot), never a manifest entry pointing at a
@@ -376,7 +390,7 @@ def _stream_acquire(
 def _drain_ndjson(gen_queue: "queue.Queue[dict[str, Any] | None]") -> Iterator[str]:
     """Yield every event currently buffered in ``gen_queue`` (until it is empty)."""
     drained = False
-    while not drained:
+    while not drained:  # flag loop, not `while True` -- the daemon avoids while-true (ratchet)
         try:
             event = gen_queue.get_nowait()
         except queue.Empty:
@@ -542,7 +556,7 @@ def hold_browser(browser_id: str) -> Response:
         yield _ndjson({"type": "held", "browser_id": browser_id})
         try:
             held = True
-            while held:
+            while held:  # flag loop, not `while True` -- the daemon avoids while-true (ratchet)
                 # No agent run; just heartbeat-ping until the client drops. The
                 # gen_queue is never written, so this always times out and pings --
                 # the write is what makes a dead client surface as GeneratorExit.
@@ -734,29 +748,33 @@ def cmd_tab(browser_id: str) -> Response:
     )
 
 
-def cmd_clipboard_copy(browser_id: str) -> Response:
-    """Human viewer copies (or cuts, ``?cut=1``) the browser's current selection to
-    their local clipboard. Not agent-gated -- the session gates on human control.
-    Returns ``{ok, mime, text|data}``; ``mime`` is null when nothing is selected."""
-    resolved = _resolve_sync(browser_id)
-    if isinstance(resolved, Response):
-        return resolved
-    cut = request.args.get("cut") == "1"
-    return jsonify(bridge.run(resolved.clipboard_copy(cut=cut), timeout=_DIRECT_ACTION_TIMEOUT))
-
-
 def cmd_clipboard_paste(browser_id: str) -> Response:
     """Human viewer pastes their local clipboard into the browser. Body is the raw
-    clipboard bytes; Content-Type is the mime (text/plain or image/*)."""
+    clipboard bytes; Content-Type is the mime (text/plain or image/*). The paste is
+    gated on human control inside the media layer (an agent mid-task can't have a stray
+    paste land). Keyed per browser."""
     resolved = _resolve_sync(browser_id)
     if isinstance(resolved, Response):
         return resolved
     data = request.get_data()
     mime = (request.content_type or "text/plain").split(";")[0].strip() or "text/plain"
-    return jsonify(bridge.run(resolved.clipboard_paste(data, mime), timeout=_DIRECT_ACTION_TIMEOUT))
+    return mediastream.clipboard_paste(browser_id, resolved, data, mime)
 
 
-# --- screencast WebSocket ----------------------------------------------------
+def cmd_clipboard_out(browser_id: str) -> Response:
+    """Copy-out: the bytes of the last remote copy on this browser, native mime. Gated on
+    human control (like paste-in) -- a copy-out can carry a secret the human just copied
+    (a password, a 2FA code), so only the party currently holding control may read it, not
+    an idle agent. GET /clipboard/out, keyed per browser."""
+    resolved = _resolve_sync(browser_id)
+    if isinstance(resolved, Response):
+        return resolved
+    if not resolved.input_allowed:
+        return jsonify({"error": "clipboard is readable only while you hold control"}), 403
+    return mediastream.clipboard_out(browser_id)
+
+
+# --- control/ownership WebSocket (/cast) -------------------------------------
 
 
 def _cast_inbound_pump(
@@ -765,11 +783,11 @@ def _cast_inbound_pump(
     """Read inbound cast messages on a dedicated thread until the socket closes.
 
     Inbound (client->loop) and outbound (loop->client) are handled by two threads
-    (this one reads; the handler's main thread drains the outbound queue and sends),
-    so a slow inbound poll never stalls the outbound screencast and vice versa --
-    the head-of-line blocking a single interleaved poll would cause. simple-websocket
-    supports send and receive from different threads. Each inbound JSON message is
-    dispatched to the loop via the bridge; commands are skipped while initializing
+    (this one reads; the handler's main thread drains the outbound control queue and
+    sends), so a slow inbound poll never stalls the outbound control broadcasts and vice
+    versa -- the head-of-line blocking a single interleaved poll would cause. simple-
+    websocket supports send and receive from different threads. Each inbound JSON message
+    is dispatched to the loop via the bridge; commands are skipped while initializing
     (a human can't grab a half-restored fleet).
     """
     try:
@@ -783,13 +801,12 @@ def _cast_inbound_pump(
                 message = json.loads(data)
             except (ValueError, TypeError):
                 continue
+            # /cast carries ONLY ownership control now (pixels + input ride /stream).
             kind = message.get("type")
             if kind == "take_control":
                 bridge.run(session.take_control(), timeout=_ROUTE_TIMEOUT)
             elif kind == "return_to_agents":
                 bridge.run(session.return_to_agents(), timeout=_ROUTE_TIMEOUT)
-            else:
-                bridge.run(session.handle_cast_message(message), timeout=_ROUTE_TIMEOUT)
     except ConnectionClosed:
         pass
     finally:
@@ -797,72 +814,66 @@ def _cast_inbound_pump(
 
 
 def cast_socket(ws: Any, browser_id: str) -> None:
-    """Bridge one cast WebSocket: outbound screencast frames + inbound input/control.
+    """Bridge one cast WebSocket: outbound control/ownership state + inbound take/return.
 
     Runs in its own Flask thread (thread-per-connection). The browser registers an
     outbound ``queue.Queue`` on the loop; ``LiveBrowser._broadcast`` (on the loop)
-    pushes JSON frames onto it and this handler drains and sends them. A second
-    thread reads inbound messages so neither direction blocks the other.
+    pushes JSON control messages onto it and this handler drains and sends them. A second
+    thread reads inbound messages so neither direction blocks the other. Pixels and audio
+    ride the separate ``/stream`` socket, not this one.
     """
     resolved = _resolve_sync_for_ws(browser_id)
     if resolved is None:
-        # Three cases, distinguished by the close code so the viewer can react correctly:
-        # - The name's background launch FAILED (finding [7]). A late/retrying optimistic
-        #   viewer that was in 1013 backoff when it failed never registered a cast queue,
-        #   so it missed the launch_failed broadcast and would otherwise retry forever.
-        #   Close 1008 -- terminal, so the pane stops retrying and shows the failed state.
-        # - The name is syntactically valid but no browser is registered under it YET.
-        #   This is the OPTIMISTIC PANE opened on modal-accept BEFORE the serialized
-        #   launch finished registering the name -- a transient miss, not "gone". Close
-        #   1013 ("Try Again Later"); the viewer retries with backoff and connects once
-        #   the launch registers the name.
-        # - The name is invalid (could never exist). Close 1008 -- terminal, the viewer
-        #   shows "browser closed -- reopen" and stops reconnecting.
-        if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
-            ws.close(1008)  # launch failed -> terminal (stop retrying)
-        elif is_valid_browser_name(browser_id):
-            ws.close(1013)  # not yet created -> retryable
-        else:
-            ws.close(1008)  # gone / never valid -> terminal
+        _close_unresolved_ws(ws, browser_id)
         return
     session = resolved
-    # Register + seed the initial control/tabs sync atomically on the loop, so no
-    # live frame can interleave ahead of the state the viewer needs first. The lifecycle
-    # is captured in the same on-loop step so the initializing banner below is consistent
-    # with the seed.
-    client_queue, lifecycle = bridge.run(session.register_cast_queue_with_lifecycle(), timeout=_ROUTE_TIMEOUT)
-    if not _init_done.is_set() and lifecycle != "running":
-        # The fleet is still restoring AND this browser isn't up yet: tell the viewer, so
-        # it shows a banner and clears it on the first live frame/control once this browser
-        # is up. A viewer joining an already-running browser is NOT told initializing
-        # (finding [3-runner]) -- its seed already carries lifecycle=running and the live
-        # page is streaming, so an initializing banner would be a false "still starting".
-        # put_nowait is safe: the queue is fresh with at most a few seed messages and its
-        # maxsize is far larger (finding [8]).
-        client_queue.put_nowait(json.dumps({"type": "initializing"}))
-    stop_event = threading.Event()
-    inbound = threading.Thread(
-        target=_cast_inbound_pump,
-        kwargs={"ws": ws, "session": session, "stop_event": stop_event},
-        name=f"browser-cast-inbound-{browser_id}",
-        daemon=True,
-    )
-    inbound.start()
+    if not mediastream.cast_slots.reserve(browser_id):
+        ws.close(1013)  # per-browser cast cap reached; retryable
+        return
+    # The reserved slot MUST be released on every exit -- including a failure in the
+    # register/seed/thread-start setup below. Guard the whole post-reserve body so an
+    # exception there can't leak the slot (8 leaks -> the browser can never be cast again
+    # until restart); the inner try owns the queue/thread cleanup once they exist.
     try:
-        while not stop_event.is_set():
-            try:
-                message = client_queue.get(timeout=_CAST_OUTBOUND_POLL_SECONDS)
-            except queue.Empty:
-                continue
-            if message is None:
-                break  # shutdown sentinel
-            ws.send(message)
-    except ConnectionClosed:
-        pass
+        # Register + seed the initial control/tabs sync atomically on the loop, so no
+        # live frame can interleave ahead of the state the viewer needs first. The lifecycle
+        # is captured in the same on-loop step so the initializing banner below is consistent
+        # with the seed.
+        client_queue, lifecycle = bridge.run(session.register_cast_queue_with_lifecycle(), timeout=_ROUTE_TIMEOUT)
+        if not _init_done.is_set() and lifecycle != "running":
+            # The fleet is still restoring AND this browser isn't up yet: tell the viewer, so
+            # it shows a banner and clears it on the first live frame/control once this browser
+            # is up. A viewer joining an already-running browser is NOT told initializing
+            # (finding [3-runner]) -- its seed already carries lifecycle=running and the live
+            # page is streaming, so an initializing banner would be a false "still starting".
+            # put_nowait is safe: the queue is fresh with at most a few seed messages and its
+            # maxsize is far larger (finding [8]).
+            client_queue.put_nowait(json.dumps({"type": "initializing"}))
+        stop_event = threading.Event()
+        inbound = threading.Thread(
+            target=_cast_inbound_pump,
+            kwargs={"ws": ws, "session": session, "stop_event": stop_event},
+            name=f"browser-cast-inbound-{browser_id}",
+            daemon=True,
+        )
+        inbound.start()
+        try:
+            while not stop_event.is_set():
+                try:
+                    message = client_queue.get(timeout=_CAST_OUTBOUND_POLL_SECONDS)
+                except queue.Empty:
+                    continue
+                if message is None:
+                    break  # shutdown sentinel
+                ws.send(message)
+        except ConnectionClosed:
+            pass
+        finally:
+            stop_event.set()
+            inbound.join(timeout=5)
+            bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
     finally:
-        stop_event.set()
-        inbound.join(timeout=5)
-        bridge.run(session.unregister_cast_queue(client_queue), timeout=_ROUTE_TIMEOUT)
+        mediastream.cast_slots.release(browser_id)
 
 
 def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
@@ -873,11 +884,133 @@ def _resolve_sync_for_ws(browser_id: str) -> "LiveBrowser | None":
         return None
 
 
+def _close_unresolved_ws(ws: Any, browser_id: str) -> None:
+    """Close a /cast or /stream WS whose browser didn't resolve, with the close code that tells
+    the viewer how to react (both handlers share this one contract):
+    - launch FAILED, or the browser was explicitly CLOSED -> 1008 terminal (stop retrying); a
+      late optimistic viewer that missed the launch_failed broadcast otherwise retries forever.
+    - a syntactically valid name not registered YET (the optimistic pane opened on modal-accept
+      before the serialized launch finished) -> 1013 retryable; the viewer backs off and reconnects.
+    - an invalid name (could never exist) -> 1008 terminal (shows "browser closed -- reopen")."""
+    if bridge.run(manager.recently_failed_launch_async(browser_id), timeout=_ROUTE_TIMEOUT):
+        ws.close(1008)
+    elif bridge.run(manager.recently_closed_async(browser_id), timeout=_ROUTE_TIMEOUT):
+        ws.close(1008)
+    elif is_valid_browser_name(browser_id):
+        ws.close(1013)
+    else:
+        ws.close(1008)
+
+
+def stream_socket(ws: Any, browser_id: str) -> None:
+    """Pixelflux media socket: one viewer of one browser (pixels + audio + clipboard).
+
+    Control/ownership stays on ``/cast`` (unchanged); this carries the media plane.
+    Resolves and gates exactly like ``cast_socket`` (same close-code contract), then
+    hands the RUNNING browser's private display to the streamer in ``mediastream.py``.
+    """
+    resolved = _resolve_sync_for_ws(browser_id)
+    if resolved is None:
+        _close_unresolved_ws(ws, browser_id)
+        return
+    session = resolved
+    display = getattr(session, "_display", "")
+    if not session._is_running or not display:  # _is_running is a property
+        ws.close(1013)  # up but not streamable yet -> retryable backoff
+        return
+    mediastream.serve_stream(ws, browser_id, display, session)
+
+
+def telemetry_client(browser_id: str) -> Response:
+    """Sink for the viewer's own per-stripe decode/paint timings (Rung 2). Watch-only:
+    it just forwards each client record into the same hub so the lens can join them to
+    the server's sent/ack by (fid, y) and subtract client render from the round trip.
+    Never touches the stream; a bad body is dropped, not fatal."""
+    # Cap on the bytes actually READ (not the declared content_length, which a chunked
+    # request omits): read at most 512KiB+1 and reject anything larger, so a hostile client
+    # can't stream an unbounded body into memory through this watch-only sink.
+    raw = request.stream.read(512 * 1024 + 1)
+    if len(raw) > 512 * 1024:
+        return jsonify({"error": "too large"}), 413
+    try:
+        records = json.loads(raw) if raw else []
+    except (ValueError, TypeError):
+        return jsonify({"error": "expected JSON"}), 400
+    if isinstance(records, dict):
+        records = [records]
+    if not isinstance(records, list):
+        return jsonify({"error": "expected a JSON list"}), 400
+    if not is_valid_browser_name(browser_id):
+        return jsonify({"error": "invalid browser name"}), 404
+    for record in records[:5000]:  # bound the batch: a client reports a handful of stripes per post
+        if isinstance(record, dict):
+            telemetry.hub.emit(browser_id, _clean_client_record(record))
+    return jsonify({"ok": True})
+
+
+# The only fields the lens joins on / renders for a client record. Coercing to just these
+# (numbers only) means a hostile POST can't pin arbitrary-sized values in the by-reference
+# telemetry rings -- the records stay a few bytes each, so they can't be inflated into an OOM.
+_CLIENT_RECORD_FIELDS = ("fid", "y", "t_arrived", "t_decoded", "t_painted", "dq")
+
+
+def _clean_client_record(record: dict) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {"type": "client"}
+    for key in _CLIENT_RECORD_FIELDS:
+        value = record.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            cleaned[key] = value
+    if record.get("err") is True:
+        cleaned["err"] = True
+    return cleaned
+
+
+def telemetry_socket(ws: Any, browser_id: str) -> None:
+    """Read-only firehose: replay recent history, then stream new telemetry records
+    (batched JSON arrays) to the lens. Subscribing/draining never touches the pipe's
+    lock, so a slow or absent lens cannot back-pressure the stream."""
+    # Resolve the browser BEFORE subscribing: subscribe() auto-creates hub state for whatever
+    # id it's handed, so an unvalidated id would let a caller allocate unbounded per-id state
+    # (and keep the resource sampler running) just by opening firehose sockets. Only a real,
+    # registered browser may be watched.
+    if _resolve_sync_for_ws(browser_id) is None:
+        ws.close(1008)
+        return
+    if not mediastream.telemetry_slots.reserve(browser_id):
+        ws.close(1013)  # per-browser firehose cap reached; retryable
+        return
+    history, records = telemetry.hub.subscribe(browser_id)
+    connected = True
+    try:
+        if history:
+            ws.send(json.dumps(history))
+        while connected:
+            batch = []
+            while records:  # drain whatever the fan-out has queued (bounded by contents)
+                batch.append(records.popleft())
+            if batch:
+                ws.send(json.dumps(batch))
+            # Pace at ~10Hz and detect a closed socket (receive raises on close); we
+            # expect no inbound, so the returned value is ignored.
+            try:
+                ws.receive(timeout=0.1)
+            except ConnectionClosed:
+                connected = False
+    except ConnectionClosed:
+        pass
+    finally:
+        telemetry.hub.unsubscribe(browser_id, records)
+        mediastream.telemetry_slots.release(browser_id)
+
+
 # --- app construction + lifecycle --------------------------------------------
 
 
 def _register_routes() -> None:
     application.add_url_rule("/", view_func=index, methods=["GET"])
+    application.add_url_rule(
+        "/browsers/<string:browser_id>/telemetry/client", view_func=telemetry_client, methods=["POST"]
+    )
     application.add_url_rule("/health", view_func=health, methods=["GET"])
     application.add_url_rule("/init-status", view_func=init_status, methods=["GET"])
     application.add_url_rule("/key-status", view_func=key_status, methods=["GET"])
@@ -898,9 +1031,19 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers/<string:browser_id>/keys", view_func=cmd_keys, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/screenshot", view_func=cmd_screenshot, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/tab", view_func=cmd_tab, methods=["POST"])
-    application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_copy, methods=["GET"], endpoint="clipboard_copy")
-    application.add_url_rule("/browsers/<string:browser_id>/clipboard", view_func=cmd_clipboard_paste, methods=["POST"], endpoint="clipboard_paste")
+    application.add_url_rule(
+        "/browsers/<string:browser_id>/clipboard/paste", view_func=cmd_clipboard_paste, methods=["POST"]
+    )
+    application.add_url_rule(
+        "/browsers/<string:browser_id>/clipboard/out", view_func=cmd_clipboard_out, methods=["GET"]
+    )
     sock.route("/browsers/<string:browser_id>/cast")(cast_socket)
+    # Pixelflux media socket: H.264 stripes out + credit acks/resize in (the pixel plane).
+    sock.route("/browsers/<string:browser_id>/stream")(stream_socket)
+    # Read-only telemetry firehose feeding the standalone CLI (browser.telemetry_watch).
+    sock.route("/browsers/<string:browser_id>/telemetry")(telemetry_socket)
+    # Strip permessage-deflate so already-compressed H.264 stripes aren't re-deflated (#22).
+    application.before_request(mediastream.strip_websocket_compression)
 
 
 _register_routes()
@@ -924,7 +1067,7 @@ def _shutdown() -> None:
 
     Owned exclusively by the signal handler (SIGTERM/SIGINT). ``manager.shutdown``
     cancels the checkpoint loop, writes a final manifest, and closes every browser
-    (each browser's close stops its agent + screencast); then we stop the loop. We
+    (each browser's close stops its agent + kills its Chromium); then we stop the loop. We
     do NOT also register an atexit handler -- a single owner avoids double-closing
     the fleet or stopping an already-stopped loop.
     """
