@@ -1,6 +1,6 @@
 # Plan: inspiration environment manifests
 
-> **Give every inspiration a pydantic-validated `inspiration.toml` that declares what its code needs from the environment -- apt / npm / uv / cargo packages and the exotic-install units that have no package database -- validated against the mirrored apt universe at publish time, and converged into the adopter's environment at the ADOPTER's pinned snapshot timestamp, so an adopting mind stops discovering an inspiration's system dependencies by running into failures.**
+> **Give every inspiration a pydantic-validated `inspiration.toml` that declares what its code needs from the environment -- apt / npm / uv / cargo packages and the exotic-install units that have no package database -- validated against the mirrored apt universe at publish time, and installed by the adopting agent at the ADOPTER's pinned snapshot timestamp, so an adopting mind stops discovering an inspiration's system dependencies by running into failures.**
 >
 > ### The gap
 > * An inspiration declares its runtime needs only as prose plus `requires_permission:` / `requires_secret:` / `requires_llm:` lines in `inspiration-<slug>.md` (the v1 format). Those cover *permissions and secrets*. They say nothing about **system packages**: an inspiration whose code shells out to `pdftotext`, or imports a python package installed as a `uv tool`, ships no record of it. The adopter finds out when the app crashes.
@@ -8,8 +8,8 @@
 >
 > ### Recommended mechanism
 > * **A sibling `inspiration.toml`** carrying the machine-readable manifest: identity, the recipe, a structured mirror of the requirements, the lineage of what it overrode, and a new `[environment]` section shaped to mirror the env-converge record (`apt` names + the publisher's snapshot timestamp as provenance; `npm_global` / `uv_tools` / `cargo` as name -> version maps; carried `env.d` units by path). Prose and the two append-only history logs stay in the `.md`.
-> * **The schema is one pydantic module owned by `env_converge`**, used by both sides: the publish-time gate validates against it, and the adopt-time convergence reads through it.
-> * **Adoption converges** the `inspiration.toml` at the repo root, as a new *declared* source inside `env-converge`, at the adopter's own pinned timestamp (the union across several adopted inspirations accrues through the record over time rather than across files). A declaration is a **seed for capture, not a competing source of truth**: it is applied once per `(slug, version)`, after which the host's own record owns those packages and removal stickiness behaves exactly as it does today.
+> * **The schema is one pydantic module owned by `env_converge`**, used by both sides: the publish-time gate validates against it, and the adopting agent reads the declaration through it.
+> * **Adoption is the adopting agent installing what the manifest lists**, with ordinary `apt-get` / `npm -g` / `uv tool` / `cargo install` commands -- no new engine. Two existing facts make that sufficient: the workspace's apt sources are already pinned, so bare names resolve at the ADOPTER's timestamp; and env-converge already captures whatever gets installed, so it lands in the record without any bookkeeping.
 > * **Publish-time validation resolves every declared apt package** against the pinned mirror at the publisher's timestamp, so an unmirrorable third-party package is rejected at the earliest possible moment rather than at some adopter's first boot.
 >
 > ### Scope note
@@ -20,7 +20,7 @@
 - An inspiration is a bootable snapshot of what a mind built, published to a GitHub repo another mind can be created from or adapt. `publish-inspiration` assembles it, `use-inspiration` adopts it, and `update-published-inspiration` / `update-installed-inspiration` move it forward on each side.
 - `env_converge` (already in the tree) gives the environment side a principled home for declarations it did not have when the inspirations flow was designed: a record of everything installed, a convergence pass that replays it, a `package_unavailable` event, an `env.d` unit convention for things with no package database, and an apt universe pinned to a single committed timestamp.
 - This plan connects the two. The structuring principle is the one `env_converge` already states: **versions are a function of the pinned snapshot timestamp**, so replaying package *names* at a timestamp yields deterministic *versions*. That is why an inspiration declares names rather than versions for apt, and why converging at the **adopter's** timestamp (not the publisher's) is the correct merge: the adopter gets versions consistent with the rest of their environment, and the publisher's timestamp is kept only as provenance to explain a skew.
-- The work splits cleanly into a schema, a publish-side gate, an adopt-side convergence, and the two update paths that must read the recipe from its new home. Each is independently landable; the phasing at the end reflects that.
+- The work splits cleanly into a schema, a publish-side gate, the adopt-side install step, and the two update paths that must read the recipe from its new home. Each is independently landable; the phasing at the end reflects that.
 
 ## The problem, grounded
 
@@ -212,41 +212,38 @@ The new `.toml` is generated at the repo root **after** the scan, exactly like t
 - Any `env.d` unit an inspiration carries is an **included path**, so it is staged and therefore scanned like any other overlaid file. This is stated explicitly so nobody later "optimizes" unit declaration into a generated file.
 - The worker's §3 step 2 already re-runs `scan_secrets.sh` over every file it modifies after applying published-version modifications; filling in the `.toml` puts it in that set.
 
-## Adoption: convergence as a declared source
+## Adoption: the agent installs what the manifest declares
 
-### Where it lives
+The declaration is a **to-do list for the adopting agent**, not an input to a new
+engine. `use-inspiration` reads `[environment]` and runs the ordinary
+`apt-get` / `npm -g` / `uv tool` / `cargo install` commands itself.
 
-Convergence belongs **inside `env_converge`, not in the `use-inspiration` skill**. Three reasons:
+This is deliberately less machinery than the first draft of this plan proposed
+(a "declared source" inside env-converge, with a `declared.json` recording which
+`(slug, version)` sets had been applied). That design solved problems this one
+does not have:
 
-- It reuses the existing install machinery, the `package_unavailable` / `package_installed` events, and the exit-3 semantics rather than reimplementing them in a skill's prose.
-- It makes the **template path work with no skill involvement at all.** A mind created *from* an inspiration repo has `inspiration.toml` at its root on first boot; the slow phase converges it. There is no adopting agent to run a step.
-- It is where the declaration can be applied once and then forgotten (below), which a skill has no good place to track.
+- **Converging at the adopter's timestamp is already true.** The workspace's apt
+  sources are pinned by `write_apt_sources.sh`, so a bare `apt-get install <name>`
+  resolves at THIS mind's snapshot. No code needed to arrange it -- it is why the
+  manifest declares names rather than versions.
+- **Capture is already automatic.** env-converge's stated model is "agents install
+  things normally; nothing needs to be declared" -- a dpkg post-invoke hook plus
+  boot-time probes record whatever appears. Anything the agent installs lands in
+  the record and survives a rebuild or restore with no extra bookkeeping.
+- **Apply-once stops being a problem.** A one-time install during adoption cannot
+  fight removal stickiness, because there is no re-application loop to fight it.
+  `declared.json` existed only to stop a boot-time replay resurrecting a package
+  the user deliberately removed; with no replay, the whole mechanism is moot.
+- **env.d units need nothing at all.** They are files in the tree; env-converge
+  already runs them on the next boot.
 
-Because there is now exactly one `inspiration.toml`, the read is a single file, not a glob or a merge. **The union the original spec asked for still happens -- through the record, over time, rather than across files.** Each manifest that arrives is converged once and captured into the host's record; when the next inspiration overrides it, the previous one's packages are already the host's own recorded state and stay installed. Accumulating declarations across adoptions is therefore the record's job, which is exactly what the record is for.
-
-`use-inspiration` §3's job is then to *trigger and surface* it during activation -- run the convergence synchronously so the app actually works before the "definition of done" check, and report anything unavailable in chat -- rather than to implement it.
-
-### Declarations are a seed for capture, not a rival source of truth
-
-This is the one place the change touches `env_converge`'s stated model ("captured state IS the manifest -- nothing needs to be declared"). The reconciliation, and it should be written into the README:
-
-> An inspiration's declarations are not *this* host's captured state -- they are *another* host's captured state, arriving as data. Converging them is a one-way import: install the union, then normal capture picks the packages up into this host's own record, after which the record owns them and the declaration is inert.
-
-That framing has a concrete consequence: **a declaration must be applied once, not on every boot.** Otherwise a package the user deliberately `apt remove`s would be resurrected on the next converge, breaking the removal-stickiness invariant. The applied set is recorded in the record directory alongside everything else:
-
-- `$MNGR_HOST_DIR/plugin/env-converge/declared.json` -- `{slug: version}` for every declaration set already applied.
-- The slow phase applies a declaration only when its `(slug, version)` is absent from that file. An inspiration update to `v2` re-applies (new version, new declarations).
-- This is **record state, not a marker file** -- it lives with `apt.json` / `npm.json` / the rest and is rewritten atomically the same way. The env.d "no marker files" rule is about *unit scripts* skipping their own work; it is not a prohibition on the record.
-
-### The unavailable prompt
-
-`package_unavailable` is reused, with the detail payload extended to carry the declaring inspiration (`slug`, `version`) and the cause, so the message can be specific instead of generic:
-
-- **timestamp skew** -- the package resolved at the publisher's timestamp but not at the adopter's. Prompt: run `env-converge upgrade` (which advances to the repo's committed timestamp), naming the two timestamps.
-- **rust absent** -- declared cargo crates with no rust installed. Prompt: install rust; an upgrade will not help.
-- **anything else** -- surface the stderr tail, as today.
-
-`env-converge status` gains the declared-but-unapplied / declared-but-unavailable summary so an agent can read it without parsing the event stream, and `use-inspiration` §3 reads that to decide what to tell the user.
+So the model is unchanged rather than extended: the manifest tells the agent what
+to install, the agent installs it normally, and the existing capture makes it
+durable. What the skill must do well is the *failure* case -- naming the package
+and distinguishing a timestamp skew (offer `env-converge upgrade`) from cargo
+entries with rust absent (an upgrade will not help), instead of pressing on into
+a setup that cannot work.
 
 ## Composition by file addition
 
@@ -310,7 +307,7 @@ Stated explicitly because each exists because of a real incident:
 
 - **The MIT license is stated, not shipped.** §6 tells the user a public inspiration is MIT-licensed; no `LICENSE` file is generated into the snapshot. Enforcing it is a small follow-up, deliberately not folded in here.
 - **Append-only enforcement -- deliberately out of scope.** Four logs are documented append-only (`## Inspirations` and `## Adopted inspirations` in `docs/VERSION_HISTORY.md`, `Publication history` / `Adaptation history` in the manifest) and nothing enforces it: the only script that touches `VERSION_HISTORY.md` is `build_inspiration.sh`, and only to `rm -f` it out of the snapshot, leaving `publish-inspiration` §8 step 4's per-slug idempotence test as the single weak check. Enforcement was scoped alongside this work and **the user's decision is to leave it for now**, so nothing here builds it. Recorded so the gap stays known rather than looking closed.
-- **Declared-set removal.** If the user adopts an inspiration and later removes it from the tree, its declared packages stay installed (they are in the host's record by then). That is probably right -- the same as uninstalling an app not uninstalling its dependencies -- but it means `declared.json` grows monotonically. Left as-is unless it becomes a problem.
+- **Nothing uninstalls.** Packages an inspiration brought in stay installed if the user later drops the inspiration, and a newer version dropping a declaration does not remove anything. That is deliberate -- something else may have come to depend on them, and an uninstall is not reversible from a manifest -- but it means the environment only accretes.
 
 ## Phasing
 
@@ -319,7 +316,10 @@ Each phase is independently landable and independently useful.
 - **Phase 1 -- schema.** `inspiration_manifest.py` in `env_converge`: identity, recipe, prerequisites, environment, lineage. The stdlib+pydantic import constraint and its test, plus unit tests over the model (valid manifests, every rejection case, the v1/v2 discrimination). No flow changes; nothing observable yet.
 - **Phase 2 -- the naming sweep.** Slug-free `inspiration.md` / `.toml` / `.svg` with override semantics and the lineage chain; `Holes` -> `Requirements`. Mechanical but wide: `build_inspiration.sh` (carry-forward becomes lineage capture, README listing, `/welcome`, summary) and all four skills. Landing it before the feature work means everything after it is written once, against the final names.
 - **Phase 3 -- publish side.** `build_inspiration.sh` generates the `.toml`, snapshots the validator with the scan tools, runs validation + the apt-resolution check, exits 6 on failure. `publish-inspiration` SKILL: FILL-IN instructions for the environment section, §5's new exit code, §6's recap of what will be installed plus the MIT-if-public sentence, §8's pre-push gates. The full README recipe (hero, Open in Minds CTA, why, how to use, ideas) and its post-push browser verification land here.
-- **Phase 4 -- adopt side. NOT YET IMPLEMENTED.** The skill half is done (`use-inspiration` §2 reads the `.toml`, §3 triggers convergence and interprets the failure modes; `update-installed-inspiration` §2b re-converges). The **engine half is not**: `env_converge` does not read `inspiration.toml`, so `env-converge run --phase slow` converges only the existing record and installs nothing an inspiration declares. Still to build: reading the manifest in `run_slow_phase` and installing its declared sets; `declared.json` in the record dir for apply-once semantics, so a deliberately-removed package is not resurrected each boot; the extended `package_unavailable` detail carrying the declaring slug/version and the cause, so the timestamp-skew and rust-absent prompts can be told apart; and declared-but-unapplied / declared-but-unavailable in `env-converge status`. Until this lands, those skill sections specify intended behaviour rather than describe current behaviour -- deliberately left that way, because the text is the contract phase 4 has to satisfy.
+- **Phase 4 -- adopt side.** `use-inspiration` §2 reads the `.toml`; §3 installs
+  the declared `[environment]` with ordinary commands and handles the two
+  failure modes. `update-installed-inspiration` §2b installs whatever a newer
+  version added. No env-converge change: capture already covers it.
 - **Phase 5 -- env.d units and the update paths.** The `2000+`-with-slug convention; validation that declared units exist and are inside the include set. `update-published-inspiration` reads the recipe from the `.toml` (with the `.md` fallback) and performs the v1 -> v2 migration including the file renames; `update-installed-inspiration` re-converges after pulling a newer version whose declarations may have changed.
 
 ## Grounding and assumptions

@@ -61,3 +61,9 @@ like `The "Daily" Digest: v2` produced a file no YAML parser would read -- and
 the same went for the generated welcome skill in the published inspiration,
 which would have failed to load at all. Both are now emitted as quoted YAML
 scalars, and the skills say to do the same for any hand-edit.
+
+Adopting an inspiration installs what it declares with ordinary commands rather
+than a special convergence step. The workspace's apt sources are already pinned,
+so bare package names resolve at your snapshot rather than the publisher's, and
+env-converge already captures whatever gets installed -- so it lands in the
+environment record and survives a rebuild without any extra bookkeeping.
