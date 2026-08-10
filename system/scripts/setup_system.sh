@@ -279,6 +279,19 @@ codex --version
 npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
 command -v pi >/dev/null
 
+# Bake the pi extension packages (subagents, web access) into the image at a
+# NON-home path: the runtime volume shadows the build-time HOME, so ~/.pi cannot
+# be baked directly. `pi install` materialises npm/node_modules plus a
+# settings.json package list under PI_CODING_AGENT_DIR; seed_home_skeleton.sh
+# copies the npm tree into the real ~/.pi/agent at first boot (a ~1s local copy
+# instead of a ~60s networked npm install -- the harness ships with its tools).
+# Keep the pins in sync with seed_home_skeleton.sh.
+: "${PI_SUBAGENTS_VERSION:=0.45.0}"
+: "${PI_WEB_ACCESS_VERSION:=0.19.0}"
+PI_CODING_AGENT_DIR=/opt/pi-extensions pi install "npm:pi-subagents@${PI_SUBAGENTS_VERSION}"
+PI_CODING_AGENT_DIR=/opt/pi-extensions pi install "npm:pi-web-access@${PI_WEB_ACCESS_VERSION}"
+test -d /opt/pi-extensions/npm/node_modules
+
 # apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the
 # environment record under ~/.mngr/plugin/env-converge re-captures from dpkg's
 # own database -- zero agent cooperation required ("dpkg is truth"). The hook

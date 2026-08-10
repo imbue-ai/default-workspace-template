@@ -23,6 +23,14 @@ ENV NODE_VERSION=${NODE_VERSION}
 ARG PI_VERSION=0.83.0
 ENV PI_VERSION=${PI_VERSION}
 
+# Pin the pi extension packages baked into the image at /opt/pi-extensions
+# (setup_system.sh); seed_home_skeleton.sh copies the tree into ~/.pi/agent at
+# first boot. Keep in sync with the pins in seed_home_skeleton.sh.
+ARG PI_SUBAGENTS_VERSION=0.45.0
+ENV PI_SUBAGENTS_VERSION=${PI_SUBAGENTS_VERSION}
+ARG PI_WEB_ACCESS_VERSION=0.19.0
+ENV PI_WEB_ACCESS_VERSION=${PI_WEB_ACCESS_VERSION}
+
 # ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
