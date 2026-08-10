@@ -96,6 +96,13 @@ export interface ToolResultEvent extends BaseTranscriptEvent {
   tool_name: string;
   output: string;
   is_error: boolean;
+  // The permission request a latchkey creation POST echoed on stdout, parsed by
+  // the backend BEFORE it truncated `output` (see session_parser's
+  // `_find_permission_request`). The response routinely runs past the per-result
+  // output limit, so scanning the truncated `output` for it can come up empty or
+  // partial; the permission card reads this field in preference to that scan.
+  // Present only for a tool result that carried such a response.
+  permission_request?: Record<string, unknown>;
 }
 
 /**

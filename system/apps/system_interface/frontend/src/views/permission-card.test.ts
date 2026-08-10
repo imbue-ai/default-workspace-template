@@ -62,7 +62,7 @@ function makeToolCall(inputPreview: string): ToolCall {
   };
 }
 
-function makeResult(output: string, isError = false): ToolResultEvent {
+function makeResult(output: string, isError = false, permissionRequest?: Record<string, unknown>): ToolResultEvent {
   return {
     timestamp: "2026-01-01T00:00:00Z",
     type: "tool_result",
@@ -73,6 +73,7 @@ function makeResult(output: string, isError = false): ToolResultEvent {
     tool_name: "Bash",
     output,
     is_error: isError,
+    ...(permissionRequest === undefined ? {} : { permission_request: permissionRequest }),
   };
 }
 
@@ -126,6 +127,78 @@ const WORKSPACE_OUTPUT = `{"request_id":"ws-1","rationale":"export a backup of t
 
 // An accounts request (listing the device's signed-in accounts).
 const ACCOUNTS_OUTPUT = `{"request_id":"acct-1","rationale":"check which account is signed in","request_type":"accounts","payload":{}}`;
+
+// The backend caps tool output (`_MAX_OUTPUT_LENGTH` in session_parser.py) and
+// appends this marker. Mirrored here so the truncation these tests feed the card
+// is the one a transcript parsed by an older backend actually carries.
+const BACKEND_MAX_OUTPUT_LENGTH = 2000;
+
+function truncateAt(output: string, length: number): string {
+  return output.length <= length ? output : `${output.slice(0, length)}...`;
+}
+
+function truncateLikeBackend(output: string): string {
+  return truncateAt(output, BACKEND_MAX_OUTPUT_LENGTH);
+}
+
+// curl's progress meter, which precedes the body and eats into the budget.
+const CURL_METER =
+  "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n" +
+  "                                 Dload  Upload   Total   Spent    Left  Speed\n" +
+  "100  2637  100  2399  100   317  12000   1687 --:--:-- --:--:-- --:--:-- 13000\n";
+
+const TRUNCATED_REQUEST_ID = "c1f0a4b78e9d4f2ab6c35d81e07f42a9";
+const TRUNCATED_RATIONALE = "Export a backup of the old workspace so I can diff its notes against this one.";
+const TRUNCATED_PERMISSIONS = ["minds-workspaces-backups-export", "minds-workspaces-read", "minds-workspaces-message"];
+
+/** One generated JSON-Schema fragment, the shape the gateway's `computeEffect`
+ *  emits per granted verb. Several of these are what push a workspace request's
+ *  response past the output cap. */
+function verbSchema(verb: string): Record<string, unknown> {
+  return {
+    name: verb,
+    schema: {
+      type: "object",
+      properties: {
+        target_workspace_id: { type: "string", description: "The workspace this verb acts on." },
+        confirm: { type: "boolean", description: "Whether the user confirmed this action." },
+      },
+      required: ["target_workspace_id"],
+      additionalProperties: false,
+    },
+  };
+}
+
+// The gateway's create response, in its real shape: pretty-printed at indent 2
+// (sendJson), request_id first, and the request's `target` and generated
+// `effect` last -- the two fields the card never reads, and the bulk of what
+// pushes the response past the cap. Spreading `overrides` last keeps each key in
+// the gateway's own order (see handleCreateRequest).
+function createResponseOutput(overrides: Record<string, unknown> = {}): string {
+  const body = {
+    request_id: TRUNCATED_REQUEST_ID,
+    agent_id: "agent-a3b7b469ee8341779c9ede1a798c447f",
+    rationale: TRUNCATED_RATIONALE,
+    request_type: "workspace",
+    payload: {
+      permissions: TRUNCATED_PERMISSIONS,
+      target_workspace_id: "agent-a3b7b469ee8341779c9ede1a798c447f",
+    },
+    target: "/home/user/.latchkey/permissions.json",
+    effect: {
+      rules: [{ "minds-workspaces::agent-a3b7b469ee8341779c9ede1a798c447f": ["minds-workspaces-backups-export"] }],
+      schemas: TRUNCATED_PERMISSIONS.map(verbSchema),
+    },
+    ...overrides,
+  };
+  return `${CURL_METER}${JSON.stringify(body, null, 2)}\n`;
+}
+
+/** The index just inside `key`'s value in a create response, for a test that
+ *  needs the cut to land in a specific field. */
+function insideField(output: string, key: string): number {
+  return output.indexOf(`"${key}"`) + key.length + 8;
+}
 
 describe("parsePermissionRequest", () => {
   it("parses the rich details of a successful predefined creation POST", () => {
@@ -191,6 +264,100 @@ describe("parsePermissionRequest", () => {
   it("returns null when the JSON body has no request_id", () => {
     expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT), makeResult('{"agent_id":"a"}'))).toBeNull();
   });
+
+  it("prefers the request the backend parsed before it truncated the output", () => {
+    // The backend now lifts the response off the untruncated output onto the
+    // event. Pair a deliberately unreadable output with that field to prove the
+    // field is what's read -- there is nothing in this output to recover from.
+    const result = parsePermissionRequest(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult("  % Total    % Received\n{ truncated beyond repai...", false, {
+        request_id: "885711ec07bf47239d71294e1534330b",
+        rationale: "read the deploy thread",
+        request_type: "predefined",
+        payload: { scope: "slack-api", permissions: ["slack-read-all"] },
+      }),
+    );
+    expect(result).toEqual({
+      requestId: "885711ec07bf47239d71294e1534330b",
+      requestType: "predefined",
+      rationale: "read the deploy thread",
+      scope: "slack-api",
+      permissions: ["slack-read-all"],
+      path: null,
+      access: null,
+    });
+  });
+
+  it("the truncation fixture really does exceed the backend's output cap", () => {
+    // Guards the fixture: if it ever shrinks under the cap, the recovery tests
+    // below would silently start exercising the strict parse instead.
+    expect(createResponseOutput().length).toBeGreaterThan(BACKEND_MAX_OUTPUT_LENGTH);
+  });
+
+  it("recovers the id, rationale, type and payload from a backend-truncated response", () => {
+    const result = parsePermissionRequest(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(truncateLikeBackend(createResponseOutput())),
+    );
+    expect(result).toEqual({
+      requestId: TRUNCATED_REQUEST_ID,
+      requestType: "workspace",
+      rationale: TRUNCATED_RATIONALE,
+      scope: null,
+      permissions: TRUNCATED_PERMISSIONS,
+      path: null,
+      access: null,
+    });
+  });
+
+  it("drops fields that did not survive the cut instead of guessing at them", () => {
+    // A cut inside `payload` -- shorter than the real cap, to put the boundary
+    // in a chosen field. Recovery is subtractive: the members before it are
+    // returned verbatim and the half-written one is dropped, not reconstructed.
+    const output = createResponseOutput();
+    const result = parsePermissionRequest(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(truncateAt(output, insideField(output, "payload"))),
+    );
+    expect(result).toMatchObject({
+      requestId: TRUNCATED_REQUEST_ID,
+      rationale: TRUNCATED_RATIONALE,
+      requestType: "workspace",
+      scope: null,
+      permissions: [],
+    });
+  });
+
+  it("is not fooled by braces, quotes, or commas inside the rationale", () => {
+    const rationale = 'Read {"a": 1}, then "summarise", ok?';
+    const output = createResponseOutput({
+      rationale,
+      request_type: "predefined",
+      payload: { scope: "slack-api", permissions: ["slack-read-all"] },
+    });
+    const result = parsePermissionRequest(makeToolCall(PERMISSION_INPUT), makeResult(truncateLikeBackend(output)));
+    expect(result?.rationale).toBe(rationale);
+    expect(result?.scope).toBe("slack-api");
+  });
+
+  it("returns null when the cut falls before the first complete field", () => {
+    const output = createResponseOutput();
+    const cut = truncateAt(output, output.indexOf("{") + 40);
+    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT), makeResult(cut))).toBeNull();
+  });
+
+  it("returns null when a truncated body's request id is not gateway-generated", () => {
+    // The recovery path reconstructs the id's text, and that id is handed
+    // straight to the shell's modal, so it must look gateway-minted.
+    const output = createResponseOutput({ request_id: "not-a-uuid" });
+    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT), makeResult(truncateLikeBackend(output)))).toBeNull();
+  });
+
+  it("returns null for a truncated gateway error body", () => {
+    const errorBody = '{\n  "error": "Invalid request body.",\n  "status": 400,\n  "detail": "rat';
+    expect(parsePermissionRequest(makeToolCall(PERMISSION_INPUT), makeResult(errorBody))).toBeNull();
+  });
 });
 
 // Depth-first search for the first vnode matching a predicate.
@@ -236,6 +403,35 @@ function findByClass(
 function findReviewButton(node: unknown): { attrs?: Record<string, unknown>; children?: unknown } | null {
   return findByClass(node, "permission-request-button");
 }
+
+// Every glyph on the card is an `m.trust`ed SVG string, which `findVnode` walks
+// straight past, so glyphs are asserted as markup rather than as vnode attrs.
+function trustedHtmlIn(node: unknown): string {
+  if (Array.isArray(node)) return node.map(trustedHtmlIn).join("");
+  if (node !== null && typeof node === "object") {
+    const vnode = node as { tag?: unknown; children?: unknown };
+    if (vnode.tag === "<" && typeof vnode.children === "string") return vnode.children;
+    return trustedHtmlIn(vnode.children);
+  }
+  return "";
+}
+
+// The `src` of the first <img> under a node, or null when there is none.
+function markSrc(node: unknown): string | null {
+  const image = findVnode(node, (v) => v.tag === "img") as { attrs?: { src?: unknown } } | null;
+  return typeof image?.attrs?.src === "string" ? image.attrs.src : null;
+}
+
+// Pinned as literals so a card that goes back to a padlock fails here rather
+// than at review. (`lock` is gone from the icon set, so this is a regression
+// guard for re-adding it, not for a name that still resolves.)
+const KEY_PATH = 'd="M2.586 17.414';
+const CUBE_PATH = 'd="M21 8a2 2 0 0 0-1-1.73';
+const LOCK_RECT = '<rect x="3" y="11"';
+
+// A predefined request naming a service the workspace bundles no artwork for.
+const UNBUNDLED_SERVICE_OUTPUT =
+  '{"request_id":"x1","request_type":"predefined","rationale":"look something up","payload":{"scope":"madeup-api"}}';
 
 describe("renderPermissionCard", () => {
   it("shows the eyebrow, title, rationale, and review button on a pending card", () => {
@@ -284,13 +480,86 @@ describe("renderPermissionCard", () => {
     expect(textOf(findByClass(vnode, "permission-request-status"))).toBe("Waiting for the request to register\u2026");
   });
 
-  it("says the request couldn't be read (not 'waiting') when a result arrived but has no request id", () => {
+  it("shows a short unreadable status, not a paragraph, when nothing could be recovered", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult('{"agent_id":"a"}'));
 
     expect(findReviewButton(vnode)).toBeNull();
-    const text = textOf(findByClass(vnode, "permission-request-status"));
-    expect(text).not.toBe("Waiting for the request to register\u2026");
-    expect(text).toContain("Couldn't read this request");
+    expect(textOf(findByClass(vnode, "permission-request-status"))).toBe(
+      "Couldn't read this request \u2014 see the Permissions tab.",
+    );
+    // The toggle is this state's only control, so it must not disappear with
+    // the rest of the card.
+    expect(findByClass(vnode, "permission-request-raw-toggle")).not.toBeNull();
+  });
+
+  it("renders a titled card with a working review button for a backend-truncated pending request", () => {
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(truncateLikeBackend(createResponseOutput())),
+    );
+
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Other machines");
+    expect(textOf(findByClass(vnode, "permission-request-reason"))).toBe(TRUNCATED_RATIONALE);
+    // The apologetic fallback is not what a still-pending request shows.
+    expect(findByClass(vnode, "permission-request-status")).toBeNull();
+
+    const button = findReviewButton(vnode) as { attrs?: { onclick?: (e: Event) => void } } | null;
+    expect(textOf(button)).toBe("Review & respond");
+    const postMessage = vi.fn();
+    withStubbedEmbedder({ postMessage }, () =>
+      button?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event),
+    );
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: "minds:open-request-modal", requestId: TRUNCATED_REQUEST_ID },
+      "*",
+    );
+  });
+
+  it("shows the rationale and button, and no redundant title, when the type was lost to the cut", () => {
+    // Cut inside `request_type`: the rationale survives but nothing names the
+    // subject, so a generic title row would only repeat the eyebrow.
+    const output = createResponseOutput();
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(truncateAt(output, insideField(output, "request_type"))),
+    );
+
+    expect(findByClass(vnode, "permission-request-title")).toBeNull();
+    expect(textOf(findByClass(vnode, "permission-request-reason"))).toBe(TRUNCATED_RATIONALE);
+    expect(findByClass(vnode, "permission-request-status")).toBeNull();
+    expect(findReviewButton(vnode)).not.toBeNull();
+  });
+
+  it("falls back to the generic subject when neither a title nor a rationale survived", () => {
+    // Cut inside `rationale`: only the id came back, and the body must not be a
+    // bare badge, so the generic subject stands in.
+    const output = createResponseOutput();
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(truncateAt(output, insideField(output, "rationale"))),
+    );
+
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("Permission request");
+    expect(findByClass(vnode, "permission-request-reason")).toBeNull();
+    expect(findReviewButton(vnode)).not.toBeNull();
+  });
+
+  it("keeps the raw disclosure on a truncated card so the dropped fields stay reachable", () => {
+    const vnode = renderCardFor(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(truncateLikeBackend(createResponseOutput())),
+      null,
+      null,
+      true,
+    );
+
+    expect(textOf(findByClass(vnode, "permission-request-raw-toggle"))).toBe("Hide raw request");
+    const raw = findByClass(vnode, "permission-request-raw");
+    const rawTextNode = findVnode(
+      raw,
+      (v) => v.tag === "#" && typeof (v as { children?: unknown }).children === "string",
+    );
+    expect(rawTextNode?.children as string).toContain("...");
   });
 
   it("titles a file-sharing request 'Local files'", () => {
@@ -407,6 +676,65 @@ describe("renderPermissionCard", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), "granted", null, true);
     expect(textOf(findByClass(vnode, "permission-request-raw-toggle"))).toBe("Hide raw request");
     expect(findByClass(vnode, "permission-request-raw")).not.toBeNull();
+  });
+
+  it("heads every card state with a key, and never brings the lock back", () => {
+    const states: [string, m.Vnode][] = [
+      ["pending", renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT))],
+      ["resolved", renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), "granted")],
+      ["unreadable", renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult('{"agent_id":"a"}'))],
+    ];
+    for (const [state, vnode] of states) {
+      expect(trustedHtmlIn(findByClass(vnode, "permission-request-eyebrow")), state).toContain(KEY_PATH);
+      expect(trustedHtmlIn(vnode), state).not.toContain(LOCK_RECT);
+    }
+  });
+
+  it("badges a service request with that service's own mark", () => {
+    const badge = findByClass(
+      renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT)),
+      "permission-request-badge",
+    );
+    expect(markSrc(badge)).toContain("slack");
+    // The mark replaces the glyph rather than sitting beside it.
+    expect(trustedHtmlIn(badge)).toBe("");
+  });
+
+  it("badges a request that names no app with the cube", () => {
+    // A file-sharing request is about local files; there is no app to show.
+    const badge = findByClass(
+      renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(FILE_SHARING_OUTPUT)),
+      "permission-request-badge",
+    );
+    expect(trustedHtmlIn(badge)).toContain(CUBE_PATH);
+    expect(markSrc(badge)).toBeNull();
+  });
+
+  it("badges a service we ship no mark for with the cube", () => {
+    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(UNBUNDLED_SERVICE_OUTPUT));
+    const badge = findByClass(vnode, "permission-request-badge");
+    expect(trustedHtmlIn(badge)).toContain(CUBE_PATH);
+    expect(markSrc(badge)).toBeNull();
+    // The card still names the service, so the cube reads as the artwork's
+    // absence and not as a card that failed to read the request.
+    expect(textOf(findByClass(vnode, "permission-request-title"))).toBe("madeup-api");
+  });
+
+  it("keeps the service mark on the resolved receipt", () => {
+    const badge = findByClass(
+      renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT), "granted"),
+      "permission-request-badge--sm",
+    );
+    expect(markSrc(badge)).toContain("slack");
+  });
+
+  it("badges a receipt whose request could not be parsed with the cube", () => {
+    // The receipt renders before the unreadable-request branch, so `details` is
+    // null there and the badge must still have something to draw.
+    const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult('{"agent_id":"a"}'), "granted");
+    const badge = findByClass(vnode, "permission-request-badge--sm");
+    expect(trustedHtmlIn(badge)).toContain(CUBE_PATH);
+    expect(textOf(findByClass(vnode, "permission-request-receipt-title"))).toBe("Permission request");
   });
 });
 
