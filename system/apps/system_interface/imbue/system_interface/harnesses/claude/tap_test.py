@@ -4,9 +4,11 @@ Covers the tap's pure verdict lattice over synthetic raw tails + mirror states (
 pre-baseline-leaves race and its idle-gap variant), the raw-tail reader, every gate, and the tap
 orchestration (chord delivery, recovery send, status mapping); the stop executor's branch
 dispatch (empty->chord+mark-idle, nonempty/dialog/binding/deadline->base, no-open-turn->noop, the
-under-lock re-check), both-variant abort confirmation (and a tool_result quoting the sentinel NOT
-confirming); and the tap's recovery suppression when a stop ran since its baseline. The live chord
-itself is verified manually via tmux, not here (repo convention).
+under-lock re-check), the bounded-lock capture (a message parked mid-stop rides the returned
+block; a lock held past the wait falls back to the hammer instead of stalling), both-variant
+abort confirmation (and a tool_result quoting the sentinel NOT confirming); and the tap's
+recovery suppression when a stop ran since its baseline. The live chord itself is verified
+manually via tmux, not here (repo convention).
 """
 
 from __future__ import annotations
@@ -26,14 +28,14 @@ from imbue.system_interface.harnesses.claude.session_parser import INTERRUPT_SEN
 from imbue.system_interface.harnesses.claude.session_parser import MID_TOOL_INTERRUPT_SENTINEL_TEXT
 from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
 from imbue.system_interface.harnesses.claude.tap import TapVerdict
+from imbue.system_interface.harnesses.claude.tap import _STOP_MONOTONIC_BY_AGENT
+from imbue.system_interface.harnesses.claude.tap import _record_stop
 from imbue.system_interface.harnesses.claude.tap import compute_tail_facts
 from imbue.system_interface.harnesses.claude.tap import deadline_verdict
 from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
 from imbue.system_interface.harnesses.claude.tap import execute_claude_stop_to_composer
 from imbue.system_interface.harnesses.claude.tap import poll_verdict
 from imbue.system_interface.harnesses.claude.tap import read_raw_tail
-from imbue.system_interface.harnesses.claude.tap import _STOP_MONOTONIC_BY_AGENT
-from imbue.system_interface.harnesses.claude.tap import _record_stop
 
 # --- raw-record builders -------------------------------------------------------------
 
@@ -109,10 +111,7 @@ def test_tail_facts_ignores_non_json_lines() -> None:
 
 
 def _facts(*, sentinel: bool, answer: bool) -> Any:
-    return compute_tail_facts(
-        ([_SENTINEL_LINE] if sentinel else [])
-        + ([_assistant_line()] if answer else [])
-    )
+    return compute_tail_facts(([_SENTINEL_LINE] if sentinel else []) + ([_assistant_line()] if answer else []))
 
 
 def test_poll_verdict_early_flushed_on_drained_with_answer() -> None:
@@ -503,11 +502,12 @@ def _clear_stop_registry() -> Any:
 
 
 @contextmanager
-def _recording_lock(record: list[str]) -> Any:
-    """A message-lock stand-in that records enter/exit so a test can assert it was held."""
+def _recording_try_lock(record: list[str], held: bool = True) -> Any:
+    """A bounded message-lock stand-in: records enter/exit and yields whether it was held, so a
+    test can assert a capture actually ran inside the acquire."""
     record.append("enter")
     try:
-        yield
+        yield held
     finally:
         record.append("exit")
 
@@ -546,12 +546,76 @@ def test_stop_nonempty_mirror_delegates_to_base(tmp_path: Path) -> None:
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
     )
     assert block == "edit me before sending"
     assert recorder.base_calls == 1
     assert recorder.presses == []
     assert recorder.mark_idle_calls == 0
+
+
+def test_stop_nonempty_mirror_captures_a_message_parked_after_the_stale_read(tmp_path: Path) -> None:
+    """A message that parks between the pre-lock mirror read and the restart rides the block.
+
+    The nonempty branch refreshes and captures UNDER the bounded message lock, so a send that
+    durably parked while the stop was dispatched (the in-flight-send race) is in the returned
+    block -- the old lock-free delegation captured the stale mirror and lost it to the SIGKILL.
+    """
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    snapshots: list[list[dict[str, Any]]] = [[{"queued_id": "q1", "content": "first message"}]]
+
+    def park_second_message(events_call: int) -> None:
+        # The under-lock refresh is the SECOND get_all_events; the in-flight send's message
+        # lands in the mirror only there (it was still mid-flight at the pre-lock read).
+        if events_call == 2:
+            snapshots[0] = snapshots[0] + [{"queued_id": "q2", "content": "parked mid-stop"}]
+
+    watcher = _FakeTapWatcher(snapshots, None, on_refresh=park_second_message)
+    lock_record: list[str] = []
+    presses: list[bool] = []
+
+    def capture_block_like_restart_drain() -> str:
+        # The real base delegation captures the watcher's CURRENT block (restart_drain reads
+        # the queue after the executor's under-lock refresh); mirror that here so the
+        # assertion sees exactly what would reach the composer.
+        return "\n\n".join(message["content"] for message in watcher.get_queued_messages())
+
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=lambda: presses.append(True) or True,
+        mark_idle=lambda: None,
+        restart_drain_to_base=capture_block_like_restart_drain,
+        try_message_lock=lambda: _recording_try_lock(lock_record),
+    )
+    assert block == "first message\n\nparked mid-stop"
+    assert presses == []
+    # The refresh + capture actually ran inside the lock acquire.
+    assert lock_record == ["enter", "exit"]
+
+
+def test_stop_nonempty_mirror_still_restarts_when_the_lock_stays_held(tmp_path: Path) -> None:
+    """Stop must win: a send holding the lock past the bounded wait does not stall the nonempty
+    drain -- it proceeds to the hammer on a fresh best-effort re-capture (the in-flight message
+    dies with the process, never runs)."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    recorder = _StopRecorder(base_block="still handed back")
+    watcher = _FakeTapWatcher([_QUEUED], None)
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=watcher,
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(False),
+    )
+    assert block == "still handed back"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+    # The mirror was still refreshed for the best-effort re-capture, even without the lock.
+    assert watcher.events_calls == 2
 
 
 def test_stop_no_open_turn_is_a_noop(tmp_path: Path) -> None:
@@ -565,7 +629,7 @@ def test_stop_no_open_turn_is_a_noop(tmp_path: Path) -> None:
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
     )
     assert block == ""
     assert recorder.presses == []
@@ -584,7 +648,7 @@ def test_stop_permissions_waiting_delegates_to_base(tmp_path: Path) -> None:
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
     )
     assert block == "<base-block>"
     assert recorder.base_calls == 1
@@ -602,7 +666,7 @@ def test_stop_binding_inactive_delegates_to_base(tmp_path: Path) -> None:
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
     )
     assert block == "<base-block>"
     assert recorder.base_calls == 1
@@ -620,7 +684,7 @@ def test_stop_no_live_session_delegates_to_base(tmp_path: Path) -> None:
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
     )
     assert block == "<base-block>"
     assert recorder.base_calls == 1
@@ -646,13 +710,36 @@ def test_stop_under_lock_recheck_delegates_when_mirror_fills(tmp_path: Path) -> 
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=_recording_lock(lock_record),
+        try_message_lock=lambda: _recording_try_lock(lock_record),
     )
     assert block == "<base-block>"
     assert recorder.base_calls == 1
     assert recorder.presses == []
     # The lock was actually held for the re-check.
     assert lock_record == ["enter", "exit"]
+
+
+def test_stop_chord_path_falls_back_to_base_when_the_lock_stays_held(tmp_path: Path) -> None:
+    """An empty-mirror stop whose bounded lock acquire expires falls back to the base restart
+    instead of blocking behind the send's turn-confirm -- and delivers no chord, since the chord
+    cannot be ordered against the in-flight send."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+    recorder = _StopRecorder()
+    block = execute_claude_stop_to_composer(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([[]], session),
+        press_chord=recorder.press_chord,
+        mark_idle=recorder.mark_idle,
+        restart_drain_to_base=recorder.restart_drain_to_base,
+        try_message_lock=lambda: nullcontext(False),
+    )
+    assert block == "<base-block>"
+    assert recorder.base_calls == 1
+    assert recorder.presses == []
+    assert recorder.mark_idle_calls == 0
 
 
 @pytest.mark.parametrize("sentinel_line", [_SENTINEL_LINE, _MID_TOOL_SENTINEL_LINE])
@@ -681,7 +768,7 @@ def test_stop_confirmed_marks_idle_and_returns_empty(tmp_path: Path, sentinel_li
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
         now=_stepping_now([0.0, 0.0, 1.0]),
         sleep=lambda _s: None,
     )
@@ -715,7 +802,7 @@ def test_stop_confirmed_still_returns_empty_when_mark_idle_raises(tmp_path: Path
         press_chord=recorder.press_chord,
         mark_idle=_raise,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
         now=_stepping_now([0.0, 0.0, 1.0]),
         sleep=lambda _s: None,
     )
@@ -746,7 +833,7 @@ def test_stop_tool_result_quoting_sentinel_does_not_confirm(tmp_path: Path) -> N
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
         now=_stepping_now([0.0, 0.0, 100.0]),
         sleep=lambda _s: None,
     )
@@ -779,7 +866,7 @@ def test_stop_marker_vanish_returns_empty_without_restart(tmp_path: Path) -> Non
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
         now=_stepping_now([0.0, 0.0, 1.0]),
         sleep=lambda _s: None,
     )
@@ -802,7 +889,7 @@ def test_stop_chord_send_failure_falls_back_to_base(tmp_path: Path) -> None:
         press_chord=recorder.press_chord,
         mark_idle=recorder.mark_idle,
         restart_drain_to_base=recorder.restart_drain_to_base,
-        message_lock=nullcontext(),
+        try_message_lock=lambda: nullcontext(True),
         now=_stepping_now([0.0, 0.0]),
         sleep=lambda _s: None,
     )

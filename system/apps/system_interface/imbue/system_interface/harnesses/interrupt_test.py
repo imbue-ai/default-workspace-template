@@ -1,12 +1,15 @@
-"""Unit tests for the shared stop-button lock helpers."""
+"""Unit tests for the shared stop-button lock helpers and the locked restart-drain."""
 
 import fcntl
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
+from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.harnesses.interrupt import agent_message_lock
+from imbue.system_interface.harnesses.interrupt import restart_drain_under_message_lock
 from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 
 
@@ -77,3 +80,71 @@ def test_agent_message_lock_blocks_a_bounded_contender(tmp_path: Path) -> None:
     with agent_message_lock(tmp_path):
         with try_hold_message_lock(tmp_path, wait_seconds=0.05, poll_interval_seconds=0.01) as held:
             assert held is False
+
+
+def _agent_info(agent_state_dir: Path) -> AgentInfo:
+    return AgentInfo(
+        id="agent-1",
+        name="stub-agent",
+        state="RUNNING",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=agent_state_dir / "config",
+    )
+
+
+class _ParkingWatcher:
+    """A watcher stand-in whose mirror gains a late-parked message on refresh (``get_all_events``),
+    the way a send that was still in flight at the caller's last mirror read parks one."""
+
+    def __init__(self, initial_block: str, refreshed_block: str) -> None:
+        self._block = initial_block
+        self._refreshed_block = refreshed_block
+        self.refresh_calls = 0
+        self.clear_calls = 0
+
+    def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        self.refresh_calls += 1
+        self._block = self._refreshed_block
+        return []
+
+    def get_queued_block(self) -> str:
+        return self._block
+
+    def clear_queue(self) -> None:
+        self.clear_calls += 1
+
+
+def test_restart_drain_under_message_lock_captures_a_late_parked_message(tmp_path: Path) -> None:
+    # The refresh and the capture run under the lock, so a message that parked after the
+    # caller's last mirror read is in the returned block (message conservation) rather than
+    # dying silently with the SIGKILLed process.
+    watcher = _ParkingWatcher("first message", "first message\n\nparked mid-stop")
+    restarts: list[bool] = []
+    block = restart_drain_under_message_lock(
+        _agent_info(tmp_path), watcher, lambda: restarts.append(True) or (True, "ok"), lambda: None
+    )
+    assert block == "first message\n\nparked mid-stop"
+    assert watcher.refresh_calls == 1
+    assert restarts == [True]
+    assert watcher.clear_calls == 1
+
+
+def test_restart_drain_under_message_lock_hammers_when_the_lock_stays_held(tmp_path: Path) -> None:
+    # Stop wins, bounded: a send holding the lock past the wait does not stall the drain -- it
+    # still refreshes (a best-effort re-capture) and restarts without the lock. The injected
+    # clock jumps straight past the bounded-wait deadline so the acquire gives up immediately.
+    watcher = _ParkingWatcher("first message", "first message\n\nparked mid-stop")
+    restarts: list[bool] = []
+    ticks = iter([0.0, 1000.0])
+    with _hold_lock_via_other_fd(tmp_path):
+        block = restart_drain_under_message_lock(
+            _agent_info(tmp_path),
+            watcher,
+            lambda: restarts.append(True) or (True, "ok"),
+            lambda: None,
+            now=lambda: next(ticks, 1000.0),
+            sleep=lambda _seconds: None,
+        )
+    assert block == "first message\n\nparked mid-stop"
+    assert watcher.refresh_calls == 1
+    assert restarts == [True]

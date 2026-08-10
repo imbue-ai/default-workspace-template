@@ -26,6 +26,10 @@ from collections.abc import Callable
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
+from typing import Protocol
+
+from loguru import logger
 
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
@@ -44,6 +48,25 @@ MESSAGE_LOCK_FILENAME: str = "message.lock"
 # the idle-start turn-confirm poll), so this window is almost never spent; an idle-start send
 # that holds the lock through its full turn-confirm is exactly the case the hammer should own.
 STOP_LOCK_WAIT_SECONDS: float = 2.0
+
+
+class DrainWatcher(Protocol):
+    """The slice of the session watcher the restart-drain needs. A Protocol (mirroring the tap's
+    ``TapWatcher``) so unit tests inject a scripted fake; the real :class:`AgentSessionWatcher`
+    satisfies it structurally."""
+
+    def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Read session files and return parsed events; the single point that refreshes the mirror."""
+        ...
+
+    def get_queued_block(self) -> str:
+        """The queued messages as one concatenated turn (empty == nothing queued)."""
+        ...
+
+    def clear_queue(self) -> None:
+        """Drop the tracked queued set (a restart invalidated it)."""
+        ...
+
 
 # Restart the agent process; returns ``(is_restarted, output)`` (stdout on success, stderr on
 # failure). Bound by the endpoint to the specific agent.
@@ -152,7 +175,7 @@ class InterruptToComposer(ABC):
 
 def restart_drain(
     agent_info: AgentInfo,
-    watcher: AgentSessionWatcher,
+    watcher: DrainWatcher,
     restart_process: RestartProcess,
     settle_activity: SettleActivity,
 ) -> str:
@@ -174,9 +197,40 @@ def restart_drain(
     return block
 
 
+def restart_drain_under_message_lock(
+    agent_info: AgentInfo,
+    watcher: DrainWatcher,
+    restart_process: RestartProcess,
+    settle_activity: SettleActivity,
+    *,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """:func:`restart_drain` with its capture made durable against a concurrent send (U1).
+
+    Takes mngr's per-agent ``message.lock`` with the shared bounded wait, then refreshes the
+    mirror (``get_all_events``) and captures/restarts under it: acquiring the lock means any
+    in-flight send has durably parked, so a message that parked between the caller's last mirror
+    read and the SIGKILL rides the returned block instead of dying silently with the process.
+    When the wait expires (an idle-start send holding the lock through its turn-confirm), stop
+    must still win: refresh and hammer anyway -- that message is stopped, not recovered to the
+    composer, and never runs (the pi/codex not-held posture). ``now``/``sleep`` drive the
+    bounded acquire and are injected for tests.
+    """
+    with try_hold_message_lock(agent_info.agent_state_dir, now=now, sleep=sleep) as is_lock_held:
+        if not is_lock_held:
+            logger.info(
+                "Stop for agent '{}': message.lock still held past the bounded wait; "
+                "restarting on a best-effort re-capture",
+                agent_info.name,
+            )
+        watcher.get_all_events()
+        return restart_drain(agent_info, watcher, restart_process, settle_activity)
+
+
 class RestartDrainInterruptToComposer(InterruptToComposer):
-    """The default stop mechanism (claude, and any harness without a native override): the
-    shared :func:`restart_drain`."""
+    """The default stop mechanism (any harness without a native override): the shared
+    :func:`restart_drain`, refreshed and captured under the bounded message lock."""
 
     _agent_info: AgentInfo
 
@@ -194,4 +248,4 @@ class RestartDrainInterruptToComposer(InterruptToComposer):
         press_chord: PressChord,
     ) -> str:
         # The base restart-drain interrupts via SIGKILL-relaunch; it has no use for the chord.
-        return restart_drain(self._agent_info, watcher, restart_process, settle_activity)
+        return restart_drain_under_message_lock(self._agent_info, watcher, restart_process, settle_activity)
