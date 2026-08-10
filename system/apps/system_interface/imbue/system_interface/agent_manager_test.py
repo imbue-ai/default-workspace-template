@@ -7,6 +7,7 @@ import shutil
 import threading
 import time
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
+from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
 from imbue.mngr.api.observe import make_full_agent_state_event
@@ -1578,8 +1580,15 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
     return writes
 
 
-def _write_client_activity_message(host_dir: Path, agent_id: str, timestamp: str) -> None:
-    """Append one message event to the workspace's client-activity log."""
+def _write_client_activity_message(host_dir: Path, agent_id: str, seconds_ago: float) -> None:
+    """Append one message event, stamped ``seconds_ago`` before now, to the activity log.
+
+    Relative to now rather than a fixed date because the band the seeded stamp
+    produces depends on how long ago it was: a pinned date drifts out of the
+    freshness ramp as wall-clock advances, and every chat then reads as equally
+    abandoned.
+    """
+    timestamp = format_nanosecond_iso_timestamp(datetime.now(timezone.utc) - timedelta(seconds=seconds_ago))
     events_path = client_activity.get_events_path(
         workspace_layouts.primary_agent_layout_dir(host_dir, "test-agent-id")
     )
@@ -1619,8 +1628,8 @@ def test_seeding_recovers_chat_message_recency_from_the_activity_log(
     agent_manager._handle_observe_event(make_full_agent_state_event([older, newer]))
     writes = _capture_prioritizer_writes(agent_manager, {str(older.id): 10, str(newer.id): 20})
 
-    _write_client_activity_message(tmp_path, str(older.id), "2026-07-29T09:00:00.000000000Z")
-    _write_client_activity_message(tmp_path, str(newer.id), "2026-07-29T09:30:00.000000000Z")
+    _write_client_activity_message(tmp_path, str(older.id), seconds_ago=60 * 60)
+    _write_client_activity_message(tmp_path, str(newer.id), seconds_ago=30 * 60)
     agent_manager._seed_oom_prioritizer()
     agent_manager._oom_prioritizer.reapply()
 
