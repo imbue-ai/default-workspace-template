@@ -66,7 +66,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -75,18 +74,20 @@ from typing import Callable
 from loguru import logger as _loguru_logger
 from watchdog.observers import Observer
 
+from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
+from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.claude.queue_tracker import ClaudeQueueTracker
+from imbue.system_interface.harnesses.claude.session_parser import QueueSignal
+from imbue.system_interface.harnesses.claude.session_parser import QueueSignalKind
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.claude.session_parser import parse_queue_signals
-from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
-from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
+from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.system_interface.watcher_common import WakeOnChangeHandler
 
 logger = _loguru_logger
-
-_BRIEF_WAIT_SECONDS = 0.5
 
 # Maximum number of parsed event bodies held resident across all of an agent's
 # session files. Far larger than any single tail/backfill page (default 50), so
@@ -160,6 +161,30 @@ def _iter_line_spans(data: bytes, base_offset: int) -> list[tuple[int, int, byte
         spans.append((base_offset + pos, len(line), line))
         pos = next_pos
     return spans
+
+
+def _is_dead_epoch_enqueue(signal: QueueSignal, process_epoch_started_at: float | None) -> bool:
+    """True iff this queue signal is an enqueue from a previous claude process's epoch.
+
+    ``claude --resume`` RE-APPENDS to the same session JSONL, so the latest main
+    session's ledger can span process restarts. An enqueue a killed process never
+    resolved dangles in that ledger forever; a full replay (backend-restart
+    priming, the truncation reset) would re-derive it as still queued -- a ghost
+    entry the working->IDLE backstop later silently evaporates. The live
+    process's start boundary is the ``claude_process_started`` marker mtime
+    (touched by the SessionStart hook on every startup/resume); an enqueue
+    stamped before it died with its process and must not feed the populator.
+
+    LEAVE signals are never excluded: a dead epoch's leave nets against a dead
+    epoch's (excluded) enqueue, and resolving against an empty set is a harmless
+    no-op, so FIFO alignment within the live epoch holds. A missing marker or an
+    unparseable stamp keeps the enqueue -- only records positively known to
+    predate the live process are dropped.
+    """
+    if signal.kind != QueueSignalKind.ENQUEUE or process_epoch_started_at is None:
+        return False
+    enqueue_at = parse_iso_timestamp_to_epoch(signal.timestamp)
+    return enqueue_at is not None and enqueue_at < process_epoch_started_at
 
 
 class EventLocator(tuple[str, str, int, int]):
@@ -497,16 +522,32 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
             return session_id in self._main_session_ids
 
     def _is_latest_main_session_locked(self, session_id: str) -> bool:
-        """True if ``session_id`` is the most recently registered main session (lock held).
+        """True if ``session_id`` is the latest main session in history order (lock held).
 
         The queue-feed gate: the live claude process's in-memory queue can only
-        live in the LATEST main session's ledger (a restart always rotates into a
-        new session file), so only that session feeds the queue populator -- a
-        dead session's dangling enqueues must never re-derive. Event routing
+        live in the LATEST main session's ledger, so only that session feeds the
+        queue populator -- a dead session's dangling enqueues must never
+        re-derive. This scope alone is not enough: a restart does not always
+        rotate the file (``--resume`` RE-APPENDS to the same session), so the
+        feed additionally drops enqueues from earlier process epochs (see
+        :func:`_is_dead_epoch_enqueue`). Event routing
         (:meth:`is_main_session_event`) keeps plain membership; only the queue
         feed is scoped to the latest session.
         """
         return bool(self._main_session_ids) and self._main_session_ids[-1] == session_id
+
+    def _read_process_epoch_started_at(self) -> float | None:
+        """The live claude process's start boundary, or None when the marker is absent.
+
+        The mtime of the ``claude_process_started`` marker, which mngr's
+        SessionStart hook touches on every startup/resume. Enqueue records
+        stamped before it belong to a process that no longer exists.
+        """
+        marker = self._agent_state_dir / ClaudeActivityTracker.marker_filename
+        try:
+            return marker.stat().st_mtime
+        except OSError:
+            return None
 
     def _selected_states_current(self, session_id: str | None) -> list[SessionFileState]:
         """Discover sessions, bring the selected files' caches current, return them.
@@ -772,8 +813,12 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
             # queue (see ``_is_latest_main_session_locked``), so only its lines
             # feed the populator. This is the single feed point, so every replay
             # path -- priming, the truncation reset above, HTTP-read feeds, and
-            # the poll loop -- inherits the scope. Computed once per refresh.
+            # the poll loop -- inherits the scope, including the process-epoch
+            # boundary that keeps a dead process's dangling enqueues from
+            # re-deriving on a full replay (``--resume`` re-appends to the same
+            # file, so the ledger can span restarts). Computed once per refresh.
             is_latest_main_session = self._is_latest_main_session_locked(state.session_id)
+            process_epoch_started_at = self._read_process_epoch_started_at() if is_latest_main_session else None
             for byte_offset, byte_len, line_bytes in _iter_line_spans(complete, state.byte_offset_consumed):
                 try:
                     decoded_line = line_bytes.decode("utf-8")
@@ -785,7 +830,7 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                 # them; this recognizes exactly the lines that move the live queue.
                 if is_latest_main_session:
                     queue_signal = parse_queue_signals(decoded_line)
-                    if queue_signal is not None:
+                    if queue_signal is not None and not _is_dead_epoch_enqueue(queue_signal, process_epoch_started_at):
                         self._queue_tracker.consume(queue_signal)
                 line_events = parse_lines(
                     decoded_line.splitlines(),
@@ -1012,37 +1057,49 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
             logger.debug("Failed to read session history file {}: {}", history_file, e)
             return
 
+        # One history position per session id, keyed to its FIRST mention: a
+        # resume re-lists the same id, and chronological order is the order the
+        # ids first appeared. Late-found sessions are inserted by this position
+        # so the registered order always matches history order.
+        history_positions: dict[str, int] = {}
         for line in lines:
             parts = line.strip().split()
-            if not parts:
-                continue
-            session_id = parts[0]
+            if parts:
+                history_positions.setdefault(parts[0], len(history_positions))
+
+        for session_id in history_positions:
             with self._lock:
                 already_known = session_id in self._session_states
             if already_known:
                 continue
 
-            # Try to find the session file
+            # A just-created session's file may not be on disk yet. Discovery
+            # runs synchronously on the HTTP read paths, so a miss must never
+            # wait here (an inline sleep stalls every read for the whole startup
+            # window): leave the session unregistered and let the next discovery
+            # pass -- the poll loop or a later read -- retry.
             file_path = self._find_session_file(session_id)
             if file_path is None:
-                # Brief wait then try again
-                time.sleep(_BRIEF_WAIT_SECONDS)
-                file_path = self._find_session_file(session_id)
-                if file_path is None:
-                    logger.debug("Session file not found for {}, will retry on next cycle", session_id)
-                    continue
+                logger.debug("Session file not found for {}, will retry on next cycle", session_id)
+                continue
 
             with self._lock:
                 if session_id in self._session_states:
                     continue
                 self._session_states[session_id] = SessionFileState(session_id, file_path)
-                self._main_session_ids.append(session_id)
-                # A NEW latest main session means the claude process restarted,
-                # so anything the previous session's ledger fed is a dead
-                # process's residue -- purge it now, within one discovery cycle,
-                # rather than waiting for the new session to emit a queue signal.
-                # The poll loop broadcasts the emptied snapshot if it changed.
-                self._queue_tracker.reset()
+                insert_position = self._main_session_insert_position_locked(session_id, history_positions)
+                self._main_session_ids.insert(insert_position, session_id)
+                # A NEW latest main session means the claude process restarted
+                # into a fresh session, so anything the previous session's ledger
+                # fed is a dead process's residue -- purge it now, within one
+                # discovery cycle, rather than waiting for the new session to
+                # emit a queue signal. A late-FOUND older session (its file
+                # appeared only after a newer session was registered) must NOT
+                # reset: the live queue derived from the still-latest session
+                # would be dropped with no replay left to rebuild it. The poll
+                # loop broadcasts the emptied snapshot if it changed.
+                if insert_position == len(self._main_session_ids) - 1:
+                    self._queue_tracker.reset()
 
             # Set up watchdog for the new file
             if self._observer is not None:
@@ -1051,6 +1108,24 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
                     self._observer.schedule(WakeOnChangeHandler(self._wake_event), parent_dir, recursive=False)
                 except OSError as e:
                     logger.debug("Failed to schedule watchdog for {}: {}", parent_dir, e)
+
+    def _main_session_insert_position_locked(self, session_id: str, history_positions: dict[str, int]) -> int:
+        """The index in ``_main_session_ids`` that keeps history order (lock held).
+
+        A session can be FOUND late -- its file was not yet on disk when a later
+        session was registered -- so a plain append would misorder the merged
+        timeline and, worse, misdirect the latest-session gates
+        (:meth:`_is_latest_main_session_locked` /
+        :meth:`get_latest_main_session_file`) at a dead session. The new session
+        slots in before the first registered session that history lists after
+        it. A registered session the current history file no longer lists (the
+        file can rotate away) sorts as oldest.
+        """
+        position = history_positions.get(session_id, -1)
+        for index, known_session_id in enumerate(self._main_session_ids):
+            if history_positions.get(known_session_id, -1) > position:
+                return index
+        return len(self._main_session_ids)
 
     def _discover_subagent_sessions(self, parent_session_id: str, parent_file_path: Path) -> None:
         """Discover subagent session files under <session_id>/subagents/.
@@ -1195,7 +1270,8 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         """Return the JSONL path of the latest main session (the live process's session), or None.
 
         The live claude process's queue and in-flight turn live in the newest main
-        session file -- a restart always rotates into a fresh session id (see
+        session file -- a fresh start rotates into a new session id, and a
+        ``--resume`` re-appends to the newest one (see
         ``_is_latest_main_session_locked``). The shoulder tap uses this to take a
         byte-size baseline before delivering the flush chord and to read the raw
         post-chord tail afterwards. Runs discovery first so a session that rotated in
