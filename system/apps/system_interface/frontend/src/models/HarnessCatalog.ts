@@ -31,7 +31,7 @@ export interface CatalogModelOption {
 
 export interface HarnessCatalog {
   options: CatalogModelOption[];
-  switch_mode: string; // "eager_then_reconcile" | "on_change" | "read_only"
+  switch_mode: string; // "eager_then_reconcile" (the only mode any harness currently uses)
   picker_mode: string; // "list" | "search" -- how the model dropdown renders (orthogonal to switch_mode)
   // Whether the "Shoulder tap" button can flush the queue atomically (merge into the live
   // turn without a restart). True only for codex; false harnesses use the restart-based flush.

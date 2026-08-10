@@ -116,11 +116,9 @@ export function changedAxes(prev: ModelIdentity, next: ModelIdentity): string[] 
 /** Apply the `axes` a click changed, then POST it. `axes` names which of
  *  model/effort/fast to actually send (see changedAxes).
  *
- *  `optimistic` follows the harness's switch mode: an EAGER harness (claude) shows
- *  the pick immediately and reconciles from the pushed live choice; an ON_CHANGE
- *  harness (codex) does NOT move the chip on click -- the switch goes through the
- *  agent's CLI and the chip follows the rollout truth once it lands, so there is no
- *  overlay to hold or time out. */
+ *  `optimistic` follows the harness's switch mode: an EAGER_THEN_RECONCILE harness
+ *  (all three -- claude, codex, pi) shows the pick immediately and reconciles from
+ *  the pushed live choice. */
 export function setModelChoice(
   agentId: string,
   identity: ModelIdentity,

@@ -121,14 +121,11 @@ class ModelChoice(FrozenModel):
 class SwitchMode(StrEnum):
     """How a harness's model bar behaves. ONE value per harness; it governs the
     model, effort, and fast axes uniformly. It has nothing to do with which axes
-    are *shown* -- that is decided purely by the matched model's data."""
+    are *shown* -- that is decided purely by the matched model's data. All three
+    harnesses (claude, codex, pi) currently use EAGER_THEN_RECONCILE."""
 
     # Optimistic: the chip moves on click, then reconciles from disk.
     EAGER_THEN_RECONCILE = "eager_then_reconcile"
-    # Switchable but not optimistic: the chip updates only once disk reflects it.
-    ON_CHANGE = "on_change"
-    # Display only: the slots show the current value but are not interactive.
-    READ_ONLY = "read_only"
 
 
 class PickerMode(StrEnum):
@@ -304,7 +301,6 @@ class HarnessModelResolver(ABC):
         those and never re-issues an untouched axis (and never suppresses a change
         just because disk has not caught up). The harness decides how -- it may
         validate first, then send one or many pane commands via ``send`` (bound by
-        the endpoint to this agent). A display-only (:attr:`SwitchMode.READ_ONLY`)
-        harness sends nothing and returns ``ok=False`` with a detail the endpoint
-        maps to 409.
+        the endpoint to this agent). On failure it returns ``ok=False`` with a
+        detail the endpoint surfaces to the user.
         """

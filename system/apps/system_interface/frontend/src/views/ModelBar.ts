@@ -322,9 +322,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       }
 
       // Interactive for any switchable harness -- a pending pick never disables the
-      // bar. `optimistic` (only an EAGER harness moves the chip on click) governs
-      // whether a pick shows immediately or waits for the pushed live choice: EAGER
-      // (claude, codex) is optimistic; an ON_CHANGE harness (pi) reconciles from disk only.
+      // bar. `optimistic` (an EAGER_THEN_RECONCILE harness moves the chip on click)
+      // governs whether a pick shows immediately or waits for the pushed live choice;
+      // all three harnesses (claude, codex, pi) are EAGER_THEN_RECONCILE.
       const interactive = catalog.switch_mode !== "read_only";
       const optimistic = catalog.switch_mode === "eager_then_reconcile";
       const currentEffort = choice.identity.effort;

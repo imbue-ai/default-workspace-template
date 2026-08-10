@@ -50,9 +50,6 @@ function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
   return files;
 }
 
-// Compatibility export
-export function setSelectedModelId(_modelId: string): void {}
-
 export function MessageInput(): m.Component<{ agentId: string | null }> {
   let messageText = "";
   let currentAgentId: string | null = null;
