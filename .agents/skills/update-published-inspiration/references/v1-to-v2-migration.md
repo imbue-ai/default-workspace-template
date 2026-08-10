@@ -1,5 +1,18 @@
 # Migrating a published inspiration from v1 to v2
 
+## Two version numbers, unrelated
+
+The **flow version** is the manifest FORMAT. v2 is exactly one slug-free
+`inspiration.md` + `inspiration.toml` + `inspiration.svg` per repo; v1 is the
+older format, which used slug-named `inspiration-<slug>.md` (possibly several
+in one repo) with a YAML recipe inside the markdown and no TOML.
+
+An **inspiration's own version** (v1, v2, v3, ...) counts how many times THAT
+inspiration has been published. It keeps counting across a format migration --
+an inspiration on its fourth publish is v4 whether the format is v1 or v2.
+
+Both appear in this skill, so read each `v<n>` for which axis it is on.
+
 An update always writes the current manifest format. There is no flag to stay on
 v1: carrying two live write-formats indefinitely costs more than the one-time
 migration, and every reader that matters is either new enough to read v2 or
