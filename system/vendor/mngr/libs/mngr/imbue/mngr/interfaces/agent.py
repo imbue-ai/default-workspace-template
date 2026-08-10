@@ -792,9 +792,7 @@ def require_key_chord_agent(agent: AgentInterface[Any]) -> SupportsKeyChordMixin
     with a clear error rather than an attribute error.
     """
     if not isinstance(agent, SupportsKeyChordMixin):
-        raise SendMessageError(
-            str(agent.name), f"agent type '{agent.agent_type}' does not accept key chords"
-        )
+        raise SendMessageError(str(agent.name), f"agent type '{agent.agent_type}' does not accept key chords")
     return agent
 
 

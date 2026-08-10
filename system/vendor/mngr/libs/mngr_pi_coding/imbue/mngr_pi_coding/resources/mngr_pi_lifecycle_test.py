@@ -1164,7 +1164,11 @@ def test_require_steps_skips_a_bash_tk_command(tmp_path: Path) -> None:
         _run_event(
             tmp_path,
             "tool_result",
-            {"toolName": "bash", "input": {"command": "tk create --step 'x'"}, "content": [{"type": "text", "text": "ok"}]},
+            {
+                "toolName": "bash",
+                "input": {"command": "tk create --step 'x'"},
+                "content": [{"type": "text", "text": "ok"}],
+            },
             env={"STUB_INPROGRESS": "", "STUB_STEPS": ""},
         )
     )

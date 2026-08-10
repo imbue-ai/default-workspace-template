@@ -789,7 +789,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // CONTROL_NAME). We apply the intent natively via pi.setModel /
   // pi.setThinkingLevel; applying fires model_select / thinking_level_select,
   // whose handlers below write minds_model_state.json, so the bar reconciles
-  // (ON_CHANGE) with no extra wiring.
+  // from the live state file with no extra wiring.
   //
   // Model resolution needs ctx.modelRegistry, which pi hands to event handlers, not to this
   // timer -- so we hold the latest ctx (captured in the handlers). The registry's getters read
@@ -896,7 +896,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // pi's model + thinking-level (effort) selectors. model_select fires on the
   // /model command, Ctrl+P cycling, or session restore; thinking_level_select on any
   // thinking change. Recording both keeps minds_model_state.json live so the chat model
-  // bar (ON_CHANGE) reflects a terminal-side switch.
+  // bar reconciles to a terminal-side switch.
   pi.on("model_select", (event, ctx) => {
     safe("model_select", () => {
       latestCtx = ctx;

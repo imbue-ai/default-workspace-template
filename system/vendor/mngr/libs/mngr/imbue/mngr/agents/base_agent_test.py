@@ -1058,6 +1058,7 @@ class _StubHost:
     def __init__(
         self,
         command_results: list[CommandResult] | None = None,
+        is_local: bool = False,
     ) -> None:
         default_result = CommandResult(success=True, stdout="", stderr="")
         self._command_results = list(command_results) if command_results else []
@@ -1065,6 +1066,7 @@ class _StubHost:
         self.executed_commands: list[str] = []
         self.written_files: list[tuple[Path, str]] = []
         self.host_dir = Path("/tmp/stub-host")
+        self.is_local = is_local
 
     def _execute_command(self, command: str, **kwargs: object) -> CommandResult:
         self.executed_commands.append(command)
@@ -1331,8 +1333,8 @@ def test_press_key_chord_sends_tmux_key(
     temp_mngr_ctx: MngrContext,
 ) -> None:
     """press_key_chord issues a single tmux send-keys with the key token (NOT -l literal)."""
-    stub = _StubHost()
-    stub.is_local = False  # skip the message-lock filesystem path; exercise only the send
+    # A non-local host skips the message-lock filesystem path; exercise only the send.
+    stub = _StubHost(is_local=False)
     agent = _create_agent_with_stub_host(temp_mngr_ctx, stub)
 
     agent.press_key_chord("M-q")
@@ -1348,8 +1350,7 @@ def test_press_key_chord_raises_on_failure(
     temp_mngr_ctx: MngrContext,
 ) -> None:
     """A failed send-keys surfaces as SendMessageError naming the key."""
-    stub = _StubHost(command_results=[CommandResult(success=False, stdout="", stderr="no session")])
-    stub.is_local = False
+    stub = _StubHost(command_results=[CommandResult(success=False, stdout="", stderr="no session")], is_local=False)
     agent = _create_agent_with_stub_host(temp_mngr_ctx, stub)
 
     with pytest.raises(SendMessageError, match="send-keys M-q failed"):
@@ -1361,8 +1362,7 @@ def test_press_key_chord_holds_message_lock(
     tmp_path: Path,
 ) -> None:
     """On a local host the chord runs through the per-agent message.lock (serializing sends)."""
-    stub = _StubHost()
-    stub.is_local = True
+    stub = _StubHost(is_local=True)
     stub.host_dir = tmp_path
     agent = _create_agent_with_stub_host(temp_mngr_ctx, stub)
 

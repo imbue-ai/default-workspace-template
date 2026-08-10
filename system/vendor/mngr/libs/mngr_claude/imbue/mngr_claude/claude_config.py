@@ -560,7 +560,10 @@ def ensure_chat_cancel_tap_keybinding(keybindings_path: Path) -> None:
 
     Uses the same ``_claude_config_lock`` + ``atomic_write`` (with ``.bak``) pattern
     as the other config writers. A file that exists but does not parse as JSON is
-    left as-is (a warning is logged) rather than overwritten.
+    left as-is (a warning is logged) rather than overwritten. Within a parseable
+    file, a malformed value we cannot interpret -- a non-list top-level ``bindings``
+    or a non-object Chat ``bindings`` -- is replaced with a fresh one (the ``.bak``
+    written by ``atomic_write`` preserves the prior content).
     """
     with _claude_config_lock(keybindings_path):
         try:
@@ -571,7 +574,9 @@ def ensure_chat_cancel_tap_keybinding(keybindings_path: Path) -> None:
 
         for context in (_CHAT_KEYBINDING_CONTEXT, _GLOBAL_KEYBINDING_CONTEXT):
             if _read_chord_action(keybindings, context, _TAP_KEYBINDING_CHORD) is not None:
-                logger.trace("Tap chord {} already bound in {} context; leaving untouched", _TAP_KEYBINDING_CHORD, context)
+                logger.trace(
+                    "Tap chord {} already bound in {} context; leaving untouched", _TAP_KEYBINDING_CHORD, context
+                )
                 return
 
         entries = _keybinding_entries(keybindings)
@@ -579,8 +584,20 @@ def ensure_chat_cancel_tap_keybinding(keybindings_path: Path) -> None:
         if chat_entry is None:
             chat_entry = {"context": _CHAT_KEYBINDING_CONTEXT, "bindings": {}}
             entries.append(chat_entry)
-        chat_bindings = chat_entry.setdefault("bindings", {})
+        chat_bindings = chat_entry.get("bindings")
+        if not isinstance(chat_bindings, dict):
+            # A Chat entry whose "bindings" is not an object is uninterpretable; replace
+            # it with a fresh dict -- mirroring how a non-list top-level "bindings" is
+            # replaced below -- rather than crash on the subscript assignment.
+            if chat_bindings is not None:
+                logger.warning(
+                    "Replacing non-object 'bindings' value in the {} keybinding context of {}",
+                    _CHAT_KEYBINDING_CONTEXT,
+                    keybindings_path,
+                )
+            chat_bindings = {}
         chat_bindings[_TAP_KEYBINDING_CHORD] = _TAP_KEYBINDING_ACTION
+        chat_entry["bindings"] = chat_bindings
         keybindings["bindings"] = entries
         _write_claude_config_atomic(keybindings_path, keybindings)
 
@@ -607,7 +624,8 @@ def is_tap_binding_active(keybindings_path: Path, process_started_marker_path: P
     """
     try:
         keybindings = read_claude_config(keybindings_path)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        logger.warning("Malformed keybindings file at {}; treating tap binding as inactive: {}", keybindings_path, e)
         return False
     if _read_chord_action(keybindings, _CHAT_KEYBINDING_CONTEXT, _TAP_KEYBINDING_CHORD) != _TAP_KEYBINDING_ACTION:
         return False

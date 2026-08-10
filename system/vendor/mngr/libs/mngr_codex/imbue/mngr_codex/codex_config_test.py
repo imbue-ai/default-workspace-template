@@ -304,8 +304,7 @@ def test_build_codex_hooks_config_maps_lifecycle_events_to_the_marker_scripts() 
     user_prompt_commands = [h["command"] for h in user_prompt[0]["hooks"]]
     assert SET_ACTIVE_MARKER_SCRIPT_NAME in user_prompt_commands[0]
     assert (
-        user_prompt_commands[1]
-        == 'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_open_tickets_reminder.sh" --codex'
+        user_prompt_commands[1] == 'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_open_tickets_reminder.sh" --codex'
     )
     assert user_prompt[0]["hooks"][0]["type"] == "command"
     # Stop: clear the active marker, then the open-steps nudge (stderr-only, exit 0).
