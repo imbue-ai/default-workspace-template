@@ -151,7 +151,7 @@ worker.
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-$TARGET \
-    --template worker \
+    --template subskill-worker \
     --runtime-dir data/.tasks/harden/update-$TARGET/ \
     --task-file data/.tasks/harden/update-$TARGET/task.md
 ```

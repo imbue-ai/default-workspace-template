@@ -154,12 +154,12 @@ worker.
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name crystallize-$NAME \
-    --template worker \
+    --template subskill-worker \
     --runtime-dir data/.tasks/harden/crystallize-$NAME/ \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md
 ```
 
-The `worker` template installs the generic `harden-worker` sub-skill.
+The `subskill-worker` template installs the generic `harden-worker` sub-skill.
 If the frontmatter sets `source_artifacts_dir`, `launch` pushes it too -- no
 extra flag.
 

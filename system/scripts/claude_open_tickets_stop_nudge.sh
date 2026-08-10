@@ -28,13 +28,8 @@ export TICKETS_DIR="$tickets_dir"
 
 # `tk steps` lists this agent's open step records only (regular tickets
 # are managed cross-agent and aren't part of the per-turn progress flow
-# the chat view renders). The trailing `|| true` is load-bearing: `tk steps`
-# exits non-zero when there are no steps at all, which under `set -euo pipefail`
-# would abort this script with that non-zero code -- breaking the "exits 0
-# always" contract (and, on codex, an exit 2 on Stop is read as a continuation
-# request, re-engaging the agent). `|| true` keeps the count at 0 and the exit
-# clean. Mirrors the same guard in claude_open_tickets_reminder.sh.
-open_count=$("$tk_script" steps 2>/dev/null | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ' || true)
+# the chat view renders).
+open_count=$("$tk_script" steps 2>/dev/null | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')
 
 if [[ "${open_count:-0}" -gt 0 ]]; then
     echo "[task-management] Stopping with ${open_count} step record(s) still open. They'll appear at the top of the next turn's progress block." >&2

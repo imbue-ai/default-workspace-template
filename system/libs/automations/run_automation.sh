@@ -44,7 +44,6 @@ set -euo pipefail
 # ---- Arguments --------------------------------------------------------------
 SKILL=""
 TEMPLATE="automation"
-HARNESS="claude"
 AGENT_NAME=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -120,7 +119,7 @@ create_automation_agent() {
   fi
   log "creating the persistent automation agent (template: ${TEMPLATE}, first message: ${RUN_MESSAGE})"
   uv run mngr create "$AGENT_NAME" \
-    --template "$HARNESS" \
+    --transfer none \
     --template "$TEMPLATE" \
     --no-connect \
     --format json \

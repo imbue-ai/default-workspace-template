@@ -60,7 +60,7 @@ def test_prevent_broad_exception_catch() -> None:
     # ChatPanel stuck on "Creating agent..." because proto_agent_completed
     # never fires. Treat this one as load-bearing rather than sloppy.
     # Bumped again for the credential-apply thread's top-level handler in
-    # auth._run_apply_in_background: same thread-boundary shape --
+    # claude_auth._run_apply_in_background: same thread-boundary shape --
     # anything escaping must surface as the FAILED restart phase in the
     # sign-in modal instead of dying silently in a daemon thread.
     rc.check_broad_exception_catch(_DIR, snapshot(4))
@@ -75,7 +75,7 @@ def test_prevent_builtin_exception_raises() -> None:
 
 
 def test_prevent_silent_decode_error_catches() -> None:
-    rc.check_silent_decode_error_catches(_DIR, snapshot(4))
+    rc.check_silent_decode_error_catches(_DIR, snapshot(5))
 
 
 # --- Import style ---
@@ -138,15 +138,7 @@ def test_prevent_functools_partial() -> None:
 
 
 def test_prevent_num_prefix() -> None:
-    # Both hits are misfires, and both are the same one: tool_labels.py's module
-    # docstring quotes codex's own tool signatures verbatim, and two of ITS optional
-    # parameters are num-prefixed (`num_last_images_to_include`, `num_games`). Renaming
-    # them would make the documented signature wrong, and no identifier in our code is
-    # num-prefixed. The rule's regex (`\bnum_\w+`) scans raw source and cannot tell a
-    # docstring from a declaration; it lives in the vendored imbue_common, so narrowing
-    # it here would diverge the subtree from mngr. Should a real violation ever land,
-    # it will push this to 3 and be caught.
-    rc.check_num_prefix(_DIR, snapshot(2))
+    rc.check_num_prefix(_DIR, snapshot(0))
 
 
 # --- Documentation ---
