@@ -180,7 +180,14 @@ PREVENT_ASYNC_AWAIT = RegexRatchetRule(
         "are almost no valid exceptions. Write blocking, synchronous code instead (poll with wait_for, "
         "use threads via ConcurrencyGroup if you need concurrency)."
     ),
-    pattern_string=r"\basync\s+def\b|\bawait\b",
+    # The pattern requires what actually follows the keyword in Python -- whitespace before
+    # the awaited expression, or an opening paren -- rather than a bare word boundary. A bare
+    # boundary also matches prose: ``await-delivery`` is a real CLI subcommand
+    # (``mngr imbue_cloud admin server await-delivery``), so every comment, docstring, and help
+    # string naming it counts as an async usage. NB: this file is scanned by this rule, so write
+    # any prose here with the keyword never followed by a space or an open paren, or the rule
+    # counts its own explanation.
+    pattern_string=r"\basync\s+def\b|\bawait\s|\bawait\(",
 )
 
 PREVENT_PANDAS_IMPORT = RegexRatchetRule(
@@ -236,10 +243,10 @@ PREVENT_TRAILING_COMMENTS = RegexRatchetRule(
     rule_name="trailing comments",
     rule_description=(
         "Comments should be on their own line, not trailing after code. Trailing comments make code harder to read. "
-        "`# ty: ignore[code]` is exempt, as are hex colors, `PR #NNNN` references inside prose, and `#{...}` "
-        "interpolation/format tokens (e.g. tmux format strings), which are not comments."
+        "`# ty: ignore[code]` is exempt, as are hex colors, `#NNNN` issue and PR references (in prose or in a string "
+        "literal), and `#{...}` interpolation/format tokens (e.g. tmux format strings), which are not comments."
     ),
-    pattern_string=r"[^\s#].*[ \t](?<![Pp][Rr] )#(?!\{)(?![0-9a-fA-F]{3,6}[;\s])(?!\s*ty:\s*ignore\[)",
+    pattern_string=r"[^\s#].*[ \t](?<![Pp][Rr] )#(?!\{)(?!\d+\b)(?![0-9a-fA-F]{3,6}[;\s])(?!\s*ty:\s*ignore\[)",
 )
 
 PREVENT_INIT_DOCSTRINGS = RegexRatchetRule(
@@ -526,6 +533,22 @@ PREVENT_HARDCODED_GUARDED_BINARY = RegexRatchetRule(
         "to the test rather than working around the guard with an absolute path."
     ),
     pattern_string=r"/(?:usr/local/bin|usr/bin|opt/homebrew/bin|opt/local/bin)/(?:docker|tmux|rsync|unison|modal|lima)(?![\w-])",
+)
+
+
+# --- Modal images ---
+
+PREVENT_UNPINNED_MODAL_PIP_INSTALL = RegexRatchetRule(
+    rule_name="unpinned Modal image pip installs",
+    rule_description=(
+        "Do not pass bare package names to Image.pip_install / Image.uv_pip_install when building "
+        "Modal images: packages then resolve at image-build time, so what ships depends on when the "
+        "image happens to rebuild instead of on reviewed, committed state. Install from a committed "
+        "hash-locked export instead: declare the ==-pinned set in the app's [dependency-groups] "
+        "image, regenerate image_requirements.txt with `just export-image-requirements`, and build "
+        "the image with imbue.modal_app_kit.image.pinned_image. See libs/modal_app_kit/README.md."
+    ),
+    pattern_string=r"\.(uv_)?pip_install\(\s*(\*|f?[\"'])",
 )
 
 

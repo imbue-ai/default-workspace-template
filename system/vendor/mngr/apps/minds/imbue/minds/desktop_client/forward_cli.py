@@ -97,6 +97,10 @@ class ForwardSubprocessConfig(FrozenModel):
         default=(),
         description="--reverse REMOTE:LOCAL pairs to set up",
     )
+    embedder_origins: tuple[str, ...] = Field(
+        default=(),
+        description="Origins allowed to embed workspace content, passed to --embedder-origin",
+    )
     mngr_binary: str = Field(default=MNGR_BINARY, description="Path to mngr binary")
     mngr_host_dir: Path = Field(default=_DEFAULT_MNGR_HOST_DIR, description="MNGR_HOST_DIR for the subprocess")
 
@@ -137,7 +141,13 @@ class _PreStartErrorDropLogger(MutableModel):
     """
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _tally_by_error_by_provider_name: dict[ProviderInstanceName, dict[DiscoveryError, _DroppedPreStartErrorTally]] = (
+    # Keyed by ``(type_name, message)`` rather than by the whole ``DiscoveryError``,
+    # matching the shared ``DiscoveryErrorLogSuppressor``: an error also carries a
+    # captured traceback, and folding that into the key would split one wedged
+    # provider's tally the moment its traceback varied -- restoring exactly the
+    # line-per-cycle flood this collapser exists to prevent, in lines that read
+    # identically (only the message is printed).
+    _tally_by_error_by_provider_name: dict[ProviderInstanceName, dict[tuple[str, str], _DroppedPreStartErrorTally]] = (
         PrivateAttr(default_factory=dict)
     )
 
@@ -145,13 +155,16 @@ class _PreStartErrorDropLogger(MutableModel):
         self, provider_name: ProviderInstanceName, error: DiscoveryError, snapshot_at: datetime
     ) -> None:
         """Tally one dropped pre-start error, to be logged when the provider's replay ends."""
+        error_key = (error.type_name, error.message)
         with self._lock:
             tally_by_error = self._tally_by_error_by_provider_name.setdefault(provider_name, {})
-            previous = tally_by_error.get(error)
+            previous = tally_by_error.get(error_key)
             if previous is None:
-                tally_by_error[error] = _DroppedPreStartErrorTally(error=error, count=1, last_snapshot_at=snapshot_at)
+                tally_by_error[error_key] = _DroppedPreStartErrorTally(
+                    error=error, count=1, last_snapshot_at=snapshot_at
+                )
             else:
-                tally_by_error[error] = previous.model_copy_update(
+                tally_by_error[error_key] = previous.model_copy_update(
                     to_update(previous.field_ref().count, previous.count + 1),
                     to_update(previous.field_ref().last_snapshot_at, snapshot_at),
                 )
@@ -216,6 +229,10 @@ class EnvelopeStreamConsumer(MutableModel):
     # the agents on each host when building the resolver's view.
     _ssh_by_host_id: dict[str, RemoteSSHInfo] = PrivateAttr(default_factory=dict)
     _services_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # Parallel to _services_by_agent: {agent_id_str: {service_name: origin label}}.
+    # Carries each service's public origin hostname label (``<name>-<rand>``) so
+    # the resolver -- and thus the Share tab -- can build per-service share links.
+    _labels_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
     _on_agent_discovered_callbacks: list[OnAgentDiscoveredCallback] = PrivateAttr(default_factory=list)
     _on_agent_destroyed_callbacks: list[OnAgentDestroyedCallback] = PrivateAttr(default_factory=list)
     _on_system_interface_backend_failure_callbacks: list[OnSystemInterfaceBackendFailureCallback] = PrivateAttr(
@@ -471,6 +488,17 @@ class EnvelopeStreamConsumer(MutableModel):
             # flap (as they do across a multi-day gap) logs afresh after every
             # clean cycle in between.
             error = event.error
+            # Dropping the error must also drop the snapshot's claim to freshness.
+            # ``last_snapshot_at`` is what tells a consumer "discovery has reported this
+            # provider", and the cloud-tile state reads a recorded time plus no error as
+            # proof the provider is healthy -- so recording it here would launder a
+            # provider that was broken for the whole gap into a healthy one reporting
+            # zero hosts, and every workspace on it would render "unreachable" (a
+            # positive claim that discovery looked and the host was gone) instead of
+            # "connecting" (we do not know yet). That is exactly what happened to a
+            # leased, perfectly healthy staging host whose provider had been failing for
+            # ~25h. Leave freshness unset until a genuine post-start snapshot lands.
+            is_snapshot_state_current = True
             if event.discovery_finished_at < self.started_at:
                 if error is not None:
                     self._pre_start_drop_logger.record_dropped_error(
@@ -479,6 +507,7 @@ class EnvelopeStreamConsumer(MutableModel):
                         snapshot_at=event.discovery_finished_at,
                     )
                     error = None
+                    is_snapshot_state_current = False
             else:
                 self._pre_start_drop_logger.flush_provider(event.provider_name)
             # A per-provider snapshot is also a discovery event, so update_providers
@@ -499,6 +528,7 @@ class EnvelopeStreamConsumer(MutableModel):
                 error=error,
                 last_snapshot_at=event.discovery_finished_at,
                 clean_snapshot_host_ids=clean_snapshot_host_ids,
+                is_snapshot_state_current=is_snapshot_state_current,
             )
         else:
             self._record_incremental_event(event)
@@ -570,6 +600,7 @@ class EnvelopeStreamConsumer(MutableModel):
             agent_id = AgentId(agent_id_str)
             with self._lock:
                 self._services_by_agent.pop(agent_id_str, None)
+                self._labels_by_agent.pop(agent_id_str, None)
             self.resolver.update_services(agent_id, {})
             self._fire_destroyed(agent_id)
         for agent_id_str in delta.added_agent_ids:
@@ -639,12 +670,19 @@ class EnvelopeStreamConsumer(MutableModel):
             return
         with self._lock:
             services = self._services_by_agent.setdefault(aid_str, {})
+            labels = self._labels_by_agent.setdefault(aid_str, {})
             if isinstance(record, ServiceDeregisteredRecord):
                 services.pop(str(record.service), None)
+                labels.pop(str(record.service), None)
             else:
                 services[str(record.service)] = record.url
+                if record.label:
+                    labels[str(record.service)] = record.label
+                else:
+                    labels.pop(str(record.service), None)
             services_snapshot = dict(services)
-        self.resolver.update_services(agent_id, services_snapshot)
+            labels_snapshot = dict(labels)
+        self.resolver.update_services(agent_id, services_snapshot, labels_snapshot)
 
     # -- Forward-stream payloads ------------------------------------------
 
@@ -737,11 +775,11 @@ class EnvelopeStreamConsumer(MutableModel):
 def start_mngr_forward(
     config: ForwardSubprocessConfig,
     resolver: MngrCliBackendResolver,
-) -> tuple[EnvelopeStreamConsumer, str]:
+) -> tuple[EnvelopeStreamConsumer, str, str]:
     """Spawn the ``mngr forward`` subprocess and attach an envelope consumer.
 
-    Returns ``(consumer, preauth_cookie_value)``. The reader threads are
-    *not* started yet -- the caller MUST:
+    Returns ``(consumer, preauth_cookie_value, browser_bridge_token)``. The
+    reader threads are *not* started yet -- the caller MUST:
 
     1. register its on_agent_discovered / on_agent_destroyed handlers
        on the consumer;
@@ -749,7 +787,8 @@ def start_mngr_forward(
        envelopes;
     3. hand the preauth cookie to the Electron shell so it can pre-set
        ``mngr_forward_session=<value>`` on ``localhost:<port>`` before the
-       first agent-subdomain navigation.
+       first agent-subdomain navigation. The browser bridge token backs the
+       ``/forward-bridge`` route, browser mode's twin of that injection.
 
     Splitting attach (here) from start (caller) avoids a race where
     envelopes arriving before the caller has registered its callbacks
@@ -757,7 +796,8 @@ def start_mngr_forward(
     dropped.
     """
     preauth_cookie = secrets.token_urlsafe(_PREAUTH_TOKEN_LENGTH)
-    command = _build_forward_command(config, preauth_cookie)
+    browser_bridge_token = secrets.token_urlsafe(_PREAUTH_TOKEN_LENGTH)
+    command = _build_forward_command(config, preauth_cookie, browser_bridge_token)
     env = dict(os.environ)
     env["MNGR_HOST_DIR"] = str(config.mngr_host_dir)
     logger.info("Spawning `mngr forward` subprocess: {}", " ".join(_redact_secrets(command)))
@@ -774,10 +814,14 @@ def start_mngr_forward(
     )
     consumer = EnvelopeStreamConsumer(resolver=resolver)
     consumer.attach(process)
-    return consumer, preauth_cookie
+    return consumer, preauth_cookie, browser_bridge_token
 
 
-def _build_forward_command(config: ForwardSubprocessConfig, preauth_cookie: str) -> list[str]:
+def _build_forward_command(
+    config: ForwardSubprocessConfig,
+    preauth_cookie: str,
+    browser_bridge_token: str,
+) -> list[str]:
     """Build the ``mngr forward`` argv for the subprocess minds spawns."""
     command: list[str] = [
         config.mngr_binary,
@@ -791,17 +835,21 @@ def _build_forward_command(config: ForwardSubprocessConfig, preauth_cookie: str)
         "--observe-via-file",
         "--preauth-cookie",
         preauth_cookie,
+        "--browser-bridge-token",
+        browser_bridge_token,
         "--format",
         "jsonl",
     ]
     # TLS + HTTP/2 so the workspace origin is not capped by Chromium's
     # per-origin HTTP/1.1 connection limit. The Electron shell trusts the
-    # proxy's self-signed cert for its loopback origins.
+    # proxy's CA-signed leaf for its loopback origins programmatically.
     command.append("--use-http2")
     for include in config.agent_include:
         command.extend(["--agent-include", include])
     for spec in config.reverse_specs:
         command.extend(["--reverse", spec])
+    for origin in config.embedder_origins:
+        command.extend(["--embedder-origin", origin])
     return command
 
 
@@ -817,4 +865,4 @@ def _redact_secrets(command: list[str]) -> list[str]:
     return redact_secret_flag_values(command, secret_bearing_flags=_SECRET_BEARING_FLAGS)
 
 
-_SECRET_BEARING_FLAGS: Final[tuple[str, ...]] = ("--preauth-cookie",)
+_SECRET_BEARING_FLAGS: Final[tuple[str, ...]] = ("--preauth-cookie", "--browser-bridge-token")

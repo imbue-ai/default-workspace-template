@@ -1,36 +1,26 @@
 #!/usr/bin/env python3
-"""Tiny static server that wraps a proxied service in a labeled "preview" frame.
+"""Tiny static server that wraps a registered service in a labeled "preview" frame.
 
-A pre-merge preview is just another service the live UI proxies at
-``/service/<name>/``, so by default it renders as a bare iframe -- visually
-indistinguishable from (and confusingly nested inside) the live interface. This
-server wraps that inner service in a chrome page that frames it on all four
-sides: an accent border + a header label marking the tab as a *preview of a
-proposed change*, with the inner service held in a bordered "stage" iframe
-inside that frame.
+A pre-merge preview is just another registered service served raw at its own
+browser origin, so by default it renders as a bare tab -- visually
+indistinguishable from the live interface. This server wraps that inner
+service in a chrome page that frames it on all four sides: an accent border +
+a header label marking the tab as a *preview of a proposed change*, with the
+inner service held in a bordered "stage" iframe inside that frame.
 
 It is deliberately service-agnostic. Given any inner service name already
-registered under the system-interface service dispatcher, plus a human-readable
-title, it serves the wrapper page -- so the same mechanism can wrap a preview of
-any service, not just the system interface itself.
+registered via ``forward_port.py``, plus a human-readable title, it serves the
+wrapper page -- so the same mechanism can wrap a preview of any service, not
+just the system interface itself.
 
-How it composes with the dispatcher's proxy (the reason for the small quirks
-below):
+The wrapper itself is registered as its own service, so it is served at its
+own origin too. Every service origin prefixes the service name as one hostname
+label on the workspace host (``<name>.<workspace-host>``), and the workspace
+host cannot be known server-side -- so the inner iframe's ``src`` is derived
+in the page's JavaScript from ``location.host`` by swapping the wrapper's own
+leading label for the inner service's name.
 
-- The wrapper page is itself served *through* the dispatcher at
-  ``/service/<wrapper>/``. The dispatcher rewrites absolute-path ``src=``/``href=``
-  attributes in proxied HTML to prepend the wrapper's own prefix. So the inner
-  iframe's URL must NOT appear as a literal ``src="/..."`` attribute (it would be
-  rewritten to ``/service/<wrapper>/service/<inner>/`` and break). We set it from
-  JavaScript instead, building the path so no ``src=``/``href=`` literal precedes
-  it -- ``reveal_system_interface_test.py`` runs the real rewriter over this page
-  to lock that in.
-- The inner service is reached at its own top-level ``/service/<inner>/`` scope,
-  disjoint from the wrapper's ``/service/<wrapper>/`` scope, so the two scoped
-  service workers the dispatcher installs never intercept each other.
-
-Run via bare ``python3`` (standard library only, no venv needed), mirroring how
-``reveal_system_interface.py`` spawns it:
+Run via bare ``python3`` (standard library only, no venv needed):
 
     python3 preview_wrapper_server.py --port 8200 --inner-service si-preview-app \\
         --title "my-change"
@@ -47,9 +37,9 @@ def build_wrapper_html(inner_service: str, title: str) -> str:
     """Build the wrapper chrome page embedding ``inner_service`` in an iframe.
 
     ``title`` is shown in the banner (HTML-escaped). The inner iframe ``src`` is
-    assigned from JavaScript -- never as a static ``src="/..."`` attribute -- so
-    the dispatcher's absolute-path rewriter leaves the inner ``/service/<name>/``
-    path intact (see the module docstring).
+    assigned from JavaScript because the inner service's origin is a sibling of
+    the wrapper's own and can only be derived from ``location.host`` at render
+    time (see the module docstring).
     """
     safe_title = html.escape(title)
     # json.dumps yields a safe, quoted JS string literal for the service name.
@@ -116,8 +106,16 @@ def build_wrapper_html(inner_service: str, title: str) -> str:
     <iframe class="preview-frame" id="preview-frame" title="Preview of {safe_title}"></iframe>
   </div>
   <script>
+    // Derive the inner service's sibling origin from this page's own host.
+    // Every service origin is <name>.<workspace-host> (the same prefix rule
+    // locally and on shares), so the wrapper at <wrapper>.<workspace-host>
+    // reaches the inner service by swapping its own leading label.
+    // The origin scheme is owned by deriveServiceOrigin in system_interface's
+    // frontend/src/origin.ts; if it changes, this sibling-swap must change too.
     var previewService = {service_literal};
-    var previewTarget = "/service/" + previewService + "/";
+    var host = location.host;
+    var innerHost = previewService + host.slice(host.indexOf("."));
+    var previewTarget = location.protocol + "//" + innerHost + "/";
     document.getElementById("preview-frame").setAttribute("src", previewTarget);
   </script>
 </body>
@@ -128,10 +126,10 @@ def _make_handler(page_html: str) -> type[BaseHTTPRequestHandler]:
     encoded = page_html.encode("utf-8")
 
     class _WrapperHandler(BaseHTTPRequestHandler):
-        # ``do_GET`` is the method name ``http.server`` dispatches to; the
-        # dispatcher only ever fetches the wrapper root, since the inner iframe is
-        # loaded by the browser directly from the inner service's own
-        # ``/service/<inner>/`` path and never reaches this server.
+        # ``do_GET`` is the method name ``http.server`` dispatches to; only the
+        # wrapper root is ever fetched here, since the inner iframe is loaded by
+        # the browser directly from the inner service's own origin and never
+        # reaches this server.
         def do_GET(self) -> None:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -162,7 +160,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--inner-service",
         required=True,
-        help="Name of the already-registered service to embed (reached at /service/<name>/).",
+        help="Name of the already-registered service to embed (reached at its "
+        "own sibling origin, derived in the page from location.host).",
     )
     parser.add_argument(
         "--title",

@@ -271,14 +271,13 @@ tk start <ticket-id>
 ```
 
 Write the task file. Use the two-heredoc form the other worker skills use: an
-**unquoted** frontmatter block so `$MNGR_AGENT_NAME` and `$REF` expand, then a
-**quoted** body so its backticks stay literal:
+**unquoted** frontmatter block so `$REF` expands, then a **quoted** body so its
+backticks stay literal:
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
@@ -654,7 +653,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
 
   - A **pinned-toolchain bump** in `setup_system.sh` /
     `install_secret_scanners.sh` (canonically `LATCHKEY_VERSION`, but also `UV_`,
-    `MODAL_`, `TTYD_`, `CLOUDFLARED_`, scanner pins) does **not** reach the live
+    `MODAL_`, `TTYD_`, `CADDY_`, `FRP_`, scanner pins) does **not** reach the live
     workspace on its own -- the globally-installed CLI stays at the old version
     until a rebuild. Apply it live by re-running the provisioner:
 

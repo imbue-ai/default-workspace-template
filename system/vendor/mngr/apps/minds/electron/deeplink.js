@@ -7,12 +7,13 @@
 // these helpers and acts on the result.
 //
 // URL shape: the host names the action.
-//   minds://create?git_url=<repo>&branch=<ref>  -> open the Create from
-//     Inspiration page for the repo (choose between a new workspace and
-//     adding it to an existing one); `branch` accepts anything the create
-//     form's Branch input accepts and stays blank when absent (create then
-//     resolves the repo's latest version). Without a git_url the plain
-//     create page is the target.
+//   minds://create?git_url=<repo>&branch=<ref>  -> an Inspiration link:
+//     main.js navigates to the SPA's Create from Inspiration PAGE, which
+//     offers both ways forward (create a new machine, or add the Inspiration
+//     to an existing one). `branch` accepts anything the create form's
+//     Branch input accepts and stays blank when absent (create then resolves
+//     the repo's latest version). Without a git_url the plain create page is
+//     the target.
 //   minds:// (or any unrecognized/malformed URL) -> just focus the app.
 
 // Generous for a git URL plus ref, tight enough to bound log spam and
@@ -54,13 +55,13 @@ function parseDeeplink(rawUrl) {
 }
 
 /**
- * Map a raw deeplink URL to the backend path it should load, or null for
- * focus-only. This is the allowlist boundary: the only possible outputs are
- * null or a string built from the fixed '/create' / '/create/inspiration'
- * literals plus URLSearchParams re-encoding -- raw deeplink text never
- * reaches loadURL. A repo-carrying link is an Inspiration link and lands on
- * the Create from Inspiration page; without a repo the plain create page is
- * the target (a branch alone is not an Inspiration).
+ * Map a raw deeplink URL to the backend path the CONTENT VIEW should navigate
+ * to, or null for focus-only. This is the allowlist boundary: the only possible
+ * outputs are null or a string built from the fixed '/create' /
+ * '/create/inspiration' literals plus URLSearchParams re-encoding -- raw
+ * deeplink text never reaches loadURL. A repo-carrying link is an Inspiration
+ * link and targets the Create from Inspiration page; without a repo the plain
+ * create page is the target (a branch alone is not an Inspiration).
  */
 function deeplinkTargetPath(rawUrl) {
   const parsed = parseDeeplink(rawUrl);

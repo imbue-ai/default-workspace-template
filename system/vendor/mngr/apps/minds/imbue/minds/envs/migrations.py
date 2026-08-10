@@ -69,8 +69,8 @@ def _direct_migration_dsn(dsn: SecretStr) -> SecretStr:
     multi-transaction protocol) that is unsafe through PgBouncer's
     transaction-mode pooling (Neon's ``-pooler`` endpoints). Non-Neon and
     already-direct DSNs are returned unchanged. Twin of
-    ``_direct_database_url`` in ``apps/modal_litellm/app.py`` (duplicated
-    because that file must stay monorepo-import-free).
+    ``direct_database_url`` in ``imbue.modal_app_kit.database`` (duplicated
+    because minds does not depend on the modal-app-kit library).
     """
     database_url = dsn.get_secret_value()
     parsed = urlsplit(database_url)
@@ -267,8 +267,6 @@ def apply_pool_hosts_migrations(
 # columns created by migration 014_plans_entitlements.sql.
 _PLAN_QUOTA_COLUMNS: Final[tuple[str, ...]] = (
     "max_remote_workspaces",
-    "max_tunnels",
-    "max_services_per_tunnel",
     "max_buckets",
     "max_total_bucket_bytes",
     "monthly_llm_spend_usd",

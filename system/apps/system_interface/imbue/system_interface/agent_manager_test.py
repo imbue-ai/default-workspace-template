@@ -149,6 +149,7 @@ def test_read_apps_parses_toml(agent_manager: AgentManager, tmp_path: Path) -> N
 [[apps]]
 name = "web"
 url = "http://localhost:8000"
+label = "web-x7k9q2w1"
 
 [[apps]]
 name = "terminal"
@@ -163,8 +164,11 @@ url = "http://localhost:7681"
     assert len(apps) == 2
     assert apps[0].name == "web"
     assert apps[0].url == "http://localhost:8000"
+    assert apps[0].label == "web-x7k9q2w1"
     assert apps[1].name == "terminal"
     assert apps[1].url == "http://localhost:7681"
+    # A row written before labels existed reads back with an empty label.
+    assert apps[1].label == ""
 
 
 def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -219,11 +223,11 @@ def test_get_agents_serialized(agent_manager: AgentManager) -> None:
 def test_get_apps_serialized(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
         agent_manager._apps = [
-            AppEntry(name="web", url="http://localhost:8000"),
+            AppEntry(name="web", url="http://localhost:8000", label="web-x7k9q2w1"),
         ]
 
     serialized = agent_manager.get_apps_serialized()
-    assert serialized == [{"name": "web", "url": "http://localhost:8000"}]
+    assert serialized == [{"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1"}]
 
 
 def test_resolve_agent_work_dir_from_own_env(agent_manager: AgentManager) -> None:

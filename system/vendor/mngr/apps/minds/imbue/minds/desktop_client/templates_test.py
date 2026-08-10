@@ -1,4 +1,6 @@
+import json
 import re
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +18,7 @@ from imbue.minds.desktop_client.templates import ADD_ACCOUNT_OPTION_VALUE
 from imbue.minds.desktop_client.templates import CATALOG
 from imbue.minds.desktop_client.templates import DEFAULT_EXPECTED_CREATE_ATTEMPT_DURATION_SECONDS
 from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
-from imbue.minds.desktop_client.templates import InspirationWorkspaceRow
+from imbue.minds.desktop_client.templates import InspirationMachineRow
 from imbue.minds.desktop_client.templates import expected_create_attempt_duration_seconds
 from imbue.minds.desktop_client.templates import make_unique_host_name
 from imbue.minds.desktop_client.templates import render_account_plan_modal_page
@@ -33,12 +35,11 @@ from imbue.minds.desktop_client.templates import render_dev_styleguide_page
 from imbue.minds.desktop_client.templates import render_help_page
 from imbue.minds.desktop_client.templates import render_inbox_page
 from imbue.minds.desktop_client.templates import render_inspiration_create_page
+from imbue.minds.desktop_client.templates import render_inspiration_modal_page
 from imbue.minds.desktop_client.templates import render_landing_page
 from imbue.minds.desktop_client.templates import render_login_page
 from imbue.minds.desktop_client.templates import render_login_redirect_page
-from imbue.minds.desktop_client.templates import render_overlay_host_page
 from imbue.minds.desktop_client.templates import render_recovery_page
-from imbue.minds.desktop_client.templates import render_sharing_editor
 from imbue.minds.desktop_client.templates import render_sidebar_page
 from imbue.minds.desktop_client.templates import render_workspace_backup_history
 from imbue.minds.desktop_client.templates import render_workspace_options_modal_page
@@ -69,9 +70,13 @@ _AGENT_B: AgentId = AgentId("agent-00000000000000000000000000000002")
 
 
 def test_render_landing_page_with_agents_lists_them_as_links() -> None:
+    # The plugin's /goto/ route is host-keyed: rows with a known host
+    # coordinate link via it, rows without one fall back to the agent id.
     ids = (_AGENT_A, _AGENT_B)
-    html = render_landing_page(accessible_agent_ids=ids)
-    assert f"/goto/{_AGENT_A}/" in html
+    host_a = "host-000000000000000000000000000000aa"
+    html = render_landing_page(accessible_agent_ids=ids, agent_host_ids={str(_AGENT_A): host_a})
+    assert f"/goto/{host_a}/" in html
+    assert f"/goto/{_AGENT_A}/" not in html
     assert f"/goto/{_AGENT_B}/" in html
     assert str(_AGENT_A) in html
     assert str(_AGENT_B) in html
@@ -281,20 +286,6 @@ def test_render_workspace_settings_pill_not_selected_for_palette_color() -> None
     )
     assert 'aria-checked="true"' in html
     assert "is-selected" not in html
-
-
-def test_render_sharing_editor_workspace_link_interpolates_agent_id() -> None:
-    # Regression: the workspace <Link href="...{{ }}..."> must interpolate
-    # (component quoted-attribute interpolation does not happen in JinjaX).
-    html = render_sharing_editor(
-        agent_id=str(_AGENT_A),
-        service_name="svc",
-        title="Share",
-        mngr_forward_origin="http://localhost:8421",
-        ws_name="ws",
-    )
-    assert f"/goto/{_AGENT_A}/" in html
-    assert "{{" not in html
 
 
 def test_render_landing_page_with_no_agents_shows_empty_state() -> None:
@@ -646,11 +637,13 @@ def test_render_create_form_shows_error_message_when_supplied() -> None:
 
 
 def test_render_creating_page_renders_onboarding_walkthrough() -> None:
-    """The creating page carries the five-step onboarding walkthrough.
+    """The creating page carries the nine-step onboarding walkthrough.
 
-    The title, the step markers (1..5), the intro panel + advance button,
-    and the graphics (minds logo, browser demo, app cloud, and the final
-    latchkey/tunnel illustration) must all be present on first paint.
+    The title, the step markers (1..9), the dot strip that navigates them,
+    and the graphics (minds mark, machine, chat, browser demo, app cloud,
+    the permissions scene, devices, publishing) must all be present on first
+    paint. There is no intro panel and no button to start it: it plays
+    itself.
     """
     create_attempt_id = CreateAttemptId()
     info = AgentCreateAttemptInfo(
@@ -669,11 +662,12 @@ def test_render_creating_page_renders_onboarding_walkthrough() -> None:
     ]
     html = render_creating_page(create_attempt_id=create_attempt_id, info=info, onboarding_services=services)
     assert "Setting up your machine" in html
-    # Eight walkthrough steps: the intro, the chat, the tabs demo, the apps
-    # cloud, the connections scene, the devices, publishing, and the tips.
-    for step_number in range(1, 9):
+    # Nine walkthrough steps: the intro, the machine, the chat, the tabs
+    # demo, the apps cloud, the connections scene, the devices, publishing,
+    # and the tips.
+    for step_number in range(1, 10):
         assert f'data-step="{step_number}"' in html
-    assert 'data-step="9"' not in html
+    assert 'data-step="10"' not in html
     assert 'id="intro-panel"' not in html
     # The progress strip is always visible.
     strip_index = html.index('id="top-strip"')
@@ -688,7 +682,7 @@ def test_render_creating_page_renders_onboarding_walkthrough() -> None:
     # circle carrying the sweep arc.
     assert 'id="onboarding-advance"' not in html
     assert 'id="onboarding-prev"' not in html
-    assert html.count('class="onboarding-dot"') == 8
+    assert html.count('class="onboarding-dot"') == 9
     # The current step's dot stretches into a pill whose fill times the dwell.
     assert "onboarding-dot-fill" in html
     # The strip is dots alone: no play/pause/replay control.
@@ -696,6 +690,7 @@ def test_render_creating_page_renders_onboarding_walkthrough() -> None:
     # Graphics for the phases.
     for gfx in (
         'id="gfx-minds"',
+        'id="gfx-machine"',
         'id="gfx-chat"',
         'id="gfx-browser"',
         'id="gfx-apps"',
@@ -741,23 +736,23 @@ def test_render_creating_page_opens_on_the_minds_intro() -> None:
     )
     html = render_creating_page(create_attempt_id=create_attempt_id, info=info)
     assert 'data-surface-errors="true"' in html
-    assert "This is Minds: your machine for building personalized apps." in html
+    assert "Minds is your personal AI operating system." in html
     # Every step is two lines: what the thing is, then what you do with it.
-    assert "Learn more while you wait." in html
+    assert "Learn your way around while your machine sets up." in html
     # The minds mark is defined once and referenced wherever it is shown.
     assert 'id="minds-mark"' in html
     assert html.count('href="#minds-mark"') == 1
     # Both devices show the same miniature of the app pane.
     assert html.count('href="#app-ui"') == 2
     # Nothing invites a click to start it any more.
-    assert "Learn more while you wait?" not in html
+    assert "Learn more while you wait" not in html
     # The tips sit on their own final step rather than crowding the picture.
-    tips_index = html.index('data-step="8"')
+    tips_index = html.index('data-step="9"')
     assert 'id="tip"' in html[tips_index : html.index("</div>", html.index('id="tip"'))]
 
 
 def test_render_creating_page_final_copy_matches_launch_mode() -> None:
-    """The final step explains where the workspace runs, per launch mode."""
+    """The machine and sharing steps explain where the machine runs, per launch mode."""
     create_attempt_id = CreateAttemptId()
     local_info = AgentCreateAttemptInfo(
         create_attempt_id=create_attempt_id,
@@ -766,7 +761,9 @@ def test_render_creating_page_final_copy_matches_launch_mode() -> None:
     )
     local_html = render_creating_page(create_attempt_id=create_attempt_id, info=local_info)
     assert "runs locally, so your computer has to be on" in local_html
-    assert 'data-is-remote="false"' in local_html
+    assert "This one runs right on your own computer." in local_html
+    # The machine drawing matches: the local variant is the laptop with a star.
+    assert 'id="gfx-machine"' in local_html
 
     remote_info = AgentCreateAttemptInfo(
         create_attempt_id=create_attempt_id,
@@ -775,7 +772,7 @@ def test_render_creating_page_final_copy_matches_launch_mode() -> None:
     )
     remote_html = render_creating_page(create_attempt_id=create_attempt_id, info=remote_info)
     assert "even when your laptop is closed" in remote_html
-    assert 'data-is-remote="true"' in remote_html
+    assert "secure cloud, but is dedicated to you" in remote_html
 
 
 def test_render_creating_page_carries_hidden_github_auth_guidance() -> None:
@@ -916,6 +913,84 @@ def _render_inspiration(**kwargs: Any) -> str:
     return render_inspiration_create_page(git_url=_INSPIRATION_URL, **kwargs)
 
 
+def _render_inspiration_modal(**kwargs: Any) -> str:
+    return render_inspiration_modal_page(git_url=_INSPIRATION_URL, **kwargs)
+
+
+def test_render_inspiration_modal_hosts_the_add_flow_in_place() -> None:
+    # The modal is the same stepper the page renders, in the overlay's card, so
+    # the add flow is clicked through in place rather than handing off.
+    html = _render_inspiration_modal()
+    assert "You've opened an Inspiration" in html
+    assert _INSPIRATION_URL in html
+    # Modal shell: backdrop + dismiss affordance, and the modal-mode flag.
+    assert 'id="inspiration-modal-backdrop"' in html
+    assert "dismissInspirationModal()" in html
+    assert "var IS_MODAL = true" in html
+    assert 'id="inspiration-step-1"' in html
+    assert 'id="inspiration-step-add-2"' in html
+
+
+def test_render_inspiration_modal_create_hands_off_to_the_full_page() -> None:
+    # Creating a new machine is too big a job for a popup: from the modal it
+    # opens the full page, already past the chooser (?start=create).
+    html = _render_inspiration_modal(current_machine_id="agent-abc")
+    assert "function openCreateOnFullPage()" in html
+    assert "params.set('start', 'create')" in html
+    assert "leaveTo('/create/inspiration?' + params.toString())" in html
+    assert "if (IS_MODAL) openCreateOnFullPage();" in html
+    # The page itself still advances in place rather than navigating.
+    page = _render_inspiration()
+    assert "else chooseBranch('create');" in page
+
+
+def test_render_inspiration_modal_in_workspace_ends_at_paste_into_chat() -> None:
+    # Adding to the workspace the user is already in: the add branch's last step
+    # drops the picker and just says to paste the copied message into that chat.
+    html = _render_inspiration_modal(
+        current_machine_id="agent-abc",
+        current_machine_name="My Machine",
+        mngr_forward_origin="https://localhost:8421",
+    )
+    # Scope the label check to the button itself: the generic wording also
+    # appears as a JS string (the fallback used when no machine is current).
+    add_button = re.search(r"<button[^>]*choose-add-existing[^>]*>(.*?)</button>", html, re.S)
+    assert add_button is not None
+    assert "Add to My Machine" in add_button.group(1)
+    assert "Add to an existing machine" not in add_button.group(1)
+    assert "Paste it into the chat" in html
+    assert "paste it into My Machine's chat" in html
+    # No workspace picker in this variant.
+    assert "Select a machine" not in html
+    # The modal waits for an explicit Done -- it must not vanish on its own
+    # before the user has read the paste instruction.
+    assert re.search(r"<button[^>]*dismissInspirationModal\(\)[^>]*>Done</button>", html)
+    assert "setTimeout(closeModalIfAny" not in html
+
+
+def test_render_inspiration_modal_navigations_use_the_shell_bridge() -> None:
+    # Inside the overlay iframe a plain window.location would load the target
+    # INSIDE the modal (a window in a window), so navigation goes through the
+    # bridge and dismisses the modal.
+    html = _render_inspiration_modal(current_machine_id="agent-abc")
+    assert "function leaveTo(url)" in html
+    assert "window.minds.navigateContent(url)" in html
+    assert "leaveTo('/creating/' + res.data.operation_id)" in html
+
+
+def test_render_inspiration_page_honors_start_param_to_skip_chooser() -> None:
+    # The modal hands off with ?start=create so the page skips its step-1
+    # chooser. The value is rendered in server-side rather than read from
+    # window.location: the hub swaps pages in place and runs the new page's
+    # script BEFORE updating the address, so the query string would be stale.
+    html = _render_inspiration(start="create")
+    assert 'var START_BRANCH = "create"' in html
+    assert "if (START_BRANCH === 'create') chooseBranch('create');" in html
+    assert "else if (START_BRANCH === 'add') chooseBranch('add');" in html
+    # Without it the page opens on the chooser as usual.
+    assert 'var START_BRANCH = ""' in _render_inspiration()
+
+
 def test_render_inspiration_page_shows_chooser_options() -> None:
     html = _render_inspiration()
     assert "You've opened an Inspiration" in html
@@ -1000,10 +1075,10 @@ def test_render_inspiration_page_connector_solid_with_dotted_more_stub() -> None
 
 def test_render_inspiration_page_lists_workspaces_with_liveness_gating() -> None:
     rows = [
-        InspirationWorkspaceRow(agent_id="agent-aa", name="alpha", accent="#112233", liveness="RUNNING"),
-        InspirationWorkspaceRow(agent_id="agent-bb", name="beta", accent="#445566", liveness="STOPPED"),
+        InspirationMachineRow(agent_id="agent-aa", name="alpha", accent="#112233", liveness="RUNNING"),
+        InspirationMachineRow(agent_id="agent-bb", name="beta", accent="#445566", liveness="STOPPED"),
     ]
-    html = _render_inspiration(mngr_forward_origin="https://localhost:8421", workspace_rows=rows)
+    html = _render_inspiration(mngr_forward_origin="https://localhost:8421", machine_rows=rows)
     assert 'data-agent-id="agent-aa"' in html
     assert 'data-liveness="STOPPED"' in html
     assert 'data-default-href="https://localhost:8421/goto/agent-aa/"' in html
@@ -1015,7 +1090,7 @@ def test_render_inspiration_page_lists_workspaces_with_liveness_gating() -> None
 
 
 def test_render_inspiration_page_empty_workspace_list_links_to_new_flow() -> None:
-    html = _render_inspiration(workspace_rows=[])
+    html = _render_inspiration(machine_rows=[])
     assert "You don't have any machines yet." in html
     assert 'id="inspiration-empty-to-new"' in html
 
@@ -1293,6 +1368,17 @@ def test_render_chrome_page_seeds_workspace_crumb_server_side() -> None:
     assert 'id="ws-crumb" class="flex items-center min-w-0" hidden' in bare
 
 
+def test_render_chrome_page_boot_context_prefers_the_resolved_host_coordinate() -> None:
+    # The iframe boot context must carry the HOST coordinate (/goto/ only
+    # routes host ids); the breadcrumb keeps the id the shell passed. Without
+    # a resolved id the crumb id rides through so chrome.js can still arm.
+    html = render_chrome_page(crumb_agent_id="agent-abc123", boot_workspace_id="host-def456")
+    assert 'data-boot-workspace-id="host-def456"' in html
+    assert 'data-agent-id="agent-abc123"' in html
+    fallback = render_chrome_page(crumb_agent_id="agent-abc123")
+    assert 'data-boot-workspace-id="agent-abc123"' in fallback
+
+
 def test_render_chrome_page_contextual_back_button_starts_hidden() -> None:
     # The back arrow is contextual: hidden at rest, shown by chrome.js only on
     # pages that opt in (e.g. the create form). There is no forward arrow.
@@ -1307,7 +1393,7 @@ def test_render_chrome_page_titlebar_is_left_cluster_plus_right_cluster() -> Non
     # shrink-0 right cluster (bug report + non-mac window controls); there is
     # no centered title section.
     html = render_chrome_page()
-    titlebar = html[html.index('id="minds-titlebar"') : html.index('id="sidebar-backdrop"')]
+    titlebar = html[html.index('id="minds-titlebar"') : html.index('id="overlay-root"')]
     assert titlebar.count("flex-1") == 1
     assert "flex-[2]" not in titlebar
     assert "justify-end shrink-0" in titlebar
@@ -1389,16 +1475,18 @@ def test_render_chrome_page_crumbs_use_type_label_tokens() -> None:
     assert 'id="page-crumb-name" class="type-label text-primary' in html
 
 
-def test_render_chrome_page_switcher_menu_has_only_new_workspace() -> None:
-    # The titlebar carries no account button (``id="user-btn"``). The floating
-    # switcher menu's bottom section was trimmed to just the "New workspace"
-    # CTA: the "Minds Settings" and "Manage account(s)" / "Log in" entries were
-    # removed (Minds Settings is still reachable from the home screen).
+def test_render_chrome_page_hosts_overlay_layer_not_inline_switcher() -> None:
+    # The titlebar carries no account button (``id="user-btn"``). The chrome
+    # page no longer embeds the switcher menu inline: every modal surface
+    # (the switcher included) is a same-origin iframe mounted in the in-DOM
+    # overlay layer, identical in the desktop app and plain-browser mode. The
+    # menu markup itself lives on the /_chrome/sidebar page.
     html = render_chrome_page()
     assert 'id="user-btn"' not in html
-    assert 'id="sidebar-new-workspace"' in html
-    assert 'id="sidebar-settings"' not in html
-    assert 'id="sidebar-account"' not in html
+    assert 'id="overlay-root"' in html
+    assert 'id="sidebar-new-workspace"' not in html
+    assert "/_static/overlay_layer.js" in html
+    assert "/_static/embed_contract.js" in html
 
 
 def test_render_chrome_page_content_iframe_uses_12px_rounded_corners() -> None:
@@ -1449,7 +1537,6 @@ def test_edge_to_edge_surfaces_opt_out_of_scrollbar_gutter() -> None:
     # them opt out of the document scrollbar gutter -- the titlebar spans the
     # full window width and its buttons never shift between pages.
     assert opted_out in render_chrome_page()
-    assert opted_out in render_overlay_host_page()
     assert opted_out in render_sidebar_page()
     assert opted_out in render_help_page(workspace_agent_id="")
     assert opted_out in render_inbox_page(cards=())
@@ -2523,11 +2610,18 @@ def _strip_svg_path_data(text: str) -> str:
 
 def _design_system_source_files() -> list[Path]:
     client_root = Path(_templates_module.__file__).resolve().parent
+    # static/ui/ is the Vite build output (gitignored, minified): generated
+    # code, not design-system source -- scanning it would flag Tailwind's own
+    # emitted utilities. The SPA's SOURCE is scanned by its own frontend
+    # checks (apps/minds/frontend).
+    ui_build_directory = client_root / "static" / "ui"
     files = [
         path
         for directory in (client_root / "templates", client_root / "static")
         for path in sorted(directory.rglob("*"))
-        if path.suffix in (".jinja", ".js") and path.name != "app.min.css"
+        if path.suffix in (".jinja", ".js")
+        and path.name != "app.min.css"
+        and not path.is_relative_to(ui_build_directory)
     ]
     files.append(client_root / "templates.py")
     return files
@@ -3334,6 +3428,7 @@ _OPTIONS_SERVERS: Final[tuple[str, ...]] = ("mailroom", "newsreader", "system_in
 def _options_modal(
     tab: str = "share",
     servers: Sequence[str] = _OPTIONS_SERVERS,
+    service_labels: Mapping[str, str] | None = None,
     selected_target: str = "",
     has_account: bool = True,
     accounts: Sequence[object] = (),
@@ -3349,6 +3444,7 @@ def _options_modal(
         current_account=None,
         accounts=accounts,
         servers=servers,
+        service_labels=service_labels,
         tab=tab,
         selected_target=selected_target,
         account_email="owner@example.com",
@@ -3358,6 +3454,18 @@ def _options_modal(
         current_color=current_color,
         has_account=has_account,
     )
+
+
+def test_share_pane_add_button_carries_both_variant_class_sets() -> None:
+    # workspace_options.js swaps the Add button between the quiet secondary
+    # and the prominent primary variant as the add-email input fills/empties;
+    # the class recipes ride on data attributes so the swap never hardcodes
+    # them in JS.
+    html = _options_modal(tab="share")
+    id_idx = html.index("ws-share-add-btn")
+    add_button = html[html.rindex("<button", 0, id_idx) : html.index(">", id_idx) + 1]
+    assert 'data-variant-secondary="' in add_button
+    assert 'data-variant-primary="' in add_button
 
 
 def test_workspace_options_modal_centers_and_drops_the_tabs_without_an_anchor() -> None:
@@ -3511,7 +3619,7 @@ def test_unlinking_an_account_is_confirmed_first() -> None:
     assert 'id="unlink-cancel-btn"' in html
     assert 'id="unlink-confirm-btn"' in html
     # The dialog names the consequence, not just the action.
-    assert "removes all sharing" in html
+    assert "stops all sharing" in html
 
 
 def test_workspace_options_modal_passes_the_accent_to_the_tab_strip() -> None:
@@ -3552,6 +3660,43 @@ def test_workspace_options_share_pane_defaults_to_the_whole_machine_target() -> 
 def test_workspace_options_share_pane_honors_an_explicit_target() -> None:
     html = _options_modal(tab="share", selected_target="newsreader")
     assert '"selectedTarget": "newsreader"' in html
+
+
+def _parse_share_config(html: str) -> dict[str, object]:
+    """Extract and parse the ``ws-share-config`` JSON block from rendered options HTML."""
+    open_tag = 'id="ws-share-config"'
+    content_start = html.index(">", html.index(open_tag)) + 1
+    content_end = html.index("</script>", content_start)
+    return json.loads(html[content_start:content_end])
+
+
+def test_workspace_options_share_pane_carries_per_service_origin_labels() -> None:
+    # A per-app share link is a real origin (``<label>.<machine domain>``), so
+    # the pane hands workspace_options.js each app service's origin label
+    # (``<name>-<rand>``) keyed by service name; targetUrl builds the link from
+    # it rather than concatenating the bare service name.
+    html = _options_modal(
+        tab="share",
+        service_labels={"mailroom": "mailroom-x7k9q2w1", "newsreader": "newsreader-a1b2c3d4"},
+    )
+    config = _parse_share_config(html)
+    assert config["serviceLabels"] == {"mailroom": "mailroom-x7k9q2w1", "newsreader": "newsreader-a1b2c3d4"}
+
+
+def test_workspace_options_share_pane_carries_the_shell_label_for_the_whole_machine_link() -> None:
+    # The whole-machine link is the SHELL's (system_interface) label origin --
+    # the bare machine domain does not route on a share -- so the shell's label
+    # is included in the map. An app service with no label (newsreader here) is
+    # still omitted so the JS falls back to its name.
+    html = _options_modal(
+        tab="share",
+        service_labels={"mailroom": "mailroom-x7k9q2w1", "system_interface": "system_interface-zzz"},
+    )
+    config = _parse_share_config(html)
+    assert config["serviceLabels"] == {
+        "mailroom": "mailroom-x7k9q2w1",
+        "system_interface": "system_interface-zzz",
+    }
 
 
 def test_workspace_options_share_pane_asks_for_an_account_before_offering_targets() -> None:
@@ -3622,16 +3767,31 @@ def test_workspace_options_settings_groups_use_the_designed_icons() -> None:
 
 
 def test_workspace_share_targets_exclude_the_workspaces_own_interfaces() -> None:
-    # Chat / terminal / browser / web are what the workspace is made of, not
-    # apps to hand out one at a time; the whole machine is the deliberate way
-    # to grant everything. Real apps beside them still appear.
+    # Chat / terminal / browser are what the workspace is made of, not apps to
+    # hand out one at a time; the whole machine is the deliberate way to grant
+    # everything. Real apps beside them still appear -- including one named
+    # "web", which is an ordinary user service and gets no special-casing.
     html = _options_modal(
         tab="share",
         servers=("terminal", "browser", "chat", "web", "newsreader", "system_interface"),
     )
     assert 'data-share-target="newsreader"' in html
+    assert 'data-share-target="web"' in html
     assert 'data-share-target="system_interface"' in html
-    for excluded in ("terminal", "browser", "chat", "web"):
+    for excluded in ("terminal", "browser", "chat"):
+        assert f'data-share-target="{excluded}"' not in html
+
+
+def test_workspace_share_targets_exclude_names_that_cannot_be_a_hostname_label() -> None:
+    # A per-app share link is a real origin (<name>.<machine domain>), so a
+    # name that cannot be a hostname label has no origin to hand out; the
+    # reserved coordinate prefixes would collide with the host label itself.
+    html = _options_modal(
+        tab="share",
+        servers=("my_tool", "Mixed-Case", "host-0123abcd", "agent-0123abcd", "good-app", "system_interface"),
+    )
+    assert 'data-share-target="good-app"' in html
+    for excluded in ("my_tool", "Mixed-Case", "host-0123abcd", "agent-0123abcd"):
         assert f'data-share-target="{excluded}"' not in html
 
 
@@ -3741,13 +3901,6 @@ def test_every_surface_rendering_associate_loads_its_script() -> None:
             agent_id=str(_AGENT_A),
             ws_name="ws",
             current_account=None,
-            accounts=(account,),
-        ),
-        render_sharing_editor(
-            agent_id=str(_AGENT_A),
-            service_name="frontend",
-            title="Share",
-            has_account=False,
             accounts=(account,),
         ),
     ]

@@ -103,6 +103,11 @@ PUBLIC_FILES = glob(
         "apps/minds/CLAUDE.md",
         "apps/minds/deployment_tests/**",
         "apps/minds/test_aws_workspace_release.py",
+        # The behavior-corpus guard test dev-depends on imbue-mngr-behaviors,
+        # internal-only tooling absent from the public tree, so it cannot run
+        # publicly (its dev-group is stripped via BEGIN-INTERNAL markers in
+        # apps/minds/pyproject.toml).
+        "apps/minds/imbue/minds/test_behavior_corpus.py",
     ],
 )
 
