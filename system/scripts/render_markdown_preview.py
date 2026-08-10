@@ -44,23 +44,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 from markdown_it import MarkdownIt
+from markdown_preview_paths import (
+    PREVIEW_STATE_DIR,
+    RENDERED_PAGE_NAME,
+    SERVICE_NAME,
+    SOURCE_RECORD_NAME,
+)
 
-# The state directory the sibling markdown_preview_server.py serves from.
-#
-# Anchored to the repo this script lives in, NOT to the caller's cwd. The
-# preview is rendered from wherever the work is -- the publish flow renders an
-# assembled README from the worker's worktree -- while the server always reads
-# the workspace's copy. A relative default silently wrote the page next to the
-# caller instead, so a re-render appeared to do nothing: the tab kept serving
-# whatever the workspace's state dir happened to hold.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-PREVIEW_STATE_DIR = _REPO_ROOT / "data" / ".state" / "markdown-preview"
-RENDERED_PAGE_NAME = "index.html"
-SOURCE_RECORD_NAME = "source.json"
-
-# The supervisord program that serves the rendered page. Started on demand from
-# here rather than at boot; see the module docstring.
-SERVICE_NAME = "markdown-preview"
 _SUPERVISORCTL_TIMEOUT_SECONDS = 30.0
 
 # `js-default` rather than `commonmark`: it enables tables (GitHub renders them,
