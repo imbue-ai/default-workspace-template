@@ -10,7 +10,6 @@ import contextlib
 import json
 import os
 import re
-import sys
 import threading
 import time
 import urllib.error
@@ -30,6 +29,7 @@ from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -43,17 +43,10 @@ except ImportError:
 
 
 def _playwright_browsers_installed() -> bool:
-    """Check if Playwright browsers are installed by looking for the cache directory."""
+    """Check whether a launchable browser is present (Fortress or Playwright's cache)."""
     if not _PLAYWRIGHT_IMPORTABLE:
         return False
-    env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if env_path:
-        cache_dir = Path(env_path)
-    elif sys.platform == "darwin":
-        cache_dir = Path.home() / "Library" / "Caches" / "ms-playwright"
-    else:
-        cache_dir = Path.home() / ".cache" / "ms-playwright"
-    return cache_dir.exists() and any(cache_dir.iterdir())
+    return is_e2e_browser_installed()
 
 
 def _frontend_built() -> bool:

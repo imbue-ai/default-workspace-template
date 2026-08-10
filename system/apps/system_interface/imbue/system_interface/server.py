@@ -66,7 +66,6 @@ from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
 from imbue.system_interface.harnesses.model import ModelIdentity
-from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
 from imbue.system_interface.harnesses.codex.model import CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
 from imbue.system_interface.harnesses.interrupt import restart_drain
@@ -466,7 +465,8 @@ def _get_harnesses_endpoint() -> Response:
     """The static per-harness model catalogs -- the model bar's compile-time half.
 
     One response covers every harness (each catalog dumped verbatim: options,
-    default model, switch mode, logo); the frontend keys in by an agent's harness.
+    switch mode, picker mode, powered-by label, shoulder-tap capability); the
+    frontend keys in by an agent's harness.
     The non-claude harnesses are included only when their feature flag is on, matching
     the rest of the UI.
     """
@@ -488,9 +488,9 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
 
     Harness-blind: it validates the request against the harness's catalog, then hands
     a concrete identity to the resolver's ``switch`` (which decides how to apply it).
-    Returns 400 for an invalid selection, 404 for an unknown agent, 409 for a
-    display-only harness, 500 when the switch fails. On success it forces one
-    authoritative model-choice broadcast so the optimistic frontend reconciles.
+    Returns 400 for an invalid selection, 404 for an unknown agent, 500 when the
+    switch fails. On success it forces one authoritative model-choice broadcast so
+    the optimistic frontend reconciles.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
@@ -529,9 +529,8 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
         identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
     )
     if not result.ok:
-        status_code = 409 if catalog.switch_mode == SwitchMode.READ_ONLY else 500
         detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
-        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=status_code)
+        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
 
     # Force one authoritative broadcast so the optimistic pick reconciles even when
     # the resolved value is unchanged (see H1 in the model-bar plan).
