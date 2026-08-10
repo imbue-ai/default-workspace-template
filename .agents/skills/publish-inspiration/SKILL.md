@@ -290,7 +290,6 @@ mkdir -p data/.tasks/launch-task/<slug>
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/launch-task/<slug>/reports/report.md
 ---
 FRONTMATTER_EOF
