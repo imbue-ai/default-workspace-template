@@ -1,3 +1,10 @@
+# Readiness budget for every harness's create wait (mngr default is 10.0s,
+# which pre-dates the chat UI gating creation on readiness). 20s covers the
+# measured cold boots -- claude ~4s, codex ~6s, pi ~8s once its npm packages
+# are prepared at provision time -- with headroom for a loaded host. A create
+# that misses this budget fails loudly and is rolled back.
+agent_ready_timeout = 20.0
+
 # --- Command defaults ---
 
 # Default create command settings -- apply to all mngr create from this repo

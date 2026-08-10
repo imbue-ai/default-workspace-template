@@ -141,6 +141,12 @@ from imbue.mngr_claude.stream_buffer import SnapshotDeltaReader
 
 _READY_SIGNAL_TIMEOUT_SECONDS: Final[float] = 10.0
 
+# The live model-state file the chat model bar reads, at the agent state dir
+# root. Seeded at provision from the launch settings; thereafter written by
+# the statusline script. Kept in sync with claude_status_line.sh (the
+# workspace-side writer) and the system interface's harness registry.
+_MODEL_STATE_FILE_NAME: Final[str] = "minds_model_state.json"
+
 # Paths within ~/.claude/ to sync to the per-agent config dir.
 # Used by both get_files_for_deploy() and provision() to ensure consistency.
 _CLAUDE_HOME_SYNC_DIRS: Final[tuple[str, ...]] = ("skills", "agents", "commands", "plugins")
@@ -2221,6 +2227,11 @@ class ClaudeCoreAgent(
             # actually reads); in isolated mode the per-agent config inherits it.
             acknowledge_cost_threshold(self._dialog_dismissal_config_path())
 
+            # Seed the live model state from the launch settings so the chat
+            # model bar is populatable the moment readiness fires (the
+            # statusline, the live writer, first fires seconds later).
+            self._seed_model_state(host)
+
             # Provision the Chat-only meta+q -> chat:cancel chord the dwt shoulder tap
             # delivers to flush the parked message queue natively. Merged into the
             # user-scope keybindings.json (idempotent, never clobbering an existing
@@ -2251,6 +2262,34 @@ class ClaudeCoreAgent(
 
             # should be done by now, just wanted to do in parallel for latency reasons
             provision_backgroun_script_thread.join(60.0)
+
+    def _seed_model_state(self, host: OnlineHostInterface) -> None:
+        """Seed ``minds_model_state.json`` from the launch settings before first start.
+
+        The statusline script (``claude_status_line.sh``) is the live writer of
+        this file, but its first fire lands seconds after the session starts --
+        after the chat surface is already visible. The launch settings know the
+        model at provision time, so seeding here makes the model bar populatable
+        the moment readiness fires; the statusline's later writes reconcile the
+        seed to claude's self-reported values. The seeded model is the settings
+        value verbatim (a catalog option id like ``opus[1m]``), which the chat
+        UI's matcher accepts alongside claude's reported ids. Skipped when no
+        model is pinned in ``settings_overrides`` (nothing authoritative to
+        seed).
+        """
+        overrides = self.agent_config.settings_overrides
+        model = overrides.get("model")
+        if not isinstance(model, str) or not model:
+            return
+        effort = overrides.get("effortLevel")
+        state: dict[str, Any] = {
+            "model": model,
+            "effort": effort if isinstance(effort, str) else None,
+            "fast": overrides.get("fastMode") is True,
+        }
+        state_path = self._get_agent_dir() / _MODEL_STATE_FILE_NAME
+        with log_span("Seeding model state at {}", state_path):
+            write_json_dict_via_host(host, state_path, state, make_parent=True)
 
     def _transfer_source_plugin_data(self, source_agent_state_location: HostLocation) -> None:
         """Rsync the source agent's ``plugin/`` into this agent's state dir.

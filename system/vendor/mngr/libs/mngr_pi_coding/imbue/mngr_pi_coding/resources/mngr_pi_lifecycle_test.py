@@ -157,6 +157,32 @@ def test_model_state_written_on_session_start(tmp_path: Path) -> None:
     }
 
 
+def test_sentinel_not_written_when_model_state_write_fails(tmp_path: Path) -> None:
+    """Readiness ordering: the model state (and session file) land BEFORE the
+    sentinel mngr's create wait reports on, so everything the chat needs at first
+    paint is on disk by the time readiness fires. When the model-state write
+    fails, readiness must therefore not be signaled."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    # A directory at the model-state path makes its writeFileSync fail (EISDIR).
+    (state_dir / "minds_model_state.json").mkdir()
+    state = _run_extension(
+        tmp_path,
+        [
+            {
+                "event": "session_start",
+                "sessionId": "s1",
+                "sessionFile": "/s/s1.jsonl",
+                "model": {"provider": "anthropic", "id": "claude-opus-4-8"},
+                "thinkingLevel": "high",
+            }
+        ],
+    )
+    assert not (state / "pi_session_started").exists()
+    # The session file was recorded before the failing write.
+    assert (state / "pi_session_file").read_text() == "/s/s1.jsonl"
+
+
 def test_model_state_tracks_model_and_thinking_switches(tmp_path: Path) -> None:
     """model_select / thinking_level_select keep the state live. The changed axis comes
     from the event; the untouched one from ctx (which may lag the event)."""

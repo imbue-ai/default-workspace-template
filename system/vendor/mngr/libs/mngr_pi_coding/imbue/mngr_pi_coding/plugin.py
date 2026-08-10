@@ -77,18 +77,21 @@ _PI_AGENT_SUBDIR: str = "agent"
 # a synced subagent extension would load but find no agents to delegate to.
 #
 # Note: the ``npm`` dir (where ``pi install`` materialises npm-package extensions
-# under ``npm/node_modules``) is deliberately NOT synced. pi re-resolves the
-# ``packages`` list in the synced ``settings.json`` on every startup and
-# auto-installs any missing ones into the per-agent ``$PI_CODING_AGENT_DIR/npm``,
-# so npm-package extensions (e.g. ``npm:pi-subagents``) become available without
-# copying ``node_modules`` around, and each agent keeps an isolated install. The
-# cost is a per-agent ``npm install`` on first launch -- observed at 45-55s, and it
-# runs before pi starts the session, so it blocks the readiness sentinel for that
-# long. It also needs network and so would not work on a fully-offline host; if
-# that latency or the offline case ever matters, copy ``npm`` into the per-agent
-# dir here (copy, not symlink -- a shared ``node_modules`` would race across
-# concurrent startups).
+# under ``npm/node_modules``) is not symlink-synced like the dirs above -- a
+# shared ``node_modules`` would race across concurrent agent startups. It is
+# instead COPIED into the per-agent dir at provision time (see
+# ``_seed_npm_dir_from_home``): pi re-resolves the ``packages`` list in the
+# synced ``settings.json`` on every startup and installs anything missing into
+# the per-agent ``$PI_CODING_AGENT_DIR/npm`` BEFORE starting the session, which
+# on an unseeded agent costs 45-55s of npm ahead of the readiness sentinel.
+# With the seed, pi's startup resolve finds the packages present and first boot
+# is as fast as a warm boot; packages added to settings.json since the home
+# install still get delta-installed by pi itself.
 _SYNCED_RESOURCE_DIRS: tuple[str, ...] = ("skills", "prompts", "extensions", "themes", "agents")
+
+# The npm extension-install dir under both ``~/.pi/agent/`` and the per-agent
+# config dir. Kept in sync with pi's own layout.
+_NPM_DIR_NAME: str = "npm"
 
 # The pi agent-type name, used for the per-agent transcript directories
 # (``events/<type>/common_transcript`` and ``logs/<type>_transcript``) and
@@ -789,6 +792,26 @@ class PiCodingAgent(
                 if source.exists():
                     symlink_on_host(host, source, config_dir / dir_name)
 
+            self._seed_npm_dir_from_home(host, home_pi, config_dir)
+
+    def _seed_npm_dir_from_home(self, host: OnlineHostInterface, home_pi: Path, config_dir: Path) -> None:
+        """Copy the home npm extension install into the per-agent npm dir.
+
+        pi re-resolves the synced ``settings.json`` package list on every startup
+        and installs anything missing into the per-agent npm dir BEFORE starting
+        the session -- observed at 45-55s of npm on a cold agent, all of it ahead
+        of the readiness sentinel. Seeding the install at provision time makes
+        first boot as fast as a warm boot. A copy, not a symlink: a shared
+        ``node_modules`` would race across concurrent agent startups. Packages
+        added to settings.json since the home install was made are still picked
+        up by pi's own startup resolve (it installs only the delta).
+        """
+        npm_source = home_pi / _NPM_DIR_NAME
+        if not npm_source.exists():
+            return
+        with log_span("Seeding per-agent pi npm dir from {}", npm_source):
+            host.copy_directory(host, npm_source, config_dir / _NPM_DIR_NAME)
+
     def _setup_remote_config_dir(
         self,
         host: OnlineHostInterface,
@@ -816,7 +839,11 @@ class PiCodingAgent(
             # per file (a full round-trip over the SSH tunnel) and does not
             # scale to large resource sets -- see github issue 1825.
             include_args: list[str] = []
-            for dir_name in _SYNCED_RESOURCE_DIRS:
+            # The npm dir rides along in the same rsync: seeding the extension
+            # install at provision time is what keeps pi's first boot from
+            # spending 45-55s in npm before the readiness sentinel (see
+            # _seed_npm_dir_from_home for the local-host equivalent).
+            for dir_name in (*_SYNCED_RESOURCE_DIRS, _NPM_DIR_NAME):
                 if (home_pi / dir_name).is_dir():
                     include_args.extend([f"--include={dir_name}/", f"--include={dir_name}/**"])
             if include_args:

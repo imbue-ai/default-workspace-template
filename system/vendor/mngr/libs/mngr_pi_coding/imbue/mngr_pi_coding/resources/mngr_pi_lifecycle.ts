@@ -878,12 +878,14 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     safe("session_start", () => {
       // Hold the ctx so the control-file drain can reach ctx.modelRegistry (see drainControl).
       latestCtx = ctx;
+      // Session file and model state land BEFORE the readiness sentinel: the
+      // sentinel is the signal mngr's create wait reports readiness on, and
+      // everything the chat surface needs at first paint (the model bar reads
+      // minds_model_state.json) must already be on disk when that signal fires.
+      recordSessionFile(ctx);
+      recordModelState(ctx);
       mkdirSync(dirname(sentinelPath), { recursive: true });
       writeFileSync(sentinelPath, "1");
-      recordSessionFile(ctx);
-      // Pre-turn-1 model/effort: session_start fires before the first prompt, so the
-      // launch selection is on disk immediately for the chat model bar.
-      recordModelState(ctx);
     });
   });
 

@@ -366,6 +366,42 @@ def test_setup_local_config_dir_symlinks_resource_dirs(
     assert Path(os.readlink(agents_link)) == home / ".pi" / "agent" / "agents"
 
 
+@pytest.mark.rsync
+def test_setup_local_config_dir_seeds_npm_as_copy(tmp_path: Path, pi_agent: PiCodingAgent, local_host: Host) -> None:
+    """The home npm extension install is copied (never symlinked) into the per-agent dir.
+
+    The seed is what keeps pi's first boot from spending 45-55s in npm before
+    the readiness sentinel; a symlinked node_modules would race across
+    concurrent agent startups.
+    """
+    home = _setup_home_pi(tmp_path)
+    npm_package_dir = home / ".pi" / "agent" / "npm" / "node_modules" / "pi-subagents"
+    npm_package_dir.mkdir(parents=True)
+    (npm_package_dir / "package.json").write_text('{"name": "pi-subagents"}')
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+
+    pi_agent._setup_local_config_dir(local_host, PiCodingAgentConfig(sync_home_settings=True), config_dir, home)
+
+    seeded = config_dir / "npm"
+    assert not seeded.is_symlink()
+    assert (seeded / "node_modules" / "pi-subagents" / "package.json").read_text() == '{"name": "pi-subagents"}'
+
+
+def test_setup_local_config_dir_skips_npm_seed_when_home_has_none(
+    tmp_path: Path, pi_agent: PiCodingAgent, local_host: Host
+) -> None:
+    home = _setup_home_pi(tmp_path)
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+
+    pi_agent._setup_local_config_dir(local_host, PiCodingAgentConfig(sync_home_settings=True), config_dir, home)
+
+    assert not (config_dir / "npm").exists()
+
+
 def test_setup_remote_config_dir_copies_settings(tmp_path: Path, pi_agent: PiCodingAgent) -> None:
     home = _setup_home_pi(tmp_path)
     settings_content = '{"defaultModel": "sonnet"}'

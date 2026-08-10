@@ -2331,6 +2331,47 @@ def test_configure_agent_hooks_applies_settings_overrides_in_managed_file(
     assert "__extend" not in content
 
 
+def test_seed_model_state_writes_launch_selection(
+    local_provider: LocalProviderInstance, tmp_path: Path, temp_mngr_ctx: MngrContext
+) -> None:
+    """The provision-time seed puts the configured model on disk in the statusline's
+    schema, so the chat model bar is populatable the moment readiness fires."""
+    host = local_provider.create_host(HostName(LOCAL_HOST_NAME))
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    agent = _make_hooks_test_agent(
+        host,
+        temp_mngr_ctx,
+        work_dir,
+        ClaudeAgentConfig(
+            check_installation=False,
+            settings_overrides={"model": "opus[1m]", "fastMode": False},
+        ),
+    )
+
+    agent._seed_model_state(host)
+
+    state = json.loads((agent._get_agent_dir() / "minds_model_state.json").read_text())
+    assert state == {"model": "opus[1m]", "effort": None, "fast": False}
+
+
+def test_seed_model_state_skips_when_no_model_pinned(
+    local_provider: LocalProviderInstance, tmp_path: Path, temp_mngr_ctx: MngrContext
+) -> None:
+    host = local_provider.create_host(HostName(LOCAL_HOST_NAME))
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    agent = _make_hooks_test_agent(
+        host, temp_mngr_ctx, work_dir, ClaudeAgentConfig(check_installation=False, settings_overrides={})
+    )
+
+    agent._seed_model_state(host)
+
+    assert not (agent._get_agent_dir() / "minds_model_state.json").exists()
+
+
 def test_configure_agent_hooks_does_not_touch_existing_settings_local(
     local_provider: LocalProviderInstance, tmp_path: Path, temp_mngr_ctx: MngrContext
 ) -> None:
