@@ -42,6 +42,8 @@ from imbue.system_interface.harnesses.interrupt import InterruptToComposer
 from imbue.system_interface.harnesses.interrupt import PressChord
 from imbue.system_interface.harnesses.interrupt import RestartProcess
 from imbue.system_interface.harnesses.interrupt import SettleActivity
+from imbue.system_interface.harnesses.interrupt import restart_drain
+from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
 from imbue.system_interface.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
@@ -274,22 +276,35 @@ class PiModelResolver(HarnessModelResolver):
 
 
 class PiInterruptToComposer(InterruptToComposer):
-    """pi's stop button: append the retract sentinel to the inbox, hand the block back, no restart.
+    """pi's stop button: try the native retract under mngr's message lock, else the restart hammer.
 
-    The lifecycle extension interrupts the running turn natively and DISCARDS its parked steers
-    (the retract sibling of the shipped flush), so there is no SIGKILL mid-tool-call, no
-    session-resume cost, and no ``reset_activity_state`` patch-up: the abort's ``agent_end``
-    settles the indicator on its own. The block is captured FIRST so it reaches the composer; the
-    tracked mirror is cleared here for immediacy, and the watcher's replay-side clear at the
-    sentinel keeps that durable across a backend restart. The base restart-drain's
-    ``restart_process`` / ``settle_activity`` are unused.
+    The native path appends the retract sentinel to the inbox and hands the block back with no
+    SIGKILL: the lifecycle extension interrupts the running turn and DISCARDS its parked steers
+    (the retract sibling of the shipped flush), so there is no mid-tool-call kill, no
+    session-resume cost, and no ``reset_activity_state`` patch-up -- the abort's ``agent_end``
+    settles the indicator on its own.
+
+    But the native path is only correct when no send is in flight: an unlocked retract can be
+    ordered before an in-flight message's inbox append, which would strand that message (it
+    starts a fresh turn while its text is gone from the mirror). So the retract is taken under
+    the SAME ``message.lock`` mngr's send holds -- captured under the lock, the block includes a
+    just-parked message and the sentinel is appended strictly after it, so the extension injects
+    it as a steer and the retract discards it. When a send is still in flight past the bounded
+    wait (an idle-start send holding the lock through its turn-confirm), the native ordering
+    cannot be guaranteed, so we fall back to the base restart-drain: the SIGKILL boundary stops
+    the turn unconditionally, and an in-flight message dies with the process -- never runs. The
+    common stop (no concurrent send) keeps the gentle native path.
     """
 
+    _agent_info: AgentInfo
+    _agent_state_dir: Path
     _inbox_path: Path
 
     @classmethod
     def build(cls, agent_info: AgentInfo) -> "PiInterruptToComposer":
         self = cls.__new__(cls)
+        self._agent_info = agent_info
+        self._agent_state_dir = agent_info.agent_state_dir
         self._inbox_path = agent_info.agent_state_dir / PI_INBOX_NAME
         return self
 
@@ -300,12 +315,18 @@ class PiInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
     ) -> str:
-        # Capture before writing the sentinel: the sentinel is what clears the queue (both here
-        # and, durably, on the watcher's replay), so the block must be read first. No separate
-        # refresh-first is needed: pi's ``get_queued_block`` calls ``_refresh`` itself (unlike
-        # codex's), so the running turn's own initiating message is popped by its own drained
-        # ``user_message`` as soon as that leave has landed -- the block is the still-queued set.
-        block = watcher.get_queued_block()
-        append_pi_inbox_sentinel(self._inbox_path, PI_RETRACT_KEY)
-        watcher.clear_queue()
-        return block
+        with try_hold_message_lock(self._agent_state_dir) as held:
+            if not held:
+                # A send is in flight past the bounded wait; take the hammer so the turn is
+                # definitely stopped and the in-flight message cannot survive to run.
+                return restart_drain(self._agent_info, watcher, restart_process, settle_activity)
+            # Held: no send is mid-flight, so any just-parked message is already in the mirror.
+            # Capture before writing the sentinel: the sentinel is what clears the queue (both
+            # here and, durably, on the watcher's replay), so the block must be read first. pi's
+            # ``get_queued_block`` calls ``_refresh`` itself, so the running turn's own initiating
+            # message is popped by its drained ``user_message`` -- the block is the still-queued
+            # set, and the sentinel appended below is strictly after any in-flight message's line.
+            block = watcher.get_queued_block()
+            append_pi_inbox_sentinel(self._inbox_path, PI_RETRACT_KEY)
+            watcher.clear_queue()
+            return block

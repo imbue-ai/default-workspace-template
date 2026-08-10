@@ -18,13 +18,32 @@ the switch endpoint binds its ``send`` callback. A native override that needs on
 (pi, codex) simply ignores the rest.
 """
 
+import fcntl
+import time
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Callable
+from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path
 
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.models import AgentRestartError
+
+# mngr serializes every text send / key chord to an agent under an exclusive flock on this
+# file in the agent's state dir (see ``BaseAgent._message_lock``). A stop that wants to read a
+# durable mirror -- or write a native retract that must be ordered AFTER any in-flight send --
+# takes the SAME lock, so a mid-flight ``mngr message`` send has finished its append/paste-and-
+# confirm cycle (and durably parked) before the stop acts. Kept in sync with mngr's filename.
+MESSAGE_LOCK_FILENAME: str = "message.lock"
+
+# How long a native stop waits for an in-flight send to release ``message.lock`` before giving
+# up and falling back to the restart-drain hammer. A mid-turn steer holds the lock only for its
+# durable append/paste (sub-second on a local host -- pi/codex confirm a mid-turn steer without
+# the idle-start turn-confirm poll), so this window is almost never spent; an idle-start send
+# that holds the lock through its full turn-confirm is exactly the case the hammer should own.
+STOP_LOCK_WAIT_SECONDS: float = 2.0
 
 # Restart the agent process; returns ``(is_restarted, output)`` (stdout on success, stderr on
 # failure). Bound by the endpoint to the specific agent.
@@ -36,6 +55,70 @@ SettleActivity = Callable[[], None]
 # ``message.lock``); returns success. Bound by the endpoint to the specific agent -- claude's
 # empty-queue chord path uses it; the base restart-drain and the other overrides ignore it.
 PressChord = Callable[[], bool]
+
+
+@contextmanager
+def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
+    """Hold mngr's per-agent ``message.lock`` for the duration of the block (blocking acquire).
+
+    dwt never drives raw tmux, but it shares this one flock so a stop reads a durable mirror:
+    acquiring blocks until any in-flight send has finished parking. Mirrors
+    ``BaseAgent._message_lock`` (same filename, same agent state dir), for local hosts -- the
+    only place the system interface runs. (mngr no-ops this lock for remote hosts, so the
+    serialization it provides holds only locally; that is the environment dwt runs in.)
+    """
+    lock_path = agent_state_dir / MESSAGE_LOCK_FILENAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def try_hold_message_lock(
+    agent_state_dir: Path,
+    *,
+    wait_seconds: float | None = None,
+    poll_interval_seconds: float = 0.05,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Generator[bool, None, None]:
+    """Bounded, non-blocking acquire of the per-agent ``message.lock``.
+
+    Yields ``True`` and HOLDS the lock for the block if it could be taken within ``wait_seconds``
+    (no send was in flight, or one finished and released in time); yields ``False`` holding
+    NOTHING if the deadline passed with a send still holding it. The caller runs its native
+    stop under a ``True`` and falls back to the restart-drain hammer under a ``False`` -- the
+    bounded wait is what turns "a send is in flight" into a fast, deterministic hammer instead
+    of an unbounded stall on the send's turn-confirm. ``wait_seconds`` defaults (read at call
+    time so a test can patch the module constant) to :data:`STOP_LOCK_WAIT_SECONDS`;
+    ``now``/``sleep`` are injected for tests.
+    """
+    if wait_seconds is None:
+        wait_seconds = STOP_LOCK_WAIT_SECONDS
+    lock_path = agent_state_dir / MESSAGE_LOCK_FILENAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = now() + wait_seconds
+    with open(lock_path, "w") as lock_file:
+        acquired = False
+        timed_out = False
+        while not acquired and not timed_out:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except OSError:
+                if now() >= deadline:
+                    timed_out = True
+                else:
+                    sleep(poll_interval_seconds)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 class InterruptToComposer(ABC):

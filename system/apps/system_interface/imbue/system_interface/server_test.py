@@ -1,10 +1,13 @@
 """Tests for the Flask server."""
 
+import fcntl
 import io
 import json
 import os
 import queue
 import time
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1301,6 +1304,71 @@ def test_drain_to_composer_codex_empty_queue_open_turn_writes_line_and_returns_e
     mock_run.assert_not_called()
     control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
     assert control_path.read_text().splitlines() == ['{"retract_turn_id": "tid-3"}']
+    assert fake_watcher.clear_calls == [True]
+
+
+@contextmanager
+def _hold_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
+    """Hold the agent's ``message.lock`` through a separate fd, as an in-flight mngr send does,
+    so a concurrent stop's bounded acquire fails and it falls back to the restart hammer."""
+    lock_path = agent_state_dir / "message.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as other:
+        fcntl.flock(other.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(other.fileno(), fcntl.LOCK_UN)
+
+
+def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """A send holding ``message.lock`` blocks pi's native retract past the bounded wait, so the
+    stop falls back to the base restart hammer: it restarts, hands the block back, and writes NO
+    retract sentinel (which, unordered against the in-flight send, could strand that message)."""
+    agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
+    fake_watcher = _fake_queue_watcher("bring me back to edit")
+    with (
+        _hold_message_lock(tmp_path),
+        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "bring me back to edit"
+    # The hammer fell: a restart ran, and NO native sentinel was written.
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "pi-agent", "--restart", "--no-resume"]
+    assert not (tmp_path / "pi_inbox").exists()
+    assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_codex_falls_back_to_restart_when_a_send_is_in_flight(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """A send holding ``message.lock`` blocks codex's native retract past the bounded wait, so the
+    stop falls back to the base restart hammer: it restarts, hands the block back, and writes NO
+    ``retract_turn_id`` control line."""
+    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
+    fake_watcher = _fake_queue_watcher("bring me back to edit", events=_codex_open_turn_events("tid-9"))
+    with (
+        _hold_message_lock(tmp_path),
+        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch.object(AgentManager, "reset_activity_state"),
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "bring me back to edit"
+    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "codex-agent", "--restart", "--no-resume"]
+    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
     assert fake_watcher.clear_calls == [True]
 
 

@@ -30,6 +30,8 @@ from imbue.system_interface.harnesses.interrupt import InterruptToComposer
 from imbue.system_interface.harnesses.interrupt import PressChord
 from imbue.system_interface.harnesses.interrupt import RestartProcess
 from imbue.system_interface.harnesses.interrupt import SettleActivity
+from imbue.system_interface.harnesses.interrupt import restart_drain
+from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.model import EffortChoice
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
@@ -117,26 +119,35 @@ class CodexModelResolver(HarnessModelResolver):
 
 
 class CodexInterruptToComposer(InterruptToComposer):
-    """codex's stop button: interrupt the live turn via a retract control line, hand the block
-    back, no restart.
+    """codex's stop button: try the native retract control line under mngr's message lock, else
+    the restart hammer.
 
-    The retract sibling of the atomic shoulder tap: rather than SIGKILL-restart the agent and
-    settle activity, append ``{"retract_turn_id": "<id>"}`` to the same
+    The native path is the retract sibling of the atomic shoulder tap: rather than SIGKILL-restart
+    the agent and settle activity, append ``{"retract_turn_id": "<id>"}`` to the same
     ``shoulder_tap_atomic.jsonl`` the flush writes. The patched binary interrupts that exact turn
-    (ABA-gated on the id) and DISCARDS its parked steers -- the retract counterpart of the shipped
-    flush -- so there is no mid-tool SIGKILL, no session-resume cost, and no ``reset_activity_state``
-    patch-up: the rollout's ``turn_aborted`` settles the indicator, and the fork's
-    ``queued_retracted`` records clear the mirror on the watcher's replay. With no turn open there
-    is nothing to interrupt -- any parked steers are committing on their own -- so the block comes
-    back empty and no control line is written. The base restart-drain's ``restart_process`` /
-    ``settle_activity`` are unused.
+    (ABA-gated on the id) and DISCARDS its parked steers, so there is no mid-tool SIGKILL, no
+    session-resume cost, and no ``reset_activity_state`` patch-up: the rollout's ``turn_aborted``
+    settles the indicator, and the fork's ``queued_retracted`` records clear the mirror on replay.
+
+    The retract is taken under the SAME ``message.lock`` mngr's send holds, so an in-flight
+    message is ordered before the control line. codex's send is STRICT -- it holds the lock until
+    the steer has PARKED (the queued-input sidecar record is written synchronously with the park)
+    -- so once the lock is acquired the steer is already in ``pending_steers`` and the retract
+    discards it (and it is in the captured block, so it reaches the composer). When a send is
+    still in flight past the bounded wait, we fall back to the base restart-drain: the SIGKILL
+    boundary stops the turn and an in-flight message dies with the process -- never runs. With no
+    turn open there is nothing to interrupt, so the block comes back empty and no line is written.
     """
 
+    _agent_info: AgentInfo
+    _agent_state_dir: Path
     _control_path: Path
 
     @classmethod
     def build(cls, agent_info: AgentInfo) -> "CodexInterruptToComposer":
         self = cls.__new__(cls)
+        self._agent_info = agent_info
+        self._agent_state_dir = agent_info.agent_state_dir
         # Same path the atomic shoulder-tap endpoint writes: the agent state dir, under codex's
         # CODEX_HOME relative dir, then the shared control filename.
         self._control_path = (
@@ -151,19 +162,24 @@ class CodexInterruptToComposer(InterruptToComposer):
         settle_activity: SettleActivity,
         press_chord: PressChord,
     ) -> str:
-        # Refresh-first: get_all_events drives the watcher's consume of the queued-input sidecar
-        # (a bare get_queued_block does not), so the captured block is the currently-parked set.
-        events = watcher.get_all_events()
-        # Capture before writing the control line: the retract is what clears the queue, so the
-        # block must be read first.
-        block = watcher.get_queued_block()
-        target_turn_id = current_open_turn_id(events)
-        if target_turn_id is None:
-            # No turn is running, so there is nothing to retract -- do NOT write a control line
-            # (a stale id would gate against a turn that never comes) and hand back an empty block.
-            return ""
-        self._control_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._control_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"retract_turn_id": target_turn_id}) + "\n")
-        watcher.clear_queue()
-        return block
+        with try_hold_message_lock(self._agent_state_dir) as held:
+            if not held:
+                # A send is in flight past the bounded wait; take the hammer so the turn is
+                # definitely stopped and the in-flight message cannot survive to run.
+                return restart_drain(self._agent_info, watcher, restart_process, settle_activity)
+            # Held: the STRICT send has released, so any just-parked steer is in the sidecar now.
+            # Refresh-first: get_all_events drives the watcher's consume of the queued-input
+            # sidecar (a bare get_queued_block does not), so the captured block is the parked set.
+            events = watcher.get_all_events()
+            # Capture before writing the control line: the retract clears the queue, so read first.
+            block = watcher.get_queued_block()
+            target_turn_id = current_open_turn_id(events)
+            if target_turn_id is None:
+                # No turn is running, so there is nothing to retract -- do NOT write a control line
+                # (a stale id would gate against a turn that never comes); hand back an empty block.
+                return ""
+            self._control_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._control_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"retract_turn_id": target_turn_id}) + "\n")
+            watcher.clear_queue()
+            return block
