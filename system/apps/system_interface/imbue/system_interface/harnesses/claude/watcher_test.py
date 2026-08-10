@@ -1,8 +1,10 @@
 """Tests for the session file watcher."""
 
 import json
+import os
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1129,14 +1131,28 @@ def test_subagent_discovered_after_history_file_disappears(tmp_path: Path) -> No
 # --- Queue replay scoped to the latest main session ---
 
 
-def _queue_enqueue_record(content: str, session_id: str) -> dict[str, Any]:
+def _queue_enqueue_record(
+    content: str, session_id: str, timestamp: str = "2026-01-01T00:00:05.000Z"
+) -> dict[str, Any]:
     return {
         "type": "queue-operation",
         "operation": "enqueue",
-        "timestamp": "2026-01-01T00:00:05.000Z",
+        "timestamp": timestamp,
         "sessionId": session_id,
         "content": content,
     }
+
+
+def _touch_process_started_marker(agent_state_dir: Path, iso_timestamp: str) -> None:
+    """Pin the claude_process_started marker's mtime to the given UTC instant.
+
+    The marker mtime is the process-epoch boundary the queue feed scopes enqueue
+    replays by: enqueues stamped before it belong to a dead process.
+    """
+    marker = agent_state_dir / "claude_process_started"
+    marker.touch()
+    epoch = datetime.fromisoformat(iso_timestamp).timestamp()
+    os.utime(marker, (epoch, epoch))
 
 
 def _queue_dequeue_record(session_id: str) -> dict[str, Any]:
@@ -1254,6 +1270,144 @@ def test_truncated_latest_session_re_derives_queue_from_scratch(tmp_path: Path) 
     session_file.write_bytes((json.dumps(_queue_enqueue_record("first", "test-session")) + "\n").encode("utf-8"))
     watcher._poll_for_changes()
     assert _queued_contents(watcher) == ["first"]
+
+
+def test_reprime_after_backend_restart_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
+    """claude --resume RE-APPENDS to the same session file, so a backend restart's
+    priming replay walks a ledger that can still hold enqueues a killed claude
+    process never resolved. Those dead-epoch enqueues must not re-derive as
+    queued (they would render as ghost chips the idle backstop later silently
+    evaporates); an enqueue stamped after the claude_process_started marker (the
+    live process's epoch) still re-derives."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    with open(session_file, "ab") as f:
+        f.write(
+            (
+                json.dumps(
+                    _queue_enqueue_record(
+                        "died with the old process", "test-session", timestamp="2026-01-01T00:00:05.000Z"
+                    )
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+        f.write(
+            (
+                json.dumps(
+                    _queue_enqueue_record(
+                        "parked in the live process", "test-session", timestamp="2026-01-01T00:01:00.000Z"
+                    )
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+    # The claude process (re)started between the two enqueues.
+    _touch_process_started_marker(agent_state_dir, "2026-01-01T00:00:30Z")
+
+    # A fresh watcher primes over the whole backlog, as a restarted backend does.
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+    watcher._prime_caches()
+
+    assert _queued_contents(watcher) == ["parked in the live process"]
+
+
+def test_truncation_reset_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
+    """The truncation reset re-reads the latest session's ledger from the start;
+    like the priming replay, that full replay must not re-derive enqueues from
+    before the current process epoch."""
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    _touch_process_started_marker(agent_state_dir, "2026-01-01T00:00:30Z")
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+
+    live_content = "a long live-epoch message that outsizes the rewritten file"
+    with open(session_file, "ab") as f:
+        f.write(
+            (
+                json.dumps(_queue_enqueue_record(live_content, "test-session", timestamp="2026-01-01T00:01:00.000Z"))
+                + "\n"
+            ).encode("utf-8")
+        )
+    watcher._poll_for_changes()
+    assert _queued_contents(watcher) == [live_content]
+
+    # An atomic save-rewrite shrinks the file to a single dead-epoch enqueue: the
+    # reset replay must exclude it rather than resurrect a ghost.
+    session_file.write_bytes(
+        (
+            json.dumps(_queue_enqueue_record("ghost", "test-session", timestamp="2026-01-01T00:00:05.000Z")) + "\n"
+        ).encode("utf-8")
+    )
+    watcher._poll_for_changes()
+    assert _queued_contents(watcher) == []
+
+
+# --- Main-session discovery: no read-path stalls, history-ordered registration ---
+
+
+def test_discovery_miss_does_not_stall_the_read_path(tmp_path: Path) -> None:
+    """A session listed in history whose file is not on disk yet (an agent's
+    startup window) must not make the synchronous read-path discovery wait for
+    it; the miss is simply retried on the next cycle. The old inline retry slept
+    0.5s per missing session per read, stalling every /events request."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    (claude_config_dir / "projects").mkdir(parents=True)
+    (agent_state_dir / "claude_session_id_history").write_text("missing-1\nmissing-2\nmissing-3\n")
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+
+    started_at = time.monotonic()
+    assert watcher.get_all_events() == []
+    elapsed = time.monotonic() - started_at
+
+    # Three misses used to cost three 0.5s sleeps on this single read; the walk
+    # over this tiny tree costs milliseconds, so the bound is generous.
+    assert elapsed < 0.5
+
+    # The missing sessions stay unregistered so a later discovery pass retries.
+    assert watcher._main_session_ids == []
+
+
+def test_late_found_session_is_inserted_in_history_order(tmp_path: Path) -> None:
+    """A session whose file appears on disk only after a newer session was
+    registered must slot into its history position, not the end: an append would
+    misorder the merged timeline and misdirect the latest-session gates --
+    feeding a dead session's ledger to the queue tracker and resetting the live
+    queue derived from the real latest session."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    projects_dir = claude_config_dir / "projects"
+    (agent_state_dir / "claude_session_id_history").write_text("session-1\nsession-2\n")
+    # Only the newer session's file is on disk at first discovery.
+    _write_session_file(projects_dir, "session-2", [_user_event(5)])
+
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher._discover_sessions()
+    assert watcher._main_session_ids == ["session-2"]
+
+    # The latest session's ledger feeds the queue tracker while session-1's file
+    # is still missing.
+    session_2_file = projects_dir / "hash123" / "session-2.jsonl"
+    with open(session_2_file, "ab") as f:
+        f.write((json.dumps(_queue_enqueue_record("parked in the live session", "session-2")) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+    assert _queued_contents(watcher) == ["parked in the live session"]
+
+    # The older session's file lands late; it must register at its history position.
+    _write_session_file(projects_dir, "session-1", [_user_event(0)])
+    watcher._discover_sessions()
+
+    assert watcher._main_session_ids == ["session-1", "session-2"]
+    latest = watcher.get_latest_main_session_file()
+    assert latest is not None
+    assert latest.name == "session-2.jsonl"
+    # The merged timeline reads in history order, and the live queue survived:
+    # the tracker resets only for a NEW latest session, never a late-found older one.
+    assert [e["event_id"] for e in watcher.get_events_at_offset(0, 10)] == ["uuid-0-user", "uuid-5-user"]
+    assert _queued_contents(watcher) == ["parked in the live session"]
 
 
 def test_is_main_session_event_excludes_subagent_sessions(tmp_path: Path) -> None:
