@@ -46,7 +46,13 @@ the real gate.
 - `POST /write-file` -- body `{"path", "content_b64", "mode"?}`; atomic write.
 - `GET /grants` / `PUT /grants` -- read/replace `data/.secrets/share_grants.toml`
   (TOML-validated on write). This is the single writer of the sharing grants,
-  used by both the web client and the desktop.
+  used by both the web client and the desktop. Writes are compare-and-swap
+  capable: `GET` returns `{"grants_toml", "revision"}` (the revision is a
+  digest of the file bytes; `""` while no file exists), and `PUT` accepts an
+  optional `base_revision` -- when given and stale, the write is refused with
+  `409 {"error", "revision", "grants_toml"}` carrying the current document so
+  the caller can merge and retry. Omitting `base_revision` is a deliberate
+  blind replace. Successful writes return the new `revision`.
 - `GET /_alive` -- unauthenticated loopback liveness (for supervisord / the
   forward readiness probe).
 

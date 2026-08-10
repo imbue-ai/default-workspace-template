@@ -115,28 +115,102 @@ def test_read_missing_file_reports_absent(tmp_path: Path) -> None:
     assert resp.get_json() == {"exists": False}
 
 
+def _put_grants(harness: _Harness, payload: dict[str, object]):  # type: ignore[no-untyped-def]
+    body = json.dumps(payload).encode("utf-8")
+    return harness.client.put("/grants", data=body, headers=harness.signed_headers("PUT", "/grants", body))
+
+
 def test_grants_put_validates_toml_and_get_reads_it_back(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     grants = '[workspace]\nemails = ["owner@example.com"]\nemail_domains = []\n'
 
-    body = json.dumps({"grants_toml": grants}).encode("utf-8")
-    put = harness.client.put("/grants", data=body, headers=harness.signed_headers("PUT", "/grants", body))
+    put = _put_grants(harness, {"grants_toml": grants})
     assert put.status_code == 200
     assert (tmp_path / "data" / ".secrets" / "share_grants.toml").read_text() == grants
 
     get = harness.client.get("/grants", headers=harness.signed_headers("GET", "/grants", b""))
     assert get.status_code == 200
     assert get.get_json()["grants_toml"] == grants
+    # The read reports the same revision the write returned, closing the
+    # read-modify-write loop.
+    assert get.get_json()["revision"] == put.get_json()["revision"]
 
 
 def test_grants_put_rejects_malformed_toml(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
-    body = json.dumps({"grants_toml": "not toml [["}).encode("utf-8")
 
-    put = harness.client.put("/grants", data=body, headers=harness.signed_headers("PUT", "/grants", body))
+    put = _put_grants(harness, {"grants_toml": "not toml [["})
 
     assert put.status_code == 400
     assert not (tmp_path / "data" / ".secrets" / "share_grants.toml").exists()
+
+
+def test_grants_get_reports_the_absent_revision_before_any_write(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    get = harness.client.get("/grants", headers=harness.signed_headers("GET", "/grants", b""))
+
+    assert get.status_code == 200
+    assert get.get_json() == {"grants_toml": "", "revision": ""}
+
+
+def test_grants_put_with_matching_base_revision_succeeds(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    seeded = _put_grants(harness, {"grants_toml": "[workspace]\nemails = []\n"})
+
+    updated = _put_grants(
+        harness,
+        {"grants_toml": '[workspace]\nemails = ["a@example.com"]\n', "base_revision": seeded.get_json()["revision"]},
+    )
+
+    assert updated.status_code == 200
+    assert updated.get_json()["revision"] != seeded.get_json()["revision"]
+    grants_file = tmp_path / "data" / ".secrets" / "share_grants.toml"
+    assert "a@example.com" in grants_file.read_text()
+
+
+def test_grants_put_seeding_participates_in_cas_via_the_absent_revision(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    seeded = _put_grants(harness, {"grants_toml": "[workspace]\nemails = []\n", "base_revision": ""})
+
+    assert seeded.status_code == 200
+
+
+def test_grants_put_with_stale_base_revision_conflicts_and_reports_the_current_document(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    first = _put_grants(harness, {"grants_toml": "[workspace]\nemails = []\n"})
+    concurrent = '[workspace]\nemails = ["other@example.com"]\n'
+    assert _put_grants(harness, {"grants_toml": concurrent}).status_code == 200
+
+    stale = _put_grants(
+        harness,
+        {"grants_toml": '[workspace]\nemails = ["mine@example.com"]\n', "base_revision": first.get_json()["revision"]},
+    )
+
+    assert stale.status_code == 409
+    conflict = stale.get_json()
+    assert conflict["grants_toml"] == concurrent
+    assert conflict["revision"]
+    # The losing write must not have landed.
+    assert (tmp_path / "data" / ".secrets" / "share_grants.toml").read_text() == concurrent
+
+
+def test_grants_put_against_the_absent_revision_conflicts_once_a_document_exists(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    assert _put_grants(harness, {"grants_toml": "[workspace]\nemails = []\n"}).status_code == 200
+
+    stale_seed = _put_grants(harness, {"grants_toml": "[workspace]\nemails = []\n", "base_revision": ""})
+
+    assert stale_seed.status_code == 409
+
+
+def test_grants_put_rejects_a_non_string_base_revision(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    put = _put_grants(harness, {"grants_toml": "[workspace]\n", "base_revision": 7})
+
+    assert put.status_code == 400
 
 
 def test_unsigned_request_is_rejected(tmp_path: Path) -> None:
