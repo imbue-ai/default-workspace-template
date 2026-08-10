@@ -191,6 +191,15 @@ const INBOX_NAME = "pi_inbox";
 // Minds queue mirror replays `pi_inbox` from zero and relies on this scoping.
 const INBOX_HISTORY_NAME = "pi_inbox_history";
 const INBOX_POLL_MS = 200;
+// How many consecutive drain ticks a flush/retract sentinel may be deferred waiting for
+// injected steers to park (pendingInjections to drain) before it is consumed anyway:
+// 10 ticks at the 200ms cadence is ~2s -- the same bound as the dwt stop path's message-lock
+// wait (STOP_LOCK_WAIT_SECONDS = 2.0) and far above a normal park (sub-second). The bound
+// keeps stop-wins (U2): a send whose promise never settles must not defer the abort forever
+// (an unstoppable turn). Proceeding past the bound means a still-un-parked steer can escape
+// the flush/retract and commit as a visible duplicate -- the class the queue-sweep series
+// already accepts -- which is strictly better than a stop that never lands.
+const SENTINEL_SETTLE_MAX_TICKS = 10;
 // Atomic shoulder-tap control records. Minds appends one JSON OBJECT line to pi_inbox
 // (a normal message is a JSON *string*, so the two never collide). Because it rides the
 // same ordered append-only inbox, every message queued before it has already been injected
@@ -465,8 +474,13 @@ function ticketSteps(args: string[]): string | null {
   if (!existsSync(TICKETS_DIR) || !existsSync(TICKET_SCRIPT)) return null;
   try {
     // Invoke via `bash` (the ticket script is bash) rather than exec'ing it directly,
-    // so it works even when it sits on a noexec mount.
-    const res = spawnSync("bash", [TICKET_SCRIPT, "steps", ...args], { encoding: "utf-8", env: process.env });
+    // so it works even when it sits on a noexec mount. TICKETS_DIR is exported explicitly:
+    // the constant may be the WORK_DIR fallback (env var unset), and the child must read
+    // the same tickets dir this guard checked -- the shell hooks these mirror export it too.
+    const res = spawnSync("bash", [TICKET_SCRIPT, "steps", ...args], {
+      encoding: "utf-8",
+      env: { ...process.env, TICKETS_DIR },
+    });
     // tk exits non-zero when there are no steps at all; that is "" (consulted), not null.
     const out = res.status === 0 && typeof res.stdout === "string" ? res.stdout : "";
     return out.split("\n").filter((line) => line.trim() !== "").join("\n");
@@ -516,7 +530,12 @@ function openStepCount(): number {
 function tkStandaloneReason(command: string): string | null {
   if (!/\b(tk|ticket)\b/.test(command) || !existsSync(TK_STANDALONE_CHECKER)) return null;
   try {
-    const res = spawnSync("python3", [TK_STANDALONE_CHECKER, command], { encoding: "utf-8", env: process.env });
+    // TICKETS_DIR is exported for the same reason as in ticketSteps: the checker must see
+    // the resolved dir even when only the WORK_DIR fallback names it.
+    const res = spawnSync("python3", [TK_STANDALONE_CHECKER, command], {
+      encoding: "utf-8",
+      env: { ...process.env, TICKETS_DIR },
+    });
     if (res.status === 2) {
       const reason = typeof res.stderr === "string" ? res.stderr.trim() : "";
       return reason || "Run `tk start` / `tk close` as the only command in the tool call.";
@@ -657,8 +676,12 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // the message LANDS in the steering queue, so an abort while injections are still outstanding
   // could fire before a just-injected steer has parked, letting it escape the flush/retract and
   // commit as a stray turn. Gating the sentinel on this counter makes "the steer has parked"
-  // provable rather than assumed-within-one-poll (the prior single-tick deferral).
+  // provable rather than assumed-within-one-poll (the prior single-tick deferral). The gate is
+  // BOUNDED by SENTINEL_SETTLE_MAX_TICKS so a send that never settles cannot defer a stop forever.
   let pendingInjections = 0;
+  // Consecutive drain ticks the current head-of-inbox sentinel has been deferred by the settle
+  // gate; reset whenever a sentinel is consumed.
+  let sentinelDeferredTicks = 0;
 
   const injectSteer = (content: string): void => {
     // Delivery is best-effort. pi.sendUserMessage is async (returns a Promise), so the
@@ -671,7 +694,10 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     const sent = pi.sendUserMessage?.(content, { deliverAs: "steer" });
     if (sent != null && typeof (sent as Promise<void>).then === "function") {
       pendingInjections++;
-      (sent as Promise<void>)
+      // Assimilate through Promise.resolve: the guard above proves only `.then`, so a
+      // then-only thenable would lack `.catch`/`.finally` and the chain would throw
+      // synchronously, leaking the pendingInjections entry and deadlocking the settle gate.
+      Promise.resolve(sent as Promise<void>)
         .catch((error) => logDiagnostic("inbox inject", error))
         .finally(() => {
           pendingInjections--;
@@ -756,9 +782,15 @@ export default function mngrPiLifecycle(pi: PiApi): void {
           // sentinel is re-read on a later tick, once every prior steer has landed in the
           // steering queue and is thus flushable/retractable. Waiting on the actual settle
           // (not a single poll) is what makes the abort provably not race a slow-parking steer.
-          if (injectedStringThisTick || pendingInjections > 0) {
+          // The deferral is BOUNDED (SENTINEL_SETTLE_MAX_TICKS): past the bound the sentinel
+          // proceeds even with injections outstanding, so a send whose promise never settles
+          // cannot make the turn unstoppable -- the un-parked steer may then escape as a
+          // visible duplicate, the accepted trade for a stop that always lands.
+          if ((injectedStringThisTick || pendingInjections > 0) && sentinelDeferredTicks < SENTINEL_SETTLE_MAX_TICKS) {
+            sentinelDeferredTicks++;
             return;
           }
+          sentinelDeferredTicks = 0;
           processedInbox++;
           // Every prior message rode the same ordered inbox, so it is already injected.
           const steers = abortAndCaptureSteers();

@@ -49,14 +49,17 @@ plugin (see ``CodexAgent._ensure_source_repo_trusted``).
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 import tomlkit
 
+from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import UserInputError
 from imbue.mngr.interfaces.host import OnlineHostInterface
@@ -721,6 +724,54 @@ def build_codex_hooks_config() -> dict[str, Any]:
 def serialize_codex_hooks(hooks_config: Mapping[str, Any]) -> str:
     """Serialize a ``hooks.json`` body as two-space-indented JSON."""
     return json.dumps(dict(hooks_config), indent=2)
+
+
+# Shell snippet that marks the agent idle out-of-band, reusing the SAME provisioned
+# ``codex_marker_state.sh`` helpers the four lifecycle hooks run, so the lock protocol and
+# the marker-recompute invariant (``active`` exists iff the root-turn flag is present or a
+# subagent is in flight) stay defined in exactly one place. It clears the root-turn flag,
+# recomputes the ``active`` marker (in-flight subagents keep it), clears any stranded
+# ``permissions_waiting`` (the same safety net clear_active_marker.sh applies at a root
+# Stop), and appends one activity event so ``mngr observe`` promptly re-probes the agent.
+# The event-append fragment is kept byte-identical to mngr_claude's
+# ``_CLEAR_ACTIVE_MARKERS_AND_EMIT_ACTIVITY_EVENT`` so the two harnesses emit one format.
+_MARK_CODEX_AGENT_IDLE_SNIPPET: Final[str] = (
+    f'. "$MNGR_AGENT_STATE_DIR/commands/{MARKER_STATE_LIB_SCRIPT_NAME}" || exit 1\n'
+    "codex_marker_lock\n"
+    'rm -f "$CODEX_ROOT_ACTIVE_FILE"\n'
+    "codex_marker_recompute\n"
+    'rm -f "$CODEX_PERMISSIONS_WAITING_FILE"\n'
+    "codex_marker_unlock\n"
+    """mkdir -p $MNGR_HOST_DIR/events/mngr/activity && echo '{"source": "mngr/activity", "type": "activity", "event_id": "'"evt-$(head -c 16 /dev/urandom | xxd -p)"'", "timestamp": "'"$(date -u +"%Y-%m-%dT%H:%M:%S.000000000Z")"'"}' >> $MNGR_HOST_DIR/events/mngr/activity/events.jsonl"""
+)
+
+
+def mark_codex_agent_idle(agent_state_dir: Path, host_dir: Path) -> None:
+    """Mark a codex agent idle out-of-band: clear the root-turn flag, recompute the ``active``
+    marker, clear ``permissions_waiting``, and emit one activity event.
+
+    The programmatic sibling of the four lifecycle hooks' own marker maintenance (and of
+    mngr_claude's ``mark_claude_agent_idle``): it runs the provisioned
+    ``codex_marker_state.sh`` helpers with ``MNGR_AGENT_STATE_DIR`` / ``MNGR_HOST_DIR``
+    bound to the passed paths, so the lock protocol and the recompute invariant have a
+    single source of truth rather than a Python re-expression that could drift from the
+    shell one. The recompute keeps ``active`` present while subagents are in flight.
+
+    The caller is the system-interface stop button after a native retract interrupt: codex
+    fires NO Stop hook when a turn is aborted via the ``retract_turn_id`` control line, so
+    the ``codex_root_active`` flag ``UserPromptSubmit`` created is stranded and the agent
+    keeps reporting RUNNING. This clears it, and the emitted event pokes ``mngr observe``
+    to re-probe. Idempotent -- ``rm -f`` no-ops on already-absent markers. Raises
+    ``ProcessError`` if the snippet cannot run (e.g. the marker-state helper is not
+    provisioned in the agent's ``commands/`` dir).
+    """
+    env = {**os.environ, "MNGR_AGENT_STATE_DIR": str(agent_state_dir), "MNGR_HOST_DIR": str(host_dir)}
+    run_local_command_modern_version(
+        ["bash", "-c", _MARK_CODEX_AGENT_IDLE_SNIPPET],
+        is_checked=True,
+        env=env,
+        name="mark_codex_agent_idle",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1,20 +1,22 @@
-"""Unit tests for pi's parsed catalog and its model resolver."""
+"""Unit tests for pi's parsed catalog, its model resolver, and the locked flush writer."""
 
 import json
 from pathlib import Path
 from typing import Any
 
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
-from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
+from imbue.system_interface.harnesses.pi_coding.model import PiFlushTapStatus
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import _parse_list_models
 from imbue.system_interface.harnesses.pi_coding.model import _supported_thinking_levels
 from imbue.system_interface.harnesses.pi_coding.model import build_catalog
+from imbue.system_interface.harnesses.pi_coding.model import flush_pi_queue_atomic
 
 
 def _agent_info(tmp_path: Path) -> AgentInfo:
@@ -159,3 +161,15 @@ def test_switch_twice_leaves_only_the_latest_intent(tmp_path: Path) -> None:
     # Exactly one intent in the file (a JSONL append would leave two lines).
     assert len(control_path.read_text().splitlines()) == 1
     assert json.loads(control_path.read_text()) == {"model_id": "openai/gpt-5", "thinking_level": "high"}
+
+
+# --- the locked atomic flush writer ---------------------------------------------
+# The send-in-flight branch (a held ``message.lock`` -> SEND_IN_FLIGHT, no write) is pinned in
+# server_test.py beside its codex sibling, where the bounded-wait constant is patched down; the
+# uncontended path is unit-tested here.
+
+
+def test_flush_appends_the_sentinel_when_no_send_is_in_flight(tmp_path: Path) -> None:
+    status = flush_pi_queue_atomic(tmp_path)
+    assert status == PiFlushTapStatus.TAPPED
+    assert (tmp_path / "pi_inbox").read_text().splitlines() == ['{"minds_interrupt": true}']

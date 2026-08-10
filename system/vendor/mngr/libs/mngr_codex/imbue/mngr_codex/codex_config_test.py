@@ -28,12 +28,14 @@ from imbue.mngr_codex.codex_config import get_codex_personality_migration_path
 from imbue.mngr_codex.codex_config import get_codex_version_cache_path
 from imbue.mngr_codex.codex_config import is_codex_update_available
 from imbue.mngr_codex.codex_config import is_project_trusted
+from imbue.mngr_codex.codex_config import mark_codex_agent_idle
 from imbue.mngr_codex.codex_config import merge_project_trust
 from imbue.mngr_codex.codex_config import parse_codex_cli_version
 from imbue.mngr_codex.codex_config import read_codex_config
 from imbue.mngr_codex.codex_config import rewrite_rollout_record_cwd
 from imbue.mngr_codex.codex_config import serialize_codex_config
 from imbue.mngr_codex.codex_config import serialize_codex_hooks
+from imbue.mngr_codex.resources.testing import provision_commands_dir
 
 # =============================================================================
 # Path helpers
@@ -402,3 +404,73 @@ def test_rewrite_rollout_record_cwd_leaves_non_cwd_records_untouched() -> None:
     # A cwd-bearing type whose payload happens to lack a cwd is also untouched.
     no_cwd = {"type": "turn_context", "payload": {"model": "gpt-5.5"}}
     assert rewrite_rollout_record_cwd(no_cwd, _NEW_CWD) == no_cwd
+
+
+# =============================================================================
+# mark_codex_agent_idle (out-of-band idle marking for the native stop retract)
+# =============================================================================
+
+
+def _idle_marking_dirs(tmp_path: Path) -> tuple[Path, Path]:
+    """A provisioned agent state dir (with the shared marker-state helper) plus a host dir."""
+    state_dir = tmp_path / "agent"
+    state_dir.mkdir()
+    provision_commands_dir(state_dir, ())
+    host_dir = tmp_path / "host"
+    host_dir.mkdir()
+    return state_dir, host_dir
+
+
+def test_mark_codex_agent_idle_clears_markers_and_emits_activity_event(tmp_path: Path) -> None:
+    """mark_codex_agent_idle clears the root-turn flag, recomputes the marker away, clears a
+    stranded permissions_waiting, and appends one format-conformant activity event.
+
+    It runs the same shell helpers the four lifecycle hooks run, and the emitted line must
+    match the hooks' activity-event format (the one mngr_claude's idle-marking emits)."""
+    state_dir, host_dir = _idle_marking_dirs(tmp_path)
+    (state_dir / "codex_root_active").write_text("")
+    (state_dir / "active").write_text("")
+    (state_dir / PERMISSIONS_WAITING_FILENAME).write_text("")
+
+    mark_codex_agent_idle(state_dir, host_dir)
+
+    # The root-turn flag and both markers are cleared, so the agent stops reporting RUNNING.
+    assert not (state_dir / "codex_root_active").exists()
+    assert not (state_dir / "active").exists()
+    assert not (state_dir / PERMISSIONS_WAITING_FILENAME).exists()
+    # Exactly one activity event was appended, in the hooks' own format.
+    events_file = host_dir / "events" / "mngr" / "activity" / "events.jsonl"
+    lines = events_file.read_text().splitlines()
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["source"] == "mngr/activity"
+    assert event["type"] == "activity"
+    assert event["event_id"].startswith("evt-")
+    assert event["timestamp"].endswith("Z")
+
+
+def test_mark_codex_agent_idle_keeps_marker_while_a_subagent_is_in_flight(tmp_path: Path) -> None:
+    """The recompute honors the marker invariant: with a subagent still registered, clearing
+    the root-turn flag must NOT clear ``active`` (the async-subagent case)."""
+    state_dir, host_dir = _idle_marking_dirs(tmp_path)
+    (state_dir / "codex_root_active").write_text("")
+    (state_dir / "active").write_text("")
+    subagents_dir = state_dir / "codex_subagents"
+    subagents_dir.mkdir()
+    (subagents_dir / "11111111-1111-1111-1111-111111111111").write_text("")
+
+    mark_codex_agent_idle(state_dir, host_dir)
+
+    assert not (state_dir / "codex_root_active").exists()
+    assert (state_dir / "active").exists(), "an in-flight subagent must keep the marker"
+
+
+def test_mark_codex_agent_idle_is_idempotent_on_absent_markers(tmp_path: Path) -> None:
+    """Absent markers are a no-op (``rm -f``); the activity event is still emitted."""
+    state_dir, host_dir = _idle_marking_dirs(tmp_path)
+
+    mark_codex_agent_idle(state_dir, host_dir)
+
+    assert not (state_dir / "active").exists()
+    events_file = host_dir / "events" / "mngr" / "activity" / "events.jsonl"
+    assert len(events_file.read_text().splitlines()) == 1

@@ -52,19 +52,17 @@ from imbue.system_interface.harnesses.claude.tap import KEYBINDINGS_FILENAME
 from imbue.system_interface.harnesses.claude.tap import OK_TAP_STATUSES
 from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
 from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
-from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
-from imbue.system_interface.harnesses.codex.model import CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
+from imbue.system_interface.harnesses.codex.model import CodexFlushTapStatus
+from imbue.system_interface.harnesses.codex.model import flush_codex_queue_atomic
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.model import ModelIdentity
-from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
-from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
-from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
+from imbue.system_interface.harnesses.pi_coding.model import PiFlushTapStatus
+from imbue.system_interface.harnesses.pi_coding.model import flush_pi_queue_atomic
 from imbue.system_interface.harnesses.registry import HARNESS_SPECS
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import get_catalog
-from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
@@ -839,13 +837,19 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     turn, so the agent stays alive:
 
     - codex: append one control line naming the currently-open turn to
-      ``shoulder_tap_atomic.jsonl``; the patched binary merges the parked steers into that turn,
-      ABA-gated on the turn id. Status ``no_open_turn`` (no write) when no turn is running.
-    - pi: append an interrupt sentinel to ``pi_inbox``; the lifecycle extension interrupts the
-      running turn (a no-op when idle) and resubmits the parked steers as one merged turn.
+      ``shoulder_tap_atomic.jsonl``, under mngr's per-agent ``message.lock`` so the line is
+      ordered after any in-flight send; the patched binary merges the parked steers into that
+      turn, ABA-gated on the turn id. Status ``no_open_turn`` (no write) when no turn is
+      running; 500 (no write) when a send holds the lock past the bounded wait.
+    - pi: append an interrupt sentinel to ``pi_inbox``, under the same per-agent
+      ``message.lock`` so the sentinel is ordered after any in-flight send's inbox append; the
+      lifecycle extension interrupts the running turn (a no-op when idle) and resubmits the
+      parked steers as one merged turn. 500 (no write) when a send holds the lock past the
+      bounded wait.
 
     Returns 404 for an unknown agent, 400 for a non-atomic harness (claude) or the primary
-    services agent, 500 if the write fails, 200 otherwise (``tapped``, or codex ``no_open_turn``).
+    services agent, 500 if the write fails or a codex/pi send is in flight, 200 otherwise
+    (``tapped``, or codex ``no_open_turn``).
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
@@ -865,16 +869,22 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     if agent_info.harness == HarnessType.PI_CODING:
         # pi has no per-turn id, so there is no ABA target to compute here: the lifecycle
         # extension gates the interrupt on "a turn is actually running" itself (a no-op when
-        # idle). Append one flush sentinel to pi's inbox; the extension interrupts the
-        # running turn and resubmits the parked steers as one merged turn.
-        inbox_path = agent_info.agent_state_dir / PI_INBOX_NAME
+        # idle). The whole locked flush write (bounded lock acquire, sentinel append) lives
+        # with the pi harness -- see ``flush_pi_queue_atomic``.
         try:
-            append_pi_inbox_sentinel(inbox_path, PI_INTERRUPT_KEY)
+            pi_flush_status = flush_pi_queue_atomic(agent_info.agent_state_dir)
         except OSError as e:
-            logger.opt(exception=e).error("Failed to write pi interrupt sentinel at {}", inbox_path)
+            logger.opt(exception=e).error("Failed to write pi interrupt sentinel for {}", agent_info.name)
             error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
             return _json_response(error.model_dump(), status_code=500)
-        return _json_response(ShoulderTapAtomicResponse(status="tapped").model_dump())
+        if pi_flush_status == PiFlushTapStatus.SEND_IN_FLIGHT:
+            # An explicit, retryable failure: a message send held the lock past the bounded
+            # wait, so no sentinel was written (writing it unordered could race the send).
+            error = ErrorResponse(
+                detail=f"A message send to agent '{agent_info.name}' is in flight; try the shoulder tap again."
+            )
+            return _json_response(error.model_dump(), status_code=500)
+        return _json_response(ShoulderTapAtomicResponse(status=pi_flush_status.value).model_dump())
 
     if agent_info.harness == HarnessType.CLAUDE:
         # claude has no control-file channel: it flushes its parked queue by cancelling the
@@ -882,26 +892,23 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
         # locked keypress, the bounded verdict watch, and the recovery send) to the executor.
         return _claude_shoulder_tap(agent_info)
 
+    # codex: the whole locked flush write (bounded lock acquire, open-turn resolution, control
+    # line append) lives with the codex harness -- see ``flush_codex_queue_atomic``.
     watcher = get_state().get_or_create_watcher(agent_info)
-    target_turn_id = current_open_turn_id(watcher.get_all_events())
-    if target_turn_id is None:
-        # No turn is running, so there is nothing to merge into -- do NOT write a control line
-        # (a stale target_turn_id would gate against a turn that never comes).
-        return _json_response(ShoulderTapAtomicResponse(status="no_open_turn").model_dump())
-
-    control_path = (
-        agent_info.agent_state_dir / get_harness_spec(agent_info.harness).model_state_relative_path
-    ) / CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
     try:
-        control_path.parent.mkdir(parents=True, exist_ok=True)
-        with control_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"target_turn_id": target_turn_id}) + "\n")
+        flush_status = flush_codex_queue_atomic(agent_info.agent_state_dir, watcher)
     except OSError as e:
-        logger.opt(exception=e).error("Failed to write atomic shoulder-tap control line at {}", control_path)
+        logger.opt(exception=e).error("Failed to write atomic shoulder-tap control line for {}", agent_info.name)
         error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
         return _json_response(error.model_dump(), status_code=500)
-
-    return _json_response(ShoulderTapAtomicResponse(status="tapped").model_dump())
+    if flush_status == CodexFlushTapStatus.SEND_IN_FLIGHT:
+        # An explicit, retryable failure: a message send held the lock past the bounded wait,
+        # so no control line was written (writing it unordered could race the in-flight send).
+        error = ErrorResponse(
+            detail=f"A message send to agent '{agent_info.name}' is in flight; try the shoulder tap again."
+        )
+        return _json_response(error.model_dump(), status_code=500)
+    return _json_response(ShoulderTapAtomicResponse(status=flush_status.value).model_dump())
 
 
 def _claude_shoulder_tap(agent_info: AgentInfo) -> Response:
@@ -2143,9 +2150,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(
         "/api/agents/<agent_id>/model-options", view_func=_get_model_options_endpoint, methods=["GET"]
     )
-    application.add_url_rule(
-        "/api/agents/<agent_id>/powered-by", view_func=_get_powered_by_endpoint, methods=["GET"]
-    )
+    application.add_url_rule("/api/agents/<agent_id>/powered-by", view_func=_get_powered_by_endpoint, methods=["GET"])
     application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/workspace/fast-mode",
@@ -2207,9 +2212,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
     application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
-    application.add_url_rule(
-        "/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"]
-    )
+    application.add_url_rule("/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"])
     auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])

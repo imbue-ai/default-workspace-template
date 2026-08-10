@@ -625,9 +625,17 @@ const pi = {
   on: (evt, h) => { (handlers[evt] ||= []).push(h); },
   // Default: resolve immediately (the send lands at once). With scenario.parkDelayMs set, the
   // send resolves only after that delay and logs a "parked:" marker on resolution -- so a test
-  // can prove a sentinel waits for the steer to actually park before aborting.
+  // can prove a sentinel waits for the steer to actually park before aborting. neverSettle
+  // returns a forever-pending promise (a send that never parks); thenOnly returns a bare
+  // then-only thenable (has .then but no .catch/.finally, the minimal Promise-like shape).
   sendUserMessage: (c) => {
     log.push("inject:" + c);
+    if (scenario.neverSettle) {
+      return new Promise(() => {});
+    }
+    if (scenario.thenOnly) {
+      return { then: (resolve) => { log.push("thenable:" + c); resolve(); } };
+    }
     if (scenario.parkDelayMs) {
       return new Promise((resolve) => setTimeout(() => { log.push("parked:" + c); resolve(); }, scenario.parkDelayMs));
     }
@@ -784,6 +792,52 @@ def test_retract_waits_for_a_slow_parking_steer_before_aborting(tmp_path: Path) 
     outcome = json.loads((state / "outcome.json").read_text())
     # The steer parked before the abort ran (abort is last), and the sentinel was still processed.
     assert outcome["log"] == ["inject:slow steer", "parked:slow steer", "abort"]
+    assert outcome["aborted"] == 1
+
+
+def test_retract_proceeds_after_the_bound_when_an_injection_never_settles(tmp_path: Path) -> None:
+    """A steer whose send promise NEVER settles must not defer the retract forever (an
+    unstoppable turn): after the bounded deferral (SENTINEL_SETTLE_MAX_TICKS ~= 2s at the 200ms
+    cadence) the sentinel proceeds anyway and the abort fires. The un-parked steer may escape as
+    a visible duplicate -- the accepted class -- but the stop always lands (U2)."""
+    both = json.dumps("never parking") + "\n" + json.dumps(_RETRACT_KEY) + "\n"
+    state = _run_sentinel_scenario(
+        tmp_path,
+        {
+            "idle": False,
+            "parkedSteers": "PARKED",
+            "neverSettle": True,
+            # The bound is 10 deferred ticks (~2s); the abort lands around tick 11 (~2.2s), so
+            # 3.5s comfortably covers it without racing the deadline.
+            "actions": [{"appendRaw": both}, {"sleep": 3500}],
+        },
+    )
+    outcome = json.loads((state / "outcome.json").read_text())
+    # The send never settled (no "parked:" marker), yet the sentinel was still consumed and the
+    # abort fired after the bound.
+    assert outcome["log"] == ["inject:never parking", "abort"]
+    assert outcome["aborted"] == 1
+
+
+def test_then_only_thenable_send_does_not_deadlock_the_sentinel(tmp_path: Path) -> None:
+    """A send returning a then-only thenable (has ``.then`` but no ``.catch``/``.finally``) must
+    not leak a pendingInjections entry: the injection is assimilated via ``Promise.resolve``, so
+    the settle gate drains and the retract aborts promptly. The 800ms window is far below the
+    ~2.2s deferral bound, so a leaked entry (rescued only by the bound) would fail this test."""
+    both = json.dumps("steer msg") + "\n" + json.dumps(_RETRACT_KEY) + "\n"
+    state = _run_sentinel_scenario(
+        tmp_path,
+        {
+            "idle": False,
+            "parkedSteers": "PARKED",
+            "thenOnly": True,
+            "actions": [{"appendRaw": both}, {"sleep": 800}],
+        },
+    )
+    outcome = json.loads((state / "outcome.json").read_text())
+    # The thenable settled (its then ran under assimilation) and the abort followed within the
+    # normal settle-gate window -- no deadlock, no reliance on the deferral bound.
+    assert outcome["log"] == ["inject:steer msg", "thenable:steer msg", "abort"]
     assert outcome["aborted"] == 1
 
 
@@ -1038,8 +1092,14 @@ sys.exit(0)
 
 # Stub `ticket`: its `steps` output is driven by env so a test can model any step
 # state. Exits non-zero with no output (like the real tk) when the requested set is
-# empty -- the extension reads that as "consulted, no steps".
+# empty -- the extension reads that as "consulted, no steps". With STUB_ECHO_TICKETS_DIR
+# set it instead reports the TICKETS_DIR value the child process actually received, so a
+# test can pin that the extension exports its resolved dir to the spawned tk.
 _STUB_TICKET = """#!/usr/bin/env bash
+if [[ "$1" == "steps" && -n "${STUB_ECHO_TICKETS_DIR:-}" ]]; then
+  printf 'tickets_dir=%s' "${TICKETS_DIR:-unset}"
+  exit 0
+fi
 if [[ "$1" == "steps" && "$2" == "--status=in_progress" ]]; then
   printf '%s' "${STUB_INPROGRESS:-}"
   [[ -n "${STUB_INPROGRESS:-}" ]] && exit 0 || exit 2
@@ -1221,6 +1281,27 @@ def test_carryover_silent_when_no_open_steps(tmp_path: Path) -> None:
         _run_event(tmp_path, "before_agent_start", {"systemPrompt": "BASE"}, env={"STUB_STEPS": ""})
     )
     assert result is None
+
+
+def test_ticket_child_receives_the_fallback_tickets_dir(tmp_path: Path) -> None:
+    """With no TICKETS_DIR in the environment the guard resolves the WORK_DIR fallback for its
+    own existence gate -- and must export that SAME dir to the spawned tk child (as the shell
+    hooks these guards mirror do), or the child consults a different tickets dir than the one
+    the guard checked. The stub ticket echoes the TICKETS_DIR it received."""
+    fallback = tmp_path / "work" / ".tickets"
+    fallback.mkdir(parents=True)
+    # An empty TICKETS_DIR is falsy on the Node side, modeling the unset-env case while still
+    # overriding the value _run_event supplies by default.
+    result = _event_result(
+        _run_event(
+            tmp_path,
+            "before_agent_start",
+            {"systemPrompt": "BASE"},
+            env={"TICKETS_DIR": "", "STUB_ECHO_TICKETS_DIR": "1"},
+        )
+    )
+    assert result is not None
+    assert f"tickets_dir={fallback}" in result["systemPrompt"]
 
 
 def test_stop_nudge_writes_to_stderr_when_steps_open(tmp_path: Path) -> None:
