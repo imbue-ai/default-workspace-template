@@ -22,15 +22,17 @@ carry any mngr content at all.
 2. Once satisfied, create a standalone mngr checkout:
 
    ```bash
-   bash .agents/skills/submit-upstream-changes/scripts/create_mngr_checkout.sh <branch-name>
+   git clone git@github.com:imbue-ai/mngr-internal.git .external_worktrees/mngr
+   git -C .external_worktrees/mngr checkout -b <branch-name> origin/main
    ```
 
-   This clones mngr to `.external_worktrees/mngr` and creates `<branch-name>`
-   off `origin/main` (defaulting to the current workspace branch name; it
-   refuses to sit on main). The checkout is a normal mngr clone: mngr's own
-   committed code-guardian policy applies, and `.reviewer/settings.json` here
-   lists the directory under `stop_hook.additional_git_directories`, so the
-   stop hook reviews work there alongside the workspace once it exists.
+   Name the branch after the current workspace branch when that makes sense,
+   and NEVER leave the checkout sitting on `main` -- mngr's committed
+   code-guardian policy applies to it as a normal mngr clone, including
+   merge-and-push on stop. The path must be exactly `.external_worktrees/mngr`:
+   that is the directory `.reviewer/settings.json` lists under
+   `stop_hook.additional_git_directories`, so the stop hook reviews work there
+   alongside the workspace once it exists.
 
 3. Carry your changes over. Diff the vendored tree against the last sync
    commit (whose message records the mngr sha it vendored):
