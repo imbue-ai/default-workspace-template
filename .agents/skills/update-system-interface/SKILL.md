@@ -81,7 +81,7 @@ specifics:
   `update-$SLUG` / `mngr/update-$SLUG`; the runtime dir is
   `data/.tasks/harden/update-$SLUG/`.
 - **Task-file frontmatter:** `operation: update`, `type: system-interface`,
-  plus the standard `lead_agent` / `finish_report_path`
+  plus the standard `finish_report_path`
   (`data/.tasks/harden/update-$SLUG/reports/report.md`). Per the system-interface
   exception in `op-update.md`, there is **no `## Change origin` marker** -- the
   body is a plain change brief, not an absorb/verify incident.
