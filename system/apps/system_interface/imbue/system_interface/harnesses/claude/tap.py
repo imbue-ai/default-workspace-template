@@ -37,13 +37,10 @@ re-drive the just-stopped turn).
 
 from __future__ import annotations
 
-import fcntl
 import json
 import time
 from collections.abc import Callable
-from collections.abc import Generator
 from contextlib import AbstractContextManager
-from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -67,6 +64,7 @@ from imbue.system_interface.harnesses.interrupt import InterruptToComposer
 from imbue.system_interface.harnesses.interrupt import PressChord
 from imbue.system_interface.harnesses.interrupt import RestartProcess
 from imbue.system_interface.harnesses.interrupt import SettleActivity
+from imbue.system_interface.harnesses.interrupt import agent_message_lock
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 
@@ -125,32 +123,6 @@ def _stop_ran_since(agent_key: str, since: float) -> bool:
     """True iff a stop was recorded for ``agent_key`` at or after ``since`` (a tap's baseline time)."""
     recorded = _STOP_MONOTONIC_BY_AGENT.get(agent_key)
     return recorded is not None and recorded >= since
-
-
-# mngr serializes every text send / key chord to an agent under an exclusive flock on this file
-# in the agent's state dir (see ``BaseAgent._message_lock``). The stop executor takes the SAME
-# lock for its under-lock mirror re-check, so a mid-flight ``mngr message`` send has finished its
-# paste-and-confirm cycle (and durably parked) before we read. Kept in sync with mngr's filename.
-MESSAGE_LOCK_FILENAME: str = "message.lock"
-
-
-@contextmanager
-def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
-    """Hold mngr's per-agent ``message.lock`` for the duration of the block.
-
-    dwt never drives raw tmux, but it shares this one flock so the stop's under-lock re-check
-    reads a durable mirror: acquiring blocks until any in-flight send has finished parking.
-    Mirrors ``BaseAgent._message_lock`` (same filename, same agent state dir), for local hosts --
-    the only place the system interface runs.
-    """
-    lock_path = agent_state_dir / MESSAGE_LOCK_FILENAME
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 class TapWatcher(Protocol):
