@@ -1,197 +1,175 @@
 /**
- * The write side of the model bar: an optimistic pick, reconciled from the pushed
- * live choice (not a poll).
+ * Per-agent model + fast-mode state for the composer model picker.
  *
- * The live selection is read from each agent's `model_choice` on the agents store
- * (pushed over the WebSocket); this module only owns the optimistic overlay while a
- * pick is being applied. On a pick we show it immediately (`pending`), POST it, and
- * clear the overlay once the pushed live choice matches it (or a timeout elapses, so
- * a switch the harness silently refused cannot strand the chip on a lie).
+ * The backend exposes the agent's Claude Code selection -- the model from its
+ * settings.json, fast mode resolved across the two settings layers Claude
+ * reads -- and applies changes by sending `/model` / `/fast` slash commands to
+ * the running session (see server.py). This module caches that state per agent,
+ * reflects a pick optimistically so the control feels responsive, and applies
+ * changes through a per-agent single-flight chain: at most one change request is
+ * in flight for an agent at a time, and they run in click order. That is what
+ * keeps rapid clicks correct -- without it, the browser fires the requests
+ * concurrently and the threaded backend delivers the `/model` / `/fast` commands
+ * to Claude in a nondeterministic order, so the agent can end up in the opposite
+ * state from the last click.
  *
- * Picks for one agent run through a single-flight chain so rapid clicks reach the
- * backend in click order -- without it the threaded backend could deliver the
- * commands out of order and leave the agent in the wrong state.
+ * When the chain drains, we re-read the settings once to reconcile the display.
+ * For the model that is a read of reality, and catches a refused change. For fast
+ * mode it is a read of what the backend recorded when it sent the command: Claude
+ * Code deletes the `fastMode` key on `/fast off` rather than writing false, so the
+ * session's own files cannot answer, and the backend writes each change into the
+ * agent's launch settings instead (see `write_fast_mode_setting`). A `/fast on`
+ * that Claude Code refuses therefore still displays as on -- which this workspace
+ * avoids by disabling the org-level eligibility check that would refuse it.
  */
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
-import { getAgentById } from "./AgentManager";
-import type { CatalogModelOption } from "./HarnessCatalog";
 
-export interface ModelIdentity {
-  model_id: string;
-  effort: string | null;
-  fast: boolean;
+export interface ModelOption {
+  id: string;
+  label: string;
+  supports_fast_mode: boolean;
 }
 
-export interface ModelChoice {
-  identity: ModelIdentity;
-  // The catalog option the live identity matched (computed on the backend), or null (shrug).
-  matched: CatalogModelOption | null;
+export interface ModelSettings {
+  model: string;
+  fast_mode: boolean;
+  fast_mode_supported: boolean;
+  options: ModelOption[];
 }
 
-interface PendingPick {
-  identity: ModelIdentity;
-  // The option the user clicked -- rendered directly, so no client-side matching.
-  option: CatalogModelOption;
-}
+// The state the picker displays -- seeded from settings.json, updated
+// optimistically on a pick, and reconciled back to the truth once a change
+// settles.
+const settingsByAgent = new Map<string, ModelSettings>();
+const inFlightFetch = new Set<string>();
 
-// The optimistic overlay per agent, and the tail of each agent's apply chain.
-const pendingByAgent = new Map<string, PendingPick>();
+// Tail of each agent's apply chain. A new change appends to it, so changes for
+// one agent run strictly in click order, one at a time.
 const applyChainByAgent = new Map<string, Promise<void>>();
 
-// How long an optimistic pick is held before it is forcefully reset to the live
-// truth, if no matching live choice ever arrives (e.g. a switch the harness
-// refused, or a stuck in-flight send). Generous, because the bar stays fully
-// interactive meanwhile -- this is only the last-resort self-heal.
-const PENDING_TIMEOUT_MS = 5 * 60 * 1000;
-
-// Two picks are the same axis-for-axis. The model id is compared exactly because a
-// pick always carries a catalog id (never a raw reported id); used only to expire the
-// right pending overlay, not to reconcile against the live choice (see effectiveChoice).
-function pickIdentityEquals(a: ModelIdentity, b: ModelIdentity): boolean {
-  return a.model_id === b.model_id && (a.effort ?? null) === (b.effort ?? null) && a.fast === b.fast;
+/** Bare alias of a model string, matching the backend's `base_alias`
+ *  (`opus[1m]` -> `opus`), so a stored `opus` or `opus[1m]` both map to the
+ *  Opus catalog option. */
+export function baseAlias(model: string): string {
+  return model.split("[")[0].trim().toLowerCase();
 }
 
-export interface EffectiveChoice {
-  identity: ModelIdentity;
-  matched: CatalogModelOption | null;
-  isPending: boolean;
+export function getModelSettings(agentId: string): ModelSettings | null {
+  return settingsByAgent.get(agentId) ?? null;
 }
 
-/**
- * What the bar should render for an agent: the optimistic pick while one is in
- * flight, otherwise the live choice pushed onto the agents store. The pending
- * overlay is held (as a whole) until the live choice matches it -- so the sequence
- * of per-command settings writes a harness makes never flickers the chip through an
- * intermediate state -- then cleared. Returns null when there is nothing to show yet.
- */
-export function effectiveChoice(agentId: string, liveChoice: ModelChoice | null | undefined): EffectiveChoice | null {
-  const pending = pendingByAgent.get(agentId);
-  if (pending) {
-    // The pushed identity carries a raw reported id, so we reconcile against the option the
-    // backend matched it to (not the raw id): the overlay settles once the matched option is
-    // the one the user clicked and effort/fast agree. A live read that matched nothing (shrug)
-    // never settles a pick -- the overlay holds until it does, or the timeout fires.
-    const settled =
-      liveChoice != null &&
-      liveChoice.matched != null &&
-      liveChoice.matched.id === pending.option.id &&
-      (liveChoice.identity.effort ?? null) === (pending.identity.effort ?? null) &&
-      liveChoice.identity.fast === pending.identity.fast;
-    if (settled) {
-      pendingByAgent.delete(agentId);
-    } else {
-      return { identity: pending.identity, matched: pending.option, isPending: true };
-    }
-  }
-  if (liveChoice == null) {
+/** The catalog option currently selected for the agent, matched by bare alias. */
+export function getSelectedOption(agentId: string): ModelOption | null {
+  const settings = settingsByAgent.get(agentId);
+  if (!settings) {
     return null;
   }
-  return { identity: liveChoice.identity, matched: liveChoice.matched, isPending: false };
+  const currentAlias = baseAlias(settings.model);
+  return settings.options.find((option) => baseAlias(option.id) === currentAlias) ?? null;
 }
 
-/** Which axes differ between the value the user was looking at (`prev`) and the
- *  one they just picked (`next`). Sent to the backend so it applies only those --
- *  computed here, against the optimistic overlay, so re-picking the value you
- *  started on (medium -> xhigh -> medium) still sends /effort medium rather than
- *  being suppressed by a disk read that has not caught up. Both model ids are catalog
- *  ids here (the caller passes the matched option's id as `prev`, never the raw
- *  reported id), so an exact compare is correct -- an effort/fast click keeps the same
- *  model id and does NOT re-send /model. */
-export function changedAxes(prev: ModelIdentity, next: ModelIdentity): string[] {
-  const axes: string[] = [];
-  if (prev.model_id !== next.model_id) {
-    axes.push("model");
+async function requestModelSettings(agentId: string): Promise<ModelSettings | null> {
+  try {
+    return await m.request<ModelSettings>({
+      method: "GET",
+      url: apiUrl("/api/agents/:agentId/model-settings"),
+      params: { agentId },
+    });
+  } catch (error) {
+    console.warn(`Failed to load model settings for agent ${agentId}`, error);
+    return null;
   }
-  if ((prev.effort ?? null) !== (next.effort ?? null)) {
-    axes.push("effort");
-  }
-  if (prev.fast !== next.fast) {
-    axes.push("fast");
-  }
-  return axes;
 }
 
-/** Apply the `axes` a click changed, then POST it. `axes` names which of
- *  model/effort/fast to actually send (see changedAxes).
- *
- *  `optimistic` follows the harness's switch mode: an EAGER_THEN_RECONCILE harness
- *  (all three -- claude, codex, pi) shows the pick immediately and reconciles from
- *  the pushed live choice. */
-export function setModelChoice(
-  agentId: string,
-  identity: ModelIdentity,
-  option: CatalogModelOption,
-  axes: string[],
-  optimistic = true,
-): void {
-  if (optimistic) {
-    pendingByAgent.set(agentId, { identity, option });
-    m.redraw();
+export async function fetchModelSettings(agentId: string): Promise<void> {
+  if (inFlightFetch.has(agentId)) {
+    return;
   }
-
-  const previous = applyChainByAgent.get(agentId) ?? Promise.resolve();
-  const next = previous.then(
-    () => postModelChoice(agentId, identity, axes),
-    () => postModelChoice(agentId, identity, axes),
-  );
-  applyChainByAgent.set(agentId, next);
-  void next.then(() => {
-    if (applyChainByAgent.get(agentId) === next) {
-      applyChainByAgent.delete(agentId);
+  inFlightFetch.add(agentId);
+  try {
+    const settings = await requestModelSettings(agentId);
+    // Don't clobber an optimistic pick that is still being applied -- the apply
+    // chain's own settle-read owns the display while it is active.
+    if (settings !== null && !applyChainByAgent.has(agentId)) {
+      settingsByAgent.set(agentId, settings);
+      m.redraw();
     }
-    if (optimistic) {
-      schedulePendingTimeout(agentId, identity);
+  } finally {
+    inFlightFetch.delete(agentId);
+  }
+}
+
+/** Queue `apply` (a single change POST) onto the agent's chain so it runs after
+ *  any in-flight change, in click order. When the chain drains -- this task is
+ *  still its tail once it finishes -- read settings.json once to reconcile the
+ *  display with the agent's real state. */
+function enqueueApply(agentId: string, apply: () => Promise<void>): void {
+  const previous = applyChainByAgent.get(agentId) ?? Promise.resolve();
+  const next = previous.then(apply, apply);
+  applyChainByAgent.set(agentId, next);
+  void next.then(async () => {
+    if (applyChainByAgent.get(agentId) !== next) {
+      // A newer change is queued behind us; it owns the settle-read.
+      return;
+    }
+    applyChainByAgent.delete(agentId);
+    const settings = await requestModelSettings(agentId);
+    if (settings !== null && !applyChainByAgent.has(agentId)) {
+      settingsByAgent.set(agentId, settings);
+      m.redraw();
     }
   });
 }
 
-async function postModelChoice(agentId: string, identity: ModelIdentity, axes: string[]): Promise<void> {
-  try {
-    await m.request({
-      method: "POST",
-      url: apiUrl("/api/agents/:agentId/model"),
-      params: { agentId },
-      body: { model_id: identity.model_id, effort: identity.effort, fast: identity.fast, axes },
+export function setModel(agentId: string, modelId: string): void {
+  const current = settingsByAgent.get(agentId);
+  if (current) {
+    // Optimistic: reflect the pick immediately. fast_mode_supported follows the
+    // newly chosen model, and fast mode cannot be on for a model that does not
+    // support it (Claude auto-disables it on the switch).
+    const chosen = current.options.find((option) => option.id === modelId);
+    const supportsFast = chosen?.supports_fast_mode ?? false;
+    settingsByAgent.set(agentId, {
+      ...current,
+      model: modelId,
+      fast_mode_supported: supportsFast,
+      fast_mode: supportsFast ? current.fast_mode : false,
     });
-  } catch (error) {
-    // The pushed live choice (or the timeout) reconciles the display back to truth.
-    console.warn(`Failed to set model for agent ${agentId}`, error);
+    m.redraw();
   }
-}
-
-function schedulePendingTimeout(agentId: string, identity: ModelIdentity): void {
-  setTimeout(() => {
-    const pending = pendingByAgent.get(agentId);
-    if (pending && pickIdentityEquals(pending.identity, identity)) {
-      pendingByAgent.delete(agentId);
-      m.redraw();
+  enqueueApply(agentId, async () => {
+    try {
+      await m.request({
+        method: "POST",
+        url: apiUrl("/api/agents/:agentId/model"),
+        params: { agentId },
+        body: { model: modelId },
+      });
+    } catch (error) {
+      // The settle-read reconciles the display back to the truth.
+      console.warn(`Failed to set model for agent ${agentId}`, error);
     }
-  }, PENDING_TIMEOUT_MS);
+  });
 }
 
-/** The agent's current fast state, from its effective (live or pending) choice;
- *  false when the agent's model is not resolved. Used by the workspace fast-mode
- *  prompt to decide whether the question is still open. */
-export function getAgentFastMode(agentId: string): boolean {
-  const agent = getAgentById(agentId);
-  const choice = effectiveChoice(agentId, agent?.model_choice);
-  return choice?.identity.fast ?? false;
-}
-
-/** Turn fast mode on/off on the agent's current model, keeping model and effort.
- *  Used by the workspace fast-mode prompt. No-op when the agent's model is unknown
- *  or does not support fast mode. */
 export function setFastMode(agentId: string, enabled: boolean): void {
-  const agent = getAgentById(agentId);
-  const choice = effectiveChoice(agentId, agent?.model_choice);
-  if (!choice || choice.matched === null || !choice.matched.supports_fast) {
-    return;
+  const current = settingsByAgent.get(agentId);
+  if (current) {
+    settingsByAgent.set(agentId, { ...current, fast_mode: enabled });
+    m.redraw();
   }
-  // Diff against the matched option's catalog id (choice.identity.model_id is the raw
-  // reported id), so only the fast axis is sent -- not a spurious /model.
-  const prev = { model_id: choice.matched.id, effort: choice.identity.effort, fast: choice.identity.fast };
-  const next = { model_id: choice.matched.id, effort: choice.identity.effort, fast: enabled };
-  setModelChoice(agentId, next, choice.matched, changedAxes(prev, next));
+  enqueueApply(agentId, async () => {
+    try {
+      await m.request({
+        method: "POST",
+        url: apiUrl("/api/agents/:agentId/fast"),
+        params: { agentId },
+        body: { enabled },
+      });
+    } catch (error) {
+      console.warn(`Failed to set fast mode for agent ${agentId}`, error);
+    }
+  });
 }
