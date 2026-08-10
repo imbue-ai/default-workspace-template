@@ -1,5 +1,8 @@
 # Queue sweep: truthful message queues across claude, codex, and pi
 
+Status: SHIPPED -- all eight plans below landed (each plan's own header cites its landing
+commits), and the two in-flight-lock follow-ups at the end of the index landed after them.
+
 ## The contracts
 
 Every harness parks a message sent mid-turn in its OWN in-process queue -- Minds never
@@ -66,6 +69,12 @@ idle-sweep trigger for the dead-process case.
 - **plan-composer-hint.md** -- mid-turn composer placeholder becomes "Type to queue
   more messages..." -- the contracts' user-facing legend. dwt frontend only
   (`claude-codex-pi-dwt`); no rebuild.
+- **plan-pi-interrupt-inflight-lock.md** -- follow-up to plan-pi-interrupt: closes the
+  in-flight-send stop-button race under mngr's `message.lock` plus an extension
+  settle-gate. dwt + mngr; no rebuild.
+- **plan-codex-interrupt-inflight-lock.md** -- follow-up to plan-codex-interrupt: the
+  same bounded-lock treatment for codex; the proposed fork-side fence was withdrawn as
+  unnecessary. dwt only; no rebuild.
 
 ## Landing order
 

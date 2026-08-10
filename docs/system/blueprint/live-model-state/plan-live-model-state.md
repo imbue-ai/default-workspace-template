@@ -1,6 +1,7 @@
 # Plan: live-only model state for the model bar (claude / codex / pi)
 
-Status: reviewed draft (three-lens review folded in, 2026-08-08). No code written yet.
+Status: SHIPPED (statusline writer `b5da867c`, hook replacement `17ef6a78`, shared
+reader/matcher `3fb837f6`, merged `3bf4a470`; codex-path decision recorded in `dfc18866`).
 
 Reference artifact: `statusline-payload-v2.1.207.json` (a real statusline stdin
 payload captured live from this workspace's Claude Code 2.1.207).

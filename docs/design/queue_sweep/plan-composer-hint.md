@@ -1,5 +1,7 @@
 # Composer placeholder hint: mid-turn typing queues, it does not interrupt
 
+Status: SHIPPED -- landed on `claude-codex-pi-dwt` (`4aa69fce`, merged `4a52e1bf`).
+
 ## Contract being enforced
 
 None of A/B/C directly -- this is their user-facing legend. Contract A makes mid-turn sends

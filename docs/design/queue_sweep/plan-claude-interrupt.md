@@ -1,5 +1,7 @@
 # claude stop button: chord interrupt on an empty queue, restart-drain on a nonempty one
 
+Status: SHIPPED -- landed on `claude-codex-pi-dwt` (`9f2dd027`, merged `c9a5b571`).
+
 ## Contract being enforced
 
 Contract B: stop interrupts the running turn, returns queued messages to the user's composer,

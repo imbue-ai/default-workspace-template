@@ -1,9 +1,10 @@
 # `shoulder_tap_atomic` for pi — minimal spec (post-adversarial-review)
 
-Status: DESIGN. Companion to `docs/design/shoulder_tap_atomic.md` (codex, shipped).
+Status: SHIPPED (extension `8eda41af`, Minds wireup `68283a42`). Companion to
+`docs/design/shoulder_tap_atomic.md` (codex, also shipped).
 Rewritten after three adversarial reviews collapsed the first draft ~4x. The earlier draft
 (turn counter + `pi_turn_state.json` + payload + outcome marker + second poller) was almost
-entirely an artifact of one wrong early choice. This is the minimal version.
+entirely fallout from one wrong early choice. This is the minimal version.
 
 ## 0. First, the honest scope question (decide this before building)
 

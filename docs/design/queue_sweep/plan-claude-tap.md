@@ -1,5 +1,8 @@
 # claude shoulder tap: native flush via a dedicated cancel keybinding (no SIGKILL-restart)
 
+Status: SHIPPED -- landed on `claude-codex-pi-dwt` and `claude-codex-pi-mngr` (`ed86b116`,
+merged `fa83eee9`; recovery-arm hardening `71780bd0`, `5c45b9ff`).
+
 ## Contract being enforced
 
 Contract C: the shoulder tap commits every queued message into the live session NOW. codex and
