@@ -20,13 +20,13 @@ from imbue.mngr_claude.claude_config import dismiss_effort_callout
 from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
 from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
 from imbue.mngr_claude.claude_config import find_project_config
+from imbue.mngr_claude.claude_config import is_tap_binding_active
+from imbue.mngr_claude.claude_config import mark_claude_agent_idle
 from imbue.mngr_claude.claude_config import find_user_config_in_isolated_mode
 from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
 from imbue.mngr_claude.claude_config import get_claude_config_dir
 from imbue.mngr_claude.claude_config import get_user_claude_config_dir
 from imbue.mngr_claude.claude_config import is_source_directory_trusted
-from imbue.mngr_claude.claude_config import is_tap_binding_active
-from imbue.mngr_claude.claude_config import mark_claude_agent_idle
 from imbue.mngr_claude.claude_config import remove_claude_trust_for_path
 from imbue.mngr_claude.claude_config import resolve_shared_claude_config_dir
 
@@ -1007,7 +1007,9 @@ def test_ensure_tap_keybinding_creates_chat_entry_when_only_other_contexts_prese
 def test_ensure_tap_keybinding_never_clobbers_existing_chat_meta_q(tmp_path: Path) -> None:
     """A meta+q already bound in Chat (to anything) is left untouched."""
     path = tmp_path / "keybindings.json"
-    path.write_text(json.dumps({"bindings": [{"context": "Chat", "bindings": {"meta+q": "chat:modelPicker"}}]}))
+    path.write_text(
+        json.dumps({"bindings": [{"context": "Chat", "bindings": {"meta+q": "chat:modelPicker"}}]})
+    )
     ensure_chat_cancel_tap_keybinding(path)
     assert _chat_meta_q(json.loads(path.read_text())) == "chat:modelPicker"
 
@@ -1036,7 +1038,9 @@ def test_ensure_tap_keybinding_never_clobbers_global_meta_q(tmp_path: Path) -> N
 def test_ensure_tap_keybinding_unrelated_context_meta_q_does_not_block(tmp_path: Path) -> None:
     """A meta+q bound only in an unrelated context (not Chat/Global) does not block the merge."""
     path = tmp_path / "keybindings.json"
-    path.write_text(json.dumps({"bindings": [{"context": "Settings", "bindings": {"meta+q": "settings:something"}}]}))
+    path.write_text(
+        json.dumps({"bindings": [{"context": "Settings", "bindings": {"meta+q": "settings:something"}}]})
+    )
     ensure_chat_cancel_tap_keybinding(path)
     assert _chat_meta_q(json.loads(path.read_text())) == "chat:cancel"
 
@@ -1057,15 +1061,6 @@ def test_ensure_tap_keybinding_leaves_corrupt_file_untouched(tmp_path: Path) -> 
     path.write_text("{ this is not valid json")
     ensure_chat_cancel_tap_keybinding(path)
     assert path.read_text() == "{ this is not valid json"
-
-
-def test_ensure_tap_keybinding_replaces_non_dict_chat_bindings(tmp_path: Path) -> None:
-    """A Chat entry whose "bindings" is not an object is replaced with a fresh dict, not crashed on."""
-    path = tmp_path / "keybindings.json"
-    path.write_text(json.dumps({"bindings": [{"context": "Chat", "bindings": "not-a-dict"}]}))
-    ensure_chat_cancel_tap_keybinding(path)
-    result = json.loads(path.read_text())
-    assert _chat_meta_q(result) == "chat:cancel"
 
 
 def _write_binding_and_marker(

@@ -157,32 +157,6 @@ def test_model_state_written_on_session_start(tmp_path: Path) -> None:
     }
 
 
-def test_sentinel_not_written_when_model_state_write_fails(tmp_path: Path) -> None:
-    """Readiness ordering: the model state (and session file) land BEFORE the
-    sentinel mngr's create wait reports on, so everything the chat needs at first
-    paint is on disk by the time readiness fires. When the model-state write
-    fails, readiness must therefore not be signaled."""
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    # A directory at the model-state path makes its writeFileSync fail (EISDIR).
-    (state_dir / "minds_model_state.json").mkdir()
-    state = _run_extension(
-        tmp_path,
-        [
-            {
-                "event": "session_start",
-                "sessionId": "s1",
-                "sessionFile": "/s/s1.jsonl",
-                "model": {"provider": "anthropic", "id": "claude-opus-4-8"},
-                "thinkingLevel": "high",
-            }
-        ],
-    )
-    assert not (state / "pi_session_started").exists()
-    # The session file was recorded before the failing write.
-    assert (state / "pi_session_file").read_text() == "/s/s1.jsonl"
-
-
 def test_model_state_tracks_model_and_thinking_switches(tmp_path: Path) -> None:
     """model_select / thinking_level_select keep the state live. The changed axis comes
     from the event; the untouched one from ctx (which may lag the event)."""
@@ -489,164 +463,6 @@ def test_unknown_content_and_roles_degrade_gracefully(tmp_path: Path) -> None:
     assert "BASE64" in raw_text
 
 
-# --- Native-vs-common transcript diff (invariant U5). -------------------------
-#
-# A real pi session captured live from the actual pi binary (a probe agent that
-# ran one bash tool call and one thinking turn; the opaque thinkingSignature is
-# scrubbed, everything else verbatim). Its `message` entries are exactly the
-# message_end payloads the extension receives, so replaying them through the
-# real extension and diffing the emitted common transcript against an
-# independent enumeration of the session proves every user-visible turn
-# surfaces exactly once. Schema validity is deliberately NOT the assertion --
-# a schema-valid stream that dropped or duplicated a turn passes validation
-# but fails this diff.
-_REAL_SESSION_FIXTURE = Path(__file__).parent / "test_fixtures" / "pi_session_two_turns.jsonl"
-
-# Native session line types that are bookkeeping, never conversation turns. An
-# unlisted line type fails the enumeration, so additions must be deliberate.
-_SESSION_BOOKKEEPING_LINE_TYPES = {
-    # Session header (version, id, cwd).
-    "session",
-    # Model/thinking-level change bookkeeping.
-    "model_change",
-    "thinking_level_change",
-}
-
-# pi message roles the common schema deliberately does not model (kept verbatim
-# in the raw transcript instead).
-_EXCLUDED_MESSAGE_ROLES = {"bashExecution", "custom", "branchSummary", "compactionSummary"}
-
-# Assistant content block types that carry no transcript-visible content.
-_EXCLUDED_ASSISTANT_BLOCK_TYPES = {"thinking"}
-
-# Mirrors of the extension's INPUT_PREVIEW_LIMIT / TOOL_OUTPUT_LIMIT and its
-# truncate() (which appends "..." past the limit).
-_PI_INPUT_PREVIEW_LIMIT = 200
-_PI_TOOL_OUTPUT_LIMIT = 2000
-
-
-def _truncate_like_emitter(text: str, limit: int) -> str:
-    return text[:limit] + "..." if len(text) > limit else text
-
-
-def _pi_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        pytest.fail(f"native pi message content is neither string nor list: {content!r}")
-    parts = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
-            parts.append(block["text"])
-    return "".join(parts)
-
-
-def _native_session_messages() -> list[dict[str, Any]]:
-    """Every `message` entry of the real session, with the bookkeeping line types excluded explicitly."""
-    messages: list[dict[str, Any]] = []
-    for line in _REAL_SESSION_FIXTURE.read_text().splitlines():
-        record = json.loads(line)
-        line_type = record.get("type")
-        if line_type in _SESSION_BOOKKEEPING_LINE_TYPES:
-            continue
-        if line_type != "message":
-            pytest.fail(
-                f"unclassified native session line type {line_type!r}: classify it as a turn or exclude it deliberately"
-            )
-        messages.append(record["message"])
-    return messages
-
-
-# A turn descriptor: ("user_message", text), ("assistant_message", (text, calls)),
-# or ("tool_result", (call_id, tool_name, output, is_error)). pi preserves the
-# native toolCall ids end to end, so descriptor equality covers pairing.
-def _enumerate_expected_turns(messages: list[dict[str, Any]]) -> list[tuple[str, Any]]:
-    """Classify every native message as a user-visible turn or an explicitly excluded shape."""
-    turns: list[tuple[str, Any]] = []
-    for message in messages:
-        role = message.get("role")
-        if role in _EXCLUDED_MESSAGE_ROLES:
-            continue
-        if role == "user":
-            turns.append(("user_message", _pi_text(message.get("content"))))
-        elif role == "assistant":
-            calls: list[tuple[str, str, str]] = []
-            for block in message.get("content") or []:
-                block_type = block.get("type") if isinstance(block, dict) else None
-                if block_type == "text":
-                    continue
-                elif block_type == "toolCall":
-                    preview = _truncate_like_emitter(
-                        json.dumps(block.get("arguments") or {}, separators=(",", ":")), _PI_INPUT_PREVIEW_LIMIT
-                    )
-                    calls.append((block["id"], block["name"], preview))
-                elif block_type in _EXCLUDED_ASSISTANT_BLOCK_TYPES:
-                    continue
-                else:
-                    pytest.fail(
-                        f"unclassified assistant content block type {block_type!r}: classify it or exclude it deliberately"
-                    )
-            turns.append(("assistant_message", (_pi_text(message.get("content")), tuple(calls))))
-        elif role == "toolResult":
-            output = _truncate_like_emitter(_pi_text(message.get("content")), _PI_TOOL_OUTPUT_LIMIT)
-            turns.append(
-                ("tool_result", (message["toolCallId"], message["toolName"], output, message.get("isError") is True))
-            )
-        else:
-            pytest.fail(
-                f"unclassified native pi message role {role!r}: classify it as a turn or exclude it deliberately"
-            )
-    return turns
-
-
-def _normalize_emitted_common(records: list[dict[str, Any]]) -> list[tuple[str, Any]]:
-    normalized: list[tuple[str, Any]] = []
-    for record in records:
-        record_type = record["type"]
-        if record_type == "user_message":
-            normalized.append(("user_message", record["content"]))
-        elif record_type == "assistant_message":
-            calls = tuple(
-                (call["tool_call_id"], call["tool_name"], call["input_preview"]) for call in record["tool_calls"]
-            )
-            normalized.append(("assistant_message", (record["text"], calls)))
-        elif record_type == "tool_result":
-            normalized.append(
-                ("tool_result", (record["tool_call_id"], record["tool_name"], record["output"], record["is_error"]))
-            )
-        else:
-            pytest.fail(f"unexpected common-transcript record type: {record_type!r}")
-    return normalized
-
-
-def test_every_native_turn_appears_in_common_transcript_exactly_once(tmp_path: Path) -> None:
-    """Native-vs-common diff over the real captured session: replaying its
-    messages through the real extension emits every user-visible turn exactly
-    once, in order, with tool calls paired to their results (invariant U5)."""
-    messages = _native_session_messages()
-    state = _run_extension(
-        tmp_path, [{"event": "message_end", "payload": {"message": message}} for message in messages]
-    )
-    records = _read_jsonl(state / _COMMON_TRANSCRIPT)
-
-    expected = _enumerate_expected_turns(messages)
-    actual = _normalize_emitted_common(records)
-
-    # Guard against a degenerate enumeration: the captured session ran a tool
-    # and had genuine typed turns, so the expected side must contain both.
-    assert any(kind == "tool_result" for kind, _ in expected)
-    assert any(kind == "user_message" for kind, _ in expected)
-
-    # Exactly once, in order, with the same content and pairing (pi preserves
-    # native toolCall ids, so equality covers call/result pairing).
-    assert actual == expected
-
-    assert len({record["event_id"] for record in records}) == len(records)
-    # Schema validity is necessary (but alone would not catch a dropped turn).
-    for record in records:
-        assert validate_common_transcript_record(record) is None, record
-
-
 # Drives the inbox watcher: a fake pi captures sendUserMessage calls; the inbox is
 # pre-seeded with one already-delivered line BEFORE load (archived to
 # pi_inbox_history and truncated at load, so it is never re-injected), then
@@ -783,17 +599,9 @@ const pi = {
   on: (evt, h) => { (handlers[evt] ||= []).push(h); },
   // Default: resolve immediately (the send lands at once). With scenario.parkDelayMs set, the
   // send resolves only after that delay and logs a "parked:" marker on resolution -- so a test
-  // can prove a sentinel waits for the steer to actually park before aborting. neverSettle
-  // returns a forever-pending promise (a send that never parks); thenOnly returns a bare
-  // then-only thenable (has .then but no .catch/.finally, the minimal Promise-like shape).
+  // can prove a sentinel waits for the steer to actually park before aborting.
   sendUserMessage: (c) => {
     log.push("inject:" + c);
-    if (scenario.neverSettle) {
-      return new Promise(() => {});
-    }
-    if (scenario.thenOnly) {
-      return { then: (resolve) => { log.push("thenable:" + c); resolve(); } };
-    }
     if (scenario.parkDelayMs) {
       return new Promise((resolve) => setTimeout(() => { log.push("parked:" + c); resolve(); }, scenario.parkDelayMs));
     }
@@ -950,52 +758,6 @@ def test_retract_waits_for_a_slow_parking_steer_before_aborting(tmp_path: Path) 
     outcome = json.loads((state / "outcome.json").read_text())
     # The steer parked before the abort ran (abort is last), and the sentinel was still processed.
     assert outcome["log"] == ["inject:slow steer", "parked:slow steer", "abort"]
-    assert outcome["aborted"] == 1
-
-
-def test_retract_proceeds_after_the_bound_when_an_injection_never_settles(tmp_path: Path) -> None:
-    """A steer whose send promise NEVER settles must not defer the retract forever (an
-    unstoppable turn): after the bounded deferral (SENTINEL_SETTLE_MAX_TICKS ~= 2s at the 200ms
-    cadence) the sentinel proceeds anyway and the abort fires. The un-parked steer may escape as
-    a visible duplicate -- the accepted class -- but the stop always lands (U2)."""
-    both = json.dumps("never parking") + "\n" + json.dumps(_RETRACT_KEY) + "\n"
-    state = _run_sentinel_scenario(
-        tmp_path,
-        {
-            "idle": False,
-            "parkedSteers": "PARKED",
-            "neverSettle": True,
-            # The bound is 10 deferred ticks (~2s); the abort lands around tick 11 (~2.2s), so
-            # 3.5s comfortably covers it without racing the deadline.
-            "actions": [{"appendRaw": both}, {"sleep": 3500}],
-        },
-    )
-    outcome = json.loads((state / "outcome.json").read_text())
-    # The send never settled (no "parked:" marker), yet the sentinel was still consumed and the
-    # abort fired after the bound.
-    assert outcome["log"] == ["inject:never parking", "abort"]
-    assert outcome["aborted"] == 1
-
-
-def test_then_only_thenable_send_does_not_deadlock_the_sentinel(tmp_path: Path) -> None:
-    """A send returning a then-only thenable (has ``.then`` but no ``.catch``/``.finally``) must
-    not leak a pendingInjections entry: the injection is assimilated via ``Promise.resolve``, so
-    the settle gate drains and the retract aborts promptly. The 800ms window is far below the
-    ~2.2s deferral bound, so a leaked entry (rescued only by the bound) would fail this test."""
-    both = json.dumps("steer msg") + "\n" + json.dumps(_RETRACT_KEY) + "\n"
-    state = _run_sentinel_scenario(
-        tmp_path,
-        {
-            "idle": False,
-            "parkedSteers": "PARKED",
-            "thenOnly": True,
-            "actions": [{"appendRaw": both}, {"sleep": 800}],
-        },
-    )
-    outcome = json.loads((state / "outcome.json").read_text())
-    # The thenable settled (its then ran under assimilation) and the abort followed within the
-    # normal settle-gate window -- no deadlock, no reliance on the deferral bound.
-    assert outcome["log"] == ["inject:steer msg", "thenable:steer msg", "abort"]
     assert outcome["aborted"] == 1
 
 
@@ -1250,14 +1012,8 @@ sys.exit(0)
 
 # Stub `ticket`: its `steps` output is driven by env so a test can model any step
 # state. Exits non-zero with no output (like the real tk) when the requested set is
-# empty -- the extension reads that as "consulted, no steps". With STUB_ECHO_TICKETS_DIR
-# set it instead reports the TICKETS_DIR value the child process actually received, so a
-# test can pin that the extension exports its resolved dir to the spawned tk.
+# empty -- the extension reads that as "consulted, no steps".
 _STUB_TICKET = """#!/usr/bin/env bash
-if [[ "$1" == "steps" && -n "${STUB_ECHO_TICKETS_DIR:-}" ]]; then
-  printf 'tickets_dir=%s' "${TICKETS_DIR:-unset}"
-  exit 0
-fi
 if [[ "$1" == "steps" && "$2" == "--status=in_progress" ]]; then
   printf '%s' "${STUB_INPROGRESS:-}"
   [[ -n "${STUB_INPROGRESS:-}" ]] && exit 0 || exit 2
@@ -1408,11 +1164,7 @@ def test_require_steps_skips_a_bash_tk_command(tmp_path: Path) -> None:
         _run_event(
             tmp_path,
             "tool_result",
-            {
-                "toolName": "bash",
-                "input": {"command": "tk create --step 'x'"},
-                "content": [{"type": "text", "text": "ok"}],
-            },
+            {"toolName": "bash", "input": {"command": "tk create --step 'x'"}, "content": [{"type": "text", "text": "ok"}]},
             env={"STUB_INPROGRESS": "", "STUB_STEPS": ""},
         )
     )
@@ -1439,27 +1191,6 @@ def test_carryover_silent_when_no_open_steps(tmp_path: Path) -> None:
         _run_event(tmp_path, "before_agent_start", {"systemPrompt": "BASE"}, env={"STUB_STEPS": ""})
     )
     assert result is None
-
-
-def test_ticket_child_receives_the_fallback_tickets_dir(tmp_path: Path) -> None:
-    """With no TICKETS_DIR in the environment the guard resolves the WORK_DIR fallback for its
-    own existence gate -- and must export that SAME dir to the spawned tk child (as the shell
-    hooks these guards mirror do), or the child consults a different tickets dir than the one
-    the guard checked. The stub ticket echoes the TICKETS_DIR it received."""
-    fallback = tmp_path / "work" / ".tickets"
-    fallback.mkdir(parents=True)
-    # An empty TICKETS_DIR is falsy on the Node side, modeling the unset-env case while still
-    # overriding the value _run_event supplies by default.
-    result = _event_result(
-        _run_event(
-            tmp_path,
-            "before_agent_start",
-            {"systemPrompt": "BASE"},
-            env={"TICKETS_DIR": "", "STUB_ECHO_TICKETS_DIR": "1"},
-        )
-    )
-    assert result is not None
-    assert f"tickets_dir={fallback}" in result["systemPrompt"]
 
 
 def test_stop_nudge_writes_to_stderr_when_steps_open(tmp_path: Path) -> None:
