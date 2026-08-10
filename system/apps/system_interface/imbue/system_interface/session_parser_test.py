@@ -803,3 +803,135 @@ def test_null_message_line_does_not_wedge_following_valid_lines() -> None:
     ]
     events = parse_session_lines(lines)
     assert [e["content"] for e in events if e["type"] == "user_message"] == ["still here"]
+
+
+def _make_permission_request_output(rationale: str) -> str:
+    """The stdout of a latchkey permission-request POST: curl's progress meter,
+    then the created request pretty-printed the way the gateway writes it --
+    including the `target` and `effect` fields it echoes but the card ignores."""
+    body = json.dumps(
+        {
+            "request_id": "885711ec07bf47239d71294e1534330b",
+            "agent_id": "agent-28dc23edadd34caeaba58441ac8e7218",
+            "rationale": rationale,
+            "request_type": "predefined",
+            "payload": {"scope": "slack-api", "permissions": ["slack-read-all", "slack-write-all"]},
+            "target": "/home/user/.latchkey/permissions.json",
+            "effect": {"rules": [{"slack-api::me@example.com": ["slack-read-all", "slack-write-all"]}]},
+        },
+        indent=2,
+    )
+    meter = "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n" * 3
+    return meter + body + "\n"
+
+
+_LONG_RATIONALE = "I need to read the eng-releases channel to summarize the deploy thread. " * 30
+_REQUEST_ID = "885711ec07bf47239d71294e1534330b"
+
+
+def _preserved_request_json(output: str) -> dict[str, Any]:
+    """Read the request back the way the card's raw-output fallback does: from the
+    first `{` to the end of the string."""
+    return json.loads(output[output.index("{") :])
+
+
+def test_permission_request_survives_output_truncation() -> None:
+    """A permission-request response longer than the output limit is preserved
+    whole: the parsed request rides on the event, and the object left in `output`
+    is still complete and still readable from its first `{`. Head truncation
+    alone cut it mid-object, which is what left the chat's permission card unable
+    to name a request that was still pending."""
+    output = _make_permission_request_output(_LONG_RATIONALE)
+    assert len(output) > 2000
+    lines = [_make_tool_result_line("uuid-perm", "2026-01-01T00:00:00Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    request = events[0]["permission_request"]
+    assert request["request_id"] == _REQUEST_ID
+    assert request["rationale"] == _LONG_RATIONALE
+    assert request["payload"]["scope"] == "slack-api"
+    assert _preserved_request_json(events[0]["output"]) == request
+    assert len(events[0]["output"]) < len(output)
+
+
+def test_permission_request_preserved_when_not_last_on_stdout() -> None:
+    """The object's end comes from the JSON decoder, not from an assumption that
+    it runs to the end of stdout, so a command that printed more after the
+    response still yields a complete request -- and the preserved output still
+    ends at the object, so the card's first-`{` fallback parses."""
+    output = _make_permission_request_output(_LONG_RATIONALE) + "\nrequest submitted, waiting for the user\n"
+    lines = [_make_tool_result_line("uuid-tail", "2026-01-01T00:00:01Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert events[0]["permission_request"]["rationale"] == _LONG_RATIONALE
+    assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
+
+
+def test_permission_request_found_past_earlier_json_in_output() -> None:
+    """Candidate `{`s are walked rather than the first one trusted, so a batched
+    command that printed other JSON before the POST still yields the request --
+    and the preserved output leads with the request, not the earlier JSON."""
+    output = '{"rules": []}\n' + _make_permission_request_output(_LONG_RATIONALE)
+    lines = [_make_tool_result_line("uuid-pre", "2026-01-01T00:00:02Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert events[0]["permission_request"]["rationale"] == _LONG_RATIONALE
+    assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
+
+
+def test_short_permission_request_output_is_attached_and_left_intact() -> None:
+    """A response that fits under the output limit is not rewritten, but the
+    parsed request is attached just the same, so the card reads one field
+    regardless of the response's size."""
+    output = (
+        '{"request_id":"fs-1","rationale":"write the report","request_type":"file-sharing",'
+        '"payload":{"path":"/tmp/report","access":"WRITE"}}'
+    )
+    lines = [_make_tool_result_line("uuid-short", "2026-01-01T00:00:03Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert events[0]["output"] == output
+    assert events[0]["permission_request"]["payload"]["access"] == "WRITE"
+
+
+def test_tk_decoration_survives_alongside_preserved_permission_request() -> None:
+    """When both land in one over-long output, both survive: the tk lines are
+    emitted ahead of the request object, so the progress view keeps its step
+    transitions and the object stays last and alone for the card."""
+    output = "Updated s1 -> closed\n" + _make_permission_request_output(_LONG_RATIONALE)
+    lines = [_make_tool_result_line("uuid-both", "2026-01-01T00:00:04Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert "Updated s1 -> closed" in events[0]["output"]
+    assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
+
+
+def test_ordinary_large_output_is_unaffected_by_request_preservation() -> None:
+    """Preservation must not widen the output limit for ordinary results: a long
+    output that merely contains JSON is still head-truncated and carries no
+    permission-request field."""
+    output = json.dumps({"items": [{"id": index, "name": "x" * 50} for index in range(100)]})
+    assert len(output) > 2000
+    lines = [_make_tool_result_line("uuid-big", "2026-01-01T00:00:05Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert "permission_request" not in events[0]
+    assert events[0]["output"].endswith("...")
+    assert len(events[0]["output"]) <= 2003
+
+
+def test_unrelated_request_id_json_is_not_a_permission_request() -> None:
+    """Recognition is narrow: an API response carrying a `request_id` but none of
+    a permission request's shape is left alone, so ordinary tool output neither
+    grows a permission-request field nor dodges the output limit."""
+    output = json.dumps({"request_id": "abc123", "status": "ok", "data": "y" * 3000})
+    lines = [_make_tool_result_line("uuid-other", "2026-01-01T00:00:06Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert "permission_request" not in events[0]
+    assert events[0]["output"].endswith("...")
+
+
+def test_oversized_permission_request_falls_back_to_truncation() -> None:
+    """Preservation is bounded: a body past the preserved-object ceiling is
+    head-truncated like any other output and is not carried on the event, so a
+    pathological response cannot widen the output limit without bound."""
+    output = _make_permission_request_output("y" * 9000)
+    lines = [_make_tool_result_line("uuid-huge", "2026-01-01T00:00:07Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert "permission_request" not in events[0]
+    assert events[0]["output"].endswith("...")
+    assert len(events[0]["output"]) <= 2003
