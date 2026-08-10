@@ -5,7 +5,7 @@ description: Create a NEW version of an inspiration you already published (v2, v
 
 # Update a published inspiration
 
-Version: v1 (inspirations flow). This is the PUBLISHER's re-publish path -- the
+Version: v2 (inspirations flow). This is the PUBLISHER's re-publish path -- the
 companion to `publish-inspiration` (first publish, v1), `use-inspiration` (adopt
 someone else's), and `update-installed-inspiration` (pull a newer version of one you
 adopted). It produces the NEXT version (v2, v3, ...) of an
@@ -84,9 +84,8 @@ worker's worktree.
   and handed to the worker (§3).
 - **The recipe** lives in the published `inspiration.toml`'s `[recipe]` table
   (`include` / `data_include` / `exclude` / `modification_rules`) -- or, on a v1
-  tip, in the markdown's `## Recipe` YAML block. It, not a repo-vs-repo diff, is
-  the durable definition of how the inspiration is derived from its source; an
-  update re-runs it. §2 reads it out of the fetched tip.
+  tip, the markdown's `## Recipe` block. It, not a repo-vs-repo diff, defines
+  how the inspiration derives from its source; an update re-runs it.
 - **Slug / repo-name rules** are identical to `publish-inspiration`'s (match
   `^[A-Za-z0-9._-]+$`, no leading `-`); an update never changes the slug or repo.
 
@@ -299,10 +298,9 @@ the bundle is pushed to the worker. The task body directs the worker to:
    ```
    Any finding, scanner error, or missing scanner -> fix or report `stuck`; never
    commit around it. This stays the authoritative, hard-failing blocker.
-   Front matter is YAML: any value you write containing a `"`, a `: `, or a
-   leading `#`/`&`/`*`/`%` must be double-quoted with inner quotes escaped
-   (`title: "The \"Daily\" Digest: v2"`), matching what `build_inspiration.sh`
-   emits -- otherwise the validator's front-matter/TOML comparison fails.
+   Front matter is YAML: double-quote any value containing a `"`, a `: `, or a
+   leading `#`/`&`/`*`/`%`, escaping inner quotes -- matching what
+   `build_inspiration.sh` emits, or validation fails.
 
 7. **Update the manifest -- append only, never regenerate.** Bump the version
    to `v(n+1)` in BOTH `inspiration.md`'s front matter and `inspiration.toml`'s

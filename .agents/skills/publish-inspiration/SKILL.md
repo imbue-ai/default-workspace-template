@@ -976,13 +976,13 @@ in one call):**
 ```bash
 latchkey curl -X POST https://api.github.com/user/repos \
     -H 'Content-Type: application/json' \
-    -d '{"name": "<repo_name>", "description": "<description> (minds inspiration v1)", "private": <true|false>}'
+    -d '{"name": "<repo_name>", "description": "<description> (minds inspiration v2)", "private": <true|false>}'
 ```
 
 Take `<owner>` from the response's `.owner.login`. `"private"` is `true` for
 the default private visibility, `false` only if the user chose public. The
 repo description is always the confirmed `<description>` followed by the
-literal suffix ` (minds inspiration v1)` -- the flow-version marker every
+literal suffix ` (minds inspiration v2)` -- the flow-version marker every
 published repo carries; keep it verbatim. You
 already validated `repo_name` against `^[A-Za-z0-9._-]+$` in §6; keep the
 JSON built from variables, never string-interpolated shell.

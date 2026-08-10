@@ -5,7 +5,7 @@ description: Pull a newer version of an inspiration this mind already adopted fr
 
 # Update an installed inspiration
 
-Version: v1 (inspirations flow). This is the ADOPTER's update path -- the
+Version: v2 (inspirations flow). This is the ADOPTER's update path -- the
 companion to `use-inspiration` (first adopt someone else's), `publish-inspiration`
 (first publish, v1), and `update-published-inspiration` (the PUBLISHER cuts v2, v3, ...).
 This mind adopted an inspiration earlier -- either it was created FROM the
