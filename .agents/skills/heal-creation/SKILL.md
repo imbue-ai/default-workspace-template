@@ -118,7 +118,7 @@ background worker.
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$TARGET \
-    --template worker \
+    --template subskill-worker \
     --runtime-dir data/.tasks/harden/heal-$TARGET/ \
     --task-file data/.tasks/harden/heal-$TARGET/task.md
 ```
