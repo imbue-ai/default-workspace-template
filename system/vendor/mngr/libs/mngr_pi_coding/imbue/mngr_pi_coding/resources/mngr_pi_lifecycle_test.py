@@ -489,6 +489,164 @@ def test_unknown_content_and_roles_degrade_gracefully(tmp_path: Path) -> None:
     assert "BASE64" in raw_text
 
 
+# --- Native-vs-common transcript diff (invariant U5). -------------------------
+#
+# A real pi session captured live from the actual pi binary (a probe agent that
+# ran one bash tool call and one thinking turn; the opaque thinkingSignature is
+# scrubbed, everything else verbatim). Its `message` entries are exactly the
+# message_end payloads the extension receives, so replaying them through the
+# real extension and diffing the emitted common transcript against an
+# independent enumeration of the session proves every user-visible turn
+# surfaces exactly once. Schema validity is deliberately NOT the assertion --
+# a schema-valid stream that dropped or duplicated a turn passes validation
+# but fails this diff.
+_REAL_SESSION_FIXTURE = Path(__file__).parent / "test_fixtures" / "pi_session_two_turns.jsonl"
+
+# Native session line types that are bookkeeping, never conversation turns. An
+# unlisted line type fails the enumeration, so additions must be deliberate.
+_SESSION_BOOKKEEPING_LINE_TYPES = {
+    # Session header (version, id, cwd).
+    "session",
+    # Model/thinking-level change bookkeeping.
+    "model_change",
+    "thinking_level_change",
+}
+
+# pi message roles the common schema deliberately does not model (kept verbatim
+# in the raw transcript instead).
+_EXCLUDED_MESSAGE_ROLES = {"bashExecution", "custom", "branchSummary", "compactionSummary"}
+
+# Assistant content block types that carry no transcript-visible content.
+_EXCLUDED_ASSISTANT_BLOCK_TYPES = {"thinking"}
+
+# Mirrors of the extension's INPUT_PREVIEW_LIMIT / TOOL_OUTPUT_LIMIT and its
+# truncate() (which appends "..." past the limit).
+_PI_INPUT_PREVIEW_LIMIT = 200
+_PI_TOOL_OUTPUT_LIMIT = 2000
+
+
+def _truncate_like_emitter(text: str, limit: int) -> str:
+    return text[:limit] + "..." if len(text) > limit else text
+
+
+def _pi_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        pytest.fail(f"native pi message content is neither string nor list: {content!r}")
+    parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    return "".join(parts)
+
+
+def _native_session_messages() -> list[dict[str, Any]]:
+    """Every `message` entry of the real session, with the bookkeeping line types excluded explicitly."""
+    messages: list[dict[str, Any]] = []
+    for line in _REAL_SESSION_FIXTURE.read_text().splitlines():
+        record = json.loads(line)
+        line_type = record.get("type")
+        if line_type in _SESSION_BOOKKEEPING_LINE_TYPES:
+            continue
+        if line_type != "message":
+            pytest.fail(
+                f"unclassified native session line type {line_type!r}: classify it as a turn or exclude it deliberately"
+            )
+        messages.append(record["message"])
+    return messages
+
+
+# A turn descriptor: ("user_message", text), ("assistant_message", (text, calls)),
+# or ("tool_result", (call_id, tool_name, output, is_error)). pi preserves the
+# native toolCall ids end to end, so descriptor equality covers pairing.
+def _enumerate_expected_turns(messages: list[dict[str, Any]]) -> list[tuple[str, Any]]:
+    """Classify every native message as a user-visible turn or an explicitly excluded shape."""
+    turns: list[tuple[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role in _EXCLUDED_MESSAGE_ROLES:
+            continue
+        if role == "user":
+            turns.append(("user_message", _pi_text(message.get("content"))))
+        elif role == "assistant":
+            calls: list[tuple[str, str, str]] = []
+            for block in message.get("content") or []:
+                block_type = block.get("type") if isinstance(block, dict) else None
+                if block_type == "text":
+                    continue
+                elif block_type == "toolCall":
+                    preview = _truncate_like_emitter(
+                        json.dumps(block.get("arguments") or {}, separators=(",", ":")), _PI_INPUT_PREVIEW_LIMIT
+                    )
+                    calls.append((block["id"], block["name"], preview))
+                elif block_type in _EXCLUDED_ASSISTANT_BLOCK_TYPES:
+                    continue
+                else:
+                    pytest.fail(
+                        f"unclassified assistant content block type {block_type!r}: classify it or exclude it deliberately"
+                    )
+            turns.append(("assistant_message", (_pi_text(message.get("content")), tuple(calls))))
+        elif role == "toolResult":
+            output = _truncate_like_emitter(_pi_text(message.get("content")), _PI_TOOL_OUTPUT_LIMIT)
+            turns.append(
+                ("tool_result", (message["toolCallId"], message["toolName"], output, message.get("isError") is True))
+            )
+        else:
+            pytest.fail(
+                f"unclassified native pi message role {role!r}: classify it as a turn or exclude it deliberately"
+            )
+    return turns
+
+
+def _normalize_emitted_common(records: list[dict[str, Any]]) -> list[tuple[str, Any]]:
+    normalized: list[tuple[str, Any]] = []
+    for record in records:
+        record_type = record["type"]
+        if record_type == "user_message":
+            normalized.append(("user_message", record["content"]))
+        elif record_type == "assistant_message":
+            calls = tuple(
+                (call["tool_call_id"], call["tool_name"], call["input_preview"]) for call in record["tool_calls"]
+            )
+            normalized.append(("assistant_message", (record["text"], calls)))
+        elif record_type == "tool_result":
+            normalized.append(
+                ("tool_result", (record["tool_call_id"], record["tool_name"], record["output"], record["is_error"]))
+            )
+        else:
+            pytest.fail(f"unexpected common-transcript record type: {record_type!r}")
+    return normalized
+
+
+def test_every_native_turn_appears_in_common_transcript_exactly_once(tmp_path: Path) -> None:
+    """Native-vs-common diff over the real captured session: replaying its
+    messages through the real extension emits every user-visible turn exactly
+    once, in order, with tool calls paired to their results (invariant U5)."""
+    messages = _native_session_messages()
+    state = _run_extension(
+        tmp_path, [{"event": "message_end", "payload": {"message": message}} for message in messages]
+    )
+    records = _read_jsonl(state / _COMMON_TRANSCRIPT)
+
+    expected = _enumerate_expected_turns(messages)
+    actual = _normalize_emitted_common(records)
+
+    # Guard against a degenerate enumeration: the captured session ran a tool
+    # and had genuine typed turns, so the expected side must contain both.
+    assert any(kind == "tool_result" for kind, _ in expected)
+    assert any(kind == "user_message" for kind, _ in expected)
+
+    # Exactly once, in order, with the same content and pairing (pi preserves
+    # native toolCall ids, so equality covers call/result pairing).
+    assert actual == expected
+
+    assert len({record["event_id"] for record in records}) == len(records)
+    # Schema validity is necessary (but alone would not catch a dropped turn).
+    for record in records:
+        assert validate_common_transcript_record(record) is None, record
+
+
 # Drives the inbox watcher: a fake pi captures sendUserMessage calls; the inbox is
 # pre-seeded with one already-delivered line BEFORE load (archived to
 # pi_inbox_history and truncated at load, so it is never re-injected), then
