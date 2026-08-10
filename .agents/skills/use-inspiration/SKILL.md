@@ -5,7 +5,7 @@ description: Adapt an existing inspiration (a published snapshot of apps/feature
 
 # Adapting an inspiration
 
-Version: v1 (inspirations flow). This versions the publish/adopt flow and the
+Version: v2 (inspirations flow). This versions the publish/adopt flow and the
 `inspiration.md` manifest format.
 
 An inspiration is a publishable, reusable snapshot of the apps and features a mind
