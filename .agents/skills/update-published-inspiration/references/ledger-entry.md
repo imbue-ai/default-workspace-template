@@ -1,12 +1,10 @@
 # Recording the v(n+1) entry in the ledger
 
-The full recording contract for `update-published-inspiration` §8. It runs
-ONLY after the push succeeded -- an update that did not publish is never
-recorded.
-
-The single sanctioned write back to `/home/user/workspace` -- read the CWD-INVARIANT callout at
-the top before running it. If the push failed or the user aborted, SKIP this
-entirely: an update that did not publish is never recorded.
+The full recording contract for `update-published-inspiration` §8, and the
+single sanctioned write back to `/home/user/workspace` -- read that skill's
+CWD-INVARIANT callout before running it. It runs ONLY after the push succeeded:
+if the push failed or the user aborted, skip it entirely, because an update
+that did not publish is never recorded.
 
 Write the entry directly into `docs/VERSION_HISTORY.md` (cwd `/home/user/workspace`) -- the same
 `## Inspirations` recording contract `publish-inspiration` §8 step 4 owns, just
