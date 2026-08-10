@@ -2,32 +2,15 @@ from typing import Any
 
 import pytest
 
+from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
+from imbue.system_interface.activity_state import derive_activity_state
 from imbue.system_interface.activity_state import has_unmatched_tool_use
 from imbue.system_interface.activity_state import is_non_turn_tail_event
 from imbue.system_interface.activity_state import is_transcript_tail_stale
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
-from imbue.system_interface.activity_state import resolve_is_agent_running
-
-
-def test_resolve_is_agent_running_running_state_is_authoritative() -> None:
-    # A reported RUNNING state means running regardless of the marker.
-    assert resolve_is_agent_running("RUNNING", is_active_marker_present=False) is True
-    assert resolve_is_agent_running("RUNNING_UNKNOWN_AGENT_TYPE", is_active_marker_present=False) is True
-
-
-def test_resolve_is_agent_running_waiting_trusts_the_marker() -> None:
-    # The lag case: a short turn leaves the reported state at WAITING while the marker flips.
-    assert resolve_is_agent_running("WAITING", is_active_marker_present=True) is True
-    assert resolve_is_agent_running("WAITING", is_active_marker_present=False) is False
-
-
-def test_resolve_is_agent_running_terminal_state_ignores_a_stale_marker() -> None:
-    # A hard-crashed agent can leave a stale marker; a STOPPED/EXITED state must still read
-    # as not running so it never shows "Thinking".
-    assert resolve_is_agent_running("STOPPED", is_active_marker_present=True) is False
-    assert resolve_is_agent_running("EXITED", is_active_marker_present=True) is False
 
 
 def _assistant_with_tool_calls(*tool_call_ids: str) -> dict[str, Any]:
@@ -94,6 +77,43 @@ def test_has_unmatched_tool_use(events: list[dict[str, Any]], expected: bool) ->
             id="returns_final",
         ),
         pytest.param([{"foo": "bar"}], None, id="missing_type_key"),
+        # A model-picker change leaves the transcript ending on the three lines
+        # Claude writes for `/model sonnet`: an isMeta caveat, the command line,
+        # and its <local-command-stdout> confirmation. None is a genuine turn, so
+        # the tail type is the assistant turn before them -> IDLE downstream (not
+        # a spurious "Thinking..." pinned on the trailing user_message).
+        pytest.param(
+            [
+                {"type": "assistant_message", "tool_calls": []},
+                {"type": "user_message", "content": "<local-command-caveat>...", "is_meta": True},
+                {"type": "user_message", "content": "/model sonnet"},
+                {
+                    "type": "user_message",
+                    "content": "<local-command-stdout>Set model to Sonnet 5</local-command-stdout>",
+                },
+            ],
+            "assistant_message",
+            id="skips_model_command_tail",
+        ),
+        # The fast-mode toggle sends `/fast on` / `/fast off`, hidden the same way.
+        pytest.param(
+            [
+                {"type": "assistant_message", "tool_calls": []},
+                {"type": "user_message", "content": "/fast on"},
+                {"type": "user_message", "content": "<local-command-stdout>Fast mode ON</local-command-stdout>"},
+            ],
+            "assistant_message",
+            id="skips_fast_command_tail",
+        ),
+        # A genuine human turn that merely mentions the command is NOT skipped.
+        pytest.param(
+            [
+                {"type": "assistant_message", "tool_calls": []},
+                {"type": "user_message", "content": "why did /model switch on me?"},
+            ],
+            "user_message",
+            id="genuine_turn_mentioning_command_is_kept",
+        ),
     ],
 )
 def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> None:
@@ -103,26 +123,96 @@ def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> 
 @pytest.mark.parametrize(
     "event, expected",
     [
-        # The composer bar's slash commands and their confirmations are not turns,
-        # so a transcript that ends on one must not pin the indicator on "Thinking".
-        pytest.param({"type": "user_message", "content": "/model sonnet"}, True, id="model_command"),
-        pytest.param({"type": "user_message", "content": "/effort xhigh"}, True, id="effort_command"),
-        pytest.param({"type": "user_message", "content": "/fast on"}, True, id="fast_command"),
+        pytest.param({"type": "user_message", "content": "please rebase"}, False, id="genuine_prompt"),
+        pytest.param({"type": "assistant_message"}, False, id="assistant"),
         pytest.param(
-            {
-                "type": "user_message",
-                "content": "<local-command-stdout>Set effort level to xhigh</local-command-stdout>",
-            },
-            True,
-            id="effort_stdout",
+            {"type": "user_message", "content": "<local-command-caveat>x", "is_meta": True}, True, id="is_meta_caveat"
         ),
-        pytest.param({"type": "user_message", "is_meta": True, "content": "resume marker"}, True, id="is_meta"),
-        pytest.param({"type": "user_message", "content": "a real question"}, False, id="real_prompt"),
-        pytest.param({"type": "assistant_message"}, False, id="not_a_user_message"),
+        pytest.param({"type": "user_message", "content": "/model opus[1m]"}, True, id="model_command"),
+        pytest.param({"type": "user_message", "content": "/fast off"}, True, id="fast_command"),
+        pytest.param(
+            {"type": "user_message", "content": "<local-command-stdout>Set model to Opus 4.8</local-command-stdout>"},
+            True,
+            id="model_stdout",
+        ),
+        # A different slash command, or a stdout for an unrelated local command, is a real tail.
+        pytest.param({"type": "user_message", "content": "/clear"}, False, id="other_slash_command"),
+        pytest.param(
+            {"type": "user_message", "content": "<local-command-stdout>Compacted</local-command-stdout>"},
+            False,
+            id="unrelated_stdout",
+        ),
     ],
 )
 def test_is_non_turn_tail_event(event: dict[str, Any], expected: bool) -> None:
     assert is_non_turn_tail_event(event) is expected
+
+
+@pytest.mark.parametrize(
+    "has_pending_tool_use, tail_event_type, expected",
+    [
+        pytest.param(
+            True,
+            "assistant_message",
+            ActivityState.TOOL_RUNNING,
+            id="tool_running_when_unmatched_tool_use",
+        ),
+        pytest.param(
+            False,
+            "user_message",
+            ActivityState.THINKING,
+            id="thinking_when_last_event_is_user_message",
+        ),
+        pytest.param(
+            False,
+            "tool_result",
+            ActivityState.THINKING,
+            id="thinking_when_last_event_is_tool_result",
+        ),
+        pytest.param(
+            False,
+            "assistant_message",
+            ActivityState.IDLE,
+            id="idle_when_last_event_is_assistant_message",
+        ),
+        pytest.param(
+            False,
+            None,
+            ActivityState.IDLE,
+            id="idle_when_no_events",
+        ),
+    ],
+)
+def test_derive_activity_state(
+    has_pending_tool_use: bool,
+    tail_event_type: str | None,
+    expected: ActivityState,
+) -> None:
+    state = derive_activity_state(
+        is_agent_running=True,
+        has_pending_tool_use=has_pending_tool_use,
+        tail_event_type=tail_event_type,
+    )
+    assert state == expected
+
+
+@pytest.mark.parametrize(
+    "lifecycle_state",
+    [
+        pytest.param("STOPPED", id="stopped"),
+        pytest.param("WAITING", id="waiting"),
+        pytest.param("REPLACED", id="replaced"),
+        pytest.param("DONE", id="done"),
+    ],
+)
+def test_derive_activity_state_non_running_agent_is_always_idle(lifecycle_state: str) -> None:
+    assert lifecycle_state not in RUNNING_LIFECYCLE_STATES
+    state = derive_activity_state(
+        is_agent_running=False,
+        has_pending_tool_use=True,
+        tail_event_type="user_message",
+    )
+    assert state == ActivityState.IDLE
 
 
 @pytest.mark.parametrize(
@@ -172,3 +262,40 @@ def test_is_transcript_tail_stale(
     tail_event_at: float | None, process_started_at: float | None, expected: bool
 ) -> None:
     assert is_transcript_tail_stale(tail_event_at=tail_event_at, process_started_at=process_started_at) is expected
+
+
+@pytest.mark.parametrize(
+    "has_pending_tool_use, tail_event_type",
+    [
+        pytest.param(True, "assistant_message", id="would_be_tool_running"),
+        pytest.param(False, "tool_result", id="would_be_thinking"),
+        pytest.param(False, "user_message", id="would_be_thinking_user_message"),
+    ],
+)
+def test_derive_activity_state_stale_tail_overrides_to_idle(has_pending_tool_use: bool, tail_event_type: str) -> None:
+    """A transcript tail older than the current process is shown IDLE, not working.
+
+    This is the restarted-mid-turn case: the agent is running and the transcript
+    still ends on an unmatched tool_use / tool_result, but that turn was abandoned
+    by a prior process, so the indicator must not read "Thinking..." forever.
+    """
+    state = derive_activity_state(
+        is_agent_running=True,
+        has_pending_tool_use=has_pending_tool_use,
+        tail_event_type=tail_event_type,
+        tail_event_at=100.0,
+        process_started_at=200.0,
+    )
+    assert state == ActivityState.IDLE
+
+
+def test_derive_activity_state_fresh_tail_still_reports_working() -> None:
+    """A tail written after the current process started drives the normal state."""
+    state = derive_activity_state(
+        is_agent_running=True,
+        has_pending_tool_use=True,
+        tail_event_type="assistant_message",
+        tail_event_at=300.0,
+        process_started_at=200.0,
+    )
+    assert state == ActivityState.TOOL_RUNNING
