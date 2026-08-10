@@ -916,7 +916,7 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
     launch_parser.add_argument(
         "--template",
         required=True,
-        help="mngr create role template (e.g. 'worker').",
+        help="mngr create template (e.g. 'worker', 'subskill-worker').",
     )
     launch_parser.add_argument(
         "--runtime-dir",
@@ -975,7 +975,7 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
     launch_sync_parser.add_argument(
         "--template",
         required=True,
-        help="mngr create role template (e.g. 'worker').",
+        help="mngr create template (e.g. 'worker', 'crystallize-worker').",
     )
     launch_sync_parser.add_argument(
         "--runtime-dir",

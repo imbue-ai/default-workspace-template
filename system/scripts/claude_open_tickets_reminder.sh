@@ -9,18 +9,7 @@
 # agent is expected to manage them through `tk ls / tk ready / tk show`.
 # Steps are the per-turn progress records that drive the chat progress
 # view, and they are the only thing the carryover reminder is about.
-#
-# Output channel: claude adds a UserPromptSubmit hook's plain stdout to context,
-# so by default the reminder is printed as plain text. codex, however, tries to
-# JSON-parse UserPromptSubmit stdout that begins with `[` or `{` -- and this
-# reminder begins with `[Open task reminder...]`, so plain text is rejected as a
-# hook failure there. Passing `--codex` emits the reminder via
-# `hookSpecificOutput.additionalContext` JSON instead, which both harnesses add
-# to context (mirrors the `--codex` flag on claude_rewrite_bash_command.py).
 set -euo pipefail
-
-emit_as_codex=0
-[[ "${1:-}" == "--codex" ]] && emit_as_codex=1
 
 repo_root="${MNGR_AGENT_WORK_DIR:-$(pwd)}"
 # Honor any externally-set TICKETS_DIR (the agent's env normally pins it
@@ -49,7 +38,7 @@ open_lines=$("$tk_script" steps 2>/dev/null | sed '/^[[:space:]]*$/d' || true)
 
 [[ -n "$open_lines" ]] || exit 0
 
-reminder=$(cat <<EOF
+cat <<EOF
 
 [Open task reminder from default-workspace-template]
 
@@ -61,11 +50,3 @@ For each one, decide before continuing: keep working on it (call \`tk start <id>
 
 See CLAUDE.md > Task management for the full protocol.
 EOF
-)
-
-if [[ "$emit_as_codex" -eq 1 ]]; then
-    jq -n --arg ctx "$reminder" \
-        '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $ctx}}'
-else
-    printf '%s\n' "$reminder"
-fi
