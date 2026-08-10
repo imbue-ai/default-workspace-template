@@ -98,6 +98,14 @@ def test_match_option_falls_back_to_id_when_reported_id_is_none() -> None:
     assert match_option(identity, _OPTIONS) is _GPT
 
 
+def test_match_option_matches_the_catalog_option_id() -> None:
+    # A provision-time seed writes the configured option id (claude's settings-style
+    # "opus[1m]") before the harness has reported anything; it must resolve to the same
+    # option the later harness-reported id does.
+    identity = ModelIdentity(model_id="opus[1m]", effort="medium", fast=False)
+    assert match_option(identity, _OPTIONS) is _OPUS
+
+
 def test_match_option_prefix_matches_a_dated_variant() -> None:
     # A dated id keeps matching the suffix-free reported key via the single prefix pass.
     identity = ModelIdentity(model_id="claude-haiku-4-5-20251001", effort="medium", fast=False)

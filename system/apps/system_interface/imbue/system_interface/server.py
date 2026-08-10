@@ -25,7 +25,6 @@ from werkzeug.exceptions import HTTPException
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
-from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import workspace_layouts
@@ -34,7 +33,6 @@ from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import start_agent
 from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
@@ -44,15 +42,30 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
 from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
 from imbue.system_interface.harnesses.claude.launch_defaults import write_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
 from imbue.system_interface.harnesses.claude.tap import KEYBINDINGS_FILENAME
 from imbue.system_interface.harnesses.claude.tap import OK_TAP_STATUSES
 from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
-from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
 from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
-from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
+from imbue.system_interface.harnesses.codex.model import CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.interrupt import restart_drain
+from imbue.system_interface.harnesses.model import ModelIdentity
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
+from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
+from imbue.system_interface.harnesses.registry import HARNESS_SPECS
+from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
+from imbue.system_interface.harnesses.registry import build_resolver
+from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_harness_spec
+from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
@@ -65,19 +78,6 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
-from imbue.system_interface.harnesses.model import ModelIdentity
-from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
-from imbue.system_interface.harnesses.codex.model import CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
-from imbue.system_interface.harnesses.interrupt import restart_drain
-from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
-from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
-from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
-from imbue.system_interface.harnesses.registry import HARNESS_SPECS
-from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
-from imbue.system_interface.harnesses.registry import build_resolver
-from imbue.system_interface.harnesses.registry import get_catalog
-from imbue.system_interface.harnesses.registry import get_harness_spec
-from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
@@ -98,9 +98,9 @@ from imbue.system_interface.models import PoweredByResponse
 from imbue.system_interface.models import RandomNameResponse
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
-from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import SetModelChoiceRequest
 from imbue.system_interface.models import SetWorkspaceFastModeRequest
+from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.models import WorkspaceFastModeResponse
@@ -129,6 +129,14 @@ _BROWSER_SERVICE_NAME = "browser"
 # Pings detect (and tear down) half-dead peers without any asyncio machinery --
 # each connection owns its own thread, so a wedged send only stalls that thread.
 _WS_PING_INTERVAL_SECONDS = 25
+
+# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
+# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
+# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
+# teardown (a partial destroy the user saw as a 500). Every internal mngr
+# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
+# generous cap only converts spurious kills into patience.
+_DESTROY_TIMEOUT_SECONDS = 120.0
 
 
 class _ReflectClientSubprotocols:
@@ -1776,7 +1784,7 @@ def _destroy_agent(agent_id: str) -> Response:
         command=_build_destroy_command(agent_name),
         cwd=None,
         is_checked=False,
-        timeout=30.0,
+        timeout=_DESTROY_TIMEOUT_SECONDS,
     )
     success = result.returncode == 0
     output = result.stdout.strip() if success else result.stderr.strip()
@@ -2077,11 +2085,14 @@ def _layout_broadcast_endpoint() -> Response:
     return _json_response(response_body)
 
 
-def _handle_unhandled_exception(exc: Exception) -> Response:
+def _handle_unhandled_exception(exc: Exception) -> Response | HTTPException:
     # Let werkzeug's own HTTP errors (404 routing, 405, etc.) render normally;
-    # only genuine unhandled exceptions become a 500 JSON body.
+    # only genuine unhandled exceptions become a 500 JSON body. Returning the
+    # exception (not re-raising it) is how Flask keeps the real status code --
+    # a raise from inside the handler re-enters handle_exception and comes out
+    # as a 500.
     if isinstance(exc, HTTPException):
-        raise exc
+        return exc
     tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
     logger.error("Unhandled exception on {} {}: {}\n{}", request.method, request.path, exc, "".join(tb))
     return _json_response({"detail": f"Internal server error: {exc}"}, status_code=500)

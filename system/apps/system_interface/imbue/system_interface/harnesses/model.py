@@ -208,7 +208,9 @@ def match_option(identity: ModelIdentity, options: tuple[ModelOption, ...]) -> M
     """The catalog option a live ``identity`` resolves to, or None (the shrug case).
 
     Matches the harness-reported model id (``harness_reported_model_id``, or ``id`` when
-    that is None) exactly, then -- for drift tolerance -- by a single prefix pass so a
+    that is None) exactly, then the catalog option id exactly (a provision-time seed
+    writes the configured option id, e.g. claude's ``opus[1m]``, before the harness has
+    reported anything), then -- for drift tolerance -- by a single prefix pass so a
     dated variant (``claude-haiku-4-5-<date>``) still matches its suffix-free key. Effort
     and fast validity are then checked against the matched option: an effort the option
     does not declare, or fast on a model without fast, is a shrug. Uses the full declared
@@ -216,6 +218,8 @@ def match_option(identity: ModelIdentity, options: tuple[ModelOption, ...]) -> M
     """
     by_key = {option.harness_reported_model_id or option.id: option for option in options}
     matched = by_key.get(identity.model_id)
+    if matched is None:
+        matched = next((option for option in options if option.id == identity.model_id), None)
     if matched is None:
         matched = next((option for key, option in by_key.items() if identity.model_id.startswith(key)), None)
     if matched is None:
