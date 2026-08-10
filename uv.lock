@@ -441,7 +441,12 @@ dependencies = [
     { name = "flask" },
     { name = "flask-sock" },
     { name = "oom-priority" },
+    { name = "pcmflux" },
+    { name = "pixelflux" },
+    { name = "psutil" },
+    { name = "python-xlib" },
     { name = "simple-websocket" },
+    { name = "websockets" },
     { name = "werkzeug" },
 ]
 
@@ -451,7 +456,12 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
+    { name = "pcmflux", specifier = ">=2.0.0" },
+    { name = "pixelflux", specifier = ">=2.0.0" },
+    { name = "psutil", specifier = ">=5.9" },
+    { name = "python-xlib", specifier = ">=0.33" },
     { name = "simple-websocket", specifier = ">=1.0" },
+    { name = "websockets", specifier = ">=13" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]
 
@@ -2668,6 +2678,25 @@ wheels = [
 ]
 
 [[package]]
+name = "pcmflux"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/ac/86cc0ec075eaae8eec057d1ad391c53bd3c600fd069cc9f0f5b08b868865/pcmflux-2.0.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:4f8d6a245d51c9523a4420ccdc3549f2b77b8ec88e6ca16d058a1c01c5d4f77f", size = 3497503, upload-time = "2026-07-17T17:34:34.696Z" },
+    { url = "https://files.pythonhosted.org/packages/61/ca/4b00cfa09f9c50adbc67882485fcea05cf3faf3d7ae2db37480d45d1af82/pcmflux-2.0.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:97fa0a0a8bd21defb747cf6dfb1d0b68c5e1900347b23273456f121a2c184c65", size = 3720959, upload-time = "2026-07-17T17:34:35.931Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/26/164efd38f0f1280c06ed5523422735510ae0bc44559c6a3dde49381d2726/pcmflux-2.0.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c49abe0f3ee9387dc40ca52ad96bcee7e24b7b47d978f8afb98dc9193e180252", size = 1912538, upload-time = "2026-07-17T17:34:37.453Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/e2/6af30d83dd1d8532f547d60e8339f45770dd648892dd9d49a09dc87f8269/pcmflux-2.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3b73e9bce2236a86bdf1135f3b1fbc23642e04094b87b51ffaf3de4de0460dba", size = 2033427, upload-time = "2026-07-17T17:34:39.324Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/9b/e4bf1d7da63951e3ca5c9dc57a6e0e41e0275b4451d55d7bb63bfe78b39b/pcmflux-2.0.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:c092419a228ba92058b2b1982ca6190006ea8fe207463dcdfcf6a5632c57bd4d", size = 3496998, upload-time = "2026-07-17T17:34:40.662Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/e5/ab80cd4d0b111bcda3cfe211a2f84b961dabaea8e1c9fb8e9118ca533e89/pcmflux-2.0.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:28ec2b33327085b00d9c5773e8093b85256837bca03257b167869c9ab4584ab1", size = 3720206, upload-time = "2026-07-17T17:34:42.13Z" },
+    { url = "https://files.pythonhosted.org/packages/13/8f/cfc355979d3b573050f31fb3f24409964df7c7450c4718dfe681bb9a1131/pcmflux-2.0.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:8195667a366f5a76ec6cfcc096e564ae3ce77bee17c20f89f858a42c8f9673ac", size = 1911988, upload-time = "2026-07-17T17:34:43.454Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/25/653ca49b0eefde185a417e80f333a61d319cc338e425bf93327c02f89b48/pcmflux-2.0.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:dc37be36026f578d7068b2ea68d39a1484051619966c608c6db29b7edc512a1a", size = 2032633, upload-time = "2026-07-17T17:34:44.963Z" },
+    { url = "https://files.pythonhosted.org/packages/78/28/a4209023b9d3420814e3d79dc179ef11eddf89b15bc1a1b15eaeb473967f/pcmflux-2.0.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:d19c1f2c9773eb3e185f92e34ff331cfb5d2546d07494332f32e8aaa8f41f647", size = 3497279, upload-time = "2026-07-17T17:34:46.265Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/69/99bb9d02fe925a0f38d9359e0761a9d38d831c293eba71654f3d29f13acf/pcmflux-2.0.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:050a8c7d7c099ee363279f085cab65e5f9891dc6ab9481a3edf64a901d276352", size = 3720558, upload-time = "2026-07-17T17:34:47.593Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/95/724be40b85fe8ee64381211cbf64c09dd7668e1a81747eda383c17f3f54c/pcmflux-2.0.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:09ff0496f5e1f46b7f092cf07b3ccf7be27ef4c1d910ec29e6420f7094576e91", size = 1912333, upload-time = "2026-07-17T17:34:48.879Z" },
+    { url = "https://files.pythonhosted.org/packages/12/b0/58a9201f2110400ce6a3ed5974484acad536632e61870d387de518616bad/pcmflux-2.0.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:64fa58c7004c9719b87342fab273b50a618cf39d8021455d3df0f124d2e61d0f", size = 2033011, upload-time = "2026-07-17T17:34:50.126Z" },
+]
+
+[[package]]
 name = "pendulum"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2798,6 +2827,25 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c9/e4/4b64a97d71b2a83158134abbb2f5bd3f8a2ea691361282f010998f339ec7/pillow-12.2.0-cp314-cp314t-win32.whl", hash = "sha256:6bb77b2dcb06b20f9f4b4a8454caa581cd4dd0643a08bacf821216a16d9c8354", size = 6482084, upload-time = "2026-04-01T14:45:47.568Z" },
     { url = "https://files.pythonhosted.org/packages/ba/13/306d275efd3a3453f72114b7431c877d10b1154014c1ebbedd067770d629/pillow-12.2.0-cp314-cp314t-win_amd64.whl", hash = "sha256:6562ace0d3fb5f20ed7290f1f929cae41b25ae29528f2af1722966a0a02e2aa1", size = 7225152, upload-time = "2026-04-01T14:45:50.032Z" },
     { url = "https://files.pythonhosted.org/packages/ff/6e/cf826fae916b8658848d7b9f38d88da6396895c676e8086fc0988073aaf8/pillow-12.2.0-cp314-cp314t-win_arm64.whl", hash = "sha256:aa88ccfe4e32d362816319ed727a004423aab09c5cea43c01a4b435643fa34eb", size = 2556579, upload-time = "2026-04-01T14:45:52.529Z" },
+]
+
+[[package]]
+name = "pixelflux"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/f4/44bcd167afbe66b30f07dc3b720d97e651497f4176127b06d4f2ad23739c/pixelflux-2.0.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:7f0080b49dd9ca36cb5f177f94f8624d371d6b3d14627c2a00f04d01ae3dde91", size = 16148418, upload-time = "2026-07-17T17:33:19.8Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/48/ca937b3780cff1ef663191791d3a0636c2788be17cc799752a6859befdf3/pixelflux-2.0.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:4a4dcc178704be708a93f6f7949b42e6350e0c94fc2159c34940477541b89070", size = 16920134, upload-time = "2026-07-17T17:33:22.038Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/45/55224e0b75b8f807a0b65255890b7ba05a4c8d51c17b289a1a129245d9cd/pixelflux-2.0.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c20296416944f847f8ec36ec5cedd823a77da2438190f5e9fcf9e0c059fd7159", size = 38353535, upload-time = "2026-07-17T17:33:24.807Z" },
+    { url = "https://files.pythonhosted.org/packages/87/b1/83f763eea321965b906793e5f3f0eb6dfb13f174cfa6bc72fb51414a5d3d/pixelflux-2.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:94bf23a1decc613125dff15ea7b250fb53b73aeb4c444ff01bd7b411038a6969", size = 40899169, upload-time = "2026-07-17T17:33:27.73Z" },
+    { url = "https://files.pythonhosted.org/packages/10/74/38f4b2f59b1a98b1f9da4d223fcd88d64194f6dcabf16f61ced77424e72a/pixelflux-2.0.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:52ef5b99510b4d6a8937f7af0c3334abc8b31d126549e3c5272399dfb3aca6c0", size = 16149472, upload-time = "2026-07-17T17:33:30.192Z" },
+    { url = "https://files.pythonhosted.org/packages/09/b2/79a27f3cbe8c296ecd98770469cc7cda2c8858b2e09b98a1f935d9652188/pixelflux-2.0.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:90a2d83be569458dff359c5dfa83c47bbccf546aa09214fc2ed8806dfd42068d", size = 16920905, upload-time = "2026-07-17T17:33:32.496Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/46/c4adbecb373fdf31c41310993891168b1e2a518e2fd5e02f56847ef30ce4/pixelflux-2.0.0-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:2b2f6641cf8754a9f20846c260b7d75f68b0b717548942f55f2743ecb023905d", size = 38354047, upload-time = "2026-07-17T17:33:34.919Z" },
+    { url = "https://files.pythonhosted.org/packages/45/c5/3883dff49b6dee6c882440198482c0ede4eb8a666b02663cc8d7afa36056/pixelflux-2.0.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:452f1b93936896a8032fb76c4d426df5ef9e27c11cabf2244985715cc0c29e7f", size = 40899560, upload-time = "2026-07-17T17:33:37.831Z" },
+    { url = "https://files.pythonhosted.org/packages/01/eb/899b089ad868a4ded2e726df93cfe0914ac9daa89774809ddd65c4829b0d/pixelflux-2.0.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:033afea1c4308416460249b554bd717731a62b7ae7b676357069eb294f723c24", size = 16149333, upload-time = "2026-07-17T17:33:40.594Z" },
+    { url = "https://files.pythonhosted.org/packages/94/da/b4b134d12f46fadc5edc94f778ac324ca6ab02b5b9be91466f95251e6f14/pixelflux-2.0.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:7c501d184fba79746ca63118b5cc462851b7cad217094e11a011696b3bfa3953", size = 16920901, upload-time = "2026-07-17T17:33:42.921Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/e2/61d7e982e2f0d2a6585088706b076774a0a1e129b818cf2d7aee882001a0/pixelflux-2.0.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:7c4663696c45bcd961df9a5ac664a309880374c7fe48244f58831a447ffd7109", size = 38353621, upload-time = "2026-07-17T17:33:45.789Z" },
+    { url = "https://files.pythonhosted.org/packages/40/b5/7ba6e9868e0c05bcaa96f417bcbba88f801041fcb224db5e1313d142e48d/pixelflux-2.0.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:80c8e09569449818a8682e8324dcc1e8ef974d4e9bf63482bd82bb1125fb1921", size = 40899826, upload-time = "2026-07-17T17:33:48.878Z" },
 ]
 
 [[package]]
@@ -6124,6 +6172,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/87/c7/5e1547c44e31da50a460df93af11a535ace568ef89d7a811069ead340c4a/python-slugify-8.0.4.tar.gz", hash = "sha256:59202371d1d05b54a9e7720c5e038f928f45daaffe41dd10822f3907b937c856", size = 10921, upload-time = "2024-02-08T18:32:45.488Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/62/02da182e544a51a5c3ccf4b03ab79df279f9c60c5e82d5e8bec7ca26ac11/python_slugify-8.0.4-py2.py3-none-any.whl", hash = "sha256:276540b79961052b66b7d116620b36518847f52d5fd9e3a70164fc8c50faa6b8", size = 10051, upload-time = "2024-02-08T18:32:43.911Z" },
+]
+
+[[package]]
+name = "python-xlib"
+version = "0.33"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/86/f5/8c0653e5bb54e0cbdfe27bf32d41f27bc4e12faa8742778c17f2a71be2c0/python-xlib-0.33.tar.gz", hash = "sha256:55af7906a2c75ce6cb280a584776080602444f75815a7aff4d287bb2d7018b32", size = 269068, upload-time = "2022-12-25T18:53:00.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fc/b8/ff33610932e0ee81ae7f1269c890f697d56ff74b9f5b2ee5d9b7fa2c5355/python_xlib-0.33-py2.py3-none-any.whl", hash = "sha256:c3534038d42e0df2f1392a1b30a15a4ff5fdc2b86cfa94f072bf11b10a164398", size = 182185, upload-time = "2022-12-25T18:52:58.662Z" },
 ]
 
 [[package]]

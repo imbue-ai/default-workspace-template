@@ -10,10 +10,11 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   loop, reached from the Flask threads through a single `run_coroutine_threadsafe`
   bridge. Each browser is a **headful** Chromium (under an Xvfb virtual display, so
   it has a real X11 clipboard for native copy/paste -- see `_HEADLESS` in
-  `session.py`) driven by `browser_use.BrowserSession`, observed over the same CDP
-  endpoint to stream a live view (`Page.startScreencast` -> base64 JPEG frames over
-  a WebSocket) and inject human input. Each browser is
-  addressed by a random ~2-word english NAME (e.g. `alex-smith`), generated on
+  `session.py`) driven by `browser_use.BrowserSession`. Its Xvfb display is captured
+  and streamed to the viewer as live H.264 (pixelflux, damage-driven stripes) plus
+  Opus audio (pcmflux) over a WebSocket, with XTEST input, resize, and clipboard back
+  the other way (see `videopipe.py` / `audiopipe.py` / `mediastream.py`). Each browser
+  is addressed by a random ~2-word english NAME (e.g. `alex-smith`), generated on
   demand and never reused; the fleet starts empty and there is no default
   browser.
 - **Ownership** is one locked, compare-and-set state machine per browser. Agents
@@ -40,9 +41,11 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium
   does this itself, we just point `user_data_dir` at a durable dir. A tiny manifest
-  (`data/.state/browser-fleet.json`, Tier B -- covered by the opt-in GitHub sync)
-  records which browsers existed and their tab URLs, so even a full rebuild restores
-  the tab list (logged out, since profiles are volume-only). On daemon startup the
+  (`data/.state/browser-fleet.json`) records which browsers existed and their tab
+  URLs. Both the profiles and the manifest live on the workspace volume and are
+  captured by the restic host backup (`data/` is gitignored, so neither rides GitHub
+  sync); a backup restore brings the tab list back (logged out only if the profiles
+  themselves were lost). On daemon startup the
   fleet is restored **eager-sequentially** (one browser at a time, no cold-boot
   memory spike) behind an **init gate**: state-changing commands return a 503
   "initializing" until restore finishes, while `ls`/`state` stay open. A fresh
