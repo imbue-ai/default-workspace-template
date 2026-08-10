@@ -46,11 +46,10 @@ def _aged(
 _BUILTIN_SERVICE_ORDER = (
     "terminal",
     "system_interface",
-    "cloudflared",
+    "share-gateway",
     "github-sync",
     "host-backup",
     "app-watcher",
-    "web",
 )
 
 

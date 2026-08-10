@@ -77,7 +77,7 @@ poll returns exit code 75 with revive instructions (see
 ## 5. Confirm the protected processes survived
 
 ```bash
-supervisorctl status        # system_interface, cloudflared, terminal, backups: RUNNING
+supervisorctl status        # system_interface, share-gateway, terminal, backups: RUNNING
 ```
 
 Nothing in tiers protected/UI/recovery should appear as a victim in the earlyoom

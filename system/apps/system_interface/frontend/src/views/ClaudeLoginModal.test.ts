@@ -10,6 +10,7 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
+import { resetEmbedEndpointForTesting } from "../embed";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
 
 type VnodeLike = {
@@ -158,21 +159,24 @@ describe("ClaudeLoginModal", () => {
   });
 });
 
-describe("the Open-the-Imbue-key-page relay handshake", () => {
-  // The workspace page cannot know the desktop app's backend origin, so the
-  // mint link posts a `minds:open-ai-keys-page` window message for the
-  // desktop shell's content relay, which acks; with no ack (plain browser /
-  // share tunnel) the modal falls back to an explanatory alert.
+describe("the Open-the-Imbue-key-page embed-contract handshake", () => {
+  // The workspace page cannot know the minds app's backend origin, so the
+  // mint link sends `minds:open-ai-keys-page` to the embedding chrome via
+  // the embed contract, which acks; with no ack (a direct share visit) the
+  // modal falls back to an explanatory alert.
 
-  type MessageListener = (event: { source: unknown; data: unknown }) => void;
+  type MessageListener = (event: { source: unknown; origin: string; data: unknown }) => void;
 
-  // A minimal `window` stand-in for the node test env: records posted
-  // messages, holds the single "message" listener the handshake registers,
-  // and spies on alert.
+  // A minimal `window` stand-in for the node test env: records messages
+  // posted to the parent, holds the "message" listener the embed endpoint
+  // registers, and spies on alert. `parent` is a self-reference so the
+  // endpoint's `event.source === window.parent` check can be satisfied by
+  // delivering events with `source: stub`.
   function makeWindowStub() {
     const posted: unknown[] = [];
-    return {
+    const stub = {
       posted,
+      parent: null as unknown,
       messageListener: null as MessageListener | null,
       alert: vi.fn(),
       addEventListener(type: string, listener: unknown): void {
@@ -185,6 +189,8 @@ describe("the Open-the-Imbue-key-page relay handshake", () => {
         posted.push(message);
       },
     };
+    stub.parent = stub;
+    return stub;
   }
 
   // The mint link is an anchor (not a button), so clickButtonByText cannot
@@ -208,6 +214,7 @@ describe("the Open-the-Imbue-key-page relay handshake", () => {
   }
 
   function openImbueFormAndClickLink(): ReturnType<typeof makeWindowStub> {
+    resetEmbedEndpointForTesting();
     const stub = makeWindowStub();
     vi.stubGlobal("window", stub);
     const modal = makeModal();
@@ -218,7 +225,7 @@ describe("the Open-the-Imbue-key-page relay handshake", () => {
     return stub;
   }
 
-  it("posts the open request for the shell relay", () => {
+  it("sends the open request to the embedding chrome", () => {
     vi.useFakeTimers();
     try {
       const stub = openImbueFormAndClickLink();
@@ -226,36 +233,36 @@ describe("the Open-the-Imbue-key-page relay handshake", () => {
     } finally {
       vi.useRealTimers();
       vi.unstubAllGlobals();
+      resetEmbedEndpointForTesting();
     }
   });
 
-  it("stays quiet when the relay acks (the shell opens the page)", () => {
+  it("stays quiet when the chrome acks (it opens the page)", () => {
     vi.useFakeTimers();
     try {
       const stub = openImbueFormAndClickLink();
       expect(stub.messageListener).not.toBeNull();
-      stub.messageListener?.({ source: stub, data: { type: "minds:open-ai-keys-ack" } });
+      stub.messageListener?.({ source: stub, origin: "http://chrome", data: { type: "minds:open-ai-keys-ack" } });
       vi.advanceTimersByTime(10_000);
       expect(stub.alert).not.toHaveBeenCalled();
-      // The handshake tore itself down: the listener was removed on ack.
-      expect(stub.messageListener).toBeNull();
     } finally {
       vi.useRealTimers();
       vi.unstubAllGlobals();
+      resetEmbedEndpointForTesting();
     }
   });
 
-  it("falls back to the desktop-app explanation when no relay acks", () => {
+  it("falls back to the minds-app explanation when nothing acks", () => {
     vi.useFakeTimers();
     try {
       const stub = openImbueFormAndClickLink();
       vi.advanceTimersByTime(10_000);
       expect(stub.alert).toHaveBeenCalledTimes(1);
-      expect(String(stub.alert.mock.calls[0]?.[0])).toContain("desktop app");
-      expect(stub.messageListener).toBeNull();
+      expect(String(stub.alert.mock.calls[0]?.[0])).toContain("Minds app");
     } finally {
       vi.useRealTimers();
       vi.unstubAllGlobals();
+      resetEmbedEndpointForTesting();
     }
   });
 });
