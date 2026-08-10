@@ -382,9 +382,9 @@ staging, the encoded-project-dir detail, and why the primary is excluded.
 **Branches.** Fetch every `mngr/<name>` branch regardless of state, so no commits
 are lost, and carry the merged/unmerged classification into your report.
 
-**Inspirations.** The source's `inspiration.md` manifests and their `.svg`
+**Templates.** The source's `template.md` manifests and their `.svg`
 thumbnails come over as ordinary user content, and the old ledger's
-`## Inspirations` and `## Adopted inspirations` entries are **merged into** this
+`## Templates` and `## Adopted templates` entries are **merged into** this
 workspace's `docs/VERSION_HISTORY.md` -- append-only, existing lines copied
 through verbatim -- so published and adopted history survives. Do **not** carry
 the old `## Workspace` lines: those record where the *old* workspace came from.

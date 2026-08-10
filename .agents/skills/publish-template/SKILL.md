@@ -1,25 +1,25 @@
 ---
-name: publish-inspiration
-description: Publish a clean, shareable snapshot of the apps/features this mind built to a new GitHub repo (an "inspiration" another mind can adapt). Use when the user asks to publish, share, or export what they built as a reusable template.
+name: publish-template
+description: Publish a clean, shareable snapshot of the apps/features this mind built to a new GitHub repo (an "template" another mind can adapt). Use when the user asks to publish, share, or export what they built as a reusable template.
 ---
 
-# Publish an inspiration
+# Publish an template
 
-Version: v2 (inspirations flow). This versions the publish/adopt flow and the
-manifest format. v2 publishes ONE slug-free `inspiration.md` + `inspiration.toml`
-+ `inspiration.svg` per repo, overriding any previous manifest rather than
+Version: v2 (templates flow). This versions the publish/adopt flow and the
+manifest format. v2 publishes ONE slug-free `template.md` + `template.toml`
++ `template.svg` per repo, overriding any previous manifest rather than
 accumulating beside it, with the machine-readable half (recipe, requirements,
 and the environment an adopter must install) in the TOML. v1 -- slug-named
-`inspiration-<slug>.md` with a YAML recipe block inside it and no TOML -- is
+`template-<slug>.md` with a YAML recipe block inside it and no TOML -- is
 still READ by the adopt paths, but nothing writes it any more.
 
-An "inspiration" is a clean, shareable, **bootable** snapshot of something this
+An "template" is a clean, shareable, **bootable** snapshot of something this
 mind built -- an app or feature, but equally a chat customization or behavior, a
 skill, a workflow, a service, config, or seed data: anything committable that
 lives in the repo tree and can be snapshotted -- published to a new GitHub repo
 so another mind can be created FROM it (not just read its source). A repo holds
-EXACTLY ONE inspiration -- `inspiration.md`, `inspiration.toml`, and
-`inspiration.svg` at the repo root -- and publishing overrides whatever was
+EXACTLY ONE template -- `template.md`, `template.toml`, and
+`template.svg` at the repo root -- and publishing overrides whatever was
 there before, recording what it replaced as a `[[lineage]]` entry. This skill delegates the assembly to a `launch-task` sub-agent
 worker (which builds the snapshot, finishes the manifest, and designs the
 thumbnail in its own git worktree), confirms the publish with the user in
@@ -32,7 +32,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > confirmation and any confirmed manifest/thumbnail edits), §7 (GitHub auth),
 > and §8 (create repo + push) runs with **cwd = `$WT`** (the worker's
 > worktree), NEVER `/home/user/workspace`. There is no merge-back step: `$WT`'s tree, built
-> by `build_inspiration.sh` on top of `BASE_REF` and finished by the worker,
+> by `build_template.sh` on top of `BASE_REF` and finished by the worker,
 > IS the tree that gets pushed, as-is, by you, from `$WT`. In particular,
 > IGNORE `lead-proxy.md`'s default `done -> merge the worker's branch`
 > handling for this flow -- `/home/user/workspace`'s branch and working tree are never
@@ -57,34 +57,34 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > tree-clobbering pattern above, and do not generalize it: nothing else in
 > §§6-10 runs from `/home/user/workspace`, and if the push fails it does not run at all.
 
-> **AN INSPIRATION MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
-> valid inspiration is always the FULL tree `build_inspiration.sh` assembles on
+> **AN TEMPLATE MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
+> valid template is always the FULL tree `build_template.sh` assembles on
 > `mngr/<slug>`: the clean DEFAULT_WORKSPACE_TEMPLATE base (`pyproject.toml`, `system/supervisord.conf`,
-> `.mngr/`, `.agents/skills/` including the generated inspiration `/welcome`, `system/config/parent.toml`,
+> `.mngr/`, `.agents/skills/` including the generated template `/welcome`, `system/config/parent.toml`,
 > etc.) plus the selected app/feature paths -- never just the app code plus a
-> README. That full tree is what makes `/use-inspiration`'s template path work:
+> README. That full tree is what makes `/use-template`'s template path work:
 > another mind must be creatable FROM the published repo, not merely able to
 > read its source. If assembly (§3), the chat confirmation or GitHub auth
 > (§6-§7), or the push (§8) fails for ANY reason, do NOT invent an alternate
 > publish mechanism -- do not push a hand-assembled subset of files via `gh
 > api`, a plain `git init` of just the app directory, or any other ad-hoc path
-> outside this skill's documented flow. A non-bootable "inspiration" silently
+> outside this skill's documented flow. A non-bootable "template" silently
 > defeats the whole feature and is strictly worse than no publish at all.
 > Instead: diagnose and fix the actual blocker (e.g. re-resolve `BASE_REF` per
 > §2, relaunch the worker, pick a different repo name) and retry the
 > documented flow from the failed step, or STOP and clearly tell the user what
 > failed, why, and that you did not publish -- never silently redefine what
-> "publishing an inspiration" means.
+> "publishing an template" means.
 
 ## Shared conventions
 
 - **Slug derivation.** `slug` = the user's title lowercased, with each run of
   characters outside `[A-Za-z0-9._-]` collapsed to a single `-`, and leading /
   trailing `-` stripped. The result MUST match `^[A-Za-z0-9._-]+$` and MUST NOT
-  start with `-` (`build_inspiration.sh` re-validates). `repo_name` defaults to
+  start with `-` (`build_template.sh` re-validates). `repo_name` defaults to
   `slug`; the user may override it in the chat confirmation (§6) -- validate
   any override against the same pattern yourself. The same slug names the
-  manifest (`inspiration.md`), the thumbnail (`inspiration.svg`),
+  manifest (`template.md`), the thumbnail (`template.svg`),
   the assembly worker, and the worker's branch (`mngr/<slug>`).
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees
   under `/home/user/worktrees/<name>-<uuid>/` (the `worktree_base_folder` in
@@ -94,7 +94,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 - **`BASE_REF` (provenance + clean base).** The workspace's template base
   -- the template state this mind started from (or last updated itself to).
   Resolve it **in-repo, with no network access** (see step 2); do NOT
-  `git fetch`/`git pull` upstream. Pass it to `build_inspiration.sh` as
+  `git fetch`/`git pull` upstream. Pass it to `build_template.sh` as
   `--base-ref`.
 
 ## 0. Somewhere to publish TO (ask first, before anything else)
@@ -130,9 +130,9 @@ Then, by their answer:
   - **auth** -- §7 requests the latchkey `github-rest-api` and `github-git`
     scopes, and the push goes through the gateway's GitHub proxy;
   - **repo creation** -- §8 step 1 POSTs to `api.github.com/user/repos`, and
-    step 1b/3 PATCH settings and set the `minds-inspiration` topic;
+    step 1b/3 PATCH settings and set the `minds-template` topic;
   - **the README** -- the generated "Open in Minds" button and its copyable
-    `/use-inspiration` line both hardcode a `https://github.com/` prefix
+    `/use-template` line both hardcode a `https://github.com/` prefix
     around the repo placeholder, so both need rewriting for another host. The
     trampoline itself takes any git URL, so only the prefix is wrong.
 
@@ -159,7 +159,7 @@ Ask the user, in plain language. Never enumerate files at them:
   the snapshot.** **Non-personal data -- generic seed/sample/reference data,
   fixtures, config defaults, and public or synthetic datasets with no tie to a
   real person -- is included by default**, since shipping it is what makes the
-  inspiration bootable and genuinely useful to an adopter. For anything
+  template bootable and genuinely useful to an adopter. For anything
   **remotely close to the boundary** -- arguably personal, a mix of personal
   and non-personal, or simply data you are not sure how to classify -- do NOT
   silently pick a side: ask the user what they want and let their answer
@@ -170,14 +170,14 @@ Ask the user, in plain language. Never enumerate files at them:
   channel names, anything they'd rather not ship. Their live files stay
   untouched; the edits land only in the snapshot (see the modifications step
   in §3);
-- a name for the inspiration (propose one yourself; it becomes the title, and
+- a name for the template (propose one yourself; it becomes the title, and
   the slug derives from it -- naming is cheap to change later, so it never
   needs to hold up the gate below).
 
 **If what they want to snapshot is not committed to git** -- an ephemeral chat
 behavior, the current conversation's history, runtime-only state, anything that
-lives only in memory or outside the repo tree -- it cannot go into an inspiration
-as-is: an inspiration must be reconstructable from the committed tree, so a
+lives only in memory or outside the repo tree -- it cannot go into an template
+as-is: an template must be reconstructable from the committed tree, so a
 snapshot that omits it would boot without the very thing that made it worth
 sharing. Recognize this and, before going further, suggest turning it into
 something committable first -- most often by crystallizing it into a skill (this
@@ -219,7 +219,7 @@ is irrelevant. If the user renames after
 dispatch anyway, handle it in place:
 
 - Renamed before the worker has run the script: just pass the new
-  `--slug`/`--title` to `build_inspiration.sh`.
+  `--slug`/`--title` to `build_template.sh`.
 - Renamed after the script has run (worker mid-run or done): rename in
   place -- `git mv` the manifest and thumbnail to the new slug names, update
   the front-matter `title:` and the generated welcome's slug references,
@@ -282,7 +282,7 @@ If the check fails, STOP and reconsider the base (e.g. walk forward along the
 first-parent chain to the earliest commit that passes both checks, or ask
 the user) rather than launching the worker -- this catches the wrong-root and
 too-old-base problems in seconds instead of a full worker round-trip.
-`build_inspiration.sh` re-validates both conditions itself and exits 5 with
+`build_template.sh` re-validates both conditions itself and exits 5 with
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
@@ -312,7 +312,7 @@ never tear down or relaunch the worker for a rename (its name and branch are
 internal and appear nowhere in the published repo).
 
 Assembly runs in a `launch-task` sub-agent worker. The worker gets a fresh git
-worktree on branch `mngr/<slug>`, runs `build_inspiration.sh` there, then --
+worktree on branch `mngr/<slug>`, runs `build_template.sh` there, then --
 in the SAME run, no second round-trip -- fleshes out every manifest FILL-IN
 block and designs the bespoke thumbnail. `/home/user/workspace` is never modified.
 
@@ -324,7 +324,7 @@ then `git branch -D "mngr/<slug>"` once no worktree holds it).
 Per `launch-task`, the whole delegation is ONE step in your timeline:
 
 ```bash
-tk create --step "Delegate assembling the shareable inspiration snapshot to a sub-agent"
+tk create --step "Delegate assembling the shareable template snapshot to a sub-agent"
 # -> Created cod-step-XXXX: ...
 tk start cod-step-XXXX
 ```
@@ -346,11 +346,11 @@ finish_report_path: data/.tasks/launch-task/<slug>/reports/report.md
 FRONTMATTER_EOF
 cat << 'BODY_EOF'
 
-# Task: Assemble the "<title>" inspiration snapshot
+# Task: Assemble the "<title>" template snapshot
 
 ## What to do
 
-Assemble a clean, bootable "inspiration" snapshot on your worktree's branch,
+Assemble a clean, bootable "template" snapshot on your worktree's branch,
 then finish its manifest and thumbnail. Do ALL of it in this one run.
 
 **Before anything else**, extract `LEAD_AGENT` / `FINISH_REPORT_PATH` per
@@ -362,7 +362,7 @@ worktree to a clean template base and deletes gitignored state -- including
    below was already resolved by the lead):
 
    ```bash
-   bash .agents/skills/publish-inspiration/scripts/build_inspiration.sh \
+   bash .agents/skills/publish-template/scripts/build_template.sh \
        --base-ref <BASE_REF> \
        --slug <slug> \
        --title "<title>" \
@@ -392,7 +392,7 @@ worktree to a clean template base and deletes gitignored state -- including
    scanner error, or any missing scanner -- there is no fallback scanner:
 
    ```bash
-   bash .agents/skills/publish-inspiration/scripts/scan_secrets.sh <each modified file>
+   bash .agents/skills/publish-template/scripts/scan_secrets.sh <each modified file>
    ```
 
    A finding means a modification did not fully remove a credential -- fix
@@ -401,11 +401,11 @@ worktree to a clean template base and deletes gitignored state -- including
    BASE_REF that predates it), report `stuck` -- do not substitute a weaker
    ad-hoc scan.
 
-3. **Flesh out the manifest.** `inspiration.md` at the repo root has
+3. **Flesh out the manifest.** `template.md` at the repo root has
    `<!-- FILL-IN (publishing agent): ... -->` comment blocks in "What it is,"
    "How it works," "Requirements," "Environment," and "Publication
    history" -- generated placeholders, not real content. Replace EVERY block
-   with real, specific content. "Publication history" is this inspiration's
+   with real, specific content. "Publication history" is this template's
    changelog: replace its FILL-IN with the first entry `### v1 (YYYY-MM-DD) --
    <one line: what this first version publishes>` using today's date; later
    updates append `### v2 (date) -- what changed`. It is the PUBLISHER's log --
@@ -420,7 +420,7 @@ worktree to a clean template base and deletes gitignored state -- including
    a latchkey permission request before asking how to adapt -- so a vague or
    missing line silently breaks adoption (a real incident: an adopter never
    prompted for a Slack permission the app needed). This list IS "what the
-   inspiration's user would need to give for the app to work"; it must be
+   template's user would need to give for the app to work"; it must be
    complete and accurate, because the lead surfaces it back to the publishing
    user for confirmation in §6 and a gap you leave here is exactly what that
    confirmation is checking for. The ADAPTATION half is prose bullets in the
@@ -455,7 +455,7 @@ worktree to a clean template base and deletes gitignored state -- including
    quotes (`title: "The \"Daily\" Digest: v2"`). The generator already does;
    a hand-edit that does not will fail validation.
 
-   **The machine-readable half lives in `inspiration.toml`.** Fill it in at the
+   **The machine-readable half lives in `template.toml`.** Fill it in at the
    same time, from the same knowledge -- the validator compares the two files and
    the publish fails if they disagree:
 
@@ -497,7 +497,7 @@ worktree to a clean template base and deletes gitignored state -- including
    blocks ("Why you care", "How to use it", "Ideas for making it yours"); the
    full recipe for what belongs in each, and the distinction between Ideas and
    the manifest's Requirements, is in
-   `.agents/skills/publish-inspiration/references/readme-recipe.md`. Read it
+   `.agents/skills/publish-template/references/readme-recipe.md`. Read it
    before writing them. The hero graphic is the thumbnail you design in step 4,
    and the "Open in Minds" button carries a placeholder repo URL the LEAD
    substitutes once the repo exists -- leave that alone.
@@ -508,7 +508,7 @@ worktree to a clean template base and deletes gitignored state -- including
    unannounced. The lead renders the finished README and asks the user about
    it at §6. Your checks are the validator and the greps in step 6.
 
-4. **Design the thumbnail.** `inspiration.svg` at the repo root is a
+4. **Design the thumbnail.** `template.svg` at the repo root is a
    generic placeholder the script generated -- it must never be published.
    Replace its entire contents with a bespoke SVG you design for THIS app: a
    clean, simple, iconic representation of what the app actually is and shows
@@ -527,9 +527,9 @@ worktree to a clean template base and deletes gitignored state -- including
 
    ```bash
    uv run --no-project --with 'pydantic>=2' python \
-       .agents/skills/publish-inspiration/scripts/validate_inspiration.py .
-   grep -n -- '<!-- FILL-IN (publishing agent)' inspiration.md README.md
-   grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' inspiration.svg
+       .agents/skills/publish-template/scripts/validate_template.py .
+   grep -n -- '<!-- FILL-IN (publishing agent)' template.md README.md
+   grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' template.svg
    ```
 
    Run the validator with NO `--allow-unfinished` and NO `--skip-apt-check`:
@@ -556,17 +556,17 @@ worktree to a clean template base and deletes gitignored state -- including
 
 ## Success criteria
 
-- `build_inspiration.sh` exited 0 and its commit is on `mngr/<slug>`.
+- `build_template.sh` exited 0 and its commit is on `mngr/<slug>`.
 - Every published-version modification applied, its files re-scanned clean.
 - Every FILL-IN block replaced with real prose (or an explicit "none") -- in
-  BOTH `inspiration.md` and `README.md`.
-- `inspiration.toml` filled in to match: the recipe's exclusions and
+  BOTH `template.md` and `README.md`.
+- `template.toml` filled in to match: the recipe's exclusions and
   modification rules, one structured entry per `requires_` line, and the
   `[environment]` declarations the included code actually needs.
-- `validate_inspiration.py` exits 0 with no `--allow-unfinished` and no
+- `validate_template.py` exits 0 with no `--allow-unfinished` and no
   `--skip-apt-check`.
-- `README.md` describes this inspiration (not the default-workspace-template).
-- `inspiration.svg` is a bespoke design for this app; the placeholder
+- `README.md` describes this template (not the default-workspace-template).
+- `template.svg` is a bespoke design for this app; the placeholder
   marker is gone and the safety grep is clean.
 - Follow-up edits committed on `mngr/<slug>`; `git status` clean.
 
@@ -631,10 +631,10 @@ liveness on a timeout) -- with one critical override:
   clean:
 
   ```bash
-  grep -n -- '<!-- FILL-IN (publishing agent)' "$WT/inspiration.md" "$WT/README.md"
-  grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' "$WT/inspiration.svg"
+  grep -n -- '<!-- FILL-IN (publishing agent)' "$WT/template.md" "$WT/README.md"
+  grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' "$WT/template.svg"
   ( cd "$WT" && uv run --no-project --with 'pydantic>=2' python \
-      .agents/skills/publish-inspiration/scripts/validate_inspiration.py . )
+      .agents/skills/publish-template/scripts/validate_template.py . )
   ```
 
   If either grep hits, message the worker to finish the job (per
@@ -648,11 +648,11 @@ you still need for the push.
 
 ## 4. What the assembly does
 
-`build_inspiration.sh` (documented below) does the whole mechanical assembly
+`build_template.sh` (documented below) does the whole mechanical assembly
 in the worker's worktree: clean base + overlay + secret scan + the manifest
-pair (`inspiration.md` prose skeleton and `inspiration.toml`, the latter
+pair (`template.md` prose skeleton and `template.toml`, the latter
 carrying forward the lineage of whatever manifest it overrides) + placeholder
-thumbnail + regenerated README + an inspiration-specific `/welcome` written
+thumbnail + regenerated README + an template-specific `/welcome` written
 into the snapshot + boot smoke-check + manifest validation + a single
 commit. It communicates purely via its exit code -- `0` on success (the
 assembled commit is on `mngr/<slug>`), non-zero otherwise (see §5). It prints
@@ -673,12 +673,12 @@ stderr. What each exit means, and what you do:
   reinstall both) -- never publish around the gate.
 - **No-diff guard (exit 3).** The resolved include set contributes nothing
   beyond `BASE_REF` (the assembled tree equals the base tree). Tell the user
-  plainly and do NOT create a repo -- there are no empty inspiration repos.
+  plainly and do NOT create a repo -- there are no empty template repos.
 - **Boot smoke-check (exit 4).** The clean base does not boot at all; abort
   BEFORE any repo creation. Selected apps having unresolved requirements is expected and does NOT
   fail the check.
-- **Manifest validation (exit 6).** The generated `inspiration.toml` did not
-  parse, did not satisfy the schema, or disagreed with `inspiration.md`. On a
+- **Manifest validation (exit 6).** The generated `template.toml` did not
+  parse, did not satisfy the schema, or disagreed with `template.md`. On a
   worker's or the lead's LATER run of the same validator (without
   `--allow-unfinished`), this also means an unreplaced FILL-IN block, a
   still-placeholder thumbnail, a declared `env.d` unit the recipe does not
@@ -699,7 +699,7 @@ BOOTABLE" callout at the top of this skill.
 ## 6. Confirm the publish in chat
 
 **cwd = `$WT` for this and every remaining section.** The manifest/thumbnail
-files referenced below (`inspiration.md` / `.svg`) live at `$WT`'s repo
+files referenced below (`template.md` / `.svg`) live at `$WT`'s repo
 root, not `/home/user/workspace`'s.
 
 Confirmation happens inline in chat -- there is no other confirmation
@@ -708,11 +708,11 @@ mechanism. Present the proposal to the user ONCE, in plain language:
 - the **title** and **description**;
 - the **repo name** (defaults to `slug`);
 - the **visibility** (default: **private**) -- and, if they choose public,
-  say in the same breath that the inspiration ships under the **MIT license**,
+  say in the same breath that the template ships under the **MIT license**,
   so the licensing consequence is in front of them at the moment they make the
   choice rather than after;
 - **what it will install** -- the `[environment]` declarations from
-  `inspiration.toml`, in plain language ("adopting this also installs
+  `template.toml`, in plain language ("adopting this also installs
   poppler-utils"), or that it needs nothing beyond the stock environment. An
   adopter's machine runs this, so the publisher should recognise the list;
 - a short recap of the **published-version modifications** that were applied
@@ -722,7 +722,7 @@ mechanism. Present the proposal to the user ONCE, in plain language:
   requirements the manifest lists (the worker derived these from the code in
   §3), stated plainly rather than as `requires_` lines, e.g. "For this to work,
   whoever adopts it will need to connect/grant: <X>, <Y>. Do those look right and
-  complete?". This is "what the inspiration's user would need to give for the app
+  complete?". This is "what the template's user would need to give for the app
   to work", and the publisher's reply is part of the go-ahead: if they say a
   permission or secret is missing or wrong, fix the manifest's "Requirements" in
   `$WT` (and re-commit per the commit step below) BEFORE proceeding to §7/§8 -- a
@@ -731,10 +731,10 @@ mechanism. Present the proposal to the user ONCE, in plain language:
   none, state that too, so the user can confirm the app really needs nothing;
 - the **thumbnail** the sub-agent designed -- EMBED it in the chat message
   as a markdown image so the user actually sees what will represent their
-  inspiration, using the file's absolute path:
+  template, using the file's absolute path:
 
   ```markdown
-  ![<title> thumbnail]($WT/inspiration.svg)
+  ![<title> thumbnail]($WT/template.svg)
   ```
 
   (substitute the real absolute worktree path), and note you can adjust it if
@@ -780,7 +780,7 @@ If the user asks to abort, stop here and leave the assembled commit intact
   survive any rewrite. A go-ahead given while they are still unhappy with the
   README is not a go-ahead for the README.
 - If the user asks for thumbnail changes, YOU edit
-  `$WT/inspiration.svg`, keeping the same safety rules the worker
+  `$WT/template.svg`, keeping the same safety rules the worker
   followed: mock data only, no `<script>`, no `on*=` attributes, no
   `<foreignObject>`, no external references. If the user pastes raw SVG
   markup in chat, never write it into the file verbatim -- apply the same
@@ -799,14 +799,14 @@ quote:
 title: "The \"Daily\" Digest: v2"
 ```
 
-`build_inspiration.sh` emits generated front matter this way already; a
+`build_template.sh` emits generated front matter this way already; a
 hand-edit must match it, or the validator's front-matter/TOML comparison fails
 the publish.
 
 **Commit before §8's push.** Write any confirmed title/description edits into
-`inspiration.md`'s front-matter (any activation requirement the publisher
+`template.md`'s front-matter (any activation requirement the publisher
 flagged as missing or wrong into its "Requirements" section AND the matching
-`[requirements]` entry in `inspiration.toml`, any thumbnail edits into the
+`[requirements]` entry in `template.toml`, any thumbnail edits into the
 `.svg`, and any README rewrites into `README.md`), and COMMIT that change with
 cwd = `$WT` before proceeding to §7/§8.
 
@@ -864,10 +864,10 @@ exactly the four fields shown -- `agent_id`, `type`, `payload`, `rationale`):
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
-    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this inspiration as a new GitHub repo on your account."}'
+    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this template as a new GitHub repo on your account."}'
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
-    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published inspiration'"'"'s git history to the new repo."}'
+    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published template'"'"'s git history to the new repo."}'
 ```
 
 Tell the user in chat that a GitHub approval is waiting for them in minds,
@@ -896,9 +896,9 @@ mechanism (no token-in-URL pushes, no partial-tree API uploads -- see
 the "MUST BE BOOTABLE" callout).
 
 **Then fill in the README's repo URL (cwd = `$WT`).** The landing page's "Open
-in Minds" button and its copyable `/use-inspiration` fallback both need
+in Minds" button and its copyable `/use-template` fallback both need
 `<owner>/<repo_name>`, which did not exist when the assembly ran, so
-`build_inspiration.sh` wrote the placeholder `MINDS_INSPIRATION_REPO_URL` in
+`build_template.sh` wrote the placeholder `MINDS_TEMPLATE_REPO_URL` in
 both places. You now have both halves: `repo_name` from §6's confirmation, and
 `owner` from the probe above --
 
@@ -910,7 +910,7 @@ OWNER="$(latchkey curl -sf https://api.github.com/user | jq -r .login)"
 
 ```bash
 ( cd "$WT" \
-    && sed -i "s|MINDS_INSPIRATION_REPO_URL|${OWNER}/<repo_name>|g" README.md \
+    && sed -i "s|MINDS_TEMPLATE_REPO_URL|${OWNER}/<repo_name>|g" README.md \
     && git add README.md \
     && git commit -m "readme: point the Open in Minds link at the published repo" )
 ```
@@ -936,7 +936,7 @@ With `repo_name` / `visibility` taken from the chat confirmation:
   - **Placeholder-thumbnail gate** -- this grep must print NOTHING:
 
     ```bash
-    grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' "$WT/inspiration.svg"
+    grep -nEi -- 'minds-placeholder-thumbnail|<script|<foreignObject|on[a-z]+[[:space:]]*=' "$WT/template.svg"
     ```
 
     A `minds-placeholder-thumbnail` hit means the script's placeholder is
@@ -949,7 +949,7 @@ With `repo_name` / `visibility` taken from the chat confirmation:
     This grep must print NOTHING:
 
     ```bash
-    grep -n -- 'MINDS_INSPIRATION_REPO_URL' "$WT/README.md"
+    grep -n -- 'MINDS_TEMPLATE_REPO_URL' "$WT/README.md"
     ```
 
     A hit means the landing page would ship a dead button. Fix it, commit in
@@ -960,7 +960,7 @@ With `repo_name` / `visibility` taken from the chat confirmation:
 
     ```bash
     ( cd "$WT" && uv run --no-project --with 'pydantic>=2' python \
-        .agents/skills/publish-inspiration/scripts/validate_inspiration.py . )
+        .agents/skills/publish-template/scripts/validate_template.py . )
     ```
 
     It must exit 0. It lists every problem at once, so fix them together,
@@ -977,20 +977,20 @@ in one call):**
 ```bash
 latchkey curl -X POST https://api.github.com/user/repos \
     -H 'Content-Type: application/json' \
-    -d '{"name": "<repo_name>", "description": "<description> (minds inspiration v2)", "private": <true|false>}'
+    -d '{"name": "<repo_name>", "description": "<description> (minds template v2)", "private": <true|false>}'
 ```
 
 Take `<owner>` from the response's `.owner.login`. `"private"` is `true` for
 the default private visibility, `false` only if the user chose public. The
 repo description is always the confirmed `<description>` followed by the
-literal suffix ` (minds inspiration v2)` -- the flow-version marker every
+literal suffix ` (minds template v2)` -- the flow-version marker every
 published repo carries; keep it verbatim. You
 already validated `repo_name` against `^[A-Za-z0-9._-]+$` in §6; keep the
 JSON built from variables, never string-interpolated shell.
 
 **Step 1b -- lock down the collaboration surface (unconditional -- never ask
 the user).** Immediately after the repo exists, close every surface where a
-non-collaborator could open or inject content, so an inspiration can never
+non-collaborator could open or inject content, so an template can never
 become a public forum on the author's account. Do it in ONE call to the "Update
 a repository" endpoint (`PATCH /repos/<owner>/<repo>`), NOT the create call above
 -- that is why this is a follow-up call. Set, unconditionally (public or
@@ -1018,7 +1018,7 @@ failing the whole publish -- the repo already exists and is private by default,
 so the comment surface is still closed.
 
 Two residual surfaces GitHub's REST API cannot fully close. On a PRIVATE
-inspiration (the default) neither matters -- outsiders have no access at all --
+template (the default) neither matters -- outsiders have no access at all --
 so only surface them to the user if they chose PUBLIC visibility (inform them --
 do NOT ask permission):
 
@@ -1027,7 +1027,7 @@ do NOT ask permission):
   `collaborators_only` policy above already blocks arbitrary outsiders, which is
   what matters.
 - **Forking cannot be disabled on a personal public repo** (GitHub allows
-  `allow_forking: false` only on org-owned repos). Keeping the inspiration
+  `allow_forking: false` only on org-owned repos). Keeping the template
   private is the only way to also prevent outside forks.
 
 **Step 2 -- mint ONE snapshot commit and push it as `main` (git through the
@@ -1040,12 +1040,12 @@ latchkey gateway):**
    preferably the template's whole real history (carried along by parenting on
    `BASE_REF`; see below). This is the pristine, already-public template base,
    never this mind's own accumulated history.
-2. **exactly one** commit on top carrying ONLY this inspiration's changes -- the
+2. **exactly one** commit on top carrying ONLY this template's changes -- the
    delta over `BASE_REF`, with all published-version cleanups already applied,
    minted atomically so no pre-cleanup state ever exists as its own commit.
 
 Never one commit total (that drops the template base), and never more than one
-inspiration commit (intermediate commits would leak pre-cleanup state). The
+template commit (intermediate commits would leak pre-cleanup state). The
 `rev-list --count > 1` and `merge-base --is-ancestor` checks below enforce this.
 
 The published history must be **the public template's full history with
@@ -1068,13 +1068,13 @@ get wrong:
 
 Why the shared base matters: because the published repo keeps `BASE_REF` and
 its ancestry, it shares a real **merge-base** with the template and with every
-other inspiration built on that template. That common ancestor is what lets an
-adopting mind cleanly **merge this inspiration into itself (or into another
+other template built on that template. That common ancestor is what lets an
+adopting mind cleanly **merge this template into itself (or into another
 template)** -- a 3-way merge against `BASE_REF` brings in exactly this
 snapshot's changes and nothing else. An orphan single-commit repo has NO common
 ancestor with anything, so adopting it degenerates from "merge just the
 changes" into a whole-tree conflict (or a blind overwrite). Keeping the base
-history is what makes an inspiration composable with other templates rather
+history is what makes an template composable with other templates rather
 than a dead-end snapshot.
 
 The worker's branch accumulates intermediate commits (the
@@ -1088,7 +1088,7 @@ push that commit -- the branch itself is never pushed:
 
 ```bash
 ( cd "$WT" \
-    && SNAPSHOT_COMMIT="$(git commit-tree 'HEAD^{tree}' -p <BASE_REF> -m "inspiration: <slug>
+    && SNAPSHOT_COMMIT="$(git commit-tree 'HEAD^{tree}' -p <BASE_REF> -m "template: <slug>
 
 Assembled on clean DEFAULT_WORKSPACE_TEMPLATE base <BASE_REF> (provenance link only; no upstream fetch).")" \
     && git merge-base --is-ancestor <BASE_REF> "$SNAPSHOT_COMMIT" \
@@ -1117,25 +1117,25 @@ The gateway proxies git's smart-HTTP endpoints and injects the GitHub
 credential server-side (gated by the `github-git-write` permission from §7);
 the two extra headers are the gateway's own auth material, already in this
 container's environment. The mind's own commit history never leaves the
-machine either (`build_inspiration.sh` parents the assembly commit on
+machine either (`build_template.sh` parents the assembly commit on
 `BASE_REF`; the minted commit here is parented there directly). No GitHub
 token appears anywhere -- not in the URL, not on disk -- and nothing is
 written into git config or a named remote (the `-c` options apply to this
 one command only; nothing to clean up afterward).
 
 **Step 3 -- tag the repo (immediately after a successful push).** Every
-published inspiration carries the `minds-inspiration` GitHub topic -- a repo
-topic, NOT part of the description -- so inspirations are discoverable as a
+published template carries the `minds-template` GitHub topic -- a repo
+topic, NOT part of the description -- so templates are discoverable as a
 group (topic search / GitHub's topic page):
 
 ```bash
 latchkey curl -X PUT "https://api.github.com/repos/<owner>/<repo_name>/topics" \
     -H 'Content-Type: application/json' \
-    -d '{"names": ["minds-inspiration"]}'
+    -d '{"names": ["minds-template"]}'
 ```
 
 (GitHub topic rules: lowercase letters, digits, and hyphens only -- the fixed
-literal `minds-inspiration` already conforms; do not prefix it with `#`. If
+literal `minds-template` already conforms; do not prefix it with `#`. If
 this call fails, the publish itself already succeeded -- retry once, and if
 it still fails, report it as a minor follow-up rather than treating the
 publish as failed.)
@@ -1148,9 +1148,9 @@ push failed, or the user aborted, SKIP this entirely.
 
 Write the entry directly into `docs/VERSION_HISTORY.md` (cwd `/home/user/workspace`). There is
 no helper skill: this block is the whole recording contract, and it owns the
-format so `publish-inspiration`, `update-published-inspiration`, and `update-self` all
+format so `publish-template`, `update-published-template`, and `update-self` all
 write identical lines. Rules: append-only (existing lines copied through
-verbatim, never re-flowed); every `## Inspirations` line ends in a commit; and a
+verbatim, never re-flowed); every `## Templates` line ends in a commit; and a
 retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 `REPO_URL="github.com/<owner>/<repo_name>"`, `NOTE="first published"`, and
 `SOURCE_SHA` from §2 -- the source workspace commit the snapshot was cut from
@@ -1159,7 +1159,7 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 - **If `docs/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
   the shipped starter first -- the `# Version history` heading, its explanatory
   paragraph, and the empty sections `## Workspace`, `## Migrations`,
-  `## Inspirations`, `## Adopted inspirations` in that order (byte-identical to
+  `## Templates`, `## Adopted templates` in that order (byte-identical to
   the shipped root file; `update-self` §5b carries the exact heredoc) -- then
   append.
 
@@ -1177,8 +1177,8 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   "the workspace template">  <7-char sha>`, note padded to width 26. (This is the
   OLDEST-marker end of §2's `BASE_REF` walk -- same markers, opposite pick.)
 
-- **Append the inspiration entry.** Create the heading `### <slug>  --  <repo-url>`
-  under `## Inspirations` if this slug has none yet. Then append one line under
+- **Append the template entry.** Create the heading `### <slug>  --  <repo-url>`
+  under `## Templates` if this slug has none yet. Then append one line under
   that heading:
 
   ```
@@ -1187,10 +1187,10 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 
   where `<n>` is **computed**, never typed: it is one greater than the highest
   `v<k>` already listed under this slug's heading (so a first publish is `v1`, and
-  a later `update-published-inspiration` run appends `v2`, `v3`, ... under the same
+  a later `update-published-template` run appends `v2`, `v3`, ... under the same
   heading). Pad the note (`first published`) to width 35 so the sha lines up.
   Compute the sha as `git rev-parse --short=7 "$SOURCE_SHA"`.
-  **Idempotence, scoped to this slug** (two inspirations published from the same
+  **Idempotence, scoped to this slug** (two templates published from the same
   commit on the same day legitimately share a note and a sha): if a line already
   under this slug's heading carries this exact note AND this exact 7-char sha, it
   is already recorded -- change nothing and skip the commit below.
@@ -1200,7 +1200,7 @@ Then commit exactly this one file:
 ```bash
 ( cd /home/user/workspace \
     && git add docs/VERSION_HISTORY.md \
-    && git commit -m "version history: published inspiration <slug> v1" )
+    && git commit -m "version history: published template <slug> v1" )
 ```
 
 Exactly that: one file staged by name, one commit, on whatever branch `/home/user/workspace`
@@ -1212,7 +1212,7 @@ If the commit fails (e.g. a hook rejects it), the publish still succeeded --
 say so plainly, and fix the entry rather than re-pushing anything.
 
 **Failure handling.** A failure anywhere in this section means step 4 never
-runs: an unpublished inspiration is never recorded in `docs/VERSION_HISTORY.md`.
+runs: an unpublished template is never recorded in `docs/VERSION_HISTORY.md`.
 If the create fails, read the response body: a
 `"request not permitted by the user"` error means the `github-rest-api`
 grant is missing or too narrow -- go back to §7; a name-taken error means
@@ -1255,28 +1255,28 @@ report the blocker; do not improvise a substitute publish.
 
 ## 9. Override and lineage
 
-A repo holds exactly ONE inspiration. Publishing from a mind that already has an
-`inspiration.md` / `.toml` / `.svg` **overrides** them -- the new manifest
+A repo holds exactly ONE template. Publishing from a mind that already has an
+`template.md` / `.toml` / `.svg` **overrides** them -- the new manifest
 replaces the old rather than landing beside it, and the generated `/welcome`
 targets the newly-published slug.
 
 What survives the override is the **lineage chain**. Before its reset,
-`build_inspiration.sh` reads the outgoing `inspiration.toml` and carries forward
+`build_template.sh` reads the outgoing `template.toml` and carries forward
 its `[[lineage]]` entries plus, when the outgoing manifest has an `[origin]`
 table, one new entry for the manifest being replaced: slug, repo URL, and the
-exact commit it was used at. So the published TOML names every inspiration this
+exact commit it was used at. So the published TOML names every template this
 mind built on, each addressed precisely enough to go and read it in the repo
 where it is authoritative. Nothing is lost by overriding -- only relocated.
 
 Two consequences worth stating plainly:
 
-- The *code* of a superseded inspiration is still in the tree (the merge that
+- The *code* of a superseded template is still in the tree (the merge that
   brought it in is not undone); only its manifest is replaced. A mind can
   therefore be running an app whose manifest lives one repo away.
 - An outgoing manifest with no `[origin]` -- one this mind published itself, or
   any v1 manifest, which predates the field -- contributes no link, because
   there is no address to record. Its inherited chain still carries through. If
-  that missing link matters, add it by hand to the new `inspiration.toml`
+  that missing link matters, add it by hand to the new `template.toml`
   before the push.
 
 ## 10. Close out
@@ -1306,14 +1306,14 @@ delete work the user may want to retry or reassemble from.
 Close the delegation step with a work-summary line. Report the new repo URL in
 your final assistant message to the user (not in the step summary).
 
-## The assembly script: `system/scripts/build_inspiration.sh`
+## The assembly script: `system/scripts/build_template.sh`
 
-The worker runs `system/scripts/build_inspiration.sh` from its worktree root (§3). It
+The worker runs `system/scripts/build_template.sh` from its worktree root (§3). It
 is self-contained (the dev `create-new-mind-repo` recipe is NOT available in
 the VM). Interface (cwd = worktree repo root):
 
 ```
-.agents/skills/publish-inspiration/scripts/build_inspiration.sh \
+.agents/skills/publish-template/scripts/build_template.sh \
   --base-ref <BASE_REF> \          # DEFAULT_WORKSPACE_TEMPLATE commit the mind was based on (provenance + clean base)
   --slug <slug> \
   --title <title> \
@@ -1338,7 +1338,7 @@ What it does, in order (see the script for the exact commands):
 4. Overlays the staged paths onto the clean base with
    `rsync -a "$STAGE/" "$REPO/"` (root-to-root contents merge) -- never a
    nesting copy like `cp -a "$STAGE/apps" "$REPO/apps"`.
-5. Reads the outgoing `inspiration.toml` (staged before the reset) so its
+5. Reads the outgoing `template.toml` (staged before the reset) so its
    identity and `[origin]` become the newest `[[lineage]]` entry. The old
    manifest files themselves are NOT carried forward -- the new one overrides
    them.
@@ -1350,23 +1350,23 @@ What it does, in order (see the script for the exact commands):
    `--no-validate`) -- where a finding from EITHER of them, any scanner error,
    or any missing scanner binary fails the scan. There is no fallback scanner.
    This is the authoritative blocker, not LLM prose.
-7. Generates the manifest `inspiration.md` at the repo root (with the
-   FILL-IN blocks the worker must replace), carrying the inspiration's
+7. Generates the manifest `template.md` at the repo root (with the
+   FILL-IN blocks the worker must replace), carrying the template's
    `version: v1` in its front-matter and a "Recipe" block -- the include paths
    it just overlaid, plus the `exclude` / `modification_rules` lists the worker
    fills in. The recipe is what a later update re-runs, so the published repo
    is its durable home.
-8. Generates a placeholder thumbnail `inspiration.svg` carrying a
+8. Generates a placeholder thumbnail `template.svg` carrying a
    distinctive `minds-placeholder-thumbnail` marker comment; the worker MUST
    replace the whole file with a bespoke SVG before reporting done, and the
    marker makes §8's pre-push gate a deterministic grep.
 9. Overwrites the snapshot's `welcome/SKILL.md` with a generated
-   inspiration-specific welcome describing the
-   newly-published inspiration.
+   template-specific welcome describing the
+   newly-published template.
 10. Removes `docs/VERSION_HISTORY.md` from the snapshot entirely: that ledger is
     WORKSPACE-only -- the SOURCE mind's own record of what it came from and
-    everything it has published -- and never belongs in a published inspiration.
-    A mind created from this inspiration grows its own ledger on demand (this
+    everything it has published -- and never belongs in a published template.
+    A mind created from this template grows its own ledger on demand (this
     skill's §8 step 4 and `update-self` §5b write the starter the first time it
     is needed), so nothing is lost by omitting it. Runs after the no-diff guard, so it can
     never make an empty include set look publishable.

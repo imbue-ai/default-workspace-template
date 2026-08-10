@@ -6,7 +6,7 @@ tab. Two routes and nothing else --
 
 - ``/`` serves the rendered page from ``data/.state/markdown-preview/``;
 - anything else is served from the SOURCE markdown's own directory, which is
-  what makes a relative ``inspiration.svg`` resolve. Serving the state dir
+  what makes a relative ``template.svg`` resolve. Serving the state dir
   alone would show every local image broken, which is precisely the failure a
   preview exists to surface *before* the push -- so a preview that could not
   reproduce it would be worse than none.
