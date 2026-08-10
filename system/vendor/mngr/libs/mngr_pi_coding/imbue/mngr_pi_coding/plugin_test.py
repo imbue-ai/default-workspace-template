@@ -8,9 +8,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
-from typing import cast
 
 import pluggy
 import pytest
@@ -28,7 +26,6 @@ from imbue.mngr.errors import SendMessageError
 from imbue.mngr.errors import UserInputError
 from imbue.mngr.hosts.host import Host
 from imbue.mngr.interfaces.data_types import CommandResult
-from imbue.mngr.interfaces.data_types import FileType
 from imbue.mngr.interfaces.host import AgentEnvironmentOptions
 from imbue.mngr.interfaces.host import CreateAgentOptions
 from imbue.mngr.interfaces.host import HostLocation
@@ -36,15 +33,12 @@ from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import HostName
-from imbue.mngr.primitives import OutputStyleName
-from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
 from imbue.mngr.utils.testing import make_mngr_ctx
 from imbue.mngr_pi_coding.plugin import PiCodingAgent
 from imbue.mngr_pi_coding.plugin import PiCodingAgentConfig
-from imbue.mngr_pi_coding.plugin import _APPEND_SYSTEM_FILE_NAME
 from imbue.mngr_pi_coding.plugin import _INBOX_FILE_NAME
 from imbue.mngr_pi_coding.plugin import _LIFECYCLE_EXTENSION_NAME
 from imbue.mngr_pi_coding.plugin import _PI_NPM_PACKAGE
@@ -366,42 +360,6 @@ def test_setup_local_config_dir_symlinks_resource_dirs(
     assert Path(os.readlink(agents_link)) == home / ".pi" / "agent" / "agents"
 
 
-@pytest.mark.rsync
-def test_setup_local_config_dir_seeds_npm_as_copy(tmp_path: Path, pi_agent: PiCodingAgent, local_host: Host) -> None:
-    """The home npm extension install is copied (never symlinked) into the per-agent dir.
-
-    The seed is what keeps pi's first boot from spending 45-55s in npm before
-    the readiness sentinel; a symlinked node_modules would race across
-    concurrent agent startups.
-    """
-    home = _setup_home_pi(tmp_path)
-    npm_package_dir = home / ".pi" / "agent" / "npm" / "node_modules" / "pi-subagents"
-    npm_package_dir.mkdir(parents=True)
-    (npm_package_dir / "package.json").write_text('{"name": "pi-subagents"}')
-
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(parents=True)
-
-    pi_agent._setup_local_config_dir(local_host, PiCodingAgentConfig(sync_home_settings=True), config_dir, home)
-
-    seeded = config_dir / "npm"
-    assert not seeded.is_symlink()
-    assert (seeded / "node_modules" / "pi-subagents" / "package.json").read_text() == '{"name": "pi-subagents"}'
-
-
-def test_setup_local_config_dir_skips_npm_seed_when_home_has_none(
-    tmp_path: Path, pi_agent: PiCodingAgent, local_host: Host
-) -> None:
-    home = _setup_home_pi(tmp_path)
-
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(parents=True)
-
-    pi_agent._setup_local_config_dir(local_host, PiCodingAgentConfig(sync_home_settings=True), config_dir, home)
-
-    assert not (config_dir / "npm").exists()
-
-
 def test_setup_remote_config_dir_copies_settings(tmp_path: Path, pi_agent: PiCodingAgent) -> None:
     home = _setup_home_pi(tmp_path)
     settings_content = '{"defaultModel": "sonnet"}'
@@ -620,15 +578,6 @@ def test_assemble_command_loads_extension_and_resumes(pi_agent: PiCodingAgent, t
     assert pi_agent.get_expected_process_name() == "pi"
 
 
-def test_assemble_command_stamps_process_started_and_clears_active(pi_agent: PiCodingAgent, tmp_path: Path) -> None:
-    # Every launch/resume stamps the process-start boundary (so the activity tracker can
-    # ignore a stale mid-turn tail) and clears a crash-stale `active` marker.
-    command = str(pi_agent.assemble_command(_fake_host(tmp_path), (), None))
-    assert "pi_process_started" in command
-    assert "touch " in command
-    assert "/active" in command
-
-
 def test_assemble_command_omits_resume_when_disabled(pi_agent: PiCodingAgent, tmp_path: Path) -> None:
     object.__setattr__(pi_agent, "agent_config", PiCodingAgentConfig(resume_session=False))
     host = _fake_host(tmp_path)
@@ -674,64 +623,6 @@ def test_provision_lifecycle_extension_writes_resource(pi_agent: PiCodingAgent, 
     pi_agent._provision_lifecycle_extension(host)
     extension_path = pi_agent._get_lifecycle_extension_path()
     assert extension_path.read_text() == _load_resource(_LIFECYCLE_EXTENSION_NAME)
-
-
-# =============================================================================
-# System prompt: output style + append_system_prompt -> APPEND_SYSTEM.md
-# =============================================================================
-
-
-class _StyleReadingHost:
-    """Minimal host exposing only what ``read_output_style_files`` touches (mirrors codex's)."""
-
-    def __init__(self, styles_dir: Path, style_body: str) -> None:
-        self._styles_dir = styles_dir
-        self._style_body = style_body
-
-    def path_exists(self, path: Path) -> bool:
-        return path == self._styles_dir
-
-    def list_directory(self, path: Path, recursive: bool = False) -> list[Any]:
-        return [SimpleNamespace(path="engineering-subordinate.md", file_type=FileType.FILE)]
-
-    def read_text_file(self, path: Path) -> str:
-        return self._style_body
-
-
-def test_append_system_stacks_prompts_then_style_body(tmp_path: Path) -> None:
-    """pi has no output-style setting, so the appended prompts and the style body share one file.
-
-    Stacked prompt blocks come first (in order), the style body verbatim last -- identical to how
-    codex builds its developer_instructions. Three sentinels so a dropped/reordered piece is visible.
-    """
-    styles_dir = tmp_path / "work" / ".agents" / "output-styles"
-    style_body = "---\nname: Engineering Subordinate\n---\nSENTINEL_C"
-    agent = PiCodingAgent.model_construct(
-        agent_config=PiCodingAgentConfig(
-            output_style=OutputStyleName("Engineering Subordinate"),
-            append_system_prompt=(SystemPromptText("SENTINEL_A"), SystemPromptText("SENTINEL_B")),
-        ),
-        work_dir=tmp_path / "work",
-    )
-    blob = agent._build_append_system(cast(Any, _StyleReadingHost(styles_dir, style_body)))
-    assert blob is not None
-    for sentinel in ("SENTINEL_A", "SENTINEL_B", "SENTINEL_C"):
-        assert sentinel in blob, f"{sentinel} missing from APPEND_SYSTEM.md body"
-    assert blob.index("SENTINEL_A") < blob.index("SENTINEL_B") < blob.index("SENTINEL_C")
-
-
-def test_append_system_is_none_when_nothing_contributed() -> None:
-    agent = PiCodingAgent.model_construct(agent_config=PiCodingAgentConfig(), work_dir=Path("/nonexistent"))
-    assert agent._build_append_system(cast(Any, object())) is None
-
-
-def test_provision_writes_append_system_md(make_pi_agent: Callable[..., PiCodingAgent], tmp_path: Path) -> None:
-    """The appended prompt lands in APPEND_SYSTEM.md in the per-agent pi config dir (pi appends it)."""
-    agent = make_pi_agent(agent_config=PiCodingAgentConfig(append_system_prompt=(SystemPromptText("HELLO_APPEND"),)))
-    host = _fake_host(tmp_path, is_local=True)
-    agent.get_pi_config_dir().mkdir(parents=True, exist_ok=True)
-    agent._provision_append_system_prompt(host)
-    assert (agent.get_pi_config_dir() / _APPEND_SYSTEM_FILE_NAME).read_text() == "HELLO_APPEND"
 
 
 def test_wait_for_ready_signal_non_creating_just_runs_start_action(pi_agent: PiCodingAgent) -> None:

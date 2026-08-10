@@ -68,8 +68,6 @@ Tunables on the `pi-coding` agent type:
 | `emit_raw_transcript` | `true` | Capture the raw pi message stream. |
 | `auto_dismiss_dialogs` | `false` | Trust the workspace without prompting, suppressing pi's 'Trust project folder?' dialog. When set, mngr launches pi with `--approve` so pi auto-trusts the project folder for the run. Also implied by `mngr create --yes`. When False and the source repo is not already trusted, mngr prompts interactively and refuses to run non-interactively. |
 | `preserve_on_destroy` | `true` | When destroying this agent, first copy its transcripts and resumable session store to <local_host_dir>/preserved/ so they survive. Set to False to discard them. |
-| `output_style` | `None` | Name of an output style (from .agents/output-styles/) whose body is written verbatim to APPEND_SYSTEM.md in the per-agent pi config dir, so pi appends it to its system prompt every turn. pi has no native output-style setting, so the style reaches it as appended instructions -- the pi analogue of codex's developer_instructions. |
-| `append_system_prompt` | `()` | Extra system-prompt blocks appended (before the output-style body) to APPEND_SYSTEM.md. Write `append_system_prompt__extend = [...]` in a template so stacked roles each contribute a block. |
 <!-- END GENERATED CONFIG TABLE -->
 
 See the [mngr agent types documentation](https://github.com/imbue-ai/mngr/blob/main/libs/mngr/docs/concepts/agent_types.md) for more details.

@@ -274,13 +274,10 @@ def test_build_codex_hooks_config_maps_lifecycle_events_to_the_marker_scripts() 
     subagent_stop = hooks["hooks"]["SubagentStop"]
     permission_request = hooks["hooks"]["PermissionRequest"]
     post_tool_use = hooks["hooks"]["PostToolUse"]
-    pre_tool_use = hooks["hooks"]["PreToolUse"]
     # Subagents run asynchronously, so SubagentStart/Stop ARE hooked now: they
     # track in-flight subagents to keep the marker RUNNING after the root Stop.
     # PermissionRequest/PostToolUse maintain the permissions_waiting marker.
-    # PreToolUse runs the dwt policy guards (block + rewrite).
     assert set(hooks["hooks"]) == {
-        "PreToolUse",
         "UserPromptSubmit",
         "Stop",
         "SubagentStart",
@@ -288,29 +285,9 @@ def test_build_codex_hooks_config_maps_lifecycle_events_to_the_marker_scripts() 
         "PermissionRequest",
         "PostToolUse",
     }
-    # PreToolUse runs the dwt policy scripts from the work dir, in order: the two blockers,
-    # the tk-standalone block, the require-steps soft reminder, then the rewriter last. The
-    # rewriter carries ``--codex``, which makes it emit ``permissionDecision: "allow"`` alongside
-    # ``updatedInput`` -- required by codex (it rejects an updatedInput-only rewrite), unlike claude.
-    pre_commands = [h["command"] for h in pre_tool_use[0]["hooks"]]
-    assert pre_commands == [
-        'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_block_pipe_tail_head.sh"',
-        'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_prevent_commit_rewrite.sh"',
-        'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_tk_standalone.sh"',
-        'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_require_steps_pretool.sh"',
-        'python3 "$MNGR_AGENT_WORK_DIR/system/scripts/claude_rewrite_bash_command.py" --codex',
-    ]
-    # UserPromptSubmit: the active marker, then the open-steps carryover reminder.
-    user_prompt_commands = [h["command"] for h in user_prompt[0]["hooks"]]
-    assert SET_ACTIVE_MARKER_SCRIPT_NAME in user_prompt_commands[0]
-    assert (
-        user_prompt_commands[1] == 'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_open_tickets_reminder.sh" --codex'
-    )
+    assert SET_ACTIVE_MARKER_SCRIPT_NAME in user_prompt[0]["hooks"][0]["command"]
     assert user_prompt[0]["hooks"][0]["type"] == "command"
-    # Stop: clear the active marker, then the open-steps nudge (stderr-only, exit 0).
-    stop_commands = [h["command"] for h in stop[0]["hooks"]]
-    assert CLEAR_ACTIVE_MARKER_SCRIPT_NAME in stop_commands[0]
-    assert stop_commands[1] == 'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_open_tickets_stop_nudge.sh"'
+    assert CLEAR_ACTIVE_MARKER_SCRIPT_NAME in stop[0]["hooks"][0]["command"]
     assert SUBAGENT_STARTED_SCRIPT_NAME in subagent_start[0]["hooks"][0]["command"]
     assert SUBAGENT_STOPPED_SCRIPT_NAME in subagent_stop[0]["hooks"][0]["command"]
     # The permission marker is a plain inline touch/remove, not a provisioned script.
