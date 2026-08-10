@@ -39,7 +39,7 @@ fi
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.3.0}"
+: "${LATCHKEY_VERSION:=3.4.1}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Install a downloaded binary atomically: fetch to a temp file beside the target,
@@ -67,11 +67,21 @@ install_downloaded_binary() {
 # pressure before the kernel kills an arbitrary victim; the rest are
 # agent/runtime deps). supervisor provides the system supervisord + supervisorctl
 # that `uv run bootstrap` execs into the foreground.
+# xvfb + xclip (the browser fleet's virtual display and its clipboard bridge)
+# are baked here, NOT deferred to the env.d browser unit: [program:xvfb] execs
+# Xvfb directly at boot, and a binary that static service config promises at
+# every boot must exist in the image. They are a few MB; only the heavy
+# Fortress/Chromium stack stays deferred.
 apt-get update
 apt-get install -y --no-install-recommends \
     bash build-essential ca-certificates cron curl earlyoom fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
-    xxd xmlstarlet
+    xclip xvfb xxd xmlstarlet
+# Runtime libraries the pixelflux/pcmflux wheels (the browser fleet's H.264 + Opus
+# media pipes) dlopen at import -- without libva pixelflux's import raises (guarded in
+# videopipe.py) -- plus xdpyinfo, which videopipe uses to size the capture. Baked small.
+apt-get install -y --no-install-recommends \
+    libva2 libva-drm2 libva-x11-2 libpixman-1-0 x11-utils pulseaudio pulseaudio-utils
 rm -rf /var/lib/apt/lists/*
 
 # The Debian `supervisor` package enables a systemd unit that immediately starts
@@ -250,6 +260,21 @@ printf 'AuthorizedKeysFile .ssh/authorized_keys /root/.ssh/authorized_keys\n' \
 # docker image builds no sshd is running and this is a no-op.
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active ssh >/dev/null 2>&1; then
     systemctl reload ssh
+fi
+
+# sshd only reads its configuration at startup, and on providers that start sshd
+# before this script runs (Modal: mngr provisions SSH, then runs setup) the
+# listener is already up with the stock config. Without a reload it keeps
+# resolving AuthorizedKeysFile against the passwd home, which the home move has
+# just repointed at /home/user, so every later connection fails to authenticate.
+# SIGHUP makes sshd re-exec and re-read the config; established sessions are
+# unaffected. No-op when sshd is not running (image builds, Lima provisioning).
+#
+# This used to work by accident: the workspace's apt phase reinstalled
+# openssh-server, which restarted sshd and picked the file up as a side effect.
+_sshd_pid="$(pgrep -o -x sshd 2>/dev/null || true)"
+if [ -n "$_sshd_pid" ]; then
+    kill -HUP "$_sshd_pid"
 fi
 
 # Pre-seed github.com SSH host keys so git operations don't block on interactive

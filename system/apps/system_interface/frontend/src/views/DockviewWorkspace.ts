@@ -221,6 +221,13 @@ let showTerminalDestroyDialog = false;
 let terminalDestroySessionName: string | null = null;
 let terminalDestroyPanelId: string | null = null;
 
+// Browser-destroy dialog state. Separate again because destroying a browser
+// retires it in the fleet (DELETE /api/browsers/<name>, a same-origin passthrough
+// to the browser daemon) rather than killing an mngr agent or a tmux session.
+let showBrowserDestroyDialog = false;
+let browserDestroyName: string | null = null;
+let browserDestroyPanelId: string | null = null;
+
 // Share modal state
 let showShareModal = false;
 let shareServiceName: string | null = null;
@@ -495,6 +502,38 @@ function createCustomTab(options: { id: string; name: string }): {
               terminalDestroySessionName = sessionName;
               terminalDestroyPanelId = options.id;
               showTerminalDestroyDialog = true;
+              m.redraw();
+            },
+            "dv-custom-tab-action-destructive",
+          ),
+        );
+      }
+
+      // Destroy button -- on browser panes (iframe tabs whose service is the
+      // browser fleet). Retires the browser in the fleet (closing the tab alone
+      // only detaches the pane). Symmetric to the agent + terminal destroy above.
+      if (panelType === "iframe" && pp?.serviceName === "browser") {
+        // The browser name lives in the pane's ``?session=<name>`` query, set on
+        // both freshly-opened and layout-restored browser panes -- derive it from
+        // the url so both cases work.
+        let browserName: string | null = null;
+        try {
+          browserName = pp?.url ? new URL(pp.url, location.origin).searchParams.get("session") : null;
+        } catch {
+          browserName = null;
+        }
+        actions.appendChild(
+          createTabActionButton(
+            "Destroy browser",
+            "trash",
+            () => {
+              if (!browserName) {
+                params.api.close();
+                return;
+              }
+              browserDestroyName = browserName;
+              browserDestroyPanelId = options.id;
+              showBrowserDestroyDialog = true;
               m.redraw();
             },
             "dv-custom-tab-action-destructive",
@@ -2859,6 +2898,38 @@ async function executeTerminalDestroy(sessionName: string, panelId: string): Pro
   m.redraw();
 }
 
+async function executeBrowserDestroy(name: string, panelId: string): Promise<void> {
+  // Retire the browser in the fleet, then drop the tab. Closing the tab alone
+  // only detaches the pane; this frees the browser (and forgets its profile),
+  // symmetric to destroying an agent or a terminal. Routed through the shell's
+  // same-origin ``DELETE /api/browsers/<name>`` passthrough because the browser
+  // daemon lives on its own service origin (no CORS for a direct cross-origin
+  // fetch); the passthrough forwards to the daemon's ``DELETE /browsers/<name>``.
+  try {
+    const response = await fetch(apiUrl(`/api/browsers/${encodeURIComponent(name)}`), {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const detail = (data as { error?: string }).error ?? "Unknown error";
+      alert(`Failed to destroy browser: ${detail}`);
+      return;
+    }
+  } catch (e) {
+    alert(`Failed to destroy browser: ${(e as Error).message}`);
+    return;
+  }
+
+  if (dockview) {
+    const panel = dockview.panels.find((p) => p.id === panelId);
+    if (panel) {
+      dockview.removePanel(panel);
+    }
+  }
+
+  m.redraw();
+}
+
 export const DockviewWorkspace: m.Component = {
   oncreate(vnode: m.VnodeDOM) {
     const wrapper = vnode.dom as HTMLElement;
@@ -3024,6 +3095,26 @@ export const DockviewWorkspace: m.Component = {
                 showTerminalDestroyDialog = false;
                 terminalDestroySessionName = null;
                 terminalDestroyPanelId = null;
+              },
+            })
+          : null,
+
+        showBrowserDestroyDialog && browserDestroyName
+          ? m(DestroyConfirmDialog, {
+              agentName: browserDestroyName,
+              title: "Destroy browser",
+              onConfirm() {
+                showBrowserDestroyDialog = false;
+                const name = browserDestroyName!;
+                const panelId = browserDestroyPanelId!;
+                browserDestroyName = null;
+                browserDestroyPanelId = null;
+                executeBrowserDestroy(name, panelId);
+              },
+              onCancel() {
+                showBrowserDestroyDialog = false;
+                browserDestroyName = null;
+                browserDestroyPanelId = null;
               },
             })
           : null,
