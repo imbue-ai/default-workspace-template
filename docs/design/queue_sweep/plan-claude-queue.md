@@ -1,5 +1,7 @@
 # Claude queuing: scope the queue mirror to the live process session
 
+Status: SHIPPED -- landed on `claude-codex-pi-dwt` (`c58ad389`, merged `825d04be`).
+
 ## Contract being enforced
 
 Contract A (the mirror invariant): the queued messages Minds shows for a claude agent must

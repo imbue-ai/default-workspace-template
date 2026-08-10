@@ -1,6 +1,8 @@
 # `shoulder_tap_atomic` — race-free interrupt-and-flush for codex & pi
 
-Status: DESIGN (no code yet). Reviewers: attack this.
+Status: SHIPPED (codex path: dwt `8dc17581`, fork rebuild + repin `3ba3b854`). The pi path
+shipped via the minimal companion spec `shoulder_tap_atomic_pi.md`. The claude conclusion in
+section 6 was later SUPERSEDED -- see the note there and `docs/design/queue_sweep/`.
 
 ## 1. What we are building
 
@@ -141,6 +143,12 @@ Add `native_atomic_shoulder_tap_possible: bool` to `HarnessSpec`
 
 Surface the flag to the frontend the same way `switch_mode` reaches `HarnessCatalog.ts`, and
 branch the "Shoulder tap" button on it.
+
+> SUPERSEDED (2026-08-09): claude did not stay on the SIGKILL-restart fallback. The queue-sweep
+> series later took claude native too, via a `meta+q` -> `chat:cancel` chord delivered over
+> tmux (`docs/design/queue_sweep/plan-claude-tap.md`, shipped `ed86b116`).
+> `native_atomic_shoulder_tap_possible` is now True for all three harnesses; the restart path
+> survives only as the dispatch base for future harnesses.
 
 ## 7. Known risks / open questions (REVIEWERS: attack these first)
 

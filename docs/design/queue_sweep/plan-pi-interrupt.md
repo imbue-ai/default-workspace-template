@@ -1,5 +1,9 @@
 # pi interrupt: stop button becomes a native interrupt-and-retract (no SIGKILL-restart)
 
+Status: SHIPPED -- landed on `claude-codex-pi-dwt` and `claude-codex-pi-mngr` (`793079af`,
+mirror-refresh follow-up `9297b430`, merged `bf41fad5`). The accepted in-flight-send race was
+later closed by `plan-pi-interrupt-inflight-lock.md`.
+
 ## Contract being enforced
 
 Contract B: the stop button interrupts the running turn, hands queued messages back to the

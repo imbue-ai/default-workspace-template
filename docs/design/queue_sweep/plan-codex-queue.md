@@ -1,5 +1,7 @@
 # Codex queue mirror: generation-scoped ledger replay + dead-process sweep
 
+Status: SHIPPED -- landed on `claude-codex-pi-dwt` (`a57f8b84`, merged `4462206b`).
+
 ## Contract being enforced
 
 Contract A (the mirror invariant) for the codex harness: the "queued messages" Minds

@@ -1,5 +1,8 @@
 # pi queue mirror: scope to the live process generation
 
+Status: SHIPPED -- landed on `claude-codex-pi-dwt` and `claude-codex-pi-mngr`
+(`4476b58f`, merged `95e93cb1`).
+
 ## Contract being enforced
 Contract A (the mirror invariant): what Minds shows as "queued messages" for a pi agent must
 exactly equal the live pi process's actual parked steer queue, scoped to the current process
@@ -42,7 +45,7 @@ already generation-scoped -- no boundary file, no floor arithmetic, no counting-
 Safe against races: mngr appends to the inbox only after the readiness sentinel
 (plugin.py:671-695; ts:408-413), which `session_start` writes after load -- the same property
 the existing `countLines` seeding already relies on. (A recorded-offset "floor file" was the
-previous design: rejected as a new cross-repo artifact requiring a physical-line re-basing
+previous design: rejected as new cross-repo machinery requiring a physical-line re-basing
 reconciling three counting schemes; truncation deletes all of that and keeps `_queued_id`'s
 basis, queue_tracker.py:41-49.)
 

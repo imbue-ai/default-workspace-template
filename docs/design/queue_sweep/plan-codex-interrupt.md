@@ -1,5 +1,9 @@
 # codex stop button: native interrupt-and-retract (no SIGKILL-restart)
 
+Status: SHIPPED -- fork rebuild + sha256 repin `5552823a`, Minds side `1658f331` on
+`claude-codex-pi-dwt` (merged `cfda29c7`). The accepted in-flight-send race was later closed
+by `plan-codex-interrupt-inflight-lock.md`.
+
 ## Contract being enforced
 Contract B: the Minds stop button interrupts the running turn, returns the queued messages to
 the user's composer, and leaves the harness's own queue empty -- without killing the process.
