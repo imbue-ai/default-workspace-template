@@ -32,6 +32,11 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
+from imbue.system_interface.harnesses.codex.model import CodexInterruptToComposer
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
+from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
@@ -40,11 +45,6 @@ from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
-from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
-from imbue.system_interface.harnesses.codex.model import CodexInterruptToComposer
-from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
-from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
@@ -133,6 +133,19 @@ def test_send_message_for_unknown_agent(client: FlaskClient) -> None:
     with patch("imbue.system_interface.server.discover_agents", return_value=[]):
         response = client.post("/api/agents/nonexistent/message", json={"message": "hello"})
     assert response.status_code == 404
+
+
+def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
+    """Routing-level HTTP errors pass through the unhandled-exception handler intact.
+
+    Regression: the handler re-raised HTTPExceptions, which re-entered Flask's
+    handle_exception and surfaced every 404/405 as a 500 (observed live on a
+    method-not-allowed destroy call).
+    """
+    # Non-GET probes are the observable cases: the SPA catch-all intentionally
+    # serves the frontend for any unknown GET, so those return 200 by design.
+    assert client.post("/api/definitely-not-a-route").status_code == 405
+    assert client.put("/api/agents/x/destroy").status_code == 405
 
 
 def _upload_relative_path(stored_path: str) -> str:
