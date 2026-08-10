@@ -597,7 +597,16 @@ const ctx = {
 };
 const pi = {
   on: (evt, h) => { (handlers[evt] ||= []).push(h); },
-  sendUserMessage: (c) => { log.push("inject:" + c); return Promise.resolve(); },
+  // Default: resolve immediately (the send lands at once). With scenario.parkDelayMs set, the
+  // send resolves only after that delay and logs a "parked:" marker on resolution -- so a test
+  // can prove a sentinel waits for the steer to actually park before aborting.
+  sendUserMessage: (c) => {
+    log.push("inject:" + c);
+    if (scenario.parkDelayMs) {
+      return new Promise((resolve) => setTimeout(() => { log.push("parked:" + c); resolve(); }, scenario.parkDelayMs));
+    }
+    return Promise.resolve();
+  },
 };
 if (scenario.preSeed !== undefined) writeFileSync(inbox, JSON.stringify(scenario.preSeed) + "\\n");
 mngrPiLifecycle(pi);
@@ -728,6 +737,27 @@ def test_string_then_sentinel_in_one_write_defers_the_sentinel(tmp_path: Path) -
     outcome = json.loads((state / "outcome.json").read_text())
     # The steer was injected before the abort ran, and the sentinel was still processed.
     assert outcome["log"] == ["inject:steer msg", "abort"]
+    assert outcome["aborted"] == 1
+
+
+def test_retract_waits_for_a_slow_parking_steer_before_aborting(tmp_path: Path) -> None:
+    """A steer whose send parks slowly (later than one poll) still parks BEFORE the retract aborts:
+    the sentinel defers until the injection settles, so the steer is captured-and-discarded rather
+    than escaping to commit as a stray turn. Under the old single-tick deferral the abort would
+    fire before the ~500ms park; here the ordered log proves park-then-abort."""
+    both = json.dumps("slow steer") + "\n" + json.dumps(_RETRACT_KEY) + "\n"
+    state = _run_sentinel_scenario(
+        tmp_path,
+        {
+            "idle": False,
+            "parkedSteers": "PARKED",
+            "parkDelayMs": 500,
+            "actions": [{"appendRaw": both}, {"sleep": 1500}],
+        },
+    )
+    outcome = json.loads((state / "outcome.json").read_text())
+    # The steer parked before the abort ran (abort is last), and the sentinel was still processed.
+    assert outcome["log"] == ["inject:slow steer", "parked:slow steer", "abort"]
     assert outcome["aborted"] == 1
 
 

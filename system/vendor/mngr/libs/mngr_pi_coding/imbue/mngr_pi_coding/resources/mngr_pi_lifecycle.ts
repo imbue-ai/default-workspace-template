@@ -652,16 +652,30 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // nothing can open a competing turn between the interrupt and the resubmit.
   let pendingResubmit: string | null = null;
 
+  // Count of steer injections whose async send has been initiated but not yet settled (parked).
+  // A sentinel (flush/retract) must not abort until this is 0: pi.sendUserMessage resolves when
+  // the message LANDS in the steering queue, so an abort while injections are still outstanding
+  // could fire before a just-injected steer has parked, letting it escape the flush/retract and
+  // commit as a stray turn. Gating the sentinel on this counter makes "the steer has parked"
+  // provable rather than assumed-within-one-poll (the prior single-tick deferral).
+  let pendingInjections = 0;
+
   const injectSteer = (content: string): void => {
     // Delivery is best-effort. pi.sendUserMessage is async (returns a Promise), so the
     // offset advances right after the call is initiated, not after the message lands --
     // an async rejection is logged and not retried. We must attach a rejection handler:
     // a bare `void promise` would surface as an unhandled rejection, which on modern
     // Node terminates the process and would take pi down with it (the one thing this
-    // extension must never do).
+    // extension must never do). We also track the in-flight count (settled in `finally`)
+    // so a sentinel can wait for the steer to actually park -- see `pendingInjections`.
     const sent = pi.sendUserMessage?.(content, { deliverAs: "steer" });
-    if (sent != null && typeof (sent as Promise<void>).catch === "function") {
-      (sent as Promise<void>).catch((error) => logDiagnostic("inbox inject", error));
+    if (sent != null && typeof (sent as Promise<void>).then === "function") {
+      pendingInjections++;
+      (sent as Promise<void>)
+        .catch((error) => logDiagnostic("inbox inject", error))
+        .finally(() => {
+          pendingInjections--;
+        });
     }
   };
 
@@ -709,9 +723,9 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       const lines = readFileSync(inboxPath, "utf-8").split("\n");
       const total = lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
       // Whether this tick has already injected a string line. injectSteer initiates an ASYNC
-      // send, so a sentinel encountered after one must be DEFERRED to the next tick (below) --
-      // otherwise the abort could fire before the just-injected steer has parked, and the
-      // steer would escape the flush/retract.
+      // send, so a sentinel encountered after one must be DEFERRED (below) until every injected
+      // steer has parked -- otherwise the abort could fire before a just-injected steer has
+      // landed in the steering queue, and the steer would escape the flush/retract.
       let injectedStringThisTick = false;
       while (processedInbox < total) {
         const raw = lines[processedInbox];
@@ -736,10 +750,13 @@ export default function mngrPiLifecycle(pi: PiApi): void {
         const isFlush = content !== null && typeof content === "object" && (content as Record<string, unknown>)[INTERRUPT_KEY] === true;
         const isRetract = content !== null && typeof content === "object" && (content as Record<string, unknown>)[RETRACT_KEY] === true;
         if (isFlush || isRetract) {
-          // Tick-deferral: never consume a sentinel in a tick that already injected a string
-          // line. Return WITHOUT advancing processedInbox so this sentinel is re-read next
-          // tick, by which point the injected steer has parked and is thus flushable/retractable.
-          if (injectedStringThisTick) {
+          // Deferral: never consume a sentinel while any injected steer is still un-parked --
+          // either one was injected in THIS tick, or an injection from a prior tick has not yet
+          // settled (pendingInjections > 0). Return WITHOUT advancing processedInbox so this
+          // sentinel is re-read on a later tick, once every prior steer has landed in the
+          // steering queue and is thus flushable/retractable. Waiting on the actual settle
+          // (not a single poll) is what makes the abort provably not race a slow-parking steer.
+          if (injectedStringThisTick || pendingInjections > 0) {
             return;
           }
           processedInbox++;

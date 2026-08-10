@@ -63,6 +63,16 @@ injected a string line (the async send must park the steer first), so the steer 
 flushable/retractable before the abort. Delivery to an idle agent is a no-op, and a
 retract discards nothing then keeps draining so later messages still inject.
 
+The inbox sentinel (flush and retract) now waits for every injected steer to actually PARK
+before it aborts, not just for one drain tick to elapse. The extension tracks the count of
+in-flight `sendUserMessage` injections (settled in a `finally`) and defers a sentinel while any
+remain outstanding, in addition to the existing same-tick deferral. Previously the sentinel was
+deferred exactly one poll on the assumption the async send parked within it; a slower-parking
+steer could be aborted before it landed and then escape the flush/retract to commit as a stray
+turn. Gating on the actual settle makes "the steer has parked before the abort" hold regardless
+of send latency (the stop button's in-flight message is provably captured-and-retracted, never
+left to run). Idle delivery is still a no-op.
+
 The pi lifecycle extension now enforces the tk workflow-discipline guards, matching claude/codex: a
 non-standalone `tk start`/`close` is blocked in the `tool_call` handler (reusing the shared
 `claude_tk_standalone_check.py`); a require-steps reminder is appended to the `tool_result` content when
