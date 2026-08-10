@@ -37,7 +37,9 @@ tmux
 unison
 util-linux
 wget
+xclip
 xmlstarlet
+xvfb
 xxd
 
 # --- Chromium/Fortress shared libraries (playwright install-deps chromium) ---
@@ -65,4 +67,3 @@ libxext6
 libxfixes3
 libxkbcommon0
 libxrandr2
-xvfb

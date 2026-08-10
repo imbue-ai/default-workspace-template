@@ -8,6 +8,7 @@ file covers minds' command-building and helpers.
 """
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -44,6 +45,7 @@ from imbue.minds.desktop_client.agent_creator import checkout_existing_branch
 from imbue.minds.desktop_client.agent_creator import classify_create_attempt_error
 from imbue.minds.desktop_client.agent_creator import clone_git_repo
 from imbue.minds.desktop_client.agent_creator import extract_repo_name
+from imbue.minds.desktop_client.agent_creator import latchkey_gateway_location_for_launch
 from imbue.minds.desktop_client.agent_creator import probe_workspace_through_plugin
 from imbue.minds.desktop_client.agent_creator import provider_instance_name_for_launch
 from imbue.minds.desktop_client.agent_creator import run_mngr_aws_prepare
@@ -77,6 +79,7 @@ from imbue.mngr.utils.git_utils import GIT_MIRROR_PUSH_REFSPECS
 from imbue.mngr_forward.testing import make_in_memory_test_ca
 from imbue.mngr_forward.tls import build_server_ssl_context
 from imbue.mngr_forward.tls import generate_server_credentials
+from imbue.mngr_latchkey.agent_setup import LatchkeyGatewayLocation
 from imbue.mngr_latchkey.agent_setup import SECRET_LATCHKEY_ENV_VAR_NAMES
 
 
@@ -526,6 +529,25 @@ def test_provider_instance_name_for_launch_local_backends() -> None:
     assert provider_instance_name_for_launch(LaunchMode.DOCKER) == "docker"
     assert provider_instance_name_for_launch(LaunchMode.LIMA) == "lima"
     assert provider_instance_name_for_launch(LaunchMode.VULTR) == "vultr"
+
+
+@pytest.mark.parametrize("launch_mode", [LaunchMode.DOCKER, LaunchMode.LIMA, LaunchMode.MODAL])
+def test_latchkey_gateway_location_for_launch_uses_desktop(launch_mode: LaunchMode) -> None:
+    assert latchkey_gateway_location_for_launch(launch_mode) is LatchkeyGatewayLocation.DESKTOP
+
+
+@pytest.mark.parametrize(
+    "launch_mode",
+    [
+        LaunchMode.VULTR,
+        LaunchMode.IMBUE_CLOUD,
+        LaunchMode.AWS,
+        LaunchMode.GCP,
+        LaunchMode.AZURE,
+    ],
+)
+def test_latchkey_gateway_location_for_launch_uses_vps(launch_mode: LaunchMode) -> None:
+    assert latchkey_gateway_location_for_launch(launch_mode) is LatchkeyGatewayLocation.VPS
 
 
 def test_provider_instance_name_for_launch_aws_uses_cloud_account() -> None:
@@ -2027,3 +2049,63 @@ def test_implicit_discard_deletes_record_when_no_leftover_host_exists(tmp_path: 
     calls = [line for line in calls_path.read_text().splitlines() if line]
     assert calls == ["list --hosts --provider lima --format json"]
     assert store.read_record(dead_record.create_attempt_id) is None
+
+
+@pytest.mark.timeout(30)
+def test_canonical_agent_id_is_published_during_ready_wait(tmp_path: Path, monkeypatch) -> None:
+    """The workspace-list handoff (``derive_create_attempt_rows``) suppresses the
+    "Creating..." row by matching ``info.agent_id`` against discovered ids. The id
+    must therefore be visible while the create attempt is still WAITING_FOR_READY:
+    for build-in-VM Lima that wait spans the whole container build, and a None
+    ``agent_id`` there shows the workspace row and the creating row side by side.
+    """
+    aid = AgentId.generate()
+    hid = HostId.generate()
+    # The create command invokes the ``MNGR_BINARY`` constant ("mngr") via PATH,
+    # so the fake rides a PATH shim rather than the ``mngr_binary`` field (which
+    # only the implicit-discard commands use).
+    fake_bin_dir = tmp_path / "fake-bin"
+    fake_bin_dir.mkdir()
+    script_path = fake_bin_dir / "mngr"
+    script_path.write_text(
+        "#!/bin/bash\n"
+        'if [ "$1" = "create" ]; then\n'
+        f'  echo \'{{"event": "created", "agent_id": "{aid}", "host_id": "{hid}"}}\'\n'
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    script_path.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin_dir}{os.pathsep}{os.environ['PATH']}")
+    # The readiness probe never answers 200, so the create attempt sits in
+    # WAITING_FOR_READY for the whole (short) ready window.
+    server, _thread, port = _start_scripted_server(not_ready_count=10**6)
+    try:
+        creator = _make_test_creator(
+            tmp_path,
+            mngr_forward_port=port,
+            preauth_cookie="any-preauth",
+            timeout_seconds=2.0,
+            poll_interval_seconds=0.02,
+            probe_timeout_seconds=0.5,
+        )
+        create_attempt_id = creator.start_create_attempt(
+            str(_make_fake_repo(tmp_path)), host_name="ready-wait-name-71001"
+        )
+        observed_waiting = False
+        info = None
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            info = creator.get_create_attempt_info(create_attempt_id)
+            assert info is not None
+            if info.status is AgentCreateAttemptStatus.WAITING_FOR_READY:
+                observed_waiting = True
+                assert info.agent_id == aid
+            if info.status in (AgentCreateAttemptStatus.DONE, AgentCreateAttemptStatus.FAILED):
+                break
+            threading.Event().wait(0.005)
+        assert observed_waiting, "the create attempt never reached WAITING_FOR_READY"
+        assert info is not None and info.status is AgentCreateAttemptStatus.DONE
+        creator.wait_for_all()
+    finally:
+        server.shutdown()

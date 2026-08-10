@@ -101,6 +101,34 @@ Sentences within the same paragraph follow one another immediately, with no blan
 Structural content (declarations, steps, tables) is unaffected: steps and table rows already occupy one line each.
 This rule is the canonical specification of the convention; other skills and guides reference it rather than restating it.
 
+## Prose style: define categories, don't enumerate them
+
+Descriptive prose - every description slot and every `.md` file - defines each category or set by the property that makes it that category: a precise, logically complete requirement.
+Descriptive prose must not describe a category by volunteering example members of it.
+
+Enumerated examples rot: the real set drifts from the sample while the prose stands still.
+An enumeration also inflicts narrowing bias - a future reader or agent treats the sample list as the definition and embeds that bias downstream.
+Behavior prose is consumed by agents as specification, so an illustrative list is silently promoted to a contract.
+Defining by property rather than by instance prevents both failure modes.
+
+The single escape hatch: if an example is genuinely load-bearing for comprehension and cannot be replaced by a precise statement, it must be marked unambiguously as a non-exhaustive illustration with the literal phrase `e.g. (wlog)` or the spelled-out `without loss of generality`.
+Absent that marker, no enumeration may stand where a category definition belongs.
+Elimination is preferred to marking; the marker is a last resort.
+
+This rule governs descriptive prose only.
+It does not license editing normative Gherkin steps or `Examples` tables to strip concrete values - those are the observable contract, and enumerating concrete inputs and outputs there is correct and required.
+
+A statement that holds across a folder subtree belongs once, in the most-scoping `overview.md`, and is referenced rather than repeated per file.
+
+Calibrate on this pair:
+
+```text
+Before: A session may be established from the desktop client, a browser presenting a fresh login URL, or a paired mobile device.
+After:  A session may be established by any client surface able to present an unspent one-time code.
+```
+
+The Before line lists members and silently claims the list is closed; the After line states the property, so a surface not yet invented is already covered.
+
 ## Identity: tags and coordinates
 
 Tags may appear wherever Gherkin permits them: on units - `Scenario`, `Scenario Outline`, and `Rule` - and on `Feature` and `Examples` blocks.
