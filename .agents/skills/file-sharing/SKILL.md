@@ -43,6 +43,7 @@ message, ask the user for permission first:
 latchkey curl http://latchkey-self.invalid/permissions/self | jq .rules
 
 # 2. Ask for the necessary missing permissions.
+# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "file-sharing", "payload": {"path": "/home/hynek/project", "access": "READ"}, "rationale": "I'"'"'d like to access the /home/hynek/project directory in order to find the most recent accounting spreadsheet you asked me about."}'
@@ -55,7 +56,7 @@ The body must be a JSON object with exactly four fields:
 
 If you don't know the absolute path to the user's home directory, you can use "~" in your permission request. The backend will expand it to the full path, which you can use to work with the files once your request is approved.
 
-After posting, wait for a message indicating whether the user approved or denied the permission request.
+After posting, wait for an automated system message indicating whether the user approved or denied the permission request.
 
 ## Notes
 

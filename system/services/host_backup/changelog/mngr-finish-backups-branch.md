@@ -1,0 +1,5 @@
+Made the minds backup restore's timeline markers survive retention, then age them out so they stay bounded.
+
+- The retention `restic forget` now passes `--keep-tag restored --keep-tag pre-restore`, so a restore's `pre-restore` safety snapshot and `restored`-state snapshot are no longer thinned away by the keep-hourly/daily bucketing (they share host+paths+hour with the ordinary hourly backups and would otherwise lose the bucket immediately, since the restore restarts the backup service and a fresh backup lands in the same hour). This is what makes the "Restored from ..." entry actually persist in the backups list.
+
+- To keep those protected markers from accumulating without bound, each tick now forgets restore-marker snapshots older than `retention.restore_marker_max_age_days` (new `backup.toml` setting, default 7 days; set to 0 to keep them forever). Emitted as a new `RESTORE_MARKERS_FORGOTTEN` event when any are dropped. Their space is reclaimed by the existing periodic `restic prune`.

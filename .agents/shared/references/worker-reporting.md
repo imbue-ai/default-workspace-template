@@ -50,7 +50,7 @@ At each gate or terminal status:
    first, then the lead endpoint. `LEAD_AGENT` / `FINISH_REPORT_PATH` come from
    the `eval` above; `<RUNTIME_REPORTS_DIR>` is your worker SKILL.md's local
    reports dir. mngr treats an argument as a local path only when it starts with
-   `/`, `./`, `../`, or `~/` (hence the `./` on the source; a bare `runtime/foo`
+   `/`, `./`, `../`, or `~/` (hence the `./` on the source; a bare `data/foo`
    reads as an agent name), and a relative path on the lead endpoint resolves
    against the lead's workdir. You sync the report's *parent directory*
    (`dirname`) rather than the file itself: the trailing slashes matter (rsync

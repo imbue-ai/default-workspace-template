@@ -1,6 +1,6 @@
 ---
 name: minds-api
-description: "Use to act on OTHER Minds workspaces on the user's behalf -- list them, create a fresh one, SSH into one, read or export its backups, start/stop/destroy/recover it. The headline workflow is migrating content out of an old/broken workspace into a new one and then handing the cleanup to the new workspace's own agent. Reached through the latchkey gateway's minds-api-proxy; most routes need a per-workspace permission grant."
+description: "Use to act on OTHER Minds workspaces on the user's behalf -- list them, create a fresh one, SSH into one, read or export its backups, start/stop/destroy/recover it, or change its settings and service sharing. Reached through the latchkey gateway's minds-api-proxy; most routes need a per-workspace permission grant. For bringing another workspace's content into this one, use the migrate-workspace skill, which drives these routes as part of a much larger flow."
 compatibility: Requires latchkey (the standard agent gateway) and curl; ssh/ssh-keygen for the SSH capability. mngr (vendored) for handing tasks to another workspace's agent.
 ---
 
@@ -45,7 +45,10 @@ appears in `GET /api/v1/workspaces` if you need to self-reference.
 
 ## Getting access for a specific workspace (latchkey permissions)
 
-Only the schema endpoint is allowed by default. Every `/api/v1/workspaces/...`
+Only two endpoints are allowed by default: the schema above, and `GET
+/api/v1/app/version` (the newest workspace-template ref the running Minds app
+supports -- what `update-self` caps itself against). Every
+`/api/v1/workspaces/...`
 call is gated by the `minds-workspaces` detent scope, with one permission per
 verb. The **targeted** verbs are granted *per workspace*, so you ask for access
 to one specific workspace at a time.
@@ -68,6 +71,7 @@ dedicated `type: "workspace"` request (distinct from the predefined-service
 requests in the `latchkey` skill):
 
 ```bash
+# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{
@@ -132,6 +136,15 @@ Many optional fields exist (`host_name`, `branch`, `launch_mode`, `ai_provider`,
 schema. A `400` with `{error, field}` means a field-level problem; a `422`
 `{"errors":[{field,message}]}` means a structurally invalid body.
 
+**Backups: always create with backups unconfigured.** Leave every `backup_*`
+field unset (the default is `backup_provider=CONFIGURE_LATER`). Configuring
+backups can involve the user's storage credentials (`backup_api_key_env`),
+which are secrets you must NEVER ask the user for and never send through this
+API -- the user enables backups themselves from the minds desktop app
+afterwards. (The user's *master password* is likewise never yours to handle;
+newer minds versions use it only inside the desktop app to protect
+cross-device sync, and it does not appear in this API at all.)
+
 ### SSH into another workspace (`minds-workspaces-ssh`)
 
 You generate a keypair locally; only the public key leaves you, and the grant is
@@ -187,41 +200,31 @@ as create.
 
 ## Headline workflow: migrate an old workspace into a fresh one
 
-This strings the capabilities together. Suppose the user has an old, outdated or
-broken workspace and wants its content moved into a clean new one.
+Moving a user's content out of an old, outdated, or broken workspace into a clean
+new one is **the `migrate-workspace` skill's job, not this one's.** Do not
+improvise a migration out of the routes above: the real flow also has to resolve
+what the user actually authored (by diffing the source against its own template
+base), map paths across the tree reorganization, re-register apps and scheduled
+jobs, recreate every past chat with its history, and re-audit the credential and
+permission call sites. This skill only supplies the plumbing it uses.
 
-1. **Find the old workspace.** `GET /api/v1/workspaces`; note its `agent_id`
-   (call it `OLD`). (Needs `minds-workspaces-read`.)
+Which side you are on decides what you do:
 
-2. **Create the fresh workspace.** `POST /api/v1/workspaces` with the template
-   `git_url`; poll `operations/create/<op>` until `status == "DONE"`, then read
-   `agent_id` (call it `NEW`). (Needs `minds-workspaces-create`.)
+- **In the NEW workspace** (the user asks you to bring their old stuff over) --
+  load `migrate-workspace` and follow it. It uses `minds-workspaces-read` to find
+  the source, `-lifecycle` to start it, `-ssh` for the live session it reads over,
+  and `-destroy` only if the user asks for that at the very end.
+- **In the OLD workspace** (the user says they want to move to a new one) --
+  `migrate-workspace`'s own escape hatch covers this in two steps: create the
+  fresh workspace here (`POST /api/v1/workspaces` with the template `git_url`,
+  polling `operations/create/<op>` until `DONE`, every `backup_*` field left
+  unset), then tell the user to open it and ask its agent to migrate. Copy nothing
+  yourself.
 
-3. **Get the old content out.** Either:
-   - export the latest backup: `GET .../<OLD>/backups`, pick the newest
-     `snapshot_id`, `POST .../<OLD>/backups/<snapshot_id>/export -o /tmp/old.zip`
-     (`minds-workspaces-backups-export`); **or**
-   - SSH into `OLD` (`minds-workspaces-ssh`) and pull files directly
-     (`tar`/`rsync` over the SSH connection from step "SSH into another
-     workspace").
-
-4. **Put the content into the new workspace.** SSH into `NEW`
-   (`minds-workspaces-ssh`) and copy the content in (unzip `/tmp/old.zip`, or
-   rsync from your pulled copy). Place files where the new workspace expects them
-   (typically the project working directory).
-
-5. **Hand the cleanup to the new workspace's own agent.** You now have a shell on
-   `NEW`. You can fix things directly, but for anything open-ended it's better to
-   let `NEW`'s own agent take over -- it knows that workspace. From your SSH
-   session on `NEW`:
-
-   ```bash
-   mngr list                       # find NEW's own agent id on this host
-   mngr message <new-agent-id> "I migrated content from an older workspace into your project dir. Please review it, fix anything broken (deps, configs, services), and get the workspace healthy."
-   ```
-
-   The agent there picks up the message and self-repairs. (If `mngr` isn't on the
-   path in that workspace, just do the repairs yourself over the SSH session.)
+If the old workspace cannot be started at all, the live-session flow does not
+apply. Export its newest snapshot (`GET .../<OLD>/backups`, then
+`POST .../<OLD>/backups/<snapshot_id>/export -o /tmp/old.zip`) and work through
+the contents with the user by hand.
 
 Throughout: request only the per-workspace permissions each step needs, with a
 rationale that names the workspace and the goal, and wait for approval before

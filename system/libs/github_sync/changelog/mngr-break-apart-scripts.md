@@ -1,0 +1,1 @@
+The post-commit auto-push hook moves from `system/scripts/git_hooks/` into this package (`system/libs/github_sync/git_hooks/post-commit`), so the opt-in GitHub sync is fully self-contained; the `wire-git` hooksPath wiring points at the new location.
