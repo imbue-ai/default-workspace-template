@@ -227,27 +227,38 @@ conversation:**
    http://latchkey-self.invalid/permission-requests`; the request opens the
    approval/login flow in the minds app). Do not merely tell the user a
    permission is needed — send the request so it appears for them to approve.
-2. **Converge the environment it declares.** If the TOML has a non-empty
-   `[environment]`, the packages and `env.d` units it names are installed by
-   `env-converge` -- at THIS mind's own pinned apt snapshot timestamp, not the
-   publisher's, so versions come out consistent with the rest of this
-   environment. It runs on its own at the next boot; run it now so the app
-   actually works during this conversation:
+2. **Install what the inspiration declares.** Read `[environment]` in
+   `inspiration.toml`. If it is empty, skip this. Otherwise install the entries
+   yourself, with the ordinary commands -- there is no special convergence step
+   to invoke:
 
    ```bash
-   uv run env-converge run --phase slow
+   apt-get install -y --no-install-recommends <apt names>   # names only
+   npm install -g <name>@<version>                          # per npm_global entry
+   uv tool install <name>==<version>                        # per uv_tools entry
+   cargo install --locked <name>@<version>                  # per cargo_crates entry
    ```
 
-   An exit code of 3 means some declared package could not be installed. Read
-   the reason and tell the user plainly rather than pressing on into a setup
-   that cannot work:
+   Two things make this simpler than it looks. **apt is already pinned** to this
+   workspace's snapshot timestamp, so installing by bare name yields versions
+   consistent with the rest of THIS environment rather than the publisher's --
+   that is exactly why the manifest declares names and not versions. And you do
+   not need to record anything: env-converge captures whatever you install (a
+   dpkg hook plus boot-time probes), so it lands in the environment record and
+   survives a rebuild or restore on its own.
 
-   - **a package that does not resolve at this mind's timestamp** -- the
-     publisher pinned an older or newer snapshot. Offer to run
-     `uv run env-converge upgrade`, which advances this workspace to its
-     committed timestamp.
-   - **cargo crates with no rust installed** -- an upgrade will NOT fix this;
-     rust has to be installed first.
+   Any `env_d_units` the manifest lists are shell scripts already in the tree at
+   `system/scripts/env.d/`. Leave them alone -- env-converge runs them on the
+   next boot. Run one by hand only if the app needs it working right now.
+
+   If an apt package will not resolve, do not press on into a setup that cannot
+   work -- tell the user which package and why:
+
+   - **it does not exist at this workspace's pinned timestamp** (the publisher
+     was on a different snapshot) -- offer `uv run env-converge upgrade`, which
+     advances this workspace to its committed timestamp;
+   - **cargo entries with rust absent** -- an upgrade will not help; rust has to
+     be installed first.
 
 3. Wire up any `requires_secret:` values (ask the user for them), start the
    services, and get the app running against THEIR data.

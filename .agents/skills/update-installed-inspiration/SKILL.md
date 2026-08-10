@@ -151,22 +151,19 @@ this mind's adaptations are carried through the merge you resolved. This path do
 not touch `system/config/parent.toml` -- provenance is read-only reference; there is no upstream
 fetch or pull here.
 
-## 2b. Re-converge the environment
+## 2b. Install anything the newer version added
 
-A newer version can declare packages the version you were on did not. After the
-merge lands, re-run convergence so the update's new dependencies are actually
-installed before you start resolving requirements against them:
+A newer version can declare packages the one you were on did not. After the
+merge lands, diff `[environment]` in `inspiration.toml` against what you had and
+install the additions the same way `use-inspiration` §3 does -- the ordinary
+`apt-get` / `npm -g` / `uv tool` / `cargo install` commands, apt by bare name so
+it resolves at THIS workspace's pinned timestamp. env-converge captures what you
+install, so nothing needs recording.
 
-```bash
-uv run env-converge run --phase slow
-```
+Do not remove packages the newer version dropped: something else may have come
+to depend on them, and an uninstall is not reversible from a manifest.
 
-Exit 3 means something declared could not be installed -- surface it to the user
-the same way `use-inspiration` §3 does, distinguishing a package that does not
-resolve at this mind's pinned timestamp (offer `uv run env-converge upgrade`)
-from cargo crates with no rust installed (an upgrade will not help; rust has to
-be installed first). A v1 inspiration declares no environment, so this step is a
-no-op for one.
+A v1 inspiration declares no environment, so this step is a no-op for one.
 
 ## 3. Resolve any requirements interactively
 
