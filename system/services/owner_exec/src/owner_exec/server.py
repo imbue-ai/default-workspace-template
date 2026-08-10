@@ -11,6 +11,7 @@ is the single writer of the sharing grants document.
 """
 
 import base64
+import hashlib
 import json
 import queue
 import subprocess
@@ -40,6 +41,16 @@ _NONCE_HEADER = "X-Exec-Nonce"
 # The grants document this service is the single writer of.
 _GRANTS_RELATIVE_PATH = "data/.secrets/share_grants.toml"
 
+# The revision reported while no grants file exists yet. A client that read
+# this state writes conditionally against it, so seeding also participates in
+# the compare-and-swap.
+_ABSENT_GRANTS_REVISION = ""
+
+
+def _grants_revision(content: bytes) -> str:
+    """The opaque compare-and-swap token for a grants document: a digest of its exact bytes."""
+    return hashlib.sha256(content).hexdigest()
+
 # Cap a single command's runtime so a wedged process cannot pin a worker
 # thread forever. The caller may request a shorter timeout.
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 600.0
@@ -66,6 +77,10 @@ class OwnerExecConfig:
         self.repo_root = repo_root
         self.nonce_cache = nonce_cache
         self.now = now
+        # Serializes the grants compare-and-swap (read-compare-write) across
+        # the threaded server's workers. In-process is sufficient: this
+        # service is the single writer of the grants document.
+        self.grants_write_lock = threading.Lock()
         # Returns the hosted chrome origin (from share.env) allowed to drive
         # this service cross-origin; "" disables the CORS headers entirely.
         self.chrome_origin_resolver = chrome_origin_resolver if chrome_origin_resolver is not None else lambda: ""
@@ -199,12 +214,18 @@ def build_owner_exec_app(config: OwnerExecConfig) -> Flask:
         _authenticate()
         grants_path = config.repo_root / _GRANTS_RELATIVE_PATH
         try:
-            text = grants_path.read_text()
+            content = grants_path.read_bytes()
         except FileNotFoundError:
-            return app.response_class(response=json.dumps({"grants_toml": ""}), mimetype="application/json")
+            return app.response_class(
+                response=json.dumps({"grants_toml": "", "revision": _ABSENT_GRANTS_REVISION}),
+                mimetype="application/json",
+            )
         except OSError as exc:
             return _bad_request(f"could not read grants: {exc}")
-        return app.response_class(response=json.dumps({"grants_toml": text}), mimetype="application/json")
+        return app.response_class(
+            response=json.dumps({"grants_toml": content.decode("utf-8"), "revision": _grants_revision(content)}),
+            mimetype="application/json",
+        )
 
     @app.put("/grants")
     def put_grants() -> Response:
@@ -213,6 +234,9 @@ def build_owner_exec_app(config: OwnerExecConfig) -> Flask:
         grants_toml = payload.get("grants_toml")
         if not isinstance(grants_toml, str):
             return _bad_request("grants_toml must be a string")
+        base_revision = payload.get("base_revision")
+        if base_revision is not None and not isinstance(base_revision, str):
+            return _bad_request("base_revision must be a string when given")
         try:
             tomllib.loads(grants_toml)
         except tomllib.TOMLDecodeError as exc:
@@ -220,11 +244,43 @@ def build_owner_exec_app(config: OwnerExecConfig) -> Flask:
             # closed at the gateway, which would lock the owner out.
             return _bad_request(f"grants_toml is not valid TOML: {exc}")
         grants_path = config.repo_root / _GRANTS_RELATIVE_PATH
-        try:
-            _atomic_write(grants_path, grants_toml.encode("utf-8"), 0o600)
-        except OSError as exc:
-            return _bad_request(f"could not write grants: {exc}")
-        return app.response_class(response=json.dumps({"written": True}), mimetype="application/json")
+        new_content = grants_toml.encode("utf-8")
+
+        # Compare-and-swap under the write lock: a caller that passes the
+        # revision it read loses cleanly (409, carrying the current document
+        # to merge and retry against) instead of silently overwriting a
+        # concurrent edit. Omitting base_revision is a deliberate blind
+        # replace (e.g. a reset flow).
+        with config.grants_write_lock:
+            try:
+                current_content = grants_path.read_bytes()
+            except FileNotFoundError:
+                current_content = None
+            except OSError as exc:
+                return _bad_request(f"could not read grants: {exc}")
+            current_revision = (
+                _grants_revision(current_content) if current_content is not None else _ABSENT_GRANTS_REVISION
+            )
+            if base_revision is not None and base_revision != current_revision:
+                return app.response_class(
+                    response=json.dumps(
+                        {
+                            "error": "grants document changed since base_revision was read",
+                            "revision": current_revision,
+                            "grants_toml": current_content.decode("utf-8") if current_content is not None else "",
+                        }
+                    ),
+                    status=409,
+                    mimetype="application/json",
+                )
+            try:
+                _atomic_write(grants_path, new_content, 0o600)
+            except OSError as exc:
+                return _bad_request(f"could not write grants: {exc}")
+        return app.response_class(
+            response=json.dumps({"written": True, "revision": _grants_revision(new_content)}),
+            mimetype="application/json",
+        )
 
     def _bad_request(message: str) -> Response:
         return app.response_class(response=json.dumps({"error": message}), status=400, mimetype="application/json")
