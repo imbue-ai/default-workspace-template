@@ -37,12 +37,10 @@
  * Adding a harness (Codex, etc.)
  * ---------------------------------------------------------------------------
  * The `UserMessageKind`s below are harness-AGNOSTIC -- they are display buckets, not
- * Claude-specific markers. A new harness does NOT add kinds; it appends detectors
- * that map ITS framework markers to these existing kinds onto the ONE shared list in
- * message-classification.ts (`USER_MESSAGE_DETECTORS`). Nothing gates on which
- * harness produced a message -- the sentinels are distinctive enough not to collide,
- * so all harnesses' detectors coexist in one list, and a detector only some harnesses
- * emit simply never fires for the others. At a glance, a harness author answers, for each kind:
+ * Claude-specific markers. A new harness does NOT add kinds; it adds a detector
+ * that maps ITS framework markers to these existing kinds (see
+ * `classifyUserMessage` in message-classification.ts, which holds Claude Code's
+ * detector table). At a glance, a harness author needs to answer, for each kind:
  * "does my framework emit a message that should display this way, and if so how
  * do I recognise it?" If a harness has no equivalent (e.g. no Stop hook), that
  * kind simply never occurs for it -- nothing downstream needs to change.

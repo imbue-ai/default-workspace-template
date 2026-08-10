@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEvent, UserMessageEvent } from "../models/Response";
 import { countUserTurns, isFastModePromptOwed } from "./fast-mode-prompt";
-import { getAgentFastMode } from "../models/ModelSettings";
+import { getModelSettings } from "../models/ModelSettings";
 import { getWorkspaceFastMode } from "../models/WorkspaceFastMode";
 
-vi.mock("../models/ModelSettings", () => ({ getAgentFastMode: vi.fn() }));
+vi.mock("../models/ModelSettings", () => ({ getModelSettings: vi.fn() }));
 vi.mock("../models/WorkspaceFastMode", () => ({
   getWorkspaceFastMode: vi.fn(),
   openFastModePrompt: vi.fn(),
 }));
 
-const getAgentFastModeMock = vi.mocked(getAgentFastMode);
+const getModelSettingsMock = vi.mocked(getModelSettings);
 const getWorkspaceFastModeMock = vi.mocked(getWorkspaceFastMode);
 
 function userMsg(content: string, id: string, isMeta = false): UserMessageEvent {
@@ -37,9 +37,6 @@ function assistantMsg(id: string): TranscriptEvent {
     stop_reason: null,
     usage: null,
     is_auth_error: false,
-    is_api_error: false,
-    api_error_kind: null,
-    is_provider_fault: false,
   } as TranscriptEvent;
 }
 
@@ -80,7 +77,12 @@ describe("countUserTurns", () => {
 describe("isFastModePromptOwed", () => {
   beforeEach(() => {
     getWorkspaceFastModeMock.mockReturnValue({ fast_mode: null });
-    getAgentFastModeMock.mockReturnValue(true);
+    getModelSettingsMock.mockReturnValue({
+      model: "opus[1m]",
+      fast_mode: true,
+      fast_mode_supported: true,
+      options: [],
+    });
   });
 
   it("waits for the grace period to be used up", () => {
@@ -99,7 +101,12 @@ describe("isFastModePromptOwed", () => {
   });
 
   it("stays quiet when the user already turned fast mode off themselves", () => {
-    getAgentFastModeMock.mockReturnValue(false);
+    getModelSettingsMock.mockReturnValue({
+      model: "opus[1m]",
+      fast_mode: false,
+      fast_mode_supported: true,
+      options: [],
+    });
     expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
   });
 
@@ -108,7 +115,7 @@ describe("isFastModePromptOwed", () => {
     expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
 
     getWorkspaceFastModeMock.mockReturnValue({ fast_mode: null });
-    getAgentFastModeMock.mockReturnValue(false);
+    getModelSettingsMock.mockReturnValue(null);
     expect(isFastModePromptOwed("agent-1", conversation(9), true)).toBe(false);
   });
 });
