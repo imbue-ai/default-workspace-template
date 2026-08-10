@@ -1254,7 +1254,7 @@ body {
   max-width: 560px;
 }
 
-/* The eyebrow every card state shares: a small lock + "Permission request". */
+/* The eyebrow every card state shares: a small key + "Permission request". */
 .permission-request-eyebrow {
   display: flex;
   align-items: center;
@@ -1269,7 +1269,7 @@ body {
   color: var(--color-text-secondary);
 }
 
-/* Pending body: a rounded lock badge beside the title + rationale column. */
+/* Pending body: a rounded subject badge beside the title + rationale column. */
 .permission-request-body {
   margin-top: 10px;
   display: flex;
@@ -1376,6 +1376,16 @@ body {
 }
 
 .permission-request-icon {
+  flex-shrink: 0;
+}
+
+/* The service's own brand mark inside the badge. Drawn as an <img> and never
+   inlined: the artwork carries its own color, and marks that pair a white path
+   with an unfilled one would be repainted by a currentColor ancestor.
+   `object-fit` matters because several of the marks are non-square. */
+.permission-request-mark {
+  display: block;
+  object-fit: contain;
   flex-shrink: 0;
 }
 
