@@ -1001,6 +1001,22 @@ is already on. NEVER `git add -A`, never a merge, checkout, or reset. If the
 idempotence check found the entry already recorded, nothing is staged and you
 skip the commit.
 
+**Step 5 -- record it in `data/.state/user_knowledge.toml`.** This file is
+gitignored machine state (not part of the commit above) that tracks whether
+the user has already used permissions/sharing/inspirations, so the agent
+knows not to keep proactively suggesting one they've already tried -- see
+`data/.state/README.md`. If the file doesn't exist yet, create it with just
+this table; if it exists, set `has_published = true` under `[inspirations]`
+without disturbing any other keys or tables already in the file:
+
+```toml
+[inspirations]
+has_published = true
+```
+
+Skip this step entirely under the same conditions as Step 4 (no push, or the
+user aborted).
+
 If the commit fails (e.g. a hook rejects it), the publish still succeeded --
 say so plainly, and fix the entry rather than re-pushing anything.
 

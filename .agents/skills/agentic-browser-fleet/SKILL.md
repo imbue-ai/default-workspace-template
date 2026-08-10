@@ -282,3 +282,21 @@ This streams the agent's `[thinking]`/`[action]` trace into your output and ends
 - Don't jump to `task` for ordinary pages. Drive them yourself.
 - **Don't try to rename a browser.** There is no rename command and a browser's name is fixed for its whole life. If the user asks you to rename one, tell them it can't be done -- the only option is to `close` it and `new` one under a different name (a fresh browser, not the same one).
 - Don't assume a default browser exists. The fleet starts empty -- run `new` first, then drive by the name it prints.
+
+## Record it in user knowledge
+
+The first time in a session you complete a real action with the fleet (past
+just `new` -- an `open`, `click`, `input`, or `task` that succeeded), update
+`data/.state/user_knowledge.toml` (gitignored machine state -- see
+`data/.state/README.md`) so the agent knows this user has already had the
+browser driven for them and doesn't keep proactively suggesting it. Create
+the file if it doesn't exist; otherwise set `has_used = true` under
+`[browser]` without touching any other keys or tables already there:
+
+```toml
+[browser]
+has_used = true
+```
+
+Idempotent -- setting it again on a later use is harmless, so don't bother
+checking first.
