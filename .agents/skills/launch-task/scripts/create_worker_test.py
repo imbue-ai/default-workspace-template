@@ -167,83 +167,62 @@ def test_no_branch_omits_the_flag(tmp_path: Path) -> None:
     assert "--branch" not in create_argv
 
 
+def _mngr_ls_result(branch: object, name: str = "demo-worker") -> _StubResult:
+    """A canned ``mngr ls --format json`` payload naming the agent's branch."""
+    return _StubResult(stdout=json.dumps({"agents": [{"name": name, "branch": branch}]}))
+
+
+def test_read_worker_branch_reports_what_mngr_says() -> None:
+    """The branch is read off the created agent, not derived from the spec.
+
+    This is the value ``launch-sync`` publishes for callers to merge from, and the
+    ``--branch <existing>`` form its callers actually use is precisely the case
+    ``initial_branch`` leaves unset -- so it must come from mngr's ``branch``.
+    """
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/update-my-slug"))
+
+    assert create_worker_mod.read_worker_branch("demo-worker", runner) == "mngr/update-my-slug"
+    ls_call = next(c for c in runner.calls if c.argv[:2] == ["mngr", "ls"])
+    assert ls_call.argv[-2:] == ["--format", "json"]
+
+
 @pytest.mark.parametrize(
-    "branch, expected",
+    "canned",
     [
-        # No spec: mngr applies its own default (":mngr/*") and cuts mngr/<name>.
-        (None, "mngr/demo-worker"),
-        # BASE with no colon: that branch is checked out directly, so it *is* the
-        # worker's branch -- not a fresh mngr/<name>.
-        ("mngr/update-my-slug", "mngr/update-my-slug"),
-        # BASE:NEW: NEW is cut from BASE, so the worker lands on NEW.
-        ("mngr/update-my-slug:mngr/harden-my-slug", "mngr/harden-my-slug"),
-        # "*" in NEW expands to the agent name, as mngr does.
-        ("main:mngr/*", "mngr/demo-worker"),
-        ("main:wip/*-attempt", "wip/demo-worker-attempt"),
-        # Empty NEW falls back to mngr's own default pattern.
-        ("main:", "mngr/demo-worker"),
-        # Empty BASE means "current branch", but NEW still names the result.
-        (":feature/x", "feature/x"),
+        # mngr could not list the agent at all.
+        _StubResult(returncode=1, stderr="boom"),
+        # Listed, but no such agent.
+        _StubResult(stdout='{"agents": []}'),
+        # Listed, but mngr knows no branch for it (no git work_dir).
+        _StubResult(stdout='{"agents": [{"name": "demo-worker", "branch": null}]}'),
+        # Output that is not the expected shape at all.
+        _StubResult(stdout="not json"),
     ],
 )
-def test_resolve_worker_branch_matches_mngr_spec_parsing(
-    branch: str | None, expected: str
-) -> None:
-    """The reported branch is the one mngr actually produces for a ``--branch``
-    spec. This is the value ``launch-sync`` publishes for callers to merge from,
-    so deriving it as a fixed ``mngr/<name>`` would name a branch the worker
-    never committed to."""
-    assert create_worker_mod.resolve_worker_branch("demo-worker", branch) == expected
+def test_read_worker_branch_raises_rather_than_guessing(canned: _StubResult) -> None:
+    """A wrong branch sends a caller to merge a ref the worker never committed to.
 
-
-def test_launch_rejects_a_malformed_branch_spec_before_creating_anything(
-    tmp_path: Path,
-) -> None:
-    """A bad ``--branch`` spec aborts before any mngr call.
-
-    The spec is knowable at launch time, but nothing else consumes it until
-    ``launch_sync`` names the branch to merge -- which happens *after* the await.
-    Left that late, an authoring typo would surface only once the worker had run
-    to completion, discarding the report it had just collected.
+    Each of these used to be papered over by deriving ``mngr/<name>`` -- a
+    plausible-looking answer that can be flatly wrong.
     """
-    runtime, task, _ = _make_layout(tmp_path)
     runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), canned)
 
-    with pytest.raises(create_worker_mod.BranchSpecError):
-        create_worker_mod.launch(
-            name="demo-worker",
-            template="worker",
-            runtime_dir=runtime,
-            task_file=task,
-            runner=runner,
-            branch="main:*/*",
-        )
-
-    assert not [c for c in runner.calls if c.argv[:2] == ["mngr", "create"]]
+    with pytest.raises(create_worker_mod.WorkerBranchUnknownError):
+        create_worker_mod.read_worker_branch("demo-worker", runner)
 
 
-def test_resolve_worker_branch_rejects_malformed_specs() -> None:
-    # Authoring bugs, surfaced loudly rather than silently naming a wrong branch:
-    # an empty spec (callers pass None for the default) and more than one "*",
-    # which mngr itself rejects.
-    with pytest.raises(create_worker_mod.BranchSpecError):
-        create_worker_mod.resolve_worker_branch("demo-worker", "")
-    with pytest.raises(create_worker_mod.BranchSpecError):
-        create_worker_mod.resolve_worker_branch("demo-worker", "main:*/*")
-
-
-def test_launch_sync_reports_the_branch_the_spec_actually_produces(
-    tmp_path: Path,
-) -> None:
-    # End to end: with a BASE:NEW handoff spec, the published result must name
-    # NEW. Reporting mngr/<name> here would send the caller to merge a branch
-    # that does not exist.
+def test_launch_sync_publishes_the_branch_mngr_reports(tmp_path: Path) -> None:
+    # End to end: the published result names whatever mngr says the worker is on,
+    # even when that differs from the conventional mngr/<name>.
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
     _write_launch_sync_task(task, report)
     result_json = tmp_path / "result.json"
     runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/harden-my-slug"))
 
     rc = create_worker_mod.launch_sync(
         name="demo-worker",
@@ -253,9 +232,7 @@ def test_launch_sync_reports_the_branch_the_spec_actually_produces(
         timeout_seconds=30,
         poll_interval_seconds=5,
         runner=runner,
-        sleeper=_write_report_on_sleep(
-            report, "---\ntype: status\nname: done\n---\n\nok\n"
-        ),
+        sleeper=_write_report_on_sleep(report, "---\ntype: status\nname: done\n---\n\nok\n"),
         clock=lambda: 0.0,
         out=io.StringIO(),
         result_path=result_json,
@@ -1280,6 +1257,7 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
     _write_launch_sync_task(task, report)
     result_json = tmp_path / "result.json"
     runner = _RecordingRunner()
+    runner.respond(('mngr', 'ls'), _mngr_ls_result('mngr/demo-worker'))
     out = io.StringIO()
 
     rc = create_worker_mod.launch_sync(
@@ -1333,7 +1311,9 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
     _write_launch_sync_task(task, report)
     consumed = report.parent / "consumed"
 
-    def _run_once(runner: create_worker_mod.Runner) -> int:
+    def _run_once(runner: _RecordingRunner) -> int:
+        # launch_sync asks mngr which branch the worker landed on.
+        runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/demo-worker"))
         return create_worker_mod.launch_sync(
             name="demo-worker",
             template="worker",
@@ -1386,6 +1366,7 @@ def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
     report.parent.mkdir(parents=True)
     _write_launch_sync_task(task, report)
     runner = _RecordingRunner()
+    runner.respond(('mngr', 'ls'), _mngr_ls_result('mngr/demo-worker'))
 
     rc = create_worker_mod.launch_sync(
         name="demo-worker",
@@ -1416,6 +1397,7 @@ def test_launch_sync_timeout_keeps_worker_alive(tmp_path: Path) -> None:
     _write_launch_sync_task(task, report)
     result_json = tmp_path / "result.json"
     runner = _RecordingRunner()
+    runner.respond(('mngr', 'ls'), _mngr_ls_result('mngr/demo-worker'))
 
     rc = create_worker_mod.launch_sync(
         name="demo-worker",
@@ -1517,6 +1499,7 @@ def test_main_launch_sync_emits_result_json(tmp_path: Path) -> None:
             return result
 
     runner = _WorkerRespondsRunner()
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/demo-worker"))
 
     rc = create_worker_mod.main(
         [

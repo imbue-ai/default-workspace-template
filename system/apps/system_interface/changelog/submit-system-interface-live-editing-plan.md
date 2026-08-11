@@ -52,6 +52,16 @@ tabs (which proxy straight through) stayed current. The fix is a new
   no process holds the observe lock there is nothing to follow, so it refuses to
   start rather than tailing a dormant file.
 
+The follower itself now comes from mngr rather than living here. `mngr observe`
+owns the event file's format, so the mechanics of tailing it (anchor the fold at a
+full-state snapshot, forward only complete lines, re-seed on truncation, refuse to
+start when no observer holds the lock) moved to `imbue.mngr.api.observe` as
+`ObserveEventFollower` / `is_observe_writer_running` / `find_last_full_state_offset`.
+`agent_events.py` keeps only what is specific to this app: which of the two sources
+an instance uses (`AgentEventsMode`) and how it reports whether events are arriving
+(`AgentEventsStatus`). Those invariants are the writer's, so they belong next to it
+where a format change would be noticed.
+
 `AgentManager` now tracks whether lifecycle events are actually reaching it, in
 either mode, and a new `GET /api/health` reports it: 200 only when a fresh mngr
 discovery succeeds *and* the lifecycle stream is live, 503 otherwise. In both

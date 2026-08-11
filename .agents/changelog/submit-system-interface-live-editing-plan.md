@@ -33,12 +33,16 @@ preview tab.
 - `create_worker.py` (`launch-task`) gained a `--branch` passthrough to
   `mngr create`, so the harden worker can check out and extend the branch the
   lead already built up instead of branching anew from HEAD. The branch that
-  `launch-sync` publishes for callers to merge from is now derived from that spec
-  (`resolve_worker_branch`, mirroring mngr's own `[BASE][:NEW]` parsing) rather
-  than assumed to be `mngr/<name>` -- with a spec that renames or reuses a
-  branch, the old assumption named a branch the worker never committed to. The
-  `launch-task` skill documents the flag, and a malformed spec raises
-  `BranchSpecError` before any worker is created.
+  `launch-sync` publishes for callers to merge from is now **read back from the
+  created agent** (`read_worker_branch`, via `mngr ls --format json`) rather than
+  assumed to be `mngr/<name>` -- with a spec that renames or reuses a branch, the
+  old assumption named a branch the worker never committed to. It reads mngr's
+  `branch` field, not `initial_branch`: the latter is only set for a branch mngr
+  *created*, and is None for the checked-out-existing-branch case these callers
+  use. The read happens right after launch, before the await, so a worker whose
+  branch mngr cannot report fails immediately instead of after a whole run; and
+  it raises rather than guessing, since a wrong answer sends the caller to merge
+  a ref that does not exist. The `launch-task` skill documents the flag.
 
 - `op-update.md`'s system-interface exception was retargeted at the new handoff:
   the worker's branch already carries the user-approved change, and the task says
