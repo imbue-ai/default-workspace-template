@@ -714,11 +714,12 @@ describe("audit regressions", () => {
   });
 });
 
-// A chip only ever appears because the agent's turn ENDED there (a Stop hook
-// fires on stop; a background-task notice wakes an agent that had stopped).
-// Prose the agent spoke just before one is therefore a delivered reply, and the
-// work it does after being woken must not retroactively bury it inside the step
-// that happened to still be open. See the stint split in finalizeSection.
+// Prose sitting immediately before a chip is a delivered reply: an injected
+// user-side line only arrives at a request boundary, so prose can precede one
+// only when that response ended with text and no tool call -- the agent stopped
+// there. The work it does after being woken must not retroactively bury that
+// reply inside the step that happened to still be open. See the stint split in
+// finalizeSection.
 describe("chips as stint boundaries", () => {
   it("keeps a delivered reply surfaced when a stop hook wakes the agent into the same step", () => {
     const events = [

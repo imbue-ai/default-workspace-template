@@ -29,12 +29,15 @@
  * of the step rather than buried in it. The turn's wrap-up reply is simply the
  * final run of ungrouped prose, rendered below the timeline.
  *
- * A system chip (Stop-hook feedback, a background-task notice) splits a step
- * into *stints*, and that ejection runs per stint. A chip is proof the agent's
- * turn ended at that point -- a Stop hook fires on stop, and a task notice lands
- * on an agent that already stopped -- so prose at the end of a stint is a
- * delivered reply. Work the agent does once woken must not retroactively bury it
- * inside the step that happened to still be open.
+ * A system chip (Stop-hook feedback, a background-task notice, a fleet nudge)
+ * splits a step into *stints*, and that ejection runs per stint. Prose closing a
+ * stint is a delivered reply, and the chip's POSITION is what proves it: a chip
+ * is a user-side line, so it only arrives at a request boundary, which leaves it
+ * two possible spots. Either it follows a tool result -- the stint ends in work
+ * and ejection has nothing to take -- or it follows prose, which can only happen
+ * when that response ended with text and no tool call, i.e. the agent stopped
+ * there. Work it does once woken must not retroactively bury that reply inside
+ * the step that happened to still be open.
  *
  * A step still open when the next user message arrives carries over: it
  * re-renders at the top of the new turn, while the prior turn's node freezes at
@@ -363,9 +366,9 @@ type SectionEntry =
   /** A permission request, lifted out of any open step to render inline as a
    *  visible break (see hasPermissionRequest / the `permission` TimelineItem). */
   | { kind: "permission"; event: AssistantMessageEvent }
-  /** A collapsed system chip. It sits in the skeleton because it marks where the
-   *  agent's turn ENDED -- which is what lets the ejection pass tell a delivered
-   *  reply from mid-step narration (see collectEjectedProse). */
+  /** A collapsed system chip. It sits in the skeleton because its POSITION is
+   *  what lets the ejection pass tell a delivered reply from mid-step narration
+   *  (see collectEjectedProse). */
   | { kind: "chip"; event: UserMessageEvent }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
 
@@ -593,14 +596,21 @@ function openStepsAtEnd(section: SectionBuilder): string[] {
 /** Collect the in-step prose to eject as closing remarks, working stint by
  *  stint.
  *
- *  A *stint* is a run of one step's events uninterrupted by a system chip. The
- *  chip is why the split exists: a Stop hook only fires when the agent tries to
- *  stop, and a background-task notice only lands on an agent that already
- *  stopped, so a chip is proof the turn ended right there. Prose at the end of a
- *  stint is therefore a delivered reply. Without the split, work the agent does
- *  after being woken would retroactively turn that reply into mid-step
- *  narration and bury it inside the collapsed step -- the step happened to still
- *  be open, so the prose stopped being "after the step's last work".
+ *  A *stint* is a run of one step's events uninterrupted by a system chip.
+ *  Prose at the end of a stint is a delivered reply, proven by where the chip
+ *  sits rather than by what kind of chip it is: an injected user-side line only
+ *  arrives at a request boundary, so it either follows a tool result (the stint
+ *  ends in work, and there is nothing to eject) or follows prose, which happens
+ *  only when that response ended with text and no tool call -- the agent
+ *  stopped there. Both halves are visible in any transcript: a text block never
+ *  follows a tool_use inside one response, and an injected line never lands
+ *  directly after a text-only one. That makes the rule independent of WHEN the
+ *  harness delivers a chip, including one it queued while the agent was busy.
+ *
+ *  Without the split, work the agent does after being woken would retroactively
+ *  turn that reply into mid-step narration and bury it inside the collapsed
+ *  step -- the step happened to still be open, so the prose stopped being
+ *  "after the step's last work".
  *
  *  The live frontier step's LAST stint is exempt: nothing has ended it, so its
  *  trailing prose is in-flight narration shown as a caption (see step 3). Its
