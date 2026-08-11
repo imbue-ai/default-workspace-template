@@ -19,6 +19,15 @@ jobs:
   check-changelog:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' && vars.ENFORCE_CHANGELOG == 'true'
+    # Take the base from the event payload rather than the runner's own
+    # GITHUB_BASE_REF. On a STACKED PR the two have been observed to disagree:
+    # the payload said `preston/publish-worktree-guard` while the env var said
+    # `main`. That matters because an unresolvable base falls back to
+    # `origin/main`, which silently widens the diff to the entire stack and then
+    # demands changelog entries for projects the PR never touched. The payload
+    # is the authority on what this PR is based on.
+    env:
+      GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - uses: actions/checkout@v6
 
