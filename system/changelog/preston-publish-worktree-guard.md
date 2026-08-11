@@ -10,3 +10,11 @@ underneath.
 The failure mode was the bad kind: a green run and a red run on the same
 unchanged files, which reads as flakiness rather than as a diff computed against
 the wrong base.
+
+Two halves, because the first fix was not enough. The job now takes the base
+from the event payload rather than the runner's variable, and it fetches the
+base into `FETCH_HEAD` and places the remote-tracking ref with `git update-ref`
+-- passing a `+src:dst` refspec was observed to succeed while creating no ref
+at all. And the gate itself now refuses an unresolvable named base instead of
+quietly falling through to `main`, which is what turned a misresolved ref into
+what looked like a flaky check.

@@ -33,11 +33,18 @@ jobs:
 
       - name: Fetch base branch and deepen HEAD for the changelog diff
         run: |
+          set -euo pipefail
           if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
             git fetch --no-tags --unshallow origin "$(git rev-parse HEAD)"
           fi
-          git fetch --no-tags origin \
-            "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+          # Fetch into FETCH_HEAD and place the ref by hand. Passing a
+          # `+src:dst` refspec was observed NOT to create the destination on a
+          # stacked PR -- the step succeeded, `origin/<base>` did not exist, and
+          # the gate quietly diffed against origin/main instead. update-ref
+          # either writes the ref or fails.
+          git fetch --no-tags origin "refs/heads/${GITHUB_BASE_REF}"
+          git update-ref "refs/remotes/origin/${GITHUB_BASE_REF}" FETCH_HEAD
+          git rev-parse --verify "refs/remotes/origin/${GITHUB_BASE_REF}" >/dev/null
 
       - name: Set up Python
         uses: actions/setup-python@v6

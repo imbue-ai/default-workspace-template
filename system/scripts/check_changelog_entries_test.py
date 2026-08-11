@@ -138,3 +138,37 @@ def test_resolve_diff_base_refuses_head_collision(tmp_path: Path) -> None:
     # Still on main, so main resolves to HEAD; no other base ref exists.
     with pytest.raises(RuntimeError):
         gate.resolve_diff_base(repo)
+
+
+def test_resolve_diff_base_refuses_an_unresolvable_named_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A named base that does not resolve must raise, never fall back to main.
+
+    On a stacked PR the real base is several commits above main, so falling
+    back diffs the whole stack and demands entries the PR does not owe. It
+    presented as flakiness -- the same files green on one run and red on the
+    next -- because the answer was confidently wrong rather than absent.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("changed\n")
+    _git(repo, "commit", "-qam", "move HEAD off the base")
+    monkeypatch.setenv("GITHUB_BASE_REF", "preston/no-such-branch")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        gate.resolve_diff_base(repo)
+
+    assert "preston/no-such-branch" in str(excinfo.value)
+    assert "main" in str(excinfo.value)
+
+
+def test_resolve_diff_base_uses_a_named_base_that_does_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "stacked-base")
+    (repo / "README.md").write_text("changed\n")
+    _git(repo, "commit", "-qam", "move HEAD off the base")
+    monkeypatch.setenv("GITHUB_BASE_REF", "stacked-base")
+
+    assert gate.resolve_diff_base(repo) == "stacked-base"
