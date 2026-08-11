@@ -75,7 +75,7 @@ For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": 
 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
 
-After posting, wait for a system message indicating whether the user
+After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.
 
 
@@ -83,15 +83,16 @@ approved or denied the permission request.
 
 The gateway natively proxies GitHub's git smart-HTTP endpoints, so plain
 `git` works through latchkey too: point git at the gateway's proxy URL and
-pass the gateway's auth header (its value is already in this
-environment):
+pass the gateway's auth headers (their values are already in this
+environment).
 
 ```bash
 git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
+    ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
     push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" <refspec>
 ```
 
-(`clone`, `fetch`, and `ls-remote` take the same proxy URL and header.) The
+(`clone`, `fetch`, and `ls-remote` take the same proxy URL and headers.) The
 GitHub credential is injected server-side -- no token enters the container.
 This is gated by the `github-git` scope: `github-git-read` covers clone and
 fetch, `github-git-write` covers push. Request them like any other permission
