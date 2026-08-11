@@ -63,7 +63,7 @@ def _write_tree(
 def _manifest(toml_text: str, tmp_path: Path) -> TemplateManifest:
     path = tmp_path / MANIFEST_TOML_NAME
     path.write_text(toml_text)
-    return load_template_manifest(path).manifest
+    return load_template_manifest(path)
 
 
 # --- the schema itself ---
@@ -586,99 +586,43 @@ def test_an_unquoted_plain_title_still_works(tmp_path: Path) -> None:
     assert check_markdown_agreement(manifest, _MINIMAL_MARKDOWN) == ()
 
 
-# --- reading a manifest written by a workspace we are not ---
+# --- a manifest written by a workspace we are not ---
 
 
-def _load(toml_text: str, tmp_path: Path):
-    path = tmp_path / MANIFEST_TOML_NAME
-    path.write_text(toml_text)
-    return load_template_manifest(path)
+def test_a_format_this_workspace_does_not_write_is_refused(tmp_path: Path) -> None:
+    """Publishing is the only thing that parses, and it writes what it read.
 
-
-def test_an_unknown_key_in_the_current_format_is_still_a_hard_failure(
-    tmp_path: Path,
-) -> None:
-    """Strictness earns its keep on the format we write: this is a typo.
-
-    `apt_packages` for `apt` means the packages never get installed. Dropping
-    it quietly would turn a caught mistake into an environment that is missing
-    something nobody notices until the app fails.
+    Reading a newer manifest for its recognisable parts would mean re-publishing
+    a file we did not fully understand: its unknown tables are still in it, so
+    stamping our own format on it yields something the next reader cannot parse,
+    and stripping them deletes what its author declared.
     """
-    with pytest.raises(TemplateManifestParseError):
-        _load(_MINIMAL_TOML + '\n[environment]\napt_packages = ["ripgrep"]\n', tmp_path)
-
-
-def test_a_newer_format_is_read_for_what_it_does_contain(tmp_path: Path) -> None:
-    # The whole point: an unrecognised table must not cost us the rest of the
-    # manifest. Everything this workspace understands still arrives.
-    loaded = _load(
-        _MINIMAL_TOML.replace('format = "v2"', 'format = "v3"')
-        + '\n[environment]\napt = ["ripgrep"]\n\n[environment.brew]\njq = "*"\n',
-        tmp_path,
-    )
-
-    assert loaded.manifest.format == "v3"
-    assert loaded.manifest.environment.apt == ("ripgrep",)
-    assert loaded.manifest.template.slug == "slack-inbox"
-    assert loaded.ignored_keys == ("environment.brew",)
-
-
-def test_what_a_newer_format_lost_is_named_not_swallowed(tmp_path: Path) -> None:
-    """A silent partial read is the failure mode this must not have.
-
-    Reporting the dropped paths is what lets the caller tell the user their
-    workspace is behind, instead of handing them a half-built environment.
-    """
-    loaded = _load(
-        _MINIMAL_TOML.replace('format = "v2"', 'format = "v9"')
-        + "\n[template.badges]\nstars = 3\n"
-        + '\n[[requirements.gpu]]\nkind = "cuda"\n',
-        tmp_path,
-    )
-
-    assert set(loaded.ignored_keys) == {"template.badges", "requirements.gpu"}
-
-
-def test_a_newer_format_still_fails_when_it_omits_something_required(
-    tmp_path: Path,
-) -> None:
-    # Leniency is about keys we do not know, never about keys we need. A
-    # manifest with no recipe cannot be acted on, whatever version wrote it.
-    with pytest.raises(TemplateManifestParseError):
-        _load(
-            'format = "v3"\n\n[template]\nslug = "x"\ntitle = "X"\n'
-            'description = "d"\nthumbnail = "template.svg"\nversion = "v1"\n',
+    with pytest.raises(TemplateManifestParseError) as excinfo:
+        _manifest(
+            _MINIMAL_TOML.replace('format = "v2"', 'format = "v3"')
+            + '\n[environment.brew]\njq = "*"\n',
             tmp_path,
         )
 
+    message = str(excinfo.value)
+    assert "'v3'" in message
+    assert CURRENT_MANIFEST_FORMAT in message
+    assert "Update this workspace" in message
 
-def test_package_maps_keep_their_own_keys_under_a_newer_format(
+
+def test_the_refusal_does_not_depend_on_finding_an_unknown_key(
     tmp_path: Path,
 ) -> None:
-    """Package names are DATA, not schema.
-
-    `[environment.uv_tools]` is a map whose keys are whatever tools the
-    template needs. A pruner that walked into it would delete the payload and
-    report the user's own packages as things it did not understand.
-    """
-    loaded = _load(
-        _MINIMAL_TOML.replace('format = "v2"', 'format = "v3"')
-        + '\n[environment.uv_tools]\nruff = "0.6.9"\nhttpie = "3.2.4"\n',
-        tmp_path,
-    )
-
-    assert loaded.manifest.environment.uv_tools == {"ruff": "0.6.9", "httpie": "3.2.4"}
-    assert loaded.ignored_keys == ()
+    # A foreign manifest that happens to contain only fields we know is still
+    # foreign: we would re-publish it under our own format having never seen
+    # whatever its version actually means.
+    with pytest.raises(TemplateManifestParseError):
+        _manifest(_MINIMAL_TOML.replace('format = "v2"', 'format = "v3"'), tmp_path)
 
 
-def test_an_unknown_key_inside_a_list_entry_is_reported_with_its_position(
-    tmp_path: Path,
-) -> None:
-    loaded = _load(
-        _MINIMAL_TOML.replace('format = "v2"', 'format = "v3"')
-        + '\n[[requirements.secret]]\nname = "SLACK_TOKEN"\nrotation = "90d"\n',
-        tmp_path,
-    )
+def test_a_manifest_with_no_format_key_is_treated_as_ours(tmp_path: Path) -> None:
+    # The field defaults to the current format, so its absence means "written
+    # before anyone thought to record it", not "written by a stranger".
+    manifest = _manifest(_MINIMAL_TOML.replace('format = "v2"\n', ""), tmp_path)
 
-    assert loaded.ignored_keys == ("requirements.secret[0].rotation",)
-    assert loaded.manifest.requirements.secret[0].name == "SLACK_TOKEN"
+    assert manifest.format == CURRENT_MANIFEST_FORMAT

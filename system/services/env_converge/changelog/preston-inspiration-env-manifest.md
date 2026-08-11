@@ -15,13 +15,15 @@ record matter precisely for templates and genuinely fresh homes.
 The module imports only pydantic and the standard library, so the publish flow
 can validate against the same schema from a worktree that has no virtualenv.
 
-How strictly a manifest is read depends on the format it declares. A manifest
-in the format this workspace knows is read strictly: an unrecognised key there
-is a typo in something we just wrote, and quietly dropping `apt_packages`
-instead of `apt` would mean quietly not installing anything. A manifest
-declaring any other format is read for what it does contain -- keys this
-workspace has never heard of are set aside rather than failing the whole read,
-so a template published by a newer workspace is still usable for everything it
-shares with this one. Whatever was set aside is listed by name, and the publish
-validator prints it, so a partial read is something you are told about rather
-than something you discover later in a half-built environment.
+Parsing is strict, and the `format` field is a wall rather than a hint. The
+only thing that parses a manifest is the publish gate, and everything it reads
+it is about to write back out, so an unrecognised key is a typo worth failing
+on -- `apt_packages` for `apt` would otherwise mean quietly installing nothing.
+A manifest declaring a format this workspace does not write is refused with a
+plain message naming both versions, instead of a validation dump.
+
+That refusal is what stops an older workspace from re-publishing a newer
+template: it would either stamp its own format on tables it never understood,
+leaving a file the next reader cannot parse, or drop them and delete what the
+template's author declared. Adopting is unaffected -- nothing on that path
+parses a manifest, so an agent reads the TOML and makes what it can of it.
