@@ -92,7 +92,7 @@ browser morgan-lee: human (took control) -- 1 tab(s), active: https://bank.examp
 
 - `new` starts a browser with a random name and prints it (`-> started browser alex-smith`). Pass `new <name>` to choose the name yourself (e.g. `new my-browser`); a **duplicate** name is rejected (pick another -- note a *crashed* browser still holds its name until you `close` it), and an invalid name (anything other than lowercase letters/digits joined by single dashes) is rejected too. `new` returns the name **immediately**; the browser's Chromium launches in the background (serialized, so back-to-back `new`s come up one at a time). If your very next command lands while it's still launching it returns `still starting up (Chromium is launching) -- try again in a few seconds` (exit 3) -- just wait a moment and retry the same command; it is **not** an error.
 - `close <name>` closes an entire browser (all its tabs) and retires its name (never reused). Use when permanently done with a browser. For a single tab, use `tab <name> close`.
-- The fleet is **capped (3 by default)**. `new` past the cap returns `3/3 browsers open -- close one first` -- `release` or `close` one you're done with first.
+- The fleet is **capped (2 by default)**. `new` past the cap returns `2/2 browsers open -- close one first` -- `release` or `close` one you're done with first.
 - If there are no browsers yet, `ls` says so. There is **no default browser**: run `new` first (it prints a name), then drive by that name.
 
 **Browsers cannot be renamed.** There is no rename command; do not try to rename a browser, and if the user asks you to, tell them it can't be done -- the only option is to `close` it and `new` one under a different name (which is a fresh browser, not the same one). A browser keeps the name it was created with for its whole life.
@@ -150,7 +150,7 @@ uv run agentic-browser-fleet tab alex-smith close 2        # close tab index 2
 
 ```bash
 uv run agentic-browser-fleet acquire alex-smith            # reserve browser alex-smith across commands
-uv run agentic-browser-fleet acquire alex-smith --reclaim  # take it back from a human -- ONLY on their say-so
+uv run agentic-browser-fleet acquire alex-smith --reclaim  # take control back from a human -- ONLY after you ask and they explicitly confirm
 uv run agentic-browser-fleet release alex-smith            # let it go (alias: unlock alex-smith)
 uv run agentic-browser-fleet handoff alex-smith "solve the CAPTCHA"  # hand to the human (alias: request-human)
 ```
@@ -168,7 +168,7 @@ Every browser has exactly one controller; every command's output names the owner
   - You switch to a different browser for the rest of the task -> release the one you're leaving.
   - Driving several at once -> keep them until fully done, then release each.
   - If you forget, an idle lease auto-frees after ~90s; if a later command says you no longer hold it, just acquire it again.
-- **The human always wins.** If a human takes control, your next command comes back with status `busy_human`/`lost_control` (exit 2). You lost control: **stop, tell the user the human took the wheel, and end your turn.** Do not retry, poll, or `--reclaim` on your own. You're queued to resume first; you'll be messaged when they hand it back. On resume, **re-run `state <name>` first** (the page changed -- and the view may have been resized while they held it, reflowing the layout, so treat every element number as stale), then continue. Resume early only on an explicit "keep going": `acquire <name> --reclaim`, then `state <name>`.
+- **The human always wins.** If a human takes control, your next command comes back with status `busy_human`/`lost_control` (exit 2). You lost control: **stop, tell the user the human took the wheel, and end your turn.** Do not retry, poll, or `--reclaim` on your own. You're queued to resume first; you'll be messaged when they hand it back. On resume, **re-run `state <name>` first** (the page changed -- and the view may have been resized while they held it, reflowing the layout, so treat every element number as stale), then continue. **Never `--reclaim` a browser the human is holding on your own initiative** -- taking control away from a human mid-session is disruptive. If you believe you need it back before they hand it over, **end your turn and ask**; run `acquire <name> --reclaim` only after they explicitly confirm (a bare "keep going" from the user counts as that confirmation), then `state <name>`.
 - **Agents never preempt each other.** A browser another agent holds returns (exit 3):
 
   ```text
@@ -257,7 +257,8 @@ uv run agentic-browser-fleet handoff alex-smith "solve the CAPTCHA on the sign-i
 # -> tell the user what to do, end your turn; you resume first when they hand back.
 uv run agentic-browser-fleet state alex-smith            # (on resume) confirm the challenge cleared
 
-# Human took over, then said "keep going" -- and ONLY then:
+# Human took over. To resume BEFORE they hand it back, ask first and end your turn;
+# reclaim ONLY after they explicitly confirm (a "keep going" counts):
 uv run agentic-browser-fleet acquire riley-jones --reclaim
 uv run agentic-browser-fleet state riley-jones            # re-state after regaining control
 ```
@@ -276,7 +277,7 @@ This streams the agent's `[thinking]`/`[action]` trace into your output and ends
 
 - Don't `click <index>` without a fresh `state` first -- indices go stale the moment the page changes.
 - Don't "take control" -- that's a human-only UI action. You drive by issuing commands.
-- Don't pass `--reclaim` unless the human explicitly told you to resume a browser they took over.
+- Don't pass `--reclaim` on your own initiative to take control from a human. End your turn and ask first; reclaim only after the user explicitly confirms.
 - Don't auto-retry on exit `2` (preempted). Stop and wait for the human.
 - Don't tell the user to "look in the tab" for results -- your CLI output is the source of truth; the tab is just the live picture.
 - Don't jump to `task` for ordinary pages. Drive them yourself.
