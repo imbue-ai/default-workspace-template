@@ -111,7 +111,8 @@ Chromium (drive it with the `agentic-browser-fleet` skill) and confirm:
 - the **Open in Minds** badge loads and its link goes to the trampoline.
   Clicking it opens the trampoline page; the final `minds://` hop only completes
   on a machine with Minds installed, so do not treat that as a failure;
-- the copyable `/use-template` line names the right repo, and every other
+- the copyable ` /use-template` line names the right repo (its leading space is
+  deliberate -- a pasted `/...` can be read as a slash command), and every other
   link resolves.
 
 Fix and re-push until the live page is clean.
