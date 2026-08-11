@@ -15,6 +15,12 @@ record matter precisely for templates and genuinely fresh homes.
 The module imports only pydantic and the standard library, so the publish flow
 can validate against the same schema from a worktree that has no virtualenv.
 
+A declared `env.d` unit is now checked against the assembled tree, not just
+against its own name. The name rules prove a unit would ship if it existed; a
+typo in its path satisfies every one of them and then simply never runs on the
+adopter's machine, which is precisely the surprise the manifest is there to
+remove.
+
 Parsing is strict, and the `format` field is a wall rather than a hint. The
 only thing that parses a manifest is the publish gate, and everything it reads
 it is about to write back out, so an unrecognised key is a typo worth failing

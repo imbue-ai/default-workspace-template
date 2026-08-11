@@ -407,6 +407,43 @@ def test_a_complete_tree_validates_clean(tmp_path: Path) -> None:
     assert validate_template_tree(tmp_path) == ()
 
 
+_UNIT_PATH = "system/scripts/env.d/2000-slack-inbox-fonts.sh"
+_TOML_WITH_UNIT = (
+    _MINIMAL_TOML.replace(
+        'include = ["system/apps/slack_inbox"]',
+        'include = ["system/apps/slack_inbox", "system/scripts/env.d"]',
+    )
+    + f'\n[environment]\nenv_d_units = ["{_UNIT_PATH}"]\n'
+)
+
+
+def test_a_declared_env_d_unit_that_is_not_in_the_tree_is_flagged(
+    tmp_path: Path,
+) -> None:
+    """Being named correctly is not the same as being there.
+
+    The name checks prove a unit WOULD ship if it existed. A typo in the path
+    passes every one of them and then simply never runs on the adopter's
+    machine -- the exact class of surprise the manifest exists to remove.
+    """
+    _write_tree(tmp_path, toml_text=_TOML_WITH_UNIT)
+
+    problems = validate_template_tree(tmp_path)
+
+    assert any(
+        _UNIT_PATH in problem and "not in the tree" in problem for problem in problems
+    )
+
+
+def test_a_declared_env_d_unit_that_is_in_the_tree_passes(tmp_path: Path) -> None:
+    _write_tree(tmp_path, toml_text=_TOML_WITH_UNIT)
+    unit = tmp_path / _UNIT_PATH
+    unit.parent.mkdir(parents=True)
+    unit.write_text("#!/usr/bin/env bash\n")
+
+    assert validate_template_tree(tmp_path) == ()
+
+
 def test_a_tree_missing_its_thumbnail_is_flagged(tmp_path: Path) -> None:
     _write_tree(tmp_path)
     (tmp_path / MANIFEST_THUMBNAIL_NAME).unlink()
