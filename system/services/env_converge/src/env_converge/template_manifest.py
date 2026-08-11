@@ -179,15 +179,17 @@ class SecretRequirement(FrozenManifestModel):
 
 
 class LlmRequirement(FrozenManifestModel):
-    """How the included code reaches Claude.
+    """How the included code reaches its model.
 
     Recorded explicitly because the route is per-environment: an adopter may be
     on the other method than the one this code was written against, and must
-    know to switch it.
+    know to switch it. The value is a free string rather than an enum so a
+    harness other than the one this workspace ships can name its own route.
     """
 
     method: NonEmptyString = Field(
-        description="'keyed' (ANTHROPIC_API_KEY via litellm) or 'keyless' (claude -p subscription)"
+        description="'keyed' (an API key, such as ANTHROPIC_API_KEY, via litellm) "
+        "or 'keyless' (a subscription-backed CLI, such as claude -p)"
     )
     note: str = Field(
         default="", description="What an adopter on the other method must change"
