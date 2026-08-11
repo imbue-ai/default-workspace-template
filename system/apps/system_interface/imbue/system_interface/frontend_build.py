@@ -1,15 +1,16 @@
 import threading
 import time
-from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Any
 from typing import Final
+from typing import Protocol
+from typing import runtime_checkable
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -35,12 +36,19 @@ _NPM_BUILD_SLOW_SECONDS: Final[float] = 120.0
 # name the cause, bounded so a runaway build log cannot bloat the response.
 _ERROR_OUTPUT_CHARACTER_LIMIT: Final[int] = 2000
 
-# Public type alias for dependency injection, mirroring ``claude_auth``: tests
-# pass a deterministic fake, production uses the module default.
-CommandRunner = Callable[..., Any]
+# The injection seam for the build commands, mirroring ``claude_auth``: tests
+# pass a deterministic fake, production uses the module default. Spelled as a
+# protocol rather than ``Callable[..., Any]`` so both the arguments and the
+# ``FinishedProcess`` result are checked -- a fake that returns some other shape
+# is then a type error here rather than an AttributeError inside a build thread.
+@runtime_checkable
+class CommandRunner(Protocol):
+    """Runs one build command to completion and reports how it went."""
+
+    def __call__(self, command: list[str], cwd: Path, timeout: float) -> FinishedProcess: ...
 
 
-def _default_command_runner(command: list[str], cwd: Path, timeout: float) -> Any:
+def _default_command_runner(command: list[str], cwd: Path, timeout: float) -> FinishedProcess:
     return run_local_command_modern_version(command=command, is_checked=False, timeout=timeout, cwd=cwd)
 
 
@@ -69,11 +77,9 @@ class FrontendBuildStatus(FrozenModel):
     error: str | None = Field(default=None, description="Command output explaining a FAILED phase")
 
 
-def _describe_command_failure(command: list[str], result: Any) -> str:
+def _describe_command_failure(command: list[str], result: FinishedProcess) -> str:
     """Render a failed command's exit status and tail of output for the user."""
-    stderr = result.stderr.strip() if isinstance(result.stderr, str) else ""
-    stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
-    output = stderr or stdout
+    output = result.stderr.strip() or result.stdout.strip()
     truncated = output[-_ERROR_OUTPUT_CHARACTER_LIMIT:] if output else "(no output)"
     return f"`{' '.join(command)}` failed (exit {result.returncode}):\n{truncated}"
 
