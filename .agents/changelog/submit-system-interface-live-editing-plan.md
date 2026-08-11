@@ -29,7 +29,10 @@ preview tab.
   use. The read happens right after launch, before the await, so a worker whose
   branch mngr cannot report fails immediately instead of after a whole run; and
   it raises rather than guessing, since a wrong answer sends the caller to merge
-  a ref that does not exist. The `launch-task` skill documents the flag.
+  a ref that does not exist -- destroying the just-created worker first, so a
+  branch it cannot name does not leave a live agent behind (an orphan also wedges
+  the next call, since `launch` refuses a stale report and `mngr create` refuses
+  the duplicate name). The `launch-task` skill documents the flag.
 
 - `op-update.md`'s system-interface exception was retargeted at the new handoff:
   the worker's branch already carries the user-approved change, and the task says
