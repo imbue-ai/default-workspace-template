@@ -213,6 +213,40 @@ def test_read_worker_branch_raises_rather_than_guessing(canned: _StubResult) -> 
         create_worker_mod.read_worker_branch("demo-worker", runner)
 
 
+def test_launch_sync_destroys_the_worker_when_its_branch_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    """An unreadable branch must not leave a live worker behind.
+
+    The read happens after creation, so raising alone would orphan the agent -- and
+    an orphan wedges retries, since launch refuses a stale report and `mngr create`
+    refuses the duplicate name.
+    """
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    _write_launch_sync_task(task, report)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), _StubResult(returncode=1, stderr="boom"))
+
+    with pytest.raises(create_worker_mod.WorkerBranchUnknownError):
+        create_worker_mod.launch_sync(
+            name="demo-worker",
+            template="worker",
+            runtime_dir=runtime,
+            task_file=task,
+            timeout_seconds=30,
+            poll_interval_seconds=5,
+            runner=runner,
+            sleeper=lambda _seconds: None,
+            clock=lambda: 0.0,
+            out=io.StringIO(),
+        )
+
+    destroys = [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "destroy"]]
+    assert destroys == [["mngr", "destroy", "demo-worker", "--force"]]
+
+
 def test_launch_sync_publishes_the_branch_mngr_reports(tmp_path: Path) -> None:
     # End to end: the published result names whatever mngr says the worker is on,
     # even when that differs from the conventional mngr/<name>.

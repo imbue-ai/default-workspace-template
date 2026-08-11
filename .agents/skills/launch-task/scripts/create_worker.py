@@ -870,7 +870,18 @@ def launch_sync(
     # reasoning that used to validate the spec up front. Left until after the wait,
     # a failure here would surface only once the worker had run to completion, and
     # would discard the report we had just collected.
-    worker_branch = read_worker_branch(name, runner)
+    try:
+        worker_branch = read_worker_branch(name, runner)
+    except WorkerBranchUnknownError:
+        # The worker exists but we cannot name the branch our caller is supposed to
+        # merge from, so proceeding is not an option. Destroy it rather than leaking
+        # it: this file's own rule (see ``_flush_common_transcript``) is that a
+        # failure here must not orphan a half-launched worker, and an orphan also
+        # wedges the next call -- ``launch`` refuses a stale report and ``mngr
+        # create`` refuses the duplicate name, so the task could not be retried
+        # without manual cleanup.
+        destroy(name, runner)
+        raise
 
     buffer = io.StringIO()
     await_rc = await_report(
