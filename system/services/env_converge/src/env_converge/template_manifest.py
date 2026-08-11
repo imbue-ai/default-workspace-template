@@ -38,7 +38,7 @@ import re
 import tomllib
 from datetime import date
 from pathlib import Path
-from typing import Annotated, get_args, get_origin
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -386,75 +386,28 @@ def find_manifest_path(workspace_dir: Path) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-class LoadedManifest(FrozenManifestModel):
-    """A parsed manifest, plus whatever the parse had to set aside."""
+def load_template_manifest(path: Path) -> TemplateManifest:
+    """Parse and validate one `template.toml`, strictly.
 
-    manifest: TemplateManifest = Field(description="The validated manifest")
-    ignored_keys: tuple[str, ...] = Field(
-        default=(),
-        description="Dotted paths this workspace did not understand and dropped",
-    )
+    Strict is the right setting because the only thing that parses a manifest
+    is the publish gate, and everything it reads it is about to write back out.
+    An unrecognised key there is a typo in something we just wrote -- dropping
+    `apt_packages` for `apt` quietly would mean quietly installing nothing.
 
-
-def _nested_manifest_model(annotation: object) -> type[BaseModel] | None:
-    """The manifest model a field wraps, if it wraps one.
-
-    Covers a plain model, `Model | None`, and `tuple[Model, ...]`. `dict` is
-    deliberately excluded: its keys are data (package names), so nothing inside
-    one can be an unknown *field*.
-    """
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        return annotation
-    if get_origin(annotation) is dict:
-        return None
-    for argument in get_args(annotation):
-        if isinstance(argument, type) and issubclass(argument, BaseModel):
-            return argument
-    return None
-
-
-def _without_unknown_keys(
-    raw: object, model: type[BaseModel], path: tuple[str, ...], ignored: list[str]
-) -> object:
-    """`raw` with every key `model` does not declare removed, recording each."""
-    if not isinstance(raw, dict):
-        return raw
-    kept: dict[str, object] = {}
-    for key, value in raw.items():
-        field = model.model_fields.get(key)
-        if field is None:
-            ignored.append(".".join((*path, key)))
-            continue
-        nested = _nested_manifest_model(field.annotation)
-        if nested is None:
-            kept[key] = value
-        elif isinstance(value, list):
-            kept[key] = [
-                _without_unknown_keys(item, nested, (*path, f"{key}[{index}]"), ignored)
-                for index, item in enumerate(value)
-            ]
-        else:
-            kept[key] = _without_unknown_keys(value, nested, (*path, key), ignored)
-    return kept
-
-
-def load_template_manifest(path: Path) -> LoadedManifest:
-    """Parse and validate one `template.toml`.
-
-    A manifest declaring the format this workspace knows is parsed STRICTLY: an
-    unrecognised key there is a typo in something we just wrote, and silently
-    dropping it would mean silently not installing a package.
-
-    A manifest declaring any OTHER format is parsed leniently -- unknown keys
-    are dropped and returned in `ignored_keys` rather than failing the read.
-    A newer template is mostly still readable, and refusing all of it because
-    of one table this workspace has never heard of helps nobody. Reporting what
-    was dropped is what keeps that from being a silent half-install; a caller
-    that ignores `ignored_keys` turns a loud problem into a quiet one.
+    A manifest declaring a format this workspace does not write is refused
+    outright, rather than read for the parts we happen to recognise. Reading it
+    leniently would mean re-publishing a file we did not fully understand: the
+    unknown tables are still in it, so stamping our own format on it produces
+    something the next reader cannot parse, and stripping them deletes what its
+    author declared. Neither is a thing to do to someone's published template.
+    Nothing on the ADOPT path comes through here -- an agent reads the TOML and
+    makes what it can of it -- so this refusal costs no one a template they
+    could otherwise have used.
 
     Raises TemplateManifestNotFoundError when the file is absent, and
-    TemplateManifestParseError when it cannot be read, is not valid TOML, or
-    does not satisfy the schema.
+    TemplateManifestParseError when it cannot be read, is not valid TOML,
+    declares a format this workspace does not write, or does not satisfy the
+    schema.
     """
     try:
         raw_bytes = path.read_bytes()
@@ -468,17 +421,19 @@ def load_template_manifest(path: Path) -> LoadedManifest:
         raise TemplateManifestParseError(path, f"not valid UTF-8: {e}") from e
     except tomllib.TOMLDecodeError as e:
         raise TemplateManifestParseError(path, f"not valid TOML: {e}") from e
-    ignored: list[str] = []
     declared_format = raw_manifest.get("format", CURRENT_MANIFEST_FORMAT)
     if declared_format != CURRENT_MANIFEST_FORMAT:
-        raw_manifest = _without_unknown_keys(
-            raw_manifest, TemplateManifest, (), ignored
+        raise TemplateManifestParseError(
+            path,
+            f"declares format {declared_format!r}, but this workspace writes "
+            f"{CURRENT_MANIFEST_FORMAT!r}. Update this workspace before "
+            "publishing a new version of this template, or it would lose what "
+            "the newer format declares.",
         )
     try:
-        manifest = TemplateManifest.model_validate(raw_manifest)
+        return TemplateManifest.model_validate(raw_manifest)
     except ValidationError as e:
         raise TemplateManifestParseError(path, str(e)) from e
-    return LoadedManifest(manifest=manifest, ignored_keys=tuple(ignored))
 
 
 def lineage_after_override(
@@ -699,7 +654,7 @@ def validate_template_tree(
     reach the checks, not findings from them.
     """
     manifest_path = repo_root / MANIFEST_TOML_NAME
-    manifest = load_template_manifest(manifest_path).manifest
+    manifest = load_template_manifest(manifest_path)
 
     problems: list[str] = []
     markdown_path = repo_root / MANIFEST_MARKDOWN_NAME
