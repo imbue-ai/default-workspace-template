@@ -108,7 +108,7 @@ EOF
 # the local agent list (only this workspace's agents are visible from here, so
 # exactly one agent carries is_primary); fall back to your own id if the lookup
 # comes up empty.
-WORKSPACE_AGENT_ID="$(mngr ls --include 'has(labels.is_primary) && has(labels.workspace)' --ids)"
+WORKSPACE_AGENT_ID="$(mngr ls --include 'has(labels.is_primary)' --ids)"
 WORKSPACE_AGENT_ID="${WORKSPACE_AGENT_ID:-$MNGR_AGENT_ID}"
 
 latchkey curl -sS -X POST \
