@@ -885,11 +885,57 @@ push that commit -- the branch itself is never pushed:
 Assembled on clean DEFAULT_WORKSPACE_TEMPLATE base <BASE_REF> (provenance link only; no upstream fetch).")" \
     && git merge-base --is-ancestor <BASE_REF> "$SNAPSHOT_COMMIT" \
     && test "$(git rev-list --count "$SNAPSHOT_COMMIT")" -gt 1 \
-    && git \
-    -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
-    ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
-    push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo_name>.git" "${SNAPSHOT_COMMIT}:refs/heads/main" )
+    && PUSH_URL="$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo_name>.git" \
+    && PUSH_GW=( -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
+                ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
+                -c "http.postBuffer=524288000" ) \
+    && if git -C "$WT" rev-parse --is-shallow-repository >/dev/null 2>&1 \
+            && [ "$(git -C "$WT" rev-parse --is-shallow-repository)" = "true" ]; then
+           # Shallow workspace: the push pack would omit objects across the
+           # shallow boundary (see the "Shallow-clone workspaces" note below).
+           # Build a fresh bare repo with BASE_REF's FULL ancestry fetched from
+           # the public upstream template, add the snapshot commit from $WT,
+           # and push from there. Object-only fetch -- does NOT change the
+           # published lineage (still BASE_REF + one snapshot commit).
+           UPSTREAM_URL="$(python3 -c "import tomllib; print(tomllib.load(open('system/config/parent.toml','rb'))['url'])" 2>/dev/null)" \
+           && FRESH="$(mktemp -d)" \
+           && git init --bare -q "$FRESH" \
+           && git -C "$FRESH" fetch --depth=1000000 "$UPSTREAM_URL" "<BASE_REF>" \
+           && git -C "$FRESH" fetch "$WT" "$SNAPSHOT_COMMIT" \
+           && git -C "$FRESH" "${PUSH_GW[@]}" push "$PUSH_URL" "${SNAPSHOT_COMMIT}:refs/heads/main" \
+           && rm -rf "$FRESH"
+       else
+           git "${PUSH_GW[@]}" push "$PUSH_URL" "${SNAPSHOT_COMMIT}:refs/heads/main"
+       fi )
 ```
+
+**Shallow-clone workspaces (why the branch above exists).** Minds
+workspaces are created as **shallow clones** by design: the desktop client's
+create flow does a shallow clone of the template, rsyncs the new mind's
+content on top, and bootstrap renames the working branch to `main` (see
+`system/libs/bootstrap`'s `_initialize_workspace_main_branch`, which
+explicitly drops the stale shallow-clone `main`). The shallow boundary can
+fall at a template **merge commit** -- and a merge commit's parents are
+referenced inside the commit object but may not be present in the local
+object store. `git commit-tree 'HEAD^{tree}' -p <BASE_REF>` produces a valid
+snapshot commit and the `merge-base --is-ancestor` / `rev-list --count` checks
+both pass (ancestry is traversable up to the shallow graft), so the mint looks
+fine -- but the push pack git builds from `$WT` omits the missing parents
+across the boundary, and the remote rejects with `remote: fatal: did not
+receive expected object <sha>` / `remote unpack failed: index-pack failed`.
+This is **not** a partial-clone or gateway issue -- it is the shallow clone
+silently producing an incomplete pack, and it affects every publish from a
+normally-created workspace (i.e. nearly all of them). The `is-shallow-repository`
+check above detects it; the fresh-repo path fetches `<BASE_REF>`'s full
+ancestry from the public upstream template (`system/config/parent.toml`'s
+`url`) so the push pack is complete. That fetch is **object-only** -- it
+supplies pack bytes the shallow clone omitted; it does not change provenance,
+does not advance `/home/user/workspace`'s `HEAD`, and the published history is
+still `<BASE_REF>` plus exactly one snapshot commit (the same two-commit-minimum
+structure the checks enforce). If the upstream template URL is unreachable
+(offline box) the fresh-repo fetch fails clearly; surface that rather than
+falling back to the direct push (which would just fail again with the same
+missing-object error).
 
 The two checks between the mint and the push are the guard against the
 "one commit TOTAL" failure above, and they run BEFORE anything reaches the
