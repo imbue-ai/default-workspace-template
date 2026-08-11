@@ -1,9 +1,9 @@
 # Plan: template environment manifests
 
-> **Give every template a pydantic-validated `template.toml` that declares what its code needs from the environment -- apt / npm / uv / cargo packages and the exotic-install units that have no package database -- validated against the mirrored apt universe at publish time, and installed by the adopting agent at the ADOPTER's pinned snapshot timestamp, so an adopting mind stops discovering an template's system dependencies by running into failures.**
+> **Give every template a pydantic-validated `template.toml` that declares what its code needs from the environment -- apt / npm / uv / cargo packages and the exotic-install units that have no package database -- validated against the mirrored apt universe at publish time, and installed by the adopting agent at the ADOPTER's pinned snapshot timestamp, so an adopting mind stops discovering atemplate's system dependencies by running into failures.**
 >
 > ### The gap
-> * An template declares its runtime needs only as prose plus `requires_permission:` / `requires_secret:` / `requires_llm:` lines in `template-<slug>.md` (the v1 format). Those cover *permissions and secrets*. They say nothing about **system packages**: an template whose code shells out to `pdftotext`, or imports a python package installed as a `uv tool`, ships no record of it. The adopter finds out when the app crashes.
+> * Atemplate declares its runtime needs only as prose plus `requires_permission:` / `requires_secret:` / `requires_llm:` lines in `template-<slug>.md` (the v1 format). Those cover *permissions and secrets*. They say nothing about **system packages**: atemplate whose code shells out to `pdftotext`, or imports a python package installed as a `uv tool`, ships no record of it. The adopter finds out when the app crashes.
 > * Everything machine-readable in the manifest today lives inside markdown -- the Recipe is a fenced **YAML** block (the style guide says never YAML), the prerequisites are hand-written lines matched by grep. Nothing validates either; `build_template.sh` generates placeholders and the only enforcement is a `grep` for un-replaced FILL-IN comments.
 >
 > ### Recommended mechanism
@@ -17,9 +17,9 @@
 
 ## Overview
 
-- An template is a bootable snapshot of what a mind built, published to a GitHub repo another mind can be created from or adapt. `publish-template` assembles it, `use-template` adopts it, and `update-published-template` / `update-installed-template` move it forward on each side.
+- Atemplate is a bootable snapshot of what a mind built, published to a GitHub repo another mind can be created from or adapt. `publish-template` assembles it, `use-template` adopts it, and `update-published-template` / `update-installed-template` move it forward on each side.
 - `env_converge` (already in the tree) gives the environment side a principled home for declarations it did not have when the templates flow was designed: a record of everything installed, a convergence pass that replays it, a `package_unavailable` event, an `env.d` unit convention for things with no package database, and an apt universe pinned to a single committed timestamp.
-- This plan connects the two. The structuring principle is the one `env_converge` already states: **versions are a function of the pinned snapshot timestamp**, so replaying package *names* at a timestamp yields deterministic *versions*. That is why an template declares names rather than versions for apt, and why converging at the **adopter's** timestamp (not the publisher's) is the correct merge: the adopter gets versions consistent with the rest of their environment, and the publisher's timestamp is kept only as provenance to explain a skew.
+- This plan connects the two. The structuring principle is the one `env_converge` already states: **versions are a function of the pinned snapshot timestamp**, so replaying package *names* at a timestamp yields deterministic *versions*. That is why atemplate declares names rather than versions for apt, and why converging at the **adopter's** timestamp (not the publisher's) is the correct merge: the adopter gets versions consistent with the rest of their environment, and the publisher's timestamp is kept only as provenance to explain a skew.
 - The work splits cleanly into a schema, a publish-side gate, the adopt-side install step, and the two update paths that must read the recipe from its new home. Each is independently landable; the phasing at the end reflects that.
 
 ## The problem, grounded
@@ -171,7 +171,7 @@ The shape deliberately mirrors `env_converge/data_types.py`: `apt` is a name lis
 
 ### Cargo: in, and why
 
-**Cargo joins `apt` / `npm_global` / `uv_tools` in the declaration shape.** The env-converge README states the reason directly: unlike npm globals, `~/.cargo/bin` binaries ride the backup as real files, so the cargo record is irrelevant to ordinary restores and matters for "template manifests and genuinely fresh homes". An template crossing to a different machine is precisely the fresh-home case, and it is the one the README names. Omitting cargo would leave a gap the existing design already anticipated, for the sake of one table and one branch in the converge path -- and `_install_missing_cargo` already exists to reuse.
+**Cargo joins `apt` / `npm_global` / `uv_tools` in the declaration shape.** The env-converge README states the reason directly: unlike npm globals, `~/.cargo/bin` binaries ride the backup as real files, so the cargo record is irrelevant to ordinary restores and matters for "template manifests and genuinely fresh homes". Atemplate crossing to a different machine is precisely the fresh-home case, and it is the one the README names. Omitting cargo would leave a gap the existing design already anticipated, for the sake of one table and one branch in the converge path -- and `_install_missing_cargo` already exists to reuse.
 
 One consequence to handle explicitly: cargo replay reports `package_unavailable` when rust itself is absent rather than bootstrapping rustup. So a declared crate on an adopter without rust surfaces as unavailable with a *different* remedy than a timestamp skew -- "install rust", not "run the upgrade". The prompt must distinguish these two causes rather than printing one generic message (see "the unavailable prompt" below).
 
@@ -209,7 +209,7 @@ A package that does not resolve fails the gate with the offending names, so an u
 
 The new `.toml` is generated at the repo root **after** the scan, exactly like the `.md` manifest, the `.svg`, the `/welcome`, and `README.md` -- all of which are generated post-scan today. The scan covers the *staged overlay* (content coming out of the live mind), which is where a secret can actually ride in; generated files are written from arguments the lead already resolved with the user. Two additions keep that reasoning honest rather than assumed:
 
-- Any `env.d` unit an template carries is an **included path**, so it is staged and therefore scanned like any other overlaid file. This is stated explicitly so nobody later "optimizes" unit declaration into a generated file.
+- Any `env.d` unit atemplate carries is an **included path**, so it is staged and therefore scanned like any other overlaid file. This is stated explicitly so nobody later "optimizes" unit declaration into a generated file.
 - The worker's §3 step 2 already re-runs `scan_secrets.sh` over every file it modifies after applying published-version modifications; filling in the `.toml` puts it in that set.
 
 ## Adoption: the agent installs what the manifest declares
@@ -249,7 +249,7 @@ a setup that cannot work.
 
 The spec's "file-addition rather than file-merge where cheap" applies directly to `env.d`:
 
-- An template carrying an exotic install ships `system/scripts/env.d/<NNNN>-<slug>-<name>.sh` as a normal included path. The adopter's merge lands it as a new file; `env_converge` runs it on the next slow phase. **No new machinery is required at all** -- only a convention and a declaration.
+- Atemplate carrying an exotic install ships `system/scripts/env.d/<NNNN>-<slug>-<name>.sh` as a normal included path. The adopter's merge lands it as a new file; `env_converge` runs it on the next slow phase. **No new machinery is required at all** -- only a convention and a declaration.
 - **Convention: `NNNN >= 2000` for template-carried units**, with the slug in the filename. The template's own units are 1000 (playwright) and 1100 (secret scanners), so 2000+ keeps template units ordered after the template's and makes cross-template collisions structurally unlikely.
 - `[environment].env_d_units` lists them so publish-time validation can assert each declared path actually exists in the assembled tree and sits under `system/scripts/env.d/`, and so the adopting agent can tell the user what will run. Validation also asserts each is inside the recipe's include set -- a declared unit that was not included would be a manifest that lies.
 - Supervisord `[include]` drop-ins are the same idea for services, but `system/supervisord.conf` has no `[include]` section today and adding one is a separate change with its own boot-risk surface. **Out of scope here**, noted so the pattern is not forgotten.
@@ -307,7 +307,7 @@ Stated explicitly because each exists because of a real incident:
 
 - **The MIT license is stated, not shipped.** §6 tells the user a public template is MIT-licensed; no `LICENSE` file is generated into the snapshot. Enforcing it is a small follow-up, deliberately not folded in here.
 - **Append-only enforcement -- deliberately out of scope.** Four logs are documented append-only (`## Templates` and `## Adopted templates` in `docs/VERSION_HISTORY.md`, `Publication history` / `Adaptation history` in the manifest) and nothing enforces it: the only script that touches `VERSION_HISTORY.md` is `build_template.sh`, and only to `rm -f` it out of the snapshot, leaving `publish-template` §8 step 4's per-slug idempotence test as the single weak check. Enforcement was scoped alongside this work and **the user's decision is to leave it for now**, so nothing here builds it. Recorded so the gap stays known rather than looking closed.
-- **Nothing uninstalls.** Packages an template brought in stay installed if the user later drops the template, and a newer version dropping a declaration does not remove anything. That is deliberate -- something else may have come to depend on them, and an uninstall is not reversible from a manifest -- but it means the environment only accretes.
+- **Nothing uninstalls.** Packages atemplate brought in stay installed if the user later drops the template, and a newer version dropping a declaration does not remove anything. That is deliberate -- something else may have come to depend on them, and an uninstall is not reversible from a manifest -- but it means the environment only accretes.
 
 ## Phasing
 

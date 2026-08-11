@@ -1,13 +1,13 @@
 ---
 name: update-installed-template
-description: Pull a newer version of an template this mind already adopted from its remote repo and merge it in, reconciling it with this mind's own adaptations. Use when the user wants to update, upgrade, or pull the latest version of an adopted template.
+description: Pull a newer version of atemplate this mind already adopted from its remote repo and merge it in, reconciling it with this mind's own adaptations. Use when the user wants to update, upgrade, or pull the latest version of an adopted template.
 ---
 
 # Update an installed template
 
 Version: v2 (templates flow). This is the ADOPTER's update path -- the
 companion to `use-template` (first adopt someone else's), `publish-template`
-(an template's first publish), and `update-published-template` (the
+(atemplate's first publish), and `update-published-template` (the
 PUBLISHER cuts each later version).
 
 Two unrelated version numbers appear below. The **flow version** (v2, above) is
@@ -16,7 +16,7 @@ pair, v1 the older slug-named markdown with no TOML, and this skill pulls either
 An **template's own version** (v1, v2, v3, ...) counts that template's
 publishes; an adopter can jump v1 -> v3 by skipping one.
 
-This mind adopted an template earlier -- either it was created FROM the
+This mind adopted atemplate earlier -- either it was created FROM the
 template repo, or it merged one in via `use-template` -- the publisher has
 since shipped a newer version, and this skill pulls that newer version from the
 template's remote and merges it into this mind WITHOUT discarding the
@@ -26,7 +26,7 @@ All git commands run with cwd = the repo root (`/home/user/workspace`).
 
 ## 0. Trust gate -- confirm before fetching or merging
 
-An template is code published by ANOTHER mind's user, in a repo outside
+Atemplate is code published by ANOTHER mind's user, in a repo outside
 Imbue's control. **Imbue does not review, verify, or vouch for templates** --
 and that is just as true for an update as for a first adopt: a newer version can
 introduce mistakes or malicious code (data exfiltration, destructive commands,

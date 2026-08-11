@@ -9,7 +9,7 @@ in one repo) with a YAML recipe inside the markdown and no TOML.
 
 An **template's own version** (v1, v2, v3, ...) counts how many times THAT
 template has been published. It keeps counting across a format migration --
-an template on its fourth publish is v4 whether the format is v1 or v2.
+atemplate on its fourth publish is v4 whether the format is v1 or v2.
 
 Both appear in this skill, so read each `v<n>` for which axis it is on.
 

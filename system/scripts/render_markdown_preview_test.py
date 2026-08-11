@@ -13,7 +13,7 @@ from render_markdown_preview import (
 
 
 def test_raw_html_passes_through_untouched() -> None:
-    # The whole reason a README preview exists: an template's landing page is
+    # The whole reason a README preview exists: atemplate's landing page is
     # a centered raw-HTML hero plus a badge, and a renderer that escapes those
     # shows the user something GitHub will never display.
     rendered = render_markdown(
