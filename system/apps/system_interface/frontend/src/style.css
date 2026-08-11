@@ -1498,9 +1498,12 @@ body {
   /* Half of the 4px separator: each of the two neighbours contributes its own
      inset, and the outermost panes get the same half against the canvas edge. */
   --si-pane-inset: 2px;
+  /* The canvas runs edge to edge and the padding is the outermost pane gap, so
+     the grey is painted across the padding too. Clipping it to the content box
+     instead would let the app's off-white body show as a band around the dock,
+     which reads as a seam rather than as an inset. */
   padding: 4px;
   background: var(--si-canvas);
-  background-clip: content-box;
 }
 
 /* ── Dockview workspace ── */
@@ -1514,8 +1517,16 @@ body {
   left: 0;
 }
 
-/* ── Dockview theme overrides ── */
-.dockview-theme-light {
+/* ── Dockview theme overrides ──
+
+   The class is doubled to win on specificity. dockview-core does not rely on
+   the stylesheet we import at the top of this file: it *injects its own style
+   element at runtime*, which therefore lands after our linked stylesheet and
+   beats a plain `.dockview-theme-light` rule on document order alone. That is
+   what used to leave the dock painted white over our grey canvas, and the tab
+   strip painted its own grey, no matter what this block said. Anything here
+   that overrides a `--dv-*` default has to stay inside this doubled selector. */
+.dockview-theme-light.dockview-theme-light {
   --dv-paneview-header-border-color: var(--color-border);
   /* Everything dockview would paint itself is transparent: the canvas behind
      the dock is the app's, and the only surface is the pane card. */
