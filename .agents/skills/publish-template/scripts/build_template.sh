@@ -135,8 +135,37 @@ if ! printf '%s' "$SLUG" | grep -Eq '^[A-Za-z0-9._-]+$' || case "$SLUG" in -*) t
     exit 2
 fi
 
-REPO="$(git rev-parse --show-toplevel)"
+REPO="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 cd "$REPO"
+
+# --- refuse to run anywhere but a throwaway linked worktree ------------------
+#
+# Step 2 resets the tree to BASE_REF and runs `git clean -fdxq`, which deletes
+# untracked AND gitignored files. In a live mind that is data/, .mngr/, the
+# secrets, and every scrap of runtime state: an unrecoverable wipe of the
+# user's workspace, by a script that believes it is doing its job.
+#
+# The skill's CWD invariant says assembly runs with cwd = $WT. That is an
+# instruction, and an instruction cannot stop the delete on the run where it is
+# not followed. This can, so the check lives here rather than only in prose.
+LIVE_WORKSPACE="$(cd "${ENV_CONVERGE_WORKSPACE_DIR:-/home/user/workspace}" 2>/dev/null && pwd -P || true)"
+if [ -n "$LIVE_WORKSPACE" ] && [ "$REPO" = "$LIVE_WORKSPACE" ]; then
+    echo "build_template.sh: refusing to run in $REPO -- that is the live workspace." >&2
+    echo "  Assembly resets the tree and deletes gitignored files (data/, .mngr/, secrets)." >&2
+    echo "  Run it in a throwaway worktree instead: git worktree add \"\$WT\" <base-ref>" >&2
+    exit 2
+fi
+# A linked worktree keeps its git dir at <common>/worktrees/<name>; in a main
+# worktree the two resolve to the same path.
+GIT_DIR_PATH="$(cd "$(git rev-parse --absolute-git-dir)" && pwd -P)"
+GIT_COMMON_DIR_PATH="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+if [ "$GIT_DIR_PATH" = "$GIT_COMMON_DIR_PATH" ]; then
+    echo "build_template.sh: refusing to run in $REPO -- this is a repo's MAIN worktree." >&2
+    echo "  Assembly resets the tree to the base and deletes untracked and gitignored files," >&2
+    echo "  so it must run somewhere disposable." >&2
+    echo "  Create one and run there: git worktree add \"\$WT\" <base-ref>" >&2
+    exit 2
+fi
 
 # One template per repo: the manifest files carry no slug and a new publish
 # OVERRIDES whatever was here rather than accumulating beside it. What survives

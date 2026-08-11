@@ -275,8 +275,15 @@ the bundle is pushed to the worker. The task body directs the worker to:
    `betterleaks.toml` out to a scratch dir, and `rsync -aR` every ADDED/MODIFIED
    approved path (from the current-HEAD checkout) into a stage dir. Record the
    DELETED approved paths as a list.
-4. **Reset the worktree to the PUBLISHED TIP -- never `BASE_REF`:**
+4. **Reset the worktree to the PUBLISHED TIP -- never `BASE_REF`.** Confirm you
+   are in the throwaway worktree before you run it. `clean -fdxq` deletes
+   untracked AND gitignored files, so these two lines in the live workspace
+   destroy `data/`, `.mngr/`, and the secrets. `build_template.sh` refuses that
+   outright; here nothing does, so make the check explicit:
    ```bash
+   # Must print a path under .git/worktrees/. If it does not, you are in the
+   # live workspace or a main clone -- STOP, do not run the reset.
+   git rev-parse --absolute-git-dir
    git read-tree -u --reset "<PUBLISHED_TIP>"
    git clean -fdxq
    ```
