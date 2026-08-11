@@ -849,6 +849,21 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     return m("span", { class: "flex shrink-0 items-center" }, m.trust(icon("check", { size: 14 })));
   }
 
+  /** The gear the current project's row carries instead of a checkmark.
+   *
+   *  Picking the project you are already in does nothing, so that row's click
+   *  target is spent: it opens the project's settings instead, which is also
+   *  where the row's own name, color and glyph are edited. The gear is a plain
+   *  affordance rather than a nested button -- the whole row is the target, so
+   *  a button inside it would only add a second thing to aim at. */
+  function settingsGear(): m.Vnode {
+    return m(
+      "span",
+      { class: "flex shrink-0 items-center text-text-faint" },
+      m.trust(icon("settings", { size: 14, strokeWidth: 1.75 })),
+    );
+  }
+
   function switcherMenu(attrs: SidebarAttrs, anchor: MenuAnchor): m.Vnode {
     const isEverythingActive = isEverythingView(attrs.activeViewId);
     return floatingCard({
@@ -858,15 +873,24 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       // Sized to the header it hangs off, so the two read as one control.
       width: anchor.width,
       children: [
-        attrs.projects.map((project) =>
-          menuRow({
+        attrs.projects.map((project) => {
+          const isCurrent = project.project_id === attrs.activeViewId;
+          return menuRow({
             iconMarkup: viewIdentityMarkup(project, MENU_GLYPH_SIZE),
             label: project.name,
-            isActive: project.project_id === attrs.activeViewId,
-            trailing: project.project_id === attrs.activeViewId ? checkMark() : null,
-            onclick: () => pick(() => attrs.onSelectView(project.project_id)),
-          }),
-        ),
+            isActive: isCurrent,
+            trailing: isCurrent ? settingsGear() : null,
+            tooltip: isCurrent ? `Project settings for ${project.name}` : null,
+            onclick: () =>
+              pick(() => {
+                if (isCurrent) {
+                  settingsProject = project;
+                  return;
+                }
+                attrs.onSelectView(project.project_id);
+              }),
+          });
+        }),
         menuRow({
           iconMarkup: railIcon("plus", 14),
           label: "New project",
@@ -1025,6 +1049,20 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         attrs.onProjectsChanged();
       },
       onCancel: close,
+      // The gear only appears on the row for the view already mounted, so the
+      // rail's own rows are that project's contents -- no second fetch, and no
+      // way for the two lists to disagree.
+      contents: attrs.rows.map((row) => ({
+        ref: row.ref,
+        kind: row.kind,
+        label: row.label,
+        isOpen: row.isOpen,
+      })),
+      onRemoveContent: (ref: string) => {
+        const row = attrs.rows.find((candidate) => candidate.ref === ref);
+        if (row === undefined) return;
+        attrs.onRemoveFromView(row);
+      },
     });
   }
 
