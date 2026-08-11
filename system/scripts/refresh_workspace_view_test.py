@@ -9,6 +9,9 @@ These tests exercise the contract the update flows depend on:
   a stale tab must not fail a reveal whose change already landed on disk.
 - The app call addresses the workspace's PRIMARY agent, and is skipped outright
   rather than aimed at the caller when that cannot be resolved.
+- The app call carries the per-agent override JWT when the gateway issues one and
+  goes out without it when the gateway does not, so neither gateway topology
+  loses the channel.
 """
 
 from __future__ import annotations
@@ -66,6 +69,17 @@ class _RecordingHttp(refresh_workspace_view.HttpClient):
                 return url
         return None
 
+    def headers_of(self, fragment: str) -> dict:
+        """The headers of the first POST whose URL contains ``fragment``.
+
+        Raises rather than returning ``None`` so a caller asserting that some
+        header is *absent* cannot pass by never having found the request.
+        """
+        for url, _payload, headers in self.posts:
+            if fragment in url:
+                return headers
+        raise AssertionError(f"no POST was made to a URL containing {fragment!r}")
+
 
 class _StubRunner(refresh_workspace_view.Runner):
     """Answers ``mngr ls`` with a fixed result (or raises, for the lookup-failed path)."""
@@ -92,7 +106,11 @@ class _StubRunner(refresh_workspace_view.Runner):
 
 @pytest.fixture(autouse=True)
 def _agent_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A fully-wired workspace: our own agent id plus reachable gateway creds."""
+    """A fully-wired workspace on a desktop-hosted gateway.
+
+    That topology is the one that carries an override JWT; a test covering the
+    VPS shape drops it.
+    """
     monkeypatch.setenv("MNGR_AGENT_ID", _OWN_ID)
     monkeypatch.setenv("LATCHKEY_GATEWAY", "http://gateway.invalid")
     monkeypatch.setenv("LATCHKEY_GATEWAY_PASSWORD", "secret")
@@ -139,6 +157,41 @@ def test_app_refresh_targets_the_primary_agent_not_the_caller() -> None:
 
     assert http.url_containing(f"/agents/{_PRIMARY_ID}/refresh") is not None
     assert http.url_containing(f"/agents/{_OWN_ID}/refresh") is None
+
+
+def test_app_refresh_sends_the_override_when_the_gateway_issues_one() -> None:
+    """A desktop-hosted gateway authorizes the call by this JWT and nothing else.
+
+    Without the header it resolves the request against its deny-all default
+    permissions file, so dropping it 403s every refresh from a local workspace.
+    """
+    http = _RecordingHttp({})
+
+    refresh_workspace_view.refresh(runner=_StubRunner(), http=http, base_url=_BASE_URL)
+
+    headers = http.headers_of("/refresh")
+    assert headers["X-Latchkey-Gateway-Permissions-Override"] == "jwt"
+
+
+def test_app_refresh_still_runs_when_the_gateway_issues_no_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A VPS-hosted gateway injects no override, and must not lose this channel.
+
+    Only a desktop-hosted gateway mints the per-agent JWT; a VPS-hosted one
+    forwards Minds API routes to the desktop and substitutes a target JWT of its
+    own, so the variable is simply absent on a remote workspace. Treating that as
+    "no app attached" would leave every remote workspace with just the broadcast
+    -- the channel the services restart has usually already disconnected.
+    """
+    monkeypatch.delenv("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", raising=False)
+    http = _RecordingHttp({})
+
+    refresh_workspace_view.refresh(runner=_StubRunner(), http=http, base_url=_BASE_URL)
+
+    headers = http.headers_of("/refresh")
+    assert "X-Latchkey-Gateway-Permissions-Override" not in headers
+    assert headers["X-Latchkey-Gateway-Password"] == "secret"
 
 
 def test_unresolvable_primary_skips_the_app_call_rather_than_guessing() -> None:
