@@ -88,3 +88,26 @@ preview tab.
   default (reserve it for changes costly to redo); `update-creation` and
   `update-self` were updated to match the live-loop handoff onto the lead's
   branch.
+
+- `update-system-interface` is now genuinely deltas-only, and says so: it opens by
+  telling you to read `update-app` first, then names only what differs. The
+  material it used to restate -- the lease pre-flight, the `frontend-design` /
+  `use-ai-integration` rules, the `--layout` explanation, the fast-pytest-marker
+  invocation -- is gone, leaving the lease section as three bullets (the fixed
+  service name, held-for-the-whole-pass, and teardown of an orphaned pass on
+  break). Nothing told the agent to load `update-app`, so the duplication was what
+  made the skill self-sufficient; the pointer had to become an instruction before
+  it could be cut.
+
+- **The final pre-merge preview is gated on whether the user can actually judge
+  the change**, not on it being the system interface. Both conditions must hold:
+  the worker produced real work the user has not seen, *and* they can observe and
+  judge what changed. The question a preview appears to answer first -- does it
+  boot -- is already answered mechanically by safe-reveal's health check and
+  auto-rollback, so the user's eyes only add "does this look right". A fix for a
+  race, an error path, or a scenario they cannot trigger from a tab gives them
+  nothing to look at, and asking them to approve an apparently unchanged UI
+  teaches them that approving a preview means nothing; the evidence there is the
+  regression test the harden gate already produced. This is the Step 2 test-only /
+  no-surface carve-out applied at merge time, and it restores the two-part gate the
+  plan specified (the skill had collapsed it to "essentially always").

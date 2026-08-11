@@ -66,8 +66,10 @@ the request is -- it changes what you do *before* touching code:
   iterate. Reserve a preview for changes that are costly to redo -- a redesign,
   a data-touching change, a substantial visual shift. A routine tweak, a copy
   change, or a behavior-only change behind an unchanged surface doesn't need one.
-  (The system interface is the exception: its own flow, `update-system-interface`,
-  previews by default because the live tab is off-limits.)
+  (The system interface leans the other way -- its own flow,
+  `update-system-interface`, previews by default, because the live tab is
+  off-limits. It still asks this same question before the *final* pre-merge
+  preview: a change the user cannot observe gives them nothing to judge.)
 
   A new view or capability bolted onto an existing service is its own
   delivery with its own feedback gate (interactive-delivery phase 8):

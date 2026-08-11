@@ -14,6 +14,12 @@ turn-end harden handoff -- lives in
 [`update-app`](../update-app/SKILL.md) and the references it points at,
 and this skill carries only what the system interface does *differently*.
 
+> **Read [`update-app`](../update-app/SKILL.md) first, then come back here.**
+> This skill is a set of deltas, not a standalone flow: it names only what
+> differs and assumes you have the shared mechanics (lease, live loop, mock
+> taxonomy, turn-end harden) from that skill. Skipping it leaves you missing
+> steps this file deliberately does not repeat.
+
 Everything different traces to one fact: **a broken build here is served
 straight to the user as their entire workspace.** That forces three adjustments
 to the ordinary live loop:
@@ -54,44 +60,21 @@ script once the user has approved and a background worker has hardened it.
 4. **Go live:** freshness-check, capture the rollback point, merge, run the
    safe-reveal script, then tear everything down and release the lease.
 
-The lease is held across the **whole** pass (entry through reveal or
-abandonment) -- a deliberate divergence from `update-app`'s per-turn release,
-because there is one served UI and one preview tab, so only one system-interface
-edit may be in flight at a time.
-
 ## 1. On entry: take the lease, provision in the background, clarify the shape
 
-**Take the editing lease first.** It is the *same* advisory lease
-`update-app` uses ("One editor at a time"). Its title is per-service
-(`editing service <name>`), so a system-interface pass never collides with an
-ordinary edit of some other app -- here the name is fixed as `editing
-service system_interface`. Pre-flight exactly as `update-app` describes:
+**Take the editing lease first**, exactly as `update-app`'s "One editor at a
+time" describes (same pre-flight, same advisory semantics, same
+never-break-it-silently rule). Three deltas:
 
-```bash
-tk ready > /tmp/service-leases.txt
-grep "editing service system_interface" /tmp/service-leases.txt
-```
-
-If a lease exists and `tk show <id>` says it is not yours, tell the user another
-chat is mid-change on the workspace UI and let them decide -- do not silently
-proceed. If the holder looks abandoned (its agent is no longer running, or it is
-hours old with no notes), say so and offer to break it; the lease is advisory and
-broken only by the user's call, never silently. **Breaking a stale
-system-interface lease also means tearing down its orphaned pass** -- its preview
-service and tab, its worktree, and its worker if one exists (see the teardown in
-Step 4; run `unpreview` + the `layout.py close` loop, `git worktree remove`,
-and `create_worker.py destroy` for whatever the abandoned pass left behind).
-Otherwise, take your own:
-
-```bash
-LEASE_ID=$(tk create "editing service system_interface" -t chore \
-    -d "Held by $MNGR_AGENT_NAME across the whole live-edit + harden + reveal pass.")
-```
-
-then `tk start "$LEASE_ID"` (as its own command). Unlike an ordinary app
-edit, this lease deliberately spans the entire pass -- including the waits for
-the user's feedback -- and is released only at final teardown (Step 4) or on
-explicit abandonment.
+- **The service name is fixed:** `editing service system_interface`.
+- **It is held for the whole pass**, not per turn -- entry through reveal or
+  abandonment, including the waits for the user's feedback -- and released only at
+  final teardown (Step 4) or on explicit abandonment. There is one served UI and
+  one preview tab, so only one system-interface edit may be in flight at a time.
+- **Breaking a stale one also means tearing down its orphaned pass:** its preview
+  service and tab, its worktree, and its worker if one exists. Run the Step 4
+  teardown (`unpreview` + the `layout.py close` loop), `git worktree remove`, and
+  `create_worker.py destroy` for whatever the abandoned pass left behind.
 
 **Pick a slug** `$SLUG` for the change. The branch is `mngr/update-$SLUG`; the
 lead's editing worktree lives at `data/.tasks/si-live/update-$SLUG/` (gitignored,
@@ -139,18 +122,14 @@ costly and a fake conveys the idea.
 
 ## 2. The live loop: edit the worktree, refresh the preview in place
 
-Work entirely inside `data/.tasks/si-live/update-$SLUG/`. If the change renders
-markup a person looks at, invoke `frontend-design` before writing it; if it
-calls Claude, follow `use-ai-integration` -- same as when the UI was built. The
-build/test mechanics for the system interface (in-process backend tests, the
-`test_e2e.py` Playwright harness, `npm run build`/`lint`/`test`) are the worker's
-job at harden time and are documented in
+Work entirely inside `data/.tasks/si-live/update-$SLUG/` -- that is the delta;
+the loop itself (including the `frontend-design` / `use-ai-integration` rules for
+what you write) is `update-app`'s. The build/test mechanics for the system
+interface (in-process backend tests, the `test_e2e.py` Playwright harness, `npm
+run build`/`lint`/`test`) are the worker's job at harden time and are documented
+in
 [`type-system-interface.md`](../../shared/worker/references/type-system-interface.md);
-in the live loop you only need a clean build, not the full gate. If you do run
-the Python suite while iterating, run the fast subset -- skip the CI-only slow
-markers with `-m 'not tmux and not modal and not docker and not docker_sdk and
-not acceptance and not release'` (plus `--no-cov --cov-fail-under=0`), per
-CLAUDE.md; those run in CI, not locally.
+in the live loop you only need a clean build, not the full gate.
 
 **First round -- boot the preview.** After the first build, boot the worktree as
 a labeled preview tab and open it:
@@ -161,11 +140,9 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
 
-`open` (like every mutating `layout.py` op) requires `--layout` and only applies
-on clients that currently have that layout active, so run it for both named
-layouts -- the one the user is not on fails fast and harmlessly. The same holds
-for `close` everywhere below. (`refresh` is the exception: it takes no
-`--layout`.)
+The `for L in desktop mobile` loop is the same `--layout` handling `update-app`
+describes, and it applies to every `close` below too. (`refresh` is the
+exception: it takes no `--layout`.)
 
 `preview` boots `uv run system-interface` from the worktree's already-built app
 dir on a free port. It points layout persistence at a throwaway copy of the live
@@ -317,12 +294,32 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
 
-Because the system interface *is* the user's workspace, a final preview is
-essentially always warranted when there is unseen real work (unlike an ordinary
-app, where a tab refresh after go-live often suffices). It is optional only
-when the user already previewed a polished, real version and the worker changed
-nothing they would see. If the user rejects here, do not merge; tear the preview
-down and decide *with them* whether to re-brief the worker.
+**Two things must both hold**, and the second is a real judgment, not a
+formality:
+
+1. The worker produced **real work the user has not seen**, and
+2. **the user can actually observe and judge what changed.**
+
+Only the second gate needs your judgment, because the first question a preview
+seems to answer -- *does it even boot?* -- is already answered mechanically by
+safe-reveal's health check and auto-rollback. What is left is *does this look
+right*, and that is the only thing the user's eyes add.
+
+So a visual or layout change always warrants the preview: the system interface
+*is* their workspace, and a taste mismatch is expensive to discover after go-live.
+But a fix whose effect they cannot trigger on demand -- a race, an error path, a
+bug that needs setup they cannot drive from a tab -- gives them nothing to look
+at, and asking them to stare at an apparently unchanged UI teaches them that
+approving a preview means nothing. For those, the evidence that the fix works is
+a regression test that fails before and passes after, which the harden gate
+already produced; say that instead of booting a preview. This is the same
+reasoning as the test-only / no-surface carve-out in Step 2, applied at merge
+time.
+
+It is likewise optional when the user already previewed a polished, real version
+and the worker changed nothing they would see. If the user rejects here, do not
+merge; tear the preview down and decide *with them* whether to re-brief the
+worker.
 
 ## 4. Go live: freshness-check, merge, safe-reveal, tear down
 
