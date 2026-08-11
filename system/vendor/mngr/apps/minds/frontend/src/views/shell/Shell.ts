@@ -21,6 +21,7 @@ import { OverlayBackdrop } from "./OverlayBackdrop";
 import { SidebarMenu } from "./SidebarMenu";
 import { Titlebar } from "./Titlebar";
 import { WorkspaceFrame } from "./WorkspaceFrame";
+import { WebLoginModal } from "../components/WebLoginModal";
 import { DialogCloseButton } from "../components/Modal";
 import { Icon16 } from "../components/Icon";
 
@@ -199,6 +200,9 @@ export function Shell(): m.Component<ShellAttrs> {
       return m("div", { style: "display: contents" }, [
         m(Titlebar, { shell, routePath }),
         m(SidebarMenu, { shell }),
+        // The browser sign-in waiting modal: any page (welcome, accounts,
+        // create) can trigger it through the shared webLogin model.
+        m(WebLoginModal),
         isReconnecting
           ? m(
               "div",

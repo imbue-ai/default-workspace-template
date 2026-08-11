@@ -7,19 +7,17 @@ the sensitive operations (core API key, OAuth client secrets) stay on this
 server.
 """
 
-import json
 import logging
 import os
 import threading
 import time
 from collections.abc import Mapping
+from typing import Any
 from typing import Final
 
-import psycopg2
 from fastapi import APIRouter
 from fastapi import HTTPException
 from fastapi import Request
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from pydantic import Field
 from supertokens_python import InputAppInfo
@@ -31,6 +29,7 @@ from supertokens_python.recipe import emailpassword as st_emailpassword_recipe
 from supertokens_python.recipe import emailverification as st_emailverification_recipe
 from supertokens_python.recipe import session as st_session_recipe
 from supertokens_python.recipe import thirdparty as st_thirdparty_recipe
+from supertokens_python.recipe.emailpassword.interfaces import APIInterface as EmailPasswordAPIInterface
 from supertokens_python.recipe.emailpassword.interfaces import ConsumePasswordResetTokenOkResult
 from supertokens_python.recipe.emailpassword.interfaces import EmailAlreadyExistsError
 from supertokens_python.recipe.emailpassword.interfaces import PasswordPolicyViolationError
@@ -43,16 +42,21 @@ from supertokens_python.recipe.emailpassword.syncio import send_reset_password_e
 from supertokens_python.recipe.emailpassword.syncio import sign_in as ep_sign_in
 from supertokens_python.recipe.emailpassword.syncio import sign_up as ep_sign_up
 from supertokens_python.recipe.emailpassword.syncio import update_email_or_password
+from supertokens_python.recipe.emailpassword.utils import default_email_validator
+from supertokens_python.recipe.emailpassword.utils import default_password_validator
+from supertokens_python.recipe.emailverification.interfaces import APIInterface as EmailVerificationAPIInterface
 from supertokens_python.recipe.emailverification.interfaces import CreateEmailVerificationTokenOkResult
-from supertokens_python.recipe.emailverification.interfaces import VerifyEmailUsingTokenOkResult
 from supertokens_python.recipe.emailverification.syncio import create_email_verification_token
 from supertokens_python.recipe.emailverification.syncio import is_email_verified
 from supertokens_python.recipe.emailverification.syncio import send_email_verification_email
 from supertokens_python.recipe.emailverification.syncio import verify_email_using_token
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from supertokens_python.recipe.session.syncio import create_new_session_without_request_response
+from supertokens_python.recipe.session.syncio import get_session_without_request_response
 from supertokens_python.recipe.session.syncio import refresh_session_without_request_response
 from supertokens_python.recipe.session.syncio import revoke_all_sessions_for_user
+from supertokens_python.recipe.session.syncio import revoke_session
+from supertokens_python.recipe.thirdparty.interfaces import APIInterface as ThirdPartyAPIInterface
 from supertokens_python.recipe.thirdparty.interfaces import ManuallyCreateOrUpdateUserOkResult
 from supertokens_python.recipe.thirdparty.provider import Provider
 from supertokens_python.recipe.thirdparty.provider import ProviderClientConfig
@@ -70,7 +74,7 @@ from supertokens_python.types.base import AccountInfoInput
 import imbue.remote_service_connector.auth as auth_module
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
-from imbue.remote_service_connector.auth import is_email_paid
+from imbue.remote_service_connector.auth import require_admin_key
 from imbue.remote_service_connector.errors import MissingAuthWebsiteDomainError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -79,82 +83,75 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-HTML_SHARED_STYLES = (
-    "body{font-family:system-ui,-apple-system,sans-serif;background:#f8fafc;"
-    "display:flex;justify-content:center;align-items:center;min-height:100vh;"
-    "margin:0;padding:20px}"
-    ".card{background:white;border-radius:12px;padding:40px;max-width:420px;"
-    "width:100%;box-shadow:0 1px 3px rgba(0,0,0,0.1);text-align:center}"
-    "h1{margin:0 0 8px;font-size:22px;color:#0f172a}"
-    "p{margin:0 0 16px;color:#475569;font-size:14px}"
-    "label{display:block;text-align:left;font-size:13px;color:#334155;margin:8px 0 6px}"
-    "input{width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;"
-    "font-size:14px;font-family:inherit;box-sizing:border-box}"
-    "button{width:100%;padding:12px;background:#1e293b;color:white;border:none;"
-    "border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;"
-    "font-family:inherit;margin-top:12px}"
-    "button:disabled{background:#94a3b8;cursor:not-allowed}"
-    ".error{color:#dc2626;font-size:13px;margin-top:12px;display:none}"
-    ".success{color:#15803d;font-size:13px;margin-top:12px;display:none}"
-)
-
-_VERIFY_EMAIL_SUCCESS_HTML = (
-    "<!doctype html><html><head><title>Email verified</title><style>"
-    + HTML_SHARED_STYLES
-    + "</style></head><body><div class='card'>"
-    "<h1 style='color:#15803d'>Email verified</h1>"
-    "<p>Your email has been verified. You may close this tab and return to the app.</p>"
-    "</div></body></html>"
-)
-
-_VERIFY_EMAIL_FAILED_HTML = (
-    "<!doctype html><html><head><title>Verification failed</title><style>"
-    + HTML_SHARED_STYLES
-    + "</style></head><body><div class='card'>"
-    "<h1 style='color:#dc2626'>Verification failed</h1>"
-    "<p>The verification link is invalid or has expired. "
-    "Request a new one from the app.</p>"
-    "</div></body></html>"
-)
-
-_RESET_PASSWORD_PAGE_TEMPLATE = (
-    "<!doctype html><html><head><title>Reset password</title><style>"
-    + HTML_SHARED_STYLES
-    + "</style></head><body><div class='card'>"
-    "<h1>Set new password</h1><p>Enter your new password below.</p>"
-    "<form id='f' onsubmit='return submitForm(event)'>"
-    "<label for='p'>New password</label>"
-    "<input id='p' type='password' minlength='8' autocomplete='new-password' required>"
-    "<label for='c'>Confirm password</label>"
-    "<input id='c' type='password' minlength='8' autocomplete='new-password' required>"
-    "<button id='b' type='submit'>Reset password</button>"
-    "<div id='err' class='error'></div>"
-    "<div id='ok' class='success'></div>"
-    "</form>"
-    "<script>"
-    "const TOKEN=__TOKEN_JSON__;"
-    "async function submitForm(ev){ev.preventDefault();"
-    "const p=document.getElementById('p').value;"
-    "const c=document.getElementById('c').value;"
-    "const err=document.getElementById('err');err.style.display='none';"
-    "if(p!==c){err.textContent='Passwords do not match';err.style.display='block';return false;}"
-    "const btn=document.getElementById('b');btn.disabled=true;"
-    "try{const r=await fetch('/auth/password/reset',{method:'POST',"
-    "headers:{'Content-Type':'application/json'},"
-    "body:JSON.stringify({token:TOKEN,new_password:p})});"
-    "const d=await r.json();"
-    "if(d.status==='OK'){document.getElementById('ok').textContent='Password reset. You can sign in now.';"
-    "document.getElementById('ok').style.display='block';"
-    "document.getElementById('f').style.display='none';}"
-    "else{err.textContent=d.message||'Reset failed';err.style.display='block';btn.disabled=false;}}"
-    "catch(e){err.textContent='Network error';err.style.display='block';btn.disabled=false;}"
-    "return false;}"
-    "</script>"
-    "</div></body></html>"
-)
-
-
 AUTH_TENANT_ID = "public"
+
+# The SuperTokens middleware's API base path (the SDK serves e.g. the browser
+# session refresh at ``<base>/session/refresh``). Deliberately distinct from
+# this module's deprecated hand-rolled ``/auth/*`` JSON endpoints so the
+# SDK-served routes can never collide with them.
+ACCOUNTS_AUTH_API_BASE_PATH: Final[str] = "/accounts/auth"
+
+
+class EnsureAsgiRootPathMiddleware:
+    """Guarantee ``scope["root_path"]`` exists before the SuperTokens middleware runs.
+
+    Modal's ASGI shim omits ``root_path`` from the request scope (regular ASGI
+    servers set it to ``""``), and the SuperTokens FastAPI middleware raises
+    on EVERY request when the key is absent -- turning the whole deployed app
+    into 500s, including ``/health/liveness``. Mounted by ``app.py`` outside
+    (added after) the SuperTokens middleware so it normalizes the scope first.
+    The ``async`` here is mandated by the ASGI protocol.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if isinstance(scope, dict) and scope.get("root_path") is None:
+            scope = {**scope, "root_path": ""}
+        await self.app(scope, receive, send)
+
+
+class PartitionedCookieMiddleware:
+    """Append ``; Partitioned`` to the SameSite=None session cookies on the way out.
+
+    The SuperTokens SDK sets its browser-session cookies ``SameSite=None;
+    Secure`` (so they ride inside the hosted chrome's cross-site workspace
+    iframe) but cannot emit the CHIPS ``Partitioned`` attribute, which is what
+    stops third-party-cookie blocking from withholding them while isolating
+    them to the chrome's top-level partition. This rewrites the ``Set-Cookie``
+    headers to add it. Scoped by attribute (SameSite=None + Secure), so it only
+    touches cookies meant to cross sites; the ``async`` is mandated by ASGI.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if not (isinstance(scope, dict) and scope.get("type") == "http"):
+            await self.app(scope, receive, send)
+            return
+
+        async def _send_with_partitioned_cookies(message: Any) -> None:
+            if isinstance(message, dict) and message.get("type") == "http.response.start":
+                message = {**message, "headers": _add_partitioned_to_cross_site_cookies(message.get("headers", []))}
+            await send(message)
+
+        await self.app(scope, receive, _send_with_partitioned_cookies)
+
+
+def _add_partitioned_to_cross_site_cookies(headers: Any) -> list[tuple[bytes, bytes]]:
+    """Return the response headers with ``; Partitioned`` added to SameSite=None Set-Cookies."""
+    rewritten: list[tuple[bytes, bytes]] = []
+    for name, value in headers:
+        is_cross_site_cookie = (
+            name.lower() == b"set-cookie"
+            and b"samesite=none" in value.lower()
+            and b"secure" in value.lower()
+            and b"partitioned" not in value.lower()
+        )
+        rewritten.append((name, value + b"; Partitioned") if is_cross_site_cookie else (name, value))
+    return rewritten
 
 
 class SessionTokens(BaseModel):
@@ -266,7 +263,7 @@ _verification_email_sent_at_monotonic_by_user_id: dict[str, float] = {}
 _verification_email_cooldown_lock = threading.Lock()
 
 
-def _send_verification_email_with_cooldown(user_id: str, recipe_user_id: RecipeUserId, email: str) -> bool:
+def send_verification_email_with_cooldown(user_id: str, recipe_user_id: RecipeUserId, email: str) -> bool:
     """Send a verification email unless one went out to this user moments ago.
 
     Returns True when an email was sent, False when the cooldown suppressed it.
@@ -325,31 +322,6 @@ def _mark_email_verified(recipe_user_id: RecipeUserId, email: str) -> None:
         verify_email_using_token(tenant_id=AUTH_TENANT_ID, token=token_result.token)
 
 
-def mark_paid_email_verified_best_effort(email: str) -> None:
-    """Mark any existing account for ``email`` verified, swallowing failures.
-
-    Called when an email is added to the paid list so a user who already signed
-    up (but never verified) is not left locked out of the paid access they were
-    just granted. Purely best-effort: SuperTokens being unconfigured or
-    unreachable must never fail the paid-list write, and an email with no
-    account yet is simply a no-op (that user is auto-verified at signup
-    instead).
-    """
-    if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
-        return
-    try:
-        users = list_users_by_account_info(
-            tenant_id=AUTH_TENANT_ID,
-            account_info=AccountInfoInput(email=email),
-        )
-        for user in users:
-            for login_method in user.login_methods:
-                if login_method.email == email and not login_method.verified:
-                    _mark_email_verified(recipe_user_id=login_method.recipe_user_id, email=email)
-    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
-        logger.warning("Failed to auto-verify paid email %s: %s", email, exc)
-
-
 def require_supertokens_configured() -> None:
     if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
         raise HTTPException(status_code=503, detail="SuperTokens not configured on the server")
@@ -399,7 +371,7 @@ def _existing_login_method_ids_for_email(email: str) -> set[str]:
     return method_ids
 
 
-def _cross_method_signup_rejection(email: str, attempted_method_id: str) -> AuthResponse | None:
+def cross_method_signup_rejection(email: str, attempted_method_id: str) -> AuthResponse | None:
     """The one-account-per-email guard shared by password signup and the OAuth callback.
 
     Returns the rejection response when ``email`` is already registered under a
@@ -431,9 +403,41 @@ def _cross_method_signup_rejection(email: str, attempted_method_id: str) -> Auth
     )
 
 
+def signup_field_rejection(email: str, password: str) -> AuthResponse | None:
+    """Server-side sign-up form validation, shared by the JSON and browser signup endpoints.
+
+    The SDK only runs its email-format / password-policy form-field validators
+    in its HTTP API layer, which this app disables
+    (``disable_emailpassword_default_apis``); the recipe function ``sign_up``
+    skips them entirely. Running the SDK's own default validators here keeps
+    the enforced policy identical to what its API layer would have applied
+    (>= 8 characters including a letter and a number; the email regex), so a
+    caller bypassing the frontend cannot create an account with a malformed
+    email or a trivially weak password.
+    """
+    email_error = _supertokens_sync_run(default_email_validator(email, AUTH_TENANT_ID))
+    if email_error is not None:
+        return AuthResponse(status="FIELD_ERROR", message=email_error)
+    password_error = _supertokens_sync_run(default_password_validator(password, AUTH_TENANT_ID))
+    if password_error is not None:
+        return AuthResponse(status="FIELD_ERROR", message=password_error)
+    return None
+
+
 @router.post("/auth/signup", response_model=AuthResponse)
 def auth_signup(body: SignUpRequest) -> AuthResponse:
     """Create a new email/password account and return a session + user info.
+
+    Deprecated: the browser-based accounts surface (`/accounts/*`, consumed via
+    ``mngr imbue_cloud auth login``) is the primary signup path. This JSON
+    endpoint remains for released desktop clients and the headless CLI
+    (``mngr imbue_cloud auth signup``); once every client ships the browser
+    flow it will be restricted to dev/CI tiers. See the README's
+    "Deprecated JSON auth endpoints" section.
+
+    Email verification is non-blocking: no verification email is sent at
+    signup (the first verification-gated action triggers a contextual send),
+    and the account counts as signed in immediately.
 
     Any exception from the SuperTokens SDK (core unreachable, schema mismatch,
     etc.) is caught and surfaced as a structured ``AuthResponse(status="ERROR")``
@@ -445,11 +449,14 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
         email = body.email.strip()
         if not email or not body.password:
             return AuthResponse(status="FIELD_ERROR", message="Email and password are required")
+        field_rejection = signup_field_rejection(email, body.password)
+        if field_rejection is not None:
+            return field_rejection
 
         try:
             # One-account-per-email: refuse a password signup when the email
             # already has an account under another login method (e.g. Google).
-            rejection = _cross_method_signup_rejection(email, _EMAIL_PASSWORD_LOGIN_METHOD_ID)
+            rejection = cross_method_signup_rejection(email, _EMAIL_PASSWORD_LOGIN_METHOD_ID)
             if rejection is not None:
                 return rejection
 
@@ -462,44 +469,35 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
                 return AuthResponse(status="ERROR", message="Sign-up failed")
 
             user = result.user
-            recipe_user_id = user.login_methods[0].recipe_user_id if user.login_methods else RecipeUserId(user.id)
-
-            # Paid users skip the email-verification round trip: mark the new
-            # account verified up front (before minting the session, so its very
-            # first token already carries the verified claim) and don't send a
-            # verification email. A paid-list lookup failure falls back to the
-            # normal verify-by-email flow rather than failing the signup.
-            # ``KeyError`` covers an unset ``DATABASE_URL`` (pool DB not
-            # configured); ``psycopg2.Error`` covers a connect/query failure.
-            try:
-                is_paid = is_email_paid(email)
-            except (psycopg2.Error, KeyError) as exc:
-                logger.warning("Paid-list lookup failed during signup for %s; treating as not paid: %s", email, exc)
-                is_paid = False
-            if is_paid:
-                _mark_email_verified(recipe_user_id=recipe_user_id, email=email)
-
             tokens = build_session_tokens(user.id)
-            if not is_paid:
-                _send_verification_email_with_cooldown(
-                    user_id=user.id,
-                    recipe_user_id=recipe_user_id,
-                    email=email,
-                )
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during signup", exc_info=exc)
             return AuthResponse(status="ERROR", message="Auth backend unavailable")
+        # ``needs_email_verification`` is pinned False for wire compat:
+        # released clients treat True as "blocked pending verification" (a
+        # check-email page polling for a mail that no longer gets sent), while
+        # verification is now non-blocking server-side. Live verification
+        # state is served by /auth/email/is-verified.
         return AuthResponse(
             status="OK",
             user=AuthUser(user_id=user.id, email=email),
             tokens=tokens,
-            needs_email_verification=not is_paid,
+            needs_email_verification=False,
         )
 
 
 @router.post("/auth/signin", response_model=AuthResponse)
 def auth_signin(body: SignInRequest) -> AuthResponse:
     """Authenticate with email/password and return a session + user info.
+
+    Deprecated: the browser-based accounts surface is the primary sign-in
+    path; this JSON endpoint remains for released desktop clients and the
+    headless CLI (``mngr imbue_cloud auth signin``). See the README's
+    "Deprecated JSON auth endpoints" section.
+
+    Email verification is non-blocking: an unverified signin succeeds and
+    triggers no verification email (the first verification-gated action
+    does, contextually).
 
     Any exception from the SuperTokens SDK is caught and returned as
     ``AuthResponse(status="ERROR")`` -- see the ``auth_signup`` docstring for
@@ -521,23 +519,17 @@ def auth_signin(body: SignInRequest) -> AuthResponse:
                 return AuthResponse(status="ERROR", message="Sign-in failed")
 
             user = result.user
-            recipe_user_id = user.login_methods[0].recipe_user_id if user.login_methods else RecipeUserId(user.id)
-            verified = is_email_verified(recipe_user_id=recipe_user_id, email=email)
             tokens = build_session_tokens(user.id)
-            if not verified:
-                _send_verification_email_with_cooldown(
-                    user_id=user.id,
-                    recipe_user_id=recipe_user_id,
-                    email=email,
-                )
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during signin", exc_info=exc)
             return AuthResponse(status="ERROR", message="Auth backend unavailable")
+        # Pinned False for wire compat -- see the matching comment in
+        # ``auth_signup``.
         return AuthResponse(
             status="OK",
             user=AuthUser(user_id=user.id, email=email),
             tokens=tokens,
-            needs_email_verification=not verified,
+            needs_email_verification=False,
         )
 
 
@@ -582,7 +574,87 @@ def auth_revoke_sessions(request: Request) -> dict[str, object]:
         return {"status": "OK", "revoked_count": len(revoked)}
 
 
-def _recipe_user_id_for_callers_email(user_id: str, email: str) -> RecipeUserId:
+@router.post("/auth/session/revoke-current")
+def auth_revoke_current_session(request: Request) -> dict[str, object]:
+    """Revoke only the session presented in the Authorization header.
+
+    The device-scoped counterpart of ``/auth/session/revoke``: signing out of
+    one desktop install must not kill the user's browser session or their
+    other devices. The session handle is derived from the caller's own access
+    token, so an anonymous caller cannot revoke anyone else's session.
+    Idempotent from the caller's perspective -- an already-revoked token gets
+    the same 401 every other stale token gets.
+    """
+    with handle_endpoint_errors():
+        require_supertokens_configured()
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            raise HTTPException(status_code=401, detail="Missing Bearer credentials")
+        try:
+            session = get_session_without_request_response(
+                access_token=auth_header[7:],
+                anti_csrf_check=False,
+                override_global_claim_validators=lambda *_args, **_kwargs: [],
+            )
+        except (ValueError, TypeError, SuperTokensSessionError, SuperTokensGeneralError) as exc:
+            raise HTTPException(status_code=401, detail="Invalid token") from exc
+        if session is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired SuperTokens session")
+        session_handle = session.get_handle()
+        is_revoked = revoke_session(session_handle)
+        logger.info("Revoked current session for user %s...", session.get_user_id()[:8])
+        return {"status": "OK", "revoked": bool(is_revoked)}
+
+
+class TestSignupRequest(BaseModel):
+    email: str = Field(description="Email address for the test account")
+    password: str = Field(description="Password for the test account")
+    verified: bool = Field(
+        default=False,
+        description="Whether to mark the email verified immediately (for tests that need verified accounts)",
+    )
+
+
+@router.post("/admin/test-signup", response_model=AuthResponse)
+def admin_test_signup(request: Request, body: TestSignupRequest) -> AuthResponse:
+    """Create an email/password account for automated tests (admin-key authenticated).
+
+    Exists so the deployment tests can mint accounts on tiers where the open
+    JSON signup is (or will be) restricted to the browser flow, and can cover
+    both verified and unverified paths without a real mailbox. This is the
+    ONLY path that may mark an email verified without the user clicking a
+    link, and it is gated by the operator admin key -- the same trust root as
+    the account admin API.
+    """
+    with handle_endpoint_errors():
+        require_admin_key(request)
+        require_supertokens_configured()
+        email = body.email.strip()
+        if not email or not body.password:
+            return AuthResponse(status="FIELD_ERROR", message="Email and password are required")
+        try:
+            result = ep_sign_up(tenant_id=AUTH_TENANT_ID, email=email, password=body.password)
+            if isinstance(result, EmailAlreadyExistsError):
+                return AuthResponse(status="EMAIL_ALREADY_EXISTS", message="An account with this email already exists")
+            if not isinstance(result, EPSignUpOkResult):
+                return AuthResponse(status="ERROR", message="Sign-up failed")
+            user = result.user
+            recipe_user_id = user.login_methods[0].recipe_user_id if user.login_methods else RecipeUserId(user.id)
+            if body.verified:
+                _mark_email_verified(recipe_user_id=recipe_user_id, email=email)
+            tokens = build_session_tokens(user.id)
+        except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+            logger.error("SuperTokens SDK error during test signup", exc_info=exc)
+            return AuthResponse(status="ERROR", message="Auth backend unavailable")
+        return AuthResponse(
+            status="OK",
+            user=AuthUser(user_id=user.id, email=email),
+            tokens=tokens,
+            needs_email_verification=not body.verified,
+        )
+
+
+def recipe_user_id_for_callers_email(user_id: str, email: str) -> RecipeUserId:
     """Resolve the caller's login method for ``email``.
 
     Raises 403 when the email does not belong to the authenticated user --
@@ -611,8 +683,8 @@ def auth_send_verification_email(body: SendVerificationEmailRequest, request: Re
     with handle_endpoint_errors():
         require_supertokens_configured()
         user_id = auth_module.get_user_id_from_bearer_header(request)
-        recipe_user_id = _recipe_user_id_for_callers_email(user_id, body.email)
-        is_sent = _send_verification_email_with_cooldown(
+        recipe_user_id = recipe_user_id_for_callers_email(user_id, body.email)
+        is_sent = send_verification_email_with_cooldown(
             user_id=user_id,
             recipe_user_id=recipe_user_id,
             email=body.email,
@@ -631,42 +703,9 @@ def auth_is_email_verified(body: IsEmailVerifiedRequest, request: Request) -> di
     with handle_endpoint_errors():
         require_supertokens_configured()
         user_id = auth_module.get_user_id_from_bearer_header(request)
-        recipe_user_id = _recipe_user_id_for_callers_email(user_id, body.email)
+        recipe_user_id = recipe_user_id_for_callers_email(user_id, body.email)
         verified = is_email_verified(recipe_user_id=recipe_user_id, email=body.email)
         return {"verified": verified}
-
-
-@router.get("/auth/verify-email", response_class=HTMLResponse)
-def auth_verify_email_page(request: Request) -> HTMLResponse:
-    """Handle an email verification link click from an email.
-
-    Returns a human-readable HTML page indicating success or failure. Reads the
-    ``token`` and ``tenantId`` query parameters directly rather than declaring
-    them as function arguments, since SuperTokens camel-cases ``tenantId`` in
-    emitted links and we do not want that to leak into the Python identifier.
-    """
-    with handle_endpoint_errors():
-        require_supertokens_configured()
-        token = request.query_params.get("token", "")
-        tenant_id = request.query_params.get("tenantId") or AUTH_TENANT_ID
-        if not token:
-            return HTMLResponse(_VERIFY_EMAIL_FAILED_HTML, status_code=400)
-        try:
-            result = verify_email_using_token(tenant_id=tenant_id, token=token)
-        except (SuperTokensSessionError, SuperTokensGeneralError, ValueError) as exc:
-            logger.error("Email verification error", exc_info=exc)
-            return HTMLResponse(_VERIFY_EMAIL_FAILED_HTML, status_code=400)
-        if isinstance(result, VerifyEmailUsingTokenOkResult):
-            return HTMLResponse(_VERIFY_EMAIL_SUCCESS_HTML)
-        return HTMLResponse(_VERIFY_EMAIL_FAILED_HTML, status_code=400)
-
-
-@router.get("/auth/reset-password", response_class=HTMLResponse)
-def auth_reset_password_page(token: str = "") -> HTMLResponse:
-    """Render the password-reset form linked from a password-reset email."""
-    require_supertokens_configured()
-    safe_token = json.dumps(token)
-    return HTMLResponse(_RESET_PASSWORD_PAGE_TEMPLATE.replace("__TOKEN_JSON__", safe_token))
 
 
 @router.post("/auth/password/forgot")
@@ -754,12 +793,18 @@ def complete_oauth_code_exchange(
     provider_id: str,
     callback_url: str,
     query_params: Mapping[str, str],
+    *,
+    is_bearer_session_minted: bool = True,
 ) -> AuthResponse:
     """Exchange a provider callback's params for a SuperTokens session.
 
-    Shared by the desktop CLI's ``/auth/oauth/callback`` and the share
-    broker's browser callback, so the one-account-per-email guard, the account
-    create/update, and the error shapes cannot drift between the two flows.
+    Shared by the desktop CLI's ``/auth/oauth/callback`` and the accounts
+    surface's browser callback, so the one-account-per-email guard, the
+    account create/update, and the error shapes cannot drift between the two
+    flows. The browser callback passes ``is_bearer_session_minted=False``: it
+    creates its own cookie session on the response, so minting bearer tokens
+    here would leave an orphaned session in the core that nothing ever
+    delivers or revokes.
     """
     try:
         # ``Provider.exchange_auth_code_for_oauth_tokens`` and
@@ -778,7 +823,15 @@ def complete_oauth_code_exchange(
             )
         )
         oauth_user = _supertokens_sync_run(provider.get_user_info(oauth_tokens=oauth_tokens, user_context={}))
-    except (ValueError, KeyError, OSError) as exc:
+    except Exception as exc:
+        # Deliberately broad: this is the boundary around the SuperTokens
+        # provider layer, whose realistic failures raise types no narrower
+        # catch covers -- httpx transport errors (not OSError), pyjwt errors
+        # from id-token verification, and plain ``Exception`` for a
+        # consumed/expired authorization code ("third party user id is
+        # missing"). Escaping here would turn a routine mid-sign-in hiccup
+        # into a raw 500 in the user's browser instead of the structured
+        # ERROR both callers render cleanly.
         logger.error("OAuth callback failed for %s", provider_id, exc_info=exc)
         return AuthResponse(status="ERROR", message=str(exc))
 
@@ -796,7 +849,7 @@ def complete_oauth_code_exchange(
     # endpoints return, so the typed desktop client gets a stable JSON
     # shape rather than a FastAPI 500 body.
     try:
-        rejection = _cross_method_signup_rejection(email, provider_id)
+        rejection = cross_method_signup_rejection(email, provider_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
         logger.error("SuperTokens SDK error during OAuth callback", exc_info=exc)
         return AuthResponse(status="ERROR", message="Auth backend unavailable")
@@ -818,7 +871,7 @@ def complete_oauth_code_exchange(
         raw = oauth_user.raw_user_info_from_provider.from_user_info_api
         display_name = raw.get("name") or raw.get("login") or raw.get("displayName")
 
-    tokens = build_session_tokens(result.user.id)
+    tokens = build_session_tokens(result.user.id) if is_bearer_session_minted else None
     return AuthResponse(
         status="OK",
         user=AuthUser(user_id=result.user.id, email=email, display_name=display_name),
@@ -921,6 +974,49 @@ def _build_oauth_providers() -> list[ProviderInput]:
     return providers
 
 
+def disable_emailpassword_default_apis(original: EmailPasswordAPIInterface) -> EmailPasswordAPIInterface:
+    """Turn off every HTTP API the emailpassword recipe would serve via the SDK middleware.
+
+    The middleware is mounted only for the SDK's cookie/session machinery
+    (the browser session refresh under ``ACCOUNTS_AUTH_API_BASE_PATH``); the
+    recipe's own signup/signin/reset routes would bypass the hand-rolled
+    endpoints' Turnstile gate, cross-method signup rejection, and
+    verification-email cooldown. Only the HTTP routes are disabled -- the
+    ``syncio`` recipe functions the hand-rolled endpoints call are unaffected.
+    """
+    original.disable_sign_up_post = True
+    original.disable_sign_in_post = True
+    original.disable_generate_password_reset_token_post = True
+    original.disable_password_reset_post = True
+    original.disable_email_exists_get = True
+    return original
+
+
+def disable_thirdparty_default_apis(original: ThirdPartyAPIInterface) -> ThirdPartyAPIInterface:
+    """Turn off every HTTP API the thirdparty recipe would serve via the SDK middleware.
+
+    Same reasoning as :func:`disable_emailpassword_default_apis`: the
+    ``/signinup`` route would mint sessions without the hand-rolled flows'
+    checks; the browser OAuth flow uses its own endpoints in accounts_web.
+    """
+    original.disable_sign_in_up_post = True
+    original.disable_authorisation_url_get = True
+    original.disable_apple_redirect_handler_post = True
+    return original
+
+
+def disable_emailverification_default_apis(original: EmailVerificationAPIInterface) -> EmailVerificationAPIInterface:
+    """Turn off every HTTP API the emailverification recipe would serve via the SDK middleware.
+
+    The recipe's generate-token route would send verification emails without
+    the hand-rolled endpoints' per-user cooldown.
+    """
+    original.disable_email_verify_post = True
+    original.disable_is_email_verified_get = True
+    original.disable_generate_email_verify_token_post = True
+    return original
+
+
 def init_supertokens() -> None:
     """Initialize SuperTokens SDK with all recipes used by the minds auth flow.
 
@@ -937,12 +1033,14 @@ def init_supertokens() -> None:
     website_domain = _get_auth_website_domain()
     providers = _build_oauth_providers()
 
+    thirdparty_override = st_thirdparty_recipe.InputOverrideConfig(apis=disable_thirdparty_default_apis)
     thirdparty_recipe_init = (
         st_thirdparty_recipe.init(
             sign_in_and_up_feature=st_thirdparty_recipe.SignInAndUpFeature(providers=providers),
+            override=thirdparty_override,
         )
         if providers
-        else st_thirdparty_recipe.init()
+        else st_thirdparty_recipe.init(override=thirdparty_override)
     )
 
     supertokens_init(
@@ -954,15 +1052,60 @@ def init_supertokens() -> None:
             app_name="Minds",
             api_domain=website_domain,
             website_domain=website_domain,
-            api_base_path="/auth",
+            # The SDK middleware serves its routes (browser session refresh)
+            # under api_base_path; website_base_path stays /auth so the links
+            # in verification/reset emails keep hitting the hand-rolled pages.
+            api_base_path=ACCOUNTS_AUTH_API_BASE_PATH,
             website_base_path="/auth",
         ),
         framework="fastapi",
         recipe_list=[
-            st_session_recipe.init(),
-            st_emailpassword_recipe.init(),
+            # Cookie config for the hosted accounts surface's browser
+            # sessions. ACCOUNTS_COOKIE_DOMAIN (sharing secret) widens the
+            # cookie to the accounts SSO domain (e.g. ".imbue.com") on tiers
+            # with a real accounts hostname; unset means host-only, which is
+            # also the only thing that works on *.modal.run (a public suffix).
+            st_session_recipe.init(
+                cookie_domain=os.environ.get("ACCOUNTS_COOKIE_DOMAIN") or None,
+                cookie_secure=True,
+                # SameSite=None (paired with the Partitioned attribute appended
+                # by PartitionedCookieMiddleware) so the browser session is
+                # readable inside the hosted web chrome's cross-site workspace
+                # iframe -- specifically on the broker's ``/share/authorize``
+                # leg, which runs in that iframe and must recognize the owner.
+                # A Lax cookie is withheld there, so the owner was bounced
+                # through the "Choose an account" interstitial. CHIPS partitions
+                # by top-level site (the chrome, on the connector origin), which
+                # is also where it is set at ``/web`` login, so the partitions
+                # match. CSRF is NOT weakened by this: every state-changing
+                # route already refuses a cross-site Origin (see
+                # ``_reject_cross_site_post``), and every session read here runs
+                # with ``anti_csrf_check=False``, so the SDK's own anti-CSRF was
+                # never the gate -- hence ``anti_csrf="NONE"`` (the SDK would
+                # otherwise default to VIA_CUSTOM_HEADER when SameSite=None,
+                # which our non-SDK frontends cannot satisfy, breaking refresh).
+                cookie_same_site="none",
+                anti_csrf="NONE",
+                # Always transfer browser-session tokens as cookies. The SDK's
+                # default resolves the method from the request's st-auth-mode
+                # header (sent only by SuperTokens' own frontend SDK) and falls
+                # back to header tokens, so the hand-rolled accounts pages
+                # would get st-access-token response headers instead of the
+                # cookie session this surface is built on.
+                get_token_transfer_method=lambda _request, _is_create, _user_context: "cookie",
+            ),
+            st_emailpassword_recipe.init(
+                override=st_emailpassword_recipe.InputOverrideConfig(apis=disable_emailpassword_default_apis)
+            ),
             thirdparty_recipe_init,
-            st_emailverification_recipe.init(mode="REQUIRED"),
+            # OPTIONAL: verification is tracked (and required per-action via
+            # ``require_verified_email``) but must not gate session validity --
+            # REQUIRED would stamp a rejecting claim validator into every
+            # session, which the connector deliberately does not enforce.
+            st_emailverification_recipe.init(
+                mode="OPTIONAL",
+                override=st_emailverification_recipe.InputOverrideConfig(apis=disable_emailverification_default_apis),
+            ),
         ],
         mode="asgi",
     )

@@ -25,6 +25,10 @@ from imbue.mngr.utils.testing import get_short_random_string
 
 @pytest.mark.acceptance
 @pytest.mark.rsync
+# Fresh Modal sandboxes transiently accept TCP before sshd answers the SSH
+# handshake; mngr's bounded banner-retry rides out the common case, but a slow
+# Modal window can outlast it, so offload retries the whole test.
+@pytest.mark.flaky
 @pytest.mark.timeout(300)
 def test_mngr_create_echo_command_on_modal(
     temp_source_dir: Path,
