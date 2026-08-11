@@ -1,0 +1,7 @@
+Added a plan for a new `migrate-workspace` skill at `docs/system/blueprint/migrate-workspace/`, and then implemented it. Because the workspace tree was restructured after `minds-v0.3.9` and the container base image moved from Debian 12 to Debian 13, an existing workspace cannot update itself across that boundary; the guidance instead becomes "create a fresh workspace and have its agent pull the old one in". The skill itself lives under `.agents/` -- see that project's entry for what it does.
+
+Changes in this project:
+
+- `docs/VERSION_HISTORY.md` gains a `## Migrations` section (between `## Workspace` and `## Inspirations`), where `migrate-workspace` appends one line per workspace it pulls in. The starter that `update-self` recreates when the file has been deleted ships the section too, so a recreated ledger already has it, and `publish-inspiration` / `update-installed-inspiration` -- which recreate the same starter by reference -- name the four sections rather than three.
+
+- `system/test_meta_ratchets.py` has its four retired-terminology counts raised off zero (`creations/` 3, "artifact" 8, "web service" 2, "application" 3), with a comment recording the single deliberate exception: the migration skill's pre-rename layout map has to name what the old tree actually called things in its left-hand column, or it cannot map them. The counts stay ratcheted rather than the file being path-exempted, so any retired term creeping into other live prose still fails.

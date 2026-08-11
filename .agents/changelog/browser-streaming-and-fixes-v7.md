@@ -1,0 +1,1 @@
+The `agentic-browser-fleet` skill doc now reflects the default simultaneous-browser cap of 2 (down from 3), matching the daemon's `BROWSER_MAX_SESSIONS` default -- so agents see the correct `2/2 browsers open` limit and message.

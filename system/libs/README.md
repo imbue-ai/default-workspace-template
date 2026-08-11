@@ -5,6 +5,9 @@ background services (no supervised program of their own). Each is a uv
 workspace member with its own `pyproject.toml`; see each package's README for
 details.
 
+- `automations/` - The machinery that runs automations (skills on a
+  schedule): the durable recurring-job runner, the cron env wrapper, and the
+  automation-agent waker (see the manage-scheduled-tasks skill).
 - `bootstrap/` - First-boot setup; then launches supervisord, which supervises
   the apps and services.
 - `github_sync/` - The opt-in GitHub auto-push wiring (a git hook, not a

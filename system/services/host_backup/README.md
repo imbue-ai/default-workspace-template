@@ -105,8 +105,20 @@ during the run.
 
 `uv run host-backup-now` waits for any in-progress backup to finish (so
 your latest changes are guaranteed to be captured), bumps `backup.toml`'s
-mtime, then tails `events/backup/events.jsonl` for the next
-`restic_backup_succeeded` / `restic_backup_failed` event and prints it.
+mtime, then tails `events/backup/events.jsonl` for the triggered tick's
+terminal event and prints it. Terminal means *any* event that ends a tick, not
+just the two restic outcomes: a tick that never reaches restic
+(`tick_skipped_due_to_missing_secrets`, `snapshot_failed`) or that dies in the
+loop's outer catch (`tick_error`) resolves the wait too, so the command returns
+as soon as the tick is over rather than waiting out its `--timeout`.
+
+Exit codes let a caller that takes a backup as a precondition distinguish the
+outcomes without parsing the event: `0` for `restic_backup_succeeded`, `3` for
+`tick_skipped_due_to_missing_secrets` (backups are not configured, so there is
+no restore point), `1` for any other tick outcome, and `2` when no outcome was
+observed at all -- either no terminal event arrived before the timeout, or the
+events log could not be located in the first place (see below), in which case
+nothing was triggered either.
 
 The service writes its events under the *primary* agent's state dir (it
 inherits `MNGR_AGENT_STATE_DIR` from the bootstrap shell that started
@@ -122,7 +134,8 @@ no pointer exists yet, which is correct when the caller is the primary agent).
 
 Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 - `capabilities_detected` (once at service startup)
-- `backup_started`, `snapshot_created`, `snapshot_deleted` (one per deleted
+- `backup_started`, `snapshot_created`, `snapshot_failed` (the snapshot step
+  aborted the tick before restic ran), `snapshot_deleted` (one per deleted
   snapshot -- `outer_trigger` may emit several per tick during keep-N pruning)
 - `restic_backup_succeeded`, `restic_backup_failed`
 - `backup_repeatedly_failing` (escalation alarm after N consecutive failures)

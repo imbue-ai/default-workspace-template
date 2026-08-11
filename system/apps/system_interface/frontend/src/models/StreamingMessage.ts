@@ -32,6 +32,12 @@ function getBackoff(agentId: string): ReconnectBackoff {
 // the initial mount or a reconnect), so fetchEvents replacing
 // eventsByAgent[agentId] does not drop them.
 const inFlightSnapshotBuffersByAgent = new Map<string, TranscriptEvent[]>();
+// Pending reconnect timers, ONE per agent. Both failure paths (a stream error
+// and a failed snapshot refetch) schedule through scheduleReconnectWithSnapshot,
+// which no-ops while a timer is already pending. Without this dedup each failed
+// cycle would spawn two future loops (the new stream's error handler plus the
+// snapshot retry), multiplying attempts for as long as the backend stays down.
+const pendingReconnectTimersByAgent = new Map<string, ReturnType<typeof setTimeout>>();
 
 // Claude auth is mind-global, so an auth-error on any agent's stream
 // opens the single shared login modal (see models/ClaudeAuth.ts) -- no
@@ -59,10 +65,12 @@ export function connectToStream(agentId: string): void {
   // A fresh connect supersedes any prior explicit-disconnect tombstone.
   explicitlyDisconnectedAgents.delete(agentId);
 
+  console.info(`[si-sse] opening stream for agent ${agentId}`);
   const eventSource = new EventSource(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/stream`));
   activeStreams.set(agentId, eventSource);
 
   eventSource.onopen = () => {
+    console.info(`[si-sse] stream open for agent ${agentId}`);
     // A successful (re)connection resets this agent's backoff.
     getBackoff(agentId).reset();
   };
@@ -86,14 +94,36 @@ export function connectToStream(agentId: string): void {
     if (activeStreams.get(agentId) === eventSource) {
       eventSource.close();
       activeStreams.delete(agentId);
-      setTimeout(() => {
-        const wasExplicitlyDisconnected = explicitlyDisconnectedAgents.delete(agentId);
-        if (!wasExplicitlyDisconnected && !activeStreams.has(agentId)) {
-          void reconnectWithSnapshot(agentId);
-        }
-      }, getBackoff(agentId).nextDelay());
+      console.warn(`[si-sse] stream error for agent ${agentId}`);
+      scheduleReconnectWithSnapshot(agentId);
     }
   };
+}
+
+/**
+ * Schedule one reconnect-with-snapshot attempt after this agent's current
+ * backoff delay. No-op while an attempt is already pending, so the stream's
+ * error handler and a failed snapshot refetch cannot stack parallel retry
+ * loops. The pending timer consumes an explicit-disconnect tombstone the same
+ * way the old error path did: a disconnect issued during the delay keeps the
+ * stream down.
+ */
+function scheduleReconnectWithSnapshot(agentId: string): void {
+  if (pendingReconnectTimersByAgent.has(agentId)) {
+    return;
+  }
+  const delayMs = getBackoff(agentId).nextDelay();
+  console.info(`[si-sse] scheduling reconnect for agent ${agentId} in ${delayMs}ms`);
+  pendingReconnectTimersByAgent.set(
+    agentId,
+    setTimeout(() => {
+      pendingReconnectTimersByAgent.delete(agentId);
+      const wasExplicitlyDisconnected = explicitlyDisconnectedAgents.delete(agentId);
+      if (!wasExplicitlyDisconnected) {
+        void reconnectWithSnapshot(agentId);
+      }
+    }, delayMs),
+  );
 }
 
 /**
@@ -131,15 +161,28 @@ export async function loadSnapshotWithStream(agentId: string): Promise<void> {
 async function reconnectWithSnapshot(agentId: string): Promise<void> {
   try {
     await loadSnapshotWithStream(agentId);
+    console.info(`[si-sse] snapshot loaded for agent ${agentId}`);
   } catch (error) {
-    console.warn(`Snapshot refetch failed for agent ${agentId} during SSE reconnect`, error);
+    // Until the snapshot lands, the stream (if it connected) is appending
+    // deltas onto the pre-outage window, so events emitted during the outage
+    // are missing from it. A single failure must not be terminal -- that
+    // permanently desynchronizes the transcript from the server -- so keep
+    // retrying until the snapshot succeeds or the panel disconnects.
+    console.warn(`[si-sse] snapshot refetch failed for agent ${agentId}`, error);
+    scheduleReconnectWithSnapshot(agentId);
   }
 }
 
 export function disconnectFromStream(agentId: string): void {
+  console.info(`[si-sse] explicit disconnect for agent ${agentId}`);
   // Always record the intent, even with no active stream, so a pending
   // error-triggered reconnect timeout sees the tombstone and stays down.
   explicitlyDisconnectedAgents.add(agentId);
+  const pendingTimer = pendingReconnectTimersByAgent.get(agentId);
+  if (pendingTimer !== undefined) {
+    clearTimeout(pendingTimer);
+    pendingReconnectTimersByAgent.delete(agentId);
+  }
   // Drop the backoff so a later fresh connectToStream starts from the base
   // delay rather than inheriting a stale grown delay.
   backoffByAgent.delete(agentId);

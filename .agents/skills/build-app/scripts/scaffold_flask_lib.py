@@ -38,8 +38,8 @@ RESERVED_NAMES = frozenset(
     {
         "system-interface",
         "system_interface",
-        "cloudflared",
-        "cloudflare-tunnel",
+        "share-gateway",
+        "share_gateway",
         "app-watcher",
         "bootstrap",
         "github-sync",
@@ -47,8 +47,21 @@ RESERVED_NAMES = frozenset(
         "terminal",
         "deferred-install",
         "imbue-common",
+        # forward_port.py rejects ``localhost`` at registration time (it is
+        # the local origin's root domain); reserve it here too so the scaffold
+        # never mints an app that cannot register.
+        "localhost",
+        # ``auth`` is reserved for the share stack's dedicated ``auth-<rand>``
+        # origin label (the sole public ``/_auth/*`` origin); forward_port.py
+        # rejects it, so the scaffold must too.
+        "auth",
     }
 )
+# Workspace hostnames carry their coordinate as a ``host-<hex>`` label
+# (``agent-`` is the legacy spelling); a service name starting with either
+# prefix could collide with that coordinate label, so forward_port.py rejects
+# both and the scaffold must too.
+RESERVED_NAME_PREFIXES = ("host-", "agent-")
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -59,12 +72,25 @@ def _kebab_to_snake(name: str) -> str:
 
 
 def _validate_name(name: str) -> None:
+    # The name becomes the leading label of the service's origin hostname
+    # (the app is served at http://<name>.<workspace-host>/), so it must be
+    # DNS-safe kebab-case and stay out of the reserved coordinate prefix
+    # space. forward_port.py accepts a superset (underscores are tolerated
+    # there for legacy names like ``system_interface``), so every name the
+    # scaffold mints registers cleanly -- a drift test in
+    # system/scripts/forward_port_test.py pins that subset relation.
     if not KEBAB_RE.match(name):
         sys.exit(
             f"error: --name {name!r} is not valid kebab-case "
             "(lowercase letters/digits with single hyphens, "
             "starting with a letter)"
         )
+    for prefix in RESERVED_NAME_PREFIXES:
+        if name.startswith(prefix):
+            sys.exit(
+                f"error: --name {name!r} starts with {prefix!r}, which is "
+                "reserved for workspace hostnames"
+            )
     if name in RESERVED_NAMES or _kebab_to_snake(name) in RESERVED_NAMES:
         sys.exit(f"error: --name {name!r} is reserved")
 
@@ -99,7 +125,9 @@ def _pick_port(repo_root: Path, requested: int | None) -> int:
     ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
     if requested is not None:
         if requested in in_use:
-            sys.exit(f"error: --port {requested} is already in use by another app or service")
+            sys.exit(
+                f"error: --port {requested} is already in use by another app or service"
+            )
         return requested
     port = LOWEST_AUTO_PORT
     while port in in_use:
@@ -165,10 +193,11 @@ Services run from /home/user/workspace (the repo root). Conventions:
   the port at the ``run_simple`` call.
 
 This is a synchronous Flask app served by the threaded Werkzeug server.
-The system_interface proxy at ``/service/{name}/`` rewrites absolute
-paths in served HTML and installs a scoped service worker that prepends
-the prefix to the page's own fetches, so the app can serve at ``/`` and
-still work behind the proxy. Use ``flask_sock`` if you need WebSockets.
+The app owns its own browser origin (the forwarder routes
+``http://{name}.<workspace-host>/`` straight to this port), so it serves
+at ``/`` and root-absolute URLs, cookies, and service workers all work
+unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
+WebSockets.
 """
 
 import os
@@ -371,7 +400,7 @@ def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/scripts/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -400,7 +429,9 @@ def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
         sys.exit(f"error: {path} not found (cannot register the new app)")
     existing = path.read_text()
     if f"[program:{name}]" in existing:
-        sys.exit(f"error: system/supervisord.conf already has a [program:{name}] section")
+        sys.exit(
+            f"error: system/supervisord.conf already has a [program:{name}] section"
+        )
     block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port)
     path.write_text(existing.rstrip("\n") + "\n\n" + block)
 
@@ -425,7 +456,9 @@ def _find_repo_root(start: Path) -> Path:
             parent / "system/supervisord.conf"
         ).exists():
             return parent
-    sys.exit("error: could not locate repo root (pyproject.toml + system/supervisord.conf)")
+    sys.exit(
+        "error: could not locate repo root (pyproject.toml + system/supervisord.conf)"
+    )
 
 
 def main() -> None:
@@ -473,9 +506,10 @@ def main() -> None:
 
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
-        f"(app `{args.name}` on port {port}). "
+        f"(app `{args.name}` on port {port}; the tab renders at the service's "
+        f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (curl + Playwright against /service/{args.name}/)."
+        f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 

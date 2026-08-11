@@ -92,3 +92,36 @@ describe("loadSnapshotWithStream", () => {
     expect(ids).toContain("delta-1");
   });
 });
+
+describe("snapshot retry after reconnect", () => {
+  it("keeps retrying a failed snapshot refetch until it succeeds", async () => {
+    // A single failed snapshot used to be terminal: the stream kept appending
+    // deltas onto the pre-outage window, so events emitted during the outage
+    // were silently missing forever (transcript desynchronized from the TUI).
+    vi.useFakeTimers();
+    try {
+      const agentId = `agent-${agentCounter++}`;
+      mockRequest.mockResolvedValueOnce({ events: [makeEvent("initial", "before outage")] });
+      await loadSnapshotWithStream(agentId);
+
+      // The stream dies; the error-path reconnect fires after its backoff, and
+      // its snapshot refetch fails (the backend is still unreachable).
+      mockRequest.mockRejectedValueOnce(new Error("503 through reconnecting tunnel"));
+      const deadSource = FakeEventSource.instances[FakeEventSource.instances.length - 1];
+      deadSource?.onerror?.();
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // The retry must refetch on its own (no further stream error to prompt
+      // it) and land the authoritative window including the outage events.
+      mockRequest.mockResolvedValueOnce({
+        events: [makeEvent("initial", "before outage"), makeEvent("missed", "emitted during outage")],
+      });
+      await vi.advanceTimersByTimeAsync(6000);
+
+      const ids = getEventsForAgent(agentId).map((event) => event.event_id);
+      expect(ids).toContain("missed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

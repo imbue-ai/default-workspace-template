@@ -29,11 +29,14 @@ import {
   getEffectiveActivityState,
   removeActivityOverlayListener,
 } from "../models/PendingMessages";
+import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
+import { setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
+import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
@@ -46,6 +49,7 @@ import {
   getAgents,
   getApps,
   getProtoAgents,
+  labelForService,
   removeAgentLocally,
   removeAgentsUpdatedListener,
   reportClientState,
@@ -85,13 +89,6 @@ const AUTOSAVE_DEBOUNCE_MS = 1500;
 const CHAT_PANEL_ID_PREFIX = "chat-";
 const TERMINAL_PANEL_ID_PREFIX = "terminal-session-";
 
-// Every non-system_interface service is reached at /service/<name>/ on the
-// same origin as the dockview UI itself. The system_interface's service
-// dispatcher handles the proxying, SW bootstrap, and header rewriting.
-function getServiceUrl(serviceName: string): string {
-  return `/service/${serviceName}/`;
-}
-
 /** Split the body of a ``service:`` ref into its service name and an
  *  optional ``?query`` suffix. Plain ``service:web`` yields
  *  ``{name: "web", query: ""}``; ``service:browser?session=2`` yields
@@ -106,14 +103,23 @@ function parseServiceRefBody(body: string): { name: string; query: string } {
   return { name: body.substring(0, queryIndex), query: body.substring(queryIndex) };
 }
 
-/** Resolve a ``service:`` ref body to its on-origin iframe URL. The query
- *  (e.g. ``?session=2``) is appended after the service base URL so a
- *  browser-session ref resolves to ``/service/browser/?session=2`` -- the
- *  viewer's per-session entrypoint. Plain refs resolve to
- *  ``/service/<name>/``. */
+/** Resolve a ``service:`` ref body to its iframe URL. The query (e.g.
+ *  ``?session=2``) is appended after the service's derived origin so a
+ *  browser-session ref resolves to ``http://browser.<ws-host>/?session=2`` --
+ *  the viewer's per-session entrypoint. Plain refs resolve to the bare
+ *  service origin. */
 function serviceRefUrl(body: string): string {
   const { name, query } = parseServiceRefBody(body);
-  return `${getServiceUrl(name)}${query}`;
+  return `${deriveServiceOrigin(labelForService(name))}${query}`;
+}
+
+/** The ``?query`` suffix of a stored iframe URL, or "" when it has none.
+ *  Used on layout restore to carry a persisted URL's query (e.g. a browser
+ *  pane's ``session=<name>``) onto a freshly derived service origin. */
+function urlQuerySuffix(url: string | undefined): string {
+  if (!url) return "";
+  const queryIndex = url.indexOf("?");
+  return queryIndex === -1 ? "" : url.substring(queryIndex);
 }
 
 /** Extract the ``session`` id from a service ref ``?query`` for use in a tab
@@ -125,7 +131,7 @@ function serviceSessionLabel(query: string): string {
 }
 
 export function getTerminalUrl(): string {
-  return getServiceUrl("terminal");
+  return deriveServiceOrigin(labelForService("terminal"));
 }
 
 /** Build the iframe URL that attaches a terminal to ``agentName``'s tmux
@@ -139,6 +145,21 @@ export function buildAgentTerminalUrl(agentName: string): string {
   const baseUrl = getTerminalUrl();
   const separator = baseUrl.includes("?") ? "&" : "?";
   return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
+}
+
+/** Rebuild a restored agent-terminal URL on the current host, or null when
+ *  ``url`` is not an agent-terminal URL. Agent terminals are identified by
+ *  their ttyd dispatch args (``arg=_&arg=agent[&arg=<name>]``) -- the shape
+ *  ``buildAgentTerminalUrl`` emits and no other iframe URL uses -- with the
+ *  agent name riding in the third arg. Persisted URLs are absolute origins
+ *  and therefore stale hints from whichever host saved the layout, so the
+ *  restore path re-derives them here to keep layouts portable. */
+function rebuildAgentTerminalUrl(url: string): string | null {
+  const args = new URLSearchParams(urlQuerySuffix(url).replace(/^\?/, "")).getAll("arg");
+  if (args[0] !== "_" || args[1] !== "agent") return null;
+  // The name-less variant is the ChatPanel fallback for an agent that isn't
+  // in the local cache yet; rebuild it without a name too.
+  return args.length >= 3 ? buildAgentTerminalUrl(args[2]) : `${getTerminalUrl()}?arg=_&arg=agent`;
 }
 
 type PanelType = "chat" | "iframe" | "subagent";
@@ -199,6 +220,13 @@ let destroyTargetPanelId: string | null = null;
 let showTerminalDestroyDialog = false;
 let terminalDestroySessionName: string | null = null;
 let terminalDestroyPanelId: string | null = null;
+
+// Browser-destroy dialog state. Separate again because destroying a browser
+// retires it in the fleet (DELETE /api/browsers/<name>, a same-origin passthrough
+// to the browser daemon) rather than killing an mngr agent or a tmux session.
+let showBrowserDestroyDialog = false;
+let browserDestroyName: string | null = null;
+let browserDestroyPanelId: string | null = null;
 
 // Share modal state
 let showShareModal = false;
@@ -481,6 +509,38 @@ function createCustomTab(options: { id: string; name: string }): {
         );
       }
 
+      // Destroy button -- on browser panes (iframe tabs whose service is the
+      // browser fleet). Retires the browser in the fleet (closing the tab alone
+      // only detaches the pane). Symmetric to the agent + terminal destroy above.
+      if (panelType === "iframe" && pp?.serviceName === "browser") {
+        // The browser name lives in the pane's ``?session=<name>`` query, set on
+        // both freshly-opened and layout-restored browser panes -- derive it from
+        // the url so both cases work.
+        let browserName: string | null = null;
+        try {
+          browserName = pp?.url ? new URL(pp.url, location.origin).searchParams.get("session") : null;
+        } catch {
+          browserName = null;
+        }
+        actions.appendChild(
+          createTabActionButton(
+            "Destroy browser",
+            "trash",
+            () => {
+              if (!browserName) {
+                params.api.close();
+                return;
+              }
+              browserDestroyName = browserName;
+              browserDestroyPanelId = options.id;
+              showBrowserDestroyDialog = true;
+              m.redraw();
+            },
+            "dv-custom-tab-action-destructive",
+          ),
+        );
+      }
+
       // Close button -- on all tab types
       actions.appendChild(
         createTabActionButton("Close tab", "close", () => {
@@ -566,9 +626,10 @@ function placementForGroup(
   return {};
 }
 
-// A single browser in the per-workspace fleet, as returned by
-// ``GET /service/browser/browsers``. Each is a separately-addressable pane
-// (viewer at ``/service/browser/?session=<name>``). The ``id`` is the
+// A single browser in the per-workspace fleet, as returned by the backend's
+// same-origin ``GET /api/browsers`` passthrough. Each is a separately-
+// addressable pane (viewer at ``?session=<name>`` on the browser service's
+// derived origin). The ``id`` is the
 // browser's NAME (a random ~2-word english name, or a user-chosen one) -- the
 // addressing key everywhere; there is no numeric id and no default browser.
 interface BrowserInfo {
@@ -596,7 +657,9 @@ let browserFleet: BrowserInfo[] = [];
  *  synchronously from the cache, so without this callback a freshly-opened
  *  menu would show a stale fleet until the next open. */
 function refreshBrowserFleet(onUpdate?: () => void): void {
-  fetch(getServiceUrl("browser") + "browsers")
+  // Same-origin backend passthrough (the browser service itself lives on a
+  // sibling origin, so a direct fetch would be a cross-origin request).
+  fetch(apiUrl("/api/browsers"))
     .then((r) => (r.ok ? r.json() : { browsers: [] }))
     .then((data) => {
       browserFleet = Array.isArray(data.browsers) ? (data.browsers as BrowserInfo[]) : [];
@@ -608,7 +671,14 @@ function refreshBrowserFleet(onUpdate?: () => void): void {
       onUpdate?.();
     });
 }
-refreshBrowserFleet();
+// Seed the fleet cache at import time. Skipped in DOM-less (test) imports:
+// ``apiUrl`` reads its base path from a <meta> tag, and every other
+// import-time side effect in this module graph is likewise inert without a
+// document. Interactive callers (the "+" dropdown, browser create) only run
+// in a browser.
+if (typeof document !== "undefined") {
+  refreshBrowserFleet();
+}
 
 /** Human-readable owner suffix for a browser dropdown item:
  *  "(you took control)" when a human holds it, "(agent <name> has control)"
@@ -684,21 +754,19 @@ function buildDropdownItems(
 
   // Apps that do not have open tabs. Exclude "system_interface"
   // (that's the surrounding chrome UI, not a tab-able app), "terminal"
-  // (reachable via the "New terminal" menu item further down), "browser"
+  // (reachable via the "New terminal" menu item further down), and "browser"
   // (the fleet has its own per-session items + "New browser" below; the bare
-  // ``/service/browser/`` app entry would open a session-less viewer that
-  // doesn't dedup against the fleet panes), and "web" (the placeholder example
-  // server -- the browser fleet is the real web surface, so it's just noise).
+  // browser app entry would open a session-less viewer that doesn't dedup
+  // against the fleet panes).
   const apps = getApps().filter(
-    (app) =>
-      app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser" && app.name !== "web",
+    (app) => app.name !== "system_interface" && app.name !== "terminal" && app.name !== "browser",
   );
   for (const app of apps) {
     if (!openAppNames.has(app.name)) {
-      const proxyUrl = getServiceUrl(app.name);
+      const serviceUrl = deriveServiceOrigin(labelForService(app.name));
       items.push({
         label: app.name,
-        action: () => openIframeTab(proxyUrl, app.name, "iframe", app.name, targetGroup),
+        action: () => openIframeTab(serviceUrl, app.name, "iframe", app.name, targetGroup),
       });
     }
   }
@@ -1731,10 +1799,23 @@ function applyLayoutContent(saved: SavedLayout | null): void {
     // layout was saved (e.g. a container restart). The fresh id keeps the
     // pty->tab mapping (for live title tracking) accurate for this connection.
     // Done before ``fromJSON`` so the terminal renderer mounts on the new url.
+    //
+    // Service and agent-terminal urls are re-derived in the same pass: a
+    // persisted url is an absolute origin from whichever host saved the
+    // layout, so it is only a stale hint -- the panel's identity
+    // (``serviceName``, or the ttyd agent-dispatch args) is authoritative and
+    // the url is rebuilt from it on the current host, preserving any
+    // ``?query`` (e.g. a browser pane's ``session=<name>``). This is what
+    // keeps saved layouts portable across hosts and shares.
     for (const [, params] of panelParams) {
       if (params.terminalSessionName) {
         params.terminalId = mintTerminalId();
         params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
+      } else if (params.serviceName) {
+        params.url = `${deriveServiceOrigin(labelForService(params.serviceName))}${urlQuerySuffix(params.url)}`;
+      } else if (params.url) {
+        const rebuiltTerminalUrl = rebuildAgentTerminalUrl(params.url);
+        if (rebuiltTerminalUrl !== null) params.url = rebuiltTerminalUrl;
       }
     }
     try {
@@ -1988,16 +2069,16 @@ async function resolveRefToPanelId(ref: string, requesterAgentId: string): Promi
 }
 
 /** Resolve a ``service:<name>[/<path>]`` shorthand URL (sent by
- *  ``replace-url``) to the on-origin ``/service/<name>/<path>`` path that
- *  the dispatcher serves. Plain ``https://`` URLs pass through. */
+ *  ``replace-url``) to a URL on the service's derived origin. Plain
+ *  ``https://`` URLs pass through. */
 function resolveReplaceUrl(url: string): string {
   if (url.startsWith("service:")) {
     const remainder = url.substring("service:".length);
     const slashIndex = remainder.indexOf("/");
-    if (slashIndex === -1) return getServiceUrl(remainder);
+    if (slashIndex === -1) return deriveServiceOrigin(labelForService(remainder));
     const serviceName = remainder.substring(0, slashIndex);
     const path = remainder.substring(slashIndex + 1);
-    return `/service/${serviceName}/${path}`;
+    return `${deriveServiceOrigin(labelForService(serviceName))}${path}`;
   }
   return url;
 }
@@ -2552,6 +2633,11 @@ function updateEmptyState(): void {
   }
 }
 
+function closeActiveTabFromEmbedder(): void {
+  const activePanel = dockview?.activePanel;
+  if (activePanel) activePanel.api.close();
+}
+
 function initializeDockview(parentElement: HTMLElement): void {
   if (initialized) return;
   initialized = true;
@@ -2662,6 +2748,11 @@ function initializeDockview(parentElement: HTMLElement): void {
   });
 
   dockview = dv;
+
+  // The embedding minds chrome forwards its close-tab shortcut (Cmd/Ctrl+W
+  // while this workspace is displayed) through the embed contract; close the
+  // active dockview tab in response.
+  setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, closeActiveTabFromEmbedder);
 
   // Listen for layout changes and auto-save
   dv.api.onDidLayoutChange(() => {
@@ -2807,6 +2898,38 @@ async function executeTerminalDestroy(sessionName: string, panelId: string): Pro
   m.redraw();
 }
 
+async function executeBrowserDestroy(name: string, panelId: string): Promise<void> {
+  // Retire the browser in the fleet, then drop the tab. Closing the tab alone
+  // only detaches the pane; this frees the browser (and forgets its profile),
+  // symmetric to destroying an agent or a terminal. Routed through the shell's
+  // same-origin ``DELETE /api/browsers/<name>`` passthrough because the browser
+  // daemon lives on its own service origin (no CORS for a direct cross-origin
+  // fetch); the passthrough forwards to the daemon's ``DELETE /browsers/<name>``.
+  try {
+    const response = await fetch(apiUrl(`/api/browsers/${encodeURIComponent(name)}`), {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const detail = (data as { error?: string }).error ?? "Unknown error";
+      alert(`Failed to destroy browser: ${detail}`);
+      return;
+    }
+  } catch (e) {
+    alert(`Failed to destroy browser: ${(e as Error).message}`);
+    return;
+  }
+
+  if (dockview) {
+    const panel = dockview.panels.find((p) => p.id === panelId);
+    if (panel) {
+      dockview.removePanel(panel);
+    }
+  }
+
+  m.redraw();
+}
+
 export const DockviewWorkspace: m.Component = {
   oncreate(vnode: m.VnodeDOM) {
     const wrapper = vnode.dom as HTMLElement;
@@ -2874,7 +2997,6 @@ export const DockviewWorkspace: m.Component = {
               // isn't needed anyway: onAccept sets showNewBrowserModal=false before the
               // POST, so a failure re-open (showNewBrowserModal back to true) is a fresh
               // mount and oninit re-reads initialName/initialError on its own.
-              browserServiceUrl: getServiceUrl("browser"),
               // Names of browsers already in the fleet, so the modal can
               // pre-validate a typed name and reject a duplicate inline BEFORE
               // opening a pane or calling create -- never optimistically
@@ -2973,6 +3095,26 @@ export const DockviewWorkspace: m.Component = {
                 showTerminalDestroyDialog = false;
                 terminalDestroySessionName = null;
                 terminalDestroyPanelId = null;
+              },
+            })
+          : null,
+
+        showBrowserDestroyDialog && browserDestroyName
+          ? m(DestroyConfirmDialog, {
+              agentName: browserDestroyName,
+              title: "Destroy browser",
+              onConfirm() {
+                showBrowserDestroyDialog = false;
+                const name = browserDestroyName!;
+                const panelId = browserDestroyPanelId!;
+                browserDestroyName = null;
+                browserDestroyPanelId = null;
+                executeBrowserDestroy(name, panelId);
+              },
+              onCancel() {
+                showBrowserDestroyDialog = false;
+                browserDestroyName = null;
+                browserDestroyPanelId = null;
               },
             })
           : null,

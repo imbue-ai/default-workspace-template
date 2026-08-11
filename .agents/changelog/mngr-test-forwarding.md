@@ -1,0 +1,1 @@
+Reserve `auth` as an app name in the build-app skill's scaffold: the share stack's dedicated `auth-<rand>` origin label (the sole public `/_auth/*` origin) makes `auth` unregisterable in `forward_port.py`, so the scaffold rejects it up front instead of minting an app that cannot register.

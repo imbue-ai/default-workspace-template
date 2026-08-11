@@ -33,20 +33,21 @@ fi
 # Pinned versions (single source of truth; override via env if needed). Keep
 # CLAUDE_CODE_VERSION in sync with agent_types.claude.version in .mngr/settings.toml.
 : "${TTYD_VERSION:=1.7.7}"
-: "${CLOUDFLARED_VERSION:=2026.3.0}"
 : "${UV_VERSION:=0.11.7}"
 : "${CLAUDE_CODE_VERSION:=2.1.207}"
 : "${MODAL_VERSION:=1.4.2}"
 : "${GH_VERSION:=2.96.0}"
-: "${LATCHKEY_VERSION:=3.1.0}"
+: "${CADDY_VERSION:=2.11.4}"
+: "${FRP_VERSION:=0.70.1}"
+: "${LATCHKEY_VERSION:=3.4.1}"
 : "${RESTIC_VERSION:=0.18.1}"
 
 # Install a downloaded binary atomically: fetch to a temp file beside the target,
 # then rename(2) it into place. A plain `curl -o <dest>` truncates <dest> in
 # place, which fails with ETXTBSY when <dest> is a currently-running executable --
-# e.g. re-provisioning a live workspace whose `terminal` service is running ttyd,
-# or whose cloudflared tunnel is active (this is what the update-self reveal flow
-# does, and `set -e` then aborts the whole script). rename(2) over a busy
+# e.g. re-provisioning a live workspace whose `terminal` service is running ttyd
+# (this is what the update-self reveal flow does, and `set -e` then aborts the
+# whole script). rename(2) over a busy
 # executable is allowed: running processes keep the old inode while new execs pick
 # up the replacement, so download-then-mv is safe to re-run on a live host. The
 # temp file shares <dest>'s directory so the mv is a same-filesystem atomic rename,
@@ -66,11 +67,21 @@ install_downloaded_binary() {
 # pressure before the kernel kills an arbitrary victim; the rest are
 # agent/runtime deps). supervisor provides the system supervisord + supervisorctl
 # that `uv run bootstrap` execs into the foreground.
+# xvfb + xclip (the browser fleet's virtual display and its clipboard bridge)
+# are baked here, NOT deferred to the env.d browser unit: [program:xvfb] execs
+# Xvfb directly at boot, and a binary that static service config promises at
+# every boot must exist in the image. They are a few MB; only the heavy
+# Fortress/Chromium stack stays deferred.
 apt-get update
 apt-get install -y --no-install-recommends \
     bash build-essential ca-certificates cron curl earlyoom fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
-    xxd xmlstarlet
+    xclip xvfb xxd xmlstarlet
+# Runtime libraries the pixelflux/pcmflux wheels (the browser fleet's H.264 + Opus
+# media pipes) dlopen at import -- without libva pixelflux's import raises (guarded in
+# videopipe.py) -- plus xdpyinfo, which videopipe uses to size the capture. Baked small.
+apt-get install -y --no-install-recommends \
+    libva2 libva-drm2 libva-x11-2 libpixman-1-0 x11-utils pulseaudio pulseaudio-utils
 rm -rf /var/lib/apt/lists/*
 
 # The Debian `supervisor` package enables a systemd unit that immediately starts
@@ -118,13 +129,9 @@ rm /tmp/restic.bz2
 ttyd_arch="$(uname -m)"
 install_downloaded_binary "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${ttyd_arch}" /usr/local/bin/ttyd
 
-# cloudflared for Cloudflare tunnel support.
-cloudflared_arch="$(dpkg --print-architecture)"
-install_downloaded_binary "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${cloudflared_arch}" /usr/local/bin/cloudflared
-
 # GitHub CLI as a pinned, sha256-verified GitHub-release tarball. gh is not in
 # Debian, and a third-party apt repo would escape the snapshot-pinned mirror,
-# so it installs like ttyd/cloudflared: fixed version, checksummed download.
+# so it installs like ttyd: fixed version, checksummed download.
 gh_arch="$(uname -m)"
 case "${gh_arch}" in
     x86_64) gh_goarch="amd64"; gh_sha256="83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60" ;;
@@ -137,6 +144,36 @@ tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${gh_goarch}/bin/gh"
 mv -f "/tmp/gh_${GH_VERSION}_linux_${gh_goarch}/bin/gh" /usr/local/bin/gh
 chmod 0755 /usr/local/bin/gh
 rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${gh_goarch}"
+
+# caddy + frpc for the self-hosted sharing stack (the share-gateway service):
+# caddy terminates a shared workspace's TLS in-container; frpc is the outbound
+# tunnel to the region's relay. Neither is in Debian's snapshot mirror, so both
+# install like gh: fixed version, checksummed GitHub-release tarball.
+caddy_arch="$(uname -m)"
+case "${caddy_arch}" in
+    x86_64) caddy_goarch="amd64"; caddy_sha256="527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9" ;;
+    aarch64) caddy_goarch="arm64"; caddy_sha256="52d42ae12b3462097e9868da6dfed3c9648ae12edd3b3638102312af84cb6904" ;;
+    *) echo "Unsupported architecture for caddy: ${caddy_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${caddy_goarch}.tar.gz" -o /tmp/caddy.tar.gz
+echo "${caddy_sha256}  /tmp/caddy.tar.gz" | sha256sum -c -
+tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
+mv -f /tmp/caddy /usr/local/bin/caddy
+chmod 0755 /usr/local/bin/caddy
+rm -f /tmp/caddy.tar.gz
+
+frp_arch="$(uname -m)"
+case "${frp_arch}" in
+    x86_64) frp_goarch="amd64"; frp_sha256="333da23d1b9009d7c01638e9ba38cf4600f7d37d393f854e96ee1396adefa9a6" ;;
+    aarch64) frp_goarch="arm64"; frp_sha256="3990f396a9a490ee7f0e5f355287750ed41520064ed999eab443b5e9a78d773d" ;;
+    *) echo "Unsupported architecture for frp: ${frp_arch}" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${frp_goarch}.tar.gz" -o /tmp/frp.tar.gz
+echo "${frp_sha256}  /tmp/frp.tar.gz" | sha256sum -c -
+tar -xzf /tmp/frp.tar.gz -C /tmp "frp_${FRP_VERSION}_linux_${frp_goarch}/frpc"
+mv -f "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}/frpc" /usr/local/bin/frpc
+chmod 0755 /usr/local/bin/frpc
+rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}"
 
 # uv (pinned). Installs to /root/.local/bin.
 curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
@@ -170,6 +207,16 @@ fi
 curl -fsSL https://claude.ai/install.sh > /tmp/install_claude.sh
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
+# Fail the build/provision right here on a pin mismatch. mngr's own runtime
+# version check still runs when a claude agent is created, but since the
+# services agent stopped being a claude agent that check would not fire until
+# the first chat agent is created on first boot -- far too late to catch a
+# Dockerfile/settings.toml desync cheaply.
+installed_claude_version="$(/root/.local/bin/claude --version | awk '{print $1}')"
+if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
+    echo "Installed claude version ${installed_claude_version} does not match pinned CLAUDE_CODE_VERSION ${CLAUDE_CODE_VERSION}" >&2
+    exit 1
+fi
 
 # Node.js from trixie main (pinned by the snapshot timestamp like every other
 # apt package; trixie ships the nodejs 20.x line). npm is its own package on
@@ -205,6 +252,30 @@ printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; 
 mkdir -p /etc/ssh/sshd_config.d
 printf 'AuthorizedKeysFile .ssh/authorized_keys /root/.ssh/authorized_keys\n' \
     > /etc/ssh/sshd_config.d/60-workspace-root-keys.conf
+# A RUNNING sshd must re-read this drop-in: the listener hands its boot-time
+# config to every future session, so without a reload the home move above
+# silently breaks all root logins (the stale relative AuthorizedKeysFile
+# resolves against the NEW home, which has no authorized_keys). This bites
+# lima mode, where this script runs against a live sshd at first boot; in
+# docker image builds no sshd is running and this is a no-op.
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active ssh >/dev/null 2>&1; then
+    systemctl reload ssh
+fi
+
+# sshd only reads its configuration at startup, and on providers that start sshd
+# before this script runs (Modal: mngr provisions SSH, then runs setup) the
+# listener is already up with the stock config. Without a reload it keeps
+# resolving AuthorizedKeysFile against the passwd home, which the home move has
+# just repointed at /home/user, so every later connection fails to authenticate.
+# SIGHUP makes sshd re-exec and re-read the config; established sessions are
+# unaffected. No-op when sshd is not running (image builds, Lima provisioning).
+#
+# This used to work by accident: the workspace's apt phase reinstalled
+# openssh-server, which restarted sshd and picked the file up as a side effect.
+_sshd_pid="$(pgrep -o -x sshd 2>/dev/null || true)"
+if [ -n "$_sshd_pid" ]; then
+    kill -HUP "$_sshd_pid"
+fi
 
 # Pre-seed github.com SSH host keys so git operations don't block on interactive
 # host-key confirmation. Idempotent: only added when absent.
