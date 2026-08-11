@@ -172,3 +172,23 @@ def test_resolve_diff_base_uses_a_named_base_that_does_resolve(
     monkeypatch.setenv("GITHUB_BASE_REF", "stacked-base")
 
     assert gate.resolve_diff_base(repo) == "stacked-base"
+
+
+def test_changelog_base_ref_overrides_the_reserved_github_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workflow cannot fix GITHUB_BASE_REF, so it must be overridable.
+
+    GitHub reserves the `GITHUB_` prefix: a job-level `env: GITHUB_BASE_REF:`
+    is echoed in the log and then ignored, leaving the runner's value in place.
+    On a stacked PR that value was `main` instead of the parent branch, so the
+    only way to pass the payload's answer through is a name GitHub does not own.
+    """
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "stacked-base")
+    (repo / "README.md").write_text("changed\n")
+    _git(repo, "commit", "-qam", "move HEAD off the base")
+    monkeypatch.setenv("GITHUB_BASE_REF", "main")
+    monkeypatch.setenv("CHANGELOG_BASE_REF", "stacked-base")
+
+    assert gate.resolve_diff_base(repo) == "stacked-base"

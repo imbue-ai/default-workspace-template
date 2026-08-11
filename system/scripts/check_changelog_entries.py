@@ -154,7 +154,13 @@ def resolve_diff_base(repo_root: Path) -> str:
     """
     head = _rev_parse("HEAD", repo_root)
     candidates: list[str] = []
-    base_ref = os.environ.get("GITHUB_BASE_REF", "")
+    # CHANGELOG_BASE_REF first: GitHub reserves the `GITHUB_` prefix, so a
+    # workflow cannot correct GITHUB_BASE_REF when the runner's value is wrong
+    # (as it was on a stacked PR, where it said `main` rather than the parent
+    # branch). The workflow sets this one from the event payload instead.
+    base_ref = os.environ.get("CHANGELOG_BASE_REF", "") or os.environ.get(
+        "GITHUB_BASE_REF", ""
+    )
     if base_ref:
         candidates.extend([f"origin/{base_ref}", base_ref])
         if all(_rev_parse(ref, repo_root) is None for ref in candidates):
