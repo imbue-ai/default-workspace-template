@@ -670,7 +670,7 @@ cat > README.md <<README_EOF
 </p>
 
 Didn't work? Create a Minds workspace and paste this to your agent:
-\`/use-template https://github.com/${REPO_URL_PLACEHOLDER}\`
+\` /use-template https://github.com/${REPO_URL_PLACEHOLDER}\`
 
 ## Why you care
 
