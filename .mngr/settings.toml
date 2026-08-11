@@ -1,9 +1,14 @@
 # Readiness budget for every harness's create wait (mngr default is 10.0s,
-# which pre-dates the chat UI gating creation on readiness). 20s covers the
-# measured cold boots -- claude ~4s, codex ~6s, pi ~8s once its npm packages
-# are prepared at provision time -- with headroom for a loaded host. A create
+# which pre-dates the chat UI gating creation on readiness). Covers the
+# measured cold boots -- claude ~4s, codex ~6s, and pi's WORST case: a
+# brand-new pi agent whose extension TypeScript is transpiled from scratch by
+# jiti (its cache is path-keyed, so a fresh per-agent npm path is a cache miss)
+# costs ~28-32s cold before its readiness sentinel. 20s cut that off and failed
+# the create (empty model bar / rolled-back agent); 45s clears the cold path
+# with headroom on a loaded host. See [agent_types.pi-coding].share_home_npm_dir
+# for the real fix (share the cache so new agents start warm at ~10s). A create
 # that misses this budget fails loudly and is rolled back.
-agent_ready_timeout = 20.0
+agent_ready_timeout = 45.0
 
 # --- Command defaults ---
 
@@ -246,6 +251,15 @@ The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS
 # first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs.
 [agent_types.pi-coding]
 auto_allow_permissions = true
+# Share the one ~/.pi/agent/npm dir (symlink) instead of copying it per agent. pi loads
+# its extensions as TypeScript through jiti, whose transpile cache is keyed by absolute
+# path -- a per-agent copy sits at a unique path and misses, so every new agent
+# re-transpiles the whole extension set (~16-24s). Sharing the one stable path lets that
+# cache hit, cutting extension-heavy startup from ~30s to ~10s. Safe here because both
+# extensions are baked into the image (seed_home_skeleton.sh), so pi never installs into
+# -- and never has to write to -- the shared tree. The boot warm-up in seed_home_skeleton.sh
+# fills the cache once so even the FIRST agent after a boot is fast.
+share_home_npm_dir = true
 auto_dismiss_dialogs = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
