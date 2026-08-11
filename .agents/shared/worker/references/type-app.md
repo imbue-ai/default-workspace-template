@@ -1,8 +1,9 @@
 # Type: app
 
 An app -- a scaffolded Flask lib under `system/apps/<package>/`, registered in
-`system/supervisord.conf`, reachable at `/service/<name>/` through the
-system_interface proxy. This reference describes what an app *is*; for how to
+`system/supervisord.conf`, served at its own browser origin
+(`http://<name>.<workspace-host>/`, routed straight to the app's registered
+port). This reference describes what an app *is*; for how to
 run and test a web frontend in isolation, see
 `.agents/shared/worker/references/web-frontend-testing.md`.
 

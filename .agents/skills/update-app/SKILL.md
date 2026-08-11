@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, cloudflared, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
 ---
 
 # Changing an existing app or service
@@ -9,10 +9,11 @@ Both apps and background services run as a `[program:<name>]` under
 supervisord (see `system/supervisord.conf`). They differ only in whether
 there's a tab to refresh:
 
-- **App** -- the user opens it as a tab rendering at `/service/<name>/`
-  (scaffolded via `build-app`). Lives under `system/apps/<package>/`.
+- **App** -- the user opens it as a tab rendering at the service's own
+  origin, `http://<name>.<workspace-host>/` (scaffolded via
+  `build-app`). Lives under `system/apps/<package>/`.
 - **Background service** -- a supervisord program with no tab (`host-backup`,
-  `cloudflared`, forwarders), standalone under `system/services/` or co-owned
+  `share-gateway`, forwarders), standalone under `system/services/` or co-owned
   by an app (named `<app>-<role>`, code in the app's folder).
 
 Two things are easy to forget when editing either, and both leave the user
@@ -179,12 +180,13 @@ no tab -- skip this step.
 Confirm the change actually does the right thing, exercised as the user
 would (not just "the process is up"):
 
-- **App**: `curl` against
-  `http://127.0.0.1:8000/service/<name>/` then a Playwright assertion on a
+- **App**: `curl` against the registered backend URL
+  `http://127.0.0.1:<port>/` then a Playwright assertion on a
   marker unique to your change. The recipe is in
   `build-app`'s [verify reference](../build-app/references/verify.md);
-  the symptom-indexed gotchas (502, duplicated tab bar, redirect loop,
-  broken WebSockets) are in that skill's `cross-flow-gotchas.md`.
+  the symptom-indexed gotchas (connection refused, a tab stuck on the
+  loading page, broken WebSockets) are in that skill's
+  `cross-flow-gotchas.md`.
 - **Daemon**: watch its log (`supervisorctl tail -f <name> stderr`) and
   confirm the new behavior actually fires.
 
