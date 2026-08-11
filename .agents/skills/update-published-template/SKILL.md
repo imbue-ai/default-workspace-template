@@ -62,7 +62,7 @@ format) and a template's own publish count. See
 >   merge, checkout, reset, or `git add -A`). If the push did not happen, it does
 >   not run at all.
 
-> **AN TEMPLATE MUST STAY BOOTABLE -- NEVER PUBLISH A PARTIAL OR BROKEN
+> **A TEMPLATE MUST STAY BOOTABLE -- NEVER PUBLISH A PARTIAL OR BROKEN
 > UPDATE.** Every published version, including this one, must be the FULL bootable
 > tree: the published snapshot with only the confirmed app/feature changes laid
 > over it. If the fetch (§2), re-assembly (§3), the secret scan or boot check

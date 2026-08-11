@@ -57,7 +57,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > tree-clobbering pattern above, and do not generalize it: nothing else in
 > §§6-10 runs from `/home/user/workspace`, and if the push fails it does not run at all.
 
-> **AN TEMPLATE MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
+> **A TEMPLATE MUST BE BOOTABLE -- NEVER PUBLISH A PARTIAL SNAPSHOT.** A
 > valid template is always the FULL tree `build_template.sh` assembles on
 > `mngr/<slug>`: the clean DEFAULT_WORKSPACE_TEMPLATE base (`pyproject.toml`, `system/supervisord.conf`,
 > `.mngr/`, `.agents/skills/` including the generated template `/welcome`, `system/config/parent.toml`,
