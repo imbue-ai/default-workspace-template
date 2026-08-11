@@ -40,7 +40,12 @@ validation depth, reveal by change class). This script owns the parts that are
     also diverged there -- validate) vs the clean **pulled-in** set (local left
     it untouched, so the merge just took upstream -- trust as upstream-tested),
     and map each file onto its reveal class and its test project. This drives
-    both validation depth (merged set) and reveal-by-class.
+    both validation depth (merged set) and reveal-by-class. ``gates_required``
+    is the mechanical half of the review-gate rule: true whenever the merged
+    set is non-empty (any merge work at all happened). A false value is
+    necessary but not sufficient to skip the gates -- the worker's impact
+    analysis must also find no user-created code affected; the worker
+    reference owns that half.
 
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
@@ -584,6 +589,13 @@ class MergeClassification(NamedTuple):
     still apply). Each entry is a dict with ``path``, ``reveal_class``,
     ``project``, ``is_manifest``, ``disposition``. The summary fields collect the
     distinct reveal classes and the projects whose suites the merged set implies.
+
+    ``gates_required`` is true whenever the merged set is non-empty: any file
+    that diverged on both sides means real merge work happened (a conflict, or
+    git silently auto-merging both sides' edits), so the review gates must run.
+    An empty merged set makes this false, which permits -- but does not by
+    itself license -- skipping the gates: the worker must also establish that
+    no user-created code depends on anything the update changed.
     """
 
     merged: list[dict[str, object]]
@@ -591,6 +603,7 @@ class MergeClassification(NamedTuple):
     reveal_classes_merged: list[str]
     reveal_classes_pulled_in: list[str]
     projects_to_validate: list[str]
+    gates_required: bool
 
 
 def _entry(path: str, disposition: str) -> dict[str, object]:
@@ -634,6 +647,7 @@ def classify_merge(
         reveal_classes_merged=_distinct_classes(merged),
         reveal_classes_pulled_in=_distinct_classes(pulled_in),
         projects_to_validate=projects,
+        gates_required=bool(merged),
     )
 
 
@@ -745,6 +759,7 @@ def _cmd_classify_merge(args: argparse.Namespace) -> int:
                 "reveal_classes_merged": result.reveal_classes_merged,
                 "reveal_classes_pulled_in": result.reveal_classes_pulled_in,
                 "projects_to_validate": result.projects_to_validate,
+                "gates_required": result.gates_required,
             },
             indent=2,
         )

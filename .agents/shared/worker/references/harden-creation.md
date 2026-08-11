@@ -97,6 +97,15 @@ fix what they flag **before** writing the final gate report, so the user sees
 a single report that already reflects the review verdicts rather than a
 report-then-verify-then-report-again pattern.
 
+The gates are part of the harden contract, not a step you may adapt. Run them
+as written unless the operation's own reference defines an explicit skip
+condition (as `update-self` does for a pure clean pull) and you can show its
+conditions hold. If you believe the gates should not run -- or should run at a
+narrower scope -- in your situation, surface that as a gate to the lead and
+stop; never decide it yourself, even with full disclosure in your report. A
+scoped-down or hand-rolled substitute reported as "review" is worse than no
+gate at all, because it reads as coverage that does not exist.
+
 Autofix's normal final step asks the user to keep or revert each proposed fix
 via AskUserQuestion, which is unavailable in a worker -- so split that decision
 out and make it yourself. Invoke autofix so it *applies* its fixes but leaves

@@ -592,6 +592,8 @@ def test_classify_merge_splits_merged_and_pulled_in() -> None:
     assert pulled_paths == ["system/scripts/forward_port.py", "system/supervisord.conf"]
     # A file only local changed is not surfaced as an upstream update at all.
     assert "PURPOSE.md" not in merged_paths + pulled_paths
+    # Any both-sides file means merge work happened, so the review gates run.
+    assert result.gates_required is True
 
 
 def test_classify_merge_summary_fields() -> None:
@@ -632,11 +634,25 @@ def test_classify_merge_surfaces_provisioner_bump() -> None:
     ]
 
 
+def test_classify_merge_gates_not_required_on_a_pure_clean_pull() -> None:
+    # No file diverged on both sides: everything arrives exactly as upstream
+    # shipped it, so the mechanical half of the review-gate rule clears. Local
+    # changes to files upstream did NOT touch do not flip it -- they are not
+    # part of the merge at all.
+    result = update_self.classify_merge(
+        ["system/scripts/forward_port.py", "system/supervisord.conf"],
+        ["PURPOSE.md", "system/apps/my_app/server.py"],
+    )
+    assert result.merged == []
+    assert result.gates_required is False
+
+
 def test_classify_merge_empty() -> None:
     result = update_self.classify_merge([], [])
     assert result.merged == []
     assert result.pulled_in == []
     assert result.projects_to_validate == []
+    assert result.gates_required is False
 
 
 # --- CLI wiring --------------------------------------------------------------
