@@ -163,7 +163,8 @@ def render_manifest(
         '#   name = "SLACK_SIGNING_SECRET"',
         "#",
         "#   [requirements.llm]",
-        '#   method = "keyed"   # keyed (ANTHROPIC_API_KEY) | keyless (claude -p)',
+        '#   method = "keyed"   # keyed (an API key, e.g. ANTHROPIC_API_KEY)'
+        " | keyless (a subscription CLI, e.g. claude -p)",
         "#",
         "#   [[requirements.adaptation]]",
         '#   summary = "the digest channel is hardcoded"',
