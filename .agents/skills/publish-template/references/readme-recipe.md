@@ -41,63 +41,37 @@ Keep them distinct and never repeat an item across the two. A reader who cannot
 tell "you must fix this" from "you could try this" reads the whole page as a
 list of defects.
 
-## Show the user the rendered page, never raw markdown
+## Show the user the README, and ask
 
-The README is a page, so the user reviews it as one. This happens at the
-publish flow's §6 confirmation gate and is driven by the LEAD -- never by the
-assembly worker, whose worktree is background work and whose output the user
-has not asked to see yet.
+The README is a page, so the user reviews it as one. Paste its full text as
+your chat message -- the chat renders markdown, so they see the headings, the
+table, the hero, and the badge as a page rather than as source. This happens at
+the publish flow's §6 confirmation gate and is driven by the LEAD -- never by
+the assembly worker, whose worktree is background work and whose output the
+user has not asked to see yet.
 
-**Render it before you send the confirmation message**, so the page is already
-on screen when they read your question:
+Read `$WT/README.md` and put its contents in the message, then ask whether it
+reads like a good description of what they built. Name what you want judged:
+whether "Why you care" frames the problem the way they would, whether "How to
+use it" matches how they actually use the thing, and whether the "Ideas for
+making it yours" are ones they would want an adopter to try.
 
-```bash
-uv run --project /home/user/workspace python \
-    /home/user/workspace/system/scripts/render_markdown_preview.py "$WT/README.md"
-python3 /home/user/workspace/system/scripts/layout.py open service:markdown-preview --layout <layout>
-```
+Two things will not look right in chat, and saying so up front stops the user
+reporting them as faults:
 
-Two details that are load-bearing:
-
-- **`--project /home/user/workspace`** keeps this compatible with the skill's
-  CWD invariant. cwd stays `$WT`, which has no virtualenv at all -- the
-  assembly's `git clean -fdxq` removed it -- while the interpreter and the
-  preview service come from the workspace, which is where the supervisord
-  program actually lives.
-- **Pass `$WT/README.md` as an absolute path.** The server serves the previewed
-  file's own directory, so this is what makes the relative hero image resolve.
-  Render a copy from somewhere else and you get a broken image that is your
-  fault, not the README's.
-
-Then ask whether it reads like a good description of what they built. Name what
-you want judged: whether "Why you care" frames the problem the way they would,
-whether "How to use it" matches how they actually use the thing, and whether
-the "Ideas for making it yours" are ones they would want an adopter to try.
+- **The hero image will not appear.** The README points at `template.svg` by a
+  relative path, which resolves on GitHub and does not resolve in a chat
+  message. Tell them the image is the thumbnail they already approved.
+- **The "Open in Minds" button renders as a link or as nothing.** It is an HTML
+  anchor around an image; GitHub shows the button.
 
 **If they say no, rewrite and show them again** -- that is the entire point of
-asking. Edit `$WT/README.md`, re-render with the same command, and refresh:
-
-```bash
-python3 /home/user/workspace/system/scripts/layout.py refresh service:markdown-preview --layout <layout>
-```
-
-Keep the generated structure. Their objection is almost always about the WORDS,
-not the shape, and the hero, the Open in Minds call-to-action, and its
-`MINDS_TEMPLATE_REPO_URL` placeholder must all survive any rewrite -- the
-lead substitutes that placeholder in §7 and §8 blocks the push if it is
-missing. Loop until they are happy.
-
-**Close it when the review is over**, so they are not left with a panel they
-did not ask for:
-
-```bash
-uv run --project /home/user/workspace python \
-    /home/user/workspace/system/scripts/render_markdown_preview.py --close
-```
-
-That stops the service, which withdraws its port and takes the tab with it.
-(The same reason the render command above is what starts it: the service is
-never autostarted, so nothing appears until there is something to look at.)
+asking. Edit `$WT/README.md` and paste the new text. Keep the generated
+structure: their objection is almost always about the WORDS, not the shape, and
+the hero, the Open in Minds call-to-action, and its `MINDS_TEMPLATE_REPO_URL`
+placeholder must all survive any rewrite -- the lead substitutes that
+placeholder in §7 and §8 blocks the push if it is missing. Loop until they are
+happy.
 
 ## Verify the published page
 
