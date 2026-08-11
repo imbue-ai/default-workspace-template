@@ -1,27 +1,27 @@
 ---
-name: use-inspiration
-description: Adapt an existing inspiration (a published snapshot of apps/features from another mind) into this mind, resolving its requirements interactively. Use when the user gives an inspiration's git URL, or asks to adopt/adapt/reuse a published inspiration.
+name: use-template
+description: Adapt an existing template (a published snapshot of apps/features from another mind) into this mind, resolving its requirements interactively. Use when the user gives a template's git URL, or asks to adopt/adapt/reuse a published template.
 ---
 
-# Adapting an inspiration
+# Adapting a template
 
-Version: v2 (inspirations flow). This versions the publish/adopt flow and the
+Version: v2 (templates flow). This versions the publish/adopt flow and the
 manifest format. This skill reads BOTH:
 
-- **v2** -- exactly one slug-free `inspiration.md` + `inspiration.toml` +
-  `inspiration.svg` per repo. The TOML is authoritative for the recipe, the
+- **v2** -- exactly one slug-free `template.md` + `template.toml` +
+  `template.svg` per repo. The TOML is authoritative for the recipe, the
   requirements, the environment to converge, and the lineage.
 - **v1** -- the older format, which could accumulate several slug-named
   `inspiration-<slug>.md` (+ `.svg`) in one repo, the
   recipe as a YAML block inside the markdown, and no TOML at all. Absence of
-  `inspiration.toml` is what identifies it. Still adopted exactly as before;
+  `template.toml` is what identifies it. Still adopted exactly as before;
   nothing writes this format any more.
 
-An inspiration is a publishable, reusable snapshot of the apps and features a mind
+A template is a publishable, reusable snapshot of the apps and features a mind
 has built. It lives in its own GitHub repo as a real default-workspace-template tree
-plus its manifest at the repo root -- `inspiration.md` with an
-`inspiration.svg` thumbnail (v2 adds `inspiration.toml`; a v1 repo instead has
-slug-named `inspiration-<slug>.md`, possibly several). Adapting an inspiration means bringing
+plus its manifest at the repo root -- `template.md` with a
+`template.svg` thumbnail (v2 adds `template.toml`; a v1 repo instead has
+slug-named `inspiration-<slug>.md`, possibly several). Adapting a template means bringing
 that snapshot into *this* mind and then working through its "requirements" — the parts
 the original author left stubbed or unwired — together with the user.
 
@@ -32,31 +32,31 @@ All git commands run with cwd = the repo root (`/home/user/workspace`).
 There are two ways this skill starts. Figure out which one applies before doing
 anything else.
 
-**A. Template path — this mind was created from an inspiration repo.** The mind
-already has the inspiration's tree at its root (it *is* the inspiration repo), so
+**A. Template path — this mind was created from a template repo.** The mind
+already has the template's tree at its root (it *is* the template repo), so
 there is nothing to fetch. On this path adaptation starts IMMEDIATELY at boot:
-the published repo ships its own inspiration-specific `/welcome` skill
+the published repo ships its own template-specific `/welcome` skill
 (generated into the snapshot by the publish flow, replacing the template's
 generic welcome), so the booting agent's first response is a custom welcome
-naming the inspiration's title and one-line description (instead of the generic
+naming the template's title and one-line description (instead of the generic
 "Welcome to Minds" message), followed in the same turn — without waiting to be
 asked — by reading the manifest and asking the user how they want to adapt it.
 The manifest's "How to adapt it" section is the script for that conversation.
-A v2 repo has exactly one `inspiration.md`, so there is nothing to choose:
+A v2 repo has exactly one `template.md`, so there is nothing to choose:
 adapt it. (Only an older v1 repo can hold several slug-named
 `inspiration-<slug>.md` files; there, take the latest slug named in the welcome
 skill, treat the others as already-adapted reference material, and ask the user
 if it is ambiguous.) Skip step 1 below (the tree is already
 here) and go straight to reading the manifest.
 
-**B. Merge path — the user gave you an inspiration's git URL.** Bring the
-inspiration into the *current* mind at the repo root, then adapt it. Do step 1
+**B. Merge path — the user gave you a template's git URL.** Bring the
+template into the *current* mind at the repo root, then adapt it. Do step 1
 below to merge it in.
 
 ## 0. Trust gate — confirm before merging in (merge path B only)
 
-An inspiration is code published by ANOTHER mind's user, in a repo outside
-Imbue's control. **Imbue does not review, verify, or vouch for inspirations.**
+A template is code published by ANOTHER mind's user, in a repo outside
+Imbue's control. **Imbue does not review, verify, or vouch for templates.**
 Adopting one runs its code in this mind -- its services, skills, and scripts --
 and it could contain mistakes or malicious code (data exfiltration, destructive
 commands, hidden network calls). You cannot detect that by reading it, so the
@@ -66,29 +66,29 @@ On the **merge path (B)**, BEFORE any fetch, merge, or execution in §1, tell th
 user in plain language that you are about to pull third-party code that **Imbue
 has not verified and that could be malicious** into their mind; name the repo
 URL; and ask them to confirm they trust that source and want to proceed. Do NOT
-fetch, merge, or run anything from the inspiration until they reply yes. If they
+fetch, merge, or run anything from the template until they reply yes. If they
 decline, stop here. This is informed consent, not a security guarantee -- you
 are telling the user you cannot vouch for the code, not certifying it is safe.
 
-The **template path (A)** needs no such gate: creating a mind from an
-inspiration repo WAS the trust decision, so a mind already built from one is
+The **template path (A)** needs no such gate: creating a mind from a
+template repo WAS the trust decision, so a mind already built from one is
 treated as trusted -- go straight to adapting it.
 
-## 1. Bring in the inspiration, verified in a worktree (merge path only)
+## 1. Bring in the template, verified in a worktree (merge path only)
 
-Only after the trust gate (§0). The inspiration is unverified third-party code,
+Only after the trust gate (§0). The template is unverified third-party code,
 so NEVER merge it straight into the live tree: do the merge in an ISOLATED
 worktree, confirm it went well there, and only then bring the verified result
 into `/home/user/workspace`. This mirrors how `update-self` validates an upstream merge off the
 live tree before landing it.
 
 Do NOT use `git subtree add --prefix=.` — subtree does not support the repo root
-as its prefix and errors out. First fetch the inspiration's branch (fetch only
+as its prefix and errors out. First fetch the template's branch (fetch only
 moves objects into the local store; it changes no working tree):
 
 ```bash
-git remote add inspiration <git-url>        # or a uniquely-named remote if 'inspiration' is taken
-git fetch inspiration <branch>              # branch from the inspiration repo (default: main)
+git remote add template <git-url>        # or a uniquely-named remote if 'template' is taken
+git fetch template <branch>              # branch from the template repo (default: main)
 ```
 
 If the repo is private, the anonymous fetch fails with an auth error. Route git
@@ -116,7 +116,7 @@ git worktree add -q "$WT" HEAD
 **Check the merge went well, in the worktree:**
 
 - **Merge conflicts** are HOLES, not a hard failure: they mark where the
-  inspiration and this mind's tree disagree. Do NOT resolve them mechanically or
+  template and this mind's tree disagree. Do NOT resolve them mechanically or
   land a half-merged tree -- remove the worktree (`git worktree remove --force
   "$WT"`), tell the user what conflicts (step 4, plain language), and only then
   redo the merge in `/home/user/workspace` and resolve it interactively with them.
@@ -136,7 +136,7 @@ git worktree add -q "$WT" HEAD
   )
   ```
 
-  If this fails, the merged tree does not boot -- the inspiration broke this
+  If this fails, the merged tree does not boot -- the template broke this
   mind (a wiring mistake, or something hostile). STOP: tell the user plainly,
   remove the worktree, and do NOT bring it into `/home/user/workspace`.
 
@@ -149,40 +149,40 @@ git merge --ff-only "$(git -C "$WT" rev-parse HEAD)"
 git worktree remove --force "$WT"
 ```
 
-This preserves both trees at the root. The inspiration's `inspiration.md`
+This preserves both trees at the root. The template's `template.md`
 manifest(s) and their `.svg` thumbnails land at the repo root alongside anything
 this mind already had.
 
 This merge path does not touch `system/config/parent.toml` — provenance is read-only reference
-(the inspiration records only a link to the default-workspace-template base it was
+(the template records only a link to the default-workspace-template base it was
 built from; there is no upstream fetch or pull here).
 
 ## 2. Read the manifest
 
-The manifest lives at the repo root. A **v2** inspiration has exactly one, in
-three files: `inspiration.md` (prose), `inspiration.toml` (the machine-readable
-half), and `inspiration.svg` (the thumbnail). Read the TOML first -- its
+The manifest lives at the repo root. A **v2** template has exactly one, in
+three files: `template.md` (prose), `template.toml` (the machine-readable
+half), and `template.svg` (the thumbnail). Read the TOML first -- its
 presence is what tells you the format:
 
-- **`inspiration.toml` present (v2).** It is authoritative for the identity,
-  the `[recipe]`, the `[requirements]`, the `[environment]` this inspiration
-  needs installed, and the `[[lineage]]` of inspirations it was built on. Read
-  `inspiration.md` alongside it for the prose: `What it is`, `How it works`,
+- **`template.toml` present (v2).** It is authoritative for the identity,
+  the `[recipe]`, the `[requirements]`, the `[environment]` this template
+  needs installed, and the `[[lineage]]` of templates it was built on. Read
+  `template.md` alongside it for the prose: `What it is`, `How it works`,
   `Requirements`, `Environment`, `How to adapt it`, and `Adaptation history`.
-- **No `inspiration.toml` (v1).** An older inspiration: one or more slug-named
+- **No `template.toml` (v1).** An older template: one or more slug-named
   `inspiration-<slug>.md` files and no TOML. Read the markdown exactly as
   before -- front matter (`title`, `description`, `thumbnail`, and optionally
   `format`), then the body sections. If several are present, take the latest
   slug named in the repo's `/welcome` skill, or ask the user which they mean.
   Older manifests may have `Apps included` instead of `How it works`,
   `Permissions it may need` instead of `Prerequisites`, `Holes` instead of
-  `Requirements`, and no `How to adapt it`. A v1 inspiration declares no
+  `Requirements`, and no `How to adapt it`. A v1 template declares no
   environment, so there is nothing to converge in §3 -- it behaves exactly as
   it always has.
 
 Do NOT synthesize a `.toml` from a v1 manifest. That would mean parsing
 hand-written prose into a validated schema -- reintroducing the fragility the
-TOML exists to remove -- on someone else's published content. A v1 inspiration
+TOML exists to remove -- on someone else's published content. A v1 template
 becomes v2 when its own publisher next updates it.
 
 **`Requirements` holds two kinds of entry, handled at different times.** They
@@ -205,7 +205,7 @@ than resolved by hand.
 (An older v1 manifest splits these across `Prerequisites` and `Holes`; read
 both, and treat `Prerequisites` as the activation half.)
 
-**`[[lineage]]` is provenance, not work.** It records the inspirations this one
+**`[[lineage]]` is provenance, not work.** It records the templates this one
 was built on, each with a repo URL and the exact commit it was used at, because
 a new manifest overrides its predecessor rather than accumulating beside it.
 Follow a link only if you need to understand where something came from; there is
@@ -213,7 +213,7 @@ nothing to adopt there.
 
 ## 3. Activate first, then ask how to adapt
 
-In chat, in plain language, walk the user through what this inspiration provides
+In chat, in plain language, walk the user through what this template provides
 and what it needs from them — name the activation requirements (do not enumerate
 file paths at the user). Then ask whether they want to run it on the same connectors:
 "This uses Slack to pull in messages — want me to connect it to your Slack now,
@@ -227,8 +227,8 @@ conversation:**
    http://latchkey-self.invalid/permission-requests`; the request opens the
    approval/login flow in the minds app). Do not merely tell the user a
    permission is needed — send the request so it appears for them to approve.
-2. **Install what the inspiration declares.** Read `[environment]` in
-   `inspiration.toml`. If it is empty, skip this. Otherwise install the entries
+2. **Install what the template declares.** Read `[environment]` in
+   `template.toml`. If it is empty, skip this. Otherwise install the entries
    yourself, with the ordinary commands -- there is no special convergence step
    to invoke:
 
@@ -294,18 +294,18 @@ The manifest is a worksheet. After adapting, **append** a dated entry to its
 ```
 
 Earlier history entries are left exactly as they are; each mind that adapts the
-inspiration adds one more entry below the previous ones.
+template adds one more entry below the previous ones.
 
 ## 6. Override and lineage
 
-A mind holds ONE manifest. A merged-in v2 inspiration's `inspiration.md` /
+A mind holds ONE manifest. A merged-in v2 template's `template.md` /
 `.toml` / `.svg` **override** whatever was at the repo root before -- they do
-not accumulate beside it. The previously-adopted inspiration's *code* stays in
+not accumulate beside it. The previously-adopted template's *code* stays in
 the tree (the merge that brought it in is not undone); only its manifest is
 replaced.
 
 So that the override loses nothing, record where this copy came from. After the
-merge lands, write an `[origin]` table into the new `inspiration.toml` with the
+merge lands, write an `[origin]` table into the new `template.toml` with the
 repo URL and the exact commit you fetched:
 
 ```toml
@@ -316,7 +316,7 @@ adopted_on = "<today, YYYY-MM-DD>"
 ```
 
 That is the address the NEXT override turns into a `[[lineage]]` entry -- and
-what makes the chain in a later published manifest name every inspiration this
+what makes the chain in a later published manifest name every template this
 mind was built on, each at the commit it was actually used at. Without it the
 link is simply lost: nothing else records it.
 

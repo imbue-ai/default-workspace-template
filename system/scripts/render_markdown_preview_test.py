@@ -13,15 +13,15 @@ from render_markdown_preview import (
 
 
 def test_raw_html_passes_through_untouched() -> None:
-    # The whole reason a README preview exists: an inspiration's landing page is
+    # The whole reason a README preview exists: a template's landing page is
     # a centered raw-HTML hero plus a badge, and a renderer that escapes those
     # shows the user something GitHub will never display.
     rendered = render_markdown(
-        '<p align="center"><img alt="hero" src="inspiration.svg" width="480"></p>\n'
+        '<p align="center"><img alt="hero" src="template.svg" width="480"></p>\n'
     )
 
     assert '<p align="center">' in rendered
-    assert 'src="inspiration.svg"' in rendered
+    assert 'src="template.svg"' in rendered
     assert "&lt;p align" not in rendered
 
 
@@ -64,12 +64,12 @@ def test_a_path_with_html_metacharacters_is_escaped(tmp_path: Path) -> None:
 
 def test_write_preview_records_the_asset_directory(tmp_path: Path) -> None:
     # The recorded asset dir is what lets the server resolve a relative
-    # inspiration.svg -- without it every local image in the preview breaks,
+    # template.svg -- without it every local image in the preview breaks,
     # which is exactly the failure the preview is supposed to surface.
     source_dir = tmp_path / "repo"
     source_dir.mkdir()
     source = source_dir / "README.md"
-    source.write_text('<img src="inspiration.svg">\n')
+    source.write_text('<img src="template.svg">\n')
     state_dir = tmp_path / "state"
 
     page_path = write_preview(source, state_dir)

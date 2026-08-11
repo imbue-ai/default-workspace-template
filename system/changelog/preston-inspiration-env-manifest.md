@@ -14,8 +14,8 @@ autostarted, rendering something is what brings it up, and
 idle previewer has no business sitting in your workspace.
 
 This is what lets an agent show you a rendered README instead of pasting raw
-markdown into chat -- the publish-inspiration flow now does exactly that before
-shipping an inspiration's landing page, and closes it afterwards.
+markdown into chat -- the publish-template flow now does exactly that before
+shipping a template's landing page, and closes it afterwards.
 
 Repoints the broken `docs/system/style_guide.md` symlink. It targeted
 `vendor/mngr/style_guide.md`, which resolves relative to `docs/system/` and so

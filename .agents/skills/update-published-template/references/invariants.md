@@ -9,7 +9,7 @@ starts from already-published content rather than a clean base.
 - **Preserve the user's customizations.** The update re-assembles from the
   PUBLISHED TIP and overlays only the approved delta -- the finished manifest
   prose, "## Recipe", thumbnail, `/welcome`, and adopters' "Adaptation history"
-  are never regenerated. `build_inspiration.sh` is never run for an update.
+  are never regenerated. `build_template.sh` is never run for an update.
 - **One atomic post-cleanup commit.** The mint is a single `commit-tree` from the
   final, scanned, generalized tree, parented on the published tip -- no pre-scan
   or pre-generalization state ever exists as its own commit, and `merge-base(template, tip)`
