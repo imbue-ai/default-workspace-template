@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# push_harness_branches.sh -- split this workspace's committed work to its two
+# push_upstreams.sh -- split this workspace's committed work to its two
 # upstreams, keeping the vendored mngr changes OUT of the dwt branch.
 #
 #   1. system/vendor/mngr  ->  imbue-ai/mngr-internal            <mngr_branch>
@@ -9,7 +9,7 @@
 #       so no mngr diff ever lands on dwt)
 #
 # Usage:
-#   system/scripts/push_harness_branches.sh <dwt_branch> <mngr_branch> [options]
+#   system/scripts/push_upstreams.sh <dwt_branch> <mngr_branch> [options]
 #
 # Options:
 #   --from <ref>   Commit to split (default: HEAD). Only committed work is pushed.
