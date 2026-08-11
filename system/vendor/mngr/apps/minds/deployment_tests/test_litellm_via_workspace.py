@@ -180,8 +180,10 @@ def _find_chat_agent_id(container_name: str) -> str:
     )
     assert listing.returncode == 0, f"in-container mngr list failed: {listing.stderr}"
     agents = json.loads(listing.stdout).get("agents", [])
-    chat_ids = [str(agent["id"]) for agent in agents if agent.get("type") == "claude"]
-    assert chat_ids, f"No claude chat agent among {[a.get('name') for a in agents]!r}"
+    # The template's chat agents run the "chat" type (parent_type = "claude");
+    # older snapshots report plain "claude", so accept both.
+    chat_ids = [str(agent["id"]) for agent in agents if agent.get("type") in ("claude", "chat")]
+    assert chat_ids, f"No chat agent among {[a.get('name') for a in agents]!r}"
     return chat_ids[0]
 
 

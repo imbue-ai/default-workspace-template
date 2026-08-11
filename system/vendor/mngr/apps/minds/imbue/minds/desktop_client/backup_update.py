@@ -73,7 +73,7 @@ BLOCKED_BY_RUNNING_CHATS_PREFIX: Final[str] = "BLOCKED_BY_RUNNING_CHATS:"
 # stashed changes never look lost.
 _STASH_CONFLICT_GUIDANCE: Final[str] = (
     "Your uncommitted changes could not be restored automatically; "
-    "they are preserved in the git stash (run `git stash pop` in the workspace)."
+    "they are preserved in the git stash (run `git stash pop` in the machine)."
 )
 
 # Must exceed the gate probe script's own `uv run mngr list` budget (180s)
@@ -294,7 +294,7 @@ def _apply_update_and_verify(
         return f"The update ran but verification still reports: {problem_names}. {check.detail}"
     if BackupServiceProblem.NOT_CONFIGURED in check.problems:
         registry.append_log(
-            agent_id, "Backups are still not configured for this workspace; enable them from the backup settings."
+            agent_id, "Backups are still not configured for this machine; enable them from the backup settings."
         )
     return None
 
@@ -458,9 +458,39 @@ def _resolve_restore_subpath(
         if f"{nested_root}/workspace" in nested_entries or f"{nested_root}/code" in nested_entries:
             return nested_root
     raise BackupProvisioningError(
-        f"Snapshot {snapshot.short_id} does not contain a workspace (no workspace/ or code/ checkout); "
+        f"Snapshot {snapshot.short_id} does not contain a machine (no workspace/ or code/ checkout); "
         "it cannot be restored"
     )
+
+
+def _services_down_warning(names: list[str]) -> str:
+    """Word the restore script's ``services_down`` list as a completion warning.
+
+    These services are outside the restore-critical set (the contract is
+    ``behaviors/backup-restore/restore-verdict.feature``), so their state
+    never fails the operation -- the workspace came back able to serve its
+    user, and this caveat tells them what has not come back up.
+    """
+    return (
+        f"The restore succeeded, but these services have not come back up: {', '.join(names)}. "
+        "The workspace is usable; the machine converges its environment in the background, so "
+        "this usually resolves itself, and a service that stays down needs attention "
+        "independent of this restore."
+    )
+
+
+def _restore_completion_warnings(payload: dict[str, object]) -> list[str]:
+    services_down = payload.get("services_down")
+    if not isinstance(services_down, list) or not services_down:
+        return []
+    return [_services_down_warning([str(name) for name in services_down])]
+
+
+def _complete_restore(registry: WorkspaceOperationRegistryInterface, agent_id: AgentId, warnings: list[str]) -> None:
+    if warnings:
+        registry.complete_with_warning(agent_id, " ".join(warnings))
+    else:
+        registry.complete(agent_id)
 
 
 def _chained_update_warning(update_error: str) -> str:
@@ -504,7 +534,7 @@ def _run_restore_phases(
     # workspace copy is archived aside, never destroyed. Also proves, before
     # anything mutates, that the snapshot the user picked lives in the same
     # repository the script will read: both came from the canonical env.
-    registry.append_log(agent_id, "Making sure the workspace has the right backup credentials...")
+    registry.append_log(agent_id, "Making sure the machine has the right backup credentials...")
     reinject_canonical_env(agent_id=agent_id, paths=paths, parent_cg=parent_cg)
 
     # Phase 1: gate + wait (cancellable; nothing has been mutated yet). Kept
@@ -573,7 +603,7 @@ def _run_restore_phases(
         # Best-effort: bring them back before reporting the failure, so a
         # killed restore cannot leave backups (and the whole workspace) down.
         detail = (restore_result.stderr or restore_result.stdout).strip()[-800:]
-        registry.append_log(agent_id, "The restore did not report a result; restarting the workspace services...")
+        registry.append_log(agent_id, "The restore did not report a result; restarting the machine services...")
         resume_result = run_mngr_exec_on_agent(
             agent_id,
             "supervisorctl restart all",
@@ -600,9 +630,10 @@ def _run_restore_phases(
         )
         registry.fail(agent_id, f"{detail}{safety_note}")
         return
-    registry.append_log(
-        agent_id, "Restored the backup, reinstalled dependencies, and restarted the workspace services."
-    )
+    registry.append_log(agent_id, "Restored the backup, reinstalled dependencies, and restarted the machine services.")
+    # Services that were already unhealthy before the restore surface as a
+    # completion warning, never a failure -- see _services_converging_warning.
+    warnings = _restore_completion_warnings(payload)
 
     # Phase 3: the script wrote back the pre-restore restic.env, but re-inject
     # the canonical copy anyway so the workspace ends converged even if the
@@ -617,7 +648,7 @@ def _run_restore_phases(
     # must not fail the operation -- the user's data is restored, which is
     # what they asked for -- so it downgrades to a completion warning.
     if not is_update_after:
-        registry.complete(agent_id)
+        _complete_restore(registry, agent_id, warnings)
         return
     registry.append_log(agent_id, "Updating the backup service to the current version...")
     update_error = _apply_update_and_verify(
@@ -628,11 +659,10 @@ def _run_restore_phases(
         parent_cg=parent_cg,
         is_stop_chats=is_stop_chats,
     )
-    if update_error is None:
-        registry.complete(agent_id)
-        return
-    logger.warning("Chained backup-service update after restore for {} failed: {}", agent_id, update_error)
-    registry.complete_with_warning(agent_id, _chained_update_warning(update_error))
+    if update_error is not None:
+        logger.warning("Chained backup-service update after restore for {} failed: {}", agent_id, update_error)
+        warnings.append(_chained_update_warning(update_error))
+    _complete_restore(registry, agent_id, warnings)
 
 
 def run_backup_configure_sequence(

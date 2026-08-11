@@ -5,6 +5,7 @@ const path = require('path');
 const paths = require('./paths');
 const { getBuildMetadata } = require('./build-metadata');
 const { createRotatingLogStream } = require('./log-rotation');
+const { formatTimestampedLine, createLineSplitter } = require('./log-timestamp');
 
 // Swallow EPIPE on the Electron main process's own stdout/stderr. When dev
 // launches go through a pipe (e.g. `just minds-start | head -30`), the
@@ -33,10 +34,11 @@ let backendProcess = null;
  * ``LATCHKEY_CURL`` is read by the upstream latchkey CLI. The dispatch
  * curl finds the impersonator binary as a sibling in the same
  * ``resources/curl/`` dir (download-binaries.js installs both or neither),
- * so no extra env var is needed. Returns ``{}`` when the dispatch curl
- * isn't bundled (a platform datalib doesn't build) so latchkey falls back
- * to the system curl -- never point ``LATCHKEY_CURL`` at a nonexistent
- * file, which would break every credential check.
+ * so no extra env var is needed. Returns ``{}`` whenever the dispatch curl
+ * is absent -- on the platforms it is never fetched for (macOS x86_64,
+ * Windows), and in packaged builds, which build.js does not stage it into --
+ * so latchkey falls back to the system curl. Never point ``LATCHKEY_CURL``
+ * at a nonexistent file, which would break every credential check.
  */
 function latchkeyCurlEnv() {
   const dispatch = paths.getLatchkeyCurlDispatchPath();
@@ -290,7 +292,7 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
       };
 
       if (paths.isDev()) {
-        // Dev mode: use system uv with the monorepo workspace venv
+        // Dev shares the developer's .venv and uv.lock, so it uses their uv.
         uvBin = 'uv';
         args = [
           'run', '--package', 'minds',
@@ -308,7 +310,8 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
           ...gitEnv,
           // Pair the bundled git binary with gitEnv in dev too: a system git
           // running against the payload's exec-path would be version-skewed.
-          PATH: `${paths.getGitBinDir()}:${process.env.PATH || ''}`,
+          // limactl too -- mngr_lima resolves it from PATH.
+          PATH: `${paths.getGitBinDir()}:${paths.getLimaBinDir()}:${process.env.PATH || ''}`,
           MINDS_ELECTRON: '1',
           MINDS_ROOT_NAME: mindsRootName,
           MNGR_HOST_DIR: mngrHostDir,
@@ -409,26 +412,35 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
 
       backendProcess = child;
 
-      // Parse JSONL events from stdout for the login URL
-      let stdoutBuffer = '';
+      // Both streams are reassembled into whole lines: stdout because its JSONL
+      // events (the login URL among them) are parsed a line at a time, and both
+      // because every line logged below is stamped individually.
+      const stdoutSplitter = createLineSplitter();
+      const stderrSplitter = createLineSplitter();
 
       // Flush any buffered (newline-less) trailing stdout to the log so a final
       // fragment emitted right before exit is never dropped. Redacted like every
       // other logged line.
       const flushStdoutBufferToLog = () => {
-        if (stdoutBuffer) {
-          logStream.write(redactStdoutLineForLog(stdoutBuffer) + '\n');
-          stdoutBuffer = '';
+        const remainder = stdoutSplitter.flush();
+        if (remainder !== null) {
+          logStream.write(formatTimestampedLine(redactStdoutLineForLog(remainder)));
+        }
+      };
+
+      // Same for a trailing newline-less stderr fragment: a backend that dies
+      // mid-line (a partial traceback) would otherwise lose its last output --
+      // exactly the output worth having when diagnosing the death.
+      const flushStderrBufferToLog = () => {
+        const remainder = stderrSplitter.flush();
+        if (remainder !== null) {
+          logStream.write(formatTimestampedLine(remainder));
         }
       };
 
       child.stdout.on('data', (data) => {
         const text = data.toString();
-        stdoutBuffer += text;
-
-        const lines = stdoutBuffer.split('\n');
-        // Keep the last incomplete line in the buffer
-        stdoutBuffer = lines.pop() || '';
+        const lines = stdoutSplitter.push(text);
 
         for (const line of lines) {
           // Log every complete line, but mask secret-bearing event fields
@@ -436,7 +448,7 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
           // bug reports, so that reusable session token must never land in it.
           // The in-process handlers below still parse the original line, so they
           // receive the real values.
-          logStream.write(redactStdoutLineForLog(line) + '\n');
+          logStream.write(formatTimestampedLine(redactStdoutLineForLog(line)));
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line);
@@ -471,7 +483,13 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
       // should never bring down the Electron main process.
       child.stderr.on('data', (data) => {
         const text = data.toString();
-        logStream.write(text);
+        // Split into complete lines before logging so each one carries its own
+        // timestamp. A chunk can end mid-line, so the remainder is held back
+        // until the rest arrives (flushed on exit). The dev-mode forward below
+        // still writes the raw text, keeping the interactive console untouched.
+        for (const line of stderrSplitter.push(text)) {
+          logStream.write(formatTimestampedLine(line));
+        }
         if (!isResolved) {
           // Surface uv's freshest progress line on the splash so cold launch doesn't look frozen.
           const latest = text.split('\n').map(l => l.trim()).filter(Boolean).pop();
@@ -488,19 +506,33 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
         }
       });
 
-      child.on('error', (err) => {
+      // Flush both trailing partial lines and close the log. Driven by 'close'
+      // rather than 'exit' because only 'close' fires after the stdio streams
+      // have closed, so by then a last newline-less line -- the dying backend's
+      // final output, exactly what the buffering exists to preserve -- has been
+      // read and is in the splitter rather than still in flight.
+      // Idempotent because 'error' also reaches it: a failed spawn emits both.
+      let isLogFinalized = false;
+      const finalizeLog = () => {
+        if (isLogFinalized) return;
+        isLogFinalized = true;
         flushStdoutBufferToLog();
+        flushStderrBufferToLog();
         logStream.end();
+      };
+
+      child.on('error', (err) => {
+        finalizeLog();
         if (!isResolved) {
           isResolved = true;
           reject(new Error(`Failed to start backend: ${err.message}`));
         }
       });
 
+      child.on('close', finalizeLog);
+
       child.on('exit', (code) => {
         backendProcess = null;
-        flushStdoutBufferToLog();
-        logStream.end();
         if (!isResolved) {
           isResolved = true;
           reject(new Error(

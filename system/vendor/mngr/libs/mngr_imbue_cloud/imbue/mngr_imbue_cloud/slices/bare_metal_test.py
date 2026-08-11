@@ -16,17 +16,22 @@ from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_ORDERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 from imbue.mngr_imbue_cloud.slices.bare_metal import DISK_RESERVE_GB
 from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_BOOT_DISK_GIB
+from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_CONTAINER_MEMORY_RESERVE_MIB
+from imbue.mngr_imbue_cloud.slices.bare_metal import build_slice_container_memory_start_args
 from imbue.mngr_imbue_cloud.slices.bare_metal import choose_raid_level
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_capacity
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_disk_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_instance_names
+from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_container_memory_cap_mib
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_disk_budget_gib
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_disk_gib
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_memory_mib
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_vcpus
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slot_count
+from imbue.mngr_imbue_cloud.slices.bare_metal import count_authorized_key_lines
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_slice_resource_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import find_server_capacity_by_id
+from imbue.mngr_imbue_cloud.slices.bare_metal import foreign_tier_slice_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import is_slice_owned_by_env
 from imbue.mngr_imbue_cloud.slices.bare_metal import is_valid_status_transition
 from imbue.mngr_imbue_cloud.slices.bare_metal import next_server_status
@@ -309,3 +314,73 @@ def test_compute_orphan_slice_disk_names_never_touches_other_envs_or_legacy() ->
     box = {mine, theirs, legacy, "some-other-disk"}
     tracked: set[str] = set()
     assert compute_orphan_slice_disk_names(box, tracked, "dev-josh") == {mine}
+
+
+def test_compute_slice_container_memory_cap_mib_subtracts_the_vm_reserve() -> None:
+    # An 8GiB slice yields a 7GiB container cap: the fixed VM-side reserve comes
+    # off the top so the VM's own daemons (sshd, dockerd, guestagent) keep room.
+    assert compute_slice_container_memory_cap_mib(8192) == 8192 - SLICE_CONTAINER_MEMORY_RESERVE_MIB
+
+
+def test_compute_slice_container_memory_cap_mib_rejects_slices_smaller_than_the_reserve() -> None:
+    with pytest.raises(BareMetalConfigError):
+        compute_slice_container_memory_cap_mib(SLICE_CONTAINER_MEMORY_RESERVE_MIB)
+
+
+def test_build_slice_container_memory_start_args_pins_swap_to_the_memory_cap() -> None:
+    # --memory-swap equals --memory so the container can never swap (it must be
+    # shed under pressure, not thrash).
+    assert build_slice_container_memory_start_args(8192) == ("--memory=7168m", "--memory-swap=7168m")
+
+
+def test_foreign_tier_slice_names_flags_a_dev_slice_on_a_staging_box() -> None:
+    # The exact shape of the incident this guard exists for: a dev env's slice
+    # carved onto a box the staging tier owns.
+    theirs = slice_lima_disk_name(HostId.generate(), "dev-xiaq")
+    mine = slice_lima_disk_name(HostId.generate(), "staging")
+    assert foreign_tier_slice_names({theirs, mine}, "staging") == {theirs}
+
+
+def test_foreign_tier_slice_names_allows_box_sharing_within_the_dev_tier() -> None:
+    # Several dev envs on one dev box is documented, routine, and must stay allowed.
+    josh = slice_lima_disk_name(HostId.generate(), "dev-josh")
+    alice = slice_lima_disk_name(HostId.generate(), "dev-alice")
+    assert foreign_tier_slice_names({josh, alice}, "dev-josh") == set()
+
+
+def test_foreign_tier_slice_names_flags_staging_slices_from_a_dev_env() -> None:
+    # Symmetric: the guard fires from whichever side bakes second.
+    staging_slice = slice_lima_disk_name(HostId.generate(), "staging")
+    assert foreign_tier_slice_names({staging_slice}, "dev-josh") == {staging_slice}
+
+
+def test_foreign_tier_slice_names_separates_production_from_staging() -> None:
+    production_slice = slice_lima_disk_name(HostId.generate(), "production")
+    assert foreign_tier_slice_names({production_slice}, "staging") == {production_slice}
+    assert foreign_tier_slice_names({production_slice}, "production") == set()
+
+
+def test_foreign_tier_slice_names_ignores_legacy_unstamped_and_non_slice_names() -> None:
+    # A legacy name carries no env, so its tier is unknowable -- it counts toward
+    # occupancy but must never be reported as a cross-tier violation. Non-slice
+    # lima resources are not ours to judge at all.
+    legacy = slice_lima_disk_name(HostId.generate())
+    assert foreign_tier_slice_names({legacy, "some-unrelated-disk"}, "staging") == set()
+
+
+def test_foreign_tier_slice_names_is_empty_for_an_empty_box() -> None:
+    assert foreign_tier_slice_names(set(), "staging") == set()
+
+
+def test_count_authorized_key_lines_counts_only_key_bearing_lines() -> None:
+    # A correctly prepped box holds exactly this: one pool key, nothing else.
+    assert count_authorized_key_lines("ssh-ed25519 AAAApool pool-management\n") == 1
+    # Blank lines, whitespace-only lines, and comments carry no key.
+    assert count_authorized_key_lines("") == 0
+    assert count_authorized_key_lines("\n\n   \n") == 0
+    assert count_authorized_key_lines("# only a comment\nssh-ed25519 AAAApool\n") == 1
+    assert count_authorized_key_lines("\t# indented comment\n  ssh-ed25519 AAAApool\n") == 1
+    # The condition the tier guard refuses on: a second key added out of band.
+    assert count_authorized_key_lines("ssh-ed25519 AAAApool\nssh-ed25519 AAAAother dev-tier\n") == 2
+    # A file with no trailing newline must not lose its last key.
+    assert count_authorized_key_lines("ssh-ed25519 AAAApool\nssh-ed25519 AAAAother") == 2

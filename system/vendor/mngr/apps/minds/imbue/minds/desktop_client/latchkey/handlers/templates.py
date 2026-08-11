@@ -22,9 +22,14 @@ out of the generic template module.
 """
 
 from collections.abc import Sequence
+from typing import Final
 
+from pydantic import Field
+
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.minds.desktop_client.templates import CATALOG
+from imbue.mngr_latchkey.account_scopes import ACCOUNT_SCOPE_SEPARATOR
 from imbue.mngr_latchkey.services_catalog import ServicePermissionInfo
 from imbue.mngr_latchkey.services_catalog import WILDCARD_PERMISSION_NAME
 from imbue.mngr_latchkey.workspace_permissions import WorkspaceVerb
@@ -32,8 +37,39 @@ from imbue.mngr_latchkey.workspace_permissions import WorkspaceVerb
 # The catch-all ``any`` permission is stored and submitted verbatim (it is
 # Detent's wildcard schema), but users find ``all`` clearer, so the dialog
 # shows this label in its place while the underlying checkbox value stays
-# ``any``.
-_WILDCARD_PERMISSION_LABEL = "all"
+# ``any``. Public: the typed inbox-detail payload carries it to the SPA.
+WILDCARD_PERMISSION_UI_LABEL: Final[str] = "all"
+
+# Form value of the predefined dialog's "sign a new account in" choice. Chosen
+# to be implausible as a real account name, but the grant flow does not rely on
+# that: it resolves the submitted value against the service's stored accounts
+# first and only falls back to the sign-in flow when nothing matches, so even an
+# account literally named this would still be treated as the account it is.
+NEW_ACCOUNT_FORM_VALUE: Final[str] = f"{ACCOUNT_SCOPE_SEPARATOR}new-account"
+
+# Label for latchkey's single unnamed "default" account (keyed by the empty
+# string). Mirrors the connectors settings page so the same account reads the
+# same way in both places.
+DEFAULT_ACCOUNT_LABEL: Final[str] = "Default account"
+
+
+class PermissionAccountChoice(FrozenModel):
+    """One selectable account in the predefined permission dialog."""
+
+    value: str = Field(
+        description=(
+            'Form value: the latchkey account key (``""`` for the unnamed default) or '
+            ":data:`NEW_ACCOUNT_FORM_VALUE` for the sign-in-a-new-account choice."
+        ),
+    )
+    label: str = Field(description="User-facing account label.")
+    hint: str = Field(default="", description="Short qualifier shown next to the label (e.g. 'needs sign-in').")
+    is_credential_setup_needed: bool = Field(
+        description="Whether picking this account has to establish credentials before the grant can apply.",
+    )
+    is_account_name_needed: bool = Field(
+        description="Whether picking this account also requires the user to name it (manual-credentials services).",
+    )
 
 
 @pure
@@ -44,16 +80,26 @@ def render_predefined_permission_dialog(
     rationale: str,
     service: ServicePermissionInfo,
     checked_permissions: Sequence[str],
+    account_choices: Sequence[PermissionAccountChoice],
+    selected_account_value: str,
     will_open_browser: bool,
     mngr_forward_origin: str = "",
 ) -> str:
     """Render the predefined (catalog-backed) permission detail fragment.
 
+    ``account_choices`` are the accounts the grant can be attached to -- every
+    account currently signed in to the service, plus the always-present
+    "new account" choice (:data:`NEW_ACCOUNT_FORM_VALUE`) -- and
+    ``selected_account_value`` is the one preselected. Grants are per account,
+    so exactly one is submitted with the form.
+
     ``will_open_browser`` controls the in-progress notice shown after the
     user clicks Approve: when True (latchkey will run ``auth browser``),
     the notice tells the user to expect a browser pop-up; when False
     (credentials are already valid, or the service requires manual
-    credentials), it shows a generic ``Granting permission...`` message.
+    credentials), it shows a generic ``Granting permission...`` message. It is
+    computed for the preselected account; picking a different one may make it
+    momentarily inaccurate, which does not affect the outcome.
 
     ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin;
     the workspace link in the fragment points at ``{mngr_forward_origin}/goto/<agent>/``.
@@ -69,8 +115,11 @@ def render_predefined_permission_dialog(
         permission_schemas=service.permission_schemas,
         description_by_permission_name=service.description_by_permission_name,
         checked_permissions=set(checked_permissions),
+        account_choices=account_choices,
+        selected_account_value=selected_account_value,
+        new_account_value=NEW_ACCOUNT_FORM_VALUE,
         wildcard_permission=WILDCARD_PERMISSION_NAME,
-        wildcard_label=_WILDCARD_PERMISSION_LABEL,
+        wildcard_label=WILDCARD_PERMISSION_UI_LABEL,
         will_open_browser=will_open_browser,
         mngr_forward_origin=mngr_forward_origin,
     )
@@ -189,7 +238,7 @@ def render_workspace_permission_dialog(
         request_id=request_id,
         ws_name=ws_name,
         rationale=rationale,
-        display_name=target_workspace_name or "workspaces",
+        display_name=target_workspace_name or "machines",
         verbs=verbs,
         checked_permissions=set(checked_permissions),
         target_workspace_id=target_workspace_id or "",

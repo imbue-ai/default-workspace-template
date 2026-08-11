@@ -26,9 +26,11 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.bootstrap import MindsRoot
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthFailedCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthSession
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudVerificationStatus
 from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.responses import make_html_response
 from imbue.minds.desktop_client.responses import make_redirect_response
@@ -71,10 +73,44 @@ class AuthResult(FrozenModel):
     identity (rendered in the UI) and whether email verification is pending.
     """
 
-    status: str = Field(description="OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, FIELD_ERROR, or ERROR")
+    status: str = Field(
+        description=(
+            "OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, ACCOUNT_EXISTS_WITH_OTHER_METHOD, FIELD_ERROR, or ERROR"
+        )
+    )
     message: str | None = Field(default=None)
     user: AuthUser | None = Field(default=None)
     needs_email_verification: bool = Field(default=False)
+
+
+# Shown when an auth call fails for a reason the connector never got to judge
+# (subprocess crash, connector unreachable, malformed response). ``str(exc)``
+# for those is the traceback-free "auth signin failed (exit 1); see the desktop
+# client logs for details" -- the right thing in a log, unusable in a sign-in
+# form -- and the full detail is already logged by ``_expect_success``.
+_UNAVAILABLE_AUTH_SERVICE_MESSAGE: Final[str] = (
+    "We could not reach the Imbue sign-in service. Check your internet connection and try again."
+)
+
+
+def _user_facing_auth_message(exc: ImbueCloudCliError) -> str:
+    """Return copy safe to render in the auth UI for a failed plugin auth call."""
+    if isinstance(exc, ImbueCloudAuthFailedCliError):
+        return exc.auth_message
+    logger.warning("Auth call failed without a structured connector verdict: {}", exc)
+    return _UNAVAILABLE_AUTH_SERVICE_MESSAGE
+
+
+def _auth_result_from_cli_error(exc: ImbueCloudCliError) -> AuthResult:
+    """Translate a failed ``mngr imbue_cloud auth ...`` call into a UI-ready result.
+
+    A structured rejection carries the connector's own verdict (status +
+    message), which the sign-in page keys off to show real copy -- notably its
+    ``WRONG_CREDENTIALS`` branch. Anything else is an infrastructure failure and
+    gets generic, actionable copy instead of the raw CLI failure string.
+    """
+    status = exc.auth_status if isinstance(exc, ImbueCloudAuthFailedCliError) else "ERROR"
+    return AuthResult(status=status, message=_user_facing_auth_message(exc))
 
 
 class _AuthBackendShim(MutableModel):
@@ -99,7 +135,7 @@ class _AuthBackendShim(MutableModel):
         try:
             session_obj = self._cli.auth_signup(email, password)
         except ImbueCloudCliError as exc:
-            return AuthResult(status="ERROR", message=str(exc))
+            return _auth_result_from_cli_error(exc)
         return AuthResult(
             status="OK",
             user=AuthUser(
@@ -114,7 +150,7 @@ class _AuthBackendShim(MutableModel):
         try:
             session_obj = self._cli.auth_signin(email, password)
         except ImbueCloudCliError as exc:
-            return AuthResult(status="ERROR", message=str(exc))
+            return _auth_result_from_cli_error(exc)
         return AuthResult(
             status="OK",
             user=AuthUser(
@@ -131,37 +167,19 @@ class _AuthBackendShim(MutableModel):
         except ImbueCloudCliError as exc:
             logger.warning("`mngr imbue_cloud auth signout` failed for {}: {}", account_email, exc)
 
-    def is_email_verified(self, _user_id: str, _email: str) -> bool:
-        # The plugin doesn't currently expose this. Treat as verified to
-        # avoid spurious "please verify" prompts; the real check happens
-        # connector-side at next signin.
-        return True
+    def check_email_verified(self, email: str) -> ImbueCloudVerificationStatus:
+        """Ask the connector whether ``email`` is verified (promoting the pending session when it is)."""
+        return self._cli.auth_is_email_verified(email)
 
-    def send_verification_email(self, _user_id: str, email: str) -> bool:
-        try:
-            # Touch the session as a smoke check.
-            self._cli.auth_status(email)
-            return True
-        except ImbueCloudCliError as exc:
-            logger.warning("Could not invoke auth status for {}: {}", email, exc)
-            return False
+    def resend_verification_email(self, email: str) -> bool:
+        """Re-send the verification email; False when the server cooldown suppressed it."""
+        return self._cli.auth_resend_verification(email)
 
     def forgot_password(self, email: str) -> None:
-        try:
-            # Plugin doesn't currently expose forgot-password.
-            self._cli.auth_status(email)
-        except ImbueCloudCliError as exc:
-            logger.warning("Forgot-password (placeholder) call failed for {}: {}", email, exc)
+        self._cli.auth_forgot_password(email)
 
     def get_user_provider(self, _user_id: str) -> str:
         return "email"
-
-    @property
-    def base_url(self) -> str:
-        # No external base URL anymore -- the desktop UI's reset link
-        # redirect should be reworked to point at a fixed connector URL via
-        # MindsConfig instead.
-        return ""
 
 
 def _json_response(data: dict[str, object], status_code: int = 200) -> Response:
@@ -186,11 +204,19 @@ def _get_auth_backend() -> _AuthBackendShim:
     return _AuthBackendShim(cli=cli)
 
 
-def _get_latest_user_info(session_store: MultiAccountSessionStore) -> UserInfo | None:
+def _get_primary_user_info(session_store: MultiAccountSessionStore) -> UserInfo | None:
+    """Return the active account's identity, or an arbitrary signed-in account's as a fallback.
+
+    The plugin's ``auth list`` marks exactly one account active (the most
+    recently signed-in / ``auth use``-pinned one); ``list_accounts`` is
+    otherwise sorted by email, so "last entry" would just be the
+    alphabetically-last account.
+    """
     accounts = session_store.list_accounts()
     if not accounts:
         return None
-    return session_store.get_user_info(str(accounts[-1].user_id))
+    active = next((account for account in accounts if account.is_active), accounts[-1])
+    return session_store.get_user_info(str(active.user_id))
 
 
 def _get_output_format() -> OutputFormat:
@@ -234,6 +260,9 @@ def _store_session_from_auth_result(
     minds_config: MindsConfig | None = get_state().minds_config
     if minds_config is not None and minds_config.get_default_account_id() is None:
         minds_config.set_default_account_id(result.user.user_id)
+    # Woken after the default-account write, so a re-derive picks up the whole
+    # new identity rather than racing the account this signin just defaulted to.
+    wake_chrome_event_streams()
 
     # Explicit signin -- always re-enable the provider entry, even if the
     # user previously clicked Disable on it in the providers panel.
@@ -286,7 +315,7 @@ def _auth_error_response(exc: AuthBackendError | ImbueCloudCliError) -> Response
 # enable the remote (Imbue Cloud) compute preset. Used when no explicit
 # ``?message=`` is supplied alongside a ``return_to``.
 _REMOTE_SIGNIN_EXPLAINER: Final[str] = (
-    "Sign in or create an Imbue account to run your workspace on Imbue Cloud. "
+    "Sign in or create an Imbue account to run your machine on Imbue Cloud. "
     "You can also go back and run it directly on your computer."
 )
 
@@ -294,9 +323,15 @@ _REMOTE_SIGNIN_EXPLAINER: Final[str] = (
 def _handle_auth_page() -> Response:
     """Render the sign-up or sign-in page.
 
-    /auth/signup always defaults to sign-up mode. /auth/login defaults
-    to sign-in mode (unless the user has never signed in before, in
-    which case it shows sign-up as a convenience).
+    Which tab leads is decided by the route alone: ``/auth/signup`` leads
+    with sign-up, ``/auth/login`` with sign-in. Every caller of
+    ``/auth/login`` is an affordance the user pressed that says "sign in"
+    ("Log in", "Sign in again", "Back to sign in"), so that request is
+    honored verbatim -- guessing from local state would hand the sign-up
+    form to a returning user signing in on a new machine, which is exactly
+    the population that has no local state. Entry points that mean
+    "get me an account" link to ``/auth/signup``; the tabs still flip
+    client-side either way.
 
     An optional ``?message=`` query parameter is rendered as a banner on
     the page (e.g. the Electron shell appends one explaining why the user
@@ -341,10 +376,21 @@ def _handle_signup_api() -> Response:
     if result.status != "OK":
         return _json_response({"status": result.status, "message": result.message or ""})
 
-    _store_session_from_auth_result(session_store, result)
     assert result.user is not None
+    # An unverified account is not signed in yet: the plugin holds its session
+    # as pending (invisible to `auth list`), and none of the local signin
+    # bookkeeping (default account, provider registration, observer bounce)
+    # runs until the check-email page's verification poll observes the
+    # verification and completes it.
+    if not result.needs_email_verification:
+        _store_session_from_auth_result(session_store, result)
     return _json_response(
-        {"status": "OK", "userId": result.user.user_id, "needsEmailVerification": result.needs_email_verification}
+        {
+            "status": "OK",
+            "userId": result.user.user_id,
+            "email": result.user.email,
+            "needsEmailVerification": result.needs_email_verification,
+        }
     )
 
 
@@ -367,12 +413,16 @@ def _handle_signin_api() -> Response:
     if result.status != "OK":
         return _json_response({"status": result.status, "message": result.message or ""})
 
-    _store_session_from_auth_result(session_store, result)
     assert result.user is not None
+    # Same deferral as signup: an unverified account stays pending until the
+    # verification poll completes the signin.
+    if not result.needs_email_verification:
+        _store_session_from_auth_result(session_store, result)
     return _json_response(
         {
             "status": "OK",
             "userId": result.user.user_id,
+            "email": result.user.email,
             "needsEmailVerification": result.needs_email_verification,
         }
     )
@@ -403,6 +453,7 @@ def signout_user_via_plugin(user_id: str) -> None:
         logger.warning("No mirrored account for user {}; skipping plugin signout", user_id[:8])
     session_store.invalidate_identity_cache()
     _kick_sync_scheduler()
+    wake_chrome_event_streams()
     if signed_out_email and unset_imbue_cloud_provider_for_account(
         signed_out_email, root=MindsRoot.from_environment()
     ):
@@ -434,7 +485,7 @@ def _handle_signout_api() -> Response:
 def _handle_status_api() -> Response:
     """Return current auth status and user info."""
     session_store = _get_session_store()
-    user_info = _get_latest_user_info(session_store)
+    user_info = _get_primary_user_info(session_store)
     if user_info is None:
         return _json_response({"signedIn": False})
     return _json_response(
@@ -448,36 +499,61 @@ def _handle_status_api() -> Response:
     )
 
 
+def _complete_verified_signin(session_store: MultiAccountSessionStore, status: ImbueCloudVerificationStatus) -> None:
+    """Finish the signin that signup deferred until the email was verified.
+
+    The plugin has already promoted the pending session (it now shows up in
+    ``auth list`` as the active account); this runs the same local bookkeeping
+    a verified signin performs -- identity-cache invalidation, default-account
+    selection, provider registration, observer bounce. Idempotent, so the poll
+    observing ``verified`` more than once is harmless.
+    """
+    result = AuthResult(
+        status="OK",
+        user=AuthUser(
+            user_id=status.user_id,
+            email=status.email,
+            display_name=status.display_name,
+        ),
+    )
+    _store_session_from_auth_result(session_store, result)
+
+
 def _handle_email_verified_api() -> Response:
-    """Check if the current user's email is verified."""
+    """Check whether ``?email=``'s address is verified, completing its signin when it is.
+
+    This is the check-email page's poll. The account being verified is
+    *pending* -- deliberately invisible to ``auth list`` -- so the address
+    must be named explicitly rather than resolved from the signed-in accounts.
+    """
     session_store = _get_session_store()
     backend = _get_auth_backend()
-    user_info = _get_latest_user_info(session_store)
-    if user_info is None:
-        return _json_response({"verified": False, "signedIn": False})
+    email = (request.args.get("email") or "").strip()
+    if not email:
+        return _json_response({"status": "FIELD_ERROR", "message": "email query parameter is required"}, 400)
     try:
-        verified = backend.is_email_verified(str(user_info.user_id), user_info.email)
+        status = backend.check_email_verified(email)
     except ImbueCloudCliError as exc:
         logger.warning("Auth backend unreachable during is-email-verified: {}", exc)
-        return _json_response({"verified": False, "signedIn": True, "error": "backend_unavailable"}, 502)
-    return _json_response({"verified": verified, "signedIn": True})
+        return _json_response({"verified": False, "error": "backend_unavailable"}, 502)
+    if status.verified:
+        _complete_verified_signin(session_store, status)
+    return _json_response({"verified": status.verified})
 
 
 def _handle_resend_verification_api() -> Response:
-    """Resend the email verification email."""
-    session_store = _get_session_store()
+    """Resend the verification email for the pending account named in the JSON body."""
     backend = _get_auth_backend()
-    user_info = _get_latest_user_info(session_store)
-    if user_info is None:
-        return _json_response({"status": "ERROR", "message": "Not signed in"}, 401)
+    body = request.get_json(silent=True, force=True) or {}
+    email = str(body.get("email", "")).strip()
+    if not email:
+        return _json_response({"status": "FIELD_ERROR", "message": "email is required"}, 400)
     try:
-        ok = backend.send_verification_email(str(user_info.user_id), user_info.email)
+        is_sent = backend.resend_verification_email(email)
     except ImbueCloudCliError as exc:
         logger.warning("Auth backend unreachable during resend-verification: {}", exc)
         return _json_response({"status": "ERROR", "message": "Authentication service is unavailable"}, 502)
-    if not ok:
-        return _json_response({"status": "ERROR", "message": "Failed to send verification email"}, 502)
-    return _json_response({"status": "OK"})
+    return _json_response({"status": "OK", "sent": is_sent})
 
 
 def _handle_signin_modal_page() -> Response:
@@ -487,20 +563,37 @@ def _handle_signin_modal_page() -> Response:
     sign-in prompt covers the whole window, including the title bar. The
     optional ``?return_to=`` (validated as a safe local path) is where a
     successful sign-in lands the content view; it defaults to the create
-    screen, the modal's original caller. The optional ``?mode=signin`` leads
-    with the sign-in tab (for callers labeled "Log In"); anything else keeps
-    the sign-up default.
+    screen, the modal's original caller. The optional ``?mode=signin``
+    leads with the sign-in tab, for the callers whose label promises exactly
+    that (the home screen's "Log in" launcher, the welcome splash's "Already
+    have an account? Sign in"). Every other caller -- the create flow, "Add
+    account" -- has no such promise to keep and gets the sign-up default.
     """
     return_to = safe_local_redirect_path(request.args.get("return_to")) or "/create"
     default_to_signup = request.args.get("mode") != "signin"
-    return make_html_response(render_signin_modal_page(return_to=return_to, default_to_signup=default_to_signup))
+    # ``?restore=1`` means this sign-in displaced another modal (the workspace
+    # options panel), which the shell will put back. Handing back is only safe
+    # once the one-time error-reporting consent has been answered: while it is
+    # outstanding /post-login forces every destination to "/" so the gate is
+    # answered first, and a restored panel would cover it.
+    minds_config = get_state().minds_config
+    can_restore = request.args.get("restore") == "1" and (
+        minds_config is None or minds_config.get_error_reporting_consent_given()
+    )
+    return make_html_response(
+        render_signin_modal_page(return_to=return_to, default_to_signup=default_to_signup, can_restore=can_restore)
+    )
 
 
 def _handle_check_email_page() -> Response:
-    """Render the 'check your email' page."""
-    session_store = _get_session_store()
-    user_info = _get_latest_user_info(session_store)
-    email = user_info.email if user_info else "your email"
+    """Render the 'check your email' page for the pending account in ``?email=``.
+
+    The pending account is not in ``auth list`` (it doesn't count as signed in
+    until verified), so the address comes from the query parameter the auth
+    page's JS forwards. Without one the page renders in a signed-out state
+    that links back to sign-in instead of polling.
+    """
+    email = (request.args.get("email") or "").strip()
     return make_html_response(render_check_email_page(email=email))
 
 
@@ -594,7 +687,30 @@ def _run_oauth_subprocess(
             flow_id,
             _OAuthFlowStatus(
                 state="error",
-                error=str(exc),
+                # The frontend renders this verbatim in the auth page's error
+                # box, so it gets the same treatment as an email/password
+                # failure rather than the raw CLI failure string.
+                error=_user_facing_auth_message(exc),
+                deadline=time.monotonic() + _OAUTH_FLOW_TTL_SECONDS,
+            ),
+        )
+        return
+
+    # Supported OAuth providers return verified emails, so this should be
+    # unreachable; if a provider ever hands back an unverified address, the
+    # plugin keeps the session pending and mirroring it here would activate an
+    # account the connector will reject on every call. Fail the flow with an
+    # actionable message instead.
+    if result.needs_email_verification:
+        logger.warning("OAuth signin for {} returned an unverified email; refusing to activate it", result.email)
+        _record_oauth_status(
+            flow_id,
+            _OAuthFlowStatus(
+                state="error",
+                error=(
+                    f"The email {result.email} is not verified with its sign-in provider. "
+                    "Verify it there, or sign up with email and password instead."
+                ),
                 deadline=time.monotonic() + _OAUTH_FLOW_TTL_SECONDS,
             ),
         )
@@ -803,14 +919,14 @@ def _handle_forgot_password_api() -> Response:
 
 
 def _handle_reset_password_redirect() -> Response:
-    """Redirect legacy in-app reset links to the auth backend's reset page.
+    """Redirect legacy in-app reset links to the connector's reset page.
 
-    The reset link embedded in the reset email now points at the backend
-    directly; this redirect keeps any older links working.
+    The reset link embedded in the reset email points at the connector
+    directly (its ``/auth/reset-password`` page); this redirect keeps any
+    older in-app links working.
     """
-    backend = _get_auth_backend()
     token = request.args.get("token", "")
-    target = str(backend.base_url).rstrip("/") + "/auth/reset-password"
+    target = _get_connector_url() + "/auth/reset-password"
     if token:
         target = f"{target}?{urlencode({'token': token})}"
     return make_redirect_response(target, status_code=302)
@@ -820,7 +936,7 @@ def _handle_settings_page() -> Response:
     """Render the account settings page."""
     session_store = _get_session_store()
     backend = _get_auth_backend()
-    user_info = _get_latest_user_info(session_store)
+    user_info = _get_primary_user_info(session_store)
     if user_info is None:
         return make_redirect_response("/auth/login", status_code=302)
 
@@ -846,6 +962,18 @@ def _kick_sync_scheduler() -> None:
     scheduler = get_state().sync_scheduler
     if scheduler is not None:
         scheduler.kick()
+
+
+def wake_chrome_event_streams() -> None:
+    """Make every open window re-read the account state after an auth change.
+
+    The chrome-events stream carries the signed-in identity on each
+    ``workspaces`` frame, but only re-derives it when its loop wakes. Auth
+    changes originate on a Flask request thread and move nothing the resolver
+    watches, so without this nudge the home screen's account launcher would
+    keep the signed-out account's label until the loop's next idle timeout.
+    """
+    get_state().chrome_event_broadcaster.wake_subscribers()
 
 
 def create_supertokens_blueprint() -> Blueprint:

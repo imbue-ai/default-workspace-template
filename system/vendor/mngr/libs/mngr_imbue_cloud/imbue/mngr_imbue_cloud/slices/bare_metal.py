@@ -17,6 +17,7 @@ from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_FAILED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_ORDERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
+from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
 
 # RAM overhead is modeled in two parts so a box's slot count reflects what it can
 # REALISTICALLY run without overcommitting RAM:
@@ -53,6 +54,18 @@ SLICE_BOOT_DISK_GIB: Final[int] = 32
 # floor(total_RAM / this), so it also sets how many slices a box yields. Used as the
 # default for the pricing table and the natural slice size for our workspaces.
 DEFAULT_MEMORY_PER_SLICE_GB: Final[int] = 8
+
+# RAM (MiB) held back from the workspace container's hard cap so the slice VM's own
+# daemons (dockerd/containerd ~200MiB, lima-guestagent, sshd/systemd/journald,
+# uncharged kernel slab, plus a little file cache) always have room. Without a cap,
+# a workspace at memory capacity collapses the VM-wide page cache and wedges the
+# VM's sshd -- making the slice unreachable AND unrecoverable (a live incident, not
+# a hypothesis). The reserve is a fixed delta, not a fraction: the VM-side
+# footprint does not scale with slice size. Measured steady state is ~470-530MiB;
+# 1024 leaves headroom for dockerd build/load spikes. Note ~244MiB of the lima
+# memory size is already consumed by boot-time kernel/firmware reservation, so the
+# guest-visible room left for VM daemons is roughly this reserve minus that.
+SLICE_CONTAINER_MEMORY_RESERVE_MIB: Final[int] = 1024
 
 # Default CPU overcommit factor used to size each slice's vCPUs (vCPUs/slice =
 # floor(threads * ratio / slots)). Overridable per box at ``admin server
@@ -175,6 +188,30 @@ def compute_slice_disk_gib(disk_gb: int, slot_count: int) -> int:
 
 
 @pure
+def compute_slice_container_memory_cap_mib(slice_memory_mib: int) -> int:
+    """The workspace container's hard memory cap: the slice VM's RAM minus the VM-side reserve."""
+    cap_mib = slice_memory_mib - SLICE_CONTAINER_MEMORY_RESERVE_MIB
+    if cap_mib <= 0:
+        raise BareMetalConfigError(
+            f"slice_memory_mib={slice_memory_mib} leaves no container memory after the "
+            f"{SLICE_CONTAINER_MEMORY_RESERVE_MIB}MiB VM reserve"
+        )
+    return cap_mib
+
+
+@pure
+def build_slice_container_memory_start_args(slice_memory_mib: int) -> tuple[str, ...]:
+    """The ``docker run`` args that hard-cap the workspace container's memory.
+
+    ``--memory-swap`` equals ``--memory`` (memcg ``swap.max=0``) so the container can
+    never swap: under pressure it is shed fast (earlyoom, then the cgroup OOM killer,
+    both steered by the workspace's ``oom_score_adj`` bands) instead of thrashing.
+    """
+    cap_mib = compute_slice_container_memory_cap_mib(slice_memory_mib)
+    return (f"--memory={cap_mib}m", f"--memory-swap={cap_mib}m")
+
+
+@pure
 def compute_slice_vcpus(cpu_threads: int, slot_count: int, overcommit_ratio: float) -> int:
     """Return the vCPU count to give each slice, applying mild CPU overcommit."""
     if cpu_threads <= 0:
@@ -282,6 +319,47 @@ def count_slice_resource_names(names: AbstractSet[str]) -> int:
     cannot collectively over-subscribe it.
     """
     return sum(1 for name in names if name.startswith(SLICE_LIMA_INSTANCE_PREFIX))
+
+
+@pure
+def count_authorized_key_lines(authorized_keys_text: str) -> int:
+    """Number of public keys an ``authorized_keys`` file authorizes.
+
+    Blank lines and ``#`` comments carry no key, so they do not count;
+    everything else is one authorized key. A correctly prepped box yields exactly
+    :data:`EXPECTED_AUTHORIZED_KEY_COUNT` -- ``build_box_prep_script`` writes the
+    file with a single-key overwrite (``cat >``, never an append) -- so any other
+    count means a key was added out of band, which is how a box ends up reachable
+    by a tier that does not own it.
+    """
+    return sum(1 for line in authorized_keys_text.splitlines() if line.strip() and not line.strip().startswith("#"))
+
+
+@pure
+def foreign_tier_slice_names(box_names: AbstractSet[str], env_name: str) -> set[str]:
+    """Slice resources on the box whose env stamp belongs to a DIFFERENT tier than ``env_name``.
+
+    Box sharing is legitimate *within* a tier -- several ``dev-<user>`` envs
+    routinely carve slices on one dev box, which is why occupancy is read from the
+    box rather than from one env's rows. It is never legitimate *across* tiers,
+    and the reason is the pool keypair, not the database: a box carrying two
+    tiers' slices is a box both tiers' pool keys can SSH, which is precisely the
+    "zero cross-tier reach" boundary (see ``apps/minds/docs/environments.md``) --
+    each tier's operators and connector gain limactl, and so root, over the
+    other's workspaces. Separate ``host_pool`` databases do not distinguish the
+    two cases: every dev env has its own database too, and the orphan reap is
+    scoped by env rather than by tier either way.
+
+    Legacy un-stamped slices (``mngr-slice-<host-hex>``, no env) have no knowable
+    tier, so they are excluded here: they still count toward occupancy, but a name
+    that predates env stamping is not evidence of a cross-tier bake.
+    """
+    expected_tier = tier_for_env_name(env_name)
+    return {
+        name
+        for name in box_names
+        if (owner := slice_name_env_owner(name)) is not None and tier_for_env_name(owner) != expected_tier
+    }
 
 
 @pure

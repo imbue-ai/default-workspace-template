@@ -80,12 +80,13 @@ def latchkey_root(tmp_path: Path) -> Path:
 def fake_latchkey_binary(tmp_path: Path) -> Path:
     """Drop a ``latchkey`` shell script that satisfies the CLI's read-side calls.
 
-    Implements only ``--version``, ``ensure-browser``, and
-    ``gateway create-jwt``: enough for ``Latchkey.initialize`` plus
-    ``prepare_agent_latchkey`` to succeed without touching a real
-    ``latchkey`` binary. Mirrors the helper in ``core_test.py`` so
-    these tests can run on machines where the real upstream CLI is
-    unavailable.
+    Implements ``--version``, ``ensure-browser``, ``gateway create-jwt``,
+    and the no-op ``services list`` / ``services register`` calls
+    ``Latchkey.initialize`` makes to register additional services: enough
+    for ``initialize`` plus ``prepare_agent_latchkey`` to succeed without
+    touching a real ``latchkey`` binary. Mirrors the helper in
+    ``core_test.py`` so these tests can run on machines where the real
+    upstream CLI is unavailable.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -101,6 +102,11 @@ def fake_latchkey_binary(tmp_path: Path) -> Path:
         'if sys.argv[1:3] == ["gateway", "create-jwt"]:\n'
         "    args = [a for a in sys.argv[3:] if not a.startswith('--')]\n"
         "    print(f'fake-jwt-for:{args[0]}' if args else 'fake-jwt')\n"
+        "    sys.exit(0)\n"
+        'if sys.argv[1:3] == ["services", "list"]:\n'
+        "    print('[]')\n"
+        "    sys.exit(0)\n"
+        'if sys.argv[1:3] == ["services", "register"]:\n'
         "    sys.exit(0)\n"
         "sys.exit(99)\n"
     )
@@ -237,14 +243,41 @@ def test_create_agent_env_emits_expected_json_shape(
     assert set(payload.keys()) == {"env", "opaque_permissions_path"}
     env = payload["env"]
     assert env["LATCHKEY_GATEWAY"] == "http://127.0.0.1:1989"
-    # Secondary (per-VPS) gateway URL, on a distinct in-container port.
-    assert env["LATCHKEY_GATEWAY_SECONDARY"] == "http://127.0.0.1:1990"
+    assert "LATCHKEY_GATEWAY_SECONDARY" not in env
     assert env["LATCHKEY_DISABLE_COUNTING"] == "1"
     assert env["LATCHKEY_GATEWAY_PASSWORD"]
     assert env["LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"].startswith("fake-jwt-for:")
     opaque = Path(payload["opaque_permissions_path"])
     assert opaque.is_file()
     assert opaque.parent == plugin_data_dir(latchkey_root) / "permissions"
+
+
+def test_create_agent_env_vps_location_omits_permissions_override(
+    cli_runner: CliRunner,
+    plugin_manager: pluggy.PluginManager,
+    latchkey_root: Path,
+    fake_latchkey_binary: Path,
+    clean_latchkey_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    del clean_latchkey_env
+    monkeypatch.setenv(ENV_LATCHKEY_DIRECTORY, str(latchkey_root))
+    monkeypatch.setenv(ENV_LATCHKEY_BINARY, str(fake_latchkey_binary))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    result = cli_runner.invoke(
+        latchkey,
+        ["create-agent-env", "--gateway-location", "VPS"],
+        obj=plugin_manager,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    env = json.loads(result.output)["env"]
+    assert env["LATCHKEY_GATEWAY"] == "http://127.0.0.1:1989"
+    assert env["LATCHKEY_GATEWAY_PASSWORD"]
+    assert "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" not in env
 
 
 def test_create_agent_env_exits_nonzero_when_binary_missing(
@@ -731,9 +764,15 @@ def test_sighup_bounce_watcher_survives_unexpected_bounce_error() -> None:
     consumer = _FlakyBounceConsumer(concurrency_group=ConcurrencyGroup(name=f"test-{uuid4().hex}"))
     shutdown_event = threading.Event()
     bounce_event = threading.Event()
+    reload_count = 0
+
+    def _record_reload() -> None:
+        nonlocal reload_count
+        reload_count += 1
+
     watcher = threading.Thread(
         target=_run_sighup_bounce_watcher,
-        args=(bounce_event, shutdown_event, consumer),
+        args=(bounce_event, shutdown_event, consumer, _record_reload),
         name="test-sighup-bounce-watcher",
         daemon=True,
     )
@@ -751,6 +790,9 @@ def test_sighup_bounce_watcher_survives_unexpected_bounce_error() -> None:
         bounce_event.set()
         watcher.join(timeout=5.0)
     assert not watcher.is_alive()
+    # A SIGHUP means "the provider set changed", so each one refreshes this
+    # process's own provider view too -- not just the observe child's.
+    assert reload_count == 2
 
 
 def test_startup_sighup_guard_sets_ignore_disposition() -> None:

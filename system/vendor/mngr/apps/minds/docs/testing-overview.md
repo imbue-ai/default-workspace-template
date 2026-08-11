@@ -10,6 +10,16 @@ tests"): unit (`*_test.py`), integration (`test_*.py`, unmarked), acceptance
 (`@pytest.mark.acceptance`), and release (`@pytest.mark.release`). Minds adds a
 few app-specific markers (below).
 
+Tests that verify a behavior unit declare it with the
+`witnesses(coordinate, partial=...)` marker: the coordinate names a unit in the
+behavior corpus under `apps/minds/behaviors/`, and `partial=` notes what the test does
+not cover. The marker is registered in the shared pytest settings, so any
+project in the monorepo can use it; the behaviors skill
+(`.claude/skills/behaviors/SKILL.md`) defines the convention,
+`behaviors.md` (in this folder) covers the CLI, and
+`uv run mngr behaviors matrix --root apps/minds/behaviors` reports per-unit coverage
+from the markers.
+
 ## Part 1 -- Where the tests live and where they run
 
 ### 1.1 Python unit / integration tests (`*_test.py`)
@@ -41,6 +51,7 @@ run. By area:
 | `test_aws_workspace_release.py::test_aws_workspace_runs_in_runsc_container_on_ec2` | `release`, `timeout(900)`, skip unless AWS creds + `MNGR_AWS_RELEASE_TESTS=1` | Provisions a real EC2 instance, asserts the agent runs in a runsc/gVisor container. Costs money. |
 | `test_snapshot_resume.py` (10 tests) | each `minds_snapshot_resume` + `docker` (+ `rsync` on the electron test) + per-test `timeout` | Most assert against a Modal-snapshot sandbox (pre-baked, stopped DEFAULT_WORKSPACE_TEMPLATE workspace container): resume sanity checks, the backup-update chat gate against a live LLM-backed chat, the backup-service check/update/force-update converge loop (real supervisord + `official`-remote tag fetch from GitHub), the backup enable / env-repair / destination-change flow (real minds-side restic provisioning + `mngr exec` injection; installs a pinned restic on the sandbox host when the image lacks the bundled one), and the in-place backup restore (the real restore worker + workspace script: pinned-restic install, safety snapshot, sync restore, services back). `test_create_workspace_and_sign_in_via_modal_then_chat_via_electron` reuses the snapshot image's warm Electron/Playwright/Xvfb toolchain to drive the real Electron app: it creates a fresh local Docker DEFAULT_WORKSPACE_TEMPLATE workspace (which boots with no AI credentials), signs in through the workspace's own Claude sign-in modal with a raw API key (needs `ANTHROPIC_API_KEY`), sends a chat message, and asserts the agent replies, then `mngr destroy`s in `finally`. Shares its driver with `desktop_client/e2e_workspace_runner.py`. Only via `just test-offload-minds-snapshot` (or `just minds-test-electron` locally). See 1.5. |
 | `test_sse_redirect.py::test_sse_redirect_on_done` | `release` | Werkzeug server + Playwright; verifies the creating-page SSE stream delivers `done` and the JS redirects. No Docker/agent. |
+| `test_creating_page_layout.py` (2 tests) | `release` | Werkzeug server + Playwright; verifies the creating page fits the window (no scrollbar) at the Electron default size, an intermediate one, and the minimum, with the log panel closed and open -- and that opening the logs shrinks the walkthrough's illustration rather than the page. No Docker/agent. Skips unless the frontend bundle has been built (`pnpm build` in `apps/minds/frontend`), which an editable install does not do. |
 | `imbue/minds/test_claude_version_alignment.py::test_claude_code_version_matches_default_workspace_template_pin` | `release` | Checks the Claude Code CLI pin matches the DEFAULT_WORKSPACE_TEMPLATE pin. |
 
 ### 1.3 Deployment-test suites (`deployment_tests/`)
@@ -57,22 +68,20 @@ excludes the whole `apps/minds` tree by path.
   `test_deploy_new_version`, `test_deploy_auto_rollback_on_broken_healthcheck`,
   `test_deploy_then_destroy_round_trip`.
 - `@pytest.mark.minds_services` (run against a pre-stood-up shared env):
-  `test_logged_in_smoke`, `test_realistic_signup_verify_signin_create_tunnel_signout`
-  (currently `skip`), `test_litellm_spend_tracking_via_local_workspace`
+  `test_logged_in_smoke`, `test_litellm_spend_tracking_via_local_workspace`
   (currently `skip`).
 
 ### 1.4 JS / Electron tests (`apps/minds/test/`)
 
-- **Node unit** (`test/unit/startup-routing.test.js`): 7 `node --test` cases for
-  startup routing. Run via `pnpm test:unit`. **Not in any CI workflow.**
+- **Node unit** (`test/unit/*.test.js`): `node --test` suites for the pure
+  Electron-shell helpers (startup routing, surface routing, deeplinks, session
+  persistence, log handling, the embed contract). Run via `pnpm test:unit`.
+  **Not in any CI workflow.**
 - **Playwright e2e** (`test/e2e/`, `playwright.config.js`, `pnpm test:e2e`):
   - `macos-launch.spec.js` -- launches the installed `/Applications/Minds.app`
-    via the `mindsApp` fixture. **The only JS spec wired into CI** (in
-    `minds-launch-to-msg.yml`).
-  - `landing-stopped-mind-restart.spec.js` and `recovery-redirect.spec.js` --
-    fast DOM-level renderer-contract tests (plain browser `page`, no
-    Electron/Docker/backend; shell out to `uv` to render the real Jinja). Run
-    locally only; **not in CI.**
+    via the `mindsApp` fixture. **The only JS spec** (wired into CI in
+    `minds-launch-to-msg.yml`). The legacy renderer-contract specs were
+    deleted with the pre-SPA shell scripts they drove.
 
 ### 1.5 CI map
 
@@ -141,7 +150,9 @@ then cheap test sandboxes fan out from the baked image.
   `offload -c offload-modal-minds-snapshot.toml run --override-image-id <id>`.
   The config boots straight from the override image (no Dockerfile/post-patch),
   `cpu_cores=4.0`, `memory_gb=8`, `vm_runtime=true` (must match the producer),
-  one `[groups.all]` with `filters="-m 'minds_snapshot_resume'"`,
+  one `[groups.all]` with `filters="-m 'minds_snapshot_resume' -c pyproject.toml"`,
+  and `[framework].paths` scoped to the two snapshot-resume test files so local
+  discovery takes seconds instead of a ~90s full-monorepo collection.
   `max_parallel=20`. The image is deleted on success. Both jobs are gated by the
   `DISABLE_MINDS_SNAPSHOT_CI` repo variable and skipped on fork PRs.
 - **Currently runs:** every `minds_snapshot_resume` test in
@@ -291,7 +302,7 @@ environment today:
     through the hub-brokered loopback endpoint. The broker itself is implemented;
     the local->local half can run in the snapshot stage (proposal 2b below),
     while the remote-caller half needs a cloud host so it stays release-only.
-16. **imbue_cloud create + backup/tunnel parity** [deployment] -- already covered
+16. **imbue_cloud create + backup parity** [deployment] -- already covered
     in spirit by the `minds_deployment`/`minds_services` suites.
 
 ## Note on testability gaps

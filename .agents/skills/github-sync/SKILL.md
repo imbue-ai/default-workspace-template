@@ -156,7 +156,7 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     # The oom_tag_service.py prefix sets its OOM shed-priority band (see
     # system/services/oom_priority).
     [program:github-sync]
-    command=python3 system/scripts/oom_tag_service.py github-sync uv run github-sync run
+    command=python3 system/services/oom_priority/bin/oom_tag_service.py github-sync uv run github-sync run
     directory=/home/user/workspace
     autostart=true
     autorestart=true
@@ -176,9 +176,8 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
 
 11. **Report**: the repo URL, that every commit now auto-pushes, that
     workspace data under `data/` stays out of GitHub (the restic host backup
-    covers it), and that pushes queue while their machine (the latchkey
-    gateway) is offline (on remote hosts the per-VPS secondary gateway
-    usually covers that).
+    covers it), and that pushes queue while the latchkey gateway is
+    unreachable and go out with the next commit once it is back.
 
 ## Status
 

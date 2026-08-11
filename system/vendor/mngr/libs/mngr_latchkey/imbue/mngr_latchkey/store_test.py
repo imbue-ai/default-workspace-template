@@ -10,6 +10,7 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr_latchkey.store import LatchkeyForwardInfo
 from imbue.mngr_latchkey.store import LatchkeyPermissionsConfig
 from imbue.mngr_latchkey.store import LatchkeyStoreError
+from imbue.mngr_latchkey.store import SHARED_SCHEMAS_FILENAME
 from imbue.mngr_latchkey.store import admin_permissions_path
 from imbue.mngr_latchkey.store import default_permissions_path
 from imbue.mngr_latchkey.store import ensure_admin_permissions_file
@@ -17,13 +18,17 @@ from imbue.mngr_latchkey.store import forward_events_log_path
 from imbue.mngr_latchkey.store import forward_log_path
 from imbue.mngr_latchkey.store import link_opaque_permissions_to_host
 from imbue.mngr_latchkey.store import load_forward_info
+from imbue.mngr_latchkey.store import load_permissions
 from imbue.mngr_latchkey.store import new_opaque_permissions_path
+from imbue.mngr_latchkey.store import opaque_handles_for_host
 from imbue.mngr_latchkey.store import opaque_permissions_dir
 from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import point_opaque_handle_at_host
 from imbue.mngr_latchkey.store import save_forward_info
 from imbue.mngr_latchkey.store import save_permissions
+from imbue.mngr_latchkey.store import shared_schemas_path
 from imbue.mngr_latchkey.store import update_forward_info_gateway_port
+from imbue.mngr_latchkey.store import write_shared_schemas_file
 
 # Gateway-record save/load/delete tests went away when the on-disk
 # gateway record did. The supervisor's bound gateway port is now
@@ -131,6 +136,21 @@ def test_link_opaque_permissions_preserves_existing_grants_on_recreation(tmp_pat
     # Opaque path is a symlink and reads back the existing grants.
     assert opaque_path.is_symlink()
     assert json.loads(opaque_path.read_text()) == {"rules": [{"slack-api": ["slack-read-all"]}]}
+
+
+def test_opaque_handles_for_host_returns_only_symlinks_to_requested_host(tmp_path: Path) -> None:
+    first_host_id = HostId()
+    second_host_id = HostId()
+    first_handle = new_opaque_permissions_path(tmp_path)
+    second_handle = new_opaque_permissions_path(tmp_path)
+    save_permissions(first_handle, LatchkeyPermissionsConfig())
+    save_permissions(second_handle, LatchkeyPermissionsConfig())
+    link_opaque_permissions_to_host(tmp_path, first_handle, first_host_id)
+    link_opaque_permissions_to_host(tmp_path, second_handle, second_host_id)
+    (opaque_permissions_dir(tmp_path) / SHARED_SCHEMAS_FILENAME).write_text("{}")
+
+    assert opaque_handles_for_host(tmp_path, first_host_id) == [first_handle]
+    assert opaque_handles_for_host(tmp_path, HostId()) == []
 
 
 def test_link_opaque_permissions_survives_save_permissions_atomic_replace(tmp_path: Path) -> None:
@@ -314,3 +334,35 @@ def test_update_forward_info_gateway_port_raises_when_record_absent(tmp_path: Pa
         update_forward_info_gateway_port(tmp_path, gateway_port=32867)
     assert "32867" in str(exc_info.value)
     assert load_forward_info(tmp_path) is None
+
+
+# -- include field + shared schemas file ---------------------------------------
+
+
+def test_save_and_load_round_trips_include(tmp_path: Path) -> None:
+    """A non-empty ``include`` list survives a save/load round-trip."""
+    path = tmp_path / "perms.json"
+    config = LatchkeyPermissionsConfig(rules=({"claude-ai": ["everything"]},), include=("minds_shared_schemas.json",))
+    save_permissions(path, config)
+
+    assert json.loads(path.read_text())["include"] == ["minds_shared_schemas.json"]
+    assert load_permissions(path).include == ("minds_shared_schemas.json",)
+
+
+def test_save_omits_empty_include(tmp_path: Path) -> None:
+    """An empty ``include`` is dropped from the file, matching the pre-existing shape."""
+    path = tmp_path / "perms.json"
+    save_permissions(path, LatchkeyPermissionsConfig())
+    assert "include" not in json.loads(path.read_text())
+
+
+def test_write_shared_schemas_file_writes_into_opaque_dir(tmp_path: Path) -> None:
+    """The shared schemas file lands in the opaque permissions dir under the bare include name."""
+    content = '{"schemas": {"claude-ai": {}}}\n'
+    path = write_shared_schemas_file(tmp_path, content)
+
+    assert path == shared_schemas_path(tmp_path)
+    assert path.name == SHARED_SCHEMAS_FILENAME
+    assert path.parent == opaque_permissions_dir(tmp_path)
+    assert path.read_text() == content
+    assert (path.stat().st_mode & 0o777) == 0o600

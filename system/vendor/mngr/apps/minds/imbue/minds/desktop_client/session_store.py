@@ -31,8 +31,6 @@ from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordSto
 from imbue.minds.errors import WorkspaceSyncError
 
 _USER_ID_PREFIX_LENGTH = 16
-_LEGACY_ASSOCIATIONS_FILENAME = "workspace_associations.json"
-_LEGACY_SESSIONS_FILENAME = "sessions.json"
 
 
 class SuperTokensUserId(NonEmptyStr):
@@ -42,7 +40,7 @@ class SuperTokensUserId(NonEmptyStr):
 
 
 class UserIdPrefix(NonEmptyStr):
-    """First 16 hex chars of a SuperTokens user ID, used for tunnel naming."""
+    """First 16 hex chars of a SuperTokens user ID, used to name per-account resources (e.g. R2 buckets)."""
 
     ...
 
@@ -59,6 +57,10 @@ class AccountSession(FrozenModel):
     email: str = Field(description="User email address")
     display_name: str | None = Field(default=None, description="Display name from OAuth provider")
     workspace_ids: list[str] = Field(default_factory=list, description="Agent IDs associated with this account")
+    is_active: bool = Field(
+        default=False,
+        description="Whether the plugin marks this account active (most recent signin / `auth use` pin)",
+    )
 
 
 class UserInfo(FrozenModel):
@@ -67,7 +69,7 @@ class UserInfo(FrozenModel):
     user_id: SuperTokensUserId = Field(description="SuperTokens user ID")
     email: str = Field(description="User email address")
     display_name: str | None = Field(default=None, description="Display name from OAuth provider")
-    user_id_prefix: UserIdPrefix = Field(description="First 16 hex chars of user ID for tunnel naming")
+    user_id_prefix: UserIdPrefix = Field(description="First 16 hex chars of the user ID, used in resource names")
 
 
 def derive_user_id_prefix(user_id: str) -> UserIdPrefix:
@@ -97,6 +99,14 @@ class MultiAccountSessionStore(MutableModel):
     )
     _cache_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _identity_cache: dict[str, ImbueCloudAuthAccount] | None = PrivateAttr(default=None)
+    # Whether the cache has already been force-refreshed since it was last
+    # invalidated. The refresh exists to recover from a signin that rotated to a
+    # new user_id, which can only have happened once per invalidation -- without
+    # this, a record naming an account that is NOT signed in (a stale ACTIVE row
+    # left by a sign-out) re-ran `mngr imbue_cloud auth list` on EVERY read. That
+    # subprocess costs ~1.7s, and it sits on the page-render path, so opening the
+    # options panel took seconds whenever such a record existed.
+    _has_force_refreshed: bool = PrivateAttr(default=False)
     _is_last_identity_read_failed: bool = PrivateAttr(default=False)
 
     # -- Identity cache (sourced from the plugin) ---------------------------
@@ -140,6 +150,8 @@ class MultiAccountSessionStore(MutableModel):
                 self._is_last_identity_read_failed = True
                 return {}
             self._is_last_identity_read_failed = False
+            if refresh:
+                self._has_force_refreshed = True
             self._identity_cache = {account.user_id: account for account in accounts}
             return dict(self._identity_cache)
 
@@ -151,7 +163,7 @@ class MultiAccountSessionStore(MutableModel):
     def _require_account(self, user_id: str) -> ImbueCloudAuthAccount:
         """Resolve a signed-in account by user_id, refreshing the cache once on a miss."""
         account = self._identity_by_user_id().get(user_id)
-        if account is None:
+        if account is None and not self._has_force_refreshed:
             account = self._identity_by_user_id(refresh=True).get(user_id)
         if account is None:
             raise WorkspaceSyncError(f"No signed-in account matches user id {user_id[:8]}")
@@ -204,7 +216,7 @@ class MultiAccountSessionStore(MutableModel):
             if agent_id in workspace_ids:
                 identity = self._identity_by_user_id()
                 account = identity.get(user_id)
-                if account is None:
+                if account is None and not self._has_force_refreshed:
                     identity = self._identity_by_user_id(refresh=True)
                     account = identity.get(user_id)
                 if account is None:
@@ -216,20 +228,6 @@ class MultiAccountSessionStore(MutableModel):
         """Whether at least one account is currently signed in (per the plugin)."""
         return bool(self._identity_by_user_id())
 
-    def has_signed_in_before(self) -> bool:
-        """Whether the user has ever signed in (replica/legacy state exists or the plugin reports anything).
-
-        The legacy files are matched by prefix so their retired
-        (``.pre-sync``-renamed) copies still count after the one-shot
-        record-store conversion.
-        """
-        has_local_state = bool(self._associations_view()) or any(
-            any(self.data_dir.glob(f"{name}*")) for name in (_LEGACY_ASSOCIATIONS_FILENAME, _LEGACY_SESSIONS_FILENAME)
-        )
-        if has_local_state:
-            return True
-        return self.is_any_signed_in()
-
     # -- Public write API (workspace associations) -------------------------
 
     def associate_workspace(self, user_id: str, agent_id: str, resolver: BackendResolverInterface) -> None:
@@ -240,10 +238,10 @@ class MultiAccountSessionStore(MutableModel):
         is owned by another account (disassociate first, then associate).
         """
         if self.record_store is None:
-            raise WorkspaceSyncError("Workspace sync is not configured; cannot associate workspaces")
+            raise WorkspaceSyncError("Machine sync is not configured; cannot associate machines")
         account = self._require_account(user_id)
         self.record_store.associate_workspace_or_raise(user_id, account.email, agent_id, resolver)
-        logger.info("Associated workspace {} with user {}", agent_id, user_id[:8])
+        logger.info("Associated machine {} with user {}", agent_id, user_id[:8])
 
     def associate_created_workspace(
         self,
@@ -263,7 +261,7 @@ class MultiAccountSessionStore(MutableModel):
         a push failure just leaves the row dirty for the reconcile.
         """
         if self.record_store is None:
-            logger.warning("Workspace sync is not configured; created workspace {} stays private", agent_id)
+            logger.warning("Machine sync is not configured; created machine {} stays private", agent_id)
             return
         account = self._require_account(user_id)
         seed = ReplicaRecord(
@@ -276,7 +274,7 @@ class MultiAccountSessionStore(MutableModel):
             device_label=self.record_store.device_label,
         )
         self.record_store.upsert_local_record(user_id, account.email, seed)
-        logger.info("Associated created workspace {} with user {}", agent_id, user_id[:8])
+        logger.info("Associated created machine {} with user {}", agent_id, user_id[:8])
 
     def disassociate_workspace(self, user_id: str, agent_id: str) -> None:
         """Remove ``agent_id``'s record (the workspace becomes private; requires connectivity)."""
@@ -284,7 +282,7 @@ class MultiAccountSessionStore(MutableModel):
             return
         account = self._require_account(user_id)
         self.record_store.disassociate_workspace_or_raise(user_id, account.email, agent_id)
-        logger.info("Disassociated workspace {} from user {}", agent_id, user_id[:8])
+        logger.info("Disassociated machine {} from user {}", agent_id, user_id[:8])
 
 
 def _build_session(account: ImbueCloudAuthAccount, workspace_ids: list[str]) -> AccountSession:
@@ -293,4 +291,5 @@ def _build_session(account: ImbueCloudAuthAccount, workspace_ids: list[str]) -> 
         email=account.email,
         display_name=account.display_name,
         workspace_ids=list(workspace_ids),
+        is_active=account.is_active,
     )

@@ -45,6 +45,10 @@ class ServiceRegisteredEvent(EventEnvelope):
 
     service: str
     url: str
+    # The service's unguessable origin label (``<name>-<rand>``); consumers
+    # route ``<label>.<host>`` origins to this service. Empty for a legacy row
+    # written before labels existed (consumers fall back to the service name).
+    label: str = ""
 
 
 class ServiceDeregisteredEvent(EventEnvelope):
@@ -95,6 +99,7 @@ def _write_events(
         for app in current_apps:
             name = str(app.get("name", ""))
             url = str(app.get("url", ""))
+            label = str(app.get("label", ""))
             if not name or not url:
                 continue
             current_names.add(name)
@@ -105,6 +110,7 @@ def _write_events(
                 source=_EVENT_SOURCE,
                 service=name,
                 url=url,
+                label=label,
             )
             f.write(event.model_dump_json() + "\n")
 

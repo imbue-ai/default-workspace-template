@@ -290,7 +290,6 @@ mkdir -p data/.tasks/launch-task/<slug>
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/launch-task/<slug>/reports/report.md
 ---
 FRONTMATTER_EOF
@@ -689,9 +688,11 @@ Probe both up front:
 # exchange, so exit 0 without -f); -f turns a denial into exit 22:
 latchkey curl -sf https://api.github.com/user
 # Push access -- a github-git (or catch-all) rule granting github-git-write
-# (or "any") must exist; grants can take either form, so check both:
+# (or "any") must exist. Approved grants are account-scoped keys like
+# "github-git:<account>", never bare "github-git", so match the scope
+# prefix rather than the exact key:
 latchkey curl http://latchkey-self.invalid/permissions/self \
-    | jq -e '[.rules[]? | to_entries[] | select(.key == "github-git" or .key == "any") | select(any(.value[]?; . == "github-git-write" or . == "any"))] | length > 0' >/dev/null \
+    | jq -e '[.rules[]? | to_entries[] | select((.key | test("^github-git(:|$)")) or .key == "any") | select(any(.value[]?; . == "github-git-write" or . == "any"))] | length > 0' >/dev/null \
     && echo "git push: permitted" || echo "git push: NOT permitted"
 ```
 
@@ -718,7 +719,7 @@ tool-execution timeout):
 for _ in $(seq 1 30); do
     if latchkey curl -sf https://api.github.com/user >/dev/null 2>&1 \
         && latchkey curl http://latchkey-self.invalid/permissions/self \
-           | jq -e '[.rules[]? | to_entries[] | select(.key == "github-git" or .key == "any") | select(any(.value[]?; . == "github-git-write" or . == "any"))] | length > 0' >/dev/null; then
+           | jq -e '[.rules[]? | to_entries[] | select((.key | test("^github-git(:|$)")) or .key == "any") | select(any(.value[]?; . == "github-git-write" or . == "any"))] | length > 0' >/dev/null; then
         echo "github access: permitted (api + git push)"
         exit 0
     fi
@@ -886,7 +887,7 @@ Assembled on clean DEFAULT_WORKSPACE_TEMPLATE base <BASE_REF> (provenance link o
     && test "$(git rev-list --count "$SNAPSHOT_COMMIT")" -gt 1 \
     && git \
     -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
-    -c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" \
+    ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
     push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo_name>.git" "${SNAPSHOT_COMMIT}:refs/heads/main" )
 ```
 
@@ -949,9 +950,10 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
 
 - **If `docs/VERSION_HISTORY.md` is missing** (deleted since creation), recreate
   the shipped starter first -- the `# Version history` heading, its explanatory
-  paragraph, and the three empty sections `## Workspace`, `## Inspirations`,
-  `## Adopted inspirations` in that order (byte-identical to the shipped root
-  file; `update-self` §5b carries the exact heredoc) -- then append.
+  paragraph, and the empty sections `## Workspace`, `## Migrations`,
+  `## Inspirations`, `## Adopted inspirations` in that order (byte-identical to
+  the shipped root file; `update-self` §5b carries the exact heredoc) -- then
+  append.
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
   workspace, as the FIRST line under `## Workspace`. Resolve the template base

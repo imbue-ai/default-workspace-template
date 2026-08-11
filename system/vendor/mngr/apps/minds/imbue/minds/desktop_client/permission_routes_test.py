@@ -5,6 +5,7 @@ fake ``LatchkeyPermissionGrantHandler`` so the routes are exercised
 end-to-end without spawning any subprocesses.
 """
 
+import json
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
@@ -33,6 +34,7 @@ from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSe
 from imbue.minds.desktop_client.latchkey.handlers.predefined import GrantOutcome
 from imbue.minds.desktop_client.latchkey.handlers.predefined import GrantResult
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
+from imbue.minds.desktop_client.latchkey.handlers.predefined import ManualCredentialSubmission
 from imbue.minds.desktop_client.latchkey.testing import build_fake_gateway_client
 from imbue.minds.desktop_client.request_events import REQUESTS_EVENT_SOURCE_NAME
 from imbue.minds.desktop_client.request_events import RequestEvent
@@ -42,18 +44,23 @@ from imbue.minds.desktop_client.request_events import RequestStatus
 from imbue.minds.desktop_client.request_events import RequestType
 from imbue.minds.desktop_client.request_events import create_latchkey_predefined_permission_request_event
 from imbue.minds.desktop_client.request_events import create_request_response_event
+from imbue.minds.desktop_client.request_handler import RequestDetailPayload
 from imbue.minds.desktop_client.request_handler import RequestEventHandler
+from imbue.minds.desktop_client.request_handler import UiManualCredentialsPrompt
+from imbue.minds.desktop_client.request_handler import UiUnsupportedDetail
 from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
-from imbue.mngr_latchkey.core import Latchkey
+from imbue.mngr_latchkey.core import CredentialStatus
+from imbue.mngr_latchkey.core import LATCHKEY_AUTH_OPTION_BROWSER
+from imbue.mngr_latchkey.core import LatchkeyServiceInfo
+from imbue.mngr_latchkey.core import ServiceAccountCredential
+from imbue.mngr_latchkey.credential_commands import CredentialCommandParameter
 from imbue.mngr_latchkey.services_catalog import ServicePermissionInfo
 from imbue.mngr_latchkey.services_catalog import ServicesCatalog
-from imbue.mngr_latchkey.store import LatchkeyPermissionsConfig
-from imbue.mngr_latchkey.store import permissions_path_for_host
-from imbue.mngr_latchkey.store import save_permissions
+from imbue.mngr_latchkey.testing import FakeLatchkey
 
 _OTHER_REQUEST_TYPE = "OTHER"
 
@@ -79,7 +86,7 @@ class _RecordingHandler(LatchkeyPermissionGrantHandler):
 
     grant_outcome: GrantOutcome = Field(default=GrantOutcome.GRANTED)
     grant_message: str = Field(default="granted")
-    grant_set_credentials_example: str | None = Field(default=None)
+    grant_manual_credentials: UiManualCredentialsPrompt | None = Field(default=None)
     deny_message: str = Field(default="denied")
     grant_calls: list[dict[str, object]] = Field(default_factory=list)
     deny_calls: list[dict[str, object]] = Field(default_factory=list)
@@ -91,6 +98,8 @@ class _RecordingHandler(LatchkeyPermissionGrantHandler):
         host_id: HostId,
         service_info: ServicePermissionInfo,
         granted_permissions: Sequence[str],
+        account_choice: str,
+        manual_credentials: ManualCredentialSubmission,
     ) -> GrantResult:
         self.grant_calls.append(
             {
@@ -99,6 +108,8 @@ class _RecordingHandler(LatchkeyPermissionGrantHandler):
                 "host_id": str(host_id),
                 "scope": service_info.scope,
                 "granted_permissions": tuple(granted_permissions),
+                "account_choice": account_choice,
+                "manual_credentials": manual_credentials,
             }
         )
         # NEEDS_MANUAL_CREDENTIALS and FAILED keep the request pending and
@@ -108,7 +119,7 @@ class _RecordingHandler(LatchkeyPermissionGrantHandler):
                 outcome=self.grant_outcome,
                 message=self.grant_message,
                 response_event=None,
-                set_credentials_example=self.grant_set_credentials_example,
+                manual_credentials=self.grant_manual_credentials,
             )
         status = RequestStatus.GRANTED if self.grant_outcome == GrantOutcome.GRANTED else RequestStatus.DENIED
         response_event = create_request_response_event(
@@ -122,7 +133,7 @@ class _RecordingHandler(LatchkeyPermissionGrantHandler):
             outcome=self.grant_outcome,
             message=self.grant_message,
             response_event=response_event,
-            set_credentials_example=None,
+            manual_credentials=None,
         )
 
     def deny(
@@ -180,17 +191,36 @@ _TEST_SERVICES_CATALOG_PAYLOAD: dict[str, object] = {
 }
 
 
+# The account the stub latchkey reports as signed in, so the dialog has a
+# concrete account to preselect and pre-check grants against.
+_TEST_ACCOUNT: str = "alice@example.com"
+
+
+def _make_stub_latchkey(tmp_path: Path) -> FakeLatchkey:
+    """Return a non-spawning ``Latchkey`` reporting one valid signed-in account."""
+    latchkey = FakeLatchkey(latchkey_directory=tmp_path)
+    latchkey.configure(
+        service_info=LatchkeyServiceInfo(
+            credential_status=CredentialStatus.VALID,
+            accounts=(ServiceAccountCredential(account=_TEST_ACCOUNT, credential_status=CredentialStatus.VALID),),
+            auth_options=frozenset({LATCHKEY_AUTH_OPTION_BROWSER}),
+            set_credentials_example=None,
+        ),
+    )
+    return latchkey
+
+
 def _make_recording_handler(
     tmp_path: Path,
     grant_outcome: GrantOutcome = GrantOutcome.GRANTED,
     grant_message: str = "granted",
-    grant_set_credentials_example: str | None = None,
+    grant_manual_credentials: UiManualCredentialsPrompt | None = None,
 ) -> _RecordingHandler:
     """Build a ``_RecordingHandler`` with stub probes that won't be exercised in routing tests."""
     gateway_client = build_fake_gateway_client()
     return _RecordingHandler(
         data_dir=tmp_path,
-        latchkey=Latchkey(latchkey_directory=tmp_path, latchkey_binary="/nonexistent"),
+        latchkey=_make_stub_latchkey(tmp_path),
         services_catalog=ServicesCatalog.from_catalog_payload(_TEST_SERVICES_CATALOG_PAYLOAD),
         mngr_message_sender=MngrMessageSender(
             mngr_caller=RecordingMngrCaller(),
@@ -201,7 +231,7 @@ def _make_recording_handler(
         gateway_client=gateway_client,
         grant_outcome=grant_outcome,
         grant_message=grant_message,
-        grant_set_credentials_example=grant_set_credentials_example,
+        grant_manual_credentials=grant_manual_credentials,
     )
 
 
@@ -273,134 +303,11 @@ def _build_authenticated_client(
     return client
 
 
-def test_get_permission_request_page_pre_checks_agent_requested_permissions(tmp_path: Path) -> None:
-    """With no existing grants, the dialog pre-checks exactly what the agent asked for.
-
-    The catch-all ``any`` schema is *not* pre-checked even though it is
-    listed as an available option; the user must opt into it explicitly.
-    """
-    agent_id = AgentId()
-    request = create_latchkey_predefined_permission_request_event(
-        agent_id=str(agent_id),
-        scope="slack-api",
-        permissions=("slack-read-all",),
-        rationale="I need to read the team channel to summarize today's discussion.",
-    )
-    inbox = RequestInbox().add_request(request)
-    handler = _make_recording_handler(tmp_path)
-    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
-
-    response = client.get(f"/inbox/detail/{request.event_id}")
-
-    assert response.status_code == 200
-    body = response.text
-    assert "Slack" in body
-    assert "I need to read" in body
-    # The agent-requested permission appears checked.
-    read_idx = body.find('value="slack-read-all"')
-    assert read_idx != -1
-    tag_start = body.rfind("<input", 0, read_idx)
-    tag_end = body.find(">", read_idx)
-    assert "checked" in body[tag_start:tag_end]
-    # ``any`` is offered as a checkbox but must not be pre-checked.
-    any_idx = body.find('value="any"')
-    assert any_idx != -1
-    any_tag_start = body.rfind("<input", 0, any_idx)
-    any_tag_end = body.find(">", any_idx)
-    assert "checked" not in body[any_tag_start:any_tag_end]
-    # Approve must be disabled in initial markup (JS enables it once the
-    # user confirms / interacts with the form).
-    assert 'id="permissions-approve-btn"' in body
-    assert "disabled" in body
-    # The form carries the elements the inbox shell toggles while an
-    # approval runs in the background so the user sees work is happening
-    # and can't double-submit or deny mid-flight: an id on Deny, plus a
-    # hidden spinner + a label span inside Approve. The spinner uses the
-    # inverse tone so it stays legible on the solid success button.
-    assert 'id="permissions-deny-btn"' in body
-    assert 'id="permissions-approve-spinner"' in body
-    assert 'id="permissions-approve-label"' in body
-    assert "spinner-inverse" in body
-
-
-def test_get_permission_request_page_labels_wildcard_permission_as_all(tmp_path: Path) -> None:
-    """The catch-all ``any`` permission is shown to users as ``all``.
-
-    The underlying checkbox value stays ``any`` (Detent's wildcard that
-    is actually stored / submitted), but the user-facing label reads
-    ``all`` for clarity. The wildcard checkbox is also tagged with
-    ``data-wildcard`` so the inbox shell can make it mutually exclusive
-    with the specific permissions.
-    """
-    agent_id = AgentId()
-    request = create_latchkey_predefined_permission_request_event(
-        agent_id=str(agent_id),
-        scope="slack-api",
-        permissions=("slack-read-all",),
-        rationale="reason",
-    )
-    inbox = RequestInbox().add_request(request)
-    handler = _make_recording_handler(tmp_path)
-    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
-
-    response = client.get(f"/inbox/detail/{request.event_id}")
-
-    assert response.status_code == 200
-    body = response.text
-    # The checkbox keeps the wildcard value and is tagged so the shell's
-    # exclusivity JS can find it.
-    any_idx = body.find('value="any"')
-    assert any_idx != -1
-    any_tag_start = body.rfind("<input", 0, any_idx)
-    any_tag_end = body.find(">", any_idx)
-    assert 'data-wildcard="true"' in body[any_tag_start:any_tag_end]
-    # The wildcard is labelled ``all`` (in a <code> element), and never
-    # surfaced to the user as the raw ``any`` value.
-    assert ">all</code>" in body
-    assert ">any</code>" not in body
-
-
-def test_inbox_page_hides_requests_whose_host_cannot_be_resolved(tmp_path: Path) -> None:
-    """A pending request from an agent the resolver no longer knows is hidden.
-
-    When a workspace is stopped, its agent drops out of discovery, so the
-    backend resolver can no longer map the agent to a host/workspace. The
-    inbox would otherwise fall back to rendering the raw agent id (a
-    meaningless 16-char hex string). Such requests are filtered out of the
-    inbox list -- only the request whose agent is still resolvable shows.
-    """
-    known_agent = AgentId()
-    stopped_agent = AgentId()
-    visible_request = create_latchkey_predefined_permission_request_event(
-        agent_id=str(known_agent),
-        scope="slack-api",
-        permissions=("slack-read-all",),
-        rationale="visible",
-    )
-    hidden_request = create_latchkey_predefined_permission_request_event(
-        agent_id=str(stopped_agent),
-        scope="slack-api",
-        permissions=("slack-read-all",),
-        rationale="hidden",
-    )
-    inbox = RequestInbox().add_request(visible_request).add_request(hidden_request)
-    handler = _make_recording_handler(tmp_path)
-    # The resolver knows only ``known_agent``; ``stopped_agent`` resolves to None.
-    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=known_agent)
-
-    response = client.get("/inbox")
-
-    assert response.status_code == 200
-    body = response.text
-    assert str(visible_request.event_id) in body
-    assert str(hidden_request.event_id) not in body
-
-
 def test_requests_payload_excludes_unresolvable_hosts(tmp_path: Path) -> None:
     """The SSE badge payload counts only requests whose host is resolvable.
 
     The badge count and the rendered cards are driven off the same filter,
-    so a request from a since-stopped workspace neither inflates the badge
+    so a request from a since-stopped machine neither inflates the badge
     nor appears in the panel.
     """
     known_agent = AgentId()
@@ -430,67 +337,6 @@ def test_requests_payload_excludes_unresolvable_hosts(tmp_path: Path) -> None:
     assert payload["request_ids"] == [str(visible_request.event_id)]
 
 
-def test_get_permission_request_page_shows_descriptions_when_present(tmp_path: Path) -> None:
-    """detent's per-permission descriptions are rendered next to each permission when present."""
-    agent_id = AgentId()
-    request = create_latchkey_predefined_permission_request_event(
-        agent_id=str(agent_id),
-        scope="slack-api",
-        permissions=("slack-read-all",),
-        rationale="reason",
-    )
-    inbox = RequestInbox().add_request(request)
-    handler = _make_recording_handler(tmp_path)
-    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
-
-    response = client.get(f"/inbox/detail/{request.event_id}")
-
-    assert response.status_code == 200
-    body = response.text
-    # The requested permission's summary comes from the catalog fixture's
-    # per-permission ``description`` field.
-    assert "All read operations across the Slack API." in body
-    # The scope-level description is intentionally not surfaced on the dialog.
-    assert "Any interaction with the Slack API." not in body
-
-
-def test_get_permission_request_page_renders_no_pre_checks_when_request_and_existing_are_empty(
-    tmp_path: Path,
-) -> None:
-    """Empty agent request + no existing grants -> nothing pre-checked.
-
-    The catch-all ``any`` is no longer treated as an implicit default,
-    so the user must actively tick a permission before they can approve.
-    """
-    agent_id = AgentId()
-    request = create_latchkey_predefined_permission_request_event(
-        agent_id=str(agent_id),
-        scope="slack-api",
-        rationale="reason",
-    )
-    inbox = RequestInbox().add_request(request)
-    handler = _make_recording_handler(tmp_path)
-    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
-
-    response = client.get(f"/inbox/detail/{request.event_id}")
-
-    assert response.status_code == 200
-    body = response.text
-    # No input element should carry the ``checked`` attribute.
-    for value_marker in ('value="any"', 'value="slack-read-all"', 'value="slack-write-all"'):
-        idx = body.find(value_marker)
-        assert idx != -1
-        tag_start = body.rfind("<input", 0, idx)
-        tag_end = body.find(">", idx)
-        assert "checked" not in body[tag_start:tag_end], (
-            f"unexpected pre-check on {value_marker}: {body[tag_start : tag_end + 1]}"
-        )
-    # Approve stays disabled in the initial markup -- the JS re-enables
-    # it as soon as the user ticks any checkbox.
-    assert 'id="permissions-approve-btn"' in body
-    assert "disabled" in body
-
-
 def test_post_permission_grant_calls_handler_and_resolves_inbox(tmp_path: Path) -> None:
     agent_id = AgentId()
     host_id = HostId()
@@ -505,7 +351,7 @@ def test_post_permission_grant_calls_handler_and_resolves_inbox(tmp_path: Path) 
 
     response = client.post(
         f"/requests/{request.event_id}/grant",
-        data={"permissions": ["slack-read-all", "slack-write-all"]},
+        data={"permissions": ["slack-read-all", "slack-write-all"], "account": _TEST_ACCOUNT},
     )
 
     assert response.status_code == 200
@@ -561,7 +407,7 @@ def test_post_permission_grant_with_failed_signin_keeps_request_pending(tmp_path
 
     response = client.post(
         f"/requests/{request.event_id}/grant",
-        data={"permissions": ["slack-read-all"]},
+        data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
 
     assert response.status_code == 200
@@ -576,7 +422,7 @@ def test_post_permission_grant_with_failed_signin_keeps_request_pending(tmp_path
 
 
 def test_post_permission_grant_with_manual_credentials_keeps_request_pending(tmp_path: Path) -> None:
-    """NEEDS_MANUAL_CREDENTIALS must echo the example command and not resolve the inbox."""
+    """NEEDS_MANUAL_CREDENTIALS must return the credential form and not resolve the inbox."""
     agent_id = AgentId()
     request = create_latchkey_predefined_permission_request_event(
         agent_id=str(agent_id),
@@ -584,28 +430,88 @@ def test_post_permission_grant_with_manual_credentials_keeps_request_pending(tmp
         rationale="reason",
     )
     inbox = RequestInbox().add_request(request)
-    expected_example = 'latchkey auth set slack -H "Authorization: Bearer xoxb-..."'
+    expected_prompt = UiManualCredentialsPrompt(
+        parameters=(CredentialCommandParameter(name="token", label="Token"),),
+        message="Slack does not support browser sign-in",
+    )
     handler = _make_recording_handler(
         tmp_path,
         grant_outcome=GrantOutcome.NEEDS_MANUAL_CREDENTIALS,
         grant_message="Slack does not support browser sign-in.",
-        grant_set_credentials_example=expected_example,
+        grant_manual_credentials=expected_prompt,
     )
     client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
 
     response = client.post(
         f"/requests/{request.event_id}/grant",
-        data={"permissions": ["slack-read-all"]},
+        data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
 
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["outcome"] == "NEEDS_MANUAL_CREDENTIALS"
-    assert payload["set_credentials_example"] == expected_example
-    # The request must remain pending so the user can click Approve again
-    # after running the suggested command.
+    assert payload["manual_credentials"] == {
+        "parameters": [{"name": "token", "label": "Token"}],
+        "message": "Slack does not support browser sign-in",
+    }
+    # The request must remain pending so the user can fill the form in and
+    # click Approve again.
     final_inbox = _get_app_request_inbox(client)
     assert final_inbox.get_pending_count() == 1
+
+
+def test_post_permission_grant_forwards_the_submitted_credential_form(tmp_path: Path) -> None:
+    """The values typed into the credential form must reach the grant flow."""
+    agent_id = AgentId()
+    request = create_latchkey_predefined_permission_request_event(
+        agent_id=str(agent_id),
+        scope="slack-api",
+        rationale="reason",
+    )
+    inbox = RequestInbox().add_request(request)
+    handler = _make_recording_handler(tmp_path)
+    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
+
+    response = client.post(
+        f"/requests/{request.event_id}/grant",
+        data={
+            "permissions": ["slack-read-all"],
+            "account": _TEST_ACCOUNT,
+            "manual_credentials": json.dumps({"token": "xoxb-9137"}),
+            "account_name": "work",
+        },
+    )
+
+    assert response.status_code == 200
+    assert handler.grant_calls[0]["manual_credentials"] == ManualCredentialSubmission(
+        value_by_parameter_name={"token": "xoxb-9137"},
+        account_name="work",
+    )
+
+
+def test_post_permission_grant_rejects_a_malformed_credential_form(tmp_path: Path) -> None:
+    agent_id = AgentId()
+    request = create_latchkey_predefined_permission_request_event(
+        agent_id=str(agent_id),
+        scope="slack-api",
+        rationale="reason",
+    )
+    inbox = RequestInbox().add_request(request)
+    handler = _make_recording_handler(tmp_path)
+    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id)
+
+    response = client.post(
+        f"/requests/{request.event_id}/grant",
+        data={
+            "permissions": ["slack-read-all"],
+            "account": _TEST_ACCOUNT,
+            "manual_credentials": json.dumps(["xoxb-9137"]),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "JSON object of strings" in response.get_json()["error"]
+    assert handler.grant_calls == []
 
 
 def test_post_permission_deny_calls_handler_and_resolves_inbox(tmp_path: Path) -> None:
@@ -649,12 +555,12 @@ def test_inbox_page_drops_request_after_resolution(tmp_path: Path) -> None:
     deny = client.post(f"/requests/{request.event_id}/deny")
     assert deny.status_code == 200
 
-    page = client.get("/inbox")
-    assert page.status_code == 200
-    body = page.text
-    # The actionable form must be gone so it cannot be submitted again.
-    assert 'id="permissions-approve-btn"' not in body
-    assert 'action="/requests/' not in body
+    # The resolved request no longer appears in the inbox list, so it can't be
+    # re-actioned (the SPA reads this JSON in place of the old SSR page).
+    listing = client.get("/ui/api/inbox")
+    assert listing.status_code == 200
+    card_ids = [card["id"] for card in listing.get_json()["cards"]]
+    assert str(request.event_id) not in card_ids
 
 
 def test_post_permission_grant_after_resolution_returns_409(tmp_path: Path) -> None:
@@ -672,14 +578,14 @@ def test_post_permission_grant_after_resolution_returns_409(tmp_path: Path) -> N
 
     first = client.post(
         f"/requests/{request.event_id}/grant",
-        data={"permissions": ["slack-read-all"]},
+        data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
     assert first.status_code == 200
     assert len(handler.grant_calls) == 1
 
     second = client.post(
         f"/requests/{request.event_id}/grant",
-        data={"permissions": ["slack-read-all"]},
+        data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
     assert second.status_code == 409
     # The handler must not have been invoked a second time.
@@ -719,92 +625,11 @@ def test_post_permission_grant_unknown_service_returns_400(tmp_path: Path) -> No
 
     response = client.post(
         f"/requests/{request.event_id}/grant",
-        data={"permissions": ["some-perm"]},
+        data={"permissions": ["some-perm"], "account": _TEST_ACCOUNT},
     )
 
     assert response.status_code == 400
     assert handler.grant_calls == []
-
-
-def test_get_permission_request_page_pre_checks_existing_grants(tmp_path: Path) -> None:
-    agent_id = AgentId()
-    host_id = HostId()
-    # Latchkey permissions are stored per-host now: pre-populate the
-    # host-keyed file so the dialog should pre-check the matching
-    # permissions for this host (every agent on the host shares this
-    # config). The backend resolver is configured to map ``agent_id`` to
-    # ``host_id`` so ``_resolve_host_id`` returns the same host the file
-    # is keyed by.
-    save_permissions(
-        permissions_path_for_host(tmp_path / "mngr_latchkey", host_id),
-        LatchkeyPermissionsConfig(rules=({"slack-api": ["slack-chat-read"]},)),
-    )
-    request = create_latchkey_predefined_permission_request_event(
-        agent_id=str(agent_id),
-        scope="slack-api",
-        rationale="reason",
-    )
-    inbox = RequestInbox().add_request(request)
-    handler = _make_recording_handler(tmp_path)
-    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id, host_id=host_id)
-
-    response = client.get(f"/inbox/detail/{request.event_id}")
-
-    assert response.status_code == 200
-    body = response.text
-    # The previously-granted permission appears checked.
-    chat_read_idx = body.find('value="slack-chat-read"')
-    assert chat_read_idx != -1
-    # Find the surrounding <input ...> tag and assert it has 'checked'.
-    tag_start = body.rfind("<input", 0, chat_read_idx)
-    tag_end = body.find(">", chat_read_idx)
-    assert "checked" in body[tag_start:tag_end]
-
-
-def test_get_permission_request_page_pre_checks_union_of_existing_and_requested(tmp_path: Path) -> None:
-    """When the agent asks for a permission that isn't yet granted, the dialog pre-checks the union.
-
-    Approving without modification grants the union, which is the
-    intuitive behavior for "give the agent what it's asking for, on top
-    of what it already has". A previous design pre-checked only the
-    existing grants, which silently turned Approve into a no-op against
-    the agent's new request.
-    """
-    agent_id = AgentId()
-    host_id = HostId()
-    save_permissions(
-        permissions_path_for_host(tmp_path / "mngr_latchkey", host_id),
-        LatchkeyPermissionsConfig(rules=({"slack-api": ["slack-chat-read"]},)),
-    )
-    request = create_latchkey_predefined_permission_request_event(
-        agent_id=str(agent_id),
-        scope="slack-api",
-        permissions=("slack-write-all",),
-        rationale="reason",
-    )
-    inbox = RequestInbox().add_request(request)
-    handler = _make_recording_handler(tmp_path)
-    client = _build_authenticated_client(tmp_path, handler, inbox, agent_id=agent_id, host_id=host_id)
-
-    response = client.get(f"/inbox/detail/{request.event_id}")
-
-    assert response.status_code == 200
-    body = response.text
-    for expected_checked in ("slack-chat-read", "slack-write-all"):
-        idx = body.find(f'value="{expected_checked}"')
-        assert idx != -1, f"checkbox for {expected_checked} missing from dialog"
-        tag_start = body.rfind("<input", 0, idx)
-        tag_end = body.find(">", idx)
-        assert "checked" in body[tag_start:tag_end], (
-            f"expected {expected_checked} to be pre-checked: {body[tag_start : tag_end + 1]}"
-        )
-    # ``slack-read-all`` is in the catalog but neither requested nor
-    # previously granted, so it must not be pre-checked.
-    read_all_idx = body.find('value="slack-read-all"')
-    assert read_all_idx != -1
-    read_all_tag_start = body.rfind("<input", 0, read_all_idx)
-    read_all_tag_end = body.find(">", read_all_idx)
-    assert "checked" not in body[read_all_tag_start:read_all_tag_end]
 
 
 def test_post_permission_grant_returns_503_when_host_not_yet_discovered(tmp_path: Path) -> None:
@@ -830,7 +655,7 @@ def test_post_permission_grant_returns_503_when_host_not_yet_discovered(tmp_path
 
     response = client.post(
         f"/requests/{request.event_id}/grant",
-        data={"permissions": ["slack-read-all"]},
+        data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
 
     assert response.status_code == 503
@@ -854,7 +679,7 @@ def test_unauthenticated_grant_post_returns_403(tmp_path: Path) -> None:
 
     response = client.post(
         f"/requests/{request.event_id}/grant",
-        data={"permissions": ["slack-read-all"]},
+        data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
 
     assert response.status_code == 403
@@ -891,6 +716,13 @@ class _StubOtherHandler(RequestEventHandler):
         mngr_forward_origin: str,
     ) -> str:
         return "ok"
+
+    def build_request_detail_payload(
+        self,
+        req_event: RequestEvent,
+        backend_resolver: BackendResolverInterface,
+    ) -> RequestDetailPayload:
+        return UiUnsupportedDetail(message="stub")
 
     def apply_grant_request(self, request: Request, req_event: RequestEvent) -> Response:
         self.grant_event_ids.append(str(req_event.event_id))
@@ -966,7 +798,7 @@ def test_dispatcher_routes_grant_to_handler_matching_request_type(tmp_path: Path
     # Granting a LATCHKEY_PERMISSION event must hit the permission handler only.
     perm_response = client.post(
         f"/requests/{permission_request.event_id}/grant",
-        data={"permissions": ["slack-read-all"]},
+        data={"permissions": ["slack-read-all"], "account": _TEST_ACCOUNT},
     )
     assert perm_response.status_code == 200
     assert other_handler.grant_event_ids == [str(other_request.event_id)]

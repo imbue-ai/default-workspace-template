@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # env.d unit: Fortress (stealth Chromium) + its apt system libs. Too heavy to
-# bake into the Docker image and not required by any boot-time service, so it
-# installs on first boot via the `env-converge` one-shot.
+# bake into the Docker image, and no boot-time service execs it directly (the
+# browser service degrades gracefully until the engine arrives), so it installs
+# on first boot via the `env-converge` one-shot. xvfb + xclip are baked into
+# the image (setup_system.sh) because [program:xvfb] DOES exec its binary
+# directly at boot; the install step below remains only for rootfses built
+# from pre-bake images, where its satisfied-check is not yet instant.
 #
 # env.d contract: idempotent with a fast satisfied-check -- NO marker files.
 # The converger re-runs every unit on every boot; a satisfied unit exits 0 in
@@ -15,6 +19,17 @@ readonly REPO_ROOT="${ENV_CONVERGE_WORKSPACE_DIR:-/home/user/workspace}"
 _log() {
     printf '[env.d/playwright-fortress] %s\n' "$*"
 }
+
+# Environments that never use the browser stack (e.g. the minds CI snapshot
+# producer) opt out of the whole unit -- most importantly the hundreds-of-MB
+# Fortress download -- by setting DWT_SKIP_BROWSER_UNIT=1 in the agent
+# environment. An env var rather than a marker file keeps the env.d contract:
+# the decision is re-evaluated every boot, so a workspace whose environment
+# stops setting it simply converges the browser stack on its next boot.
+if [ "${DWT_SKIP_BROWSER_UNIT:-}" = "1" ]; then
+    _log "DWT_SKIP_BROWSER_UNIT=1 -- skipping the browser stack install"
+    exit 0
+fi
 
 _recover_interrupted_dpkg() {
     # A prior apt/dpkg run killed mid-operation leaves dpkg broken, after which
@@ -117,12 +132,52 @@ _install_fortress() {
         return 1
     fi
     chmod +x "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion"
+    # Point Playwright's DEFAULT chromium at Fortress too. A bare `chromium.launch()`
+    # (no executable_path) looks in Playwright's own browser cache, which this install
+    # deliberately leaves empty (we run `install-deps`, not `install`, so no managed
+    # Chromium is downloaded). Symlink Fortress into that expected path -- resolved
+    # from Playwright itself so it tracks the pinned version's revision/layout -- so
+    # ad-hoc Playwright calls use the same one engine instead of erroring on a missing
+    # build. Chromium finds its resources via /proc/self/exe (the real Fortress dir),
+    # so symlinking just the binary is enough.
+    local pw_chrome
+    pw_chrome="$(cd "$REPO_ROOT" && uv run python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()' 2>/dev/null)"
+    if [ -n "$pw_chrome" ]; then
+        mkdir -p "$(dirname "$pw_chrome")"
+        ln -sf "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion" "$pw_chrome"
+        # Some Playwright versions gate launch() on a per-browser install marker.
+        touch "$(dirname "$(dirname "$pw_chrome")")/INSTALLATION_COMPLETE" 2>/dev/null || true
+        _log "fortress: pointed Playwright's default chromium at Fortress ($pw_chrome)"
+    else
+        _log "fortress: WARNING could not resolve Playwright's chromium path; a bare chromium.launch() will still need an explicit executable_path"
+    fi
     _log "fortress: install complete (${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion)"
+}
+
+_install_xvfb() {
+    # Fast satisfied-check (env.d contract: no marker files): both binaries exist.
+    if command -v Xvfb >/dev/null 2>&1 && command -v xclip >/dev/null 2>&1; then
+        _log "xvfb: Xvfb and xclip already installed, satisfied"
+        return 0
+    fi
+    # Headful Chromium needs a display; Xvfb is a headless X server that gives it
+    # one (the browser runs headful under it -- see session.py's _HEADLESS). xclip
+    # bridges the resulting X11 clipboard to/from the user for native copy/paste
+    # (images included). Recover any interrupted dpkg first, same as fortress.
+    _recover_interrupted_dpkg
+    _log "xvfb: installing xvfb + xclip"
+    if apt-get update -y && apt-get install -y --no-install-recommends xvfb xclip; then
+        _log "xvfb: install complete"
+    else
+        _log "xvfb: install FAILED; the next converge retries"
+        return 1
+    fi
 }
 
 main() {
     local rc=0
     _install_fortress || rc=$?
+    _install_xvfb || rc=$?
     if [ "$rc" -eq 0 ]; then
         _log "unit satisfied"
     else

@@ -33,6 +33,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.minds.desktop_client.agent_creator import AgentCreateAttemptInfo
+from imbue.minds.desktop_client.onboarding_services import OnboardingService
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.workspace_color import DEFAULT_WORKSPACE_COLOR
 from imbue.minds.desktop_client.workspace_color import WORKSPACE_PALETTE
@@ -123,6 +124,10 @@ _BTN_VARIANTS: Final[Mapping[str, str]] = {
 # border-stronger on hover (a quieter cue than a fill tint), with a focus ring
 # drawn OUTSIDE the field (outline-offset) so it keeps the border rather than
 # recoloring it.
+# Sentinel value for Associate's "Add account" picker entry. Not a user id,
+# so the association submit must reject it -- see Associate.jinja.
+ADD_ACCOUNT_OPTION_VALUE: Final[str] = "__add_account__"
+
 _INPUT_BASE: Final[str] = (
     "p-2 type-body border border-strong bg-surface-primary text-primary "
     "placeholder:text-tertiary hover:border-stronger focus:border-stronger "
@@ -154,6 +159,12 @@ _ICONS_16: Final[Mapping[str, str]] = {
     # the inner stroke-width of 1.8 renders at the set's visual 1.2 after the
     # 2/3 scale). Used by the workspace icon-tab in the titlebar breadcrumb.
     "panels-top-left": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></g>',
+    "share": '<path d="M9.78225 1.44141C10.0122 1.35145 10.2738 1.4114 10.4414 1.59278L15.4405 7.00391C15.6532 7.23415 15.6527 7.58953 15.4395 7.81934L10.4405 13.208C10.2726 13.3889 10.011 13.4485 9.78127 13.3584C9.55172 13.2682 9.40041 13.0465 9.40041 12.7998V10.04C7.84575 10.1878 6.30604 10.8831 4.98537 11.7168C3.50242 12.653 2.35808 13.7236 1.87209 14.2412L1.87112 14.2402C1.75059 14.3697 1.59344 14.4597 1.41994 14.4951C1.2432 14.5312 1.05947 14.5098 0.895531 14.4346C0.731549 14.3593 0.595769 14.2337 0.507836 14.0762C0.419903 13.9186 0.384182 13.7367 0.406273 13.5576H0.40725C0.667763 11.3166 2.21196 9.13775 4.04592 7.54297C5.68193 6.12036 7.67022 5.05919 9.40041 4.85059V2C9.40041 1.75301 9.55223 1.53141 9.78225 1.44141ZM10.6006 5.41114C10.6006 5.74242 10.3323 6.01061 10.001 6.01075C8.5585 6.01075 6.56212 6.94567 4.83401 8.44825C3.45889 9.644 2.35133 11.1163 1.85354 12.5898C2.48514 12.023 3.34266 11.3348 4.34475 10.7022C5.92057 9.70737 7.91948 8.81055 10.001 8.81055C10.3321 8.81069 10.6004 9.07906 10.6006 9.41016V11.2705L14.1817 7.41016L10.6006 3.53321V5.41114Z"/>',
+    "box": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></g>',
+    "link": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></g>',
+    "copy": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></g>',
+    "info": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></g>',
+    "cloud": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></g>',
     "settings": '<g transform="translate(0.5 0.5)"><path d="M8.33765 2.50001C8.33765 2.31436 8.26384 2.13617 8.13257 2.00489C8.0013 1.87363 7.82309 1.79981 7.63745 1.79981H7.36206C7.17669 1.79993 6.99907 1.87389 6.86792 2.00489C6.73664 2.13617 6.66284 2.31436 6.66284 2.50001V2.61329C6.66248 2.92882 6.57854 3.23854 6.42065 3.51173C6.263 3.78448 6.03608 4.01019 5.76343 4.16798L5.7644 4.16895L5.49487 4.3252L5.4939 4.32618C5.22026 4.48416 4.90947 4.56739 4.59351 4.56739C4.28352 4.56735 3.97951 4.48625 3.70972 4.33399V4.33497L3.61597 4.28517C3.61069 4.28235 3.60552 4.27936 3.60034 4.27638C3.43989 4.18382 3.24904 4.15837 3.07007 4.20606C2.89093 4.25397 2.73723 4.37177 2.64429 4.53224L2.50757 4.76954C2.41531 4.92995 2.39048 5.12004 2.43823 5.29884C2.47414 5.43311 2.54837 5.553 2.65112 5.64356L2.76343 5.72364L2.79272 5.7422L2.88647 5.8047H2.8855C3.14427 5.9608 3.36037 6.17885 3.51245 6.44044C3.67027 6.71193 3.75466 7.01998 3.75659 7.33399V7.65431L3.75269 7.77247C3.73559 8.04849 3.65566 8.31791 3.51733 8.5586C3.3607 8.83108 3.13439 9.05648 2.86304 9.21485L2.86401 9.21583L2.77026 9.27149L2.76343 9.27638C2.60297 9.36932 2.48613 9.52204 2.43823 9.70118C2.39048 9.87998 2.41531 10.0701 2.50757 10.2305L2.64429 10.4678C2.73723 10.6282 2.89093 10.7461 3.07007 10.794C3.24904 10.8417 3.43989 10.8162 3.60034 10.7236L3.61597 10.7149L3.70972 10.665C3.97941 10.5129 4.28368 10.4327 4.59351 10.4326C4.86998 10.4326 5.14235 10.4964 5.3894 10.6182L5.4939 10.6738L5.49487 10.6748L5.76245 10.8301L5.86304 10.8926C6.09166 11.0455 6.28249 11.2493 6.42065 11.4883C6.57854 11.7615 6.66248 12.0712 6.66284 12.3867V12.5C6.66284 12.6857 6.73664 12.8639 6.86792 12.9951C6.99907 13.1261 7.17669 13.2001 7.36206 13.2002H7.63745C7.82309 13.2002 8.0013 13.1264 8.13257 12.9951C8.26384 12.8639 8.33765 12.6857 8.33765 12.5V12.3867C8.33801 12.0713 8.42105 11.7614 8.57886 11.4883C8.71709 11.2492 8.90868 11.0455 9.13745 10.8926L9.23706 10.8301L9.50464 10.6748L9.50659 10.6738C9.78011 10.516 10.0902 10.4327 10.406 10.4326C10.7158 10.4326 11.0201 10.513 11.2898 10.665L11.3835 10.7149L11.4001 10.7236C11.5607 10.8162 11.7514 10.8418 11.9304 10.794C12.1096 10.7461 12.2623 10.6282 12.3552 10.4678L12.49 10.2295L12.4919 10.2256C12.5846 10.065 12.6102 9.87349 12.5623 9.69435C12.5148 9.51717 12.3998 9.36564 12.2419 9.27247L12.1599 9.2295C12.1545 9.2266 12.1487 9.22282 12.1433 9.21974C11.869 9.06123 11.6411 8.83328 11.4832 8.5586C11.3251 8.28367 11.2427 7.9714 11.2439 7.65431V7.34376C11.243 7.02734 11.3255 6.71579 11.4832 6.44142C11.6397 6.16926 11.8645 5.9425 12.1355 5.78419L12.2292 5.72853L12.2371 5.72364C12.3973 5.63068 12.5144 5.47785 12.5623 5.29884C12.61 5.11979 12.5845 4.92909 12.4919 4.76856V4.76759L12.3552 4.53224C12.2623 4.37177 12.1096 4.25397 11.9304 4.20606C11.7514 4.15823 11.5607 4.18386 11.4001 4.27638C11.3949 4.27942 11.3889 4.2823 11.3835 4.28517L11.3054 4.3252L11.3064 4.32618C11.0328 4.48416 10.722 4.56739 10.406 4.56739C10.0902 4.56735 9.78011 4.48405 9.50659 4.32618L9.50464 4.3252L9.23706 4.16895V4.16993C8.96387 4.01211 8.73675 3.78488 8.57886 3.51173C8.42105 3.23859 8.33801 2.92874 8.33765 2.61329V2.50001ZM8.82495 7.50001C8.82495 6.76823 8.23153 6.17481 7.49976 6.17481C6.76809 6.17495 6.17456 6.76831 6.17456 7.50001C6.17456 8.23171 6.76809 8.82507 7.49976 8.8252C8.23153 8.8252 8.82495 8.23179 8.82495 7.50001ZM9.92456 7.50001C9.92456 8.8393 8.83905 9.92481 7.49976 9.92481C6.16058 9.92468 5.07495 8.83922 5.07495 7.50001C5.07495 6.1608 6.16058 5.07534 7.49976 5.0752C8.83905 5.0752 9.92456 6.16072 9.92456 7.50001ZM9.43726 2.61231L9.44312 2.70313C9.45513 2.79393 9.48488 2.88212 9.53101 2.96192C9.57708 3.0416 9.63913 3.11035 9.71167 3.16603L9.78784 3.21778L9.78882 3.21876L10.0554 3.37403H10.0564C10.1627 3.43533 10.2833 3.46774 10.406 3.46778C10.5289 3.46778 10.6502 3.43547 10.7566 3.37403L10.7722 3.36427L10.866 3.31446C11.2757 3.08362 11.7598 3.02198 12.2146 3.14356C12.6753 3.26674 13.0684 3.56786 13.3074 3.98048L13.4451 4.21778V4.21876C13.6833 4.63172 13.7478 5.12244 13.6248 5.58302C13.5023 6.04104 13.2037 6.43153 12.7947 6.67091L12.7019 6.72755L12.6941 6.73243C12.5873 6.79411 12.4987 6.8833 12.4373 6.99024C12.3758 7.09719 12.343 7.21846 12.3435 7.34181V7.65821C12.343 7.78156 12.3758 7.90283 12.4373 8.00978C12.4987 8.11672 12.5873 8.20591 12.6941 8.26759L12.7712 8.3086L12.7878 8.31739C13.2004 8.55634 13.5015 8.94964 13.6248 9.41017C13.7475 9.86904 13.683 10.3575 13.447 10.7695L13.3103 11.0137L13.3074 11.0195C13.0684 11.4322 12.6753 11.7333 12.2146 11.8565C11.7597 11.9781 11.2758 11.9156 10.866 11.6846L10.7722 11.6358C10.7668 11.6329 10.7619 11.629 10.7566 11.626C10.6502 11.5645 10.5289 11.5322 10.406 11.5322C10.2833 11.5323 10.1627 11.5647 10.0564 11.626L10.0554 11.625L9.78882 11.7813L9.78784 11.7822C9.68156 11.8436 9.59244 11.9319 9.53101 12.0381C9.46964 12.1443 9.43745 12.2651 9.43726 12.3877V12.5C9.43726 12.9774 9.24748 13.4349 8.90991 13.7725C8.57235 14.11 8.11483 14.2998 7.63745 14.2998H7.36206C6.88483 14.2997 6.42706 14.1099 6.0896 13.7725C5.75217 13.4349 5.56226 12.9773 5.56226 12.5V12.3877C5.56207 12.2651 5.52988 12.1443 5.46851 12.0381C5.40708 11.932 5.31885 11.8436 5.21265 11.7822L5.21069 11.7813L4.94409 11.626L4.86108 11.5859C4.77655 11.551 4.68557 11.5322 4.59351 11.5322C4.47081 11.5323 4.35018 11.5647 4.2439 11.626C4.23855 11.6291 4.23274 11.6328 4.22729 11.6358L4.13354 11.6856L4.13257 11.6846C3.72316 11.915 3.24026 11.9778 2.78589 11.8565C2.32532 11.7333 1.93212 11.4321 1.69312 11.0195L1.55542 10.7822L1.55444 10.7813C1.31626 10.3683 1.25172 9.87753 1.37476 9.417C1.49724 8.95896 1.79581 8.56751 2.20483 8.32813L2.29858 8.27247L2.3064 8.26759C2.4132 8.20592 2.50178 8.11671 2.56323 8.00978C2.62462 7.90288 2.6565 7.78148 2.65601 7.65821V7.34083L2.65015 7.25001C2.63778 7.15974 2.60737 7.07245 2.56128 6.99317C2.49994 6.88771 2.41203 6.80032 2.3064 6.73927C2.29617 6.73336 2.28595 6.72629 2.27612 6.71974L2.18237 6.65724V6.65626C1.78541 6.4158 1.49488 6.03226 1.37476 5.58302C1.25172 5.12249 1.31626 4.63168 1.55444 4.21876L1.55542 4.21778L1.69312 3.98048C1.93212 3.56797 2.32532 3.26672 2.78589 3.14356C3.2401 3.02225 3.72325 3.08422 4.13257 3.31446H4.13354L4.22729 3.36427C4.23274 3.36717 4.23855 3.37095 4.2439 3.37403C4.35018 3.43533 4.47081 3.46774 4.59351 3.46778C4.71638 3.46778 4.83768 3.43547 4.94409 3.37403L5.21069 3.21876L5.21265 3.21778C5.31885 3.15646 5.40708 3.06806 5.46851 2.96192C5.51463 2.88214 5.54437 2.79391 5.5564 2.70313L5.56226 2.61231V2.50001C5.56226 2.02272 5.75217 1.56509 6.0896 1.22755C6.42706 0.890087 6.88483 0.700322 7.36206 0.700205H7.63745C8.11483 0.700205 8.57235 0.889999 8.90991 1.22755C9.24748 1.56511 9.43726 2.02262 9.43726 2.50001V2.61231Z"/></g>',
     "chevron-right": '<path d="M5.57617 3.57617C5.81049 3.34186 6.18951 3.34186 6.42383 3.57617L10.4238 7.57617C10.6581 7.81049 10.6581 8.18951 10.4238 8.42383L6.42383 12.4238C6.18951 12.6581 5.81049 12.6581 5.57617 12.4238C5.34186 12.1895 5.34186 11.8105 5.57617 11.5762L9.15234 8L5.57617 4.42383C5.34186 4.18951 5.34186 3.81049 5.57617 3.57617Z"/>',
     "chevron-left": '<path d="M9.57617 3.57617C9.81049 3.34186 10.1895 3.34186 10.4238 3.57617C10.6581 3.81049 10.6581 4.18951 10.4238 4.42383L6.84766 8L10.4238 11.5762C10.6581 11.8105 10.6581 12.1895 10.4238 12.4238C10.1895 12.6581 9.81049 12.6581 9.57617 12.4238L5.57617 8.42383C5.34186 8.18951 5.34186 7.81049 5.57617 7.57617L9.57617 3.57617Z"/>',
@@ -259,6 +270,7 @@ def _build_catalog() -> Catalog:
             "BTN_SIZES": _BTN_SIZES,
             "BTN_VARIANTS": _BTN_VARIANTS,
             "INPUT_BASE": _INPUT_BASE,
+            "ADD_ACCOUNT_OPTION_VALUE": ADD_ACCOUNT_OPTION_VALUE,
             "ICONS_16": _ICONS_16,
             "ICONS_12": _ICONS_12,
             # Resolved per render so the page only boots the frontend Sentry SDK
@@ -278,6 +290,16 @@ def _build_catalog() -> Catalog:
 
 
 CATALOG: Final[Catalog] = _build_catalog()
+
+
+class InspirationMachineRow(FrozenModel):
+    """One pickable machine on the Create from Inspiration page's add flow."""
+
+    agent_id: str = Field(description="The machine agent id (drives the recovery-restart detour)")
+    host_id: str = Field(default="", description="The machine host id (drives the /goto/ href); '' when unknown")
+    name: str = Field(description="Display name")
+    accent: str = Field(description="Accent color hex")
+    liveness: str = Field(description="RUNNING, STOPPED, or UNKNOWN (drives the recovery-restart detour)")
 
 
 class RemoteWorkspaceTile(FrozenModel):
@@ -309,6 +331,7 @@ def render_landing_page(
     shutdown_capable_agent_ids: Sequence[AgentId] | None = None,
     mind_liveness_by_agent_id: dict[str, str] | None = None,
     agent_providers: dict[str, str] | None = None,
+    agent_host_ids: dict[str, str] | None = None,
     account_email: str = "",
     extra_account_count: int = 0,
     remote_workspaces: Sequence[RemoteWorkspaceTile] | None = None,
@@ -325,10 +348,15 @@ def render_landing_page(
 
     ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin
     (e.g. ``"http://localhost:8421"``). Workspace links target
-    ``{mngr_forward_origin}/goto/<agent>/`` because Phase 2 deletes minds'
+    ``{mngr_forward_origin}/goto/<host>/`` because Phase 2 deletes minds'
     in-process subdomain forwarder; the plugin owns ``/goto/`` now.
 
     agent_names maps agent ID strings to human-readable workspace names.
+
+    agent_host_ids maps agent ID strings to the workspace's ``host-<hex>``
+    coordinate. The plugin's ``/goto/`` route is host-keyed, so rows with an
+    entry link via it; rows without one fall back to the agent id (nothing
+    better is known -- same degrade as the inspiration page's rows).
 
     agent_accents maps agent ID strings to ``#rrggbb`` workspace accent
     hexes (the stored color label, resolved by the caller). Agents without
@@ -373,6 +401,7 @@ def render_landing_page(
         shutdown_capable_agent_ids=shutdown_capable_agent_id_strings,
         mind_liveness_by_agent_id=mind_liveness_by_agent_id or {},
         agent_providers=agent_providers or {},
+        agent_host_ids=agent_host_ids or {},
         account_email=account_email,
         extra_account_count=extra_account_count,
         create_attempt_rows=list(create_attempt_rows or []),
@@ -389,7 +418,7 @@ _FALLBACK_GIT_URL: Final[str] = DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
 # Pin to an annotated DEFAULT_WORKSPACE_TEMPLATE tag so a shipped binary clones the exact DEFAULT_WORKSPACE_TEMPLATE
 # snapshot it was verified against. Bump to a newer tag only after
 # re-verifying launch-to-msg CI against (this binary, the new tag).
-FALLBACK_BRANCH: Final[str] = "minds-v0.3.9"
+FALLBACK_BRANCH: Final[str] = "minds-v0.3.11"
 
 # Env var (set by ``just minds-start`` and the e2e workspace runner) that opts a
 # launch into the operator's local-worktree create-form defaults. Gating on an
@@ -435,6 +464,31 @@ def _operator_workspace_default(env_var: str, fallback: str) -> str:
     return os.environ.get(env_var, fallback)
 
 
+def default_workspace_template_ref() -> str:
+    """Return the template ref a plain create uses -- the create form's Version default.
+
+    For an end-user ``minds run`` this is always :data:`FALLBACK_BRANCH`, the
+    ``minds-v*`` tag this binary was verified against; only an opted-in operator
+    (``just minds-start``) sees the ``MINDS_WORKSPACE_BRANCH`` override, which is
+    typically a branch name rather than a release tag.
+
+    ``GET /api/v1/app/version`` also reports this as the ceiling on how far a
+    workspace may update itself, so a branch value here imposes no ceiling.
+    """
+    return _operator_workspace_default("MINDS_WORKSPACE_BRANCH", FALLBACK_BRANCH)
+
+
+def default_workspace_git_url() -> str:
+    """Return the template repository a plain create uses -- the create form's Repository default.
+
+    For an end-user ``minds run`` this is always the public
+    default-workspace-template URL; only an opted-in operator
+    (``just minds-start``) sees the ``MINDS_WORKSPACE_GIT_URL`` override,
+    which points at their local DEFAULT_WORKSPACE_TEMPLATE worktree.
+    """
+    return _operator_workspace_default("MINDS_WORKSPACE_GIT_URL", _FALLBACK_GIT_URL)
+
+
 # Base for auto-generated workspace host names. The generic default is never
 # used bare -- it is always numbered (``workspace-1``, ``workspace-2``, ...).
 _DEFAULT_HOST_NAME_BASE: Final[str] = "workspace"
@@ -457,7 +511,7 @@ def normalize_host_name_slug(text: str) -> HostName:
     collapsed = _NON_SLUG_CHARS_RE.sub("-", lowered).strip("-")
     truncated = collapsed[:_MINDS_HOST_NAME_SLUG_MAX_LENGTH].strip("-")
     if not truncated:
-        raise InvalidName("Workspace name must include at least one letter or number.")
+        raise InvalidName("Machine name must include at least one letter or number.")
     return HostName(truncated)
 
 
@@ -579,10 +633,10 @@ def render_create_form(
     ``/`` once a workspace appears, so a user who was shown the create form on a
     cold-start race (discovery hadn't re-surfaced their workspace yet) is taken
     to their workspace list instead of being trapped. It is left False on the
-    explicit ``/create`` page so a deliberate "create another workspace" flow is
+    explicit ``/create`` page so a deliberate "create another machine" flow is
     never bounced away by the user's existing workspaces.
     """
-    effective_url = git_url if git_url else _operator_workspace_default("MINDS_WORKSPACE_GIT_URL", _FALLBACK_GIT_URL)
+    effective_url = git_url if git_url else default_workspace_git_url()
     # The env/operator branch default pairs with the default template repo, so
     # it only applies when the repository was NOT explicitly supplied. With an
     # explicit repository (e.g. an inspiration deeplink's git_url) the branch
@@ -591,7 +645,7 @@ def render_create_form(
     if git_url:
         effective_branch = branch
     else:
-        effective_branch = branch if branch else _operator_workspace_default("MINDS_WORKSPACE_BRANCH", FALLBACK_BRANCH)
+        effective_branch = branch if branch else default_workspace_template_ref()
     # The selected preset card drives the provider defaults so the highlighted
     # card always matches what a plain submit would create. A fresh form
     # (no explicit selection, no submitted launch mode) defaults to the remote
@@ -670,12 +724,96 @@ def render_create_form(
     )
 
 
+@pure
+def render_inspiration_create_page(
+    git_url: str,
+    branch: str = "",
+    accounts: Sequence[object] | None = None,
+    default_account_id: str = "",
+    color: str = DEFAULT_WORKSPACE_COLOR,
+    mngr_forward_origin: str = "",
+    machine_rows: Sequence[InspirationMachineRow] = (),
+    region_options_by_launch_mode: Mapping[str, Sequence[str]] | None = None,
+    region_selected_by_launch_mode: Mapping[str, str] | None = None,
+    start: str = "",
+) -> str:
+    """Render the Create from Inspiration page (GET /create/inspiration).
+
+    The landing page for an Inspiration deeplink: a chooser between creating
+    a new machine from ``git_url`` and adding the Inspiration to an
+    existing machine. The add flow shows a copyable ``/use-inspiration
+    <git-url>`` message (the skill accepts only a URL, so ``branch`` is
+    deliberately absent from it) plus ``machine_rows`` to open. The new
+    flow's settings step lets the user keep the preset defaults or reveal the
+    compute / backup provider and region selects inline (the repo and branch
+    stay fixed); the provider enums and region options come from the same
+    source the create form uses.
+    """
+    return _render_inspiration_stepper(
+        git_url=git_url,
+        branch=branch,
+        accounts=accounts,
+        default_account_id=default_account_id,
+        color=color,
+        mngr_forward_origin=mngr_forward_origin,
+        machine_rows=machine_rows,
+        region_options_by_launch_mode=region_options_by_launch_mode,
+        region_selected_by_launch_mode=region_selected_by_launch_mode,
+        is_modal=False,
+        start=start,
+    )
+
+
+@pure
+def _render_inspiration_stepper(
+    git_url: str,
+    branch: str,
+    accounts: Sequence[object] | None,
+    default_account_id: str,
+    color: str,
+    mngr_forward_origin: str,
+    machine_rows: Sequence[InspirationMachineRow],
+    region_options_by_launch_mode: Mapping[str, Sequence[str]] | None,
+    region_selected_by_launch_mode: Mapping[str, str] | None,
+    is_modal: bool,
+    current_machine_id: str = "",
+    current_machine_name: str = "",
+    start: str = "",
+) -> str:
+    """Render the Create from Inspiration stepper into one of its two shells.
+
+    ``is_modal`` picks the shell: the full page, or the shared overlay's card
+    (the deeplink modal). The stepper itself is identical; only the add branch's
+    last step differs, and only when a ``current_machine_id`` is supplied.
+    """
+    return CATALOG.render(
+        "pages.InspirationCreate",
+        git_url=git_url,
+        branch=branch,
+        accounts=accounts or [],
+        default_account_id=default_account_id,
+        color=color,
+        mngr_forward_origin=mngr_forward_origin,
+        machine_rows=list(machine_rows),
+        launch_modes=list(LaunchMode),
+        backup_providers=list(BackupProvider),
+        region_options_by_launch_mode={
+            key: list(value) for key, value in (region_options_by_launch_mode or {}).items()
+        },
+        region_selected_by_launch_mode=dict(region_selected_by_launch_mode or {}),
+        is_modal=is_modal,
+        current_machine_id=current_machine_id,
+        current_machine_name=current_machine_name,
+        start=start,
+    )
+
+
 _STATUS_TEXT_DEFAULT: Final[dict[str, str]] = {
     "INITIALIZING": "Starting...",
     "CLONING_REPO": "Cloning repository...",
     "CHECKING_OUT_BRANCH": "Checking out branch...",
-    "CREATING_WORKSPACE": "Creating workspace...",
-    "WAITING_FOR_READY": "Waiting for workspace to be ready...",
+    "CREATING_WORKSPACE": "Creating machine...",
+    "WAITING_FOR_READY": "Waiting for machine to be ready...",
     "DONE": "Done. Redirecting...",
 }
 
@@ -687,7 +825,7 @@ _STATUS_TEXT_IMBUE_CLOUD: Final[dict[str, str]] = {
     "CLONING_REPO": "Connecting to host...",
     "CHECKING_OUT_BRANCH": "Checking out branch...",
     "CREATING_WORKSPACE": "Setting up agent...",
-    "WAITING_FOR_READY": "Waiting for workspace to be ready...",
+    "WAITING_FOR_READY": "Waiting for machine to be ready...",
     "DONE": "Done. Redirecting...",
 }
 
@@ -745,6 +883,7 @@ def expected_create_attempt_duration_seconds(launch_mode: LaunchMode) -> float:
 def render_creating_page(
     create_attempt_id: CreateAttemptId,
     info: AgentCreateAttemptInfo,
+    onboarding_services: Sequence[OnboardingService] = (),
 ) -> str:
     """Render the progress page shown while an agent is being created.
 
@@ -768,6 +907,11 @@ def render_creating_page(
         # Drives the client-side time-based progress bar on the loading
         # screen (eases toward ~80% over this duration).
         expected_duration_seconds=expected_create_attempt_duration_seconds(info.launch_mode),
+        # Onboarding walkthrough context: the latchkey services for the app
+        # cloud, and whether the machine is remote, which decides the
+        # sharing step's second line.
+        onboarding_services=list(onboarding_services),
+        is_remote=info.launch_mode is LaunchMode.IMBUE_CLOUD,
     )
 
 
@@ -1129,7 +1273,7 @@ _RECOVERY_STYLE: Final[str] = """\
 
       /* A quiet "Report a problem" link under the primary action, shown only on
          the terminal recovery states that offer a restart/retry (not the
-         transient "Loading workspace" spinner, where there is nothing to report
+         transient "Loading machine" spinner, where there is nothing to report
          yet). Kept de-emphasized (text-only) so it never competes with the
          restart/retry button above it. */
       #recovery-report-btn {
@@ -1266,21 +1410,19 @@ _RECOVERY_SCRIPT: Final[str] = """\
           return u;
         }
         // Convergence poll while a restart is in flight (the RESTARTING state).
-        // A full-page reload here would steal OS focus from any Electron view
-        // layered over this one -- e.g. the bug-report modal opened from
-        // "Report a problem" -- on every tick, making its inputs impossible to
-        // type into (Electron has no per-WebContentsView focus-on-navigation
-        // control; see https://github.com/electron/electron/issues/42578). So
-        // poll in the background instead: a HEALTHY tracker 302s back to the
-        // workspace (an opaque redirect, which we follow), and any non-restarting
-        // status (e.g. restart_failed) means we reload to render that state.
-        // While the status stays 'restarting' we leave the page -- and any
-        // focused overlay -- untouched and just poll again.
-        // Go back to the now-recovered workspace. On the desktop shell this
-        // recovery screen renders on the trusted chrome surface, whose guard
-        // blocks agent-content navigations -- so hand return_to (an agent URL)
-        // to the shell bridge, which loads it into the caged content view. In a
-        // plain browser (no bridge) follow the server's healthy 302 as before.
+        // A full-page reload here would tear down any overlay modal layered
+        // over this page -- e.g. the bug-report modal opened from "Report a
+        // problem" -- on every tick, making its inputs impossible to type
+        // into. So poll in the background instead: a HEALTHY tracker 302s
+        // back to the workspace (an opaque redirect, which we follow), and
+        // any non-restarting status (e.g. restart_failed) means we reload to
+        // render that state. While the status stays 'restarting' we leave the
+        // page -- and any focused overlay -- untouched and just poll again.
+        // Go back to the now-recovered workspace. Inside the chrome shell
+        // this recovery screen renders as a trusted local page, so hand
+        // return_to (an agent URL) to the shell bridge, which loads it into
+        // the sandboxed workspace iframe. On a standalone page load (no
+        // bridge) follow the server's healthy 302 as before.
         function goToWorkspace() {
           if (pageTornDown) return;
           if (window.minds && window.minds.navigateContent && returnTo) {
@@ -1397,7 +1539,7 @@ _RECOVERY_SCRIPT: Final[str] = """\
 
 
         function renderLoading() {
-          titleEl.textContent = 'Loading workspace';
+          titleEl.textContent = 'Loading machine';
           messageEl.textContent = '';
           show(spinnerEl, true);
           show(errorEl, false);
@@ -1417,15 +1559,15 @@ _RECOVERY_SCRIPT: Final[str] = """\
         // workspace" click). Names the action so the wait reads as a
         // deliberate recovery, not a hang. The entry dispatch does NOT use
         // this copy: it fires without knowing whether the start will do
-        // anything, so it stays on the neutral "Loading workspace" spinner
+        // anything, so it stays on the neutral "Loading machine" spinner
         // (or the offline copy, when the host is known offline) rather than
         // claiming a restart. scheduleRefresh (armed by the caller) sends the
         // user home the moment the tracker flips HEALTHY, so this state needs
         // no separate homeward poll.
         function renderRestarting() {
-          titleEl.textContent = 'Restarting your workspace';
+          titleEl.textContent = 'Restarting your machine';
           messageEl.textContent =
-            'We\\'ll return you to your workspace automatically as soon as it is back.';
+            'We\\'ll return you to your machine automatically as soon as it is back.';
           show(spinnerEl, true);
           show(errorEl, false);
           show(hostBtn, false);
@@ -1445,9 +1587,9 @@ _RECOVERY_SCRIPT: Final[str] = """\
         // mid-restart by maybeUpgradeToOfflineCopy when the hint was stale.
         function renderRestartingOffline() {
           offlineCopyShown = true;
-          titleEl.textContent = 'Bringing your workspace back online';
+          titleEl.textContent = 'Bringing your machine back online';
           messageEl.textContent =
-            'This workspace was offline. We\\'re starting it back up and will '
+            'This machine was offline. We\\'re starting it back up and will '
             + 'return you to it automatically.';
           show(spinnerEl, true);
           show(errorEl, false);
@@ -1475,18 +1617,18 @@ _RECOVERY_SCRIPT: Final[str] = """\
           if ((resp.headers.get('X-Workspace-Offline') || '') !== '1') return;
           renderRestartingOffline();
         }
-        // The shared "Workspace unresponsive" state -- shown after a restart
+        // The shared "Machine unresponsive" state -- shown after a restart
         // failure and for the host_unresponsive tier (container observed
         // running but unreachable: bouncing it would interrupt user agents, so
         // we want explicit consent before doing so).
         function renderUnresponsive() {
-          titleEl.textContent = 'Workspace unresponsive';
+          titleEl.textContent = 'Machine unresponsive';
           messageEl.textContent =
-            'This workspace needs a restart to recover. In-progress work in all agents will be '
+            'This machine needs a restart to recover. In-progress work in all agents will be '
             + 'interrupted. If the problem persists, contact support.';
           show(spinnerEl, false);
           show(errorEl, true);
-          hostBtn.textContent = 'Restart workspace';
+          hostBtn.textContent = 'Restart machine';
           hostBtn.classList.remove('secondary');
           show(hostBtn, true);
           // Reset the backend-unreachable state's elements: the page can move
@@ -1513,10 +1655,10 @@ _RECOVERY_SCRIPT: Final[str] = """\
         // later lands. A live GET / 200 short-circuits to HEALTHY upstream, so we
         // only reach here without direct positive evidence.
         function renderReconnecting() {
-          titleEl.textContent = 'Reconnecting to your workspace';
+          titleEl.textContent = 'Reconnecting to your machine';
           messageEl.textContent =
             'This is taking longer than usual. We\\'ll reconnect you automatically as soon '
-            + 'as your workspace responds.';
+            + 'as your machine responds.';
           show(spinnerEl, true);
           show(errorEl, false);
           show(hostBtn, false);
@@ -1526,11 +1668,11 @@ _RECOVERY_SCRIPT: Final[str] = """\
           armHealthyPoll();
         }
         function renderDispatchError() {
-          titleEl.textContent = 'Workspace unresponsive';
+          titleEl.textContent = 'Machine unresponsive';
           messageEl.textContent = 'Could not start the restart. Check your connection and try again.';
           show(spinnerEl, false);
           show(errorEl, false);
-          hostBtn.textContent = 'Restart workspace';
+          hostBtn.textContent = 'Restart machine';
           hostBtn.classList.remove('secondary');
           show(hostBtn, true);
           // Same residual-state reset as renderUnresponsive: this state can
@@ -1551,11 +1693,11 @@ _RECOVERY_SCRIPT: Final[str] = """\
         // ``unreachable_reason``, surfaced verbatim below so we never have to
         // hand-author a message per provider.
         function renderBackendUnreachable(data) {
-          var label = (data && data.provider_label) || 'the workspace backend';
+          var label = (data && data.provider_label) || 'the machine backend';
           var reason = (data && data.unreachable_reason) || '';
           titleEl.textContent = "Can't connect to " + label;
           messageEl.textContent =
-            'This page will reconnect you automatically the moment your workspace '
+            'This page will reconnect you automatically the moment your machine '
             + 'is reachable again.';
           if (providerReasonEl) {
             providerReasonEl.textContent = reason;
@@ -1705,10 +1847,10 @@ _RECOVERY_SCRIPT: Final[str] = """\
         if (reportBtn) {
           reportBtn.addEventListener('click', function () {
             // Open the get-help / report-a-bug modal, scoped to this workspace.
-            // The recovery page renders on the trusted chrome surface, so in the
-            // desktop shell it calls the window.minds bridge directly (opens the
-            // shared overlay modal). In a plain browser (no bridge) navigate to
-            // the full-page /help fallback.
+            // The recovery page renders inside the chrome shell, so it calls
+            // the window.minds bridge directly (opens the overlay-layer help
+            // modal). On a standalone page load (no bridge) navigate to the
+            // full-page /help fallback.
             if (window.minds && window.minds.openHelp) {
               window.minds.openHelp(agentId);
             } else {
@@ -1733,16 +1875,16 @@ _RECOVERY_SCRIPT: Final[str] = """\
         var hostOffline = root.dataset.hostOffline === '1';
         // The flavor of an in-flight restart, from the tracker: start-only (the
         // page's own entry dispatch, a possible no-op) vs a full manual bounce
-        // (the right-click "Restart workspace" click, which POSTs the restart and
+        // (the right-click "Restart machine" click, which POSTs the restart and
         // then navigates here fresh). Display-only.
         var restartStartOnly = root.dataset.restartStartOnly === '1';
         if (initialStatus === 'restarting') {
           // A restart is in flight (a reload lands here for the entry dispatch
           // and the manual bounce alike). The offline hint wins -- a cold boot
-          // reads as "Bringing your workspace back online". Otherwise the flavor
+          // reads as "Bringing your machine back online". Otherwise the flavor
           // decides: a full manual bounce is a deliberate, known restart, so name
-          // it "Restarting your workspace"; a start-only entry dispatch may be a
-          // no-op, so it stays on the neutral "Loading workspace" spinner.
+          // it "Restarting your machine"; a start-only entry dispatch may be a
+          // no-op, so it stays on the neutral "Loading machine" spinner.
           (hostOffline
             ? renderRestartingOffline
             : (restartStartOnly ? renderLoading : renderRestarting))();
@@ -1774,8 +1916,8 @@ _RECOVERY_SCRIPT: Final[str] = """\
           // stop+start bounce is never dispatched without a click). The
           // pending copy claims only what is known: the offline copy when the
           // host reads offline (a real cold boot is coming), else the neutral
-          // "Loading workspace" spinner -- the dispatch may well be a no-op,
-          // and "Restarting your workspace" would overclaim (the header
+          // "Loading machine" spinner -- the dispatch may well be a no-op,
+          // and "Restarting your machine" would overclaim (the header
           // upgrade switches to the offline copy if a STOPPED observation
           // lands mid-dispatch).
           armHealthyPoll();
@@ -1808,15 +1950,15 @@ def render_recovery_page(
     ``return_to`` is the URL the page navigates back to once the workspace is
     healthy again. ``initial_offline`` is the display-only hint that the host
     currently reads as offline (STOPPED/CRASHED), which selects the "Bringing
-    your workspace back online" copy for the restarting state; it never
+    your machine back online" copy for the restarting state; it never
     affects what is dispatched.
 
     ``restart_is_start_only`` is the display-only flavor of an in-flight restart
     when ``initial_status`` is ``"restarting"``: True for the recovery page's own
-    start-only entry dispatch (a possible no-op -> the neutral "Loading workspace"
+    start-only entry dispatch (a possible no-op -> the neutral "Loading machine"
     spinner), False for a full manual bounce reloaded here (the right-click
-    "Restart workspace" click POSTs the restart and then navigates to this page
-    fresh -> the known "Restarting your workspace" copy). Ignored unless the host
+    "Restart machine" click POSTs the restart and then navigates to this page
+    fresh -> the known "Restarting your machine" copy). Ignored unless the host
     reads offline (the offline copy wins) and unless the status is restarting.
 
     ``ssh_command`` is the copy-pasteable SSH command for the agent's host. When
@@ -1859,7 +2001,7 @@ def render_recovery_page(
     # whenever neither disclosure is currently visible.
     card_extra = (
         '      <p id="recovery-provider-reason" class="recovery-provider-reason hidden"></p>\n'
-        '      <button id="recovery-host-btn" class="hidden">Restart workspace</button>\n'
+        '      <button id="recovery-host-btn" class="hidden">Restart machine</button>\n'
         '      <button id="recovery-retry-btn" class="hidden">Retry</button>\n'
         '      <button type="button" id="recovery-report-btn" class="hidden">Report a problem</button>\n'
         '      <div class="recovery-troubleshooting">\n'
@@ -1926,6 +2068,7 @@ def render_chrome_page(
     accent: str = "",
     crumb_workspace_name: str = "",
     crumb_agent_id: str = "",
+    boot_workspace_id: str = "",
 ) -> str:
     """Render the persistent chrome page (title bar + sidebar + content iframe).
 
@@ -1936,9 +2079,10 @@ def render_chrome_page(
     ``data-mngr-forward-origin`` attribute on the body so chrome.js can build
     workspace links that target the plugin's port directly.
 
-    In Electron mode, the iframe and browser sidebar are hidden via JS; the content
-    is handled by a separate WebContentsView, and the sidebar page is loaded into
-    the shared modal WebContentsView when opened.
+    Workspace content renders in the page's sandboxed cross-origin
+    ``#content-frame`` iframe, and the sidebar page is mounted as an
+    overlay-layer iframe when opened -- identically in the desktop app and
+    plain browsers.
 
     ``accent`` optionally seeds the titlebar's workspace color server-side (a
     ``#rrggbb`` string) so the wrapper's first paint is already tinted when the
@@ -1949,8 +2093,14 @@ def render_chrome_page(
     workspace breadcrumb (name + Workspace/Settings tabs, Workspace tab active)
     server-side, mirroring the accent: the desktop shell passes the workspace it
     is loading so the bar's first paint already carries the full context instead
-    of a bare "Minds" until the content view commits. chrome.js owns every later
-    update.
+    of a bare "Minds" until the workspace iframe commits. chrome.js owns every
+    later update.
+
+    ``boot_workspace_id`` is the workspace coordinate stamped into
+    ``data-boot-workspace-id`` (the id chrome.js arms the content iframe
+    from). The caller resolves it to the HOST coordinate when known -- the
+    forward plugin's /goto/ route only accepts host ids -- falling back to
+    ``crumb_agent_id`` when empty.
     """
     return CATALOG.render(
         "pages.Chrome",
@@ -1961,6 +2111,7 @@ def render_chrome_page(
         accent=accent,
         crumb_workspace_name=crumb_workspace_name,
         crumb_agent_id=crumb_agent_id,
+        boot_workspace_id=boot_workspace_id or crumb_agent_id,
     )
 
 
@@ -1974,22 +2125,24 @@ def render_sidebar_page(
     offset_x: int = -24,
     offset_y: int = 2,
 ) -> str:
-    """Render the standalone sidebar page loaded into the shared modal WebContentsView.
+    """Render the standalone sidebar page mounted as an overlay-layer iframe.
 
-    This page shows the workspace list and subscribes to SSE updates. In Electron,
-    clicking a workspace sends an IPC message via the preload bridge to navigate
-    the content WebContentsView. ``mngr_forward_origin`` is exposed via
-    ``data-mngr-forward-origin`` so sidebar.js can build the cross-origin
-    ``/goto/<agent>/`` URL the plugin serves.
+    This page shows the workspace list and subscribes to SSE updates. Clicking
+    a workspace hands the target to the hosting shell through the
+    ``window.minds`` bridge, which loads it into the workspace iframe.
+    ``mngr_forward_origin`` is exposed via ``data-mngr-forward-origin`` so
+    sidebar.js can build the cross-origin ``/goto/<agent>/`` URL the plugin
+    serves.
 
-    Position is driven entirely by the caller. The chrome view (which owns the
-    trigger button) passes the button's viewport-relative rect (``trigger_x``,
-    ``trigger_y``, ``trigger_w``, ``trigger_h``) plus a caller-chosen offset
-    (``offset_x``, ``offset_y``). The menu's top-left lands at the trigger's
-    bottom-left + offset. The chrome view and the modal view share window
-    coordinate space, so the rect translates directly. Defaults (no query
-    params) anchor a 38px-tall element at the top-left of the window,
-    nudged 24px left and 2px below it -- right for the titlebar's first button.
+    Position is driven entirely by the caller. The chrome shell (which owns
+    the trigger button) passes the button's viewport-relative rect
+    (``trigger_x``, ``trigger_y``, ``trigger_w``, ``trigger_h``) plus a
+    caller-chosen offset (``offset_x``, ``offset_y``). The menu's top-left
+    lands at the trigger's bottom-left + offset. The full-window iframe shares
+    the shell's viewport coordinate space, so the rect translates directly.
+    Defaults (no query params) anchor a 38px-tall element at the top-left of
+    the window, nudged 24px left and 2px below it -- right for the titlebar's
+    first button.
     """
     return CATALOG.render(
         "pages.Sidebar",
@@ -2018,7 +2171,6 @@ def warm_template_caches() -> None:
     for render in (
         render_chrome_page,
         render_sidebar_page,
-        render_overlay_host_page,
         lambda: render_help_page(workspace_agent_id=""),
         lambda: render_inbox_page(cards=()),
     ):
@@ -2028,53 +2180,7 @@ def warm_template_caches() -> None:
             logger.opt(exception=True).debug("Template warmup render failed (ignored)")
 
 
-def render_overlay_host_page() -> str:
-    """Render the always-warm overlay host page loaded into the shared modal WebContentsView.
-
-    The page is a transparent shell hosting the overlay manager (overlay.js).
-    Every overlay -- the migrated workspace menu / inbox / help / sign-in modals
-    (as mount-on-demand iframes, created when opened and destroyed when closed)
-    and hover tooltips -- is in-page DOM driven over IPC, so opening an overlay
-    never costs a per-open page load. main.js loads this once at window create attempt
-    and keeps it mounted for the window's life.
-    """
-    return CATALOG.render("pages.OverlayHost")
-
-
 # -- Workspace/settings/sharing/accounts --
-
-
-@pure
-def render_sharing_editor(
-    agent_id: str,
-    service_name: str,
-    title: str,
-    mngr_forward_origin: str = "",
-    initial_emails: list[str] | None = None,
-    has_account: bool = True,
-    accounts: Sequence[object] | None = None,
-    redirect_url: str = "",
-    ws_name: str = "",
-    account_email: str = "",
-) -> str:
-    """Render the sharing editor page used by the workspace-settings sharing flow.
-
-    ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin;
-    the workspace link in the page title points at ``{mngr_forward_origin}/goto/<agent>/``.
-    """
-    return CATALOG.render(
-        "pages.Sharing",
-        title=title,
-        agent_id=agent_id,
-        service_name=service_name,
-        mngr_forward_origin=mngr_forward_origin,
-        initial_emails=initial_emails or [],
-        has_account=has_account,
-        accounts=accounts or [],
-        redirect_url=redirect_url,
-        ws_name=ws_name,
-        account_email=account_email,
-    )
 
 
 @pure
@@ -2095,41 +2201,11 @@ def render_ai_keys_page(
 
 
 @pure
-def render_sharing_modal_page(
-    agent_id: str,
-    service_name: str,
-    initial_emails: list[str] | None = None,
-    has_account: bool = True,
-    accounts: Sequence[object] | None = None,
-    ws_name: str = "",
-    account_email: str = "",
-) -> str:
-    """Render the centered sharing-editor modal page (``GET /sharing/<agent_id>/<service_name>/modal``).
-
-    Hosted in the shared modal WebContentsView; shows the same editor body as
-    :func:`render_sharing_editor` (the full-page browser fallback), minus the
-    linked heading and the Cancel-to-workspace-settings link (the modal is
-    dismissed via Cancel, its X, or a backdrop click).
-    """
-    return CATALOG.render(
-        "pages.SharingModal",
-        agent_id=agent_id,
-        service_name=service_name,
-        initial_emails=initial_emails or [],
-        has_account=has_account,
-        accounts=accounts or [],
-        ws_name=ws_name,
-        account_email=account_email,
-    )
-
-
-@pure
 def render_workspace_settings(
     agent_id: str,
     ws_name: str,
     current_account: object | None,
     accounts: Sequence[object],
-    servers: Sequence[str],
     is_leased_imbue_cloud: bool = False,
     current_color: str = DEFAULT_WORKSPACE_COLOR,
     is_stale: bool = False,
@@ -2159,12 +2235,188 @@ def render_workspace_settings(
         ws_name=ws_name,
         current_account=current_account,
         accounts=accounts,
-        servers=servers,
         is_leased_imbue_cloud=is_leased_imbue_cloud,
         current_color=current_color,
         is_stale=is_stale,
         has_account=has_account,
         palette=WORKSPACE_PALETTE,
+    )
+
+
+# The workspace's own web UI service -- what the desktop client shows as "the
+# workspace" and the default target of ``mngr forward``. The options panel's
+# "Whole machine" entry stands in for it: under the machine-level sharing model
+# the shell is the machine's bare origin, gated by the grants document's
+# workspace scope (which admits every service), so it is never offered as a
+# per-app target.
+_WHOLE_MACHINE_SERVICE: Final[str] = "system_interface"
+
+# Registered services that are the workspace's own interfaces rather than apps
+# someone would share on their own, so the Share machine list leaves them out
+# (see _split_share_targets). Singular and plural are both listed because the
+# name is whatever the in-workspace process registered, not a fixed vocabulary.
+_NON_APP_SHARE_SERVICES: Final[frozenset[str]] = frozenset(
+    {"chat", "chats", "terminal", "terminals", "browser", "browsers"}
+)
+
+# A service can only be a per-app share target if its name can be a hostname
+# label: shared app links are real origins (``<name>.<machine domain>``), so a
+# name with underscores or other non-DNS characters has no origin to hand out.
+# Matches forward_port.py's validation in the workspace template (lowercase
+# alphanumerics with single hyphens).
+_DNS_SAFE_SERVICE_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+@pure
+def _split_share_targets(servers: Sequence[str]) -> tuple[list[str], str]:
+    """Split a workspace's services into the per-app targets and the whole-machine one.
+
+    The whole-machine entry is always offered, whether or not the workspace has
+    registered that service yet -- a workspace that has not finished booting
+    would otherwise silently lose the option it most likely wants.
+
+    Everything the workspace registers shows up in that service list, including
+    the interfaces the workspace is built out of rather than apps built on top
+    of it. Those are excluded: handing someone a chat, a terminal or a browser
+    is not the same act as handing them one app, and offering them in the same
+    flat list invites it by accident. The whole machine remains the deliberate
+    way to grant everything.
+
+    Names that cannot be a hostname label (underscores, reserved ``host-`` /
+    ``agent-`` coordinate prefixes) are excluded too: a per-app share link is a
+    real origin, and such a name has none to hand out. Those services are still
+    reachable through a whole-machine share.
+    """
+    app_services = [
+        str(service)
+        for service in servers
+        if str(service) != _WHOLE_MACHINE_SERVICE
+        and str(service).lower() not in _NON_APP_SHARE_SERVICES
+        and _DNS_SAFE_SERVICE_NAME.match(str(service)) is not None
+        and not str(service).startswith(("host-", "agent-"))
+    ]
+    return app_services, _WHOLE_MACHINE_SERVICE
+
+
+@pure
+def _share_target_labels(app_services: Sequence[str], service_labels: Mapping[str, str] | None) -> dict[str, str]:
+    """The origin-label map for the rendered share targets, keyed by service name.
+
+    Every share link is a real origin. A per-app link is ``<label>.<machine
+    domain>``; the whole-machine link is the SHELL's own label origin
+    (``<system_interface label>.<machine domain>``), because the bare machine
+    domain does not route on a share (only explicit ``<label>.<machine domain>``
+    origins are claimed on the relay and served). So the map
+    covers the rendered ``app_services`` plus the whole-machine (shell) service,
+    restricted to services that actually carry a label -- a service with none is
+    omitted, and workspace_options.js falls back accordingly.
+    """
+    labels = service_labels or {}
+    target_labels = {service: labels[service] for service in app_services if service in labels}
+    if _WHOLE_MACHINE_SERVICE in labels:
+        target_labels[_WHOLE_MACHINE_SERVICE] = labels[_WHOLE_MACHINE_SERVICE]
+    return target_labels
+
+
+@pure
+def render_workspace_options_page(
+    agent_id: str,
+    ws_name: str,
+    current_account: object | None,
+    accounts: Sequence[object],
+    servers: Sequence[str],
+    service_labels: Mapping[str, str] | None = None,
+    host_id: str = "",
+    tab: str = "share",
+    selected_target: str = "",
+    account_email: str = "",
+    is_leased_imbue_cloud: bool = False,
+    current_color: str = DEFAULT_WORKSPACE_COLOR,
+    is_stale: bool = False,
+    has_account: bool = False,
+    selected_group: str = "general",
+) -> str:
+    """Render the browser-mode workspace options page (``GET /workspace/<agent_id>/options``).
+
+    The full-page twin of the docked panel: the same Share machine / Machine
+    Settings panes without the overlay chrome, since outside Electron the
+    titlebar's icon-tabs navigate instead of opening an overlay.
+    """
+    app_services, whole_service = _split_share_targets(servers)
+    return CATALOG.render(
+        "pages.WorkspaceOptions",
+        agent_id=agent_id,
+        ws_name=ws_name,
+        host_id=host_id,
+        tab=tab,
+        current_account=current_account,
+        accounts=accounts,
+        app_services=app_services,
+        service_labels=_share_target_labels(app_services, service_labels),
+        whole_service=whole_service,
+        selected_target=selected_target or whole_service,
+        account_email=account_email,
+        has_account=has_account,
+        is_leased_imbue_cloud=is_leased_imbue_cloud,
+        current_color=current_color,
+        is_stale=is_stale,
+        palette=WORKSPACE_PALETTE,
+        selected_group=selected_group,
+    )
+
+
+@pure
+def render_workspace_options_modal_page(
+    agent_id: str,
+    ws_name: str,
+    current_account: object | None,
+    accounts: Sequence[object],
+    servers: Sequence[str],
+    service_labels: Mapping[str, str] | None = None,
+    host_id: str = "",
+    tab: str = "share",
+    selected_target: str = "",
+    account_email: str = "",
+    anchor_x: int | None = None,
+    anchor_y: int | None = None,
+    anchor_height: int | None = None,
+    is_leased_imbue_cloud: bool = False,
+    current_color: str = DEFAULT_WORKSPACE_COLOR,
+    is_stale: bool = False,
+    has_account: bool = False,
+    selected_group: str = "general",
+) -> str:
+    """Render the workspace options panel (``GET /workspace/<agent_id>/options/modal``).
+
+    Hosted as an overlay-layer modal iframe. The anchor is the titlebar's
+    workspace icon-tab strip, measured by chrome.js and packed into the URL by
+    the overlay layer. Supplying it docks the panel under that strip and
+    draws the tab strip in its place; omitting it -- there is no such strip
+    outside a workspace -- centers the panel and drops the tabs.
+    """
+    app_services, whole_service = _split_share_targets(servers)
+    return CATALOG.render(
+        "pages.WorkspaceOptionsModal",
+        agent_id=agent_id,
+        ws_name=ws_name,
+        host_id=host_id,
+        tab=tab,
+        anchor_x=anchor_x,
+        anchor_y=anchor_y,
+        anchor_height=anchor_height,
+        current_account=current_account,
+        accounts=accounts,
+        app_services=app_services,
+        service_labels=_share_target_labels(app_services, service_labels),
+        whole_service=whole_service,
+        selected_target=selected_target or whole_service,
+        account_email=account_email,
+        has_account=has_account,
+        is_leased_imbue_cloud=is_leased_imbue_cloud,
+        current_color=current_color,
+        is_stale=is_stale,
+        palette=WORKSPACE_PALETTE,
+        selected_group=selected_group,
     )
 
 
@@ -2296,8 +2548,8 @@ def render_settings_modal_page(
 ) -> str:
     """Render the centered "Minds Settings" modal page (``GET /settings/modal``).
 
-    Hosted in the shared modal WebContentsView; shows the same shared sections
-    as :func:`render_settings_page`, minus the "back to workspaces" link (the
+    Hosted as an overlay-layer modal iframe; shows the same shared sections
+    as :func:`render_settings_page`, minus the "back to machines" link (the
     modal is dismissed via its X or a backdrop click).
     """
     return CATALOG.render(
@@ -2319,8 +2571,8 @@ def render_accounts_modal_page(
 ) -> str:
     """Render the centered "Manage Accounts" modal page (``GET /accounts/modal``).
 
-    Hosted in the shared modal WebContentsView; the full accounts page
-    (:func:`render_accounts_page`) remains as the browser-mode fallback.
+    Hosted as an overlay-layer modal iframe; the full accounts page
+    (:func:`render_accounts_page`) remains as the standalone fallback.
     """
     return CATALOG.render(
         "pages.AccountsModal",
@@ -2349,7 +2601,7 @@ def render_destroyed_workspaces_page(retention_days: int, error: str = "") -> st
 
 @pure
 def render_destroyed_workspaces_rows_fragment(
-    # Row dicts from _collect_destroyed_workspace_rows (agent_id, display_name,
+    # Row dicts from _collect_destroyed_machine_rows (agent_id, display_name,
     # account_label, countdown/lock/delete affordance fields).
     rows: Sequence[Mapping[str, object]],
 ) -> str:
@@ -2373,4 +2625,43 @@ def render_account_plan_modal_page(acct_user_id: str, account_email: str) -> str
         "pages.AccountPlanModal",
         acct_user_id=acct_user_id,
         account_email=account_email,
+    )
+
+
+@pure
+def render_inspiration_modal_page(
+    git_url: str,
+    branch: str = "",
+    current_machine_id: str = "",
+    current_machine_name: str = "",
+    accounts: Sequence[object] | None = None,
+    default_account_id: str = "",
+    color: str = DEFAULT_WORKSPACE_COLOR,
+    mngr_forward_origin: str = "",
+    machine_rows: Sequence[InspirationMachineRow] = (),
+    region_options_by_launch_mode: Mapping[str, Sequence[str]] | None = None,
+    region_selected_by_launch_mode: Mapping[str, str] | None = None,
+) -> str:
+    """Render the Create from Inspiration stepper as a modal (``GET /create/inspiration/modal``).
+
+    The deeplink entry point when the app is already inside a workspace. It is
+    the SAME stepper the full page renders (``render_inspiration_create_page``),
+    hosted in the shared overlay's card instead of the page shell, so the create
+    flow behaves identically. The one difference: the add branch targets the
+    workspace the user is already in, so its last step drops the picker and just
+    says to paste the copied message into that chat, then dismisses itself.
+    """
+    return _render_inspiration_stepper(
+        git_url=git_url,
+        branch=branch,
+        accounts=accounts,
+        default_account_id=default_account_id,
+        color=color,
+        mngr_forward_origin=mngr_forward_origin,
+        machine_rows=machine_rows,
+        region_options_by_launch_mode=region_options_by_launch_mode,
+        region_selected_by_launch_mode=region_selected_by_launch_mode,
+        is_modal=True,
+        current_machine_id=current_machine_id,
+        current_machine_name=current_machine_name,
     )

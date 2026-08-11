@@ -16,7 +16,6 @@ from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.server import create_application
-from imbue.system_interface.service_dispatcher import make_service_proxy_client
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -80,9 +79,10 @@ def build_production_state(
             resolve_never_welcomed_agent_name=welcome_resender.never_welcomed_agent_name,
         ),
         welcome_resender=welcome_resender,
-        # Single shared synchronous httpx client for the /service/<name>/
-        # forwarding layer; a separate one for the latchkey catalog proxy.
-        http_client=make_service_proxy_client(),
+        # Single shared synchronous httpx client for server-side API calls to
+        # local services (e.g. the /api/browsers passthrough to the browser
+        # daemon); a separate one for the latchkey catalog proxy.
+        http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=httpx.Client(timeout=30.0),
     )
 

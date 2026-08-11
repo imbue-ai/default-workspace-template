@@ -34,10 +34,11 @@ from imbue.minds.testing import write_stub_supervisorctl
 
 
 def _make_workspace_repo(tmp_path: Path, *, code_path: str = "libs/host_backup") -> Path:
-    """A git repo shaped like a workspace: the backup-service code dir + an unrelated file.
+    """A git repo shaped like a machine: the backup-service code dir + an unrelated file.
 
     ``code_path`` is the repo-relative backup-service directory (pass
-    ``system/libs/host_backup`` for a repo shaped like the decluttered template).
+    ``system/services/host_backup`` for a repo shaped like the creation-rename
+    template, ``system/libs/host_backup`` for the decluttered one).
     """
     repo = tmp_path / "workspace"
     repo.mkdir()
@@ -80,13 +81,16 @@ def _make_stub_bin(
     sync_ok: bool = True,
     list_ok: bool = True,
     supervisorctl_call_log: Path | None = None,
+    supervisorctl_status_lines: tuple[str, ...] | None = None,
+    supervisorctl_status_lines_after_restart: tuple[str, ...] | None = None,
 ) -> Path:
-    """A PATH dir with stub `uv` and `supervisorctl` acting like a healthy workspace.
+    """A PATH dir with stub `uv` and `supervisorctl` acting like a healthy machine.
 
     ``sync_ok=False`` fails `uv sync` (a post-restore failpoint for the
     restore script); ``list_ok=False`` fails `uv run mngr list` (a broken
-    workspace whose chat gate cannot answer); ``supervisorctl_call_log`` is
-    forwarded to the supervisorctl stub for lifecycle-order assertions.
+    machine whose chat gate cannot answer); ``supervisorctl_call_log`` and the
+    ``supervisorctl_status_lines*`` rosters are forwarded to the supervisorctl
+    stub for lifecycle-order and differential-verification assertions.
     """
     stub_bin = tmp_path / "stub-bin"
     stub_bin.mkdir(exist_ok=True)
@@ -103,7 +107,13 @@ def _make_stub_bin(
         + "exit 0\n"
     )
     uv_stub.chmod(0o755)
-    write_stub_supervisorctl(stub_bin, is_restart_ok=restart_ok, call_log_path=supervisorctl_call_log)
+    write_stub_supervisorctl(
+        stub_bin,
+        is_restart_ok=restart_ok,
+        call_log_path=supervisorctl_call_log,
+        status_lines=supervisorctl_status_lines,
+        status_lines_after_restart=supervisorctl_status_lines_after_restart,
+    )
     return stub_bin
 
 
@@ -195,6 +205,19 @@ def test_check_script_reports_outdated_on_a_new_layout_workspace(tmp_path: Path)
     # read "matches").
     repo = _make_workspace_repo(tmp_path, code_path="system/libs/host_backup")
     tag_newer_release_content(repo, code_path="system/libs/host_backup")
+    stub_bin = _make_stub_bin(tmp_path)
+    run = _run_script(repo, BACKUP_CHECK_SCRIPT, ("--minimum-tag", "minds-v2.0.0"), extra_path=stub_bin)
+    payload = extract_marker_json(run["stdout"], CHECK_RESULT_MARKER)
+    assert payload is not None, run
+    assert payload["code_state"] == "outdated"
+
+
+def test_check_script_reports_outdated_on_a_creation_rename_layout_workspace(tmp_path: Path) -> None:
+    # A workspace shaped like the creation-rename template keeps the backup
+    # code at system/services/host_backup, checked against a tag with the same
+    # layout. The check must resolve and diff that path.
+    repo = _make_workspace_repo(tmp_path, code_path="system/services/host_backup")
+    tag_newer_release_content(repo, code_path="system/services/host_backup")
     stub_bin = _make_stub_bin(tmp_path)
     run = _run_script(repo, BACKUP_CHECK_SCRIPT, ("--minimum-tag", "minds-v2.0.0"), extra_path=stub_bin)
     payload = extract_marker_json(run["stdout"], CHECK_RESULT_MARKER)
@@ -588,6 +611,10 @@ def test_apply_update_is_blocked_by_running_chats_without_stop_flag(tmp_path: Pa
     assert payload["running_chats"] == ["chat-1"]
 
 
+# Runs the apply-update script twice (apply, then re-check) over a real git
+# repo, which exceeds the 10s default under a loaded parallel run. Same 120s
+# budget the restore-script tests below already take for the same reason.
+@pytest.mark.timeout(120)
 def test_apply_update_rolls_back_when_service_restart_fails(tmp_path: Path) -> None:
     repo = _make_workspace_repo(tmp_path)
     tag_newer_release_content(repo)
@@ -680,9 +707,12 @@ def _stub_bin_with_restic(
     tmp_path: Path,
     *,
     agents_json: str = '{"agents": [], "errors": []}',
+    restart_ok: bool = True,
     sync_ok: bool = True,
     list_ok: bool = True,
     supervisorctl_call_log: Path | None = None,
+    supervisorctl_status_lines: tuple[str, ...] | None = None,
+    supervisorctl_status_lines_after_restart: tuple[str, ...] | None = None,
     restic_script: str | None = None,
 ) -> Path:
     """The usual uv/supervisorctl stub dir, plus a restic on PATH.
@@ -695,9 +725,12 @@ def _stub_bin_with_restic(
     stub_bin = _make_stub_bin(
         tmp_path,
         agents_json=agents_json,
+        restart_ok=restart_ok,
         sync_ok=sync_ok,
         list_ok=list_ok,
         supervisorctl_call_log=supervisorctl_call_log,
+        supervisorctl_status_lines=supervisorctl_status_lines,
+        supervisorctl_status_lines_after_restart=supervisorctl_status_lines_after_restart,
     )
     restic_path = shutil.which(_get_restic_binary())
     assert restic_path is not None, "restic binary not found; run `pnpm build` in apps/minds/"
@@ -860,7 +893,7 @@ def test_restore_script_reports_failure_when_the_restored_tree_lacks_a_checkout(
     host, code, restic_repo = _make_restore_workspace(tmp_path)
     junk = (tmp_path / "junk").resolve()
     junk.mkdir()
-    (junk / "unrelated.txt").write_text("not a workspace\n")
+    (junk / "unrelated.txt").write_text("not a machine\n")
     _restic_for_test(restic_repo, "backup", str(junk))
     snapshot_id = _snapshot_entries(restic_repo)[0]["id"]
 
@@ -1214,3 +1247,166 @@ def test_restore_script_fails_cleanly_without_a_snapshot_subpath(tmp_path: Path)
     assert "--snapshot-subpath" in str(payload["detail"])
     # Nothing was mutated.
     assert (code / "file.txt").read_text() == "version 2\n"
+
+
+# --- post-restore verdict: the restore-critical tiered contract ---
+# (behaviors/backup-restore/restore-verdict.feature)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.witnesses("backup-restore.full-recovery")
+@pytest.mark.witnesses(
+    "backup-restore.restore-critical-set",
+    partial="only the all-healthy direction (verdict does not gate on the restart-all exit code); not the services-down clauses",
+)
+def test_restore_script_succeeds_when_restart_all_fails_but_services_recover(tmp_path: Path) -> None:
+    # `supervisorctl restart all` exits non-zero when ANY program fails to
+    # start immediately. That exit code must not decide the verdict: with
+    # every service healthy afterwards, the restore is a plain success.
+    host, code, restic_repo = _make_restore_workspace(tmp_path)
+    _restic_for_test(restic_repo, "backup", str(host))
+    snapshot_id = _snapshot_entries(restic_repo)[0]["id"]
+    healthy = (
+        "host-backup RUNNING pid 123, uptime 0:00:01",
+        "system_interface RUNNING pid 124, uptime 0:00:01",
+    )
+    stub_bin = _stub_bin_with_restic(
+        tmp_path,
+        restart_ok=False,
+        supervisorctl_status_lines=healthy,
+        supervisorctl_status_lines_after_restart=healthy,
+    )
+    run = _run_script(
+        code,
+        BACKUP_RESTORE_SCRIPT,
+        _restore_args(restic_repo, snapshot_id),
+        extra_path=stub_bin,
+        env_overrides={"MNGR_HOST_DIR": str(host)},
+    )
+    payload = extract_marker_json(run["stdout"], RESTORE_RESULT_MARKER)
+    assert payload is not None, run
+    assert payload["status"] == "ok", payload
+    assert payload["services_restarted"] is False
+    assert "services_down" not in payload
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.witnesses(
+    "backup-restore.restore-critical-set",
+    partial="one non-critical service (xvfb) down; not the 'however many services down' quantifier",
+)
+def test_restore_script_reports_non_critical_services_down_as_a_warning_not_failure(tmp_path: Path) -> None:
+    # A service outside the restore-critical set that does not come back --
+    # here the crash-looping xvfb, and equally the backup service itself --
+    # surfaces via services_down (the desktop maps it to a completion
+    # warning), never as a failed restore. The tiny
+    # --service-verify-timeout-seconds keeps the recovery wait, which polls
+    # to its deadline while any service is down, from holding the test for
+    # the production 60s.
+    host, code, restic_repo = _make_restore_workspace(tmp_path)
+    _restic_for_test(restic_repo, "backup", str(host))
+    snapshot_id = _snapshot_entries(restic_repo)[0]["id"]
+    roster = (
+        "host-backup RUNNING pid 123, uptime 0:00:01",
+        "system_interface RUNNING pid 124, uptime 0:00:01",
+        "xvfb BACKOFF Exited too quickly (process log may have details)",
+    )
+    stub_bin = _stub_bin_with_restic(
+        tmp_path,
+        restart_ok=False,
+        supervisorctl_status_lines=roster,
+        supervisorctl_status_lines_after_restart=roster,
+    )
+    run = _run_script(
+        code,
+        BACKUP_RESTORE_SCRIPT,
+        _restore_args(restic_repo, snapshot_id, extra=("--service-verify-timeout-seconds", "0.2")),
+        extra_path=stub_bin,
+        env_overrides={"MNGR_HOST_DIR": str(host)},
+    )
+    payload = extract_marker_json(run["stdout"], RESTORE_RESULT_MARKER)
+    assert payload is not None, run
+    assert payload["status"] == "ok", payload
+    assert payload["services_down"] == ["xvfb"]
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.witnesses("backup-restore.system-interface-down")
+@pytest.mark.witnesses(
+    "backup-restore.restore-critical-set",
+    partial="only the system-interface-down direction of the 'may not succeed while a restore-critical service is down' clause",
+)
+def test_restore_script_fails_when_a_restore_critical_service_does_not_come_back(tmp_path: Path) -> None:
+    # The restore-critical set decides the verdict: a workspace whose system
+    # interface does not come back cannot serve its user, so the operation
+    # fails and names it. The tiny --service-verify-timeout-seconds keeps the
+    # recovery wait from holding the test for the production 60s.
+    host, code, restic_repo = _make_restore_workspace(tmp_path)
+    _restic_for_test(restic_repo, "backup", str(host))
+    snapshot_id = _snapshot_entries(restic_repo)[0]["id"]
+    stub_bin = _stub_bin_with_restic(
+        tmp_path,
+        supervisorctl_status_lines=(
+            "host-backup RUNNING pid 123, uptime 0:00:01",
+            "system_interface RUNNING pid 124, uptime 0:00:01",
+        ),
+        supervisorctl_status_lines_after_restart=(
+            "host-backup RUNNING pid 123, uptime 0:00:01",
+            "system_interface BACKOFF Exited too quickly (process log may have details)",
+        ),
+    )
+    run = _run_script(
+        code,
+        BACKUP_RESTORE_SCRIPT,
+        _restore_args(restic_repo, snapshot_id, extra=("--service-verify-timeout-seconds", "0.2")),
+        extra_path=stub_bin,
+        env_overrides={"MNGR_HOST_DIR": str(host)},
+    )
+    payload = extract_marker_json(run["stdout"], RESTORE_RESULT_MARKER)
+    assert payload is not None, run
+    assert payload["status"] == "failed", payload
+    assert "restore-critical" in str(payload["detail"])
+    assert "system_interface (BACKOFF)" in str(payload["detail"])
+    # The data restore itself had already succeeded when the verification
+    # failed, so the payload still records it (and the safety snapshot).
+    assert payload["restored"] is True
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.witnesses("backup-restore.backup-service-down")
+@pytest.mark.witnesses(
+    "backup-restore.restore-critical-set",
+    partial="only the backup-service instance of the non-critical direction; not the 'however many services down' quantifier",
+)
+def test_restore_script_treats_the_backup_service_as_non_critical(tmp_path: Path) -> None:
+    # The backup service (host-backup) is deliberately outside the
+    # restore-critical set: a restore whose system interface came back but
+    # whose backup service did not is a success with a warning naming the
+    # backup service, never a failure. The tiny --service-verify-timeout-seconds
+    # keeps the recovery wait, which polls to its deadline while any service is
+    # down, from holding the test for the production 60s.
+    host, code, restic_repo = _make_restore_workspace(tmp_path)
+    _restic_for_test(restic_repo, "backup", str(host))
+    snapshot_id = _snapshot_entries(restic_repo)[0]["id"]
+    stub_bin = _stub_bin_with_restic(
+        tmp_path,
+        supervisorctl_status_lines=(
+            "host-backup RUNNING pid 123, uptime 0:00:01",
+            "system_interface RUNNING pid 124, uptime 0:00:01",
+        ),
+        supervisorctl_status_lines_after_restart=(
+            "host-backup BACKOFF Exited too quickly (process log may have details)",
+            "system_interface RUNNING pid 124, uptime 0:00:01",
+        ),
+    )
+    run = _run_script(
+        code,
+        BACKUP_RESTORE_SCRIPT,
+        _restore_args(restic_repo, snapshot_id, extra=("--service-verify-timeout-seconds", "0.2")),
+        extra_path=stub_bin,
+        env_overrides={"MNGR_HOST_DIR": str(host)},
+    )
+    payload = extract_marker_json(run["stdout"], RESTORE_RESULT_MARKER)
+    assert payload is not None, run
+    assert payload["status"] == "ok", payload
+    assert payload["services_down"] == ["host-backup"]

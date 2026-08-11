@@ -1,8 +1,8 @@
 """Tests for the desktop-side backup operation workers.
 
 The restore worker resolves its target snapshot from minds' own view of the
-repository before it touches the workspace, so these run against a real local
-restic repo and never need a reachable workspace.
+repository before it touches the machine, so these run against a real local
+restic repo and never need a reachable machine.
 """
 
 from datetime import datetime
@@ -18,6 +18,7 @@ from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
 from imbue.minds.desktop_client.backup_env_store import write_canonical_env
 from imbue.minds.desktop_client.backup_update import _resolve_restore_snapshot
 from imbue.minds.desktop_client.backup_update import _resolve_restore_subpath
+from imbue.minds.desktop_client.backup_update import _restore_completion_warnings
 from imbue.minds.desktop_client.backup_update import run_backup_restore_sequence
 from imbue.minds.desktop_client.testing import restic_backup_a_file
 from imbue.minds.desktop_client.workspace_operations import InMemoryWorkspaceOperationRegistry
@@ -158,7 +159,7 @@ def test_resolve_restore_subpath_rejects_a_snapshot_without_a_workspace(tmp_path
     _write_env_for_local_repo(paths, agent_id, repository)
     junk = (tmp_path / "junk").resolve()
     junk.mkdir()
-    (junk / "unrelated.txt").write_text("not a workspace\n")
+    (junk / "unrelated.txt").write_text("not a machine\n")
     _backup_tree(repository, junk)
 
     snapshot = _resolve_restore_snapshot(
@@ -173,3 +174,15 @@ def _only_snapshot_id(paths: WorkspacePaths, agent_id: AgentId) -> str:
     snapshots = backup_status.list_workspace_snapshots(paths, agent_id, parent_cg=None)
     assert len(snapshots) == 1
     return snapshots[0].snapshot_id
+
+
+def test_restore_completion_warnings_name_the_services_down() -> None:
+    # The restore script's services_down list (services outside the
+    # restore-critical set that did not come back) becomes a completion
+    # warning that names them; a payload without the list yields no warnings,
+    # keeping clean restores warning-free.
+    warnings = _restore_completion_warnings({"services_down": ["browser", "xvfb"]})
+    assert len(warnings) == 1
+    assert "browser, xvfb" in warnings[0]
+    assert _restore_completion_warnings({}) == []
+    assert _restore_completion_warnings({"services_down": []}) == []

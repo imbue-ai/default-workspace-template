@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.mngr.primitives import AgentId
@@ -21,21 +22,24 @@ from imbue.mngr_latchkey.agent_setup import ENV_LATCHKEY_DISABLE_COUNTING
 from imbue.mngr_latchkey.agent_setup import ENV_LATCHKEY_GATEWAY
 from imbue.mngr_latchkey.agent_setup import ENV_LATCHKEY_GATEWAY_PASSWORD
 from imbue.mngr_latchkey.agent_setup import ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE
-from imbue.mngr_latchkey.agent_setup import ENV_LATCHKEY_GATEWAY_SECONDARY
+from imbue.mngr_latchkey.agent_setup import LatchkeyGatewayLocation
 from imbue.mngr_latchkey.agent_setup import SECRET_LATCHKEY_ENV_VAR_NAMES
 from imbue.mngr_latchkey.agent_setup import _build_allowed_agent_anyof_entry
 from imbue.mngr_latchkey.agent_setup import _extract_agent_id_from_anyof_entry
 from imbue.mngr_latchkey.agent_setup import finalize_host_permissions
 from imbue.mngr_latchkey.agent_setup import maybe_recover_host_permissions_for_agent
 from imbue.mngr_latchkey.agent_setup import prepare_agent_latchkey
+from imbue.mngr_latchkey.agent_setup import reconcile_baseline_permissions
 from imbue.mngr_latchkey.agent_setup import register_agent_for_host
+from imbue.mngr_latchkey.baseline_permissions import AGENT_BASELINE_PERMISSIONS
 from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import LatchkeyError
 from imbue.mngr_latchkey.core import LatchkeyJwtMintError
-from imbue.mngr_latchkey.remote_gateway import INNER_PORT
+from imbue.mngr_latchkey.store import LatchkeyPermissionsConfig
 from imbue.mngr_latchkey.store import LatchkeyStoreError
 from imbue.mngr_latchkey.store import opaque_permissions_dir
 from imbue.mngr_latchkey.store import permissions_path_for_host
+from imbue.mngr_latchkey.store import save_permissions
 from imbue.mngr_latchkey.testing import FakeLatchkey
 from imbue.mngr_latchkey.testing import make_full_fake_latchkey
 
@@ -55,7 +59,6 @@ def test_secret_latchkey_env_var_names_are_exactly_password_and_jwt() -> None:
         {ENV_LATCHKEY_GATEWAY_PASSWORD, ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE}
     )
     assert ENV_LATCHKEY_GATEWAY not in SECRET_LATCHKEY_ENV_VAR_NAMES
-    assert ENV_LATCHKEY_GATEWAY_SECONDARY not in SECRET_LATCHKEY_ENV_VAR_NAMES
     assert ENV_LATCHKEY_DISABLE_COUNTING not in SECRET_LATCHKEY_ENV_VAR_NAMES
 
 
@@ -71,9 +74,7 @@ def test_prepare_no_latchkey_tunneled_returns_constant_url(tmp_path: Path) -> No
     """
     setup = prepare_agent_latchkey(None, is_tunneled=True)
     assert setup.env[ENV_LATCHKEY_GATEWAY] == f"http://127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}"
-    # Tunneled agents also get the secondary (per-VPS) gateway URL on a distinct port.
-    assert setup.env[ENV_LATCHKEY_GATEWAY_SECONDARY] == f"http://127.0.0.1:{INNER_PORT}"
-    assert INNER_PORT != AGENT_SIDE_LATCHKEY_PORT
+    assert set(setup.env) == {ENV_LATCHKEY_GATEWAY, ENV_LATCHKEY_DISABLE_COUNTING}
     assert setup.env[ENV_LATCHKEY_DISABLE_COUNTING] == "1"
     assert ENV_LATCHKEY_GATEWAY_PASSWORD not in setup.env
     assert ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE not in setup.env
@@ -95,7 +96,7 @@ def test_prepare_full_wiring_tunneled(tmp_path: Path) -> None:
     fake = _full_fake(tmp_path)
     setup = prepare_agent_latchkey(fake, is_tunneled=True)
     assert setup.env[ENV_LATCHKEY_GATEWAY] == f"http://127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}"
-    assert setup.env[ENV_LATCHKEY_GATEWAY_SECONDARY] == f"http://127.0.0.1:{INNER_PORT}"
+    assert "LATCHKEY_GATEWAY_SECONDARY" not in setup.env
     assert setup.env[ENV_LATCHKEY_GATEWAY_PASSWORD] == "hunter2"
     assert setup.env[ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE] == "header.payload.signature"
     assert setup.env[ENV_LATCHKEY_DISABLE_COUNTING] == "1"
@@ -129,9 +130,14 @@ def test_prepare_full_wiring_tunneled(tmp_path: Path) -> None:
                 "latchkey-self-read-available-permissions",
                 "minds-api-proxy-per-agent",
                 "minds-api-schema-read",
+                "minds-app-version-read",
+                "minds-api-timezone-read",
             ],
         },
     ]
+    # The baseline references the shared additional-services schemas file, so a
+    # granted custom scope resolves without inlining its schema per host.
+    assert on_disk["include"] == ["minds_shared_schemas.json"]
     schemas = on_disk["schemas"]
     # The report scope + permission both pin to a POST on the per-agent
     # ``/report`` path, so any agent's bug-report escalation is let through
@@ -190,6 +196,46 @@ def test_prepare_full_wiring_tunneled(tmp_path: Path) -> None:
         "method": {"const": "GET"},
         "path": {"const": "/minds-api-proxy/api/schema"},
     }
+    # Likewise the app's version, which a workspace's update-self flow reads
+    # unattended to cap how far it may upgrade. Pinned to the exact route so the
+    # baseline grant cannot reach the rest of ``/api/v1`` -- nor whatever app
+    # state a later route hangs off ``/app``.
+    assert schemas["minds-app-version-read"]["properties"] == {
+        "method": {"const": "GET"},
+        "path": {"const": "/minds-api-proxy/api/v1/app/version"},
+    }
+    # ... and the (non-agent-scoped) host timezone: a GET pinned to the proxy's
+    # inbound /api/v1/timezone path, so a workspace scheduler can always resolve
+    # the user's local time.
+    assert schemas["minds-api-timezone-read"]["properties"] == {
+        "method": {"const": "GET"},
+        "path": {"const": "/minds-api-proxy/api/v1/timezone"},
+    }
+
+
+def test_prepare_vps_gateway_omits_workspace_permissions_override(tmp_path: Path) -> None:
+    fake = _full_fake(tmp_path)
+    setup = prepare_agent_latchkey(
+        fake,
+        is_tunneled=True,
+        gateway_location=LatchkeyGatewayLocation.VPS,
+    )
+
+    assert setup.env[ENV_LATCHKEY_GATEWAY] == f"http://127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}"
+    assert setup.env[ENV_LATCHKEY_GATEWAY_PASSWORD] == "hunter2"
+    assert ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE not in setup.env
+    assert setup.opaque_permissions_path is not None
+    assert setup.opaque_permissions_path.exists()
+
+
+def test_prepare_vps_gateway_rejects_on_host_mode(tmp_path: Path) -> None:
+    fake = _full_fake(tmp_path)
+    with pytest.raises(LatchkeyError, match="requires a tunneled workspace"):
+        prepare_agent_latchkey(
+            fake,
+            is_tunneled=False,
+            gateway_location=LatchkeyGatewayLocation.VPS,
+        )
 
 
 def test_prepare_full_wiring_on_host_uses_live_port(tmp_path: Path) -> None:
@@ -198,8 +244,7 @@ def test_prepare_full_wiring_on_host_uses_live_port(tmp_path: Path) -> None:
     with ConcurrencyGroup(name="test-on-host-prepare") as cg:
         setup = prepare_agent_latchkey(fake, is_tunneled=False, concurrency_group=cg)
     assert setup.env[ENV_LATCHKEY_GATEWAY] == "http://127.0.0.1:55555"
-    # On-host (DEV) agents run on the gateway host itself -- no per-VPS secondary.
-    assert ENV_LATCHKEY_GATEWAY_SECONDARY not in setup.env
+    assert "LATCHKEY_GATEWAY_SECONDARY" not in setup.env
     assert setup.env[ENV_LATCHKEY_GATEWAY_PASSWORD] == "hunter2"
     assert setup.env[ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE] == "header.payload.signature"
 
@@ -486,6 +531,74 @@ def test_register_agent_for_host_preserves_other_grants(tmp_path: Path) -> None:
     assert rule_keys == ["minds-api-proxy-report", "minds-api-proxy-per-agent-unauthorized", "latchkey-self"]
 
 
+def test_register_agent_for_host_preserves_the_shared_schemas_include(tmp_path: Path) -> None:
+    """Registering an agent must not drop the host file's ``include``.
+
+    Regression test: rebuilding the config from ``rules``/``schemas`` alone
+    silently dropped ``include``, which points at the shared additional-services
+    schemas file. Losing it leaves any granted custom scope (e.g. ``claude-ai``)
+    referencing a schema detent can no longer resolve.
+    """
+    host_id = HostId.generate()
+    path = permissions_path_for_host(tmp_path, host_id)
+    # A host that already carries the include plus a granted custom scope.
+    save_permissions(
+        path,
+        LatchkeyPermissionsConfig(
+            rules=AGENT_BASELINE_PERMISSIONS.rules + ({"claude-ai": ["everything"]},),
+            schemas=AGENT_BASELINE_PERMISSIONS.schemas,
+            include=("minds_shared_schemas.json",),
+        ),
+    )
+
+    register_agent_for_host(tmp_path, host_id, AgentId.generate())
+
+    config = json.loads(path.read_text())
+    assert config["include"] == ["minds_shared_schemas.json"]
+    # The custom-scope grant survives too.
+    assert {"claude-ai": ["everything"]} in config["rules"]
+
+
+def test_register_agent_for_host_restores_a_missing_shared_schemas_include(tmp_path: Path) -> None:
+    """A host file that lost its include gets it back on the next registration.
+
+    The data-format migration only runs when the recorded version changes, so it
+    cannot repair a file stripped afterwards; registration is the self-heal point.
+    """
+    host_id = HostId.generate()
+    path = permissions_path_for_host(tmp_path, host_id)
+    # A host file in the damaged state: baseline rules/schemas but no include.
+    save_permissions(
+        path,
+        LatchkeyPermissionsConfig(
+            rules=AGENT_BASELINE_PERMISSIONS.rules,
+            schemas=AGENT_BASELINE_PERMISSIONS.schemas,
+        ),
+    )
+
+    register_agent_for_host(tmp_path, host_id, AgentId.generate())
+
+    assert json.loads(path.read_text())["include"] == ["minds_shared_schemas.json"]
+
+
+def test_register_agent_for_host_preserves_unrelated_includes(tmp_path: Path) -> None:
+    """Ensuring the baseline include does not clobber includes someone else added."""
+    host_id = HostId.generate()
+    path = permissions_path_for_host(tmp_path, host_id)
+    save_permissions(
+        path,
+        LatchkeyPermissionsConfig(
+            rules=AGENT_BASELINE_PERMISSIONS.rules,
+            schemas=AGENT_BASELINE_PERMISSIONS.schemas,
+            include=("some_other_config.json",),
+        ),
+    )
+
+    register_agent_for_host(tmp_path, host_id, AgentId.generate())
+
+    assert json.loads(path.read_text())["include"] == ["some_other_config.json", "minds_shared_schemas.json"]
+
+
 def test_register_agent_for_host_raises_when_anyof_was_hand_edited(tmp_path: Path) -> None:
     """A corrupted / hand-edited permissions file is not silently overwritten."""
     host_id = HostId.generate()
@@ -508,3 +621,111 @@ def test_register_agent_for_host_raises_when_anyof_was_hand_edited(tmp_path: Pat
 # ``workspace`` permission request's effect and spliced in on approval (see
 # ``permission_requests.mjs`` and its end-to-end tests). Nothing about it lives
 # in ``agent_setup`` anymore.
+
+
+# -- reconcile_baseline_permissions ------------------------------------------
+
+
+def _stale_host_config(*allowed_agent_ids: str) -> LatchkeyPermissionsConfig:
+    """A host file as an older build wrote it: gateway-self rule, no app-version grant.
+
+    ``allowed_agent_ids`` seed the per-host allowlist, so a caller can start from
+    a host whose agents are already registered.
+    """
+    any_of: list[JsonValue] = [_build_allowed_agent_anyof_entry(agent_id) for agent_id in allowed_agent_ids]
+    return LatchkeyPermissionsConfig(
+        rules=(
+            {"minds-api-proxy-per-agent-unauthorized": []},
+            {"latchkey-self": ["latchkey-self-read-self-permissions", "minds-api-schema-read"]},
+        ),
+        schemas={
+            "minds-api-proxy-per-agent-unauthorized": {
+                "properties": {"domain": {"const": "latchkey-self.invalid"}, "path": {"not": {"anyOf": any_of}}}
+            },
+            "latchkey-self-read-self-permissions": {"properties": {"method": {"const": "GET"}}},
+            "minds-api-schema-read": {"properties": {"method": {"const": "GET"}}},
+        },
+    )
+
+
+def test_reconcile_adds_missing_baseline_permissions_with_their_schemas() -> None:
+    reconciled = reconcile_baseline_permissions(_stale_host_config())
+
+    gateway_self = next(rule for rule in reconciled.rules if "latchkey-self" in rule)["latchkey-self"]
+    assert "minds-app-version-read" in gateway_self
+    # The schema rides along, pinned to the one route -- a permission name with no
+    # schema would be unresolvable at the gateway.
+    assert reconciled.schemas["minds-app-version-read"] == {
+        "properties": {
+            "method": {"const": "GET"},
+            "path": {"const": "/minds-api-proxy/api/v1/app/version"},
+        },
+        "required": ["method", "path"],
+    }
+    # Grants the older build already had are kept, in order, and other rules are
+    # untouched -- notably the per-host allowlist, which is not baseline state.
+    assert gateway_self[:2] == ["latchkey-self-read-self-permissions", "minds-api-schema-read"]
+    assert reconciled.rules[0] == {"minds-api-proxy-per-agent-unauthorized": []}
+
+
+def test_reconcile_is_a_noop_on_an_already_current_file() -> None:
+    current = reconcile_baseline_permissions(_stale_host_config())
+    assert reconcile_baseline_permissions(current) == current
+
+
+def test_reconcile_does_not_invent_a_gateway_self_rule_but_still_heals_the_include() -> None:
+    """A file with no gateway-self rule gets its include healed and nothing else.
+
+    Inventing the rule would grant far more than reconciliation is about. The
+    include is a different matter: it is not a grant, and a missing one makes
+    detent fail the whole permission check for the host, so it is healed on every
+    path.
+    """
+    config = LatchkeyPermissionsConfig(rules=({"slack-api": ["slack-read-all"]},), schemas={})
+    reconciled = reconcile_baseline_permissions(config)
+    assert reconciled.rules == config.rules
+    assert reconciled.schemas == config.schemas
+    assert reconciled.include == AGENT_BASELINE_PERMISSIONS.include
+
+
+def test_register_backfills_the_baseline_for_an_already_registered_agent(tmp_path: Path) -> None:
+    """The path that matters: an existing host whose agents are already registered.
+
+    This is how a newly added baseline permission reaches hosts created by an
+    older build.
+    """
+    host_id = HostId.generate()
+    agent_id = AgentId.generate()
+    stale = _stale_host_config(str(agent_id))
+    path = permissions_path_for_host(tmp_path, host_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(stale.model_dump_json())
+
+    register_agent_for_host(tmp_path, host_id, agent_id)
+
+    written = json.loads(path.read_text())
+    gateway_self = next(rule for rule in written["rules"] if "latchkey-self" in rule)["latchkey-self"]
+    assert "minds-app-version-read" in gateway_self
+    # The agent was already listed, so the allowlist must not have grown.
+    assert len(written["schemas"]["minds-api-proxy-per-agent-unauthorized"]["properties"]["path"]["not"]["anyOf"]) == 1
+
+
+def test_register_heals_a_missing_include_for_an_already_registered_agent(tmp_path: Path) -> None:
+    """An old host file lacking the shared-schemas include is healed on the early-return path too.
+
+    Without it a granted custom scope references an unresolvable schema, and
+    detent fails the whole permission check for that host rather than just that
+    rule.
+    """
+    host_id = HostId.generate()
+    agent_id = AgentId.generate()
+    stale = _stale_host_config(str(agent_id))
+    assert stale.include == (), "fixture must start without the include for this to test anything"
+    path = permissions_path_for_host(tmp_path, host_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(stale.model_dump_json())
+
+    register_agent_for_host(tmp_path, host_id, agent_id)
+
+    written = json.loads(path.read_text())
+    assert written["include"] == list(AGENT_BASELINE_PERMISSIONS.include)

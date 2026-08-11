@@ -5,10 +5,18 @@ Minds-managed agents access third-party services (Slack, GitHub, Google Drive,
 describes how the desktop client surfaces permission decisions to the user
 and how the agent receives the answer.
 
+Every workspace sees exactly one gateway at the same loopback URL. Local
+workspaces use the desktop-resident gateway. Remote workspaces use the
+VPS-resident gateway for third-party calls; its bundled forwarding extension
+proxies `/permissions`, `/permission-requests`, and `/minds-api-proxy` requests
+back to the desktop gateway over an SSH tunnel. This keeps the permission queue,
+permissions files, and Minds API on the user's computer without requiring a
+second gateway URL or a different agent skill.
+
 ## End-to-end flow
 
 1. **Agent makes a call.** The agent issues an HTTP request to the
-   minds-managed shared `latchkey gateway` (or to `latchkey curl`
+   workspace's minds-managed `latchkey gateway` (or to `latchkey curl`
    directly). The agent's environment carries the gateway URL, a shared
    password (sent in `X-Latchkey-Gateway-Password`) and a permissions
    override JWT (sent in `X-Latchkey-Gateway-Permissions-Override`) that
@@ -81,7 +89,9 @@ and how the agent receives the answer.
      there before approving.
 6. **User approves.** The desktop client:
    1. Runs `latchkey services info <service>` to read `credentialStatus`,
-      `authOptions`, and `setCredentialsExample`.
+      `authOptions`, and `setCredentialsExample` (the same call that
+      rendered the dialog's account picker and, for a service with no
+      browser sign-in, its credential form).
    2. If credentials are not `valid` and the service advertises a
       `browser` auth option (or latchkey reports no `authOptions` at all,
       treated as the legacy fallback), runs `latchkey auth browser <service>`
@@ -93,12 +103,11 @@ and how the agent receives the answer.
       user can click Approve again to retry. A failed approval is never
       recorded as a denial.
    3. If credentials are not `valid` and the service does not advertise a
-      `browser` auth option (e.g. Coolify, where `authOptions = ["set"]`),
-      the grant is **refused** and the request stays pending. The dialog
-      shows the `setCredentialsExample` returned by latchkey (or a
-      generic fallback) and asks the user to run it in a terminal. A
-      subsequent Approve click re-runs `latchkey services info` and
-      proceeds normally once credentials are valid.
+      `browser` auth option (e.g. AWS or Coolify, where `authOptions =
+      ["set"]`), the grant is **refused for now** and the request stays
+      pending while the dialog collects the credentials (see
+      [Manual credential entry](#manual-credential-entry) below). Minds
+      never asks the user to open a terminal.
    4. Atomically rewrites the agent's `latchkey_permissions.json` so the gateway
       enforces the chosen schemas on the next request.
    5. On success, appends a `GRANTED` response event to
@@ -111,6 +120,75 @@ and how the agent receives the answer.
 7. **User denies.** The desktop client appends a `DENIED` response event
    and sends the agent a plain-English denial message. `latchkey_permissions.json`
    is not touched.
+
+## Manual credential entry
+
+A service latchkey cannot sign in to through a browser advertises an
+example of the command that stores its credentials, with each value the
+user has to supply written as an angle-bracketed placeholder -- e.g.
+`latchkey auth set-nocurl aws <access-key-id> <secret-access-key>`. Minds
+parses that example (`imbue.mngr_latchkey.credential_commands`) and turns
+it into **one labeled input per placeholder**, which the detail payload
+carries (`manual_credentials`) so the dialog renders the form at the top
+immediately -- no first Approve needed to discover that credentials are
+required. Approve then substitutes the typed values, runs the command
+itself with `--account <selected account>` (a global latchkey option, so
+it precedes the subcommand) and Minds' own `LATCHKEY_DIRECTORY`, re-reads
+`latchkey services info`, and continues the grant. One click, no terminal,
+and the credentials land in the store the desktop client actually reads.
+
+Details worth knowing:
+
+* The command itself is **never shown**: it is an implementation detail,
+  and the user only ever sees the values it needs. It is built as an argv
+  list (no shell), so a pasted value is never re-interpreted, and the
+  filled-in argv is never logged.
+
+* The form belongs to the *selected account*: each account choice carries
+  `is_credential_setup_needed`, so switching from a not-yet-connected
+  account to a working one hides the form (and re-enables Approve) without
+  a round trip. Approve stays disabled while any input is empty.
+
+* The account the credentials are stored under is the one the dialog's
+  account radio selects. "Connect" (a service with no accounts yet)
+  resolves to latchkey's unnamed default account; "Use a new account" on a
+  service that already has one also asks for an **account name**
+  (`is_account_name_needed`), since a manual connection cannot discover it
+  the way a browser sign-in does.
+
+* Two different things can go wrong, and they read differently:
+
+  * The value is **malformed** -- the service's own shape check rejects it
+    (`latchkey auth set-nocurl` exits non-zero, e.g. "doesn't look like an
+    AWS access key ID"). Its explanation is surfaced verbatim, minus the
+    usage lines latchkey appends: those either restate a terminal command
+    Minds never shows or, for AWS, print the bare `<access-key-id>`
+    placeholder as the "example", which is worse than nothing next to an
+    input already labelled that way. `describe_credential_command_failure`
+    does that trimming (and caps a crash dump).
+
+  * The value is **well-formed but wrong** -- mistyped within the accepted
+    shape, or revoked, rotated or expired. `auth set` only validates the
+    shape, so these store fine and only fail when latchkey actually calls
+    the service. Minds therefore re-reads the *online* `services info`
+    after storing and refuses to grant unless the account's credentials
+    come back usable. Note that a service Minds cannot reach reads the same
+    way (latchkey reports any failed check as `invalid`), so the message
+    names that possibility too. The credentials stay stored either way, so
+    a later Approve re-checks them.
+
+  In both cases the form comes back with the typed values intact and the
+  reason in place of its instruction -- as the design system's `error`
+  `Notice` (red, `role="alert"`), and scrolled into view with the smallest
+  movement that shows it, since the form sits above a permission list that
+  can leave it off-screen from where the Approve button is. The scroll is
+  handed out once per failed approval, so later redraws never fight the
+  user's own scrolling. An outright `FAILED` approval (a browser sign-in
+  that did not complete) gets the same treatment on its own notice.
+
+* If the example has no `<placeholder>` at all (or is not a latchkey
+  invocation), there is nothing to ask for: the dialog shows that as an
+  error and offers **no Approve button**, leaving Deny as the only action.
 
 ## Per-agent isolation
 
@@ -127,16 +205,15 @@ latchkey 2.8.0 features:
   hard-coded sentinel path and SHA-256-hashes the resulting JWT. That
   way the password is stable across desktop-client restarts without
   minds having to persist it in plaintext anywhere.
-* **Per-agent permission overrides.** When an agent is created, minds
-  allocates an opaque
-  `~/.minds/latchkey/permissions/<uuid>.json` handle, materializes it
-  with empty `rules` (deny-all baseline), and mints a
-  permissions-override JWT pointing at that path via
-  `latchkey gateway create-jwt`. The JWT is injected into the agent's
-  environment as `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE` *at*
-  `mngr create` *time*, so the agent's first ever `latchkey` call
-  already carries it in the
-  `X-Latchkey-Gateway-Permissions-Override` header.
+* **Per-agent permissions.** When an agent is created, minds allocates an
+  opaque `~/.minds/latchkey/permissions/<uuid>.json` handle and materializes it
+  with the deny-by-default baseline. For a desktop-gateway workspace, minds
+  mints a permissions-override JWT pointing at that handle and injects it as
+  `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE` at `mngr create` time. For a
+  VPS-gateway workspace, the environment omits that override: native requests
+  use the VPS gateway's synchronized default `~/.latchkey/permissions.json`.
+  Its desktop-forwarding extension holds a separate desktop-target JWT and
+  replaces the override header only on requests it forwards.
 
   After `mngr create` returns the canonical agent id, minds replaces
   the opaque file with a symlink pointing at
@@ -166,6 +243,33 @@ every forwarded request, overwriting any header the agent supplied.
 The desktop client matches the same value on the inbound side. The
 key rotates per minds startup; nothing else in the monorepo reads it
 from disk, so there is no on-disk copy to keep in sync.
+
+Three routes are *not* agent-scoped and are granted to every agent by the
+baseline, because they are identical for all callers and carry no
+per-workspace data: `GET /minds-api-proxy/api/schema` (the OpenAPI
+description of the reachable surface), `GET
+/minds-api-proxy/api/v1/timezone` (the IANA timezone of the machine the
+desktop client runs on), and `GET /minds-api-proxy/api/v1/app/version`
+(the newest workspace-template ref the app supports, which for a released
+binary is also its own release tag). That last one is what a workspace's
+`update-self` caps itself against, so it does not pull a template newer
+than the app driving it. Note that this is self-imposed by the workspace,
+not enforced here: nothing stops an agent that skips `resolve-target`, or
+a user running `git merge` by hand. The threat model is a workspace
+breaking itself by accident, not a hostile one. It is baseline-granted
+rather than must-ask because update-self resolves its target from a
+background worker, where a permission dialog has nobody to answer it.
+Each of the three is pinned by `const` to its exact method and path, so
+none of them widens to the rest of `/api/v1` -- note in particular that
+the app grant pins `/app/version` and not `/app`, so it cannot widen to
+whatever app state a later route hangs off that prefix.
+Existing hosts pick a newly-added baseline grant up through
+`reconcile_baseline_permissions`, which `register_agent_for_host` applies
+whenever it registers a discovered agent -- a baseline addition alone
+would otherwise only reach newly-created workspaces. Auto-registration
+de-dupes per `(host, agent)` pair for the life of the process, so a
+baseline addition lands on the first discovery after the app restarts,
+not mid-run.
 
 Per-agent isolation comes from the latchkey gateway's permissions
 file. The agent baseline grants every agent one shared call --
@@ -197,12 +301,12 @@ Minds exposes a cross-workspace management API (`/api/v1/workspaces/...`)
 that lets an agent in one workspace act on *other* workspaces -- listing,
 reading detail/version/backups, creating, destroying, starting/stopping,
 exporting and managing backups, establishing SSH access, updating settings,
-recovering (health check / restart), and managing service sharing. It is
+and recovering (health check / restart). It is
 reached through the same `minds-api-proxy` extension and gated by a single
 `minds-workspaces` detent scope with one named permission per verb
 (`minds-workspaces-read`, `-create`, `-destroy`, `-lifecycle`,
-`-backups-export`, `-backups-manage`, `-ssh`, `-update`, `-recover`,
-`-sharing`). Nothing is
+`-backups-export`, `-backups-manage`, `-ssh`, `-update`,
+`-recover`). Nothing is
 pre-granted, so an agent's first cross-workspace call gets a 403 until the
 user approves; the scope and verb schemas are not part of the agent baseline
 at all -- they arrive, fully self-described, with the grant (see below).
@@ -221,7 +325,7 @@ The verbs split on a **target axis**:
   workspace (listing does not leak per-target data, and create takes no
   target).
 * `destroy`, `lifecycle`, `backups-export`, `backups-manage`, `ssh`,
-  `update`, `recover`, and `sharing` are *target-scoped*.
+  `update`, and `recover` are *target-scoped*.
   A "selected" grant for one of these verbs mints a **uniquely-named
   per-target permission schema** (`minds-workspaces-<verb>-<target_id>`)
   whose path pins that single workspace; an "all workspaces" grant uses
@@ -269,10 +373,48 @@ Each entry has the shape:
   dialog never pre-checks it, but the user can opt into it explicitly.
 
 The minds desktop client caches the response in-process on first access
-so each request renders without re-fetching. To add a new service,
-edit `services.json` in the gateway extension package (see its README).
-Schemas must already exist in detent; minds does not register custom
-schemas.
+so each request renders without re-fetching. To add a new builtin
+service, edit `services.json` in the gateway extension package (see its
+README); those schemas must already exist in detent.
+
+## Additional (custom) services
+
+Beyond detent's builtin catalog, minds ships a small hardcoded list of
+*additional* services in
+[`libs/mngr_latchkey/imbue/mngr_latchkey/additional_services.json`](../../../libs/mngr_latchkey/imbue/mngr_latchkey/additional_services.json).
+Their catalog entries are folded into `services.json` by that package's
+generator, so the dialog and the gateway extensions treat them exactly like a
+builtin service. These are third-party services minds supports itself, using
+two latchkey features:
+
+* **Registration.** At gateway bring-up, `Latchkey.initialize()` runs
+  `latchkey services register <name> --base-api-url <url>` for each
+  additional service (skipping any already registered, since that command
+  is not idempotent), so latchkey can inject the user's stored credentials
+  for the service's domain.
+* **Self-shipped detent schemas, referenced via `include`.** A custom scope
+  is not one of detent's builtin schemas, so each additional service ships
+  its own scope schema (matching the service domain) plus a permission
+  schema. Rather than inlining those schemas into every host's
+  `latchkey_permissions.json`, minds materializes them **once** into a
+  shared `minds_shared_schemas.json` file and has every per-host file
+  reference it through detent's [`include`](https://github.com/imbue-ai/detent)
+  directive. Granting an additional-service scope is then a plain rule
+  write (no schema injection); detent resolves the scope's schema from the
+  shared include. The include is a bare relative name, which detent resolves
+  relative to the referencing file's directory -- so the same host file
+  works both on the desktop (where the shared file lives in the gateway's
+  opaque-handle directory) and on a VPS (where it is shipped next to the
+  host's `~/.latchkey/permissions.json`).
+
+Additional services are merged into the same catalog the dialog reads, so
+they appear and are granted exactly like builtin ones. The seed entry is
+`claude.ai`, which exposes a single `everything` permission (full access
+to the `claude.ai` domain). Because registered services support only
+static-argument credentials, authenticating one is a manual
+`latchkey auth set <name> -H "..."` (the browser sign-in flow does not
+apply); granting the permission and supplying credentials are independent
+steps.
 
 ## Connectors and accounts (Settings page)
 
@@ -294,6 +436,15 @@ Two per-service actions manage accounts:
   Google OAuth service, if signing in with the official Minds client does
   not succeed, it always falls back to a fresh `auth browser-prepare`
   self-setup step and retries.
+
+  Because the action *is* that sign-in, it is **disabled** for a service
+  that has no browser flow (`is_browser_sign_in_supported`, resolved per
+  listed service with one `latchkey services info <service> --offline`
+  call -- all of them probed on a thread each, so the page's wall time
+  does not grow with the number of connectors), with the reason on hover,
+  instead of failing with an error after the click. Such a service is connected from a permission dialog, which
+  asks for its credentials directly (see
+  [Manual credential entry](#manual-credential-entry)).
 * **Disconnect** clears one account's stored credentials
   (`latchkey auth clear <service> --account <account>`). Disconnecting the
   *last* account for a service also runs the per-service "revoke all"

@@ -8,6 +8,8 @@ file covers minds' command-building and helpers.
 """
 
 import json
+import os
+import shutil
 import subprocess
 import threading
 import time
@@ -31,6 +33,8 @@ from imbue.minds.desktop_client.agent_creator import CREATE_ATTEMPT_LOG_REPLAY_M
 from imbue.minds.desktop_client.agent_creator import CreateAttemptErrorKind
 from imbue.minds.desktop_client.agent_creator import CreateAttemptLogSink
 from imbue.minds.desktop_client.agent_creator import LOG_SENTINEL
+from imbue.minds.desktop_client.agent_creator import ORPHANED_SCRATCH_CLONE_AGE_SECONDS
+from imbue.minds.desktop_client.agent_creator import SCRATCH_CLONE_DIR_PREFIX
 from imbue.minds.desktop_client.agent_creator import _CreateEventCapture
 from imbue.minds.desktop_client.agent_creator import _build_mngr_create_command
 from imbue.minds.desktop_client.agent_creator import _is_git_worktree
@@ -44,9 +48,12 @@ from imbue.minds.desktop_client.agent_creator import checkout_existing_branch
 from imbue.minds.desktop_client.agent_creator import classify_create_attempt_error
 from imbue.minds.desktop_client.agent_creator import clone_git_repo
 from imbue.minds.desktop_client.agent_creator import extract_repo_name
+from imbue.minds.desktop_client.agent_creator import latchkey_gateway_location_for_launch
+from imbue.minds.desktop_client.agent_creator import make_scratch_clone_root
 from imbue.minds.desktop_client.agent_creator import probe_workspace_through_plugin
 from imbue.minds.desktop_client.agent_creator import provider_instance_name_for_launch
 from imbue.minds.desktop_client.agent_creator import run_mngr_aws_prepare
+from imbue.minds.desktop_client.agent_creator import sweep_orphaned_scratch_clones
 from imbue.minds.desktop_client.backup_provisioning import BackupSetupRequest
 from imbue.minds.desktop_client.conftest import FAKE_CONNECTOR_URL
 from imbue.minds.desktop_client.conftest import RecordingImbueCloudCli
@@ -71,10 +78,13 @@ from imbue.minds.primitives import GitUrl
 from imbue.minds.primitives import LaunchMode
 from imbue.minds.utils.secret_redaction import redact_secret_env_assignments
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.git_utils import GIT_MIRROR_PUSH_REFSPECS
+from imbue.mngr_forward.testing import make_in_memory_test_ca
 from imbue.mngr_forward.tls import build_server_ssl_context
-from imbue.mngr_forward.tls import generate_self_signed_cert
+from imbue.mngr_forward.tls import generate_server_credentials
+from imbue.mngr_latchkey.agent_setup import LatchkeyGatewayLocation
 from imbue.mngr_latchkey.agent_setup import SECRET_LATCHKEY_ENV_VAR_NAMES
 
 
@@ -341,10 +351,25 @@ def test_build_mngr_create_command_omits_prebaked_image_override_when_unset() ->
     assert "default_image_url" not in " ".join(command)
 
 
+def test_build_mngr_create_command_stacks_modal_overlay_template_from_env(monkeypatch) -> None:
+    """A MODAL create stacks the overlay template named in ``MINDS_MODAL_EXTRA_TEMPLATE`` on top of
+    ``modal`` (mirroring ``docker_runsc`` on ``docker``); the eval harness uses this for ``modal_eval``."""
+    monkeypatch.setenv("MINDS_MODAL_EXTRA_TEMPLATE", "modal_eval")
+    joined = " ".join(_build_mngr_create_command(launch_mode=LaunchMode.MODAL, host_name=HostName("hello")))
+    assert "--template main --template modal --template modal_eval" in joined
+
+
+def test_build_mngr_create_command_modal_has_no_overlay_when_env_unset(monkeypatch) -> None:
+    monkeypatch.delenv("MINDS_MODAL_EXTRA_TEMPLATE", raising=False)
+    joined = " ".join(_build_mngr_create_command(launch_mode=LaunchMode.MODAL, host_name=HostName("hello")))
+    assert "--template main --template modal" in joined
+    assert "modal_eval" not in joined
+
+
 def test_build_mngr_create_command_stamps_original_minds_version_label() -> None:
     """The resolved template ref is stamped as an immutable
     ``original_minds_version`` label so the version API can report what
-    version the workspace was created at even when it is offline."""
+    version the machine was created at even when it is offline."""
     command = _build_mngr_create_command(
         launch_mode=LaunchMode.DOCKER,
         host_name=HostName("hello"),
@@ -365,8 +390,8 @@ def test_build_mngr_create_command_omits_version_label_when_unset() -> None:
 
 def test_build_mngr_create_command_stamps_original_branch_label() -> None:
     """The create-time branch/tag is stamped as an immutable ``original_branch``
-    label so the workspace detail API can report which branch it was created
-    from even when the workspace is offline."""
+    label so the machine detail API can report which branch it was created
+    from even when the machine is offline."""
     command = _build_mngr_create_command(
         launch_mode=LaunchMode.DOCKER,
         host_name=HostName("hello"),
@@ -511,6 +536,25 @@ def test_provider_instance_name_for_launch_local_backends() -> None:
     assert provider_instance_name_for_launch(LaunchMode.VULTR) == "vultr"
 
 
+@pytest.mark.parametrize("launch_mode", [LaunchMode.DOCKER, LaunchMode.LIMA, LaunchMode.MODAL])
+def test_latchkey_gateway_location_for_launch_uses_desktop(launch_mode: LaunchMode) -> None:
+    assert latchkey_gateway_location_for_launch(launch_mode) is LatchkeyGatewayLocation.DESKTOP
+
+
+@pytest.mark.parametrize(
+    "launch_mode",
+    [
+        LaunchMode.VULTR,
+        LaunchMode.IMBUE_CLOUD,
+        LaunchMode.AWS,
+        LaunchMode.GCP,
+        LaunchMode.AZURE,
+    ],
+)
+def test_latchkey_gateway_location_for_launch_uses_vps(launch_mode: LaunchMode) -> None:
+    assert latchkey_gateway_location_for_launch(launch_mode) is LatchkeyGatewayLocation.VPS
+
+
 def test_provider_instance_name_for_launch_aws_uses_cloud_account() -> None:
     """AWS resolves only through a bring-your-own-key account block name."""
     assert (
@@ -648,7 +692,7 @@ def test_build_mngr_create_command_non_imbue_cloud_passes_new_host_without_reuse
 
     mngr's ``--reuse`` matches on agent name only (``system-services``
     here) without scoping to a host, so passing it from the create-form
-    would adopt the wrong host's agent whenever any other workspace
+    would adopt the wrong host's agent whenever any other machine
     shared the constant agent name. ``--new-host`` already encodes
     fresh-host intent; ``--reuse`` is reserved for IMBUE_CLOUD where the
     pool host comes pre-baked with a ``system-services`` agent.
@@ -1120,9 +1164,10 @@ def _start_scripted_server(not_ready_count: int) -> tuple[HTTPServer, threading.
     # The readiness probe dials the proxy over https (minds always runs it with
     # HTTP/2), so the stand-in server must speak TLS to match -- otherwise the
     # probe's TLS handshake fails against a plain-HTTP socket. Reuse the proxy's
-    # own self-signed cert helpers so the test exercises the real https path.
-    cert_pem, key_pem = generate_self_signed_cert()
-    ssl_context = build_server_ssl_context(cert_pem, key_pem)
+    # own CA-backed cert helpers so the test exercises the real https path.
+    ca = make_in_memory_test_ca()
+    chain_pem, key_pem = generate_server_credentials(ca)
+    ssl_context = build_server_ssl_context(chain_pem, key_pem, ca)
     server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1163,8 +1208,9 @@ def test_wait_for_workspace_ready_short_circuits_when_disabled(tmp_path) -> None
     creator = _make_test_creator(tmp_path, mngr_forward_port=0, preauth_cookie="anything")
     log_sink = CreateAttemptLogSink()
     aid = AgentId.generate()
+    host_id = HostId.generate()
     started = time.monotonic()
-    creator._wait_for_workspace_ready(aid, log_sink, creator.workspace_ready_timeout_seconds)
+    creator._wait_for_workspace_ready(aid, host_id, log_sink, creator.workspace_ready_timeout_seconds)
     # Returns immediately -- no network calls, no log lines.
     assert time.monotonic() - started < 0.1
     assert log_sink.appended_line_count == 0
@@ -1175,8 +1221,9 @@ def test_wait_for_workspace_ready_short_circuits_when_no_preauth(tmp_path) -> No
     creator = _make_test_creator(tmp_path, mngr_forward_port=8421, preauth_cookie="")
     log_sink = CreateAttemptLogSink()
     aid = AgentId.generate()
+    host_id = HostId.generate()
     started = time.monotonic()
-    creator._wait_for_workspace_ready(aid, log_sink, creator.workspace_ready_timeout_seconds)
+    creator._wait_for_workspace_ready(aid, host_id, log_sink, creator.workspace_ready_timeout_seconds)
     assert time.monotonic() - started < 0.1
     assert log_sink.appended_line_count == 0
 
@@ -1199,7 +1246,7 @@ def test_wait_for_workspace_ready_returns_when_probe_succeeds(tmp_path) -> None:
         # answers it without any ``*.localhost`` name resolution. Construct a
         # plausible-looking AgentId so the Host header is well-formed.
         aid = AgentId.generate()
-        creator._wait_for_workspace_ready(aid, log_sink, creator.workspace_ready_timeout_seconds)
+        creator._wait_for_workspace_ready(aid, HostId.generate(), log_sink, creator.workspace_ready_timeout_seconds)
     finally:
         server.shutdown()
     drained = list(log_sink.read_chunk(0, timeout_seconds=0.0).lines)
@@ -1238,7 +1285,9 @@ def test_wait_for_workspace_ready_calls_record_probe_success_on_ready(tmp_path) 
             probe_timeout_seconds=0.5,
             system_interface_health_tracker=tracker,
         )
-        creator._wait_for_workspace_ready(aid, CreateAttemptLogSink(), creator.workspace_ready_timeout_seconds)
+        creator._wait_for_workspace_ready(
+            aid, HostId.generate(), CreateAttemptLogSink(), creator.workspace_ready_timeout_seconds
+        )
     finally:
         server.shutdown()
     # ``record_probe_success`` de-enrolled the agent, so it is no longer a
@@ -1252,7 +1301,7 @@ def test_probe_workspace_through_plugin_targets_root_path() -> None:
     """The probe hits ``/``, carrying the agent vhost in the Host header.
 
     Probing ``/`` deliberately decouples readiness from any particular app
-    running inside the workspace: a 200 only confirms that some web server is
+    running inside the machine: a 200 only confirms that some web server is
     answering on the inner port, with no assumption about which routes it
     implements.
     """
@@ -1262,12 +1311,12 @@ def test_probe_workspace_through_plugin_targets_root_path() -> None:
         captured.append(request)
         return httpx.Response(200, text="ok")
 
-    aid = AgentId.generate()
+    host_id = HostId.generate()
     with httpx.Client(transport=httpx.MockTransport(_capture)) as client:
         status = probe_workspace_through_plugin(
             mngr_forward_port=18999,
             preauth_cookie="any-preauth",
-            agent_id=aid,
+            workspace_host_id=str(host_id),
             probe_timeout_seconds=0.5,
             client=client,
         )
@@ -1275,9 +1324,9 @@ def test_probe_workspace_through_plugin_targets_root_path() -> None:
     assert status == 200
     assert len(captured) == 1
     assert captured[0].url.path == "/"
-    # The agent vhost rides the Host header, not the URL host, so the probe
-    # does not depend on ``*.localhost`` resolution.
-    assert captured[0].headers["host"] == f"{aid}.localhost"
+    # The workspace vhost rides the Host header, not the URL host, so the
+    # probe does not depend on ``*.localhost`` resolution.
+    assert captured[0].headers["host"] == f"{host_id}.localhost"
 
 
 def test_probe_workspace_through_plugin_surfaces_non_200_status() -> None:
@@ -1285,7 +1334,7 @@ def test_probe_workspace_through_plugin_surfaces_non_200_status() -> None:
 
     When the inner port answers but not with a 200 (e.g. a 503 while the server
     is still warming up), the probe returns that status so the caller's
-    ``== 200`` check treats the workspace as unready and the background loop
+    ``== 200`` check treats the machine as unready and the background loop
     records a probe failure, driving the agent toward STUCK.
     """
 
@@ -1297,7 +1346,7 @@ def test_probe_workspace_through_plugin_surfaces_non_200_status() -> None:
         status = probe_workspace_through_plugin(
             mngr_forward_port=18999,
             preauth_cookie="any-preauth",
-            agent_id=AgentId.generate(),
+            workspace_host_id=str(HostId.generate()),
             probe_timeout_seconds=0.5,
             client=client,
         )
@@ -1322,7 +1371,7 @@ def test_probe_workspace_uses_https_scheme() -> None:
         probe_workspace_through_plugin(
             mngr_forward_port=18999,
             preauth_cookie="any-preauth",
-            agent_id=AgentId.generate(),
+            workspace_host_id=str(HostId.generate()),
             probe_timeout_seconds=0.5,
             client=client,
         )
@@ -1332,11 +1381,11 @@ def test_probe_workspace_uses_https_scheme() -> None:
 
 
 def test_build_redirect_url_uses_https_scheme(tmp_path) -> None:
-    """The /goto redirect URL the UI navigates to uses the proxy's https scheme."""
+    """The /goto redirect URL the UI navigates to uses the proxy's https scheme and the host id."""
     creator = _make_test_creator(tmp_path, mngr_forward_port=8421)
-    aid = AgentId.generate()
-    url = creator._build_redirect_url(aid)
-    assert url == f"https://localhost:8421/goto/{aid}/"
+    host_id = HostId.generate()
+    url = creator._build_redirect_url(host_id)
+    assert url == f"https://localhost:8421/goto/{host_id}/"
 
 
 def test_wait_for_workspace_ready_publishes_anyway_on_timeout(tmp_path) -> None:
@@ -1354,7 +1403,7 @@ def test_wait_for_workspace_ready_publishes_anyway_on_timeout(tmp_path) -> None:
         log_sink = CreateAttemptLogSink()
         aid = AgentId.generate()
         started = time.monotonic()
-        creator._wait_for_workspace_ready(aid, log_sink, creator.workspace_ready_timeout_seconds)
+        creator._wait_for_workspace_ready(aid, HostId.generate(), log_sink, creator.workspace_ready_timeout_seconds)
         elapsed = time.monotonic() - started
     finally:
         server.shutdown()
@@ -1418,7 +1467,7 @@ def _wait_until_finished(
 def test_start_create_attempt_never_mints_a_litellm_key(tmp_path: Path) -> None:
     """CreateAttempt injects no Anthropic credentials: even with an imbue_cloud
     account supplied (for compute/backups), no LiteLLM key is minted -- the
-    workspace signs in through its own modal after boot."""
+    machine signs in through its own modal after boot."""
     cli = RecordingImbueCloudCli(
         connector_url=FAKE_CONNECTOR_URL,
     )
@@ -1501,6 +1550,21 @@ def test_checkout_existing_branch_raises_for_missing_branch(tmp_path: Path) -> N
         checkout_existing_branch(dest, GitBranch("no-such-branch-55307"))
 
     assert "no-such-branch-55307" in str(excinfo.value)
+
+
+def test_build_mngr_create_command_forwards_extra_pass_host_env(monkeypatch) -> None:
+    """MINDS_EXTRA_PASS_HOST_ENV (space-separated var names) becomes one --pass-host-env per name, so a
+    creating host (e.g. the eval box) can push env vars onto every machine it creates."""
+    monkeypatch.setenv("MINDS_EXTRA_PASS_HOST_ENV", "FEATURE_X FEATURE_Y")
+    joined = " ".join(_build_mngr_create_command(launch_mode=LaunchMode.MODAL, host_name=HostName("hello")))
+    assert "--pass-host-env FEATURE_X" in joined
+    assert "--pass-host-env FEATURE_Y" in joined
+
+
+def test_build_mngr_create_command_no_extra_pass_host_env_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("MINDS_EXTRA_PASS_HOST_ENV", raising=False)
+    joined = " ".join(_build_mngr_create_command(launch_mode=LaunchMode.MODAL, host_name=HostName("hello")))
+    assert "FEATURE_X" not in joined
 
 
 # ---------------------------------------------------------------------------
@@ -1702,12 +1766,16 @@ def test_failed_create_attempt_marks_pending_record_failed_with_log_tail(tmp_pat
 
     info = creator.get_create_attempt_info(create_attempt_id)
     assert info is not None and info.status is AgentCreateAttemptStatus.FAILED
+    # The worker flips the in-memory status to FAILED before writing the FAILED
+    # record to the store, so a read taken the instant _wait_until_finished returns
+    # can still see IN_FLIGHT. Join the worker first: wait_for_all makes the store
+    # write happen-before the read.
+    creator.wait_for_all()
     record = store.read_record(str(create_attempt_id))
     assert record is not None
     assert record.state is PendingCreateAttemptState.FAILED
     assert record.error
     assert record.log_tail, "the FAILED record must carry the create attempt log tail"
-    creator.wait_for_all()
 
 
 class _TerminalWriteFailingPendingCreateAttemptStore(PendingCreateAttemptStore):
@@ -1986,3 +2054,106 @@ def test_implicit_discard_deletes_record_when_no_leftover_host_exists(tmp_path: 
     calls = [line for line in calls_path.read_text().splitlines() if line]
     assert calls == ["list --hosts --provider lima --format json"]
     assert store.read_record(dead_record.create_attempt_id) is None
+
+
+@pytest.mark.timeout(30)
+def test_canonical_agent_id_is_published_during_ready_wait(tmp_path: Path, monkeypatch) -> None:
+    """The workspace-list handoff (``derive_create_attempt_rows``) suppresses the
+    "Creating..." row by matching ``info.agent_id`` against discovered ids. The id
+    must therefore be visible while the create attempt is still WAITING_FOR_READY:
+    for build-in-VM Lima that wait spans the whole container build, and a None
+    ``agent_id`` there shows the workspace row and the creating row side by side.
+    """
+    aid = AgentId.generate()
+    hid = HostId.generate()
+    # The create command invokes the ``MNGR_BINARY`` constant ("mngr") via PATH,
+    # so the fake rides a PATH shim rather than the ``mngr_binary`` field (which
+    # only the implicit-discard commands use).
+    fake_bin_dir = tmp_path / "fake-bin"
+    fake_bin_dir.mkdir()
+    script_path = fake_bin_dir / "mngr"
+    script_path.write_text(
+        "#!/bin/bash\n"
+        'if [ "$1" = "create" ]; then\n'
+        f'  echo \'{{"event": "created", "agent_id": "{aid}", "host_id": "{hid}"}}\'\n'
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    script_path.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin_dir}{os.pathsep}{os.environ['PATH']}")
+    # The readiness probe never answers 200, so the create attempt sits in
+    # WAITING_FOR_READY for the whole (short) ready window.
+    server, _thread, port = _start_scripted_server(not_ready_count=10**6)
+    try:
+        creator = _make_test_creator(
+            tmp_path,
+            mngr_forward_port=port,
+            preauth_cookie="any-preauth",
+            timeout_seconds=2.0,
+            poll_interval_seconds=0.02,
+            probe_timeout_seconds=0.5,
+        )
+        create_attempt_id = creator.start_create_attempt(
+            str(_make_fake_repo(tmp_path)), host_name="ready-wait-name-71001"
+        )
+        observed_waiting = False
+        info = None
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            info = creator.get_create_attempt_info(create_attempt_id)
+            assert info is not None
+            if info.status is AgentCreateAttemptStatus.WAITING_FOR_READY:
+                observed_waiting = True
+                assert info.agent_id == aid
+            if info.status in (AgentCreateAttemptStatus.DONE, AgentCreateAttemptStatus.FAILED):
+                break
+            threading.Event().wait(0.005)
+        assert observed_waiting, "the create attempt never reached WAITING_FOR_READY"
+        assert info is not None and info.status is AgentCreateAttemptStatus.DONE
+        creator.wait_for_all()
+    finally:
+        server.shutdown()
+
+
+def test_scratch_clone_roots_are_unique_per_create_attempt() -> None:
+    """Two overlapping creates from one repo must not share a directory.
+
+    The old path was ``<tmp>/minds-clone-<repo_name>``, keyed on the repo name
+    alone and rmtree'd on the way in, so the second create deleted the directory
+    the first was using as its ``mngr create`` cwd -- whatever launch modes the
+    two had picked.
+    """
+    first = make_scratch_clone_root("default-workspace-template")
+    second = make_scratch_clone_root("default-workspace-template")
+    try:
+        assert first != second
+        assert first.is_dir()
+        assert second.is_dir()
+        assert first.name.startswith(SCRATCH_CLONE_DIR_PREFIX)
+    finally:
+        shutil.rmtree(first, ignore_errors=True)
+        shutil.rmtree(second, ignore_errors=True)
+
+
+def test_sweep_reclaims_stale_scratch_clones_but_spares_live_ones(tmp_path: Path) -> None:
+    """Startup sweep collects what a force-quit leaked, and nothing else.
+
+    Per-attempt directories are removed in the attempt's ``finally``, which a
+    force-quit skips (the create worker is a daemon thread), and a full clone is
+    ~240MB. The age guard is what keeps the sweep from deleting a clone belonging
+    to a concurrently running second Minds instance -- i.e. from reintroducing the
+    very race this change removes.
+    """
+    stale = make_scratch_clone_root("default-workspace-template", temp_dir=tmp_path)
+    live = make_scratch_clone_root("default-workspace-template", temp_dir=tmp_path)
+    unrelated = tmp_path / "some-other-tempdir"
+    unrelated.mkdir()
+    aged_out = time.time() - ORPHANED_SCRATCH_CLONE_AGE_SECONDS - 60
+    os.utime(stale, (aged_out, aged_out))
+
+    sweep_orphaned_scratch_clones(tmp_path)
+
+    assert not stale.exists()
+    assert live.is_dir()
+    assert unrelated.is_dir()

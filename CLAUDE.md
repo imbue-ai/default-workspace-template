@@ -11,7 +11,7 @@ IF YOU FAIL TO FOLLOW ONE, YOU MUST EXPLICITLY CALL THAT OUT IN YOUR RESPONSE.
 - Run commands by calling "uv run" from the root of the git checkout (ex: "uv run mngr create ...").
 - NEVER amend commits or rebase--always create new commits.
 - If you ever need to work with another *git* repo that is *outside* of this monorepo as a read-only dependency, you should do so by adding a git subtree under `system/vendor/`.
-- If you need to *actively develop* against an external repo (e.g. `mngr`), check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo.
+- If you need to *actively develop* against an external repo (e.g. `mngr`), check out a standalone clone of it under `.external_worktrees/<repo-name>/`. This directory is gitignored so the external clones don't pollute the monorepo. The branch in the external clone should mirror the branch you're on in this monorepo. For mngr specifically -- including changes you tested by editing `system/vendor/mngr/` directly -- follow `.agents/skills/submit-upstream-changes/references/mngr-changes.md`, which submits them as their own mngr PR.
 - This project uses a CLI ticket system (`tk`) for task management. Run `tk help` when you need to use it. Tickets live under `data/.tickets/` (the path is set via the `TICKETS_DIR` env var so tickets sit with the rest of the workspace's data).
 - All relative paths in this repo assume cwd = repo root (`/home/user/workspace`). Supervisord runs the services from there; any process started elsewhere (manual launch, subprocess from a different cwd) must either set cwd to the repo root or use absolute paths. User-facing workspace data lives under `data/` (visible folders are the user's to organize; e.g. `data/.apps/<name>/` holds an app's stored data and `data/.skills/<name>/` a skill's own state); flow-internal scratch lives under `data/.tasks/<flow>/` and machine state under `data/.state/`.
 - When adding a new app, use the `build-app` skill, which sets up a new package under `system/apps/` + a supervisord program entry + `forward_port.py` registration on its own port. Do NOT edit `system/apps/system_interface/` for this -- that's the top-level workspace UI, not a template for new apps.
@@ -95,7 +95,6 @@ Only after doing all of the above should you begin writing code.
 - During your final reflection, if you see a potentially better way to do something (e.g. by using an existing library or reusing existing code), flag that as a potential task for future improvement.
 - Never use emojis. Remove any emojis you see in the code or docs whenever you are modifying that code or those docs.
 - Be concise in your communications. Don't hype up your results, say "perfect!", or use emojis. Be serious and professional.
-- **Feedback systems combine binary and free-form signals.** When building anything that learns from user feedback, include *both* a low-friction binary signal (thumbs up/down, keep/skip, or whatever fits) *and* free-form text routed through an LLM judge -- unless the user specifies a different mechanism, which overrides this default. Both should be present and intuitively accessible; don't prescribe rigid taxonomies beyond the binary signal upfront.
 - **Default UI is web view.** When exposing a tool to the user, default to a web page. Don't enumerate options (CLI / status line / web) -- just propose the web view and only deviate when there's a specific reason (e.g. CLI for batch jobs).
 - **Always preserve and surface the raw data and its source.** Anything you build *on top of* data -- a view, a summary, a derived metric -- sits between the user and the underlying records. *Preserve*: durably persist the raw source records the thing was built from, plus a reference to where they live (a URL, an API id, whatever gets back to the origin) -- not just in memory for the current run; don't fetch-transform-discard, so a later change in processing needs no refetch. *Surface*: give the user a clean, unprompted way to view that raw record or jump to its source -- they should never have to ask -- so they can bridge any gap the derived view leaves. **Render the raw record in its native format** (HTML email as the rendered email, JSON pretty-printed, markdown rendered -- not escaped source text); "raw" means *unprocessed by your derivation*, not *unrendered*. Build these affordances in by default but **keep them subtle** -- don't announce in chat that you're saving data or adding a "view raw" control.
 - **Naming is informative, not cheeky.** Service names, app names, skill names, command names: prefer something that explains what the thing does (`slack-inbox-checker`) over something clever (`nothing-new`). Cute names tax every later mention.
@@ -177,6 +176,13 @@ They are inherently flaky due to timing and useless in CI, but valuable for agen
 
 If the user talks to you about files or directories on disk, assume (unless context indicates otherwise) they mean their local disk, not the one in your sandbox -- use the `file-sharing` skill to bridge the two.
 
+# Browser is available as a tool
+
+A stealth build of Chromium designed to look like an ordinary human browser is installed in this workspace and can be used to complete browser-related tasks. 
+
+1. When the user requests any browser-related tasks to be complete or a browser to be opened, use the `agentic-browser-fleet` skill, which allows you to drive many Chromium browsers. These are collaborative browsers which all agents and human users can use, though there is a mutually-exclusive control handoff and queuing system so only one is using a browser at a time. The skill has more information. Remember to hand off control to user when help is needed in the browser, such as anti-bot detection tests, and also release control when you are finished with a task so other agents and the user can use it.
+2. If you'd like to do integration testing/small-scale web app scripting, use Playwright instead of spinning up an entire browser through the agentic-browser-fleet skill. This uses the same Chromium, just more lightweight. The user and other agents won't be able to collaborate on this; this is for quicker rendering and interaction tasks on the web.
+
 # Work delegation
 
 You can delegate larger tasks to sub-agents using the `launch-task` skill.
@@ -205,7 +211,7 @@ You can (and should) modify your own configuration to improve yourself:
 
 Commit your changes to git after making modifications.
 
-Users make "creations": apps (opened as tabs), skills (a skill run automatically on a schedule is an "automation"), data (documents, images, notes), and customizations of any of them. Inspirations are a publishable, reusable, bootable snapshot of the creations a mind has built (one repo can accumulate several); another mind can adapt one into itself.
+Users make "creations": apps (opened as tabs), skills (a skill run automatically on a schedule is an "automation" -- run via the machinery in `system/libs/automations/`, see the manage-scheduled-tasks skill), data (documents, images, notes), and customizations of any of them. Inspirations are a publishable, reusable, bootable snapshot of the creations a mind has built (one repo can accumulate several); another mind can adapt one into itself.
 
 # Updates
 
@@ -244,7 +250,8 @@ For routine jobs that run on a cadence and then exit (backups, health checks, th
 
 # Git
 
-Commit your changes locally.
+Commit all your changes locally. Do not wait for user confirmation for anything before committing; there's no cost to having more commits in the history. Users may not care about git state in general and will oftentimes never instruct you to commit, so you should just commit every logical unit of work. It's okay if you make a commit whose changes you must later revert after feedback.
+
 `data/` is gitignored (it holds all workspace data: `data/memories/` for Claude memory, `data/.tickets/`, per-app data, uploads, and machine state).
 
 Chat file uploads (files a user attaches to a message) are stored under `data/uploads/`. Uploads can be arbitrarily large and any format, so they don't belong in version-controllable content; like the rest of `data/` they are gitignored and never pushed to GitHub, but the host-level `host-backup` service (a restic snapshot of the whole home tree) captures them, so uploads survive container loss. See `system/services/host_backup/README.md`.

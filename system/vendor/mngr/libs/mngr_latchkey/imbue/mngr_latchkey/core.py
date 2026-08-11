@@ -28,6 +28,7 @@ from collections.abc import Collection
 from collections.abc import Mapping
 from collections.abc import Sequence
 from enum import auto
+from functools import cached_property
 from importlib import resources
 from pathlib import Path
 from typing import Final
@@ -38,6 +39,7 @@ from packaging.version import Version
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import SecretStr
+from pydantic import computed_field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
@@ -48,6 +50,9 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr_latchkey._spawn import spawn_detached_latchkey_ensure_browser
+from imbue.mngr_latchkey.additional_services import AdditionalServiceRegistration
+from imbue.mngr_latchkey.additional_services import load_additional_service_registrations
+from imbue.mngr_latchkey.additional_services import shared_schemas_file_content
 from imbue.mngr_latchkey.encryption_key import LatchkeyEncryptionKeyPermissionError
 from imbue.mngr_latchkey.encryption_key import inject_encryption_key_into_env
 from imbue.mngr_latchkey.encryption_key import load_or_create_encryption_key
@@ -59,6 +64,7 @@ from imbue.mngr_latchkey.store import ensure_browser_log_path
 from imbue.mngr_latchkey.store import forward_events_log_path
 from imbue.mngr_latchkey.store import plugin_data_dir as _plugin_data_dir
 from imbue.mngr_latchkey.store import save_permissions
+from imbue.mngr_latchkey.store import write_shared_schemas_file
 
 # Default value for :attr:`Latchkey.latchkey_binary` -- the bare
 # command name, looked up on ``PATH`` by every spawn site via
@@ -95,6 +101,16 @@ _CREATE_JWT_TIMEOUT_SECONDS: Final[float] = 15.0
 # Empirically, reencryption takes around 0.1s.
 _REENCRYPT_TIMEOUT_SECONDS: Final[float] = 5.0
 
+# Storing user-supplied credentials writes the credential store and, for some
+# services, validates the credentials over the network first. Unlike the browser
+# flows it never waits on a human, so it must not run unbounded.
+_AUTH_SET_TIMEOUT_SECONDS: Final[float] = 60.0
+
+# Listing services and registering an additional (custom) service are quick
+# config-store operations, but can stall on slow keychains like the others.
+_SERVICES_LIST_TIMEOUT_SECONDS: Final[float] = 15.0
+_SERVICES_REGISTER_TIMEOUT_SECONDS: Final[float] = 15.0
+
 # ``latchkey --version`` is normally a print-and-exit, but the upstream CLI
 # runs its credential-store data-format migrations before printing anything --
 # e.g. latchkey 3.0's migration to the multiple-accounts format makes
@@ -114,11 +130,18 @@ UPSTREAM_DATA_FORMAT_VERSION_FILENAME: Final[str] = "data-format-version"
 CREDENTIALS_STORE_FILENAME: Final[str] = "credentials.json.enc"
 
 # Minimum version of the upstream ``latchkey`` CLI this package will operate
-# against. Kept in lockstep with the version we install/bundle (see
-# ``LATCHKEY_VERSION``). 2.18.0 was the first release with the ``auth prepare``
-# subcommand, which the Minds Google OAuth flow (:meth:`Latchkey.auth_prepare`)
-# depends on.
-LATCHKEY_MIN_VERSION: Final[str] = "3.1.0"
+# against. :meth:`Latchkey._check_minimum_version` enforces it against the
+# binary this process runs locally -- the copy bundled with the minds app, or
+# a CLI-only user's own install -- so the floor must never exceed the version
+# in ``apps/minds/package.json``, or the app rejects the very binary it ships.
+# Move it in lockstep with the versions we install
+# (:data:`imbue.mngr_latchkey.remote_gateway.LATCHKEY_VERSION` and the
+# in-workspace pin in default-workspace-template) rather than to track what the
+# code strictly needs: the newest release with a hard dependency here is 3.2.0,
+# the first to report the account whose credentials it injects to detent as
+# ``customMetadata.account`` -- what the per-account permission grants
+# (:mod:`imbue.mngr_latchkey.account_scopes`) read.
+LATCHKEY_MIN_VERSION: Final[str] = "3.4.1"
 
 # Fixed port that every containerized/VM/VPS agent sees on its own 127.0.0.1
 # when reaching the Latchkey gateway. A per-agent SSH reverse tunnel bridges
@@ -145,10 +168,20 @@ _GATEWAY_PASSWORD_SENTINEL_PATH: Final[str] = "/__minds_gateway_password__/senti
 _ENV_EXTENSION_PERMISSIONS_ROOT: Final[str] = "LATCHKEY_EXTENSION_PERMISSIONS_ROOT"
 
 # Subdirectory of ``LATCHKEY_DIRECTORY`` from which the upstream
-# ``latchkey gateway`` (>= 2.9.0) loads ``.mjs`` extension files. This
-# package drops its bundled ``permissions.mjs`` and
-# ``permission_requests.mjs`` files there at gateway-spawn time.
+# ``latchkey gateway`` (>= 2.9.0) loads ``.mjs`` extension files.
 _GATEWAY_EXTENSIONS_SUBDIR: Final[str] = "extensions"
+
+# The desktop and VPS gateways intentionally load disjoint extension sets. The
+# desktop owns all stateful Minds endpoints; the VPS loads only the transparent
+# forwarder that sends those endpoint families back to the desktop gateway.
+DESKTOP_GATEWAY_EXTENSION_FILENAMES: Final[tuple[str, ...]] = (
+    "minds_api_proxy.mjs",
+    "permission_requests.mjs",
+    "permissions.mjs",
+    "services.json",
+    "workspace_permissions.json",
+)
+REMOTE_GATEWAY_EXTENSION_FILENAME: Final[str] = "desktop_gateway_proxy.mjs"
 
 # Filename of the upstream latchkey CLI's JSON config file, directly under
 # ``LATCHKEY_DIRECTORY``. Latchkey (>= 3.1.0) reads its ``settings`` block --
@@ -294,6 +327,18 @@ class LatchkeyServiceInfo(FrozenModel):
             "manual credential setup, or ``None`` if latchkey did not provide one."
         ),
     )
+
+    @computed_field
+    @cached_property
+    def is_browser_auth_supported(self) -> bool:
+        """True when ``latchkey auth browser`` is the way to establish credentials.
+
+        Either latchkey explicitly advertises a browser flow, or it returned no
+        ``auth_options`` at all and we don't actually know (legacy fallback:
+        keep the old always-run-browser behaviour). A service without one --
+        AWS, Coolify, ... -- can only be connected by supplying credentials.
+        """
+        return LATCHKEY_AUTH_OPTION_BROWSER in self.auth_options or not self.auth_options
 
 
 _UNKNOWN_LATCHKEY_SERVICE_INFO: Final[LatchkeyServiceInfo] = LatchkeyServiceInfo(
@@ -549,7 +594,10 @@ def _build_gateway_env(
     return env
 
 
-_BUNDLED_EXTENSION_SUFFIXES: Final[tuple[str, ...]] = (".mjs", ".json")
+def bundled_gateway_extension_content(filename: str) -> str:
+    """Read one explicitly selected bundled gateway extension file."""
+    resource = resources.files("imbue.mngr_latchkey.extensions").joinpath(filename)
+    return resource.read_text(encoding="utf-8")
 
 
 def _materialize_bundled_extensions(latchkey_directory: Path) -> Path:
@@ -568,13 +616,12 @@ def _materialize_bundled_extensions(latchkey_directory: Path) -> Path:
     """
     extensions_dir = latchkey_directory / _GATEWAY_EXTENSIONS_SUBDIR
     extensions_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    source_package = resources.files("imbue.mngr_latchkey.extensions")
-    for entry in source_package.iterdir():
-        name = entry.name
-        if not any(name.endswith(suffix) for suffix in _BUNDLED_EXTENSION_SUFFIXES):
-            continue
-        destination = extensions_dir / name
-        destination.write_text(entry.read_text(encoding="utf-8"), encoding="utf-8")
+    # Never let the desktop load the VPS-only forwarder: it would proxy these
+    # routes back to itself. Remove a stale copy left by a partial/older install.
+    (extensions_dir / REMOTE_GATEWAY_EXTENSION_FILENAME).unlink(missing_ok=True)
+    for filename in DESKTOP_GATEWAY_EXTENSION_FILENAMES:
+        destination = extensions_dir / filename
+        destination.write_text(bundled_gateway_extension_content(filename), encoding="utf-8")
     return extensions_dir
 
 
@@ -752,7 +799,19 @@ class Latchkey(MutableModel):
         outstanding :class:`DataFormatMigration` steps between the
         version recorded under :attr:`plugin_data_dir` and the version
         the installed code targets are applied here (cheap in the
-        steady state -- one small file read when already current).
+        steady state -- one small file read when already current). A
+        migration that needs to inspect the credential store gets the
+        latchkey directory and binary to do so.
+
+        Also materializes the shared additional-services schemas file that every
+        per-host permissions baseline references via detent's ``include`` (so a
+        granted custom scope resolves without inlining its schema per host), and
+        registers minds' additional (custom) latchkey services (see
+        :func:`imbue.mngr_latchkey.additional_services.load_additional_service_registrations`)
+        so the gateway can inject their credentials. This happens before the
+        gateway is spawned so the running gateway picks up the registrations.
+        Registration is best-effort: a failure is logged and does not abort
+        initialization (only that service's credential injection is affected).
 
         There is intentionally **no** cross-process gateway-record
         reconciliation: the new ``mngr latchkey forward`` /
@@ -773,7 +832,13 @@ class Latchkey(MutableModel):
                 (non-zero exit, unparseable output, spawn error).
         """
         self._check_minimum_version()
-        run_data_format_migrations(self.plugin_data_dir)
+        # Materialize the shared additional-services schemas file before touching
+        # any host permissions file: every per-host baseline ``include``s it, so
+        # it must exist before the gateway evaluates a host file (and before the
+        # migration stamps the include into existing files).
+        write_shared_schemas_file(self.plugin_data_dir, shared_schemas_file_content())
+        run_data_format_migrations(self.plugin_data_dir, self.latchkey_directory, self.latchkey_binary)
+        self._register_additional_services()
         with self._lock:
             self._is_initialized = True
 
@@ -1133,8 +1198,9 @@ class Latchkey(MutableModel):
 
         Any failure (process error, malformed output) degrades to an empty
         mapping rather than raising, mirroring :meth:`services_info`, so a
-        transient latchkey problem renders as \"no accounts\" instead of crashing
-        the page.
+        transient latchkey problem renders as "no accounts" instead of crashing
+        the page. Callers for which that would be destructive read the store
+        themselves (see the per-account permissions migration).
         """
         env = _build_env_with_latchkey_directory(self.latchkey_directory, encryption_key=self._load_encryption_key())
         command = [self.latchkey_binary, "auth", "list"]
@@ -1207,8 +1273,20 @@ class Latchkey(MutableModel):
             return False, prepare_detail
         return self.auth_browser_login(service_name, is_ephemeral=True)
 
-    def auth_browser(self, service_name: str, *, is_ephemeral: bool = False) -> tuple[bool, str]:
+    def auth_browser(
+        self, service_name: str, *, is_ephemeral: bool = False, account: str | None = None
+    ) -> tuple[bool, str]:
         """Run ``latchkey auth browser <service>`` and report success or failure.
+
+        ``account`` targets one already-stored account of the service (the
+        unnamed default account is :data:`DEFAULT_ACCOUNT`): latchkey then
+        reuses that account's stored OAuth client instead of the service-level
+        preparation, which is what a re-sign-in of a specific account needs.
+        Latchkey still stores the result under whichever account the user
+        actually logs in as, so callers must read the account back rather than
+        assume it. Passing an account latchkey does not know about makes the
+        call fail, so callers only pass one they have just seen in
+        :meth:`services_info`.
 
         Returns ``(True, "")`` on a clean exit. Any non-zero exit -- whether
         from a cancelled browser flow, network failure, or something else --
@@ -1239,7 +1317,7 @@ class Latchkey(MutableModel):
         account already left behind.
         """
         if not is_ephemeral:
-            is_success, detail = self.auth_browser_login(service_name)
+            is_success, detail = self.auth_browser_login(service_name, account=account)
             if is_success:
                 return True, ""
             if "latchkey auth browser-prepare" not in detail.lower():
@@ -1265,7 +1343,7 @@ class Latchkey(MutableModel):
         )
         if not is_prepared:
             return False, prepare_detail
-        return self.auth_browser_login(service_name, is_ephemeral=is_ephemeral)
+        return self.auth_browser_login(service_name, is_ephemeral=is_ephemeral, account=account)
 
     def _authenticate_with_minds_google_client(
         self, service_name: str, *, is_ephemeral: bool = False
@@ -1295,8 +1373,13 @@ class Latchkey(MutableModel):
             return False, prepare_detail
         return self.auth_browser_login(service_name, is_ephemeral=is_ephemeral)
 
-    def auth_browser_login(self, service_name: str, *, is_ephemeral: bool = False) -> tuple[bool, str]:
+    def auth_browser_login(
+        self, service_name: str, *, is_ephemeral: bool = False, account: str | None = None
+    ) -> tuple[bool, str]:
         """Run a single ``latchkey auth browser <service>`` with no preparation fallback.
+
+        ``account`` is passed through to latchkey's global ``--account`` option
+        (see :meth:`auth_browser`).
 
         Unlike :meth:`auth_browser`, this never auto-runs ``auth
         browser-prepare`` on failure. It is the bare sign-in used once a
@@ -1305,9 +1388,12 @@ class Latchkey(MutableModel):
         self-setup left behind. Returns ``(True, "")`` on a clean exit,
         otherwise ``(False, detail)``.
         """
+        argv = ["auth", "browser", service_name]
+        if account is not None:
+            argv.extend(["--account", account])
         return self._run_latchkey_auth_command(
             log_label="auth browser",
-            argv=["auth", "browser", service_name],
+            argv=argv,
             service_name=service_name,
             is_ephemeral=is_ephemeral,
         )
@@ -1374,18 +1460,41 @@ class Latchkey(MutableModel):
             service_name=service_name,
         )
 
+    def auth_set_credentials(self, service_name: str, argv: Sequence[str]) -> tuple[bool, str]:
+        """Run a ``latchkey auth set``-family command that stores credentials the user typed in.
+
+        ``argv`` (everything after the binary) is built by
+        :func:`imbue.mngr_latchkey.credential_commands.build_credential_command_argv`
+        from the service's own ``setCredentialsExample``, so it already carries
+        the ``--account`` option and the filled-in values. It is passed through
+        verbatim and never logged, since it contains the user's secrets.
+        Returns ``(is_success, detail)``.
+        """
+        return self._run_latchkey_auth_command(
+            log_label="auth set",
+            argv=list(argv),
+            service_name=service_name,
+            timeout_seconds=_AUTH_SET_TIMEOUT_SECONDS,
+        )
+
     def _run_latchkey_auth_command(
         self,
         log_label: str,
         argv: list[str],
         service_name: str,
         is_ephemeral: bool = False,
+        timeout_seconds: float | None = None,
     ) -> tuple[bool, str]:
         """Run a single ``latchkey auth ...`` subcommand and translate its exit into ``(is_success, detail)``.
 
         ``log_label`` is the human-readable name of the subcommand
         (e.g. ``"auth browser"``, ``"auth browser-prepare"``) used in
-        log lines and the generic failure-message fallback.
+        log lines, as the log-safe process name (the argv may carry
+        credentials, so it must never be logged), and as the generic
+        failure-message fallback.
+
+        ``timeout_seconds`` bounds the child; leave it ``None`` for the
+        interactive flows that wait on a human.
 
         When ``is_ephemeral`` is set, :data:`LATCHKEY_EPHEMERAL_BROWSER_ENV_VAR`
         is exported to the child so any browser flow starts from a clean session
@@ -1399,16 +1508,17 @@ class Latchkey(MutableModel):
             env[LATCHKEY_EPHEMERAL_BROWSER_ENV_VAR] = "1"
         cg = ConcurrencyGroup(name=f"latchkey-{log_label.replace(' ', '-')}")
         with cg:
-            # No timeout: ``auth browser`` waits on a real human
-            # completing the browser sign-in flow, which can take
-            # arbitrarily long. ``auth browser-prepare`` is typically
-            # non-interactive but may still hit the network, so we keep
-            # the same untimed treatment.
+            # Without an explicit timeout the child is unbounded, which is what
+            # ``auth browser`` needs: it waits on a real human completing the
+            # browser sign-in flow, which can take arbitrarily long. ``auth
+            # browser-prepare`` is typically non-interactive but may still hit
+            # the network, so it keeps the same untimed treatment.
             result = cg.run_process_to_completion(
                 command=[self.latchkey_binary, *argv],
-                timeout=None,
+                timeout=timeout_seconds,
                 is_checked_after=False,
                 env=env,
+                name=f"latchkey {log_label} {service_name}",
             )
         if result.returncode == 0:
             logger.info("latchkey {} {} succeeded", log_label, service_name)
@@ -1496,6 +1606,103 @@ class Latchkey(MutableModel):
                 f"Installed latchkey version {installed} is older than the required minimum {minimum}; "
                 f"upgrade the binary at {self.latchkey_binary}."
             )
+
+    def _register_additional_services(self) -> None:
+        """Register minds' additional (custom) latchkey services, skipping any already present.
+
+        ``latchkey services register`` is not idempotent -- it exits non-zero
+        when a service of the same name already exists -- so we consult
+        ``latchkey services list`` first and only register the missing ones.
+        Best-effort: a failure to list or to register one service is logged and
+        does not abort gateway bring-up.
+        """
+        registrations = load_additional_service_registrations()
+        if not registrations:
+            return
+        existing_service_names = self._list_service_names()
+        for registration in registrations:
+            if registration.name in existing_service_names:
+                continue
+            self._register_one_additional_service(registration)
+
+    def _list_service_names(self) -> frozenset[str]:
+        """Return every service name latchkey currently knows (builtin + registered).
+
+        Runs ``latchkey services list`` (a JSON array of names). Returns an empty
+        set on any failure so the caller falls back to attempting registration
+        (itself guarded and best-effort).
+        """
+        env = _build_local_latchkey_env(self.latchkey_directory, encryption_key=self._load_encryption_key())
+        cg = ConcurrencyGroup(name="latchkey-services-list")
+        try:
+            with cg:
+                result = cg.run_process_to_completion(
+                    command=[self.latchkey_binary, "services", "list"],
+                    timeout=_SERVICES_LIST_TIMEOUT_SECONDS,
+                    is_checked_after=False,
+                    env=env,
+                )
+        except ConcurrencyExceptionGroup as group:
+            if not group.only_exception_is_instance_of(ProcessSetupError):
+                raise
+            logger.warning("Failed to launch 'latchkey services list': {}", group)
+            return frozenset()
+        if result.returncode != 0:
+            logger.warning(
+                "'latchkey services list' exited {}: {}",
+                result.returncode,
+                result.stderr.strip() or result.stdout.strip(),
+            )
+            return frozenset()
+        try:
+            parsed = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            logger.warning("Could not parse 'latchkey services list' output: {}", e)
+            return frozenset()
+        if not isinstance(parsed, list):
+            logger.warning("'latchkey services list' returned an unexpected shape: {!r}", parsed)
+            return frozenset()
+        service_names: list[str] = []
+        for name in parsed:
+            if not isinstance(name, str):
+                logger.warning("'latchkey services list' returned a non-string entry: {!r}", name)
+                return frozenset()
+            service_names.append(name)
+        return frozenset(service_names)
+
+    def _register_one_additional_service(self, registration: AdditionalServiceRegistration) -> None:
+        """Register a single additional service via ``latchkey services register`` (best-effort)."""
+        env = _build_local_latchkey_env(self.latchkey_directory, encryption_key=self._load_encryption_key())
+        cg = ConcurrencyGroup(name="latchkey-services-register")
+        try:
+            with cg:
+                result = cg.run_process_to_completion(
+                    command=[
+                        self.latchkey_binary,
+                        "services",
+                        "register",
+                        registration.name,
+                        "--base-api-url",
+                        registration.base_api_url,
+                    ],
+                    timeout=_SERVICES_REGISTER_TIMEOUT_SECONDS,
+                    is_checked_after=False,
+                    env=env,
+                )
+        except ConcurrencyExceptionGroup as group:
+            if not group.only_exception_is_instance_of(ProcessSetupError):
+                raise
+            logger.warning("Failed to launch 'latchkey services register' for {!r}: {}", registration.name, group)
+            return
+        if result.returncode != 0:
+            logger.warning(
+                "Failed to register additional latchkey service {!r}: 'latchkey services register' exited {}: {}",
+                registration.name,
+                result.returncode,
+                result.stderr.strip() or result.stdout.strip(),
+            )
+            return
+        logger.debug("Registered additional latchkey service {!r}", registration.name)
 
     def _spawn_gateway(
         self,

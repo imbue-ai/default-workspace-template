@@ -9,6 +9,7 @@ from imbue.mngr.api.testing import created_host
 from imbue.mngr.errors import HostNotFoundError
 from imbue.mngr.errors import SnapshotNotFoundError
 from imbue.mngr.interfaces.agent import AgentInterface
+from imbue.mngr.interfaces.host import OnlineHostInterface
 from imbue.mngr.interfaces.volume import HostVolume
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
@@ -16,6 +17,7 @@ from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_modal.errors import ModalMngrError
 from imbue.mngr_modal.errors import NoSnapshotsModalMngrError
 from imbue.mngr_modal.instance import ModalProviderInstance
 from imbue.mngr_modal.volume import ModalVolume
@@ -118,9 +120,22 @@ def test_get_host_by_name(real_modal_provider: ModalProviderInstance) -> None:
 def test_discover_hosts_includes_created_host(real_modal_provider: ModalProviderInstance) -> None:
     """Created host should appear in discover_hosts."""
     with created_host(real_modal_provider, HostName("test-host")) as host:
-        hosts = real_modal_provider.discover_hosts(cg=real_modal_provider.mngr_ctx.concurrency_group)
-        host_ids = [h.host_id for h in hosts]
-        assert host.id in host_ids
+        # Modal's sandbox listing is eventually consistent: a just-created
+        # sandbox can be briefly absent from the control plane's list (CI has
+        # seen discovery return an empty list right after create), so poll
+        # discovery rather than asserting a single snapshot.
+        def _host_is_discovered() -> bool:
+            hosts = real_modal_provider.discover_hosts(cg=real_modal_provider.mngr_ctx.concurrency_group)
+            return host.id in [h.host_id for h in hosts]
+
+        # CI has observed the listing stay stale for over a minute, so the cap
+        # is generous; the surrounding test timeout (300s) still bounds it.
+        wait_for(
+            _host_is_discovered,
+            timeout=150.0,
+            poll_interval=5.0,
+            error_message=f"Created host {host.id} was not in discover_hosts after 150s",
+        )
 
 
 @pytest.mark.acceptance
@@ -306,6 +321,12 @@ def test_start_host_on_running_host(real_modal_provider: ModalProviderInstance) 
         assert started_host.id == host_id
 
 
+# Flaky: start_host's SSH wait (SSH_CONNECT_TIMEOUT, 60s) can time out when a
+# resumed sandbox is slow to accept connections under CI's parallel
+# acceptance fan-out (~50 sandboxes created at once) -- the same
+# resource-contention family as the VolumeListFiles flakiness marked flaky
+# elsewhere in this file, just a different Modal-side resource.
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.timeout(300)
 def test_start_host_on_stopped_host_uses_latest_resumable_snapshot(
@@ -432,8 +453,7 @@ def test_get_host_by_name_not_found_raises_error(real_modal_provider: ModalProvi
 
 
 @pytest.mark.acceptance
-@pytest.mark.timeout(300)
-@pytest.mark.acceptance
+@pytest.mark.flaky
 @pytest.mark.timeout(300)
 def test_restart_after_graceful_stop_without_initial_snapshot(
     real_modal_provider: ModalProviderInstance,
@@ -621,7 +641,26 @@ def test_offline_blocks_all_network_access(real_modal_provider: ModalProviderIns
 # =============================================================================
 
 
+def _volume_is_visible(provider: ModalProviderInstance, host: OnlineHostInterface) -> bool:
+    """Whether the host's volume resolves via Modal's control plane.
+
+    Treats ``ModalMngrError`` (e.g. control-plane rate limits) as "not yet visible":
+    the probe runs inside ``wait_for``, which lets probe exceptions propagate, so one
+    transient blip would otherwise fail the test immediately instead of polling until
+    the timeout.
+    """
+    try:
+        return provider.get_volume_for_host(host) is not None
+    except ModalMngrError:
+        return False
+
+
+# Flaky: the volume probes (get_volume_for_host / read_file) go through Modal's
+# VolumeListFiles API, whose per-workspace rate limit can stay exceeded for
+# longer than the volume layer's in-process retry budget when the parallel
+# acceptance fan-out hammers the same workspace.
 @pytest.mark.acceptance
+@pytest.mark.flaky
 @pytest.mark.timeout(180)
 def test_host_volume_is_symlinked_and_persists_data(real_modal_provider: ModalProviderInstance) -> None:
     """Host dir should be symlinked to the host volume, and data should persist on the volume."""
@@ -648,12 +687,16 @@ def test_host_volume_is_symlinked_and_persists_data(real_modal_provider: ModalPr
         # created (eventual consistency), so the name-lookup probe inside
         # get_volume_for_host may transiently return None right after creation. Poll
         # rather than asserting once.
-        def volume_is_available() -> bool:
-            return real_modal_provider.get_volume_for_host(host) is not None
+        wait_for(
+            lambda: _volume_is_visible(real_modal_provider, host),
+            timeout=30.0,
+            error_message="Host volume not visible after 30s",
+        )
 
-        wait_for(volume_is_available, timeout=30.0, error_message="Host volume not visible after 30s")
 
-
+# Flaky for the same VolumeListFiles rate-limit reason as
+# test_host_volume_is_symlinked_and_persists_data above.
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.timeout(300)
 def test_host_volume_data_readable_via_volume_interface(real_modal_provider: ModalProviderInstance) -> None:
@@ -673,7 +716,7 @@ def test_host_volume_data_readable_via_volume_interface(real_modal_provider: Mod
         # plane after the sandbox is created (eventual consistency), so poll rather
         # than asserting once.
         wait_for(
-            lambda: real_modal_provider.get_volume_for_host(host) is not None,
+            lambda: _volume_is_visible(real_modal_provider, host),
             timeout=30.0,
             error_message="Host volume not visible after 30s",
         )

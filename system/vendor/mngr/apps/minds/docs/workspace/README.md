@@ -7,19 +7,19 @@ A "workspace" is a persistent mngr agent created from a template repository. The
 The template repository (e.g. [default-workspace-template](https://github.com/imbue-ai/default-workspace-template)) contains:
 
 - `.mngr/settings.toml` -- mngr configuration: agent types, create templates, environment variables
-- `system/supervisord.conf` -- background services, each a `[program:*]` section supervised by supervisord
+- `system/supervisord.conf` -- the apps' and background services' `[program:*]` sections, supervised by supervisord
 - `system/Dockerfile` -- container image definition
 - `CLAUDE.md` -- instructions for the Claude agent
 - `.agents/skills/` -- skills available to the agent
-- `system/scripts/` -- utility scripts (forward_port.py, run_ttyd.sh, etc.)
-- `system/libs/` -- Python packages for the built-in services (bootstrap, cloudflare_tunnel, app_watcher, ...); user-built packages live in `creations/`
-- `data/` -- gitignored workspace data (uploads, memories, per-creation data, machine state, secrets)
+- `system/scripts/` -- utility scripts (forward_port.py, layout.py, etc.)
+- `system/apps/` -- everything tab-openable (system_interface, terminal, browser, and user-built apps); `system/services/` -- tab-less background services (app_watcher, share_gateway, host_backup, ...); `system/libs/` -- support libraries (bootstrap, ...)
+- `data/` -- gitignored workspace data (documents, uploads, memories, per-app data, machine state, secrets)
 
 ## Key files
 
 ### system/supervisord.conf
 
-Declares the background services as `[program:*]` sections that supervisord
+Declares the apps and background services as `[program:*]` sections that supervisord
 starts and supervises (logs under `/var/log/supervisor`). The bootstrap runs
 first-boot setup and then execs `supervisord -n -c system/supervisord.conf`:
 
@@ -31,13 +31,13 @@ autostart=true
 autorestart=true
 
 [program:terminal]
-command=bash system/scripts/run_ttyd.sh
+command=bash system/apps/terminal/run_ttyd.sh
 directory=/home/user/workspace
 autostart=true
 autorestart=true
 
-[program:cloudflared]
-command=uv run cloudflare-tunnel
+[program:share-gateway]
+command=uv run share-gateway
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -49,12 +49,12 @@ autostart=true
 autorestart=true
 ```
 
-### data/.state/applications.toml
+### data/.state/apps.toml
 
-Tracks application ports for forwarding. Written by services via `system/scripts/forward_port.py`:
+Tracks app ports for forwarding. Written by apps via `system/scripts/forward_port.py`:
 
 ```toml
-[[applications]]
+[[apps]]
 name = "web"
 url = "http://localhost:8000"
 global = true
@@ -62,22 +62,27 @@ global = true
 
 ### data/.secrets
 
-Contains environment variable exports injected by the desktop client:
+Contains environment variable exports injected by the desktop client.
+While sharing is enabled, `data/.secrets/share.env` holds the share
+materials the share-gateway service watches for (alongside
+`data/.secrets/share_grants.toml`, the grants document gating access):
 
 ```bash
-export CLOUDFLARE_TUNNEL_TOKEN=eyJ...
+export SHARE_WORKSPACE_DOMAIN=host-<hex>.<user>.us1.example.com
+export SHARE_RELAY_ENDPOINT=relay-us1.example.com:7000
+export SHARE_RELAY_TOKEN=...
+export SHARE_CONNECTOR_URL=https://...
+export SHARE_BROKER_URL=https://...
 ```
 
-## How services register ports
+## How apps register ports
 
-Services call `system/scripts/forward_port.py` on startup to register their ports:
+Apps call `system/scripts/forward_port.py` on startup to register their ports:
 
 ```bash
 python3 system/scripts/forward_port.py --url http://localhost:8000 --name web
 python3 system/scripts/forward_port.py --url http://localhost:7681 --name terminal
-python3 system/scripts/forward_port.py --remove --name old-service
+python3 system/scripts/forward_port.py --remove --name old-app
 ```
 
-The app watcher service monitors `applications.toml` and:
-1. Writes service events to `events/services/events.jsonl` for the desktop client to discover
-2. Reconciles with the Cloudflare forwarding API (adds missing services, removes stale ones)
+The app watcher service monitors `apps.toml` and writes service events to `events/services/events.jsonl` for the desktop client to discover. (Share registration happens on the minds side when the user enables sharing -- not in the watcher.)

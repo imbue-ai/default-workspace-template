@@ -6,8 +6,6 @@
 # tests/batch while load-balancing the slowest tests into their own bin.
 max_parallel = 50
 test_timeout_secs = 900
-retry_count = 2
-stream_output = true
 sandbox_project_root = "/code/mngr"
 
 # Run scripts/post-source-setup.sh after offload applies its thin diff
@@ -43,6 +41,10 @@ build_inputs = [
 type = "pytest"
 command = "uv run pytest"
 run_args = "--no-cov -p no:xdist"
+# Skip coverage tracing during `pytest --collect-only` -- pure overhead there
+# (no tests run). offload does not auto-inject discovery args (by design they
+# stay explicit), so we set it here.
+discovery_args = "--no-cov"
 
 [groups.all]
 retry_count = 1
