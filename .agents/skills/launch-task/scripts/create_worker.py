@@ -111,11 +111,6 @@ _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
 _DEFAULT_TIMEOUT = "30m"
 _DEFAULT_POLL_INTERVAL = "5s"
 
-# mngr's own default ``--branch`` NEW-branch pattern (``_DEFAULT_NEW_BRANCH_PATTERN``
-# in ``mngr/cli/create.py``): ``*`` expands to the agent name. Mirrored here so
-# ``resolve_worker_branch`` can name the branch mngr will actually produce.
-_MNGR_DEFAULT_NEW_BRANCH_PATTERN = "mngr/*"
-
 # Distinct exit code for an await that timed out without the report appearing,
 # matching coreutils ``timeout``'s convention so the prose's mental model
 # carries over.
@@ -127,49 +122,56 @@ _AWAIT_TIMEOUT_RC = 124
 _AWAIT_SHED_RC = 75
 
 
-class BranchSpecError(ValueError):
-    """A malformed mngr ``--branch`` spec (avoids raising a built-in directly).
+class WorkerBranchUnknownError(ValueError):
+    """Raised when mngr cannot tell us which branch the worker ended up on."""
 
-    Inherits ``ValueError`` so the failure still reads as a bad-argument error to
-    anything catching broadly, while giving callers a name to catch precisely.
+
+def read_worker_branch(name: str, runner: Runner) -> str:
+    """Ask mngr which branch the worker's work_dir is actually on.
+
+    Observed, not predicted. This used to re-derive the branch by parsing the
+    ``--branch`` spec the same way mngr's own (private) ``_parse_branch_flag``
+    does, which duplicated logic we do not own and would have drifted silently.
+    mngr now reports it directly as the agent's ``branch`` field, so we read that.
+
+    Note ``branch`` rather than ``initial_branch``: the latter is only set for a
+    branch mngr *created*, and is deliberately None when an existing branch was
+    checked out -- exactly the ``--branch <existing>`` case this script's callers
+    use. ``branch`` is populated either way.
+
+    ``launch-sync`` publishes this as the ref its callers merge from, so a wrong
+    answer sends them at a branch the worker never committed to. Raising is
+    therefore better than guessing.
     """
-
-
-def resolve_worker_branch(name: str, branch: str | None) -> str:
-    """The branch the worker's commits actually land on, for a ``--branch`` spec.
-
-    Mirrors mngr's own ``[BASE][:NEW]`` parsing (``_parse_branch_flag`` in
-    ``mngr/cli/create.py``):
-
-    - ``None`` -- no ``--branch`` passed, so mngr applies its default spec
-      (``:mngr/*``) and cuts a fresh ``mngr/<name>``.
-    - ``BASE`` (no colon) -- ``BASE`` is checked out directly, so it *is* the
-      worker's branch.
-    - ``BASE:NEW`` -- ``NEW`` is created from ``BASE``, with ``*`` expanding to
-      the agent name; an empty ``NEW`` falls back to mngr's ``mngr/*`` pattern.
-
-    This is not cosmetic bookkeeping: ``launch-sync`` reports this branch as the
-    machine-readable contract its callers merge from. Deriving it as a fixed
-    ``mngr/<name>`` was correct only while ``--branch`` did not exist -- with a
-    spec that renames or reuses a branch, that guess names a branch the worker
-    never committed to, so a caller would merge the wrong ref (or a missing one).
-    """
-    if branch is None:
-        return f"mngr/{name}"
-    if ":" not in branch:
-        if not branch:
-            raise BranchSpecError(
-                "branch spec must not be empty -- pass None for mngr's default (mngr/<name>)"
-            )
-        return branch
-    _base, new = branch.split(":", 1)
-    if not new:
-        new = _MNGR_DEFAULT_NEW_BRANCH_PATTERN
-    if new.count("*") > 1:
-        raise BranchSpecError(
-            f"branch spec allows at most one '*' in the new branch name: {branch!r}"
+    result = runner.run(
+        [
+            "mngr",
+            "ls",
+            "--include",
+            f'name == "{name}"',
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(result, "returncode", 0) != 0:
+        raise WorkerBranchUnknownError(
+            f"could not list agent {name!r} to learn its branch: {getattr(result, 'stderr', '')!r}"
         )
-    return new.replace("*", name)
+    try:
+        agents = json.loads(getattr(result, "stdout", "") or "")["agents"]
+    except (ValueError, KeyError, TypeError) as e:
+        raise WorkerBranchUnknownError(f"could not parse `mngr ls` output for {name!r}: {e}") from e
+    if not agents:
+        raise WorkerBranchUnknownError(f"mngr reports no agent named {name!r}")
+    branch = agents[0].get("branch")
+    if not branch:
+        raise WorkerBranchUnknownError(
+            f"mngr reports no branch for agent {name!r}; it may not have a git work_dir"
+        )
+    return str(branch)
 
 
 def _normalize_dir(value: str) -> str:
@@ -500,18 +502,10 @@ def launch(
     branch not being checked out in another worktree at create time (git forbids
     the same branch in two worktrees); the ``BASE:NEW`` form has no such
     constraint, since mngr cuts ``NEW`` from ``BASE`` without checking ``BASE``
-    out. The spec is resolved through ``resolve_worker_branch`` up front, so a
-    malformed one raises here -- before any worker is created -- rather than
-    after a caller has waited out a whole run.
+    out. The spec is handed to ``mngr create`` verbatim; this script no longer
+    parses it, so a malformed one surfaces as mngr's own error.
     """
     runner = runner or Runner()
-
-    # Parse the branch spec before anything is created. A malformed spec is an
-    # authoring bug in the caller's argv, and it is knowable now: leaving it to
-    # ``launch_sync``'s own resolve (which runs after the await) would only
-    # surface it once the worker had already run to completion, discarding the
-    # report it had just collected.
-    resolve_worker_branch(name, branch)
 
     if not runtime_dir.is_dir():
         print(
@@ -774,7 +768,8 @@ def destroy(name: str, runner: Runner | None = None) -> None:
     ``mngr destroy`` removes the agent and its worktree; the branch persists in
     the shared object store, so a caller can still merge or inspect the work.
     That branch is ``mngr/<name>`` unless ``launch`` was given a ``--branch``
-    spec -- see ``resolve_worker_branch``.
+    spec; ``read_worker_branch`` reports whichever it is, but only while the
+    agent still exists -- so read it before destroying.
     """
     runner = runner or Runner()
     runner.run(["mngr", "destroy", name, "--force"], check=True)
@@ -870,6 +865,13 @@ def launch_sync(
     if launch_rc != 0:
         return launch_rc
 
+    # Read the branch now, not after the await. The worker exists from here on, so
+    # mngr can answer; and if it cannot, this is the moment to say so -- the same
+    # reasoning that used to validate the spec up front. Left until after the wait,
+    # a failure here would surface only once the worker had run to completion, and
+    # would discard the report we had just collected.
+    worker_branch = read_worker_branch(name, runner)
+
     buffer = io.StringIO()
     await_rc = await_report(
         report_path=report_path,
@@ -881,7 +883,6 @@ def launch_sync(
         worker_name=name,
         pending_shed_check=_worker_has_pending_shed,
     )
-    worker_branch = resolve_worker_branch(name, branch)
     if await_rc != 0:
         # Timed out: leave the worker alive for liveness diagnosis.
         _emit_run_result(

@@ -103,9 +103,11 @@ pushes that directory into the worker's worktree automatically.
 mngr/some-branch`) to have the worker check *that* branch out directly, so its
 commits extend work you already built up rather than starting from HEAD -- the
 branch must not be checked out in another worktree when the worker is created.
-The full mngr `[BASE][:NEW]` spec is accepted; see the flag's `--help` and
-`resolve_worker_branch` in `create_worker.py` for the exact grammar. Whatever you
-pass, the branch to merge from is what that spec resolves to, not `mngr/$NAME`.
+The full mngr `[BASE][:NEW]` spec is accepted and handed to `mngr create`
+verbatim; see the flag's `--help` for the grammar. Whatever you pass, the branch
+to merge from is whatever mngr reports the worker actually landed on -- read back
+from the created agent (`read_worker_branch`), not guessed from the spec, and not
+assumed to be `mngr/$NAME`.
 
 ## 3. Background-poll for the worker's report
 
@@ -143,7 +145,7 @@ report -> diagnose worker liveness, then surface to the user per
 Flow-specific substitutions when reading `lead-proxy.md`:
 
 - Worker name: `$NAME`
-- Branch: `mngr/$NAME` by default, or whatever a `--branch` spec resolved to
+- Branch: `mngr/$NAME` by default, or whatever branch mngr reports the worker is on when `--branch` was passed
 - Task file (pass to `create_worker.py await --task-file`): `data/.tasks/launch-task/$NAME/task.md`
 - `finish_report_path`: `data/.tasks/launch-task/$NAME/reports/report.md`
 - Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `data/.tasks/launch-task/$NAME/reports/`
