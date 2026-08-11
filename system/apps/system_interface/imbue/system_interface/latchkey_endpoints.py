@@ -42,6 +42,8 @@ logger = _loguru_logger
 # read them rather than bundle any gateway state of our own.
 _ENV_GATEWAY = "LATCHKEY_GATEWAY"
 _ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
+# Only present on desktop-hosted gateways, where requests without this JWT are
+# evaluated against a deny-all default; VPS gateways omit it.
 _ENV_GATEWAY_PERMISSIONS_OVERRIDE = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 _HEADER_PASSWORD = "X-Latchkey-Gateway-Password"
 _HEADER_PERMISSIONS_OVERRIDE = "X-Latchkey-Gateway-Permissions-Override"
@@ -133,7 +135,7 @@ def resolve_scope_info(
     client: httpx.Client,
     base_url: str,
     password: str,
-    permissions_override: str,
+    permissions_override: str | None,
     scope: str,
     cache: CatalogCache,
 ) -> LatchkeyScopeInfo | None:
@@ -143,7 +145,9 @@ def resolve_scope_info(
     the entry from the first service whose catalog contains the scope. Propagates
     ``httpx.HTTPError`` from the gateway calls.
     """
-    headers = {_HEADER_PASSWORD: password, _HEADER_PERMISSIONS_OVERRIDE: permissions_override}
+    headers = {_HEADER_PASSWORD: password}
+    if permissions_override:
+        headers[_HEADER_PERMISSIONS_OVERRIDE] = permissions_override
     for service in candidate_services(scope):
         entries = _get_service_catalog(client, base_url, headers, service, cache)
         if entries is None:
@@ -164,7 +168,7 @@ def get_scope_info(scope: str) -> Response:
     base_url = os.environ.get(_ENV_GATEWAY)
     password = os.environ.get(_ENV_GATEWAY_PASSWORD)
     permissions_override = os.environ.get(_ENV_GATEWAY_PERMISSIONS_OVERRIDE)
-    if not base_url or not password or not permissions_override:
+    if not base_url or not password:
         return _json_response({"detail": "latchkey gateway is not configured"}, status_code=503)
     state = get_state()
     client: httpx.Client = state.latchkey_http_client

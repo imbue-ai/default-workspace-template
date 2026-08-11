@@ -54,27 +54,15 @@ async def _create_running(manager: "bsession.BrowserSessionManager", name: str |
     return session
 
 
-def _drain_cast_queue(cast_queue: Any) -> tuple[list[str], list[dict[str, Any]]]:
-    """Split a cast queue's buffered JSON strings into frames vs other events."""
-    frames: list[str] = []
-    events: list[dict[str, Any]] = []
-    drained = False
-    while not drained:
-        try:
-            obj = json.loads(cast_queue.get_nowait())
-        except queue.Empty:
-            drained = True
-            continue
-        if obj.get("type") == "frame":
-            frames.append(obj["data"])
-        else:
-            events.append(obj)
-    return frames, events
-
-
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 @pytest.mark.timeout(120)  # real-Chromium cold-start + nav exceeds the global 10s locally/offload
-def test_live_browser_streams_and_accepts_input(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_browser_tabs_track_browser_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    # browser-use is the single source of truth for tabs now (no Playwright observer):
+    # the tab list, opening a tab, and switching a tab all go through browser-use, and
+    # `switch` moves the REAL working tab (state/click follow it). This verifies that
+    # behavioral spec against real Chromium. (Pixel streaming films a display via
+    # pixelflux and so can't be exercised headless -- it's verified on the /stream path
+    # and live, not here.)
     monkeypatch.setenv("BROWSER_HEADLESS", "1")
 
     async def go() -> None:
@@ -84,30 +72,28 @@ def test_live_browser_streams_and_accepts_input(monkeypatch: pytest.MonkeyPatch)
         except (bsession.BrowserStartupError, PlaywrightError, OSError) as e:
             pytest.skip(f"Chromium unavailable in this environment: {e}")
         try:
-            cast_queue = await session.register_cast_queue()
-            await session.handle_cast_message({"type": "navigate", "url": "https://example.com"})
-            frames: list[str] = []
-            for _ in range(20):
-                await asyncio.sleep(0.5)
-                more_frames, _ = _drain_cast_queue(cast_queue)
-                frames += more_frames
-                if frames:
-                    break
-            assert frames, "expected at least one screencast frame"
-
-            # Human input dispatch must not raise against the live target.
-            await session.handle_cast_message(
-                {"type": "mouse", "event": {"type": "mouseMoved", "x": 50, "y": 50, "button": "none"}}
-            )
-
-            # Open a second tab and confirm the view follows it (active switches).
-            await session.handle_cast_message({"type": "tab", "action": "new", "url": "https://example.org"})
-            await asyncio.sleep(2)
-            _, events = _drain_cast_queue(cast_queue)
-            tab_events = [e for e in events if e.get("type") == "tabs"]
-            assert tab_events, "expected a tab-list update after opening a tab"
-            active = [t for t in tab_events[-1]["tabs"] if t["active"]]
+            # Navigate the starting tab, then open a second one via the fleet's tab verb.
+            assert (await session.act_navigate("A", "Alice", "https://example.com"))["ok"]
+            opened = await session.act_tab("A", "Alice", "new", None, "https://example.org")
+            assert opened["ok"]
+            await asyncio.sleep(1.0)
+            # The tab list is browser-use's real tabs, with the newly opened one active.
+            listed = await session.act_tab("A", "Alice", "list", None, None)
+            tabs = listed["tabs"]
+            assert len(tabs) == 2, f"expected two real tabs, got {tabs}"
+            active = [t for t in tabs if t["active"]]
             assert len(active) == 1 and "example.org" in active[0]["url"]
+            # state runs on that same active tab (single tab brain).
+            state = await session.act_state("A", "Alice")
+            assert "example.org" in state["url"]
+            # Switch back to the first tab -> the REAL working tab moves, state follows.
+            # Use the EXACT CLI verb "switch" (fleet.py's tab action) so this guards the
+            # real agent path, not an alias -- a mismatch here silently no-ops the switch.
+            first_index = next(i for i, t in enumerate(tabs) if "example.com" in t["url"])
+            assert (await session.act_tab("A", "Alice", "switch", first_index, None))["ok"]
+            await asyncio.sleep(0.5)
+            switched = await session.act_state("A", "Alice")
+            assert "example.com" in switched["url"], f"switch did not move the real tab: {switched['url']}"
         finally:
             await manager.shutdown()
 
@@ -453,18 +439,66 @@ def test_http_handoff_returns_a_consistent_on_loop_control_snapshot(monkeypatch:
 
 
 def test_http_cast_closes_a_failed_launch_name_terminally(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A name whose background launch FAILED is closed 1008 (terminal) by the cast handler,
-    # so a late/retrying optimistic viewer stops looping on 1013 (finding [7]). We boot a
-    # real server because the close CODE is only observable over a real socket.
+    # A name whose background launch FAILED is closed terminally by the cast handler, so a
+    # late/retrying optimistic viewer stops looping on 1013 (finding [7]). The terminal reason
+    # rides a TEXT frame (`launch_failed`) sent BEFORE the close: the close CODE alone is not a
+    # reliable signal here -- werkzeug writes a trailing HTTP response onto the hijacked socket,
+    # so a real browser sees 1006 "Invalid frame header" and never the 1008 code. We boot a real
+    # server because both the message and the close CODE are only observable over a real socket.
     runner.manager._browsers.clear()
     runner.manager._failed_launch_names.append("alex-smith")  # valid name, but launch failed
     with _BootedServer() as server:
         ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/alex-smith/cast")
-        # The handler closes the socket terminally; the client sees it close (no messages).
+        # The reliable terminal signal is the message; the viewer marks itself closed-for-good
+        # on it regardless of whether the (corruptible) close code survives.
+        assert _ws_recv_json(ws, timeout=5)["type"] == "launch_failed"
         assert _wait_until(lambda: not ws.connected)
         # 1008 is terminal; a still-launching (not failed) valid name would have been 1013.
         assert ws.close_reason == 1008
     runner.manager._failed_launch_names.clear()
+
+
+def test_http_cast_closes_a_closed_browser_with_the_terminated_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A browser explicitly CLOSED by an agent is closed terminally, so a viewer whose tab is
+    # still open renders the "terminated by an agent" overlay instead of the generic "reopen"
+    # text or a "Starting browser…" retry loop. The viewer acts on the `closed` TEXT frame
+    # (delivered intact before the close), not the 4001 close code -- which a real browser never
+    # sees, because werkzeug corrupts the close handshake with a trailing HTTP response (1006).
+    runner.manager._browsers.clear()
+    runner.manager._closed_names.append("alex-smith")
+    try:
+        with _BootedServer() as server:
+            ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/alex-smith/cast")
+            assert _ws_recv_json(ws, timeout=5)["type"] == "closed"
+            assert _wait_until(lambda: not ws.connected)
+            assert ws.close_reason == runner._WS_CLOSE_TERMINATED
+    finally:
+        runner.manager._closed_names.clear()
+
+
+def test_http_cast_closes_a_stale_valid_name_terminally_once_restore_is_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A syntactically valid name that resolves to nothing is RETRYABLE (1013) while the fleet
+    # is still restoring -- it may yet come up -- but TERMINAL (4001 + `closed`) once restore is
+    # done: a layout-restored tab of a browser closed in a PRIOR daemon life (whose in-memory
+    # close memory didn't survive the restart) must show the terminated overlay, not loop forever
+    # on "Starting browser…".
+    runner.manager._browsers.clear()
+    runner.manager._closed_names.clear()
+    runner.manager._failed_launch_names.clear()
+    runner._init_done.clear()  # still restoring -> retryable
+    try:
+        with _BootedServer() as server:
+            ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/riley-jones/cast")
+            assert _wait_until(lambda: not ws.connected)
+            # Retryable: NO terminal message (the viewer must keep reconnecting), just 1013.
+            assert ws.close_reason == 1013
+    finally:
+        runner._init_done.set()  # restore done -> terminal (conftest also re-sets on teardown)
+    with _BootedServer() as server:
+        ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/riley-jones/cast")
+        assert _ws_recv_json(ws, timeout=5)["type"] == "closed"
+        assert _wait_until(lambda: not ws.connected)
+        assert ws.close_reason == runner._WS_CLOSE_TERMINATED
 
 
 def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -472,8 +506,6 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
     # `initializing` banner, even while the whole fleet is still restoring (finding
     # [3-runner]) -- its seed already says lifecycle=running and the live page is there.
     fake = _install_fake_browser(monkeypatch)  # lifecycle=running
-    fake._context = None
-    fake._latest_frame = "f"  # avoid an on-demand capture (no real CDP)
     runner._init_done.clear()  # the fleet is still restoring
     try:
         with _BootedServer() as server:
@@ -656,22 +688,35 @@ def test_profile_persists_across_manager_restart(monkeypatch: pytest.MonkeyPatch
             assert (await browser.act_navigate("A", "Alice", "https://example.com"))["ok"]
             # Anti-_copy_profile tripwire: the live profile is our persistent dir, NOT a temp copy.
             assert str(_profile_dir_for(name)) == str(browser._bu_session.browser_profile.user_data_dir)
-            first_context = browser._context
-            assert first_context is not None, "context should be live after a successful navigate"
-            await first_context.add_cookies(
+            # Set the cookie through browser-use's CDP (the single Chrome connection now).
+            await browser._bu_session._cdp_set_cookies(
                 [{"name": "fleet_test", "value": "persisted", "url": "https://example.com", "expires": future_expiry}]
             )
+            live = await browser._bu_session.cookies()
+            assert any(c.get("name") == "fleet_test" for c in live), f"cookie not set in the live session: {live}"
             await first._save_manifest()
+            # Chromium writes the cookie to the on-disk profile DB lazily; the fleet's
+            # teardown kills Chromium with force=True (a hard stop that does NOT flush), so
+            # a cookie set moments before shutdown can be lost. A graceful stop() flushes
+            # the profile deterministically first -- a real daemon that has run for minutes
+            # has long since flushed on Chromium's own timer, so this stands in for that.
+            await browser._bu_session.stop()
         finally:
-            await first.shutdown()  # clean stop flushes the profile to disk
+            await first.shutdown()
 
         second = bsession.BrowserSessionManager()
         await second.restore()  # the saved browser comes back by name
         try:
-            second_context = second.get(name)._context
-            assert second_context is not None, "context should be live after restore"
-            cookies = await second_context.cookies("https://example.com")
-            assert any(c.get("name") == "fleet_test" and c.get("value") == "persisted" for c in cookies)
+            # Poll briefly: the relaunched session opens its cookie DB asynchronously, so
+            # the cookie can land a beat after restore returns. Deterministic under load.
+            found = False
+            for _ in range(20):
+                cookies = await second.get(name)._bu_session.cookies()
+                if any(c.get("name") == "fleet_test" and c.get("value") == "persisted" for c in cookies):
+                    found = True
+                    break
+                await asyncio.sleep(0.5)
+            assert found, "cookie did not survive the profile restore"
         finally:
             await second.shutdown()
 
@@ -745,7 +790,6 @@ def test_cast_ws_streams_control_and_take_control_flips_ownership(monkeypatch: p
     # queue and the Flask thread sends them; inbound take_control is read on a second
     # thread and dispatched to the loop. No real Chromium -- a fake session suffices.
     fake = _install_fake_browser(monkeypatch)
-    fake._context = None  # _tab_list -> [] without Chromium
     with _BootedServer() as server:
         ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/alex-smith/cast")
         try:
@@ -776,7 +820,6 @@ def test_hold_releases_the_lease_when_the_client_socket_dies(monkeypatch: pytest
     # finally runs -> the lease is released. This is the contract the in-process test
     # client cannot exercise (it never fails a real socket write).
     fake = _install_fake_browser(monkeypatch)
-    fake._context = None
     with _BootedServer() as server:
         conn = socket.create_connection(("127.0.0.1", server.port), timeout=5)
         request = (

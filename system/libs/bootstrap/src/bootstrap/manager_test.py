@@ -713,7 +713,6 @@ def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
 ) -> None:
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
     monkeypatch.delenv("LATCHKEY_GATEWAY_PASSWORD", raising=False)
-    monkeypatch.delenv("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", raising=False)
     assert _fetch_user_timezone() == ""
 
 

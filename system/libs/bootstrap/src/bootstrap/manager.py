@@ -487,16 +487,18 @@ def _fetch_user_timezone() -> str:
     """
     gateway = os.environ.get("LATCHKEY_GATEWAY", "")
     password = os.environ.get("LATCHKEY_GATEWAY_PASSWORD", "")
-    permissions = os.environ.get("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "")
-    if not gateway or not password or not permissions:
+    if not gateway or not password:
         logger.debug("Latchkey gateway env not fully set; skipping timezone fetch")
         return ""
+    headers = {"X-Latchkey-Gateway-Password": password}
+    # Desktop-hosted gateways authorize via this per-agent JWT and deny
+    # requests without it; VPS gateways omit the env var.
+    permissions_override = os.environ.get("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "")
+    if permissions_override:
+        headers["X-Latchkey-Gateway-Permissions-Override"] = permissions_override
     request = urllib.request.Request(
         f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/timezone",
-        headers={
-            "X-Latchkey-Gateway-Password": password,
-            "X-Latchkey-Gateway-Permissions-Override": permissions,
-        },
+        headers=headers,
     )
     try:
         timezone_name = _request_timezone(request)

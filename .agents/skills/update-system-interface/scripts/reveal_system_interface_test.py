@@ -78,22 +78,15 @@ class _RecordingRunner(reveal_mod.Runner):
 
 
 class _FakeHttp(reveal_mod.HttpClient):
-    """Returns whatever ``responder(url)`` yields for GETs; records POSTs."""
+    """Returns whatever ``responder(url)`` yields for the health-probe GETs."""
 
     def __init__(self, responder: Callable[[str], int | None]) -> None:
         self._responder = responder
         self.get_urls: list[str] = []
-        self.post_urls: list[str] = []
 
     def get_status(self, url: str, timeout: float) -> int | None:
         self.get_urls.append(url)
         return self._responder(url)
-
-    def post_json(
-        self, url: str, payload: dict, headers: dict, timeout: float
-    ) -> int | None:
-        self.post_urls.append(url)
-        return 200
 
 
 @dataclass
@@ -163,6 +156,13 @@ def _all_healthy(_url: str) -> int:
     return 200
 
 
+def _refreshed_the_view(runner: _RecordingRunner) -> bool:
+    """Whether the reveal delegated to the shared post-change refresh helper."""
+    return runner.ran(
+        sys.executable, str(_REPO / "system/scripts/refresh_workspace_view.py")
+    )
+
+
 def _is_live(url: str) -> bool:
     return url.startswith(_LIVE_BASE)
 
@@ -217,7 +217,7 @@ def test_classify_ignores_unrelated_paths() -> None:
 # --- happy paths ------------------------------------------------------------
 
 
-def test_frontend_only_builds_and_broadcasts_without_restart() -> None:
+def test_frontend_only_builds_and_refreshes_without_restart() -> None:
     runner = _runner_with_diff(
         "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
     )
@@ -233,7 +233,86 @@ def test_frontend_only_builds_and_broadcasts_without_restart() -> None:
         "uv", "tool", "install"
     )  # no manifest change -> no dep refresh
     assert not spawner.spawns  # no pre-flight for a frontend-only change
-    assert http.post_urls  # reload broadcast sent
+    assert _refreshed_the_view(runner)
+
+
+def test_backend_only_change_still_refreshes_the_view() -> None:
+    """A backend-only reveal must reload the open view too.
+
+    The restart swaps the API underneath a page that keeps rendering from what
+    it already fetched, and a restart quick enough not to look unreachable
+    never gets a reload from anywhere else -- so skipping it here (as the
+    frontend-gated broadcast used to) leaves the user on stale output.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+    assert runner.ran("mngr", "start", "--restart", "system-services")
+    assert _refreshed_the_view(runner)
+
+
+def test_refresh_runs_after_the_restart_not_before() -> None:
+    """Refreshing before the backend is back would just reload the old code."""
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+
+    _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    restart_index = next(
+        i for i, c in enumerate(runner.calls) if c[:2] == ["mngr", "start"]
+    )
+    refresh_index = next(
+        i
+        for i, c in enumerate(runner.calls)
+        if c[:1] == [sys.executable] and c[1].endswith("refresh_workspace_view.py")
+    )
+    assert restart_index < refresh_index
+
+
+def test_unspawnable_refresh_helper_does_not_fail_a_successful_reveal() -> None:
+    """The refresh runs last, after the reveal has already succeeded.
+
+    It is the one step that cannot fail the reveal: the change has landed and
+    the live UI is confirmed healthy, so a helper we cannot even spawn (no
+    memory to fork right after the restart) must not turn that into a
+    non-zero exit the lead reads as "the change did not land".
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    runner.respond((sys.executable,), OSError("Cannot allocate memory"))
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
+    assert _refreshed_the_view(runner)  # it was attempted, not skipped
+
+
+def test_undecodable_refresh_output_does_not_fail_a_successful_reveal() -> None:
+    """Capturing the helper's output must not become the thing that fails a reveal.
+
+    ``capture_output=True, text=True`` decodes what the child wrote, and output
+    the stdio encoding cannot decode raises ``UnicodeDecodeError`` -- a
+    ``ValueError``, so neither ``OSError`` nor ``SubprocessError`` covers it.
+    The helper guards the mirror image of this on its own side; letting it
+    escape here would abort a reveal whose change has already landed.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    runner.respond(
+        (sys.executable,),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    )
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
+
+    assert code == 0
 
 
 def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> None:
@@ -317,6 +396,10 @@ def test_no_relevant_changes_does_nothing() -> None:
     assert code == 0
     assert not runner.ran("npm", "run", "build")
     assert not runner.ran("mngr", "start")
+    # The unconditional refresh in _apply_reveal is only safe because this run
+    # never reaches it: nothing changed, so there is nothing to reveal and no
+    # reason to reload the view the user is already looking at.
+    assert not _refreshed_the_view(runner)
 
 
 # --- failure + autonomous rollback ------------------------------------------
@@ -395,6 +478,10 @@ def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
         )
         == 2
     )
+    # Recovery got the service healthy again, so the restored tree is what the
+    # open view should be rendering -- a failed reveal must not leave the user
+    # looking at the build that broke.
+    assert _refreshed_the_view(runner)
 
 
 def test_emergency_when_rollback_cannot_restore_health() -> None:

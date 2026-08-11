@@ -165,13 +165,15 @@ process restarts:
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
   This surgical reload is for iterating on a single service. It is *not* the
   path for landing an `update-self` merge -- that restarts the whole services
-  agent (`mngr start --restart system-services`) so `bootstrap` re-runs too.
+  agent (`mngr start --restart system-services`) so `bootstrap` re-runs too,
+  and must be followed by
+  `python3 system/scripts/refresh_workspace_view.py` (see step 3).
 
 If it doesn't come back `RUNNING`, read
 `/var/log/supervisor/<name>-stderr.log` or
 `supervisorctl tail <name> stderr`.
 
-### 3. Refresh the user's view (apps only)
+### 3. Refresh the user's view
 
 If the service has a user-facing tab, the open iframe is still showing the
 pre-change page. Refresh it so the user sees the update without being told
@@ -187,7 +189,21 @@ layout -- `open` requires `--layout` and only applies on clients with that
 layout active, so the layout the user is not on fails fast and harmlessly:
 `for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done`.
 For any other tab manipulation, see `manage-layout`. Background daemons have
-no tab -- skip this step.
+no tab -- skip the tab refresh, but not the rest of this step.
+
+If you restarted the whole services agent rather than a single program, one
+tab refresh is not enough -- the workspace shell itself was bounced. Rebuild
+the user's whole view instead:
+
+```bash
+python3 system/scripts/refresh_workspace_view.py
+```
+
+Nothing else does this for you. The Minds app only intervenes when a workspace
+looks unreachable for a sustained stretch, and a services restart that comes
+back quickly never crosses that bar, so the user is left reading the page the
+previous build rendered. The helper is fire-and-forget and always exits 0; it
+names any channel that did not land on stderr and is never a reason to stop.
 
 ### 4. Verify
 
