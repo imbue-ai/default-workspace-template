@@ -15,6 +15,13 @@ export interface AgentState {
   name: string;
   state: string;
   labels: Record<string, string>;
+  // The mngr ``project`` label, lifted out of ``labels`` by the backend: the
+  // project this chat was created in, which mngr propagates to the agent's own
+  // children. Null when the agent carries no label. Membership is many-to-many
+  // and this label names the chat's *originating* project only -- what a view
+  // shows is its member list, not this -- so it is a starting point for filing
+  // a chat, never an owner.
+  project?: string | null;
   work_dir: string | null;
   // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the
   // system interface has no per-agent activity tracking available (e.g.
@@ -150,6 +157,13 @@ type WsEvent =
       // content is untouched, so consumers only re-list.
       type: "project_updated";
       project_id: string;
+    }
+  | {
+      // One or more projects' member lists changed (an add, a remove, or a
+      // share). Membership is durable and independent of the layout, so this
+      // reaches clients that do not have any of these projects mounted.
+      type: "project_members_changed";
+      project_ids: string[];
     };
 
 /** Layout registry / sync events pushed over the WebSocket. */
@@ -164,12 +178,16 @@ export type LayoutSyncListener = (event: LayoutSyncEvent) => void;
  * Project registry / sync events pushed over the WebSocket. The mirror of
  * ``LayoutSyncEvent`` for projects: ``saved`` carries the writer's client id so
  * the originator can skip its own echo, ``deleted`` carries the id everyone
- * mounted on it should fall back to, and ``updated`` is display metadata only.
+ * mounted on it should fall back to, ``updated`` is display metadata only, and
+ * ``members`` names every project whose member list moved -- which any client
+ * has to act on, mounted on those projects or not, since membership is what
+ * the sidebar lists rather than the layout.
  */
 export type ProjectSyncEvent =
   | { kind: "saved"; projectId: string; savedByClientId: string }
   | { kind: "deleted"; projectId: string; fallbackId: string }
-  | { kind: "updated"; projectId: string };
+  | { kind: "updated"; projectId: string }
+  | { kind: "members"; projectIds: string[] };
 
 export type ProjectSyncListener = (event: ProjectSyncEvent) => void;
 
@@ -388,6 +406,12 @@ function handleEvent(event: WsEvent): void {
     case "project_updated":
       for (const listener of projectSyncListeners) {
         listener({ kind: "updated", projectId: event.project_id });
+      }
+      break;
+
+    case "project_members_changed":
+      for (const listener of projectSyncListeners) {
+        listener({ kind: "members", projectIds: event.project_ids });
       }
       break;
   }

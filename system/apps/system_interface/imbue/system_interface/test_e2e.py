@@ -27,8 +27,10 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
-from imbue.system_interface.projects import EVERYTHING_PROJECT_ID
-from imbue.system_interface.projects import EVERYTHING_PROJECT_NAME
+from imbue.system_interface.projects import DEFAULT_PROJECT_ID
+from imbue.system_interface.projects import DEFAULT_PROJECT_NAME
+from imbue.system_interface.projects import EVERYTHING_VIEW_ID
+from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
@@ -71,8 +73,14 @@ def _frontend_built() -> bool:
     return (Path(__file__).parent / "static" / "index.html").is_file()
 
 
+# Every test here loads the workspace, and mounting a view re-reads the machine
+# so the project rail and the New Tab launcher can list its terminals -- which
+# shells out to ``tmux list-sessions`` server-side. The resource_guards plugin
+# fails any unmarked test that reaches tmux, so the mark belongs on the module
+# rather than on the handful of tests that also create a session.
 pytestmark = [
     pytest.mark.release,
+    pytest.mark.tmux,
     pytest.mark.skipif(not _playwright_browsers_installed(), reason="Playwright browsers not installed"),
     pytest.mark.skipif(
         not _frontend_built(),
@@ -179,8 +187,8 @@ def _running_e2e_server(
     ``additional_agents`` is a tuple of ``(agent_id, agent_name)`` for extra
     agents that EXIST but whose chats are not auto-opened. They carry no
     transcript -- a bare state dir plus a manager entry is enough to surface them
-    in the WebSocket agents snapshot the add-tab "+" dropdown lists. Used to
-    exercise the menu's agent-discovery path (nothing else opens their chat).
+    in the WebSocket agents snapshot the New Tab launcher enumerates. Used to
+    exercise the launcher's agent-discovery path (nothing else opens their chat).
     """
     base_url = f"http://127.0.0.1:{port}"
     agent_info, session_file = _make_agent_fixture(tmp_path, session_events=session_events)
@@ -279,9 +287,16 @@ def e2e_server(tmp_path: Path) -> Generator[tuple[str, list[AgentInfo], Path], N
 
 @pytest.mark.timeout(30, func_only=False)
 def test_page_loads_and_shows_title(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
-    """The page loads and shows the app title."""
+    """The page loads, boots the workspace, and shows the app title.
+
+    Every other test here waits on rendered content, which keeps them inside the
+    view mount; this one asserts on the document alone, so it waits explicitly
+    for the fleet listing that mounting a view issues. That makes its tmux use
+    (the module's mark) deterministic instead of a race against teardown.
+    """
     base_url, _, _ = e2e_server
-    page.goto(base_url)
+    with page.expect_response(lambda response: response.url.endswith("/api/terminals"), timeout=15000):
+        page.goto(base_url)
     expect(page).to_have_title("System Interface")
 
 
@@ -321,18 +336,18 @@ def test_chat_transcript_area_is_pure_white(e2e_server: tuple[str, list[AgentInf
     )
 
 
-# Opening the "+" dropdown fetches the live terminal fleet, which shells out to
-# ``tmux list-sessions`` server-side -- hence the tmux mark.
-@pytest.mark.tmux
 @pytest.mark.timeout(120, func_only=False)
-def test_add_tab_menu_lists_unopened_agent(tmp_path: Path, page: Page) -> None:
-    """The add-tab "+" menu lists agents that exist but have no open chat.
+def test_new_tab_launcher_lists_unopened_agent(tmp_path: Path, page: Page) -> None:
+    """The New Tab launcher lists agents that exist but have no open chat.
 
     The single-dockview UI replaced the old agent sidebar: the primary agent's
-    chat auto-opens as a tab, and every OTHER discoverable agent is surfaced in
-    the header "+" dropdown so the user can open its chat. This is where the
+    chat auto-opens as a tab, and every OTHER discoverable agent is reachable
+    from the "+", which now opens a full-page New Tab launcher instead of the
+    old dropdown. The launcher enumerates the whole machine, so an agent this
+    view does not show yet lands in its "On this machine" table -- opening it
+    from there files it into the active project as well. This is where the
     sidebar's "list the available agents" behavior now lives, so we assert an
-    unopened agent shows up there as an openable item.
+    unopened agent shows up there as an openable row.
     """
     with _running_e2e_server(tmp_path, _PORT + 3, additional_agents=(("agent-other-999", "other-agent"),)) as (
         base_url,
@@ -343,9 +358,12 @@ def test_add_tab_menu_lists_unopened_agent(tmp_path: Path, page: Page) -> None:
         # The primary agent's chat auto-opens; the extra agent stays closed.
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
 
-        # Open the "+" menu and confirm the unopened agent is offered as a chat.
+        # Open the "+" (a launcher tab) and confirm the unopened agent is offered.
         page.locator(".dockview-add-tab-button").first.click()
-        other_item = page.locator(".dockview-add-tab-dropdown-item", has_text="other-agent")
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+        other_item = page.locator(
+            ".new-tab-launcher-section[data-section='on-machine'] .new-tab-launcher-row", has_text="other-agent"
+        )
         expect(other_item).to_have_count(1, timeout=10000)
         expect(other_item).to_be_visible()
 
@@ -531,14 +549,13 @@ def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], agent_id:
     here exercises the real frontend ``handleSplit`` handler (which carves the
     second group) rather than reaching into dockview internals from the test.
 
-    Mutating ops are layout-targeted, and a client reports its active *project*
-    as its active layout, so they carry the Everything project (the one a fresh
-    browser lands on). They only succeed once the page's ``client_state``
-    registration has landed, so a 412 is retried until it catches up.
+    Mutating ops are layout-targeted, and a client reports its active *view* as
+    its active layout, so they carry the starter project -- the one a fresh
+    browser lands on, since Everything is reached by choosing it rather than by
+    default. They only succeed once the page's ``client_state`` registration has
+    landed, so a 412 is retried until it catches up.
     """
-    payload = json.dumps(
-        {"op": op, "args": {**args, "layout": EVERYTHING_PROJECT_NAME}, "agent_id": agent_id}
-    ).encode()
+    payload = json.dumps({"op": op, "args": {**args, "layout": DEFAULT_PROJECT_NAME}, "agent_id": agent_id}).encode()
     request = urllib.request.Request(
         f"{base_url}/api/layout/broadcast",
         data=payload,
@@ -563,10 +580,8 @@ def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], agent_id:
     )
 
 
-# Selects "New terminal" from the add-tab dropdown, which spawns a real tmux
-# session, so this test must be marked ``tmux`` (the resource_guards plugin
-# blocks unmarked tmux invocations).
-@pytest.mark.tmux
+# Picks the launcher's "Terminal" tile, which spawns a real tmux session (on top
+# of the fleet listing every page load already does -- see the module's mark).
 @pytest.mark.timeout(120, func_only=False)
 def test_new_tab_opens_in_clicked_split(e2e_server: tuple[str, list[AgentInfo], Path], page: Page) -> None:
     """The header "+" opens the new tab in the split whose header was clicked.
@@ -620,11 +635,13 @@ def test_new_tab_opens_in_clicked_split(e2e_server: tuple[str, list[AgentInfo], 
     right_index = 0 if boxes[0]["x"] > boxes[1]["x"] else 1
     add_buttons.nth(right_index).click()
 
-    # Choose "New terminal" from the (right split's) dropdown. The old "New URL" item this
-    # test used was intentionally removed from the "+" menu ("New browser" replaces the
-    # ad-hoc-URL flow); "New terminal" opens a tab through the SAME openIframeTab +
-    # targetGroup placement path, so it still exercises the clicked-split placement.
-    page.locator(".dockview-add-tab-dropdown-item:visible", has_text="New terminal").click()
+    # Pick "Terminal" from the launcher the "+" opened in the right split. The
+    # old "New URL" dropdown item this test used is gone twice over -- "New
+    # browser" replaced the ad-hoc-URL flow, and the launcher replaced the
+    # dropdown -- but a terminal opens through the SAME openIframeTab +
+    # targetGroup placement path, so it still exercises clicked-split placement.
+    expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+    page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
 
     # The new tab must render in the RIGHT split, not the left, and must tab
     # into the existing right group rather than carving a third.
@@ -832,12 +849,14 @@ def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
 
 
 @pytest.mark.timeout(30, func_only=False)
-def test_no_agents_shows_empty_state(page: Page, tmp_path: Path) -> None:
-    """When there are no agents, the workspace shows its empty-state overlay.
+def test_no_agents_shows_new_tab_launcher(page: Page, tmp_path: Path) -> None:
+    """When there are no agents, the workspace shows a New Tab launcher.
 
-    The sidebar (and its "No agents found" message) is gone. With no discoverable
-    agents there are no tabs to open, so the dockview's empty-state overlay is
-    shown instead of any chat -- waiting for the initial chat agent to appear.
+    The old agent sidebar (and its "No agents found" message) is gone, and so is
+    the dockview empty-state overlay that replaced it: the dock is never empty,
+    so a view with nothing to mount opens the launcher instead. With no
+    discoverable agents there is no chat to auto-open, so the launcher is the
+    whole dock -- one "New tab" tab and no transcript.
     """
     config = Config(system_interface_host="127.0.0.1", system_interface_port=_PORT + 2)
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
@@ -858,12 +877,16 @@ def test_no_agents_shows_empty_state(page: Page, tmp_path: Path) -> None:
         try:
             page.goto(f"http://127.0.0.1:{_PORT + 2}")
 
-            # The empty-state overlay is shown (no tabs, no chat rendered).
-            overlay = page.locator(".dockview-empty-state")
-            expect(overlay).to_be_visible(timeout=15000)
-            expect(page.locator(".dockview-empty-state-status")).to_contain_text("Waiting for initial chat agent")
-            expect(page.locator(".dv-default-tab-content")).to_have_count(0)
+            # The launcher stands in for the missing chat: one "New tab" tab and
+            # nothing else, with no transcript rendered anywhere.
+            expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+            expect(page.locator(".dv-default-tab-content")).to_have_count(1)
+            expect(page.locator(".dv-default-tab-content").first).to_have_text("New tab")
             expect(page.locator(".message-list")).to_have_count(0)
+            # No agent exists, so no chat is offered to jump to. (The rest of the
+            # machine-wide table is whatever this host happens to be running, so
+            # only the chat half is asserted on.)
+            expect(page.locator(".new-tab-launcher-row", has_text="test-agent")).to_have_count(0)
         finally:
             server.shutdown()
             thread.join(timeout=5.0)
@@ -872,34 +895,27 @@ def test_no_agents_shows_empty_state(page: Page, tmp_path: Path) -> None:
 _PROJECT_DIALOG_PORT = 18867
 
 
-def _create_project_over_http(base_url: str, name: str) -> str:
-    """Register a project through the real API, returning its server-minted id."""
-    payload = json.dumps({"name": name, "color": "#F0603A", "glyph": 1}).encode()
-    request = urllib.request.Request(
-        f"{base_url}/api/projects",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        return str(json.loads(response.read())["project_id"])
+def _open_rail_switcher(page: Page) -> None:
+    """Open the project rail's switcher menu (the old top-bar picker's job)."""
+    page.locator(".project-rail-header").click()
+    expect(page.locator(".project-rail-menu")).to_be_visible(timeout=5000)
 
 
-def _switch_project_via_picker(page: Page, project_name: str) -> None:
-    """Drive the top-left project picker to switch onto ``project_name``."""
-    page.locator(".project-picker-trigger").click()
-    page.locator(".project-picker-menu [role='menuitem']", has_text=project_name).first.click()
+def _switch_view_via_rail(page: Page, view_name: str) -> None:
+    """Drive the rail's switcher header to mount ``view_name``."""
+    _open_rail_switcher(page)
+    page.locator(".project-rail-menu [role='menuitem']", has_text=view_name).first.click()
 
 
 @pytest.mark.timeout(120, func_only=False)
 def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
-    """The project picker's create/delete dialogs drive the project registry.
+    """The rail's switcher and settings modal drive the project registry.
 
     End-to-end over the real frontend + server: the initial landing on the
-    Everything project with its WebSocket registration, the debounced autosave
-    materializing that project's content file, "New project..." creating one
-    and switching onto it, and deleting the active project falling back to
-    Everything.
+    starter project with its WebSocket registration, the debounced autosave
+    materializing that project's content file, "New project" minting the next
+    "Project N" and switching onto it, and deleting the active project from the
+    header's settings modal falling back to the surviving one.
     """
     primary_agent_id = "primary-services-agent"
     with _running_e2e_server(tmp_path, _PROJECT_DIALOG_PORT, primary_agent_id=primary_agent_id) as (
@@ -912,63 +928,65 @@ def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(base_url)
 
-        # Initial: Everything is chosen, the fixture chat auto-opens, and the
-        # debounced autosave materializes everything.json.
+        # Initial: the starter project is chosen, the fixture chat auto-opens,
+        # and the debounced autosave materializes its content file.
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
         page.wait_for_function(
-            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_PROJECT_ID}'", timeout=10000
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
         wait_for(
-            lambda: (layout_dir / "projects" / f"{EVERYTHING_PROJECT_ID}.json").exists(),
+            lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").exists(),
             timeout=15.0,
             poll_interval=0.1,
-            error_message="autosave never materialized everything.json",
+            error_message=f"autosave never materialized {DEFAULT_PROJECT_ID}.json",
         )
 
-        # New project...: creating one switches onto it, and its own autosave
-        # materializes a second content file under the slugified id.
-        page.locator(".project-picker-trigger").click()
-        page.locator(".project-picker-menu [role='menuitem']", has_text="New project...").click()
-        dialog_input = page.locator(".custom-url-dialog-input")
-        expect(dialog_input).to_be_visible(timeout=5000)
-        dialog_input.fill("My Phone Setup")
-        page.locator(".custom-url-dialog-open").click()
-        page.wait_for_function("localStorage.getItem('si-active-project-id') === 'my-phone-setup'", timeout=10000)
+        # New project: no naming form any more -- it mints the next free
+        # "Project N", switches onto it, and its own autosave materializes a
+        # second content file under the slugified id.
+        _open_rail_switcher(page)
+        page.locator(".project-rail-menu [role='menuitem']", has_text="New project").click()
+        page.wait_for_function("localStorage.getItem('si-active-project-id') === 'project-2'", timeout=10000)
         wait_for(
-            lambda: (layout_dir / "projects" / "my-phone-setup.json").exists(),
+            lambda: (layout_dir / "projects" / "project-2.json").exists(),
             timeout=10.0,
             poll_interval=0.1,
-            error_message="create never wrote my-phone-setup.json",
+            error_message="create never wrote project-2.json",
         )
 
-        # Delete on the active project: the client auto-switches to the
-        # fallback and the registry drops the deleted entry.
-        page.locator(".project-picker-trigger").click()
-        page.locator(".project-picker-menu [role='menuitem']", has_text="My Phone Setup").locator(
-            ".project-picker-settings"
-        ).click()
+        # Delete the active project from the header's context menu: the client
+        # auto-switches to the fallback and the registry drops the entry.
+        page.locator(".project-rail-header").click(button="right")
+        page.locator(".project-rail-menu [role='menuitem']", has_text="Project settings").click()
         page.locator(".destroy-dialog-btn-cancel", has_text="Delete").click()
         page.locator(".destroy-dialog-btn-destroy", has_text="Delete project").click()
         page.wait_for_function(
-            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_PROJECT_ID}'", timeout=10000
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
         registry = json.loads((layout_dir / "projects_meta.json").read_text())
-        assert "my-phone-setup" not in registry["project_by_id"]
-        assert EVERYTHING_PROJECT_ID in registry["project_by_id"]
+        assert "project-2" not in registry["project_by_id"]
+        # Everything is the unfiltered view, not a project: it keeps a layout file
+        # but never a registry entry.
+        assert EVERYTHING_VIEW_ID not in registry["project_by_id"]
 
 
 _LAYOUT_RESTORE_PORT = 18868
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_switching_projects_preserves_chat_transcript(tmp_path: Path, page: Page) -> None:
-    """A chat pane restored by a project switch still shows its own transcript.
+def test_switching_views_preserves_chat_transcript(tmp_path: Path, page: Page) -> None:
+    """A chat pane restored by a view switch still shows its own transcript.
 
     Regression test: ``fromJSON`` disposes the outgoing panels before creating
     the incoming ones, and the removal handler deletes their ``panelParams``.
-    Because panel ids are deterministic, a chat present in BOTH projects had its
+    Because panel ids are deterministic, a chat open in BOTH views had its
     freshly-seeded params deleted mid-restore and came back bound to the primary
     (services) agent -- the tab kept its title but showed an empty transcript.
+
+    Getting the chat into both views also exercises the model: Everything is the
+    unfiltered view with a layout of its own, so it lists the machine's agent
+    even though no project put it there, and opening it there leaves it open in
+    the starter project too. Nothing moves.
     """
     primary_agent_id = "primary-services-agent"
     with _running_e2e_server(tmp_path, _LAYOUT_RESTORE_PORT, primary_agent_id=primary_agent_id) as (
@@ -977,31 +995,44 @@ def test_switching_projects_preserves_chat_transcript(tmp_path: Path, page: Page
         _session_file,
     ):
         layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
-        # Registered before the page loads, so the picker lists it on first open.
-        _create_project_over_http(base_url, "Side Quest")
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(base_url)
 
-        # The fixture chat auto-opens on Everything and shows its transcript.
+        # The fixture chat auto-opens in the starter project and shows its
+        # transcript, which the debounced autosave writes out.
         expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         page.wait_for_function(
-            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_PROJECT_ID}'", timeout=10000
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
         wait_for(
-            lambda: (layout_dir / "projects" / f"{EVERYTHING_PROJECT_ID}.json").exists(),
+            lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").exists(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message=f"autosave never materialized {DEFAULT_PROJECT_ID}.json",
+        )
+
+        # Over to Everything, which has its own (empty) layout, so it mounts a
+        # launcher. Its machine-wide table lists the agent regardless of which
+        # project shows it; opening it from there gives Everything the same chat
+        # panel the starter project already has.
+        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+        )
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+        page.locator(".new-tab-launcher-row:visible", has_text="test-agent").first.click()
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        wait_for(
+            lambda: (layout_dir / "projects" / f"{EVERYTHING_VIEW_ID}.json").exists(),
             timeout=15.0,
             poll_interval=0.1,
             error_message="autosave never materialized everything.json",
         )
 
-        # Away to the (empty) second project, then back to Everything.
-        _switch_project_via_picker(page, "Side Quest")
-        page.wait_for_function("localStorage.getItem('si-active-project-id') === 'side-quest'", timeout=10000)
-        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
-
-        _switch_project_via_picker(page, EVERYTHING_PROJECT_NAME)
+        # Back to the starter project, whose saved layout holds the same panel id.
+        _switch_view_via_rail(page, DEFAULT_PROJECT_NAME)
         page.wait_for_function(
-            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_PROJECT_ID}'", timeout=10000
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
         )
 
         # The restored chat must show ITS transcript -- not the primary agent's
@@ -1025,14 +1056,15 @@ def test_layout_missing_panel_params_recovers_chat_binding(tmp_path: Path, page:
         agent_info,
         _session_file,
     ):
-        # Hand-write the Everything project's content holding the agent's chat
+        # Hand-write the starter project's content holding the agent's chat
         # panel with an EMPTY panelParams map -- the shape the restore bug used
-        # to persist.
+        # to persist. The starter project is what a fresh browser mounts, so this
+        # is the content the page loads.
         layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
         projects_dir = layout_dir / "projects"
         projects_dir.mkdir(parents=True)
         panel_id = f"chat-{agent_info.id}"
-        (projects_dir / f"{EVERYTHING_PROJECT_ID}.json").write_text(
+        (projects_dir / f"{DEFAULT_PROJECT_ID}.json").write_text(
             json.dumps(
                 {
                     "dockview": {

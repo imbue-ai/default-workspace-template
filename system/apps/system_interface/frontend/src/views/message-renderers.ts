@@ -7,6 +7,7 @@ import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { openSubagentTab } from "./DockviewWorkspace";
+import { hoverTooltipAttrs } from "./hoverTooltip";
 import type { PermissionResolution } from "./message-classification";
 import { isPermissionRequestCall, isSkillExpansionUserMessage } from "./message-classification";
 import { PermissionCard } from "./permission-card";
@@ -202,8 +203,8 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
   const statusIndicator = isRunning
     ? m("span", {
         class: "subagent-card-status-dot subagent-card-status-dot--running",
-        title: "Working",
         "aria-label": "Sub-agent is working",
+        ...hoverTooltipAttrs("Working"),
       })
     : m(
         "svg.subagent-card-status-check",
@@ -212,8 +213,8 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
           height: 16,
           viewBox: "0 0 16 16",
           fill: "none",
-          title: "Finished",
           "aria-label": "Sub-agent finished",
+          ...hoverTooltipAttrs("Finished"),
         },
         // Same filled-circle-with-check mark used for a done step in the progress timeline.
         m.trust(

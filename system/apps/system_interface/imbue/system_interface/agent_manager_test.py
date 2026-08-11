@@ -35,6 +35,7 @@ from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _build_worktree_create_command
+from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
@@ -976,6 +977,70 @@ def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
     # as CLI tokens: an unresolvable -S key path fails the create outright.
     assert_mngr_argv_valid(enabled_argv)
     assert_mngr_argv_valid(disabled_argv)
+
+
+# --- the chat's originating project (the mngr ``project`` label) ---
+# A chat is an agent, so the project it was created inside rides the label mngr
+# already propagates to the agent's children rather than a parallel list. The
+# label is where a chat starts out filed, not an owner: membership is
+# many-to-many and each view's member list says what that view shows.
+
+
+def test_chat_project_label_prefers_the_project_the_chat_was_created_in() -> None:
+    assert _chat_project_label({"project": "taxes"}, "website-redesign") == "website-redesign"
+
+
+def test_chat_project_label_inherits_the_primary_agents_project_outside_any_project() -> None:
+    assert _chat_project_label({"project": "taxes"}, "") == "taxes"
+
+
+def test_chat_project_label_is_empty_when_nothing_names_a_project() -> None:
+    """A chat filed in no project is fine -- Everything lists every object anyway."""
+    assert _chat_project_label({}, "") == ""
+
+
+def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={"workspace": "ws", "project": "taxes"},
+        is_fast_mode_enabled=True,
+        project_id="website-redesign",
+    )
+    assert "project=website-redesign" in argv
+    assert "project=taxes" not in argv
+    assert_mngr_argv_valid(argv)
+
+
+def test_chat_create_argv_omits_the_project_label_when_there_is_no_project() -> None:
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={"workspace": "ws"},
+        is_fast_mode_enabled=True,
+    )
+    assert not any(token.startswith("project=") for token in argv)
+    assert_mngr_argv_valid(argv)
+
+
+def test_serialized_agents_expose_the_project_label(broadcaster: WebSocketBroadcaster) -> None:
+    """The workspace reads each chat's originating project off the agent payload."""
+    manager = AgentManager.build(broadcaster)
+    try:
+        with manager._lock:
+            for agent_id, labels in (
+                ("filed", {"user_created": "true", "project": "taxes"}),
+                ("unfiled", {"user_created": "true"}),
+            ):
+                manager._agents[agent_id] = AgentStateItem(
+                    id=agent_id, name=agent_id, state="RUNNING", labels=labels, work_dir=None
+                )
+        project_by_id = {agent["id"]: agent["project"] for agent in manager.get_agents_serialized()}
+        assert project_by_id == {"filed": "taxes", "unfiled": None}
+    finally:
+        manager.stop()
 
 
 def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketBroadcaster) -> None:

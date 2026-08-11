@@ -32,6 +32,8 @@ from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
+from imbue.system_interface.projects import EVERYTHING_VIEW_ID
+from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
@@ -1194,13 +1196,41 @@ def test_layout_broadcast_mutating_op_targets_a_project(app: Flask) -> None:
     project is the arrangement it autosaves into), so a name that is not one of
     the named layouts resolves through the projects registry instead.
     """
-    matching_queue = _register_fake_client(app, "client-on-everything", "everything")
+    matching_queue = _register_fake_client(app, "client-on-project-1", "project-1")
     other_queue = _register_fake_client(app, "client-on-desktop", "desktop")
 
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web", "layout": "Everything"}, "agent_id": "agent-42"},
+        json={"op": "open", "args": {"ref": "service:web", "layout": "Project 1"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 200
+
+    msg = _next_broadcast_message(matching_queue)
+    assert msg == {
+        "type": "layout_op",
+        "op": "open",
+        "args": {"ref": "service:web"},
+        "requester_agent_id": "agent-42",
+    }
+    assert other_queue.empty()
+
+
+def test_layout_broadcast_mutating_op_targets_everything(app: Flask) -> None:
+    """``--layout Everything`` reaches a client sitting in the unfiltered view.
+
+    Everything is a view rather than a project, so it has no registry entry to
+    resolve against -- but it is the home, and a client is as likely to be in it
+    as in any project. Naming it must therefore address that client instead of
+    reporting an unknown layout.
+    """
+    matching_queue = _register_fake_client(app, "client-on-everything", EVERYTHING_VIEW_ID)
+    other_queue = _register_fake_client(app, "client-on-project-1", "project-1")
+
+    client = app.test_client()
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "open", "args": {"ref": "service:web", "layout": EVERYTHING_VIEW_NAME}, "agent_id": "agent-42"},
     )
     assert response.status_code == 200
 
@@ -2159,20 +2189,25 @@ def test_browsers_passthrough_returns_503_when_backend_is_unreachable() -> None:
     assert "unreachable" in response.get_json()["detail"]
 
 
-def test_list_projects_seeds_the_everything_project(
+def test_list_projects_seeds_one_starter_project(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A fresh workspace lists only Everything: empty, and already the active one."""
+    """A fresh workspace lists one starter project: empty, and already the active one.
+
+    "Everything" is the unfiltered view rather than a project, so it is
+    deliberately absent from the registry even though it keeps a layout.
+    """
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     response = client.get("/api/projects")
 
     assert response.status_code == 200
     body = response.get_json()
-    assert [project["project_id"] for project in body["projects"]] == ["everything"]
-    assert body["projects"][0]["name"] == "Everything"
+    assert [project["project_id"] for project in body["projects"]] == ["project-1"]
+    assert body["projects"][0]["name"] == "Project 1"
     assert body["projects"][0]["has_content"] is False
-    assert body["last_active_id"] == "everything"
+    assert body["projects"][0]["members"] == []
+    assert body["last_active_id"] == "project-1"
 
 
 def test_create_project_slugifies_and_registers(
@@ -2191,10 +2226,11 @@ def test_create_project_slugifies_and_registers(
         "color": "#3B82F6",
         "glyph": 6,
         "has_content": False,
+        "members": [],
     }
     list_response = client.get("/api/projects")
     assert [project["project_id"] for project in list_response.get_json()["projects"]] == [
-        "everything",
+        "project-1",
         "data-pipeline",
     ]
 
@@ -2228,7 +2264,7 @@ def test_get_empty_project_returns_null_content(
     """A registered-but-never-saved project reports null content (fresh state)."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    response = client.get("/api/projects/everything")
+    response = client.get("/api/projects/project-1")
 
     assert response.status_code == 200
     assert response.get_json() == {"layout": None}
@@ -2249,14 +2285,14 @@ def test_autosave_and_get_project_round_trips(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
 
     layout_data = {"dockview": {"panels": {}}, "panelParams": {"chat-1": {"panelType": "chat"}}}
-    save_response = client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "client-1"})
+    save_response = client.post("/api/projects/project-1", json={"layout": layout_data, "client_id": "client-1"})
     assert save_response.status_code == 200
     assert save_response.get_json()["status"] == "ok"
 
-    get_response = client.get("/api/projects/everything")
+    get_response = client.get("/api/projects/project-1")
     assert get_response.status_code == 200
     assert get_response.get_json()["layout"] == layout_data
-    assert (tmp_path / "agents" / "agent-123" / "workspace_layout" / "projects" / "everything.json").exists()
+    assert (tmp_path / "agents" / "agent-123" / "workspace_layout" / "projects" / "project-1.json").exists()
 
 
 def test_autosave_unknown_project_returns_404(
@@ -2270,15 +2306,16 @@ def test_autosave_unknown_project_returns_404(
     assert response.status_code == 404
 
 
-def test_update_project_settings_keeps_id_and_content(
+def test_update_project_settings_keeps_id_content_and_members(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A rename changes only the display metadata; the id still keys the content."""
+    """A rename changes only the display metadata; id, content and members survive."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     assert client.post("/api/projects", json={"name": "Alpha", "color": "#3B82F6", "glyph": 2}).status_code == 200
     layout_data = {"dockview": {"panels": {}}, "panelParams": {}}
     assert client.post("/api/projects/alpha", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+    assert client.post("/api/projects/alpha/members", json={"ref": "terminal:terminal-1"}).status_code == 200
 
     response = client.post(
         "/api/projects/alpha/settings", json={"name": "Renamed Alpha", "color": "#F0603A", "glyph": 7}
@@ -2291,29 +2328,300 @@ def test_update_project_settings_keeps_id_and_content(
         "color": "#F0603A",
         "glyph": 7,
         "has_content": True,
+        "members": ["terminal:terminal-1"],
     }
     assert client.get("/api/projects/alpha").get_json()["layout"] == layout_data
     unknown = client.post("/api/projects/gone/settings", json={"name": "Gone", "color": "#F0603A", "glyph": 0})
     assert unknown.status_code == 404
 
 
-def test_delete_project_and_everything_guard(
+def test_delete_project_reports_the_fallback_and_guards_the_last_one(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Deleting reports the fallback project; Everything itself is protected."""
+    """Deleting reports the fallback project; the last remaining one is protected."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
 
     delete_scratch = client.post("/api/projects/scratch/delete")
     assert delete_scratch.status_code == 200
-    assert delete_scratch.get_json() == {"fallback_id": "everything"}
+    assert delete_scratch.get_json() == {
+        "fallback_id": "project-1",
+        "stopped": [],
+        "failed": [],
+        "left_running": [],
+    }
 
-    delete_everything = client.post("/api/projects/everything/delete")
-    assert delete_everything.status_code == 409
+    delete_last = client.post("/api/projects/project-1/delete")
+    assert delete_last.status_code == 409
 
     delete_unknown = client.post("/api/projects/scratch/delete")
     assert delete_unknown.status_code == 404
+
+
+def test_delete_project_stops_its_terminals_and_browsers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delete tears down the members that have a stop verb and reports the rest.
+
+    A terminal's tmux session is killed and a fleet browser is retired through
+    the browser daemon -- the same teardown their own destroy endpoints use. A
+    chat is an agent and an app is supervised elsewhere, so both are reported as
+    still running rather than being killed off the back of a project delete.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
+    killed_session = FinishedProcess(
+        returncode=0,
+        stdout="",
+        stderr="",
+        command=("tmux", "kill-session", "-t", "=terminal-4"),
+        is_output_already_logged=False,
+    )
+    with serve_app(_build_stub_browser_backend()) as backend:
+        test_client = _client_with_browser_service(backend.http_url)
+        assert (
+            test_client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code
+            == 200
+        )
+        for ref in ("terminal:terminal-4", "service:browser?session=research", "chat:agent-9", "service:web"):
+            assert test_client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
+        with patch(
+            "imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session
+        ) as mock_run:
+            response = test_client.post("/api/projects/scratch/delete")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["stopped"] == ["terminal:terminal-4", "service:browser?session=research"]
+    assert body["failed"] == []
+    assert body["left_running"] == ["chat:agent-9", "service:web"]
+    assert body["fallback_id"] == "project-1"
+    assert mock_run.call_args.kwargs["command"] == ["tmux", "kill-session", "-t", "=terminal-4"]
+
+
+def test_delete_project_reports_a_terminal_it_could_not_stop(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tmux session that survives the kill is reported as failed, not as stopped."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
+    failed_kill = FinishedProcess(
+        returncode=1,
+        stdout="",
+        stderr="can't kill session",
+        command=("tmux", "kill-session", "-t", "=terminal-4"),
+        is_output_already_logged=False,
+    )
+    still_listed = FinishedProcess(
+        returncode=0,
+        stdout="terminal-4\t$1\t/work\n",
+        stderr="",
+        command=("tmux", "list-sessions"),
+        is_output_already_logged=False,
+    )
+    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
+    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:terminal-4"}).status_code == 200
+
+    with patch(
+        "imbue.system_interface.server.run_local_command_modern_version",
+        side_effect=[failed_kill, still_listed],
+    ):
+        response = client.post("/api/projects/scratch/delete")
+
+    assert response.status_code == 200
+    assert response.get_json()["failed"] == ["terminal:terminal-4"]
+    assert response.get_json()["stopped"] == []
+
+
+def test_delete_project_reports_a_browser_it_could_not_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no browser daemon registered, the browser is reported as still running."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _client_with_browser_service(None)
+    assert (
+        test_client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
+    )
+    assert (
+        test_client.post("/api/projects/scratch/members", json={"ref": "service:browser?session=research"}).status_code
+        == 200
+    )
+
+    response = test_client.post("/api/projects/scratch/delete")
+
+    assert response.status_code == 200
+    assert response.get_json()["failed"] == ["service:browser?session=research"]
+    assert response.get_json()["stopped"] == []
+
+
+def test_delete_project_never_stops_an_agent_tmux_session(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``terminal:`` ref naming an mngr agent session is refused, not killed."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
+    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
+    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:mngr-alice"}).status_code == 200
+
+    with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
+        response = client.post("/api/projects/scratch/delete")
+
+    assert response.status_code == 200
+    assert response.get_json()["failed"] == ["terminal:mngr-alice"]
+    mock_run.assert_not_called()
+
+
+def test_add_member_files_a_ref_and_lists_it(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A member is durable and independent of the layout: adding one lists it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    response = client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-1"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"project_id": "project-1", "members": ["terminal:terminal-1"]}
+    # Idempotent: re-adding what the project already owns is not an error.
+    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-1"}).status_code == 200
+    listed = client.get("/api/projects").get_json()["projects"]
+    assert listed[0]["members"] == ["terminal:terminal-1"]
+
+
+def test_add_member_rejects_bad_bodies_and_unknown_projects(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank ref is a 400 and an unregistered project is a 404."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    blank_ref = client.post("/api/projects/project-1/members", json={"ref": "  "})
+    assert blank_ref.status_code == 400
+    missing_ref = client.post("/api/projects/project-1/members", json={})
+    assert missing_ref.status_code == 400
+    unknown_project = client.post("/api/projects/gone/members", json={"ref": "terminal:terminal-1"})
+    assert unknown_project.status_code == 404
+
+
+def test_add_member_files_a_ref_another_project_already_shows(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A project is a view, so the same app can sit in as many as you like."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects", json={"name": "Alpha", "color": "#3B82F6", "glyph": 2}).status_code == 200
+    assert client.post("/api/projects/project-1/members", json={"ref": "service:web"}).status_code == 200
+
+    response = client.post("/api/projects/alpha/members", json={"ref": "service:web"})
+
+    assert response.status_code == 200
+    members_by_id = {
+        project["project_id"]: project["members"] for project in client.get("/api/projects").get_json()["projects"]
+    }
+    assert members_by_id == {"project-1": ["service:web"], "alpha": ["service:web"]}
+
+
+def test_remove_member_unfiles_it_without_touching_the_object(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remove-from-project drops the ref; nothing is stopped and the project stays."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-1"}).status_code == 200
+
+    with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
+        response = client.post("/api/projects/project-1/members/remove", json={"ref": "terminal:terminal-1"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"project_id": "project-1", "members": []}
+    mock_run.assert_not_called()
+    # Removing a ref the project does not own is a no-op, not an error.
+    assert (
+        client.post("/api/projects/project-1/members/remove", json={"ref": "terminal:terminal-1"}).status_code == 200
+    )
+    unknown_project = client.post("/api/projects/gone/members/remove", json={"ref": "terminal:terminal-1"})
+    assert unknown_project.status_code == 404
+
+
+def test_share_member_adds_it_without_removing_it_anywhere(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening another project's object files it here and takes it from nowhere."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects", json={"name": "Alpha", "color": "#3B82F6", "glyph": 2}).status_code == 200
+    assert client.post("/api/projects/project-1/members", json={"ref": "service:web"}).status_code == 200
+
+    response = client.post("/api/projects/members/share", json={"ref": "service:web", "to_project_id": "alpha"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "ref": "service:web",
+        "to_project_id": "alpha",
+        "projects": ["project-1", "alpha"],
+    }
+    members_by_id = {
+        project["project_id"]: project["members"] for project in client.get("/api/projects").get_json()["projects"]
+    }
+    # Still in the project that had it: a project is a view, not an owner.
+    assert members_by_id == {"project-1": ["service:web"], "alpha": ["service:web"]}
+
+
+def test_share_member_into_a_project_that_did_not_have_it(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chat filed nowhere gets filed here, and reports the one project showing it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    response = client.post("/api/projects/members/share", json={"ref": "chat:agent-9", "to_project_id": "project-1"})
+
+    assert response.status_code == 200
+    assert response.get_json()["projects"] == ["project-1"]
+    unknown_target = client.post("/api/projects/members/share", json={"ref": "chat:agent-9", "to_project_id": "gone"})
+    assert unknown_target.status_code == 404
+    missing_target = client.post("/api/projects/members/share", json={"ref": "chat:agent-9"})
+    assert missing_target.status_code == 400
+
+
+def test_list_members_maps_every_ref_to_the_projects_showing_it(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One flat map: every filed ref plus every project showing it.
+
+    ``/api/projects/members`` is also the routing check -- it must not resolve
+    as a project whose id happens to be "members".
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects", json={"name": "Alpha", "color": "#3B82F6", "glyph": 2}).status_code == 200
+    assert client.post("/api/projects/project-1/members", json={"ref": "service:web"}).status_code == 200
+    assert client.post("/api/projects/alpha/members", json={"ref": "terminal:terminal-1"}).status_code == 200
+
+    response = client.get("/api/projects/members")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"members": {"service:web": ["project-1"], "terminal:terminal-1": ["alpha"]}}
+
+
+def test_delete_project_panel_also_unfiles_the_member(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Destroying an object drops both its panel and its membership everywhere."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-1"}).status_code == 200
+
+    response = client.post("/api/projects/panels/terminal-panel-1/delete", json={"ref": "terminal:terminal-1"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"project_ids": ["project-1"]}
+    assert client.get("/api/projects").get_json()["projects"][0]["members"] == []
+    # A caller that knows only the panel still works, and changes nothing here.
+    panel_only = client.post("/api/projects/panels/terminal-panel-1/delete")
+    assert panel_only.status_code == 200
+    assert panel_only.get_json() == {"project_ids": []}
 
 
 def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
@@ -2329,6 +2637,7 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
         "color": "#3B82F6",
         "glyph": 2,
         "has_content": False,
+        "members": [],
     }
 
     assert client.post("/api/projects/alpha", json={"layout": {}, "client_id": "client-1"}).status_code == 200
@@ -2349,5 +2658,99 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
     assert _next_broadcast_message(client_queue) == {
         "type": "project_deleted",
         "project_id": "alpha",
-        "fallback_id": "everything",
+        "fallback_id": "project-1",
+        "stopped": [],
+        "failed": [],
+        "left_running": [],
     }
+
+
+def test_membership_changes_broadcast_the_affected_projects(app: Flask) -> None:
+    """Add, remove and move each announce which projects' member lists moved.
+
+    A move announces both ends, because the object left one project and joined
+    another; a client with either one mounted has to refresh.
+    """
+    client = app.test_client()
+    assert client.post("/api/projects", json={"name": "Alpha", "color": "#3B82F6", "glyph": 2}).status_code == 200
+    client_queue = _register_fake_client(app, "client-1", "desktop")
+
+    assert client.post("/api/projects/project-1/members", json={"ref": "service:web"}).status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "project_members_changed",
+        "project_ids": ["project-1"],
+    }
+
+    assert (
+        client.post("/api/projects/members/share", json={"ref": "service:web", "to_project_id": "alpha"}).status_code
+        == 200
+    )
+    # Sharing only touches the destination -- nothing leaves the project it was in.
+    assert _next_broadcast_message(client_queue) == {
+        "type": "project_members_changed",
+        "project_ids": ["alpha"],
+    }
+
+    assert client.post("/api/projects/alpha/members/remove", json={"ref": "service:web"}).status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "project_members_changed",
+        "project_ids": ["alpha"],
+    }
+
+
+def test_create_chat_carries_the_project_id_beside_the_request_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``project_id`` is accepted on create-chat and is not mistaken for a chat field.
+
+    Chat membership rides the agent's ``project`` label rather than the member
+    list, so the project a chat is created in travels with the create request.
+    The request model forbids unknown fields, so this guards the split.
+    """
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    test_client = create_application(build_test_state()).test_client()
+
+    response = test_client.post("/api/agents/create-chat", json={"name": "test-chat", "project_id": "alpha"})
+
+    # Still the no-work-dir failure, i.e. the extra field reached the label path
+    # rather than being rejected as an unknown request field.
+    assert response.status_code == 400
+    assert "project_id" not in response.get_json()["detail"]
+
+
+@pytest.mark.timeout(15)
+def test_websocket_snapshot_exposes_each_agent_project_label(app: Flask) -> None:
+    """The agent payload the frontend already receives carries the project label.
+
+    That label is where a chat starts out filed; an agent without one is in no
+    project at all, which is ordinary -- Everything enumerates the machine, so
+    it still shows up there.
+    """
+    agent_manager = state_of(app).agent_manager
+    with agent_manager._lock:
+        agent_manager._agents["chat-1"] = AgentStateItem(
+            id="chat-1",
+            name="filed-chat",
+            state="RUNNING",
+            labels={"user_created": "true", "project": "alpha"},
+            work_dir=None,
+        )
+        agent_manager._agents["chat-2"] = AgentStateItem(
+            id="chat-2",
+            name="loose-chat",
+            state="RUNNING",
+            labels={"user_created": "true"},
+            work_dir=None,
+        )
+
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            first = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+        finally:
+            close_ws(ws)
+
+    assert first["type"] == "agents_updated"
+    project_by_agent_id = {agent["id"]: agent["project"] for agent in first["agents"]}
+    assert project_by_agent_id == {"chat-1": "alpha", "chat-2": None}

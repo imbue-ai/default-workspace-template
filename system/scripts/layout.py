@@ -18,15 +18,16 @@ Subcommands:
     replace-url <ref-or-service> <url>  Swap an iframe's src (service:<name>[/<path>] or https://...).
     refresh <ref-or-service>            Reload one iframe; ``service:<name>`` reloads all iframes for that service.
 
-The workspace groups tabs into *projects* (e.g. ``Everything``); each connected
-browser client has one active, and that project is the arrangement the client
-saves into. Every mutating op requires an explicit ``--layout <name>`` and only
-takes effect when a connected client has that project active (the op fails with
-a clear error listing the connected clients otherwise). ``inspect`` / ``where``
-/ ``list`` accept an optional ``--layout``. ``context`` tells you which client
-(and project) recently messaged each agent, so you can work out which one a
-request refers to. The name also resolves against the older *named layouts*
-(``desktop`` / ``mobile``), which nothing keeps active any more.
+The workspace shows one *view* at a time: a project, or ``Everything`` (the
+unfiltered home). Each connected browser client has one active, and that view is
+the arrangement the client saves into. Every mutating op requires an explicit
+``--layout <name>`` and only takes effect when a connected client has that view
+active (the op fails with a clear error listing the connected clients
+otherwise). ``inspect`` / ``where`` / ``list`` accept an optional ``--layout``.
+``context`` tells you which client (and view) recently messaged each agent, so
+you can work out which one a request refers to. The name also resolves against
+the older *named layouts* (``desktop`` / ``mobile``), which nothing keeps active
+any more.
 
 Every ref-accepting argument (positional ref, ``--relative-to``) accepts a bare
 service name as shorthand for ``service:<name>``. ``open`` and ``split`` also
@@ -1483,9 +1484,9 @@ def _add_required_layout_argument(subparser: argparse.ArgumentParser) -> None:
         "--layout",
         required=True,
         help=(
-            "Project to mutate (e.g. ``Everything``). Required: mutating ops only "
-            "apply on connected clients that have this project active. Use "
-            "``context`` to see each client's current project. An older named "
+            "View to mutate: a project, or ``Everything``. Required: mutating ops "
+            "only apply on connected clients that have this view active. Use "
+            "``context`` to see each client's current view. An older named "
             "layout (``desktop`` / ``mobile``) also resolves here."
         ),
     )
@@ -1495,7 +1496,8 @@ def _add_optional_layout_argument(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--layout",
         default=None,
-        help="Project (or older named layout) to read; defaults to the last active named layout",
+        help="View (project or ``Everything``, or an older named layout) to read; "
+        "defaults to the last active named layout",
     )
 
 

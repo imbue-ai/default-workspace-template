@@ -211,11 +211,16 @@ def _is_serving(base_url: str) -> bool:
 
 
 def _create_chat_through_ui(page: Page, base_url: str) -> None:
-    """Drive the "+" menu's New chat flow, exactly as a user would."""
+    """Drive the New Tab launcher's Chat tile, exactly as a user would.
+
+    The "+" no longer drops a menu down: it opens a full-page launcher tab whose
+    "Open new" row starts a chat, which is what raises the naming modal.
+    """
     page.goto(base_url)
     page.wait_for_selector(".dockview-add-tab-button", timeout=_RECOVERY_TIMEOUT_MS)
     page.locator(".dockview-add-tab-button").first.click()
-    page.locator(".dockview-add-tab-dropdown-item:visible", has_text="New chat").click()
+    page.wait_for_selector(".new-tab-launcher", timeout=_RECOVERY_TIMEOUT_MS)
+    page.locator(".new-tab-launcher-tile:visible", has_text="Chat").click()
     page.wait_for_selector(".custom-url-dialog-input", timeout=_RECOVERY_TIMEOUT_MS)
     page.locator(".custom-url-dialog-input").fill("recovery-chat")
     page.locator(".custom-url-dialog-open").click()
