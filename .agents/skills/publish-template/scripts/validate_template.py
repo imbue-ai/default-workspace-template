@@ -194,9 +194,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"validate_template: {e}", file=sys.stderr)
         return 1
 
+    loaded = schema.load_template_manifest(manifest_path)
+    # A warning, not a problem: this happens when re-cutting on top of a tip
+    # published by a newer workspace, and failing would block the update over a
+    # table we merely do not recognise. Naming the keys is what stops it being
+    # a silent half-read.
+    if loaded.ignored_keys:
+        print(
+            f"validate_template: {manifest_path.name} declares format "
+            f"{loaded.manifest.format!r}, which this workspace does not know. "
+            f"Ignored {len(loaded.ignored_keys)} key(s): "
+            f"{', '.join(loaded.ignored_keys)}. Update this workspace if the "
+            "template depends on them.",
+            file=sys.stderr,
+        )
+
     if not args.skip_apt_check:
-        manifest = schema.load_template_manifest(manifest_path)
-        problems.extend(check_apt_packages_resolve(manifest.environment.apt))
+        problems.extend(check_apt_packages_resolve(loaded.manifest.environment.apt))
 
     if problems:
         print(
