@@ -1429,51 +1429,6 @@ body {
   visibility: visible;
 }
 
-/* ── Project bar ── */
-/* The slim strip above the workspace that carries the project switcher. It
-   wears the same off-white as the tab strips that begin immediately below it,
-   so the bar and the dockview headers read as one piece of chrome rather than
-   two stacked bars. */
-.project-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  /* Matches the rail's header row, so the project name in the bar and the one
-     in the expanded rail sit on the same baseline. */
-  height: 34px;
-  padding: 0 6px;
-  background: var(--color-bg-sidebar);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.project-picker-trigger {
-  /* The trigger is a single line of chrome; a long project name truncates
-     rather than growing the bar. */
-  min-width: 0;
-}
-
-.project-picker-menu {
-  /* A machine can accumulate a lot of projects, and the menu hangs off a bar
-     pinned to the top of the window -- so it scrolls rather than running past
-     the bottom edge. */
-  max-height: 60vh;
-  overflow-y: auto;
-}
-
-/* The per-project settings affordance is a secondary action on a row whose
-   primary action is "switch to this project", so it stays out of the way until
-   the row is under the pointer (or the button itself is tabbed to). */
-.project-picker-settings {
-  opacity: 0;
-  transition: opacity 80ms;
-}
-
-.project-picker-menu [role="menuitem"]:hover .project-picker-settings,
-.project-picker-settings:focus-visible {
-  opacity: 1;
-}
-
 /* ── Machine rail ── */
 /* The narrow icon strip down the left edge. Its collapsed width (37px), the
    width transition and the label fade all live on the element as utilities, so
@@ -1509,6 +1464,45 @@ body {
   background: var(--color-text-faint);
 }
 
+/* ── Workspace surface: the connected tab card ──
+   The whole content area is one flat grey canvas, and every pane is a white
+   card floating on it whose active tab is physically part of the card. The
+   pieces that make that read as one shape:
+
+   - the canvas is inset 4px from the window frame, so the frame color shows as
+     a thin rim around it (`background-clip: content-box` does the inset without
+     a wrapper element);
+   - each group insets itself 2px, which puts 4px of bare canvas between two
+     adjacent panes -- that gap is the whole of a split separator;
+   - the tab strip paints nothing, so it is canvas with labels on it. The active
+     tab is the only white one, carries the card's hairline on its top/left and
+     right, and the pane below is pulled up 1px so its own top border passes
+     underneath the tab rather than cutting across the junction;
+   - the pane's top-left corner is square only when the FIRST tab is active,
+     because that is the one case where the tab meets the corner and the two
+     outlines have to continue into each other.
+
+   The machine's accent belongs to chrome: the send button and the focus ring
+   below use it, and nothing here does -- no accent wash on a card, a canvas or
+   a tab strip.
+
+   DARK MODE IS UNDECIDED (§1 of the design says "dark mode TBD"), and this app
+   carries no dark tokens of its own. The values below are therefore the light
+   design serving as the default in both schemes; when the dark canvas is
+   settled it belongs here, as a `prefers-color-scheme` override. */
+.app-main {
+  --si-canvas: rgb(245 245 245);
+  --si-pane-surface: #ffffff;
+  --si-pane-border: rgba(0, 0, 0, 0.09);
+  --si-pane-radius: 12px;
+  /* Half of the 4px separator: each of the two neighbours contributes its own
+     inset, and the outermost panes get the same half against the canvas edge. */
+  --si-pane-inset: 2px;
+  padding: 4px;
+  background: var(--si-canvas);
+  background-clip: content-box;
+}
+
 /* ── Dockview workspace ── */
 .dockview-workspace {
   position: relative;
@@ -1522,29 +1516,115 @@ body {
 
 /* ── Dockview theme overrides ── */
 .dockview-theme-light {
-  --dv-background-color: var(--color-bg);
   --dv-paneview-header-border-color: var(--color-border);
-  --dv-tabs-and-actions-container-background-color: var(--color-bg-sidebar);
-  --dv-activegroup-visiblepanel-tab-background-color: var(--color-bg);
-  --dv-activegroup-hiddenpanel-tab-background-color: var(--color-bg-sidebar);
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--color-bg);
-  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-bg-sidebar);
+  /* Everything dockview would paint itself is transparent: the canvas behind
+     the dock is the app's, and the only surface is the pane card. */
+  --dv-background-color: transparent;
+  --dv-group-view-background-color: transparent;
+  --dv-tabs-and-actions-container-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--si-pane-surface);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--si-pane-surface);
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
   --dv-activegroup-visiblepanel-tab-color: var(--color-text-primary);
   --dv-activegroup-hiddenpanel-tab-color: var(--color-text-secondary);
   --dv-inactivegroup-visiblepanel-tab-color: var(--color-text-primary);
   --dv-inactivegroup-hiddenpanel-tab-color: var(--color-text-secondary);
-  --dv-tab-divider-color: var(--color-border);
-  --dv-separator-border: var(--color-border);
-  --dv-group-view-background-color: var(--color-bg);
+  /* Inactive tabs are bare labels: no dividers between them, and no line under
+     the strip. The 4px gap is the separator, so that goes too. */
+  --dv-tab-divider-color: transparent;
+  --dv-separator-border: transparent;
   --dv-tabs-container-scrollbar-color: var(--color-border);
   --dv-drag-over-background-color: var(--color-accent-light);
   --dv-drag-over-border-color: var(--color-accent);
 }
 
-.dockview-theme-light .dv-tabs-container {
-  /* No bottom border: the selected tab shares the content's background
-     (--color-bg), so dropping the line lets it bleed straight into the panel. */
+/* The gap between panes. Padding rather than a margin so dockview's own sizing
+   (which writes pixel widths onto the views outside) is left alone. */
+.dockview-theme-light .dv-groupview {
+  padding: var(--si-pane-inset);
+}
+
+/* The pane card. It is pulled up 1px so its top border lands on the strip's
+   last row, where the active tab covers it and the junction closes. */
+.dockview-theme-light .dv-groupview > .dv-content-container {
+  margin-top: -1px;
+  background: var(--si-pane-surface);
+  border: 1px solid var(--si-pane-border);
+  border-radius: var(--si-pane-radius);
+}
+
+/* Square only where the first tab connects to it. */
+.dockview-theme-light
+  .dv-groupview:has(> .dv-tabs-and-actions-container .dv-tabs-container > .dv-tab:first-child.dv-active-tab)
+  > .dv-content-container {
+  border-top-left-radius: 0;
+}
+
+/* Panels render with dockview's "always" renderer, which hoists their content
+   into an overlay layered over the pane rather than inside it. The overlay is
+   sized to the card exactly, so it takes the card's rounded clip here, and a
+   1px transparent border keeps the content off the hairline.
+
+   The overlay sits outside the group's subtree and carries nothing that says
+   which pane it belongs to, so this clip cannot be the conditional one the card
+   above gets: it rounds all four corners. Where a card is square at the
+   top-left, a panel painted anything other than white therefore leaves the
+   card's own white showing in that corner -- directly under the white active
+   tab that squared it. The card's outline, which is what reads as the shape, is
+   still exactly right. */
+.dockview-theme-light .dv-render-overlay {
+  border: 1px solid transparent;
+  border-radius: var(--si-pane-radius);
+  overflow: hidden;
+}
+
+.dockview-theme-light .dv-tabs-and-actions-container {
+  /* Above the pane, so the active tab's white closes over the 1px of card
+     border the negative margin above tucked under the strip. */
+  position: relative;
+  z-index: 1;
+}
+
+/* The "+" belongs immediately after the pane's tabs; dockview's void container
+   (the drop region that eats the leftover width) is what would otherwise push
+   it to the far edge, so it is ordered last instead. */
+.dockview-theme-light .dv-void-container {
+  order: 1;
+}
+
+.dockview-theme-light .dv-tab {
+  height: 100%;
+  /* No padding of its own -- `.dv-default-tab` inside fills the tab and carries
+     the insets, so the tab's box is exactly the card shape. */
+  padding: 0;
+  border: 1px solid transparent;
   border-bottom: none;
+  border-radius: var(--si-pane-radius) var(--si-pane-radius) 0 0;
+}
+
+.dockview-theme-light .dv-tab.dv-active-tab {
+  border-color: var(--si-pane-border);
+}
+
+/* A transient fill under the pointer, the same affordance the rail's rows use.
+   An inactive tab is otherwise unpainted. Spelled out down the whole chain
+   because that is the shape dockview paints tab backgrounds with, and a shorter
+   selector would simply lose to it. */
+.dockview-theme-light
+  .dv-groupview
+  > .dv-tabs-and-actions-container
+  .dv-tabs-container
+  > .dv-tab.dv-inactive-tab:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+/* dockview outlines a focused tab in the (now transparent) divider color, so
+   the keyboard ring is spelled out here instead -- in the accent, which is
+   where the accent is allowed. */
+.dockview-theme-light .dv-tab:focus-visible::after {
+  outline: 2px solid var(--color-accent) !important;
+  outline-offset: -2px;
 }
 
 .dockview-theme-light .dv-default-tab {
@@ -1562,7 +1642,9 @@ body {
 
 /* Chat panel within dockview */
 .chat-panel {
-  background: var(--color-bg);
+  /* The pane card's own white: a chat fills its pane edge to edge, so anything
+     else here would read as a second surface inside the card. */
+  background: var(--si-pane-surface);
 }
 
 .chat-panel .app-footer {
@@ -1602,34 +1684,6 @@ body {
 .dockview-add-tab-button:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
-}
-
-.dockview-add-tab-dropdown {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  min-width: 140px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  box-shadow:
-    0 4px 16px rgba(55, 53, 47, 0.1),
-    0 1px 4px rgba(55, 53, 47, 0.06);
-  padding: 4px;
-  z-index: 1000;
-}
-
-.dockview-add-tab-dropdown-item {
-  padding: 6px 10px;
-  font-size: 13px;
-  color: var(--color-text-primary);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background 80ms;
-}
-
-.dockview-add-tab-dropdown-item:hover {
-  background: var(--color-bg-hover);
 }
 
 /* ── Custom URL dialog ── */
@@ -1843,24 +1897,50 @@ body {
   opacity: 0.45;
 }
 
-/* Hover tooltip for the liveness dot, appended to <body> and positioned (fixed)
-   just below the dot by attachHoverTooltip. It lives on the body rather than as
-   a ::after bubble because the tab strip clips overflow, and as a JS element
-   rather than a native title because dockview's draggable tabs suppress those. */
-.dv-tab-hover-tooltip {
+/* ── Hover tooltip ── */
+/* The one tooltip bubble in the workspace, built on <body> and positioned
+   (fixed) by views/hoverTooltip.ts. It stands in for native `title`
+   everywhere: dockview's draggable tabs suppress those, and a ::after bubble
+   is clipped by the tab strip's overflow.
+
+   The appearance is the minds shell's `.minds-tooltip`, so chrome and
+   workspace tooltips are indistinguishable -- inverse surface with matching
+   inverse text, 12px helper type, 6px radius, 8px/4px padding, the overlay
+   elevation shadow, and centered text wrapping at 400px. `display` is toggled
+   in JS (`inline-flex` when shown) and there is deliberately no transition:
+   the bubble appears after the 250ms hover-intent delay and disappears
+   instantly. It has to clear the modals, which sit at 10000.
+
+   This app has no theme tokens for an inverted surface, so both modes are
+   spelled out here off `prefers-color-scheme` -- the only theme signal that
+   reaches this iframe. */
+.minds-tooltip {
   position: fixed;
-  z-index: 1000;
-  transform: translateX(-50%);
+  z-index: 10001;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 400px;
   padding: 4px 8px;
   border-radius: 6px;
-  background: var(--color-text-primary);
-  color: #fff;
-  font-size: 11px;
+  background: #000000;
+  color: #ffffff;
+  font-size: 12px;
   font-weight: 400;
   line-height: 1.4;
-  white-space: nowrap;
+  text-align: center;
+  white-space: normal;
   pointer-events: none;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  box-shadow:
+    0 1px 1px 0 rgba(0, 0, 0, 0.08),
+    0 3px 12px 0 rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .minds-tooltip {
+    background: #ffffff;
+    color: #000000;
+  }
 }
 
 .dv-custom-tab-actions {
@@ -1896,21 +1976,6 @@ body {
 .dv-custom-tab-action:hover {
   background: rgba(0, 0, 0, 0.08);
   color: var(--color-text-primary);
-}
-
-.dv-custom-tab-action-destructive:hover {
-  background: rgba(220, 38, 38, 0.1);
-  color: #dc2626;
-}
-
-.dv-custom-tab-action-disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.dv-custom-tab-action-disabled:hover {
-  background: none;
-  color: var(--color-text-secondary);
 }
 
 /* ── Destroy confirmation dialog ── */

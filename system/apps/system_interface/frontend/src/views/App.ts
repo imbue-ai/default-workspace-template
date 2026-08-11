@@ -1,10 +1,22 @@
 import m from "mithril";
-import { DockviewWorkspace, getActiveProject, openAppTab, openTabOfType, switchToProject } from "./DockviewWorkspace";
+import {
+  DockviewWorkspace,
+  destroyMemberRow,
+  getActiveViewId,
+  getAvailableProjects,
+  getSidebarRows,
+  openAppTab,
+  openMemberRow,
+  openTabOfType,
+  refreshProjects,
+  removeMemberRow,
+  shareMemberRow,
+  switchToView,
+} from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
 import { FastModeModal } from "./FastModeModal";
-import { ProjectPicker } from "./ProjectPicker";
 import { Sidebar } from "./Sidebar";
-import type { QuickAddTabType } from "./Sidebar";
+import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import type { AppEntry } from "../models/AgentManager";
 import { checkAuthStatusOnLoad, isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
 import { fetchWorkspaceFastMode, getFastModePromptAgentId } from "../models/WorkspaceFastMode";
@@ -26,36 +38,49 @@ export function App(): m.Component {
         { class: "app-layout flex flex-col", style: "height: calc(100vh - var(--minds-titlebar-height, 0px))" },
         [
           m("div", { class: "minds-titlebar-spacer" }),
-          // Which project you are in frames everything below it -- the rail's
-          // header, the tabs, what a new tab joins -- so the switcher spans the
-          // window rather than sitting inside the rail it also labels.
-          m(
-            "div",
-            { class: "project-bar" },
-            m(ProjectPicker, {
-              // The picker has already persisted the choice by the time this
-              // runs; loading that project's dockview state is the workspace's
-              // half of the switch.
-              onSelectProject: (projectId: string) => {
-                void switchToProject(projectId);
-              },
-            }),
-          ),
+          // The whole content area is one grey surface with the rail sitting on
+          // it, directly left of the dock. Which view you are in is said by the
+          // rail's own header now, so there is no bar above this row.
           m("div", { class: "app-main flex flex-1 min-w-80" }, [
+            // Every attr is read straight off the workspace on each draw rather
+            // than cached: the registry loads asynchronously, and a rename, a
+            // new tab or another client's change all arrive as a redraw, so the
+            // rail follows all of them without a subscription of its own.
             m(Sidebar, {
-              // Read every draw rather than cached: the registry loads
-              // asynchronously and a rename arrives as a redraw, so the rail's
-              // header follows both without a subscription of its own.
-              project: getActiveProject(),
+              projects: getAvailableProjects(),
+              activeViewId: getActiveViewId(),
+              rows: getSidebarRows(),
+              onSelectView: (viewId: string) => {
+                // The workspace saves the outgoing layout and swaps the dock;
+                // that is the whole of a view switch.
+                void switchToView(viewId);
+              },
+              onProjectsChanged: () => {
+                refreshProjects();
+              },
               onOpenTabType: (tabType: QuickAddTabType) => {
                 openTabOfType(tabType);
               },
               onOpenApp: (app: AppEntry) => {
                 openAppTab(app);
               },
+              onOpenRow: (row: SidebarTabRow) => {
+                openMemberRow(row);
+              },
+              onRemoveFromView: (row: SidebarTabRow) => {
+                removeMemberRow(row);
+              },
+              onShareApp: (row: SidebarTabRow) => {
+                shareMemberRow(row);
+              },
+              onDeleteFromMachine: (row: SidebarTabRow) => {
+                destroyMemberRow(row);
+              },
             }),
             // ``min-w-0`` so a wide tab strip scrolls inside the workspace
-            // instead of pushing this row wider than the window.
+            // instead of pushing this row wider than the window. The rail is
+            // absolutely positioned inside its own 37px slot, so expanding it
+            // overlays this dock rather than squeezing it.
             m("div", { class: "min-w-0 flex-1" }, m(DockviewWorkspace)),
           ]),
           // Claude auth is mind-global, so the login modal is a single

@@ -111,12 +111,31 @@ def _build_worktree_create_command(
     return cmd
 
 
+def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
+    """The ``project`` label value a new chat agent should carry.
+
+    Chats are agents, and mngr already propagates an agent's ``project`` label
+    to the children it spawns, so a chat created inside a project records that
+    project here and its children inherit it. The label names the chat's
+    *originating* project rather than an owner: membership is many-to-many, and
+    what a view shows is its own member list, so this is where a chat starts out
+    filed and not where it is stuck. A chat created outside any project inherits
+    whatever the primary agent carries, and one left with no label at all is
+    filed nowhere -- which costs it nothing, since Everything lists every object
+    on the machine.
+    """
+    if project_id:
+        return project_id
+    return primary_labels.get("project", "")
+
+
 def _build_chat_create_command(
     mngr_binary: str,
     name: str,
     agent_id: str,
     primary_labels: dict[str, str],
     is_fast_mode_enabled: bool,
+    project_id: str = "",
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent. Pure (see above)."""
     cmd = [
@@ -141,10 +160,12 @@ def _build_chat_create_command(
         f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
         "--no-connect",
     ]
-    # Inherit the project label from the primary agent. The chat agent belongs to
-    # its workspace by sharing the host; it carries no workspace label.
-    if "project" in primary_labels:
-        cmd.extend(["--label", f"project={primary_labels['project']}"])
+    # The project the chat starts out filed in: the one it was created inside
+    # when there is one, else whatever the primary agent carries. The chat agent
+    # belongs to its workspace by sharing the host; it carries no workspace label.
+    project_label = _chat_project_label(primary_labels, project_id)
+    if project_label:
+        cmd.extend(["--label", f"project={project_label}"])
     return cmd
 
 
@@ -551,7 +572,13 @@ class AgentManager:
             return tuple(sorted(app.name for app in self._apps))
 
     def get_agents_serialized(self) -> list[dict[str, Any]]:
-        """Return agent list serialized for JSON."""
+        """Return agent list serialized for JSON.
+
+        ``project`` is lifted out of the labels because it is the chat-to-project
+        linkage the workspace UI reads on every agent it lists (see
+        ``_chat_project_label``); null means the chat was created inside no
+        project, which Everything lists all the same.
+        """
         with self._lock:
             return [
                 {
@@ -559,6 +586,7 @@ class AgentManager:
                     "name": a.name,
                     "state": a.state,
                     "labels": a.labels,
+                    "project": a.labels.get("project"),
                     "work_dir": a.work_dir,
                     "activity_state": a.activity_state,
                 }
@@ -629,8 +657,14 @@ class AgentManager:
 
         return agent_id
 
-    def create_chat_agent(self, name: str) -> str:
-        """Create a new chat agent in the primary agent's work dir. Returns the pre-generated agent ID."""
+    def create_chat_agent(self, name: str, project_id: str = "") -> str:
+        """Create a new chat agent in the primary agent's work dir. Returns the pre-generated agent ID.
+
+        ``project_id`` is the project the chat was created inside, which becomes
+        the agent's ``project`` label -- the project it starts out filed in (see
+        ``_chat_project_label``). Empty means "not created inside a project",
+        which keeps the primary agent's inherited label.
+        """
         agent_id = str(AgentId())
 
         with self._lock:
@@ -646,7 +680,9 @@ class AgentManager:
         # user answers the prompt, then whatever they chose.
         decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
         is_fast_mode_enabled = FAST_MODE_BEFORE_DECISION if decision is None else decision
-        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels, is_fast_mode_enabled)
+        cmd = _build_chat_create_command(
+            self._mngr_binary, name, agent_id, primary_labels, is_fast_mode_enabled, project_id
+        )
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
 
@@ -668,8 +704,9 @@ class AgentManager:
         )
 
         labels: dict[str, str] = {}
-        if "project" in primary_labels:
-            labels["project"] = primary_labels["project"]
+        project_label = _chat_project_label(primary_labels, project_id)
+        if project_label:
+            labels["project"] = project_label
         self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels)
 
         return agent_id

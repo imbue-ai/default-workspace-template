@@ -1,13 +1,14 @@
 /**
  * Modal for one project's display metadata: its name, its color, and which of
- * the ten squiggles stands for it.
+ * the ten squiggles stands for it -- plus the one place a project can be
+ * deleted.
  *
- * One component serves both "edit an existing project" and "create a new one".
- * The two differ only in which Projects API call Save makes and in whether a
- * Delete affordance exists at all -- create mode has nothing to delete yet, and
- * the Everything project can never be deleted, so its Delete button is
- * permanently disabled rather than hidden (a missing button reads as a bug; a
- * disabled one with a tooltip explains itself).
+ * Reached from the sidebar's switcher header context menu, and only ever for a
+ * real project. Creating no longer goes through here: the switcher's "New
+ * project" mints "Project N" with the next unused glyph on the spot, so the
+ * user lands in the New Tab launcher instead of on a form. Everything never
+ * reaches here either -- it is a view rather than a project, with no name,
+ * color or glyph of its own and nothing to delete.
  *
  * Deleting is confirm-gated in place -- a second, red button inside this same
  * dialog rather than a second stacked dialog -- because the modal already owns
@@ -21,35 +22,22 @@
  */
 
 import m from "mithril";
-import { EVERYTHING_PROJECT_ID, createProject, deleteProjectRequest, updateProjectSettings } from "../models/Projects";
+import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 
-interface ProjectSettingsCommonAttrs {
+export interface ProjectSettingsModalAttrs {
+  project: ProjectInfo;
   // Fired with the server's copy of the project once the save lands, so the
   // parent can close the modal and adopt the stored values (the server
-  // normalizes the name, and a create also mints the id).
+  // normalizes the name).
   onSaved: (project: ProjectInfo) => void;
+  // Fired once the project is gone server-side. The parent re-lists; a client
+  // mounted on the deleted project is moved off it by the `project_deleted`
+  // broadcast, the same path another client's delete takes.
+  onDeleted: (projectId: string) => void;
   onCancel: () => void;
 }
-
-export interface ProjectSettingsCreateAttrs extends ProjectSettingsCommonAttrs {
-  mode: "create";
-}
-
-export interface ProjectSettingsEditAttrs extends ProjectSettingsCommonAttrs {
-  // Optional, because attrs that carry a project are an edit by construction.
-  // Only a create has to say so, having no project to go on.
-  mode?: "edit";
-  project: ProjectInfo;
-  // Fired once the project is gone server-side. The parent re-lists and, if
-  // this was the active project, switches away from it.
-  onDeleted: (projectId: string) => void;
-}
-
-// A create has no project to carry and no delete callback to honour, so the
-// two modes are separate shapes rather than one shape with optional fields.
-export type ProjectSettingsModalAttrs = ProjectSettingsCreateAttrs | ProjectSettingsEditAttrs;
 
 // The palette is exactly the glyphs' own signature colors, so every project
 // color belongs to the family the squiggles were drawn in.
@@ -98,11 +86,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     m.redraw();
 
     try {
-      const saved =
-        attrs.mode === "create"
-          ? await createProject(chosen, color, glyphIndex)
-          : await updateProjectSettings(attrs.project.project_id, chosen, color, glyphIndex);
-      attrs.onSaved(saved);
+      attrs.onSaved(await updateProjectSettings(attrs.project.project_id, chosen, color, glyphIndex));
     } catch (e) {
       error = (e as Error).message ?? "The project could not be saved.";
       isSaving = false;
@@ -110,7 +94,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     m.redraw();
   }
 
-  async function deleteProject(attrs: ProjectSettingsEditAttrs): Promise<void> {
+  async function deleteProject(attrs: ProjectSettingsModalAttrs): Promise<void> {
     if (isSaving || isDeleting) return;
     isDeleting = true;
     error = null;
@@ -167,41 +151,13 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     );
   }
 
-  function deleteButton(attrs: ProjectSettingsEditAttrs): m.Vnode {
-    const isEverything = attrs.project.project_id === EVERYTHING_PROJECT_ID;
-    const isDisabled = isEverything || isSaving || isDeleting;
-    // The tooltip rides on a wrapper rather than on the button, because browsers
-    // swallow pointer events on a disabled control -- and the disabled case is
-    // exactly the one that needs explaining. The cursor is inline for the same
-    // kind of reason: `.destroy-dialog-btn` sets `cursor: pointer` outside any
-    // cascade layer, so a Tailwind `disabled:` utility would lose to it.
-    return m(
-      "span",
-      {
-        class: "mr-auto flex",
-        title: isEverything ? "Everything holds every tab, so it can't be deleted" : "Delete this project",
-      },
-      m(
-        "button.destroy-dialog-btn.destroy-dialog-btn-cancel",
-        {
-          class: "disabled:opacity-50",
-          style: isDisabled ? "cursor: not-allowed;" : "",
-          disabled: isDisabled,
-          onclick() {
-            isConfirmingDelete = true;
-          },
-        },
-        "Delete",
-      ),
-    );
-  }
-
-  function deleteConfirmation(attrs: ProjectSettingsEditAttrs): m.Children {
+  function deleteConfirmation(attrs: ProjectSettingsModalAttrs): m.Children {
     return [
       m("p.destroy-dialog-message", [
         "Delete ",
         m("strong", attrs.project.name),
-        "? Its tabs stay open in Everything — nothing is destroyed and every transcript stays accessible.",
+        "? This deletes the view, not what it showed: every chat, terminal, browser and app in it keeps " +
+          "running, stays in Everything, and stays in any other project showing it.",
       ]),
       m("div.custom-url-dialog-actions", [
         m(
@@ -231,25 +187,14 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     oninit(vnode) {
       const attrs = vnode.attrs;
       latestAttrs = attrs;
-      if (attrs.mode === "create") {
-        // A fresh project opens on a random squiggle in that glyph's own color,
-        // so projects made without touching the pickers still look distinct.
-        glyphIndex = Math.floor(Math.random() * SQUIGGLE_GLYPHS.length);
-        color = SQUIGGLE_GLYPHS[glyphIndex].color;
-      } else {
-        name = attrs.project.name;
-        color = attrs.project.color;
-        glyphIndex = normalizedGlyphIndex(attrs.project.glyph);
-      }
+      name = attrs.project.name;
+      color = attrs.project.color;
+      glyphIndex = normalizedGlyphIndex(attrs.project.glyph);
     },
 
     view(vnode) {
       const attrs = vnode.attrs;
       latestAttrs = attrs;
-      const isCreate = attrs.mode === "create";
-      // Narrowed once, so the delete affordances below take a shape that is
-      // guaranteed to carry a project and an onDeleted.
-      const editAttrs: ProjectSettingsEditAttrs | null = attrs.mode === "create" ? null : attrs;
       const trimmedName = name.trim();
 
       return m(
@@ -276,7 +221,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
               },
             },
             [
-              m("h3.custom-url-dialog-title", isCreate ? "New project" : "Project settings"),
+              m("h3.custom-url-dialog-title", "Project settings"),
 
               // Live preview of the two pickers' combined result.
               m("div", { class: "mb-4 flex items-center gap-3" }, [
@@ -321,10 +266,20 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
 
               error ? m("p", { style: "color: red; font-size: 0.85em; margin-top: 4px;" }, error) : null,
 
-              isConfirmingDelete && editAttrs !== null
-                ? deleteConfirmation(editAttrs)
+              isConfirmingDelete
+                ? deleteConfirmation(attrs)
                 : m("div.custom-url-dialog-actions", [
-                    editAttrs === null ? null : deleteButton(editAttrs),
+                    m(
+                      "button.destroy-dialog-btn.destroy-dialog-btn-cancel",
+                      {
+                        class: "mr-auto disabled:opacity-50",
+                        disabled: isSaving || isDeleting,
+                        onclick() {
+                          isConfirmingDelete = true;
+                        },
+                      },
+                      "Delete",
+                    ),
                     m(
                       "button.custom-url-dialog-cancel",
                       {
@@ -339,7 +294,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
                         onclick: () => save(attrs),
                         disabled: isSaving || isDeleting || !trimmedName,
                       },
-                      isSaving ? (isCreate ? "Creating..." : "Saving...") : isCreate ? "Create" : "Save",
+                      isSaving ? "Saving..." : "Save",
                     ),
                   ]),
             ],

@@ -1,21 +1,52 @@
 /**
  * API client + pure helpers for projects.
  *
- * A project is a named, server-persisted dockview state plus the display
- * metadata the picker and sidebar render (name, color, squiggle glyph).
- * Membership is implicit: a tab belongs to a project exactly when a panel for
- * it exists in that project's saved content, so there is no separate
- * membership map to keep in sync.
+ * A project is a **view** over the machine's objects: a filter saying which of
+ * them it shows (`service:<name>`, `service:browser?session=<name>`,
+ * `chat:<agent-id>`, `terminal:<name>`, `url:<hash>`), plus its own saved
+ * dockview arrangement. Membership is explicit -- it changes only through the
+ * member calls below, never as a side effect of opening or closing a tab -- so
+ * a member with no panel is simply backgrounded: still running, just not
+ * docked.
  *
- * "Everything" is a real stored project that always exists and cannot be
- * deleted; new tabs are written into it as well as into the active project,
- * which is what keeps it unfiltered while still holding its own arrangement.
- * See DockviewWorkspace for the consuming logic.
+ * Membership is many-to-many and nothing owns anything: the same object may
+ * appear in any number of projects at once, so there is no owner and no
+ * "move". `removeMember` hides an object in one view and nowhere else.
+ *
+ * "Everything" is the view with no filter, and it is the *home*: every object
+ * on the machine appears in it, including objects filed in no project at all.
+ * It keeps its own layout like any other view -- `fetchProjectContent` and
+ * `autosaveProject` take EVERYTHING_VIEW_ID -- but it is not a project: it
+ * never comes back from `fetchProjectsList`, has no member list, and cannot be
+ * renamed or deleted. Its tab list is built by enumerating the machine (see
+ * buildEverythingMembers), not by unioning member lists, because objects filed
+ * nowhere must still show up. See DockviewWorkspace and Sidebar for the
+ * consuming logic.
  */
 
 import { apiUrl } from "../base-path";
 
-export const EVERYTHING_PROJECT_ID = "everything";
+/**
+ * The id of the reserved unfiltered view, matching the backend's
+ * ``EVERYTHING_VIEW_ID``.
+ *
+ * It is a view id but not a project id: the server stores its layout under
+ * this id and rejects nothing when it is used for content, yet it has no
+ * registry entry, so it never appears in the project list and must never be
+ * posted to a member, settings, or delete endpoint.
+ */
+export const EVERYTHING_VIEW_ID = "everything";
+
+/** The display name of the unfiltered view, matching the backend's
+ *  ``EVERYTHING_VIEW_NAME``. */
+export const EVERYTHING_VIEW_NAME = "Everything";
+
+/** Whether a view id addresses the unfiltered view rather than a project. The
+ *  views branch on this constantly: Everything has a layout but no members,
+ *  no settings and no delete. */
+export function isEverythingView(viewId: string): boolean {
+  return viewId === EVERYTHING_VIEW_ID;
+}
 
 export interface ProjectInfo {
   project_id: string;
@@ -23,6 +54,10 @@ export interface ProjectInfo {
   color: string;
   glyph: number;
   has_content: boolean;
+  // Every ref this project shows, open or backgrounded, in the order they were
+  // added. Not derived from the layout: a member with no panel is still here.
+  // The same ref may appear in other projects' lists too.
+  members: string[];
 }
 
 export interface ProjectsListResponse {
@@ -30,8 +65,10 @@ export interface ProjectsListResponse {
   last_active_id: string | null;
 }
 
-/** Fetch the project registry. Defensive: an unreachable server yields an
- *  empty list so the workspace still renders (nothing will persist). */
+/** Fetch the project registry. Everything is never in it -- it has no registry
+ *  entry -- so `last_active_id` is the one field that may name it. Defensive:
+ *  an unreachable server yields an empty list so the workspace still renders
+ *  (nothing will persist). */
 export async function fetchProjectsList(): Promise<ProjectsListResponse> {
   try {
     const response = await fetch(apiUrl("/api/projects"));
@@ -43,12 +80,13 @@ export async function fetchProjectsList(): Promise<ProjectsListResponse> {
   }
 }
 
-/** Fetch one project's saved content. Returns null both for an empty project
- *  (never saved yet -- render the fresh welcome-chat state) and on any fetch
- *  failure. */
-export async function fetchProjectContent(projectId: string): Promise<unknown | null> {
+/** Fetch one view's saved content, EVERYTHING_VIEW_ID included -- the
+ *  unfiltered view has its own layout like any project. Returns null both for
+ *  a view that has never been saved (render the New Tab launcher) and on any
+ *  fetch failure. */
+export async function fetchProjectContent(viewId: string): Promise<unknown | null> {
   try {
-    const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}`));
+    const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(viewId)}`));
     if (!response.ok) return null;
     const data = (await response.json()) as { layout?: unknown };
     return data.layout ?? null;
@@ -62,10 +100,10 @@ async function errorDetailFromResponse(response: Response): Promise<string> {
   return data.detail ?? `HTTP ${response.status}`;
 }
 
-/** Autosave the active project's content. Throws on failure (callers treat
- *  autosave as best-effort and catch). */
-export async function autosaveProject(projectId: string, layoutPayload: unknown, clientId: string): Promise<void> {
-  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}`), {
+/** Autosave the active view's content, EVERYTHING_VIEW_ID included. Throws on
+ *  failure (callers treat autosave as best-effort and catch). */
+export async function autosaveProject(viewId: string, layoutPayload: unknown, clientId: string): Promise<void> {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(viewId)}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ layout: layoutPayload, client_id: clientId }),
@@ -90,8 +128,9 @@ export async function createProject(name: string, color: string, glyph: number):
 }
 
 /** Rename/restyle an existing project. The id is stable across edits, so the
- *  project's saved content is untouched. Throws with the server's detail on
- *  rejection (unknown project, bad name, bad color or glyph). */
+ *  project's saved content and member list are untouched. Throws with the
+ *  server's detail on rejection (unknown project, bad name, bad color or
+ *  glyph). */
 export async function updateProjectSettings(
   projectId: string,
   name: string,
@@ -109,8 +148,12 @@ export async function updateProjectSettings(
   return (await response.json()) as ProjectInfo;
 }
 
-/** Delete a project. Throws with the server's detail on rejection (unknown
- *  project, or the Everything project, which may never be deleted). */
+/** Delete a project. Stopping the services behind its members is the server's
+ *  half of this, and the confirmation that precedes it is the caller's, so by
+ *  the time this is called the user has already seen what goes away. Throws
+ *  with the server's detail on rejection (unknown project, or the last
+ *  remaining project, which may not be deleted -- the dock always needs a real
+ *  project behind it). */
 export async function deleteProjectRequest(projectId: string): Promise<void> {
   const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/delete`), { method: "POST" });
   if (!response.ok) {
@@ -119,19 +162,26 @@ export async function deleteProjectRequest(projectId: string): Promise<void> {
 }
 
 /**
- * Drop one panel from every project that holds it, returning the ids that
- * changed.
+ * Drop one destroyed panel -- and, when given, the member it stood for --
+ * from every project, returning the ids that changed.
  *
- * This is the storage half of destroying a tab. Closing only removes a tab
- * from the project you are looking at, but destroying tears down the agent,
- * terminal, or browser behind it, so the panel has to leave the projects that
- * are not currently mounted as well -- otherwise switching to one of them
- * would restore a tab whose identity can no longer be resolved. Best-effort:
- * a failure here must not block the destroy itself, so callers catch.
+ * This is the storage half of destroying a tab, and the one path that reaches
+ * across projects. Closing a tab leaves both the layout entry and the
+ * membership alone, but destroying tears down the agent, terminal, or browser
+ * behind it, so it has to leave the projects that are not currently mounted as
+ * well -- otherwise switching to one of them would restore a tab whose
+ * identity can no longer be resolved, and the sidebar would list the object as
+ * backgrounded forever. Destroying is also the only thing that takes an object
+ * out of Everything, since Everything lists whatever the machine still holds.
+ * Callers that know only the panel omit `ref` and drop the panel alone.
+ * Best-effort: a failure here must not block the destroy itself, so callers
+ * catch.
  */
-export async function removePanelFromAllProjects(panelId: string): Promise<string[]> {
+export async function removePanelFromAllProjects(panelId: string, ref?: string): Promise<string[]> {
   const response = await fetch(apiUrl(`/api/projects/panels/${encodeURIComponent(panelId)}/delete`), {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref: ref ?? null }),
   });
   if (!response.ok) {
     throw new Error(await errorDetailFromResponse(response));
@@ -140,17 +190,321 @@ export async function removePanelFromAllProjects(panelId: string): Promise<strin
   return data.project_ids ?? [];
 }
 
+/** Show `ref` in a project. Idempotent, and indifferent to what else shows it:
+ *  a project is a view, so the same object appearing in several at once is
+ *  ordinary rather than a conflict. Throws with the server's detail on
+ *  rejection (unknown project). */
+export async function addMember(projectId: string, ref: string): Promise<void> {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/members`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorDetailFromResponse(response));
+  }
+}
+
+/** Stop showing `ref` in one project, leaving the object itself running. This
+ *  is "remove from project": it keeps running, it stays in every other project
+ *  showing it, and it stays in Everything. Throws with the server's detail on
+ *  rejection (unknown project). */
+export async function removeMember(projectId: string, ref: string): Promise<void> {
+  const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(projectId)}/members/remove`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorDetailFromResponse(response));
+  }
+}
+
 /**
- * Pick the project a client should start on: its stored per-browser choice
- * when that project still exists, else Everything (which the server always
- * keeps), else the first project. Null only when no projects exist at all,
- * which means the registry could not be read.
+ * Also show `ref` in another project, returning every project showing it
+ * afterwards.
+ *
+ * This is what opening something from the launcher's "on this machine" table
+ * does: the object joins the project you are looking at and is taken from
+ * nowhere. It differs from `addMember` only in addressing the destination in
+ * the body rather than the path, which is what lets a caller that holds a ref
+ * but no project context file it. Throws with the server's detail on rejection
+ * (unknown destination).
  */
-export function chooseInitialProject(projects: ProjectInfo[], storedId: string): ProjectInfo | null {
-  if (projects.length === 0) return null;
+export async function shareMember(ref: string, toProjectId: string): Promise<string[]> {
+  const response = await fetch(apiUrl("/api/projects/members/share"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ref, to_project_id: toProjectId }),
+  });
+  if (!response.ok) {
+    throw new Error(await errorDetailFromResponse(response));
+  }
+  const data = (await response.json()) as { projects?: string[] };
+  return data.projects ?? [];
+}
+
+/** Fetch the machine-wide ref -> showing-projects map. A ref maps to every
+ *  project whose filter includes it, and a ref no project holds is simply
+ *  absent -- it still exists on the machine, and Everything lists it anyway.
+ *  Defensive like fetchProjectsList: an unreachable server yields an empty
+ *  map, which reads as "nothing is filed anywhere" rather than breaking the
+ *  sidebar. */
+export async function fetchMemberMap(): Promise<Record<string, string[]>> {
+  try {
+    const response = await fetch(apiUrl("/api/projects/members"));
+    if (!response.ok) return {};
+    const data = (await response.json()) as { members?: Record<string, string[]> };
+    return data.members ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Pick the view a client should mount on: its stored per-browser choice when
+ * that view still exists, else the first project. Null only when no projects
+ * exist at all, which means the registry could not be read.
+ *
+ * A client last looking at Everything lands back on Everything: it is the home
+ * and has a layout of its own, so there is nothing to fall back from.
+ */
+export function chooseInitialViewId(projects: readonly ProjectInfo[], storedId: string): string | null {
+  if (isEverythingView(storedId)) return EVERYTHING_VIEW_ID;
   const stored = projects.find((project) => project.project_id === storedId);
-  if (stored) return stored;
-  const everything = projects.find((project) => project.project_id === EVERYTHING_PROJECT_ID);
-  if (everything) return everything;
-  return projects[0];
+  if (stored) return stored.project_id;
+  return projects.length === 0 ? null : projects[0].project_id;
+}
+
+/**
+ * Resolve a view id to the project backing it, or null when nothing does.
+ *
+ * Null covers both Everything, which is a view with no registry entry, and a
+ * project that has been deleted since the id was recorded -- callers that need
+ * a project's name, color, glyph or members have to handle both the same way.
+ */
+export function projectForViewId(projects: readonly ProjectInfo[], viewId: string): ProjectInfo | null {
+  return projects.find((project) => project.project_id === viewId) ?? null;
+}
+
+/** The kinds of object a member ref addresses: what the sidebar picks an icon
+ *  for, and what its search matches against so "browser" keeps browsers. */
+export type MemberKind = "chat" | "browser" | "terminal" | "app" | "url";
+
+const CHAT_REF_PREFIX = "chat:";
+const TERMINAL_REF_PREFIX = "terminal:";
+const URL_REF_PREFIX = "url:";
+const SERVICE_REF_PREFIX = "service:";
+const BROWSER_SERVICE_NAME = "browser";
+const TERMINAL_SERVICE_NAME = "terminal";
+
+/**
+ * Classify one member ref.
+ *
+ * The grammar is the store's (see projects.py): `chat:<agent-id>`,
+ * `terminal:<session>`, `url:<hash>` for an ad-hoc page, and `service:<name>`
+ * with the browser fleet's `?session=<id>` suffix. The browser viewer and the
+ * terminal are registered services like any other, but they are fleets rather
+ * than installed apps and the sidebar lists them as their own kinds. Anything
+ * unrecognized -- only reachable through a hand-edited registry -- falls back
+ * to the generic app row.
+ */
+export function memberKindFromRef(ref: string): MemberKind {
+  if (ref.startsWith(CHAT_REF_PREFIX)) return "chat";
+  if (ref.startsWith(TERMINAL_REF_PREFIX)) return "terminal";
+  if (ref.startsWith(URL_REF_PREFIX)) return "url";
+  if (ref.startsWith(SERVICE_REF_PREFIX)) {
+    const serviceName = ref.substring(SERVICE_REF_PREFIX.length).split("?")[0];
+    if (serviceName === BROWSER_SERVICE_NAME) return "browser";
+    if (serviceName === TERMINAL_SERVICE_NAME) return "terminal";
+  }
+  return "app";
+}
+
+/**
+ * Build the ref one object of a given kind is filed under.
+ *
+ * The inverse of memberKindFromRef, and the one place the views form refs, so
+ * the grammar the store and `layout_ops` share is written down once. `name` is
+ * whatever identifies the object within its kind: a chat's stable agent id (not
+ * its renameable display name), a tmux session name, a fleet browser's session
+ * name, a service name, or the short hash an ad-hoc URL panel is addressed by
+ * (which only the live layout can compute, hence taking it rather than
+ * deriving it).
+ */
+export function memberRef(kind: MemberKind, name: string): string {
+  switch (kind) {
+    case "chat":
+      return `${CHAT_REF_PREFIX}${name}`;
+    case "terminal":
+      return `${TERMINAL_REF_PREFIX}${name}`;
+    case "url":
+      return `${URL_REF_PREFIX}${name}`;
+    case "browser":
+      return `${SERVICE_REF_PREFIX}${BROWSER_SERVICE_NAME}?session=${name}`;
+    case "app":
+      return `${SERVICE_REF_PREFIX}${name}`;
+  }
+}
+
+/** One object as the machine reports it, before it becomes a row: the name its
+ *  ref is built from (see memberRef) and what to call it in the UI. */
+export interface MachineObject {
+  name: string;
+  label: string;
+}
+
+/**
+ * Everything the machine currently holds, gathered per kind from the source
+ * that knows about it: chat agents from the agent list, terminals from the
+ * tmux fleet, browsers from the browser fleet, apps from the registered
+ * service list, and ad-hoc URL tabs from the layouts that host them.
+ */
+export interface MachineInventory {
+  chatAgents: readonly MachineObject[];
+  terminals: readonly MachineObject[];
+  browsers: readonly MachineObject[];
+  apps: readonly MachineObject[];
+  urlTabs: readonly MachineObject[];
+}
+
+/** One row of a tab list: the object, what it is called, and which projects
+ *  show it. `projectIds` is empty for an object filed in no project at all,
+ *  which is ordinary -- Everything is its home. */
+export interface MemberRow {
+  ref: string;
+  kind: MemberKind;
+  label: string;
+  projectIds: string[];
+}
+
+const INVENTORY_KINDS: readonly { kind: MemberKind; key: keyof MachineInventory }[] = [
+  { kind: "chat", key: "chatAgents" },
+  { kind: "terminal", key: "terminals" },
+  { kind: "browser", key: "browsers" },
+  { kind: "app", key: "apps" },
+  { kind: "url", key: "urlTabs" },
+];
+
+/**
+ * Build Everything's tab list by enumerating the machine.
+ *
+ * Everything is the unfiltered view, so its rows come from what exists rather
+ * than from the union of the projects' member lists: an object filed in no
+ * project at all -- a side chat, a terminal nobody put anywhere -- has to
+ * appear here, and unioning member lists would silently drop exactly those.
+ * `projectsByRef` (see fetchMemberMap) only decorates each row with the
+ * projects showing it, for the row menu; a ref missing from it is filed
+ * nowhere, not hidden.
+ *
+ * Kinds come out in inventory order (chats, terminals, browsers, apps, URL
+ * tabs) and objects within a kind in the order their source listed them.
+ * Duplicate refs collapse onto the first row for them, so a URL tab that the
+ * layouts report twice does not list twice.
+ */
+export function buildEverythingMembers(
+  inventory: MachineInventory,
+  projectsByRef: Readonly<Record<string, readonly string[]>>,
+): MemberRow[] {
+  const rows: MemberRow[] = [];
+  const seenRefs = new Set<string>();
+  for (const { kind, key } of INVENTORY_KINDS) {
+    for (const object of inventory[key]) {
+      if (object.name === "") continue;
+      const ref = memberRef(kind, object.name);
+      if (seenRefs.has(ref)) continue;
+      seenRefs.add(ref);
+      rows.push({ ref, kind, label: object.label, projectIds: [...(projectsByRef[ref] ?? [])] });
+    }
+  }
+  return rows;
+}
+
+/** A machine-wide list split by whether the project shows each object: the two
+ *  tables the New Tab launcher renders, "In this project" and "On this
+ *  machine". */
+export interface MembershipPartition<T> {
+  inProject: T[];
+  onMachine: T[];
+}
+
+/**
+ * Split a machine-wide object list into the ones this project shows and the
+ * rest.
+ *
+ * "The rest" is everything else on the machine, whether it is filed in other
+ * projects or in none: membership is many-to-many, so opening one of them from
+ * the launcher adds it here and takes it from nowhere. Input order is
+ * preserved within each half.
+ */
+export function partitionByMembership<T extends { ref: string }>(
+  objects: readonly T[],
+  memberRefs: readonly string[],
+): MembershipPartition<T> {
+  const members = new Set(memberRefs);
+  const partition: MembershipPartition<T> = { inProject: [], onMachine: [] };
+  for (const object of objects) {
+    if (members.has(object.ref)) {
+      partition.inProject.push(object);
+    } else {
+      partition.onMachine.push(object);
+    }
+  }
+  return partition;
+}
+
+/** A `[start, end)` slice of a label that the search query matched, for the
+ *  view to render bold. */
+export interface MatchRange {
+  start: number;
+  end: number;
+}
+
+/** The least a row has to carry to be searchable: what it is called and what
+ *  it is. Rows keep whatever else they hold -- searchMembers hands the row
+ *  itself back. */
+export interface SearchableMember {
+  label: string;
+  kind: MemberKind;
+}
+
+export interface MemberSearchResult<T extends SearchableMember> {
+  member: T;
+  // Where the query hit the label, left to right and never overlapping. Empty
+  // when the row was kept on its kind alone, so nothing renders bold.
+  labelRanges: MatchRange[];
+}
+
+/**
+ * Filter the sidebar's tab list to the rows a query matches.
+ *
+ * A row is kept when the query appears in its label or in its kind, so typing
+ * "browser" keeps every browser however its tab happens to be titled. Matching
+ * is case-insensitive and on the raw substring, which is what lets the ranges
+ * come back as label offsets: the view bolds exactly what the user typed
+ * rather than re-deriving it. An empty query keeps everything with nothing
+ * bolded.
+ */
+export function searchMembers<T extends SearchableMember>(
+  members: readonly T[],
+  query: string,
+): MemberSearchResult<T>[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return members.map((member) => ({ member, labelRanges: [] }));
+  const results: MemberSearchResult<T>[] = [];
+  for (const member of members) {
+    const labelRanges: MatchRange[] = [];
+    const haystack = member.label.toLowerCase();
+    let searchFrom = 0;
+    let start = haystack.indexOf(needle, searchFrom);
+    while (start !== -1) {
+      labelRanges.push({ start, end: start + needle.length });
+      searchFrom = start + needle.length;
+      start = haystack.indexOf(needle, searchFrom);
+    }
+    if (labelRanges.length > 0 || member.kind.includes(needle)) {
+      results.push({ member, labelRanges });
+    }
+  }
+  return results;
 }
