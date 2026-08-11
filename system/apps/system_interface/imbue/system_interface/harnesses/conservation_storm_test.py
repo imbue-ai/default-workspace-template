@@ -9,8 +9,8 @@ bounded wait when a stop hammers is *stopped, never runs* -- the ledger admits t
 KILLED, and only when the storm deliberately staged such a send.
 
 Each storm drives the REAL executor under test -- claude's tap + stop executors over a REAL
-:class:`ClaudeSessionWatcher` reading real session JSONL, codex's stop/flush control-line writers,
-and pi's flush/retract inbox writers -- against seeded rounds of interleaved operations, with REAL
+:class:`ClaudeSessionWatcher` reading real session JSONL, and pi's flush/retract inbox writers --
+against seeded rounds of interleaved operations, with REAL
 ``message.lock`` flock contention: an in-flight send takes the same exclusive flock mngr's send
 holds (the ``server_test`` in-flight pattern) on a separate open file description BEFORE the
 executor starts its bounded acquire, and a timer thread completes the send (park-then-release)
@@ -50,14 +50,8 @@ from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
 from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
 from imbue.system_interface.harnesses.claude.tap import execute_claude_stop_to_composer
 from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
-from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
-from imbue.system_interface.harnesses.codex.model import CodexFlushTapStatus
-from imbue.system_interface.harnesses.codex.model import codex_control_path
-from imbue.system_interface.harnesses.codex.model import execute_codex_stop_to_composer
-from imbue.system_interface.harnesses.codex.model import flush_codex_queue_atomic
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
-from imbue.system_interface.harnesses.interrupt import agent_message_lock
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
@@ -68,6 +62,7 @@ from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToCompos
 from imbue.system_interface.harnesses.pi_coding.model import flush_pi_queue_atomic
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
+from imbue.system_interface.testing import agent_message_lock
 
 # One seed drives every storm; a failure report carries it plus the op log for replay.
 _BASE_SEED = 20260810
@@ -179,7 +174,7 @@ class _InFlightSend:
 
 
 class _StormWatcherBase(AgentSessionWatcher):
-    """A minimal concrete watcher for the pi/codex storm fakes.
+    """A minimal concrete watcher for the pi storm fakes.
 
     The transcript surface is inert (the executors under test never read it); subclasses override
     only the queued-message surface. Constructed directly by the storms, never via ``build``.
@@ -478,300 +473,6 @@ def test_pi_conservation_storm_flush_and_retract_writers(tmp_path: Path) -> None
 
 
 # =============================================================================
-# codex: the stop/flush control-line writers against the real control file + real lock
-# =============================================================================
-
-
-class _CodexWorld:
-    """Ground truth for the codex storm: parked steers, a rollout, and the REAL control file.
-
-    Sends park under the real ``message.lock`` (codex's STRICT send: the steer is durably parked
-    before the lock releases). ``apply_control_lines`` replays the real control file the way the
-    patched binary tails it, ABA-gated on the open turn id: a retract aborts the turn and
-    discards the parked steers; a flush target merges them into the turn.
-    """
-
-    def __init__(self, agent_state_dir: Path, ledger: _Ledger) -> None:
-        self.agent_state_dir = agent_state_dir
-        self.control_path = codex_control_path(agent_state_dir)
-        self.ledger = ledger
-        self.parked: list[str] = []
-        self.mirror: list[str] = []
-        self.rollout: list[dict[str, Any]] = []
-        self.last_discarded: list[str] = []
-        self.restart_count = 0
-        self.idle_marks = 0
-        self._consumed_control_lines = 0
-        self._turn_counter = 0
-        self._generation = 0
-        self._message_counter = 0
-
-    def new_text(self) -> str:
-        self._message_counter += 1
-        return f"codex-msg-{self._message_counter:03d}"
-
-    def open_turn_id(self) -> str | None:
-        return current_open_turn_id(self.rollout)
-
-    def ensure_open_turn(self) -> None:
-        if self.open_turn_id() is None:
-            self._turn_counter += 1
-            self.rollout.append({"type": "special", "kind": "turn_started", "turn_id": f"turn-{self._turn_counter}"})
-
-    def _park(self, text: str, generation: int) -> None:
-        if self._generation == generation:
-            self.parked.append(text)
-        else:
-            # The SIGKILL boundary landed mid-send: the paste died with the process; the strict
-            # send fails its park confirm and the message never runs (the staged corner).
-            self.ledger.killed.append(text)
-
-    def send_now(self, text: str) -> None:
-        self.ledger.accepted.append(text)
-        generation = self._generation
-        with agent_message_lock(self.agent_state_dir):
-            self._park(text, generation)
-
-    def begin_inflight_send(self, text: str, hold_seconds: float) -> _InFlightSend:
-        self.ledger.accepted.append(text)
-        generation = self._generation
-        return _InFlightSend(self.agent_state_dir, hold_seconds, lambda: self._park(text, generation))
-
-    def _read_control_lines(self) -> list[str]:
-        if not self.control_path.exists():
-            return []
-        return self.control_path.read_text(encoding="utf-8").splitlines()
-
-    def count_control_lines(self) -> int:
-        return len(self._read_control_lines())
-
-    def apply_control_lines(self) -> None:
-        """The patched binary's tail of the control file, ABA-gated on the live turn id."""
-        lines = self._read_control_lines()
-        for line in lines[self._consumed_control_lines :]:
-            intent = json.loads(line)
-            open_id = self.open_turn_id()
-            if "retract_turn_id" in intent:
-                if open_id is not None and intent["retract_turn_id"] == open_id:
-                    self.rollout.append({"type": "special", "kind": "turn_aborted", "turn_id": open_id})
-                    self.last_discarded = list(self.parked)
-                    self.parked = []
-            elif "target_turn_id" in intent:
-                if open_id is not None and intent["target_turn_id"] == open_id:
-                    self.ledger.delivered.extend(self.parked)
-                    self.parked = []
-            else:
-                pytest.fail(f"unrecognized codex control line: {line!r}\n{self.ledger.replay_note()}")
-        self._consumed_control_lines = len(lines)
-
-    def mark_idle(self) -> None:
-        self.idle_marks += 1
-
-    def restart_process(self) -> tuple[bool, str]:
-        """The base drain's SIGKILL boundary: the open turn and every pending steer die.
-
-        Steers the stale mirror captured ride the returned block (the driver records them as
-        RETURNED); one not yet mirrored dies entirely -- only a staged slow send can be there.
-        """
-        self.restart_count += 1
-        self._generation += 1
-        open_id = self.open_turn_id()
-        if open_id is not None:
-            self.rollout.append({"type": "special", "kind": "turn_aborted", "turn_id": open_id})
-        mirrored = set(self.mirror)
-        for text in self.parked:
-            if text not in mirrored:
-                self.ledger.killed.append(text)
-        self.parked = []
-        return (True, "ok")
-
-    def complete_turn_boundary(self) -> None:
-        """The rollout's ``turn_completed`` lands; parked steers await their follow-on turn."""
-        open_id = self.open_turn_id()
-        if open_id is not None:
-            self.rollout.append({"type": "special", "kind": "turn_completed", "turn_id": open_id})
-
-    def strand_parked(self) -> None:
-        """The process exits cleanly between turns with steers still pending: the ghost-chip
-        state the codex idle-stop handback was built for. The steers can never run."""
-        self.complete_turn_boundary()
-        self._generation += 1
-
-    def settle_turn_end(self) -> None:
-        """Natural turn end: the follow-on turn commits every still-parked steer."""
-        self.complete_turn_boundary()
-        self.ledger.delivered.extend(self.parked)
-        self.parked = []
-        self.mirror = []
-
-
-class _CodexStormWatcher(_StormWatcherBase):
-    """The codex watcher slice over the world: refresh applies the binary tail, then mirrors."""
-
-    def __init__(self, world: _CodexWorld) -> None:
-        self._world = world
-
-    def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
-        self._world.apply_control_lines()
-        self._world.mirror = list(self._world.parked)
-        return [dict(event) for event in self._world.rollout]
-
-    def get_queued_block(self) -> str:
-        return "\n".join(self._world.mirror)
-
-    def clear_queue(self) -> None:
-        self._world.mirror = []
-
-
-def _codex_agent_info(agent_state_dir: Path) -> AgentInfo:
-    return AgentInfo(
-        id="codex-storm-agent",
-        name="codex-storm-agent",
-        state="RUNNING",
-        agent_state_dir=agent_state_dir,
-        claude_config_dir=agent_state_dir / "unused",
-        harness=HarnessType.CODEX,
-    )
-
-
-def _stage_codex_send(world: _CodexWorld, send_mode: str) -> _InFlightSend | None:
-    if send_mode == _SEND_MODE_NONE:
-        return None
-    text = world.new_text()
-    if send_mode == _SEND_MODE_SLOW:
-        world.ledger.killable.add(text)
-        return world.begin_inflight_send(text, _SLOW_HOLD_SECONDS)
-    return world.begin_inflight_send(text, _FAST_HOLD_SECONDS)
-
-
-def _run_codex_stop(world: _CodexWorld, watcher: _CodexStormWatcher, agent_info: AgentInfo, send_mode: str) -> None:
-    note = world.ledger.replay_note
-    restarts_before = world.restart_count
-    control_lines_before = world.count_control_lines()
-    open_turn_before = world.open_turn_id()
-    parked_before = list(world.parked)
-    sender = _stage_codex_send(world, send_mode)
-    block = execute_codex_stop_to_composer(
-        agent_state_dir=world.agent_state_dir,
-        watcher=watcher,
-        mark_idle=world.mark_idle,
-        restart_drain_to_base=lambda: restart_drain(agent_info, watcher, world.restart_process, lambda: None),
-        sleep=lambda _seconds: None,
-        settle_deadline_seconds=2.0,
-    )
-    if sender is not None:
-        sender.join()
-    returned = _block_texts(block)
-    if send_mode == _SEND_MODE_SLOW and world.restart_count == restarts_before + 1:
-        # The hammer corner (the staged outcome): no control line, a restart, and the block is
-        # the stale mirror; the in-flight steer died with the process (KILLED, staged). On a
-        # heavily stalled machine the holder can release just inside the bounded wait instead --
-        # then the native branch below applies and conservation holds without a kill.
-        assert world.count_control_lines() == control_lines_before, f"no control line may be written\n{note()}"
-        assert returned == parked_before, f"hammer block {returned} != parked-at-capture {parked_before}\n{note()}"
-        world.ledger.returned.extend(returned)
-        return
-    assert world.restart_count == restarts_before, f"the native codex stop must not restart\n{note()}"
-    if open_turn_before is None:
-        # Idle stop: no control line is ever written; queued-but-stranded steers are handed
-        # back (the ghost-chip conservation branch), an empty mirror is a pure no-op.
-        assert world.count_control_lines() == control_lines_before, f"idle stop may write nothing\n{note()}"
-        assert returned == parked_before, f"idle handback {returned} != stranded steers {parked_before}\n{note()}"
-        world.ledger.returned.extend(returned)
-        return
-    # Native retract: the control line was ordered after any in-flight send under the lock, the
-    # binary's discard set must be EXACTLY the returned block, and the stranded lifecycle
-    # markers were cleared once the abort was observed (confirm-before-clear).
-    assert world.count_control_lines() == control_lines_before + 1, f"exactly one retract line\n{note()}"
-    assert world.last_discarded == returned, (
-        f"codex retract discarded {world.last_discarded} but the composer got {returned}\n{note()}"
-    )
-    world.ledger.returned.extend(returned)
-
-
-def _run_codex_flush(world: _CodexWorld, watcher: _CodexStormWatcher, send_mode: str) -> None:
-    note = world.ledger.replay_note
-    control_lines_before = world.count_control_lines()
-    open_turn_before = world.open_turn_id()
-    sender = _stage_codex_send(world, send_mode)
-    status = flush_codex_queue_atomic(world.agent_state_dir, watcher)
-    if sender is not None:
-        sender.join()
-    if send_mode == _SEND_MODE_SLOW:
-        if status == CodexFlushTapStatus.SEND_IN_FLIGHT:
-            # The staged outcome: nothing written, an explicit retryable refusal. No hammer ran,
-            # so the staged steer parked normally once the send completed; un-stage it. (On a
-            # heavily stalled machine the holder can release just inside the wait; the flush
-            # then legitimately taps -- the other branch.)
-            assert world.count_control_lines() == control_lines_before, f"a refused flush writes nothing\n{note()}"
-            world.ledger.killable.difference_update(world.parked)
-            return
-        assert status == CodexFlushTapStatus.TAPPED, f"unexpected codex flush status {status}\n{note()}"
-        watcher.get_all_events()
-        world.ledger.killable.difference_update(world.ledger.delivered)
-        return
-    if open_turn_before is None:
-        assert status == CodexFlushTapStatus.NO_OPEN_TURN, f"an idle codex flush must no-op\n{note()}"
-        assert world.count_control_lines() == control_lines_before, f"an idle flush may write nothing\n{note()}"
-        return
-    assert status == CodexFlushTapStatus.TAPPED, f"unexpected codex flush status {status}\n{note()}"
-    # The driver's next poll applies the binary tail, merging the parked steers into the turn.
-    watcher.get_all_events()
-
-
-@pytest.mark.timeout(120)
-def test_codex_conservation_storm_stop_and_flush_writers(tmp_path: Path) -> None:
-    """N seeded rounds of interleaved codex sends / stops / flushes under real lock contention."""
-    ledger = _Ledger("codex")
-    world = _CodexWorld(tmp_path, ledger)
-    watcher = _CodexStormWatcher(world)
-    agent_info = _codex_agent_info(tmp_path)
-    for round_index in range(_ROUND_COUNT):
-        rng = random.Random(_BASE_SEED + round_index)
-        ledger.log(f"round {round_index}:")
-        op_count = rng.randint(2, 4)
-        for op_index in range(op_count):
-            world.ensure_open_turn()
-            if round_index in _STOP_HAMMER_ROUNDS and op_index == 0:
-                op = "stop:" + _SEND_MODE_SLOW
-            elif round_index in _FLUSH_BLOCKED_ROUNDS and op_index == 0:
-                op = "flush:" + _SEND_MODE_SLOW
-            else:
-                op = rng.choice(
-                    (
-                        "send",
-                        "send",
-                        "stop:" + _SEND_MODE_NONE,
-                        "stop:" + _SEND_MODE_FAST,
-                        "flush:" + _SEND_MODE_NONE,
-                        "flush:" + _SEND_MODE_FAST,
-                        "strand-then-stop",
-                    )
-                )
-            ledger.log(f"  {op}")
-            if op == "send":
-                world.send_now(world.new_text())
-            elif op == "strand-then-stop":
-                # The process exited between turns with steers still pending: without the
-                # stop's handback these are the ghost chips U1 forbids (they can never run).
-                # The stop takes the no-open-turn branch and returns them to the composer.
-                if not world.parked:
-                    world.send_now(world.new_text())
-                world.strand_parked()
-                watcher.get_all_events()
-                _run_codex_stop(world, watcher, agent_info, _SEND_MODE_NONE)
-                world.parked = []
-            elif op.startswith("stop:"):
-                _run_codex_stop(world, watcher, agent_info, op.split(":", 1)[1])
-            elif op.startswith("flush:"):
-                _run_codex_flush(world, watcher, op.split(":", 1)[1])
-            else:
-                pytest.fail(f"unknown codex op {op}")
-        world.settle_turn_end()
-        ledger.verify()
-
-
-# =============================================================================
 # claude: the tap + stop executors over a REAL ClaudeSessionWatcher and real session JSONL
 # =============================================================================
 
@@ -1057,6 +758,7 @@ def _run_claude_tap(world: _ClaudeWorld) -> None:
         watcher=world.watcher,
         press_chord=world.press_chord_flush,
         send_recovery=lambda _text: True,
+        try_message_lock=lambda: try_hold_message_lock(world.agent_state_dir, wait_seconds=_CLAUDE_LOCK_WAIT_SECONDS),
     )
     if not parked_before:
         assert result.status == ClaudeTapStatus.NOTHING_QUEUED, f"an empty tap must no-op ({result})\n{note()}"

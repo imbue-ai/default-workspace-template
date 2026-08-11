@@ -125,12 +125,11 @@ _QUEUED_COMMAND_PROMPT_MODE = "prompt"
 #     <command-args>bar</command-args>
 # The three tags appear in varying order (built-ins lead with <command-name>,
 # custom commands with <command-message>), so they are matched individually
-# rather than positionally. We rebuild the original ``/foo bar`` text so (a) the
+# rather than positionally. We rebuild the original ``/foo bar`` text so the
 # rendered user bubble shows what the user actually typed instead of the raw
-# expansion and (b) the frontend's optimistic-message reconciliation -- which
-# matches a pending bubble to its transcript event by whitespace-normalized
-# content -- finds the match (otherwise the bubble is stranded; see
-# PendingMessages.ts).
+# expansion. (The frontend's optimistic "Sending…" bubble is removed positionally,
+# oldest-first, as the real user turn appears -- it does not depend on this text;
+# see OutgoingMessages.ts.)
 _COMMAND_NAME_PATTERN = re.compile(r"<command-name>(.*?)</command-name>", re.DOTALL)
 _COMMAND_ARGS_PATTERN = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
 

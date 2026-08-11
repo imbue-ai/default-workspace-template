@@ -41,17 +41,13 @@ from typing import Callable
 
 from loguru import logger as _loguru_logger
 
-from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
-from imbue.system_interface.harnesses.codex.queue_tracker import CodexQueueTracker
-from imbue.system_interface.harnesses.codex.session_parser import CodexQueueSignalKind
 from imbue.system_interface.harnesses.codex.session_parser import SOURCE as _SOURCE
-from imbue.system_interface.harnesses.codex.session_parser import parse_codex_queue_signals
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
 
 logger = _loguru_logger
@@ -71,16 +67,6 @@ logger = _loguru_logger
 # mirroring claude_session_parser's reimplement-don't-import stance.
 _MARKER_RELATIVE = Path("codex_transcript_path")
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
-# The queued-input sidecar the patched codex binary appends to on every enqueue, a
-# sibling of ``sessions/`` under CODEX_HOME. Watched alongside the rollout so a message
-# queued mid-turn surfaces as a bubble immediately, rather than only when it drains into
-# the rollout at the end of the running turn.
-_QUEUED_INPUT_RELATIVE = Path("plugin") / "codex" / "home" / "queued_input.jsonl"
-# The per-launch marker mngr_codex touches on every codex startup/resume -- the same
-# boundary the activity staleness guard compares transcript tails against. Its mtime
-# scopes the queued-input replay to the current process generation (see
-# ``_consume_queued_input``). Kept local like the other constants above.
-_PROCESS_STARTED_MARKER_RELATIVE = Path("codex_process_started")
 
 
 def read_marker_rollout_path(marker_path: Path) -> Path | None:
@@ -133,25 +119,6 @@ class CodexSessionWatcher(AgentSessionWatcher):
     _partial: bytes
     _line_index: int
     _tool_name_by_call_id: dict[str, str]
-    # The queued-input sidecar (codex's queue LEDGER) and its own byte cursor +
-    # trailing-partial, read exactly like the rollout but from a separate file. Each new
-    # line feeds ``_queue_tracker`` (enqueue -> add, committed/retracted -> resolve by id);
-    # the ledger drives the live queued snapshot only, never the transcript. The sidecar is
-    # append-only and continuous across ``codex resume`` (unlike the rollout, which
-    # rotates), so its cursor never resets on rotation.
-    _queued_input_path: Path
-    _queued_offset: int
-    _queued_partial: bytes
-    # The ``codex_process_started`` marker for this agent: its mtime is the current
-    # process generation's launch boundary, against which ledger enqueue timestamps
-    # are compared (see ``_consume_queued_input``).
-    _process_started_marker_path: Path
-    # The codex queued-message populator + the snapshot sink (set by app_context) and the
-    # last snapshot pushed to it, so a pure-enqueue cycle (which produces no transcript
-    # events) still broadcasts the queued snapshot, and only when it actually changed.
-    _queue_tracker: CodexQueueTracker
-    _queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None
-    _last_broadcast_queue_snapshot: list[dict[str, Any]]
     # The shared watch loop: a recursive watchdog on the sessions dir plus the poll
     # safety net, invoking _emit_unsent once at start and on every wake. Replaces the
     # bespoke thread/observer/poll block this watcher used to hand-roll.
@@ -168,7 +135,6 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # so it follows rotation), and the sessions dir we watchdog.
         self._marker_path = agent_state_dir / _MARKER_RELATIVE
         self._sessions_dir = codex_sessions_dir(agent_state_dir)
-        self._queued_input_path = agent_state_dir / _QUEUED_INPUT_RELATIVE
         self._on_events = on_events
 
         # Guards the in-memory transcript mirror and the tail cursor. Held across
@@ -206,15 +172,6 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # from the earlier function_call. Persists across files (a resume re-serialises
         # the calls, but keeping the map is harmless and covers output-only cases).
         self._tool_name_by_call_id = {}
-        # Queued-input sidecar cursor (see the attribute docs above).
-        self._queued_offset = 0
-        self._queued_partial = b""
-        self._process_started_marker_path = agent_state_dir / _PROCESS_STARTED_MARKER_RELATIVE
-        # The codex queued-message populator, its snapshot sink, and the last snapshot
-        # pushed (starts empty so the first non-empty snapshot broadcasts).
-        self._queue_tracker = CodexQueueTracker.build()
-        self._queue_snapshot_callback = None
-        self._last_broadcast_queue_snapshot = []
 
         self._path_watcher = None
         return self
@@ -228,10 +185,9 @@ class CodexSessionWatcher(AgentSessionWatcher):
         broadcast whatever already exists, since the agent may have run before the UI
         connected -- and again on every filesystem wake or poll timeout.
         """
-        # Watch CODEX_HOME (the parent of ``sessions/``) recursively: this catches every
-        # rollout append as before AND the queued-input sidecar's appends, both of which
-        # feed the transcript. The sidecar is a sibling of ``sessions/``, not under it, so
-        # watching only the sessions dir would miss it.
+        # Watch CODEX_HOME (the parent of ``sessions/``) recursively so an append to whichever
+        # rollout is live wakes the loop immediately, with the poll as the safety net. (The queue
+        # is owned by the live ledger now, not tailed here, so there is no sidecar to watch.)
         self._path_watcher = PathWatcher.build((self._sessions_dir.parent,), self._emit_unsent)
         self._path_watcher.start()
 
@@ -269,10 +225,6 @@ class CodexSessionWatcher(AgentSessionWatcher):
             self._emitted_count = len(self._events)
         if to_send:
             self._on_events(self._agent_id, to_send)
-        # Queue-ledger lines produce no transcript events, so a pure-enqueue cycle
-        # broadcasts nothing above; push the live queued snapshot here if it moved
-        # (including a change an HTTP read fed into the tracker via _refresh).
-        self._broadcast_queue_snapshot_if_changed()
 
     def _read_active_rollout(self) -> Path | None:
         """The absolute path of the live rollout, per the marker; None until written."""
@@ -287,10 +239,6 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
         new_events: list[dict[str, Any]] = []
         with self._lock:
-            # Feed codex's queue ledger into the tracker (drives the live queued snapshot,
-            # not the transcript). Read it first so a message's enqueue is folded in before
-            # the rollout turn it later commits into is parsed below.
-            self._consume_queued_input()
             if target != self._current_path:
                 # First resolution or rotation (resume -> new rollout). Tail the new
                 # file from its start. Keep _line_index (global -> ids stay unique
@@ -351,64 +299,6 @@ class CodexSessionWatcher(AgentSessionWatcher):
                             self._ingest_event(synthetic, new_events)
 
         return new_events
-
-    def _consume_queued_input(self) -> None:
-        """Read new lines from the queued-input sidecar (codex's queue LEDGER) and fold
-        each into the queued-message tracker. Must hold ``_lock``.
-
-        Produces NO transcript events: a queued message drives the live queued snapshot
-        (pushed separately via ``_broadcast_queue_snapshot_if_changed``), and the committed
-        message reaches the transcript on its own as an ordinary rollout ``user_message``.
-        The sidecar is append-only and continuous across ``codex resume`` (unlike the
-        rollout, which rotates), so the cursor only moves forward; a shrink (unexpected)
-        re-reads from the start, and the ledger's own conservation (one leave per enqueue)
-        makes a full re-read self-correcting.
-        """
-        path = self._queued_input_path
-        try:
-            size = path.stat().st_size
-        except OSError:
-            # No sidecar yet (agent has queued nothing, or an older binary): nothing to do.
-            return
-        if size < self._queued_offset:
-            self._queued_offset = 0
-            self._queued_partial = b""
-        if size == self._queued_offset and not self._queued_partial:
-            return
-        try:
-            with path.open("rb") as f:
-                f.seek(self._queued_offset)
-                raw = f.read()
-        except OSError:
-            logger.debug("codex watcher: failed to read queued-input sidecar {}", path)
-            return
-        self._queued_offset += len(raw)
-        byte_lines = (self._queued_partial + raw).split(b"\n")
-        self._queued_partial = byte_lines.pop()
-        # Scope the replay to the CURRENT codex process generation: skip folding any
-        # ENQUEUE whose ledger timestamp predates the ``codex_process_started`` marker
-        # mtime (touched by mngr on every codex launch). Conservation fails across a
-        # kill-based death -- the dying process writes no terminating records, and the
-        # fork's restore-time retraction only closes entries held in the live process's
-        # memory -- so a prior generation's open entries would otherwise resurrect on
-        # every full replay. Nothing live is ever dropped (a live entry postdates its
-        # own launch). LEAVE records still fold unconditionally (an unknown-id resolve
-        # is a no-op). Missing marker or unparseable timestamp folds: override only on
-        # positive evidence, as in ``is_transcript_tail_stale``.
-        try:
-            process_started_at: float | None = self._process_started_marker_path.stat().st_mtime
-        except OSError:
-            process_started_at = None
-        for byte_line in byte_lines:
-            decoded = byte_line.decode("utf-8", errors="replace")
-            signal = parse_codex_queue_signals(decoded)
-            if signal is None:
-                continue
-            if signal.kind == CodexQueueSignalKind.ENQUEUE and process_started_at is not None:
-                enqueued_at = parse_iso_timestamp_to_epoch(signal.timestamp)
-                if enqueued_at is not None and enqueued_at < process_started_at:
-                    continue
-            self._queue_tracker.consume(signal)
 
     def _ingest_event(self, event: dict[str, Any], new_events: list[dict[str, Any]]) -> None:
         """Add one parsed event to the view: append a new id, supersede a changed one in
@@ -551,57 +441,3 @@ class CodexSessionWatcher(AgentSessionWatcher):
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         """Every codex event belongs to the single main session."""
         return True
-
-    # --- queued-message interface (mirrors ClaudeSessionWatcher) ------------
-    #
-    # Backed by the shared QueuedSet via CodexQueueTracker. The snapshot field,
-    # the two common actions, and the frontend are all harness-agnostic; this is
-    # the codex population behind the same interface.
-
-    def set_queue_snapshot_callback(self, callback: Callable[[list[dict[str, Any]]], None]) -> None:
-        """Register the sink the watcher pushes each new queued-message snapshot to."""
-        self._queue_snapshot_callback = callback
-
-    def get_queued_messages(self) -> list[dict[str, Any]]:
-        with self._lock:
-            return self._queue_tracker.snapshot()
-
-    def get_queued_block(self) -> str:
-        with self._lock:
-            return self._queue_tracker.concatenated_block()
-
-    def clear_queue(self) -> None:
-        """Drop the queued set (a flush restart invalidated it) and push the empty snapshot."""
-        with self._lock:
-            self._queue_tracker.clear()
-        self._broadcast_queue_snapshot_if_changed()
-
-    def notify_idle(self) -> list[dict[str, Any]]:
-        """Apply the working->IDLE backstop and return the resulting (empty) snapshot.
-
-        The caller (the agent manager, on a working->IDLE transition) folds the returned
-        snapshot into the same broadcast that carries the IDLE activity state, so this does
-        not push a broadcast of its own -- it only records the cleared snapshot as broadcast
-        so the poll loop does not re-push it.
-        """
-        with self._lock:
-            self._queue_tracker.on_idle()
-            snapshot = self._queue_tracker.snapshot()
-            self._last_broadcast_queue_snapshot = snapshot
-        return snapshot
-
-    def _broadcast_queue_snapshot_if_changed(self) -> None:
-        """Push the live queued snapshot to the registered sink when it has changed.
-
-        The snapshot read + last-broadcast comparison run under the lock; the callback
-        fan-out runs outside it, matching the ``on_events`` fan-out rule.
-        """
-        callback = self._queue_snapshot_callback
-        if callback is None:
-            return
-        with self._lock:
-            snapshot = self._queue_tracker.snapshot()
-            if snapshot == self._last_broadcast_queue_snapshot:
-                return
-            self._last_broadcast_queue_snapshot = snapshot
-        callback(snapshot)

@@ -39,6 +39,14 @@ class SendMessageRequest(FrozenModel):
     """Request body for sending a message to an agent."""
 
     message: str = Field(description="The message text to send")
+    message_id: str = Field(
+        default="",
+        description=(
+            "Stable per-message id the sender mints at send time (contract A4), keying the backend "
+            "'Sending' record so an interrupt can reconcile this message per id and return it to the "
+            "composer if it never committed. '' for legacy callers, which the backend then mints for."
+        ),
+    )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
     active_layout: str = Field(default="", description="The sender's active layout slug at send time")
     device_kind: str = Field(default="", description="'mobile' or 'desktop', derived from the sender's user agent")

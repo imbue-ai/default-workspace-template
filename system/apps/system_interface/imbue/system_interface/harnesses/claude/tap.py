@@ -173,7 +173,9 @@ class ClaudeTapStatus(StrEnum):
     race its recovery message sent). The rest are errors the server surfaces: PERMISSIONS_WAITING
     (409, claude is on a dialog the chord is inert in), BINDING_NOT_ACTIVE (500, the chord is not
     live for this process yet), CHORD_SEND_FAILED / RECOVERY_SEND_FAILED (500, a delivery failed),
-    and NOT_FLUSHED (500, the queue did not flush within the watch window).
+    NOT_FLUSHED (500, the queue did not flush within the watch window), and SEND_IN_FLIGHT (500,
+    a message send held ``message.lock`` past the bounded wait -- an explicit, retryable refusal
+    mirroring codex/pi, rather than a NOTHING_QUEUED no-op that would miss the not-yet-parked send).
     """
 
     NOTHING_QUEUED = "nothing_queued"
@@ -183,6 +185,7 @@ class ClaudeTapStatus(StrEnum):
     CHORD_SEND_FAILED = "chord_send_failed"
     NOT_FLUSHED = "not_flushed"
     RECOVERY_SEND_FAILED = "recovery_send_failed"
+    SEND_IN_FLIGHT = "send_in_flight"
     TAPPED = "tapped"
 
 
@@ -386,6 +389,7 @@ def execute_claude_shoulder_tap(
     watcher: TapWatcher,
     press_chord: Callable[[], bool],
     send_recovery: Callable[[str], bool],
+    try_message_lock: Callable[[], AbstractContextManager[bool]],
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     watch_deadline_seconds: float = _WATCH_DEADLINE_SECONDS,
@@ -395,9 +399,12 @@ def execute_claude_shoulder_tap(
 
     ``press_chord`` delivers ``meta+q`` under mngr's per-agent lock (returns success);
     ``send_recovery`` sends a task-notification the same confirmed way a normal message is
-    sent (returns success). Both are injected so the server wires them to the mngr message
-    API and tests substitute fakes. See the module docstring for the flow and the never-loss
-    bias of the watch.
+    sent (returns success). ``try_message_lock`` is one bounded acquire of mngr's per-agent
+    ``message.lock`` (yielding whether it was taken): the refresh-first mirror read runs under
+    it so a tap racing a not-yet-parked send does not read an empty mirror and no-op the message
+    away -- the same in-flight-send discipline pi's ``flush_pi_queue_atomic`` follows. All
+    three are injected so the server wires them to the mngr message API and tests substitute
+    fakes. See the module docstring for the flow and the never-loss bias of the watch.
     """
     # Baseline the tap's start so the recovery arm can tell whether a stop-button interrupt
     # (which delivers its own cancel chord) fired for this agent mid-watch -- see below.
@@ -407,9 +414,23 @@ def execute_claude_shoulder_tap(
     # (A process launched before the write still fails the gate until its next restart.)
     ensure_chat_cancel_tap_keybinding(keybindings_path)
 
-    # Refresh-first: drain a queue that already flushed at natural turn end before gating.
-    watcher.get_all_events()
-    if len(watcher.get_queued_messages()) == 0:
+    # Refresh-first UNDER the bounded ``message.lock`` (the codex/pi flush discipline): acquiring
+    # the lock means any in-flight send has durably parked, so its text is already in the mirror
+    # -- a tap racing a not-yet-parked send no longer reads an empty mirror and no-ops the message
+    # away. A send still holding the lock past the bounded wait yields SEND_IN_FLIGHT: an explicit,
+    # retryable refusal the endpoint surfaces (like codex/pi), never a silent NOTHING_QUEUED miss.
+    # The lock is released here (before the gates and the chord): the chord's keypress re-acquires
+    # it through mngr's locked message API, so holding it across ``press_chord`` would deadlock.
+    with try_message_lock() as is_lock_held:
+        if not is_lock_held:
+            return ClaudeTapResult(
+                status=ClaudeTapStatus.SEND_IN_FLIGHT,
+                detail="A message send to the agent is in flight; try the shoulder tap again.",
+            )
+        # Drain a queue that already flushed at natural turn end, then read the settled mirror.
+        watcher.get_all_events()
+        mirror_is_empty = len(watcher.get_queued_messages()) == 0
+    if mirror_is_empty:
         return ClaudeTapResult(status=ClaudeTapStatus.NOTHING_QUEUED)
 
     if not (agent_state_dir / ACTIVE_MARKER_FILENAME).exists():
@@ -563,26 +584,56 @@ def watch_for_abort_verdict(
     return verdict if verdict is not None else _AbortVerdict.UNCONFIRMED
 
 
+def _no_in_flight_block() -> str:
+    """Default in-flight-Sending source: nothing recorded (tests and legacy callers)."""
+    return ""
+
+
+def _no_settle_activity() -> None:
+    """Default activity-settle: a no-op (unit tests that assert only the block/markers)."""
+    return None
+
+
+def _combine_return_block(queued_block: str, in_flight_block: str) -> str:
+    """Concatenate the queued block and the in-flight (Sending) block, in send order.
+
+    Queued messages (parked first) lead; a message still mid-send follows. Either may be
+    empty; the result drops the empties so an empty queue or no in-flight send does not
+    inject a blank line. Matches the queued block's own newline join so the composer sees
+    one uniform block.
+    """
+    return "\n".join(part for part in (queued_block, in_flight_block) if part)
+
+
 def _drain_to_base_under_message_lock(
     watcher: TapWatcher,
     restart_drain_to_base: Callable[[], str],
     try_message_lock: Callable[[], AbstractContextManager[bool]],
+    get_in_flight_block: Callable[[], str] = _no_in_flight_block,
 ) -> str:
     """Refresh the mirror and run the base restart-drain under ONE bounded message-lock acquire.
 
-    Acquiring the lock means any in-flight send has durably parked, so a message that parked
-    between the caller's earlier mirror read and the SIGKILL rides the returned block instead of
-    dying silently with the process (message conservation). When the bounded wait expires, stop
-    must still win: refresh and hammer anyway -- that message is stopped, not recovered to the
-    composer, and never runs (the pi/codex not-held posture).
+    Acquiring the lock means any in-flight send has durably resolved (committed, queued, or
+    failed) and released, so a message that parked between the caller's earlier mirror read and
+    the SIGKILL rides the returned queued block instead of dying silently with the process
+    (message conservation). When the bounded wait EXPIRES the lock is still held by an in-flight
+    send that has NOT committed -- the SIGKILL will abort it -- so that Sending message is folded
+    into the returned block (contract A4/B: return every not-Delivered message), reconciled per id
+    by the Sending registry (a committed/queued send has already cleared its own record, so a lock
+    held past the wait means the record is genuinely unresolved). When the lock IS acquired we do
+    NOT add the in-flight block: the send resolved, so its record is (being) cleared and adding it
+    would risk returning an already-committed message.
     """
     with try_message_lock() as is_lock_held:
-        if not is_lock_held:
-            logger.info(
-                "claude stop: message.lock still held past the bounded wait; restarting on a best-effort re-capture"
-            )
         watcher.get_all_events()
-        return restart_drain_to_base()
+        queued_block = restart_drain_to_base()
+        if is_lock_held:
+            return queued_block
+        logger.info(
+            "claude stop: message.lock still held past the bounded wait; aborting the in-flight send and "
+            "returning it to the composer with the queued block"
+        )
+        return _combine_return_block(queued_block, get_in_flight_block())
 
 
 def execute_claude_stop_to_composer(
@@ -592,8 +643,10 @@ def execute_claude_stop_to_composer(
     watcher: TapWatcher,
     press_chord: Callable[[], bool],
     mark_idle: Callable[[], None],
+    settle_activity: Callable[[], None] = _no_settle_activity,
     restart_drain_to_base: Callable[[], str],
     try_message_lock: Callable[[], AbstractContextManager[bool]],
+    get_in_flight_block: Callable[[], str] = _no_in_flight_block,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     watch_deadline_seconds: float = _INTERRUPT_WATCH_DEADLINE_SECONDS,
@@ -615,15 +668,24 @@ def execute_claude_stop_to_composer(
       mid-flight send that parked while we waited routes back to the base, captured under that
       same hold; a lock still held past the wait routes straight to the hammer instead of
       stalling the stop behind the send's turn-confirm), deliver ``meta+q``, then watch.
-      CONFIRMED -> mark the agent idle (claude fires no hook on interrupt, stranding ``active``)
-      and return ``""``; TURN_ENDED -> return ``""``, clear nothing; UNCONFIRMED -> the base.
+      CONFIRMED -> settle the activity indicator via ``settle_activity`` (one direct broadcast,
+      so the dot clears at once) AND mark the agent idle (claude fires no hook on interrupt,
+      stranding ``active``), then return ``""``; TURN_ENDED -> return ``""``, clear nothing;
+      UNCONFIRMED -> the base.
 
-    The block is always empty on the chord path (the mirror was empty); every branch that carries
-    a real block goes through ``restart_drain_to_base``. ``press_chord`` / ``mark_idle`` /
-    ``restart_drain_to_base`` / ``try_message_lock`` are injected so the override wires the real
-    mngr boundaries and tests substitute fakes; each ``try_message_lock()`` call is one bounded
-    acquire of mngr's per-agent ``message.lock`` (waiting at most the shared
-    ``STOP_LOCK_WAIT_SECONDS``), yielding whether the lock was actually taken.
+    Whenever the bounded ``message.lock`` acquire EXPIRES -- a send is still in flight and has not
+    committed -- the aborted Sending message is returned to the composer alongside the queued block
+    (contract A4/B: return every not-Delivered message). ``get_in_flight_block`` supplies that text
+    (the Sending records the send endpoint keeps on the watcher); it is folded in ONLY on the
+    lock-not-held branches, because acquiring the lock means the send resolved (committed/queued)
+    and cleared its own record, so adding it there would risk returning an already-committed
+    message. On the chord path (lock acquired, mirror empty) the block is therefore empty. Every
+    branch that carries a real block goes through ``restart_drain_to_base``. ``press_chord`` /
+    ``mark_idle`` / ``settle_activity`` / ``restart_drain_to_base`` / ``try_message_lock`` /
+    ``get_in_flight_block`` are injected so the override wires the real mngr boundaries (the
+    endpoint's ``reset_activity_state`` for ``settle_activity``) and tests substitute fakes; each
+    ``try_message_lock()`` call is one bounded acquire of mngr's per-agent ``message.lock``
+    (waiting at most the shared ``STOP_LOCK_WAIT_SECONDS``), yielding whether the lock was taken.
     """
     # Self-provision the chord binding (idempotent, a no-op once bound), like the tap.
     ensure_chat_cancel_tap_keybinding(keybindings_path)
@@ -631,7 +693,7 @@ def execute_claude_stop_to_composer(
     # Refresh-first, then read the mirror.
     watcher.get_all_events()
     if len(watcher.get_queued_messages()) > 0:
-        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock)
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
 
     # Mirror is empty from here on.
     if not (agent_state_dir / ACTIVE_MARKER_FILENAME).exists():
@@ -640,17 +702,17 @@ def execute_claude_stop_to_composer(
 
     if (agent_state_dir / PERMISSIONS_WAITING_MARKER_FILENAME).exists():
         # The Chat-only chord is inert under a dialog, but a blocked turn is still a turn.
-        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock)
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
 
     process_marker = agent_state_dir / CLAUDE_PROCESS_STARTED_MARKER_FILENAME
     if not is_tap_binding_active(keybindings_path, process_marker):
         # The chord is not live for this process yet; the base restart still interrupts.
-        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock)
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
 
     baseline = resolve_live_session_baseline(watcher)
     if baseline is None:
         # No live session file to observe the abort against; fall back so stop still works.
-        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock)
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
     session_file, baseline_size = baseline
 
     # Under-lock re-check, BOUNDED: an in-flight ``mngr message`` send holds ``message.lock``
@@ -665,10 +727,14 @@ def execute_claude_stop_to_composer(
     with try_message_lock() as is_lock_held:
         if not is_lock_held:
             logger.info(
-                "claude stop: message.lock still held past the bounded wait; restarting on a best-effort re-capture"
+                "claude stop: message.lock still held past the bounded wait; aborting the in-flight send and "
+                "returning it to the composer"
             )
             watcher.get_all_events()
-            return restart_drain_to_base()
+            # The lock is still held by a send that has NOT committed; the hammer will abort it,
+            # so fold that Sending message into the returned block (A4/B). The mirror is empty here,
+            # so the base block is empty and the in-flight block is what returns.
+            return _combine_return_block(restart_drain_to_base(), get_in_flight_block())
         watcher.get_all_events()
         if len(watcher.get_queued_messages()) > 0:
             return restart_drain_to_base()
@@ -682,7 +748,7 @@ def execute_claude_stop_to_composer(
 
     if not press_chord():
         # The chord could not be delivered; the base restart still interrupts (stop must work).
-        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock)
+        return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
 
     verdict = watch_for_abort_verdict(
         session_file,
@@ -694,11 +760,20 @@ def execute_claude_stop_to_composer(
         poll_interval_seconds=poll_interval_seconds,
     )
     if verdict == _AbortVerdict.CONFIRMED:
-        # The abort is on disk; clear the stranded markers and poke observe to re-probe. The
+        # The abort is on disk. Settle the activity indicator with ONE direct broadcast --
+        # the SAME ``reset_activity_state`` the restart-drain path runs -- so the dot clears at
+        # once (A6: model done -> dot cleared immediately), rather than only indirectly via the
+        # observe re-probe ``mark_idle`` pokes (a two-hop, laggy chain). Then clear the stranded
+        # on-disk markers so a later observe also reads idle and never re-derives THINKING. The
         # mirror was empty, so the block is empty. Confirm-before-clear: markers move only here.
-        # Best-effort: the interrupt already succeeded, so a marker-cleanup failure (the activity
-        # log append, say) must not turn a completed stop into a 500 -- log and still return "".
-        # The indicator then recovers on the next idle_prompt hook instead of clearing promptly.
+        # Both are best-effort: the interrupt already succeeded, so a settle/marker-cleanup
+        # failure must not turn a completed stop into a 500 -- log and still return "".
+        try:
+            settle_activity()
+        except (ConcurrencyGroupError, OSError) as e:
+            logger.opt(exception=e).warning(
+                "claude stop: abort confirmed but settling activity failed; indicator will lag"
+            )
         try:
             mark_idle()
         except (ConcurrencyGroupError, OSError) as e:
@@ -708,7 +783,7 @@ def execute_claude_stop_to_composer(
         # The turn ended naturally in the gap and its own Stop hook settled it; nothing to do.
         return ""
     # UNCONFIRMED: fall back to the base so the turn is definitely interrupted.
-    return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock)
+    return _drain_to_base_under_message_lock(watcher, restart_drain_to_base, try_message_lock, get_in_flight_block)
 
 
 class ClaudeInterruptToComposer(InterruptToComposer):
@@ -749,6 +824,8 @@ class ClaudeInterruptToComposer(InterruptToComposer):
             watcher=watcher,
             press_chord=press_chord,
             mark_idle=lambda: mark_claude_agent_idle(self._agent_state_dir, get_host_dir()),
+            settle_activity=settle_activity,
             restart_drain_to_base=lambda: restart_drain(self._agent_info, watcher, restart_process, settle_activity),
             try_message_lock=lambda: try_hold_message_lock(self._agent_state_dir),
+            get_in_flight_block=watcher.get_in_flight_block,
         )

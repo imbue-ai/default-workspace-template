@@ -12,7 +12,7 @@ ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
 # Pin Codex CLI; passed to setup_system.sh. Keep in sync with the default in
 # system/scripts/setup_system.sh. Bump deliberately, not by accident.
-ARG CODEX_VERSION=0.146.0
+ARG CODEX_VERSION=0.147.0
 ENV CODEX_VERSION=${CODEX_VERSION}
 
 # Pin Node.js (installed from a nodejs.org release tarball, not apt -- pi needs

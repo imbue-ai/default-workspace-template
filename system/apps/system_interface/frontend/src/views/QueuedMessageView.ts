@@ -5,10 +5,10 @@
  * The frontend is dumb here -- it renders a full snapshot the backend pushes on
  * the agents WebSocket (``AgentState.queued_messages``) and holds no queued state
  * of its own. The only action on the group is [Shoulder tap] (flush): it fires an
- * intent (`POST /flush-queue`) and paints nothing locally EXCEPT a transient
- * "freeze" so the group does not blip out while the agent restarts -- the freeze is
- * released by the same backend-arrival signal that clears a "Sending…" bubble (see
- * models/OutgoingMessages), so it clears exactly as the resent messages land.
+ * intent (`POST /flush-queue`) and paints nothing locally -- the next backend queue
+ * snapshot and the committed turn reflect the result. Whether the tap is available
+ * is a backend decision; the frontend only greys the button while its own request is
+ * in flight, so a click cannot double-fire.
  * (Interrupt-to-composer lives on the composer's Stop button -- see MessageInput.)
  * There is no harness branch anywhere in here.
  */
@@ -17,7 +17,6 @@ import m from "mithril";
 import { getAgentById, getQueuedMessagesForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
 import { getHarnessCatalog } from "../models/HarnessCatalog";
-import { getFlushFreeze, hasPendingSends, releaseFlushFreeze, startFlushFreeze } from "../models/OutgoingMessages";
 import { flushQueue, shoulderTapAtomic } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 
@@ -36,57 +35,29 @@ function isAtomicShoulderTapAgent(agentId: string): boolean {
   return catalog?.native_atomic_shoulder_tap_possible === true;
 }
 
-// Atomic-tap statuses that commit nothing (no turn to flush into, or an already-empty queue).
-// They release the flush freeze immediately, since no backend arrival ever will.
-const TERMINAL_NOOP_TAP_STATUSES: ReadonlySet<string> = new Set(["no_open_turn", "nothing_queued"]);
-
-function isTerminalNoopStatus(status: string): boolean {
-  return TERMINAL_NOOP_TAP_STATUSES.has(status);
-}
-
 async function flushQueuedMessages(agentId: string): Promise<void> {
-  // Never flush while the tap is already running, or while a message is still sending: a
-  // mid-send message is not in the queue yet, so a flush would race it. The button is
-  // greyed for both, but ``disabled`` only takes effect on the next redraw, so a click
-  // can beat it -- this synchronous re-check at click time is the actual guarantee that a
-  // flush never runs with a send in flight.
-  if (inFlightAgentIds.has(agentId) || hasPendingSends(agentId)) {
+  // Never flush while the tap is already running. The button is greyed while it is,
+  // but ``disabled`` only takes effect on the next redraw, so a click can beat it --
+  // this synchronous re-check at click time is the actual double-fire guard.
+  if (inFlightAgentIds.has(agentId)) {
     return;
   }
   const isAtomic = isAtomicShoulderTapAgent(agentId);
   inFlightAgentIds.add(agentId);
-  // Capture the messages BEFORE the backend snapshot empties, and hold them greyed
-  // until a backend arrival
-  // releases the freeze (arrival-driven, like a "Sending…" bubble; a 20s cap is the
-  // only fallback). We deliberately do NOT release on the POST resolving -- that would
-  // clear the hold before the merged/resent turn renders, reopening the blip. The
-  // arrival is the release. This holds for both paths: the restart-based flush and the
-  // atomic tap both empty the queue snapshot.
-  const captured = getQueuedMessagesForAgent(agentId);
-  if (captured.length > 0) {
-    startFlushFreeze(agentId, captured);
-  }
   m.redraw();
   try {
-    // The native harnesses (codex / pi / claude) flush into the live turn without a restart;
-    // the rest restart and resend. The flag comes from the agent's harness catalog.
+    // The native harnesses (codex / pi / claude) flush into the live turn without a
+    // restart; the rest restart and resend. The flag comes from the agent's harness
+    // catalog. Either way the frontend paints nothing local: the next backend queue
+    // snapshot and the committed turn reflect the result.
     if (isAtomic) {
-      const { status } = await shoulderTapAtomic(agentId);
-      // A terminal no-op commits nothing, so no backend arrival will release the freeze --
-      // drop it now instead of holding to the 20s cap. A real ``tapped`` stays arrival-released
-      // so the freeze clears exactly as the merged turn renders.
-      if (isTerminalNoopStatus(status)) {
-        releaseFlushFreeze(agentId);
-      }
+      await shoulderTapAtomic(agentId);
     } else {
       await flushQueue(agentId);
     }
   } catch (err) {
     const detail = describeRequestError(err);
     console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);
-    // The flush failed -- drop the hold so the UI reverts to the true backend state,
-    // and surface a popup.
-    releaseFlushFreeze(agentId);
     alert(`Failed to send queued messages: ${detail}`);
   } finally {
     inFlightAgentIds.delete(agentId);
@@ -97,11 +68,8 @@ async function flushQueuedMessages(agentId: string): Promise<void> {
 /** Render one queued message as a user bubble. Reuses the user-bubble *view* (the
  *  same markup ``StableUserMessage`` produces for a plain prompt) directly, rather
  *  than the classifier -- a queued message is always shown verbatim. */
-function renderQueuedBubble(queued: QueuedMessage, frozen = false): m.Vnode {
-  const cls = frozen
-    ? "message message-user queued-message queued-message--frozen"
-    : "message message-user queued-message";
-  return m("div", { class: cls, key: `queued-${queued.queued_id}` }, [
+function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
+  return m("div", { class: "message message-user queued-message", key: `queued-${queued.queued_id}` }, [
     m("div", { class: "message-user-bubble" }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
     ]),
@@ -110,38 +78,21 @@ function renderQueuedBubble(queued: QueuedMessage, frozen = false): m.Vnode {
 
 /**
  * The queued group, rendered below the last committed turn. Returns [] when the
- * agent has nothing queued (and is not mid-flush). A subtle header row reads:
+ * agent has nothing queued. A subtle header row reads:
  *   'Queued messages' (i) ................................... [Shoulder tap]
  * with the label + an info tooltip on the left and the flush button on the right;
- * the queued bubbles follow below. While a flush restarts the agent, the group is
- * held greyed (no button) until the resent messages arrive.
+ * the queued bubbles follow below. The group is a live mirror of the backend
+ * snapshot -- it is never held or reconstructed on the frontend.
  */
 export function renderQueuedMessages(agentId: string): m.Vnode[] {
-  // While a flush is restarting the agent, render the frozen (captured) messages
-  // greyed, ignoring the backend snapshot (which briefly empties). The freeze is
-  // released by a backend arrival (see models/OutgoingMessages), so it clears
-  // exactly as the resent messages land. No visible countdown.
-  const freeze = getFlushFreeze(agentId);
-  if (freeze !== undefined) {
-    const frozenHeader = m("div", { class: "queued-header queued-header--frozen", key: "queued-header" }, [
-      m("span", { class: "queued-header-label" }, "Sending queued messages…"),
-    ]);
-    return [
-      m("div", { class: "queued-group queued-group--frozen", key: "queued-group" }, [
-        frozenHeader,
-        ...freeze.messages.map((message) => renderQueuedBubble(message, true)),
-      ]),
-    ];
-  }
-
   const queued = getQueuedMessagesForAgent(agentId);
   if (queued.length === 0) {
     return [];
   }
-  // Grey the button while the tap is running OR a message is still sending: a mid-send
-  // message is not yet in the queue, so tapping now would race it. Waiting until the
-  // send parks (or the user cancels it) keeps the tap's "commit what's queued" honest.
-  const isInFlight = inFlightAgentIds.has(agentId) || hasPendingSends(agentId);
+  // Grey the button only while this tap's own request is in flight, to prevent a
+  // double-fire. Whether the tap is otherwise available (e.g. a message is still
+  // Sending) is a backend decision -- the frontend does not compute it.
+  const isInFlight = inFlightAgentIds.has(agentId);
 
   const header = m("div", { class: "queued-header", key: "queued-header" }, [
     m("span", { class: "queued-header-title" }, [
