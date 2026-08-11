@@ -32,3 +32,9 @@ mind created FROM a template opens by saying what it is allowed to do with it.
 A publish cannot ship with the question unanswered: the README's License
 section is generated with a placeholder, and `validate_template.py` fails while
 it is still there.
+
+The assembly script has its first tests: they run it over a real repo and
+assert on what a publisher actually ships -- that the generated welcome names
+the license and does so before the step that ends the turn, that the README's
+License section is present and unmistakably unfinished, and that assembly
+writes no `LICENSE` of its own, since choosing one is the user's call.
