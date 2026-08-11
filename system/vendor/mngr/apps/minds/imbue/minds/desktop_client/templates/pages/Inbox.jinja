@@ -1,92 +1,120 @@
-{#def pending=[], selected_id="", detail_html="", is_empty=False, pending_json="[]" #}
+{#def cards, selected_id="", detail_html="", is_empty=False, auto_open=True, keep_open=False #}
 {#
-  The permission-request popup: one centered dialog over the workspace,
-  the only surface a pending request is reviewed on (the old inbox drawer
-  and its titlebar Requests button are gone). Hosts:
-    - Transparent body + dim backdrop (so the desktop client modal view
-      reveals the workspace behind the popup).
-    - An eyebrow header naming the asking workspace ("Permission request
-      for [dot] <workspace>") over the request's detail fragment.
-    - The shell JS that owns Approve/Deny submission, the advance-to-next
-      queue, and escape/backdrop dismissal.
+  Inbox modal page. Hosts:
+    - Transparent body + dim backdrop (so the overlay-layer iframe
+      reveals the workspace behind the inbox).
+    - Master/detail layout: a left list (#inbox-list) and a right detail
+      pane (#inbox-detail), both swappable via fragment fetches.
+    - The shell JS that owns selection, Approve/Deny + auto-advance,
+      SSE-driven list refresh, and escape/backdrop dismissal.
 
-  ``pending`` is the ordered pending-request metadata (dicts with ``id``,
-  ``ws_name``, ``accent``), newest first; ``pending_json`` is the same
-  data pre-serialized for the shell script. ``selected_id`` is the id
-  of the request being shown; ``detail_html`` its pre-rendered handler
-  fragment (or the "no longer available" fragment). ``is_empty`` is True
-  when there are no pending requests at all, which renders the caught-up
-  state.
-
-  Resolving the shown request advances to the next pending one, and the
-  popup dismisses itself when none remain. It is opened by the Electron
-  auto-open path (a genuinely new request arrived) or by the chat card's
-  "Review & respond" relay, always over the current view.
+  ``cards`` is the initial pending-request list; ``selected_id`` the id
+  of the initially-selected card; ``detail_html`` is the pre-rendered
+  right-pane HTML (a handler fragment, the "no longer available"
+  fragment, or an empty placeholder). ``is_empty`` is True when there
+  are no pending requests and the layout collapses to a centered
+  message. ``auto_open`` is the initial state of the auto-open checkbox.
+  ``keep_open`` is True only when the user intentionally opened the whole
+  inbox (via the Requests button); when False, resolving a request via
+  Approve/Deny dismisses the whole window rather than advancing to the
+  next pending request (which could be an unrelated stale request).
 #}
 {% set _head %}
   <style>
-    /* Pop-in: the card slides down slightly and fades; the backdrop
-       scrim fades alongside on the same timing. Runs once per open
-       (the modal view loads a fresh page each time). */
-    @keyframes request-popup-in {
-      from { transform: translateY(-8px); opacity: 0; }
-      to   { transform: translateY(0);    opacity: 1; }
+    .inbox-card {
+      padding: 10px 12px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
     }
-    #request-popup { animation: request-popup-in 180ms cubic-bezier(0, 0.55, 0.45, 1); }
-    @keyframes request-backdrop-fade-in {
+    .inbox-card:hover { background: rgba(0, 0, 0, 0.04); }
+    .inbox-card.is-selected {
+      background: rgba(0, 0, 0, 0.06);
+      border-left-color: var(--workspace-accent, #94a3b8);
+    }
+    /* While a deny POST is in flight (it's fire-and-forget so the user
+       doesn't wait for the mngr message round trip) the card stays in
+       the list until the server appends the response event and the
+       chrome SSE pushes the new pending set. Visually mark it so the
+       user doesn't think the dialog reappeared on its own, and disable
+       hover / clicks so it can't be re-selected. */
+    .inbox-card.is-denying {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+    .inbox-card.is-denying .inbox-card-display::after {
+      content: " (denying...)";
+      color: #94a3b8;
+      font-weight: normal;
+      font-style: italic;
+    }
+    .inbox-card-kind {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #64748b;
+    }
+    .inbox-card-display {
+      font-size: 13px;
+      color: #18181b;
+      font-weight: 500;
+      margin-top: 2px;
+    }
+    .inbox-empty-placeholder {
+      padding: 32px 16px;
+      text-align: center;
+      color: #64748b;
+      font-size: 13px;
+    }
+    /* Drawer in-animation: small slide from the left edge (-15px
+       past the final position, slides right into place) plus a fade.
+       Backdrop scrim fades in alongside it on the same timing. Runs
+       once per inbox open (the overlay layer mounts a fresh /inbox
+       iframe each time, so the animation re-runs naturally). */
+    @keyframes inbox-slide-in {
+      from { transform: translateX(-15px); opacity: 0; }
+      to   { transform: translateX(0);     opacity: 1; }
+    }
+    #inbox-dialog { animation: inbox-slide-in 180ms cubic-bezier(0, 0.55, 0.45, 1); }
+    @keyframes inbox-backdrop-fade-in {
       from { background-color: rgba(0, 0, 0, 0); }
       to   { background-color: rgba(0, 0, 0, 0.2); }
     }
-    #inbox-backdrop { animation: request-backdrop-fade-in 180ms cubic-bezier(0, 0.55, 0.45, 1); }
+    #inbox-backdrop { animation: inbox-backdrop-fade-in 180ms cubic-bezier(0, 0.55, 0.45, 1); }
+    /* When the body has no cards, the left column expands to fill the
+       dialog and the right pane is hidden so the empty state reads as
+       a single centered message rather than a half-empty split. The
+       auto-open footer stays left-aligned in both states. */
+    #inbox-body.is-empty #inbox-detail { display: none; }
+    #inbox-body.is-empty #inbox-left-column {
+      flex: 1 1 auto;
+      width: auto;
+      border-right: none;
+    }
+    #inbox-body.is-empty #inbox-list {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
   </style>
 {% endset %}
 {% set _scripts %}
 <script>
   (function () {
+    // Whether the user intentionally opened the whole inbox (Requests
+    // button) vs. landed on a single request (notification click,
+    // workspace relay, or auto-open on a new request). When false,
+    // resolving a request dismisses the whole window rather than
+    // advancing to the next pending request -- see advanceAfterResolution.
+    var keepInboxOpen = {% if keep_open %}true{% else %}false{% endif %};
+    var inboxBody = document.getElementById("inbox-body");
+    var inboxList = document.getElementById("inbox-list");
     var inboxDetail = document.getElementById("inbox-detail");
 
-    // The pending queue, newest first, as [{id, ws_name, accent}]. The
-    // popup shows one request at a time and advances through this queue
-    // as requests resolve; SSE events reconcile it live.
-    var pendingQueue = [];
-    try {
-      pendingQueue = JSON.parse(document.getElementById("inbox-pending-data").textContent) || [];
-    } catch (e) { pendingQueue = []; }
-    var currentId = {{ selected_id | tojson }};
-    // Ids whose deny POST is in flight: excluded from advance targets so
-    // the user is never bounced into a dialog that is about to vanish.
-    var denyingIds = new Set();
-    // While an approval is running (possibly a browser sign-in), SSE
-    // reconciliation must not swap the pane out from under it.
-    var approveBusy = false;
-
-    // Where the browser-mode popup returns on close: an optional local-path
-    // ``return_to`` query param (the Permissions page passes its own URL so
-    // reviewing a request hands back there), validated to a single-slash
-    // local path; anything else falls back to home. Electron ignores this --
-    // its close routes through the modal-dismissal IPCs, which restore any
-    // modal the popup displaced (the workspace-options panel).
-    function browserReturnTarget() {
-      try {
-        var raw = new URLSearchParams(window.location.search).get("return_to") || "";
-        if (/^\/(?!\/)[A-Za-z0-9\-._~/?=&%]*$/.test(raw)) return raw;
-      } catch (e) { /* fall through to home */ }
-      return "/";
-    }
-
-    // ``didResolve`` distinguishes the two close paths: a close after the
-    // user resolved a request completes the detour (the revealed modal
-    // re-renders, so a Permissions panel's waiting strip drops the resolved
-    // row); a plain dismissal (Escape, backdrop, the X) restores it as-is.
-    function closeInbox(didResolve) {
+    function closeInbox() {
       if (window.minds && window.minds.closeModal) {
-        if (didResolve && window.minds.completeModalDetour) {
-          window.minds.completeModalDetour();
-        } else {
-          window.minds.closeModal();
-        }
+        window.minds.closeModal();
       } else {
-        window.location.href = browserReturnTarget();
+        window.location.href = "/";
       }
     }
     window.closeInbox = closeInbox;
@@ -96,13 +124,30 @@
     }
     window.onBackdropClick = onBackdropClick;
 
+    // Auto-open toggle. Fire-and-forget POST: the server reads the value
+    // on the next SSE-driven auto-open decision, so the UI doesn't need
+    // to wait for the response. The Electron main process queries the
+    // setting via the chrome SSE ``auto_open`` field on ``requests``
+    // events, which it polls separately.
+    window.onAutoOpenToggle = function (event) {
+      var enabled = !!(event.target && event.target.checked);
+      fetch("/_chrome/requests-auto-open", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: enabled }),
+        keepalive: true,
+      }).catch(function () {});
+    };
+
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") closeInbox();
     });
 
     // The Adjust toggle (predefined-permission "simple vs editor" view)
-    // lives here as a global so the fragment's onclick=showPermissionEditor()
-    // still works after a pane swap (fragments carry no scripts).
+    // is the only per-handler script we used to inject; with no per-handler
+    // scripts in the inbox shell, it lives here as a global so the
+    // fragment's onclick=showPermissionEditor() still works after swap.
     window.showPermissionEditor = function () {
       var simple = document.getElementById("permissions-simple-view");
       var editor = document.getElementById("permissions-editor-view");
@@ -110,6 +155,9 @@
       if (editor) editor.classList.remove("hidden");
     };
 
+    // Approve becomes available as soon as any name="permissions" input
+    // is checked. Re-run after every right-pane swap and on checkbox
+    // change (via the delegated handler below).
     // Parse the WebDAV mount roots the file-sharing dialog embeds on its
     // path input (a JSON array of absolute paths). Returns [] when absent
     // or malformed.
@@ -126,7 +174,8 @@
     // file-sharing dialog embeds on its path input, mirroring the
     // server-side ``_expand_home_prefix``. A bare ``~`` or ``~/...``
     // expands; ``~user`` (another user's home) is left unchanged so the
-    // within-roots check rejects it, matching the server.
+    // within-roots check rejects it, matching the server. Returns the
+    // value unchanged when there is no home dir or no ``~`` prefix.
     function expandSharePathHome(value, input) {
       var home = String(input.getAttribute("data-home-dir") || "");
       if (!home) return value;
@@ -150,9 +199,14 @@
 
     // The predefined-permission dialog offers a catch-all permission
     // (stored as ``any``, shown to users as ``all``) alongside the
-    // specific permissions. While it is ticked, the specific checkboxes
-    // are disabled (the browser omits disabled inputs from the
-    // submission, so only the active side is granted).
+    // specific permissions. While ``all`` is ticked, the specific
+    // checkboxes are disabled (they keep their own checked/unchecked
+    // state) to communicate that the catch-all already covers them;
+    // unticking ``all`` re-enables them. The browser omits disabled
+    // inputs from the submission, so only the active side is granted.
+    // The wildcard checkbox is tagged with ``data-wildcard`` in the
+    // template; dialogs without one (e.g. file-sharing) are left
+    // untouched.
     function syncPermissionWildcardExclusivity() {
       var form = document.getElementById("permissions-form");
       if (!form) return;
@@ -172,9 +226,11 @@
       var anyChecked = form.querySelector('input[name="permissions"]:checked') !== null;
       // The file-sharing dialog adds an editable path field. Its hidden
       // "permissions" checkbox is always checked, so gate Approve on the
-      // path being both non-empty AND inside a shared root, with an
-      // instant hint for out-of-root paths (matching the server-side
-      // rejection).
+      // path being both non-empty AND inside a shared root -- otherwise
+      // the user could approve a blank or unshareable path. A hint is
+      // shown next to the field for a non-empty out-of-root path so the
+      // feedback is instant (matching the server-side rejection) instead
+      // of only surfacing after submit.
       var pathInput = document.getElementById("file-sharing-path-input");
       var pathOk = true;
       if (pathInput) {
@@ -190,7 +246,9 @@
 
     // The file-sharing dialog ships its "Choose file…" / "Choose folder…"
     // buttons hidden; reveal them only when the Electron native-picker
-    // bridge is available. Idempotent: safe to call after every pane swap.
+    // bridge is available (in a plain browser the user pastes a path into
+    // the input instead). Idempotent: safe to call after every
+    // detail-pane render.
     function wireSharePathControls() {
       if (!(window.minds && window.minds.showFilePicker)) return;
       ["file-sharing-browse-file-btn", "file-sharing-browse-folder-btn"].forEach(function (id) {
@@ -201,7 +259,8 @@
 
     // Open the OS picker for the requested ``mode`` ('file' or
     // 'directory') and write the chosen absolute path back into the
-    // share-path input. A cancel (or bridge error) leaves the field alone.
+    // share-path input. Defaults the dialog to the path already in the
+    // field. A cancel (or any bridge error) leaves the field untouched.
     window.browseForSharePath = async function (mode) {
       var input = document.getElementById("file-sharing-path-input");
       if (!input || !(window.minds && window.minds.showFilePicker)) return;
@@ -219,44 +278,78 @@
       }
     };
 
-    // -- Queue navigation -----------------------------------------------
-
-    function metaFor(id) {
-      for (var i = 0; i < pendingQueue.length; i += 1) {
-        if (pendingQueue[i].id === id) return pendingQueue[i];
-      }
-      return null;
+    function applyEmptyState() {
+      var hasCards = !!inboxList.querySelector(".inbox-card");
+      if (hasCards) inboxBody.classList.remove("is-empty");
+      else inboxBody.classList.add("is-empty");
     }
 
-    // Repaint the eyebrow ("Permission request for [dot] <workspace>")
-    // for the request on screen; a missing meta (stale id) keeps the
-    // generic title with the dot hidden.
-    function updateEyebrow(id) {
-      var meta = id ? metaFor(id) : null;
-      var nameEl = document.getElementById("request-popup-ws-name");
-      var dotEl = document.getElementById("request-popup-ws-dot");
-      var forEl = document.getElementById("request-popup-for");
-      if (nameEl) nameEl.textContent = meta ? meta.ws_name : "";
-      if (dotEl) {
-        dotEl.classList.toggle("hidden", !meta);
-        if (meta) dotEl.style.backgroundColor = meta.accent;
-      }
-      if (forEl) forEl.classList.toggle("hidden", !meta);
+    function getSelectedId() {
+      var card = inboxList.querySelector(".inbox-card.is-selected");
+      return card ? card.getAttribute("data-request-id") : null;
     }
 
-    function nextPendingId(excludedId) {
-      for (var i = 0; i < pendingQueue.length; i += 1) {
-        var id = pendingQueue[i].id;
-        if (id !== excludedId && !denyingIds.has(id)) return id;
+    // Ids of cards whose deny POST is in flight. We mark them with
+    // ``is-denying`` so the user can see the action is in progress and
+    // re-clicks can't reopen the dialog. The set is reconciled with the
+    // DOM after every list refresh: ids that no longer appear are
+    // pruned (server processed the deny), and ids whose cards reappear
+    // have the class re-applied (innerHTML swap wiped it).
+    var denyingIds = new Set();
+
+    function isSelectableCard(el) {
+      return !!el
+        && el.classList
+        && el.classList.contains("inbox-card")
+        && !el.classList.contains("is-denying");
+    }
+
+    function syncDenyingClasses() {
+      var pruned = new Set();
+      denyingIds.forEach(function (id) {
+        var card = inboxList.querySelector('.inbox-card[data-request-id="' + id + '"]');
+        if (card) {
+          card.classList.add("is-denying");
+          pruned.add(id);
+        }
+      });
+      denyingIds = pruned;
+    }
+
+    function findNextPendingId(resolvedId) {
+      // Pick the next selectable card after the resolved one, falling
+      // back to the previous, falling back to any other selectable
+      // card. Operates on the rendered DOM order (most-recent-first,
+      // server-determined). Skips cards that are mid-deny so the user
+      // isn't auto-bounced back into a dialog that's about to vanish.
+      var current = inboxList.querySelector('.inbox-card[data-request-id="' + resolvedId + '"]');
+      if (!current) {
+        var any = inboxList.querySelector(".inbox-card:not(.is-denying)");
+        return any ? any.getAttribute("data-request-id") : null;
       }
-      return null;
+      var sibling = current.nextElementSibling;
+      while (sibling && !isSelectableCard(sibling)) sibling = sibling.nextElementSibling;
+      if (!sibling) {
+        sibling = current.previousElementSibling;
+        while (sibling && !isSelectableCard(sibling)) sibling = sibling.previousElementSibling;
+      }
+      return sibling ? sibling.getAttribute("data-request-id") : null;
+    }
+
+    async function fetchListFragment() {
+      var resp = await fetch("/inbox/list", { credentials: "same-origin" });
+      if (!resp.ok) return;
+      var html = await resp.text();
+      inboxList.innerHTML = html;
+      syncDenyingClasses();
+      applyEmptyState();
     }
 
     async function fetchDetailFragment(id) {
       var resp = await fetch("/inbox/detail/" + encodeURIComponent(id), { credentials: "same-origin" });
       if (!resp.ok) {
-        // The server returns 200 with an "unavailable" fragment for stale
-        // ids; anything else is a real error, leave the pane untouched.
+        // The server returns 200 with an "unavailable" fragment for stale ids;
+        // anything else is a real error, leave the pane untouched.
         return;
       }
       var html = await resp.text();
@@ -265,43 +358,82 @@
       wireSharePathControls();
     }
 
+    function setSelectedCard(id) {
+      inboxList.querySelectorAll(".inbox-card.is-selected").forEach(function (c) {
+        c.classList.remove("is-selected");
+      });
+      if (!id) return;
+      var card = inboxList.querySelector('.inbox-card[data-request-id="' + id + '"]');
+      if (card) card.classList.add("is-selected");
+    }
+
     function updateUrl(id) {
       try {
-        history.replaceState(null, "", id ? "/inbox?selected=" + encodeURIComponent(id) : "/inbox");
+        // Preserve keep_open so a reload keeps the whole-inbox semantics.
+        var suffix = keepInboxOpen ? (id ? "&keep_open=1" : "?keep_open=1") : "";
+        var target = id ? "/inbox?selected=" + encodeURIComponent(id) + suffix : "/inbox" + suffix;
+        history.replaceState(null, "", target);
       } catch (e) { /* noop in restricted contexts */ }
     }
 
-    async function showRequest(id) {
-      currentId = id;
-      updateEyebrow(id);
+    async function selectItem(id) {
+      setSelectedCard(id);
       updateUrl(id);
       if (id) await fetchDetailFragment(id);
     }
 
-    // After the shown request resolves: advance to the next pending one,
-    // or dismiss the popup when nothing is left (completing the detour, so
-    // a displaced Permissions panel comes back re-rendered). Any in-flight
-    // deny POST carries keepalive:true, so it completes after the window
-    // closes.
     async function advanceAfterResolution(resolvedId) {
-      pendingQueue = pendingQueue.filter(function (m) { return m.id !== resolvedId; });
-      var nextId = nextPendingId(resolvedId);
+      if (!keepInboxOpen) {
+        // The inbox was opened for a single request rather than as the
+        // whole inbox, so resolving it dismisses the window instead of
+        // advancing to the next pending request. This avoids surprising
+        // the user with an unrelated stale request suddenly appearing
+        // after they approve/deny. Any in-flight deny POST carries
+        // keepalive:true, so it still completes after the window closes.
+        closeInbox();
+        return;
+      }
+      var nextId = findNextPendingId(resolvedId);
+      await fetchListFragment();
       if (nextId) {
-        await showRequest(nextId);
+        // The list refetch may have dropped the just-resolved card and
+        // shifted indices; re-resolve against the fresh DOM rather
+        // than the pre-fetch sibling guess. Skip denying cards so we
+        // don't auto-bounce into a dialog that's about to vanish.
+        var stillSelectable = inboxList.querySelector(
+          '.inbox-card[data-request-id="' + nextId + '"]:not(.is-denying)',
+        );
+        if (!stillSelectable) {
+          var fallback = inboxList.querySelector(".inbox-card:not(.is-denying)");
+          nextId = fallback ? fallback.getAttribute("data-request-id") : null;
+        }
+      }
+      if (nextId) {
+        await selectItem(nextId);
       } else {
-        closeInbox(true);
+        // The user just resolved the last pending request -- nothing
+        // left for them to act on, so dismiss the modal. ``is-denying``
+        // cards still in the list will resolve in the background via
+        // their keepalive POST + the next SSE update.
+        closeInbox();
       }
     }
 
-    // -- Approve / Deny submission --------------------------------------
+    // -- Approve / Deny submission --
 
-    // Bring a just-revealed notice (progress / error / manual credentials)
-    // into view at the bottom of the scrollable pane.
+    // Bring a just-revealed notification (progress / error / manual
+    // credentials box) into view at the bottom of the detail pane.
+    // Required because the form sits at the top of the right pane and
+    // the notice that's shown after Approve lives below it -- on a
+    // tall request fragment the notice would otherwise be scrolled
+    // off-screen. Scrolls all the way to the bottom of the detail
+    // pane so the notice + its trailing padding are both visible.
     function scrollDetailIntoView(el) {
       if (!el) return;
       try {
         inboxDetail.scrollTo({ top: inboxDetail.scrollHeight, behavior: "smooth" });
       } catch (e) {
+        // Older browsers without scrollTo({ behavior }).
         inboxDetail.scrollTop = inboxDetail.scrollHeight;
       }
     }
@@ -309,10 +441,12 @@
     // Toggle the "an approval is running in the background" state. While
     // busy, BOTH buttons are disabled and the Approve label is swapped for
     // a spinner + "Approving...", so the user always has a clear signal
-    // that work is underway (a browser sign-in, a follow-up grant) and
-    // cannot double-submit or deny mid-flight.
+    // that work is underway (a browser sign-in, a follow-up grant, or any
+    // other step that runs until the approval succeeds or fails) and
+    // cannot double-submit or deny mid-flight. When cleared, Deny is
+    // re-enabled, the spinner hidden, the label restored, and Approve's
+    // availability is recomputed from the checkbox state.
     function setApproveBusy(isBusy) {
-      approveBusy = isBusy;
       var approveBtn = document.getElementById("permissions-approve-btn");
       var denyBtn = document.getElementById("permissions-deny-btn");
       var spinner = document.getElementById("permissions-approve-spinner");
@@ -321,11 +455,11 @@
         if (approveBtn) approveBtn.disabled = true;
         if (denyBtn) denyBtn.disabled = true;
         if (spinner) spinner.classList.remove("hidden");
-        if (label) label.textContent = "Approving…";
+        if (label) label.textContent = "Approving\u2026";
       } else {
         if (denyBtn) denyBtn.disabled = false;
         if (spinner) spinner.classList.add("hidden");
-        if (label) label.textContent = label && label.dataset.idleLabel ? label.dataset.idleLabel : "Approve";
+        if (label) label.textContent = "Approve";
         updateApproveState();
       }
     }
@@ -356,7 +490,6 @@
         }
         var data = await response.json();
         if (data.outcome === "GRANTED" || data.outcome === "DENIED") {
-          setApproveBusy(false);
           await advanceAfterResolution(resolvedId);
           return;
         }
@@ -364,7 +497,7 @@
         if (data.outcome === "NEEDS_MANUAL_CREDENTIALS") {
           var cmdEl = document.getElementById("permissions-manual-credentials-command");
           var msgEl = document.getElementById("permissions-manual-credentials-message");
-          if (cmdEl) cmdEl.textContent = data.set_credentials_example || "";
+          if (cmdEl) cmdEl.textContent = (data.manual_credentials && data.manual_credentials.command) || "";
           if (msgEl) msgEl.textContent = data.message || "";
           if (manualBox) {
             manualBox.classList.remove("hidden");
@@ -374,9 +507,10 @@
           return;
         }
         // FAILED: the approval did not complete (e.g. the browser sign-in
-        // flow failed). The request stays pending server-side; show the
-        // reason and re-enable Approve so the user can retry -- this is a
-        // failure, not a denial.
+        // flow failed). The request stays pending server-side (it is not
+        // resolved, so we do not advance the inbox); show the reason and
+        // re-enable Approve so the user can retry -- this is a failure, not
+        // a denial.
         if (data.outcome === "FAILED") {
           if (errorMsg) errorMsg.textContent = data.message || "Approval failed; please try again.";
           if (errorBox) {
@@ -406,17 +540,26 @@
     window.submitPermissionDeny = function () {
       var form = document.getElementById("permissions-form");
       if (!form) return;
-      var resolvedId = currentId;
-      if (resolvedId) denyingIds.add(resolvedId);
-      // Disable both buttons so the resolving request can't be re-actioned
-      // while the deny POST is in flight and the popup advances.
+      var resolvedId = getSelectedId();
+      // Mark the card as denying immediately so the list refresh that
+      // follows -- and any re-render before the server has processed
+      // the deny -- shows it faded with a "(denying...)" label rather
+      // than letting the user click it back into the dialog.
+      if (resolvedId) {
+        denyingIds.add(resolvedId);
+        var card = inboxList.querySelector('.inbox-card[data-request-id="' + resolvedId + '"]');
+        if (card) card.classList.add("is-denying");
+      }
+      // Disable both buttons so the resolving card can't be re-actioned
+      // while the deny POST is in flight and the inbox advances.
       var approveBtn = document.getElementById("permissions-approve-btn");
       if (approveBtn) approveBtn.disabled = true;
       var denyBtn = document.getElementById("permissions-deny-btn");
       if (denyBtn) denyBtn.disabled = true;
       var denyUrl = form.action.replace(/\/grant\b/, "/deny");
-      // Fire-and-forget so the user doesn't wait for mngr message round
-      // trips; keepalive lets the request finish even if the popup closes.
+      // Fire-and-forget so the user doesn't wait for mngr message round trips,
+      // and so the next-item swap can start immediately. keepalive lets the
+      // request finish even if the page transitions away unexpectedly.
       fetch(denyUrl, {
         method: "POST",
         credentials: "same-origin",
@@ -425,93 +568,129 @@
       advanceAfterResolution(resolvedId);
     };
 
-    // -- Event delegation ------------------------------------------------
+    // -- Event delegation --
+
+    inboxList.addEventListener("click", function (e) {
+      var card = e.target.closest(".inbox-card");
+      if (!card) return;
+      var id = card.getAttribute("data-request-id");
+      if (id) selectItem(id);
+    });
 
     inboxDetail.addEventListener("submit", function (e) {
       var form = e.target;
       if (!form || form.id !== "permissions-form") return;
       e.preventDefault();
-      submitGrant(form, currentId);
+      submitGrant(form, getSelectedId());
     });
 
     inboxDetail.addEventListener("change", function (e) {
       if (e.target && e.target.name === "permissions") updateApproveState();
     });
 
-    // -- SSE-driven queue reconciliation (Electron forwards chrome events) --
+    // -- SSE-driven list refresh (Electron forwards chrome events) --
 
     if (window.minds && window.minds.onChromeEvent) {
       window.minds.onChromeEvent(function (evt) {
         if (!evt || evt.type !== "requests") return;
+        var currentId = getSelectedId();
         var newIds = Array.isArray(evt.request_ids) ? evt.request_ids.map(String) : [];
-        // Keep known metadata; a genuinely new id has no meta yet, so the
-        // eyebrow falls back to the generic title if it is ever shown
-        // before a reload provides the workspace name.
-        var known = {};
-        pendingQueue.forEach(function (m) { known[m.id] = m; });
-        pendingQueue = newIds.map(function (id) { return known[id] || { id: id, ws_name: "", accent: "" }; });
-        if (approveBusy) return;
-        if (currentId && newIds.indexOf(currentId) === -1) {
-          // The shown request resolved on another surface; advance to the
-          // next pending one or dismiss.
-          advanceAfterResolution(currentId);
-        }
+        fetchListFragment().then(function () {
+          if (!currentId) return;
+          if (newIds.indexOf(currentId) === -1) {
+            // The server returns the canonical unavailable fragment for
+            // resolved/unknown ids; let it own the copy rather than
+            // duplicating the message here.
+            fetchDetailFragment(currentId);
+            updateUrl(null);
+          } else {
+            // The selection is still pending, but fetchListFragment
+            // rebuilt the list innerHTML with no card highlighted (the
+            // /inbox/list endpoint is selection-agnostic). Re-apply the
+            // highlight so the user's selection survives the refresh.
+            setSelectedCard(currentId);
+          }
+        });
       });
     }
 
-    // Initial state: Approve-button availability for the server-rendered
-    // detail, native-picker wiring, and the eyebrow for the selection.
+    // Initial state: set Approve-button availability for the server-rendered
+    // detail, and pick the right empty/non-empty body class.
+    applyEmptyState();
     updateApproveState();
     wireSharePathControls();
-    updateEyebrow(currentId);
   })();
 </script>
 {% endset %}
-<OverlaySurface title="Permission request"
+<OverlaySurface title="Requests"
                 body_style="-webkit-app-region: no-drag;"
                 head={{ _head }}
                 scripts={{ _scripts }}>
-  <script type="application/json" id="inbox-pending-data">{{ pending_json | safe }}</script>
-  {# Centered popup over a dim backdrop. A 38px strip across the top of
-     the backdrop keeps a window-drag handle available while the modal
-     covers the chrome titlebar (the OS swallows mousedown for dragging
-     there, so click-to-dismiss still works on the rest of the scrim). #}
+  {# Left-anchored slide-in drawer: full viewport height (including
+     under the title bar -- the overlay iframe covers the full window),
+     ~70% width capped at a max, dropping to ~90% on small viewports.
+     The dialog is flush with the left/top/bottom edges and has no
+     rounded corners so it reads as a top-level panel attached to the
+     screen edge. The backdrop dims the workspace strip on the right. #}
   <div id="inbox-backdrop"
-       class="fixed inset-0 bg-surface-overlay flex items-center justify-center p-4"
+       class="fixed inset-0 bg-surface-overlay flex justify-start"
        onclick="onBackdropClick(event)">
-    <div class="absolute top-0 left-0 right-0 h-[38px]"
-         style="-webkit-app-region: drag;"></div>
-    <div id="request-popup"
-         class="relative w-[min(600px,92vw)] max-h-[85vh] flex flex-col rounded-xl bg-surface-primary shadow-overlay overflow-hidden">
-      {# Eyebrow header on one line: "Permission request for [dot] <workspace>",
-         with the close button on the right. The dot carries the asking
-         workspace's accent; the shell JS repaints both as the popup
-         advances through the pending queue. #}
-      <div class="flex items-center justify-between gap-3 px-4 pt-3 pb-1 shrink-0">
-        <span class="flex min-w-0 items-center gap-1.5 type-label font-semibold text-primary">
-          <Icon16 name="key" size="sm" extra="shrink-0" />
-          <span class="shrink-0">Permission request</span>
-          {% set _selected_meta = (pending | selectattr("id", "equalto", selected_id) | list | first) if selected_id else none %}
-          <span id="request-popup-for" class="shrink-0{% if not _selected_meta %} hidden{% endif %}">for</span>
-          <span id="request-popup-ws-dot" aria-hidden="true"
-                class="h-2.5 w-2.5 shrink-0 rounded-full{% if not _selected_meta %} hidden{% endif %}"
-                {% if _selected_meta %}style="background-color: {{ _selected_meta.accent }}"{% endif %}></span>
-          <span id="request-popup-ws-name" class="truncate">{{ _selected_meta.ws_name if _selected_meta else "" }}</span>
-        </span>
+    <div id="inbox-dialog"
+         class="relative w-[90vw] lg:w-[75vw] max-w-[1100px] h-full flex flex-col bg-surface-primary border-r border-default shadow-overlay overflow-hidden">
+      {# Header row. 3-column grid so the title sits in the visual
+         center regardless of how wide the close button is. The fixed
+         height matches the chrome titlebar (h-[38px] in Chrome.jinja)
+         so the two headers line up visually when the drawer sits
+         beside the workspace's titlebar strip.
+
+         The header is opted INTO ``-webkit-app-region: drag`` so the
+         user can grab it to drag the window (the chrome titlebar
+         beneath is no-drag while the modal is open). The close button
+         is opted back out via inline no-drag so its click is not
+         eaten by the drag handler. #}
+      <div class="grid grid-cols-3 items-center px-2 h-[38px] border-b border-default"
+           style="-webkit-app-region: drag;">
+        <div></div>
+        <h1 class="type-section text-primary text-center">Requests</h1>
         <button type="button" aria-label="Close" data-tooltip="Close"
                 id="inbox-close-btn"
                 onclick="closeInbox()"
-                class="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-md text-tertiary hover:text-primary hover:bg-fill-hover cursor-pointer">
+                style="-webkit-app-region: no-drag;"
+                class="justify-self-end inline-flex items-center justify-center w-6 h-6 rounded-md text-tertiary hover:text-primary hover:bg-fill-hover cursor-pointer">
           <Icon16 name="close" />
         </button>
       </div>
-      <div id="inbox-detail" class="flex-1 min-h-0 overflow-y-auto px-6 pb-6 pt-2">
-        {% if is_empty %}
-          <p class="type-body text-secondary text-center py-8">You're all caught up — no pending requests.</p>
-        {% else %}
+      <div id="inbox-body" class="flex flex-1 min-h-0 {% if is_empty %}is-empty{% endif %}">
+        {# Left column: scrollable cards (or empty placeholder) on top,
+           pinned auto-open footer at the bottom. The footer's horizontal
+           alignment flips based on ``#inbox-body.is-empty`` (centered
+           when empty, left-aligned otherwise). #}
+        <div id="inbox-left-column" class="flex flex-col w-72 border-r border-default bg-fill-subtle">
+          <div id="inbox-list" class="flex-1 overflow-y-auto">
+            <InboxList :cards="cards" :selected_id="selected_id" />
+          </div>
+          <div id="inbox-list-footer" class="border-t border-default px-3 py-2 flex items-center">
+            <label class="type-helper text-secondary cursor-pointer flex items-center gap-1.5">
+              <input type="checkbox" id="inbox-auto-open"
+                     {% if auto_open %}checked{% endif %}
+                     onchange="onAutoOpenToggle(event)">
+              Auto-open on new request
+            </label>
+          </div>
+        </div>
+        <div id="inbox-detail" class="flex-1 overflow-y-auto p-6 sm:p-6">
           {{ detail_html|safe }}
-        {% endif %}
+        </div>
       </div>
     </div>
+    {# Drag strip in the backdrop to the right of the drawer. ``flex-1
+       h-[38px] self-start`` makes it sit at the top of the remaining
+       flex row width and only 38px tall, matching the chrome titlebar
+       height. With ``app-region: drag`` the OS uses this area as a
+       window-drag handle. The OS swallows mousedown for dragging, so
+       the backdrop's click-to-dismiss isn't triggered from here -- the
+       rest of the backdrop below the strip remains click-to-dismiss. #}
+    <div class="flex-1 h-[38px] self-start"
+         style="-webkit-app-region: drag;"></div>
   </div>
 </OverlaySurface>

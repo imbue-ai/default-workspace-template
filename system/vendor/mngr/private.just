@@ -213,6 +213,14 @@ tmr-mngr *args:
 tmr-minds *args:
   uv run --project libs/mngr_tmr mngr tmr apps/minds --name tmr-minds --mapper-prompt apps/minds/tmr/mapper.j2 {{args}} -- -m 'release and not minds_deployment and not minds_services and not minds_snapshot_resume'
 
+# minds behavior corpus (`mngr tmr-behaviors`: one agent per feature file, creating
+# and updating the tests that witness the behaviors). No testing flags after `--`:
+# behavior mappers run the specific witness tests they touch by node id, and
+# host-capability guardrails live in the variant prompt's infra_blockers block.
+[group("minds test")]
+tmr-behaviors-minds *args:
+  uv run --project libs/mngr_tmr mngr tmr-behaviors --root apps/minds/behaviors --name tmr-behaviors-minds --mapper-prompt apps/minds/tmr/behaviors_mapper.j2 {{args}}
+
 # === minds deployment / services test orchestrator ===
 # Wraps apps/minds/scripts/test_deployments.py. See specs/minds-deployment-tests.md
 # and apps/minds/deployment_tests/README.md for the full design + usage.
@@ -449,6 +457,7 @@ minds-install:
 #   just minds-start                     # launch against the worktree's branch
 #   just minds-start my-branch           # pin the DEFAULT_WORKSPACE_TEMPLATE branch to `my-branch`
 #   just minds-start "" .external_worktrees/my-default-workspace-template-worktree   # 2nd arg = default_workspace_template
+#   just minds-start "" "" 9223          # 3rd arg = Chromium remote-debugging port (CDP on 127.0.0.1)
 # `default_workspace_template` defaults to .external_worktrees/default-workspace-template; an absolute
 # path is used as-is, a relative one is resolved against the mngr root. This
 # is what gets synced (system/vendor/mngr/) and exported as MINDS_WORKSPACE_GIT_URL,
@@ -457,7 +466,7 @@ minds-install:
 # worktree (PID file under /tmp keyed by worktree path). Use `just
 # minds-stop` to kill the running instance first.
 [group("minds dev")]
-minds-start branch="" default_workspace_template="":
+minds-start branch="" default_workspace_template="" debug_port="":
     #!/bin/bash
     set -ueo pipefail
     if [ -z "${MINDS_ROOT_NAME:-}" ]; then
@@ -570,6 +579,12 @@ minds-start branch="" default_workspace_template="":
         echo "       Then re-run \`just minds-start\`." >&2
         exit 2
     fi
+    if [ -n "{{debug_port}}" ]; then
+        # Read by electron/main.js, which appends Chromium's
+        # --remote-debugging-port switch (CDP, bound to 127.0.0.1).
+        export MINDS_REMOTE_DEBUGGING_PORT="{{debug_port}}"
+        echo "MINDS_REMOTE_DEBUGGING_PORT=$MINDS_REMOTE_DEBUGGING_PORT (CDP at http://127.0.0.1:$MINDS_REMOTE_DEBUGGING_PORT)"
+    fi
     # Put the Node version apps/minds pins (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
@@ -597,8 +612,10 @@ minds-start branch="" default_workspace_template="":
 # minds-start). In the form's advanced settings, pick the SAME region the
 # slice was baked in -- region is a hard match and is never relaxed. Stop it
 # with `just minds-stop` (shared PID file, keyed by worktree path).
+#
+#   just minds-start-cloud 9223   # optional arg = Chromium remote-debugging port (CDP on 127.0.0.1)
 [group("minds dev")]
-minds-start-cloud:
+minds-start-cloud debug_port="":
     #!/bin/bash
     set -ueo pipefail
     if [ -z "${MINDS_ROOT_NAME:-}" ]; then
@@ -633,6 +650,12 @@ minds-start-cloud:
         echo "error: minds desktop client isn't installed/built yet in this worktree." >&2
         echo "       Run \`just minds-install\` first, then re-run \`just minds-start-cloud\`." >&2
         exit 2
+    fi
+    if [ -n "{{debug_port}}" ]; then
+        # Read by electron/main.js, which appends Chromium's
+        # --remote-debugging-port switch (CDP, bound to 127.0.0.1).
+        export MINDS_REMOTE_DEBUGGING_PORT="{{debug_port}}"
+        echo "MINDS_REMOTE_DEBUGGING_PORT=$MINDS_REMOTE_DEBUGGING_PORT (CDP at http://127.0.0.1:$MINDS_REMOTE_DEBUGGING_PORT)"
     fi
     # Put apps/minds's pinned Node (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
@@ -691,13 +714,24 @@ minds-stop:
     # (portable: pstree is not preinstalled on macOS, and macOS ps has no
     # `cmd=` keyword). We'll use this both to identify electron's main
     # process and to verify the whole tree exits.
-    descendants=$(ps -eo pid=,ppid= | awk -v root="$pid" '
-        { ppid_of[$1] = $2 }
+    #
+    # Subtrees rooted at a process that started its own session (setsid) are
+    # skipped: those are intentionally detached daemons -- the `mngr latchkey
+    # forward` supervisor and its gateway / `mngr observe` children -- which
+    # are DESIGNED to outlive the desktop client so agents keep working across
+    # restarts (see the spawn comment in apps/minds/imbue/minds/cli/run.py).
+    # They are neither waited on nor killed here.
+    root_sess=$(ps -o sess= -p "$pid" | tr -d ' ')
+    descendants=$(ps -eo pid=,ppid=,sess= | awk -v root="$pid" -v root_sess="$root_sess" '
+        { ppid_of[$1] = $2; sess_of[$1] = $3 }
         END {
             n = 1; queue[0] = root; seen[root] = 1
             for (i = 0; i < n; i++)
                 for (p in ppid_of)
-                    if (ppid_of[p] == queue[i] && !(p in seen)) { seen[p] = 1; queue[n++] = p }
+                    if (ppid_of[p] == queue[i] && !(p in seen)) {
+                        if (sess_of[p] != root_sess) continue
+                        seen[p] = 1; queue[n++] = p
+                    }
             for (i = 0; i < n; i++) print queue[i]
         }' | sort -u)
     # Locate Electron's main process: the descendant whose command contains
@@ -726,11 +760,15 @@ minds-stop:
         echo "Stopping minds-start (pid=$pid, electron not yet spawned)"
         kill -TERM "$pid"
     fi
-    # Wait up to 10s for the whole tree to exit.
-    for i in $(seq 1 10); do
+    # Wait up to 15s for the whole (same-session) tree to exit. Zombies are
+    # not counted as alive: they cannot be killed and resolve on their own
+    # once their parent reaps them or exits.
+    for i in $(seq 1 15); do
         still_alive=""
         for descendant in $descendants; do
             if kill -0 "$descendant" 2>/dev/null; then
+                stat=$(ps -o stat= -p "$descendant" 2>/dev/null || true)
+                case "$stat" in Z*) continue ;; esac
                 still_alive="$still_alive $descendant"
             fi
         done
@@ -743,7 +781,7 @@ minds-stop:
     # Force-kill anything that survived the grace period. Each kill targets
     # a specific PID we observed under the recipe shell -- never a broad
     # pgrep-style match.
-    echo "Tree did not exit after 10s SIGTERM grace; force-killing leftovers:$still_alive"
+    echo "Tree did not exit after 15s SIGTERM grace; force-killing leftovers:$still_alive"
     for descendant in $still_alive; do
         kill -9 "$descendant" 2>/dev/null || true
     done
@@ -1084,9 +1122,30 @@ list-pool-hosts:
 
 # List bare-metal servers (per-server + fleet slot accounting) for the activated
 # minds env (read-only; DSN resolved from the env, no manual exports).
+#
+# NOTE: the slot columns are derived from THIS env's pool_hosts rows, so a box
+# shared with another env reads as emptier than it is. Use `just audit-boxes` for
+# true occupancy before deciding you have free slots.
 [group("minds ops")]
 list-servers:
     uv run minds server list
+
+# Audit every bare-metal box for the activated env: SSH each one and report its
+# REAL occupancy (all envs' slices, not just this env's rows) plus any cross-tier
+# contamination -- a slice stamped for another TIER, or an extra key in the lima
+# user's authorized_keys (prep writes exactly one, so a second was added by hand).
+#
+# Tiers are isolated by construction (each has its own pool keypair, and there is
+# meant to be zero cross-tier reach), so a box serving two tiers is a box both
+# tiers' keys can SSH -- each tier's operators and connector gain limactl, and so
+# root, over the other's workspaces. A bake onto a contaminated box now refuses;
+# this is how you find one WITHOUT a failed bake.
+# Read-only. Activate first and `vault login` (the pool SSH key comes from Vault).
+#
+#   eval "$(uv run minds env activate staging)" && just audit-boxes
+[group("minds ops")]
+audit-boxes:
+    uv run minds server list --verify-occupancy
 
 # (Re-)prep a bare-metal box for slice baking: qemu/lima/tooling + image staging +
 # the per-box default-workspace-template image cache dir. Pool SSH key + DSN come from

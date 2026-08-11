@@ -118,7 +118,6 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     import os
     import subprocess
     import tempfile
-    import time
     from pathlib import Path
 
     from imbue.minds.desktop_client.e2e_workspace_runner import (
@@ -153,6 +152,18 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     # stacked template's docker_runtime outranks it.) Mirrors the pytest path in
     # apps/minds/test_snapshot_resume.py.
     _write_to_os_environ("MINDS_DOCKER_RUNTIME_DEFAULT", "RUNC")
+    # The snapshot-resume suite never exercises the browser stack, so the
+    # workspace skips its env.d browser unit -- most importantly the
+    # hundreds-of-MB Fortress engine download -- making this build faster and
+    # deterministic by construction (no deferred install left to race). The
+    # switch rides MINDS_EXTRA_PASS_HOST_ENV -> `mngr create --pass-host-env`
+    # -> the host env file on the workspace's persistent volume, so it is in
+    # the agent environment on EVERY boot: the unit re-evaluates it each boot,
+    # which also keeps resumed test sandboxes from starting the download
+    # mid-suite. Xvfb itself is baked into the DEFAULT_WORKSPACE_TEMPLATE
+    # image, so no supervisord service depends on the skipped unit.
+    _write_to_os_environ("DWT_SKIP_BROWSER_UNIT", "1")
+    _write_to_os_environ("MINDS_EXTRA_PASS_HOST_ENV", "DWT_SKIP_BROWSER_UNIT")
     # The paired DEFAULT_WORKSPACE_TEMPLATE worktree was materialized on the runner and baked into the
     # image at ``.external_worktrees/default-workspace-template``; resolve it
     # (errors loudly if the bake did not stage it).
@@ -161,59 +172,11 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     debug_port = find_free_port()
     print(f"[snapshot] workspace={workspace_name} debug_port={debug_port}", flush=True)
     create_workspace_via_electron(default_workspace_template_path, workspace_name, debug_port)
-    # The workspace's deferred install (the env.d browser unit) apt-installs the
-    # Fortress engine and then Xvfb in the background after the create returns.
-    # A snapshot taken before both land bakes a workspace whose xvfb service can
-    # never start in resumed sandboxes: `supervisorctl restart all` (e.g. after a
-    # backup restore) then reports `xvfb: ERROR (spawn error)` on every retry,
-    # because all test attempts share this one snapshot. Wait for both artifacts
-    # inside the workspace's own container (matched by the workspace name --
-    # other running containers, like the docker-state holder, never install
-    # Xvfb and must not gate the snapshot); a genuinely wedged install should
-    # fail this build loudly rather than mint a snapshot that fails the test
-    # stage mysteriously. The install runs concurrently with the multi-minute
-    # create above (it starts on the container's first boot), so the residual
-    # wait here is normally seconds; 5 minutes is a generous bound for an apt
-    # hiccup, not the install's full duration.
-    deferred_install_check = (
-        "command -v Xvfb >/dev/null 2>&1 && test -x /opt/fortress/tilion-fortress/tilion"
-    )
-    deferred_install_deadline = time.monotonic() + 300.0
-    while True:
-        running_names = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout.split()
-        workspace_containers = [name for name in running_names if workspace_name in name]
-        if not workspace_containers:
-            raise RuntimeError(
-                f"no running container carries the workspace name {workspace_name!r} "
-                f"(running: {running_names!r}); cannot verify the deferred install"
-            )
-        pending = [
-            name
-            for name in workspace_containers
-            if subprocess.run(
-                ["docker", "exec", name, "sh", "-c", deferred_install_check],
-                check=False,
-                timeout=60,
-            ).returncode
-            != 0
-        ]
-        if not pending:
-            print("[snapshot] deferred install complete in the workspace container", flush=True)
-            break
-        if time.monotonic() > deferred_install_deadline:
-            raise RuntimeError(
-                "deferred install (Xvfb + Fortress engine) did not complete in "
-                f"container(s) {pending!r} within 5 minutes; refusing to snapshot "
-                "a workspace whose xvfb service cannot start"
-            )
-        print(f"[snapshot] waiting for deferred install in {pending!r}", flush=True)
-        time.sleep(10)
+    # No deferred-install wait here: DWT_SKIP_BROWSER_UNIT (set above) turns
+    # the env.d browser unit off entirely, and Xvfb is baked into the image,
+    # so there is nothing racing this snapshot -- the bounded wait that used
+    # to sit here guarded a snapshot-without-Xvfb failure mode that can no
+    # longer occur.
     # IMPORTANT: do NOT call destroy_agent_best_effort here. The whole
     # point of this script is to leave the workspace agent + Docker
     # container's on-disk state (volumes, /home/user/workspace, the
@@ -307,6 +270,11 @@ _PNPM_MANIFEST_RELATIVE_PATHS: Final[tuple[str, ...]] = (
     "apps/minds/pnpm-lock.yaml",
     "apps/minds/pnpm-workspace.yaml",
     "apps/minds/.npmrc",
+    # The desktop client's Mithril frontend is its own pnpm workspace root
+    # (separate lockfile); its manifests ride in the same cacheable layer.
+    "apps/minds/frontend/package.json",
+    "apps/minds/frontend/pnpm-lock.yaml",
+    "apps/minds/frontend/pnpm-workspace.yaml",
 )
 
 
@@ -540,7 +508,10 @@ def _build_snapshot_image(
             'if [ $attempt -ge 3 ]; then echo "pnpm install: all 3 attempts failed" >&2; exit 1; fi; '
             'echo "pnpm install attempt $attempt failed; retrying in $((attempt * 10))s..." >&2; '
             "sleep $((attempt * 10)); "
-            "done",
+            "done && "
+            # The frontend workspace's deps warm the same cacheable layer; no
+            # retry loop needed (its only postinstall is esbuild's tiny check).
+            "cd /code/mngr/apps/minds/frontend && pnpm install --frozen-lockfile",
         )
         # Third-party Python deps layer: only the uv manifests. `--no-install-workspace`
         # installs just the locked third-party deps (uv constructs the
@@ -591,10 +562,15 @@ def _build_snapshot_image(
         # v0.9.7's create_from_image hardcoding workdir="/app": our project is at
         # /code/mngr, so the symlink lets `uv run pytest` find the project venv
         # from offload's chosen workdir.
+        # The SPA bundle build mirrors build:css's role for the Mithril UI:
+        # static/ui/ is gitignored build output, and without it every hub
+        # route serves the "frontend not built" page, so the e2e onboarding
+        # driver never sees the create form.
         .run_commands(
             "( cd /code/mngr && uv sync --all-packages ) && "
             "( cd /code/mngr/apps/minds && pnpm install --frozen-lockfile ) && "
             "( cd /code/mngr/apps/minds && node scripts/ensure-binaries.js && pnpm run build:css ) && "
+            "( cd /code/mngr/apps/minds/frontend && pnpm install --frozen-lockfile && pnpm generate && pnpm build ) && "
             "ln -s /code/mngr /app",
         )
     )
@@ -687,10 +663,7 @@ def _create_workspace_in_sandbox(sandbox: modal.Sandbox) -> None:
     command = "cd /code/mngr && xvfb-run -a uv run python -c {}".format(shlex.quote(_IN_SANDBOX_RUNNER_PROGRAM))
     # Budget: 1500s, sized for the Electron create itself (the in-sandbox
     # DEFAULT_WORKSPACE_TEMPLATE container build, the headline phase -- a few
-    # minutes in practice, so this carries large headroom). The runner
-    # program's bounded 300s deferred-install wait fits inside that headroom,
-    # so a slow install hits the program's own deadline (which names the
-    # pending containers) rather than this generic exec timeout.
+    # minutes in practice, so this carries large headroom).
     returncode = _exec_in_sandbox(
         sandbox,
         command,

@@ -6,9 +6,9 @@ Key concepts in the minds system:
 
 - **creation**: anything a user makes in their workspace. Used only at the highest conceptual level; the working vocabulary is the kinds: *apps* (opened as tabs), *skills* (an *automation* is a skill run automatically on a schedule), *data* (documents, images, notes), and *customizations* (changes to any of the above).
 
-- **app**: something the user can open as a tab and interact with. Lives under `system/apps/<package>/` in the workspace, runs as a supervisord program, and registers its port in `data/.state/apps.toml` via `system/scripts/forward_port.py`. Each app gets a local URL (via the desktop client) and optionally a global URL (via Cloudflare tunnel). The built-in apps are the terminal, the browser, and the system interface (the special app that hosts the other tabs). Never "application" -- always "app".
+- **app**: something the user can open as a tab and interact with. Lives under `system/apps/<package>/` in the workspace, runs as a supervisord program, and registers its port in `data/.state/apps.toml` via `system/scripts/forward_port.py`. Each app gets a local URL (via the desktop client) and, while sharing is enabled, a shared URL (via the workspace's share through the self-hosted relay). The built-in apps are the terminal, the browser, and the system interface (the special app that hosts the other tabs). Never "application" -- always "app".
 
-- **service**: a background supervisord program with no tab (host-backup, cloudflared, the app watcher). Standalone services live under `system/services/`; a service that exists solely to support one app lives in that app's folder and is named `<app>-<role>`. "Web service" is retired vocabulary: a tab-openable thing is an app.
+- **service**: a background supervisord program with no tab (host-backup, the share-gateway, the app watcher). Standalone services live under `system/services/`; a service that exists solely to support one app lives in that app's folder and is named `<app>-<role>`. "Web service" is retired vocabulary: a tab-openable thing is an app.
 
 - **automation** [future]: a skill that runs automatically on a schedule, without the user asking. The scheduling primitive is landing separately; until then skills run when invoked.
 
@@ -30,13 +30,19 @@ Key concepts in the minds system:
 
 - **desktop client**: a local process (`minds run`) that handles authentication, agent creation, and reverse proxying. Multiplexes access to multiple workspaces through a single local endpoint.
 
+- **browser authorization component** (fully, the *desktop-app backend-server* browser authorization component): the browser-facing part of the *desktop client* -- the bare-origin web UI served by `minds run` (`apps/minds/imbue/minds/desktop_client/`) on a single local endpoint. It serves every page the browser reaches, carries the browser's session, and authenticates it. The desktop client's other duties (agent and workspace creation, reverse proxying to workspaces) sit outside the browser authorization component.
+
+- **session**: the authenticated state of a browser connected to the *browser authorization component*, carried by the **session cookie** -- an HTTP cookie whose value is a token signed with the *installation*'s session-signing key, so a tampered cookie, one minted under another installation, or one older than 30 days is rejected. A browser authenticates a session by opening the one-time authentication URL that `minds run` prints to its terminal; the authenticated session is then the sole credential gating every page the component serves, and it covers all of the user's workspaces. It is scoped to a single *installation*, and is distinct from the optional imbue-cloud account sign-in (a separate credential for cloud-backed features).
+
+- **installation**: one copy of the desktop client's local state -- a single data directory (e.g. `~/.minds`), so one installation = one data directory. Its one-time code, session-signing key, sessions, and error-reporting consent all live in that data directory and do not carry across to another one on the same machine; `minds run` pointed at a different data directory is a different installation.
+
 - **bootstrap**: `uv run bootstrap`, the process that runs first-boot setup inside each agent container and then execs `supervisord -n` to launch the apps and background services.
 
 - **supervisord**: the process-control system running inside each agent container that supervises the apps and background services, each declared as a `[program:*]` section in `supervisord.conf` (logs under `/var/log/supervisor`). Replaces the old custom service manager that watched `services.toml` and ran services in tmux windows.
 
 - **app watcher**: a background service that monitors `data/.state/apps.toml` and writes service events to `events/services/events.jsonl` so the desktop client can discover an agent's apps. (Forwarding reconciliation happens on the minds side, via the `mngr forward` plumbing -- not in the watcher.)
 
-- **cloudflare tunnel**: a persistent connection from the agent container to Cloudflare's network, managed by `cloudflared`. Enables global access to workspace apps protected by Cloudflare Access (Google OAuth, service tokens).
+- **share-gateway**: the background service that watches `data/.secrets/share.env` for relay materials and runs the workspace's share stack (relay tunnel + in-workspace TLS) while sharing is enabled. Who may access the share is controlled by the grants document (`data/.secrets/share_grants.toml`), which the desktop client rewrites as the user edits grants.
 
 - **service event**: a JSON line in `events/services/events.jsonl` that registers (or deregisters) a name and URL for discovery. The desktop client's MngrStreamManager watches these events to discover agent backends. (The path and event vocabulary predate the app rename and are treated as plumbing.)
 

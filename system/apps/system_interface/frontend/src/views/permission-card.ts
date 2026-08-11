@@ -195,7 +195,7 @@ export function parsePermissionRequest(
 /**
  * Ask the outer Minds app to open its permission-request modal. The chat UI
  * runs inside an iframe, so we hand the request id to the embedding chrome
- * over the embed contract rather than rendering the modal ourselves.
+ * via the embed contract rather than rendering the modal ourselves.
  */
 export function openPermissionRequest(requestId: string): void {
   sendToEmbedder(OPEN_REQUEST_MODAL, { requestId });

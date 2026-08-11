@@ -71,7 +71,7 @@ Status: **Implemented** (branch `mngr/account-association`). Written as a bluepr
 - New `desktop_client/dek_store.py`: per-account DEK files at `~/.minds/keys/<user_id>.dek` (0600, atomic writes); create-if-absent; lock status (`is_unlocked(user_id)`); unlock (fetch bundle via CLI → unwrap → write file); wrap-and-push; per-account results for the "which accounts are still locked" surface.
 - New `desktop_client/workspace_record_store.py`: the local replica + sync engine —
   - replica persistence (`~/.minds/workspace_records/<user_id>.json`, dirty flags, last-pulled snapshot);
-  - record assembly: metadata from the resolver (name, color, provider, host_id, agent_id) + `device_id` (minds env's mngr `host_id`) + `device_label` (hostname);
+  - record assembly: metadata from the resolver (name, color, provider, host_id, agent_id) + `device_id` (the minds-owned per-install id at `<data_dir>/device_id`, adopted from the legacy mngr `host_id` on first run) + `device_label` (hostname);
   - secrets assembly per provider: the SSH private key that grants access (per-host key when the provider has one, e.g. imbue_cloud's `hosts/<host_id>/ssh_key`; else the provider-wide key), its known_hosts entries, and the canonical `restic.env` text when present;
   - push (CAS retry loop), pull, merge, and the post-discovery reconcile (migrate unmigrated, push dirty, tombstone definitively-absent, one-shot legacy conversion with `.pre-sync` renames).
 - `desktop_client/imbue_cloud_cli.py`: typed wrappers for the new `sync` verbs.

@@ -79,8 +79,9 @@ def build_production_state(
             resolve_never_welcomed_agent_name=welcome_resender.never_welcomed_agent_name,
         ),
         welcome_resender=welcome_resender,
-        # Single shared synchronous httpx client for the /service/<name>/
-        # forwarding layer; a separate one for the latchkey catalog proxy.
+        # Single shared synchronous httpx client for server-side API calls to
+        # local services (e.g. the /api/browsers passthrough to the browser
+        # daemon); a separate one for the latchkey catalog proxy.
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=httpx.Client(timeout=30.0),
     )

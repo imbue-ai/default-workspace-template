@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 from flask import Flask
 from flask import Response
 from flask import request
@@ -89,7 +90,6 @@ from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.models import WorkspaceFastModeResponse
 from imbue.system_interface.plugins import get_plugin_manager
-from imbue.system_interface.service_dispatcher import register_service_routes
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -104,6 +104,11 @@ _FRONTEND_NOT_BUILT_HTML = (
 
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
+
+# Name under which the browser daemon registers itself (via forward_port.py)
+# in data/.state/apps.toml. The /api/browsers passthrough resolves the daemon's
+# local backend URL from this registry entry.
+_BROWSER_SERVICE_NAME = "browser"
 
 # How often flask-sock sends a keepalive ping on each WebSocket connection.
 # Pings detect (and tear down) half-dead peers without any asyncio machinery --
@@ -123,17 +128,13 @@ class _ReflectClientSubprotocols:
     transparent passthrough -- the server echoes back whatever subprotocol the
     client requested.
 
-    This is required for the ``/service/<name>/`` proxy: ttyd's browser client
-    opens its socket with the ``tty`` subprotocol, and Chrome aborts the
-    handshake (close 1006, "press enter to reconnect" in the terminal tab) if it
-    offered a subprotocol and the 101 response echoes none. Reflecting the
-    offered subprotocol keeps the proxy transparent for any service, not just
-    ttyd, so a new service that uses its own subprotocol works without touching
-    this list.
-
-    Clients that offer no subprotocol (the ``/api/ws`` broadcaster and the
-    proto-agent-logs stream) are unaffected: with nothing offered, the
-    negotiation loop never runs and no subprotocol is echoed.
+    Chrome aborts a WebSocket handshake (close 1006) if the client offered a
+    subprotocol and the 101 response echoes none, so any future WS route that
+    negotiates a subprotocol works without touching this list. Today's own
+    endpoints (the ``/api/ws`` broadcaster and the proto-agent-logs stream)
+    offer no subprotocol, so the negotiation loop never runs and no
+    subprotocol is echoed -- the passthrough is inert for them but keeps the
+    server permissive for subprotocol-bearing clients.
     """
 
     def __contains__(self, _subprotocol: object) -> bool:
@@ -322,11 +323,14 @@ def _stream_filtered_events(
     sentinel) ends the stream.
     """
     keepalive_counter = 0
+    _loguru_logger.info("SSE stream opened for agent {} (conn {})", agent_id, id(event_queue))
+    close_reason = "event-queues shutdown"
     try:
         while not event_queues.is_shutdown:
             try:
                 event = event_queue.get(timeout=1)
                 if event is None:
+                    close_reason = "queue shutdown sentinel"
                     break
                 if not should_forward(event):
                     continue
@@ -338,8 +342,11 @@ def _stream_filtered_events(
                     keepalive_counter = 0
                     yield ": keepalive\n\n"
     except GeneratorExit:
-        pass
+        close_reason = "client disconnected"
     finally:
+        _loguru_logger.info(
+            "SSE stream closed for agent {} (conn {}, reason: {})", agent_id, id(event_queue), close_reason
+        )
         event_queues.unregister(agent_id, event_queue)
 
 
@@ -610,7 +617,7 @@ def _interrupt_agent_endpoint(agent_id: str) -> Response:
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
-    bootstrap, web, cloudflared, and other supervised services. The
+    bootstrap, web, share-gateway, and other supervised services. The
     frontend already hides ``is_primary=true`` agents from the visible agent
     list; this is defense-in-depth for callers that hit the endpoint directly
     (curl, scripted use, etc.).
@@ -1046,6 +1053,75 @@ def _terminal_notify_endpoint() -> Response:
     return _json_response(error.model_dump(), status_code=400)
 
 
+def _browsers_passthrough() -> Response:
+    """Same-origin passthrough for the browser daemon's fleet API.
+
+    Browser panels live on their own service origin now, so the shell frontend
+    can no longer ``fetch()`` the daemon's ``/browsers`` endpoint directly
+    (sibling service origins are same-site but not same-origin, and the daemon
+    sends no CORS headers). This server-side hop forwards ``GET`` /
+    ``POST /api/browsers`` to the registered ``browser`` service's local
+    backend and relays the backend's body and status verbatim (GET returns
+    ``{"browsers": [...]}``; POST relays the daemon's create result, including
+    its 400/409/503 rejections). Returns a 503 JSON error when the service is
+    not registered or unreachable.
+    """
+    state = get_state()
+    base_url = state.agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
+    if base_url is None:
+        error = ErrorResponse(detail="Browser service is not registered")
+        return _json_response(error.model_dump(), status_code=503)
+    backend_url = f"{base_url.rstrip('/')}/browsers"
+    try:
+        if request.method == "POST":
+            backend_response = state.http_client.post(
+                backend_url,
+                content=request.get_data(),
+                headers={"Content-Type": request.headers.get("Content-Type") or "application/json"},
+            )
+        else:
+            backend_response = state.http_client.get(backend_url)
+    except httpx.HTTPError as e:
+        _loguru_logger.warning("Browser service request to {} failed: {}", backend_url, e)
+        error = ErrorResponse(detail="Browser service is unreachable")
+        return _json_response(error.model_dump(), status_code=503)
+    return Response(
+        backend_response.content,
+        status=backend_response.status_code,
+        content_type=backend_response.headers.get("content-type", "application/json"),
+    )
+
+
+def _destroy_browser_passthrough(name: str) -> Response:
+    """Same-origin passthrough for retiring one browser in the fleet.
+
+    Companion to :func:`_browsers_passthrough` for the destroy control on a
+    browser pane's tab. The panels live on their own service origin, so the
+    shell can't ``DELETE`` the daemon's ``/browsers/<name>`` directly (no CORS);
+    this hop forwards ``DELETE /api/browsers/<name>`` to the registered
+    ``browser`` service and relays the daemon's body and status verbatim
+    (including its 404/409/503 rejections). Returns a 503 JSON error when the
+    service is not registered or unreachable.
+    """
+    state = get_state()
+    base_url = state.agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
+    if base_url is None:
+        error = ErrorResponse(detail="Browser service is not registered")
+        return _json_response(error.model_dump(), status_code=503)
+    backend_url = f"{base_url.rstrip('/')}/browsers/{name}"
+    try:
+        backend_response = state.http_client.delete(backend_url)
+    except httpx.HTTPError as e:
+        _loguru_logger.warning("Browser service DELETE to {} failed: {}", backend_url, e)
+        error = ErrorResponse(detail="Browser service is unreachable")
+        return _json_response(error.model_dump(), status_code=503)
+    return Response(
+        backend_response.content,
+        status=backend_response.status_code,
+        content_type=backend_response.headers.get("content-type", "application/json"),
+    )
+
+
 def _get_screen_capture(agent_id: str) -> Response:
     """Capture the tmux pane content for an agent.
 
@@ -1178,6 +1254,26 @@ def _handle_client_state_message(
     if not client_id or not active_layout:
         return False
     ws_broadcaster.set_client_info(client_queue, client_id, active_layout, device_kind)
+    if is_first_report:
+        _loguru_logger.info(
+            "WS client registered: client_id={} layout={} device={} (conn {})",
+            client_id,
+            active_layout,
+            device_kind,
+            id(client_queue),
+        )
+    elif previous_layout and previous_layout != active_layout:
+        _loguru_logger.info(
+            "WS client {} switched layout {} -> {} (conn {})",
+            client_id,
+            previous_layout,
+            active_layout,
+            id(client_queue),
+        )
+    else:
+        # A re-report on an already-registered connection with an unchanged
+        # layout; not worth a log line.
+        pass
     if layout_dir is not None:
         workspace_layouts.set_last_active_slug(layout_dir, active_layout)
         events_path = client_activity.get_events_path(layout_dir)
@@ -1216,6 +1312,10 @@ def _run_ws_broadcast_loop(
     op that depends on the registration.
     """
     client_queue = ws_broadcaster.register()
+    _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
+    # Overwritten by the paths below; every exit from the loop goes through one
+    # of them, so this default should never surface in a log line.
+    disconnect_reason = "handler exited"
     try:
         websocket.send(
             json.dumps(
@@ -1257,11 +1357,19 @@ def _run_ws_broadcast_loop(
                 continue
             if message is None:
                 shutdown = True
+                disconnect_reason = "shutdown sentinel (evicted by broadcaster or server shutdown)"
             else:
                 websocket.send(message)
     except ConnectionClosed:
-        pass
+        disconnect_reason = "connection closed"
     finally:
+        client_info = ws_broadcaster.get_client_info(client_queue)
+        _loguru_logger.info(
+            "WS /api/ws connection closed (conn {}, client_id={}, reason: {})",
+            id(client_queue),
+            client_info["client_id"] if client_info is not None else "<unregistered>",
+            disconnect_reason,
+        )
         ws_broadcaster.unregister(client_queue)
 
 
@@ -1317,7 +1425,7 @@ def _destroy_agent(agent_id: str) -> Response:
 
     Refuses to destroy agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and destroying it would tear down
-    the bootstrap, web, cloudflared, and other supervised services
+    the bootstrap, web, share-gateway, and other supervised services
     along with it. The frontend already hides ``is_primary=true`` agents
     from the visible agent list; this is defense-in-depth for callers that
     hit the endpoint directly (curl, scripted use, etc.).
@@ -1594,10 +1702,25 @@ def _layout_broadcast_endpoint() -> Response:
         if layout_error_response is not None:
             return layout_error_response
         if target_layout_slug is None or not broadcaster.has_client_on_layout(target_layout_slug):
+            connected_clients = broadcaster.get_connected_client_infos()
+            _loguru_logger.warning(
+                "Layout op {!r} rejected (412): no connected client on layout {!r}; connected clients: {}",
+                op,
+                requested_layout,
+                connected_clients,
+            )
+            client_summary = (
+                ", ".join(
+                    f"{info['client_id']} (layout={info['active_layout_slug']}, device={info['device_kind']})"
+                    for info in connected_clients
+                )
+                or "none"
+            )
             error = ErrorResponse(
                 detail=(
                     f"No connected client has layout '{requested_layout}' active. Ask the user to switch "
-                    f"to it, or run `layout.py load {requested_layout!r}` first."
+                    f"to it, or run `layout.py load {requested_layout!r}` first. "
+                    f"Connected clients: {client_summary}."
                 )
             )
             return _json_response(error.model_dump(), status_code=412)
@@ -1654,8 +1777,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application = Flask(__name__, static_folder=None)
     application.config["SOCK_SERVER_OPTIONS"] = {
         "ping_interval": _WS_PING_INTERVAL_SECONDS,
-        # Echo back whatever subprotocol the client offered so the WS proxy is
-        # transparent (e.g. ttyd's ``tty``); see ``_ReflectClientSubprotocols``.
+        # Echo back whatever subprotocol a client offers so subprotocol-bearing
+        # WS clients can connect; see ``_ReflectClientSubprotocols``.
         "subprotocols": _ReflectClientSubprotocols(),
     }
     attach_state(application, state)
@@ -1734,6 +1857,10 @@ def create_application(state: SystemInterfaceState) -> Flask:
         methods=["POST"],
     )
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
+    application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
+    application.add_url_rule(
+        "/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"]
+    )
     claude_auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
@@ -1754,11 +1881,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
     assets_directory = STATIC_DIRECTORY / "assets"
     if assets_directory.is_dir():
         application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
-
-    # Service forwarding routes: /service/<name>/... forwards to the service's
-    # local backend (from data/.state/apps.toml) with path rewriting,
-    # cookie scoping, WS shim, and a scoped service worker.
-    register_service_routes(application, sock)
 
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
 

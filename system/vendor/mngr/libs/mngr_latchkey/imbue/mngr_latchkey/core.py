@@ -28,6 +28,7 @@ from collections.abc import Collection
 from collections.abc import Mapping
 from collections.abc import Sequence
 from enum import auto
+from functools import cached_property
 from importlib import resources
 from pathlib import Path
 from typing import Final
@@ -38,6 +39,7 @@ from packaging.version import Version
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import SecretStr
+from pydantic import computed_field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
@@ -99,6 +101,11 @@ _CREATE_JWT_TIMEOUT_SECONDS: Final[float] = 15.0
 # Empirically, reencryption takes around 0.1s.
 _REENCRYPT_TIMEOUT_SECONDS: Final[float] = 5.0
 
+# Storing user-supplied credentials writes the credential store and, for some
+# services, validates the credentials over the network first. Unlike the browser
+# flows it never waits on a human, so it must not run unbounded.
+_AUTH_SET_TIMEOUT_SECONDS: Final[float] = 60.0
+
 # Listing services and registering an additional (custom) service are quick
 # config-store operations, but can stall on slow keychains like the others.
 _SERVICES_LIST_TIMEOUT_SECONDS: Final[float] = 15.0
@@ -123,12 +130,18 @@ UPSTREAM_DATA_FORMAT_VERSION_FILENAME: Final[str] = "data-format-version"
 CREDENTIALS_STORE_FILENAME: Final[str] = "credentials.json.enc"
 
 # Minimum version of the upstream ``latchkey`` CLI this package will operate
-# against. Kept in lockstep with the version we install/bundle (see
-# ``LATCHKEY_VERSION``). 3.2.0 was the first release that reports the account
-# whose credentials it injects to detent as ``customMetadata.account``, which
-# the per-account permission grants (:mod:`imbue.mngr_latchkey.account_scopes`)
-# depend on.
-LATCHKEY_MIN_VERSION: Final[str] = "3.2.0"
+# against. :meth:`Latchkey._check_minimum_version` enforces it against the
+# binary this process runs locally -- the copy bundled with the minds app, or
+# a CLI-only user's own install -- so the floor must never exceed the version
+# in ``apps/minds/package.json``, or the app rejects the very binary it ships.
+# Move it in lockstep with the versions we install
+# (:data:`imbue.mngr_latchkey.remote_gateway.LATCHKEY_VERSION` and the
+# in-workspace pin in default-workspace-template) rather than to track what the
+# code strictly needs: the newest release with a hard dependency here is 3.2.0,
+# the first to report the account whose credentials it injects to detent as
+# ``customMetadata.account`` -- what the per-account permission grants
+# (:mod:`imbue.mngr_latchkey.account_scopes`) read.
+LATCHKEY_MIN_VERSION: Final[str] = "3.4.1"
 
 # Fixed port that every containerized/VM/VPS agent sees on its own 127.0.0.1
 # when reaching the Latchkey gateway. A per-agent SSH reverse tunnel bridges
@@ -155,10 +168,20 @@ _GATEWAY_PASSWORD_SENTINEL_PATH: Final[str] = "/__minds_gateway_password__/senti
 _ENV_EXTENSION_PERMISSIONS_ROOT: Final[str] = "LATCHKEY_EXTENSION_PERMISSIONS_ROOT"
 
 # Subdirectory of ``LATCHKEY_DIRECTORY`` from which the upstream
-# ``latchkey gateway`` (>= 2.9.0) loads ``.mjs`` extension files. This
-# package drops its bundled ``permissions.mjs`` and
-# ``permission_requests.mjs`` files there at gateway-spawn time.
+# ``latchkey gateway`` (>= 2.9.0) loads ``.mjs`` extension files.
 _GATEWAY_EXTENSIONS_SUBDIR: Final[str] = "extensions"
+
+# The desktop and VPS gateways intentionally load disjoint extension sets. The
+# desktop owns all stateful Minds endpoints; the VPS loads only the transparent
+# forwarder that sends those endpoint families back to the desktop gateway.
+DESKTOP_GATEWAY_EXTENSION_FILENAMES: Final[tuple[str, ...]] = (
+    "minds_api_proxy.mjs",
+    "permission_requests.mjs",
+    "permissions.mjs",
+    "services.json",
+    "workspace_permissions.json",
+)
+REMOTE_GATEWAY_EXTENSION_FILENAME: Final[str] = "desktop_gateway_proxy.mjs"
 
 # Filename of the upstream latchkey CLI's JSON config file, directly under
 # ``LATCHKEY_DIRECTORY``. Latchkey (>= 3.1.0) reads its ``settings`` block --
@@ -304,6 +327,18 @@ class LatchkeyServiceInfo(FrozenModel):
             "manual credential setup, or ``None`` if latchkey did not provide one."
         ),
     )
+
+    @computed_field
+    @cached_property
+    def is_browser_auth_supported(self) -> bool:
+        """True when ``latchkey auth browser`` is the way to establish credentials.
+
+        Either latchkey explicitly advertises a browser flow, or it returned no
+        ``auth_options`` at all and we don't actually know (legacy fallback:
+        keep the old always-run-browser behaviour). A service without one --
+        AWS, Coolify, ... -- can only be connected by supplying credentials.
+        """
+        return LATCHKEY_AUTH_OPTION_BROWSER in self.auth_options or not self.auth_options
 
 
 _UNKNOWN_LATCHKEY_SERVICE_INFO: Final[LatchkeyServiceInfo] = LatchkeyServiceInfo(
@@ -559,7 +594,10 @@ def _build_gateway_env(
     return env
 
 
-_BUNDLED_EXTENSION_SUFFIXES: Final[tuple[str, ...]] = (".mjs", ".json")
+def bundled_gateway_extension_content(filename: str) -> str:
+    """Read one explicitly selected bundled gateway extension file."""
+    resource = resources.files("imbue.mngr_latchkey.extensions").joinpath(filename)
+    return resource.read_text(encoding="utf-8")
 
 
 def _materialize_bundled_extensions(latchkey_directory: Path) -> Path:
@@ -578,13 +616,12 @@ def _materialize_bundled_extensions(latchkey_directory: Path) -> Path:
     """
     extensions_dir = latchkey_directory / _GATEWAY_EXTENSIONS_SUBDIR
     extensions_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    source_package = resources.files("imbue.mngr_latchkey.extensions")
-    for entry in source_package.iterdir():
-        name = entry.name
-        if not any(name.endswith(suffix) for suffix in _BUNDLED_EXTENSION_SUFFIXES):
-            continue
-        destination = extensions_dir / name
-        destination.write_text(entry.read_text(encoding="utf-8"), encoding="utf-8")
+    # Never let the desktop load the VPS-only forwarder: it would proxy these
+    # routes back to itself. Remove a stale copy left by a partial/older install.
+    (extensions_dir / REMOTE_GATEWAY_EXTENSION_FILENAME).unlink(missing_ok=True)
+    for filename in DESKTOP_GATEWAY_EXTENSION_FILENAMES:
+        destination = extensions_dir / filename
+        destination.write_text(bundled_gateway_extension_content(filename), encoding="utf-8")
     return extensions_dir
 
 
@@ -1467,18 +1504,41 @@ class Latchkey(MutableModel):
             service_name=service_name,
         )
 
+    def auth_set_credentials(self, service_name: str, argv: Sequence[str]) -> tuple[bool, str]:
+        """Run a ``latchkey auth set``-family command that stores credentials the user typed in.
+
+        ``argv`` (everything after the binary) is built by
+        :func:`imbue.mngr_latchkey.credential_commands.build_credential_command_argv`
+        from the service's own ``setCredentialsExample``, so it already carries
+        the ``--account`` option and the filled-in values. It is passed through
+        verbatim and never logged, since it contains the user's secrets.
+        Returns ``(is_success, detail)``.
+        """
+        return self._run_latchkey_auth_command(
+            log_label="auth set",
+            argv=list(argv),
+            service_name=service_name,
+            timeout_seconds=_AUTH_SET_TIMEOUT_SECONDS,
+        )
+
     def _run_latchkey_auth_command(
         self,
         log_label: str,
         argv: list[str],
         service_name: str,
         is_ephemeral: bool = False,
+        timeout_seconds: float | None = None,
     ) -> tuple[bool, str]:
         """Run a single ``latchkey auth ...`` subcommand and translate its exit into ``(is_success, detail)``.
 
         ``log_label`` is the human-readable name of the subcommand
         (e.g. ``"auth browser"``, ``"auth browser-prepare"``) used in
-        log lines and the generic failure-message fallback.
+        log lines, as the log-safe process name (the argv may carry
+        credentials, so it must never be logged), and as the generic
+        failure-message fallback.
+
+        ``timeout_seconds`` bounds the child; leave it ``None`` for the
+        interactive flows that wait on a human.
 
         The failure ``detail`` is user-facing (the settings page and the
         permission dialogs show it verbatim), so it is condensed to the
@@ -1497,16 +1557,17 @@ class Latchkey(MutableModel):
             env[LATCHKEY_EPHEMERAL_BROWSER_ENV_VAR] = "1"
         cg = ConcurrencyGroup(name=f"latchkey-{log_label.replace(' ', '-')}")
         with cg:
-            # No timeout: ``auth browser`` waits on a real human
-            # completing the browser sign-in flow, which can take
-            # arbitrarily long. ``auth browser-prepare`` is typically
-            # non-interactive but may still hit the network, so we keep
-            # the same untimed treatment.
+            # Without an explicit timeout the child is unbounded, which is what
+            # ``auth browser`` needs: it waits on a real human completing the
+            # browser sign-in flow, which can take arbitrarily long. ``auth
+            # browser-prepare`` is typically non-interactive but may still hit
+            # the network, so it keeps the same untimed treatment.
             result = cg.run_process_to_completion(
                 command=[self.latchkey_binary, *argv],
-                timeout=None,
+                timeout=timeout_seconds,
                 is_checked_after=False,
                 env=env,
+                name=f"latchkey {log_label} {service_name}",
             )
         if result.returncode == 0:
             logger.info("latchkey {} {} succeeded", log_label, service_name)

@@ -306,10 +306,11 @@ def _build_catalog() -> Catalog:
 CATALOG: Final[Catalog] = _build_catalog()
 
 
-class InspirationWorkspaceRow(FrozenModel):
-    """One pickable workspace on the Create from Inspiration page's add flow."""
+class InspirationMachineRow(FrozenModel):
+    """One pickable machine on the Create from Inspiration page's add flow."""
 
-    agent_id: str = Field(description="The workspace agent id (drives the /goto/ href)")
+    agent_id: str = Field(description="The machine agent id (drives the recovery-restart detour)")
+    host_id: str = Field(default="", description="The machine host id (drives the /goto/ href); '' when unknown")
     name: str = Field(description="Display name")
     accent: str = Field(description="Accent color hex")
     liveness: str = Field(description="RUNNING, STOPPED, or UNKNOWN (drives the recovery-restart detour)")
@@ -344,6 +345,7 @@ def render_landing_page(
     shutdown_capable_agent_ids: Sequence[AgentId] | None = None,
     mind_liveness_by_agent_id: dict[str, str] | None = None,
     agent_providers: dict[str, str] | None = None,
+    agent_host_ids: dict[str, str] | None = None,
     account_email: str = "",
     extra_account_count: int = 0,
     remote_workspaces: Sequence[RemoteWorkspaceTile] | None = None,
@@ -360,10 +362,15 @@ def render_landing_page(
 
     ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin
     (e.g. ``"http://localhost:8421"``). Workspace links target
-    ``{mngr_forward_origin}/goto/<agent>/`` because Phase 2 deletes minds'
+    ``{mngr_forward_origin}/goto/<host>/`` because Phase 2 deletes minds'
     in-process subdomain forwarder; the plugin owns ``/goto/`` now.
 
     agent_names maps agent ID strings to human-readable workspace names.
+
+    agent_host_ids maps agent ID strings to the workspace's ``host-<hex>``
+    coordinate. The plugin's ``/goto/`` route is host-keyed, so rows with an
+    entry link via it; rows without one fall back to the agent id (nothing
+    better is known -- same degrade as the inspiration page's rows).
 
     agent_accents maps agent ID strings to ``#rrggbb`` workspace accent
     hexes (the stored color label, resolved by the caller). Agents without
@@ -408,6 +415,7 @@ def render_landing_page(
         shutdown_capable_agent_ids=shutdown_capable_agent_id_strings,
         mind_liveness_by_agent_id=mind_liveness_by_agent_id or {},
         agent_providers=agent_providers or {},
+        agent_host_ids=agent_host_ids or {},
         account_email=account_email,
         extra_account_count=extra_account_count,
         create_attempt_rows=list(create_attempt_rows or []),
@@ -424,7 +432,7 @@ _FALLBACK_GIT_URL: Final[str] = DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
 # Pin to an annotated DEFAULT_WORKSPACE_TEMPLATE tag so a shipped binary clones the exact DEFAULT_WORKSPACE_TEMPLATE
 # snapshot it was verified against. Bump to a newer tag only after
 # re-verifying launch-to-msg CI against (this binary, the new tag).
-FALLBACK_BRANCH: Final[str] = "minds-v0.3.10"
+FALLBACK_BRANCH: Final[str] = "minds-v0.3.11"
 
 # Env var (set by ``just minds-start`` and the e2e workspace runner) that opts a
 # launch into the operator's local-worktree create-form defaults. Gating on an
@@ -482,6 +490,17 @@ def default_workspace_template_ref() -> str:
     workspace may update itself, so a branch value here imposes no ceiling.
     """
     return _operator_workspace_default("MINDS_WORKSPACE_BRANCH", FALLBACK_BRANCH)
+
+
+def default_workspace_git_url() -> str:
+    """Return the template repository a plain create uses -- the create form's Repository default.
+
+    For an end-user ``minds run`` this is always the public
+    default-workspace-template URL; only an opted-in operator
+    (``just minds-start``) sees the ``MINDS_WORKSPACE_GIT_URL`` override,
+    which points at their local DEFAULT_WORKSPACE_TEMPLATE worktree.
+    """
+    return _operator_workspace_default("MINDS_WORKSPACE_GIT_URL", _FALLBACK_GIT_URL)
 
 
 # Base for auto-generated workspace host names. The generic default is never
@@ -631,7 +650,7 @@ def render_create_form(
     explicit ``/create`` page so a deliberate "create another machine" flow is
     never bounced away by the user's existing workspaces.
     """
-    effective_url = git_url if git_url else _operator_workspace_default("MINDS_WORKSPACE_GIT_URL", _FALLBACK_GIT_URL)
+    effective_url = git_url if git_url else default_workspace_git_url()
     # The env/operator branch default pairs with the default template repo, so
     # it only applies when the repository was NOT explicitly supplied. With an
     # explicit repository (e.g. an inspiration deeplink's git_url) the branch
@@ -727,21 +746,59 @@ def render_inspiration_create_page(
     default_account_id: str = "",
     color: str = DEFAULT_WORKSPACE_COLOR,
     mngr_forward_origin: str = "",
-    workspace_rows: Sequence[InspirationWorkspaceRow] = (),
+    machine_rows: Sequence[InspirationMachineRow] = (),
     region_options_by_launch_mode: Mapping[str, Sequence[str]] | None = None,
     region_selected_by_launch_mode: Mapping[str, str] | None = None,
+    start: str = "",
 ) -> str:
     """Render the Create from Inspiration page (GET /create/inspiration).
 
     The landing page for an Inspiration deeplink: a chooser between creating
-    a new workspace from ``git_url`` and adding the Inspiration to an
-    existing workspace. The add flow shows a copyable ``/use-inspiration
+    a new machine from ``git_url`` and adding the Inspiration to an
+    existing machine. The add flow shows a copyable ``/use-inspiration
     <git-url>`` message (the skill accepts only a URL, so ``branch`` is
-    deliberately absent from it) plus ``workspace_rows`` to open. The new
+    deliberately absent from it) plus ``machine_rows`` to open. The new
     flow's settings step lets the user keep the preset defaults or reveal the
     compute / backup provider and region selects inline (the repo and branch
     stay fixed); the provider enums and region options come from the same
     source the create form uses.
+    """
+    return _render_inspiration_stepper(
+        git_url=git_url,
+        branch=branch,
+        accounts=accounts,
+        default_account_id=default_account_id,
+        color=color,
+        mngr_forward_origin=mngr_forward_origin,
+        machine_rows=machine_rows,
+        region_options_by_launch_mode=region_options_by_launch_mode,
+        region_selected_by_launch_mode=region_selected_by_launch_mode,
+        is_modal=False,
+        start=start,
+    )
+
+
+@pure
+def _render_inspiration_stepper(
+    git_url: str,
+    branch: str,
+    accounts: Sequence[object] | None,
+    default_account_id: str,
+    color: str,
+    mngr_forward_origin: str,
+    machine_rows: Sequence[InspirationMachineRow],
+    region_options_by_launch_mode: Mapping[str, Sequence[str]] | None,
+    region_selected_by_launch_mode: Mapping[str, str] | None,
+    is_modal: bool,
+    current_machine_id: str = "",
+    current_machine_name: str = "",
+    start: str = "",
+) -> str:
+    """Render the Create from Inspiration stepper into one of its two shells.
+
+    ``is_modal`` picks the shell: the full page, or the shared overlay's card
+    (the deeplink modal). The stepper itself is identical; only the add branch's
+    last step differs, and only when a ``current_machine_id`` is supplied.
     """
     return CATALOG.render(
         "pages.InspirationCreate",
@@ -751,13 +808,17 @@ def render_inspiration_create_page(
         default_account_id=default_account_id,
         color=color,
         mngr_forward_origin=mngr_forward_origin,
-        workspace_rows=list(workspace_rows),
+        machine_rows=list(machine_rows),
         launch_modes=list(LaunchMode),
         backup_providers=list(BackupProvider),
         region_options_by_launch_mode={
             key: list(value) for key, value in (region_options_by_launch_mode or {}).items()
         },
         region_selected_by_launch_mode=dict(region_selected_by_launch_mode or {}),
+        is_modal=is_modal,
+        current_machine_id=current_machine_id,
+        current_machine_name=current_machine_name,
+        start=start,
     )
 
 
@@ -1346,21 +1407,19 @@ _RECOVERY_SCRIPT: Final[str] = """\
           return u;
         }
         // Convergence poll while a restart is in flight (the RESTARTING state).
-        // A full-page reload here would steal OS focus from any Electron view
-        // layered over this one -- e.g. the bug-report modal opened from
-        // "Report a problem" -- on every tick, making its inputs impossible to
-        // type into (Electron has no per-WebContentsView focus-on-navigation
-        // control; see https://github.com/electron/electron/issues/42578). So
-        // poll in the background instead: a HEALTHY tracker 302s back to the
-        // workspace (an opaque redirect, which we follow), and any non-restarting
-        // status (e.g. restart_failed) means we reload to render that state.
-        // While the status stays 'restarting' we leave the page -- and any
-        // focused overlay -- untouched and just poll again.
-        // Go back to the now-recovered workspace. On the desktop shell this
-        // recovery screen renders on the trusted chrome surface, whose guard
-        // blocks agent-content navigations -- so hand return_to (an agent URL)
-        // to the shell bridge, which loads it into the caged content view. In a
-        // plain browser (no bridge) follow the server's healthy 302 as before.
+        // A full-page reload here would tear down any overlay modal layered
+        // over this page -- e.g. the bug-report modal opened from "Report a
+        // problem" -- on every tick, making its inputs impossible to type
+        // into. So poll in the background instead: a HEALTHY tracker 302s
+        // back to the workspace (an opaque redirect, which we follow), and
+        // any non-restarting status (e.g. restart_failed) means we reload to
+        // render that state. While the status stays 'restarting' we leave the
+        // page -- and any focused overlay -- untouched and just poll again.
+        // Go back to the now-recovered workspace. Inside the chrome shell
+        // this recovery screen renders as a trusted local page, so hand
+        // return_to (an agent URL) to the shell bridge, which loads it into
+        // the sandboxed workspace iframe. On a standalone page load (no
+        // bridge) follow the server's healthy 302 as before.
         function goToWorkspace() {
           if (pageTornDown) return;
           if (window.minds && window.minds.navigateContent && returnTo) {
@@ -1785,10 +1844,10 @@ _RECOVERY_SCRIPT: Final[str] = """\
         if (reportBtn) {
           reportBtn.addEventListener('click', function () {
             // Open the get-help / report-a-bug modal, scoped to this workspace.
-            // The recovery page renders on the trusted chrome surface, so in the
-            // desktop shell it calls the window.minds bridge directly (opens the
-            // shared overlay modal). In a plain browser (no bridge) navigate to
-            // the full-page /help fallback.
+            // The recovery page renders inside the chrome shell, so it calls
+            // the window.minds bridge directly (opens the overlay-layer help
+            // modal). On a standalone page load (no bridge) navigate to the
+            // full-page /help fallback.
             if (window.minds && window.minds.openHelp) {
               window.minds.openHelp(agentId);
             } else {
@@ -2006,6 +2065,7 @@ def render_chrome_page(
     accent: str = "",
     crumb_workspace_name: str = "",
     crumb_agent_id: str = "",
+    boot_workspace_id: str = "",
 ) -> str:
     """Render the persistent chrome page (title bar + sidebar + content iframe).
 
@@ -2016,9 +2076,10 @@ def render_chrome_page(
     ``data-mngr-forward-origin`` attribute on the body so chrome.js can build
     workspace links that target the plugin's port directly.
 
-    In Electron mode, the iframe and browser sidebar are hidden via JS; the content
-    is handled by a separate WebContentsView, and the sidebar page is loaded into
-    the shared modal WebContentsView when opened.
+    Workspace content renders in the page's sandboxed cross-origin
+    ``#content-frame`` iframe, and the sidebar page is mounted as an
+    overlay-layer iframe when opened -- identically in the desktop app and
+    plain browsers.
 
     ``accent`` optionally seeds the titlebar's workspace color server-side (a
     ``#rrggbb`` string) so the wrapper's first paint is already tinted when the
@@ -2029,8 +2090,14 @@ def render_chrome_page(
     workspace breadcrumb (name + Workspace/Settings tabs, Workspace tab active)
     server-side, mirroring the accent: the desktop shell passes the workspace it
     is loading so the bar's first paint already carries the full context instead
-    of a bare "Minds" until the content view commits. chrome.js owns every later
-    update.
+    of a bare "Minds" until the workspace iframe commits. chrome.js owns every
+    later update.
+
+    ``boot_workspace_id`` is the workspace coordinate stamped into
+    ``data-boot-workspace-id`` (the id chrome.js arms the content iframe
+    from). The caller resolves it to the HOST coordinate when known -- the
+    forward plugin's /goto/ route only accepts host ids -- falling back to
+    ``crumb_agent_id`` when empty.
     """
     return CATALOG.render(
         "pages.Chrome",
@@ -2041,6 +2108,7 @@ def render_chrome_page(
         accent=accent,
         crumb_workspace_name=crumb_workspace_name,
         crumb_agent_id=crumb_agent_id,
+        boot_workspace_id=boot_workspace_id or crumb_agent_id,
     )
 
 
@@ -2054,22 +2122,24 @@ def render_sidebar_page(
     offset_x: int = -24,
     offset_y: int = 2,
 ) -> str:
-    """Render the standalone sidebar page loaded into the shared modal WebContentsView.
+    """Render the standalone sidebar page mounted as an overlay-layer iframe.
 
-    This page shows the workspace list and subscribes to SSE updates. In Electron,
-    clicking a workspace sends an IPC message via the preload bridge to navigate
-    the content WebContentsView. ``mngr_forward_origin`` is exposed via
-    ``data-mngr-forward-origin`` so sidebar.js can build the cross-origin
-    ``/goto/<agent>/`` URL the plugin serves.
+    This page shows the workspace list and subscribes to SSE updates. Clicking
+    a workspace hands the target to the hosting shell through the
+    ``window.minds`` bridge, which loads it into the workspace iframe.
+    ``mngr_forward_origin`` is exposed via ``data-mngr-forward-origin`` so
+    sidebar.js can build the cross-origin ``/goto/<agent>/`` URL the plugin
+    serves.
 
-    Position is driven entirely by the caller. The chrome view (which owns the
-    trigger button) passes the button's viewport-relative rect (``trigger_x``,
-    ``trigger_y``, ``trigger_w``, ``trigger_h``) plus a caller-chosen offset
-    (``offset_x``, ``offset_y``). The menu's top-left lands at the trigger's
-    bottom-left + offset. The chrome view and the modal view share window
-    coordinate space, so the rect translates directly. Defaults (no query
-    params) anchor a 38px-tall element at the top-left of the window,
-    nudged 24px left and 2px below it -- right for the titlebar's first button.
+    Position is driven entirely by the caller. The chrome shell (which owns
+    the trigger button) passes the button's viewport-relative rect
+    (``trigger_x``, ``trigger_y``, ``trigger_w``, ``trigger_h``) plus a
+    caller-chosen offset (``offset_x``, ``offset_y``). The menu's top-left
+    lands at the trigger's bottom-left + offset. The full-window iframe shares
+    the shell's viewport coordinate space, so the rect translates directly.
+    Defaults (no query params) anchor a 38px-tall element at the top-left of
+    the window, nudged 24px left and 2px below it -- right for the titlebar's
+    first button.
     """
     return CATALOG.render(
         "pages.Sidebar",
@@ -2098,7 +2168,6 @@ def warm_template_caches() -> None:
     for render in (
         render_chrome_page,
         render_sidebar_page,
-        render_overlay_host_page,
         lambda: render_help_page(workspace_agent_id=""),
         lambda: render_inbox_page(pending=()),
     ):
@@ -2108,53 +2177,7 @@ def warm_template_caches() -> None:
             logger.opt(exception=True).debug("Template warmup render failed (ignored)")
 
 
-def render_overlay_host_page() -> str:
-    """Render the always-warm overlay host page loaded into the shared modal WebContentsView.
-
-    The page is a transparent shell hosting the overlay manager (overlay.js).
-    Every overlay -- the migrated workspace menu / inbox / help / sign-in modals
-    (as mount-on-demand iframes, created when opened and destroyed when closed)
-    and hover tooltips -- is in-page DOM driven over IPC, so opening an overlay
-    never costs a per-open page load. main.js loads this once at window create attempt
-    and keeps it mounted for the window's life.
-    """
-    return CATALOG.render("pages.OverlayHost")
-
-
 # -- Workspace/settings/sharing/accounts --
-
-
-@pure
-def render_sharing_editor(
-    agent_id: str,
-    service_name: str,
-    title: str,
-    mngr_forward_origin: str = "",
-    initial_emails: list[str] | None = None,
-    has_account: bool = True,
-    accounts: Sequence[object] | None = None,
-    redirect_url: str = "",
-    ws_name: str = "",
-    account_email: str = "",
-) -> str:
-    """Render the sharing editor page used by the workspace-settings sharing flow.
-
-    ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin;
-    the workspace link in the page title points at ``{mngr_forward_origin}/goto/<agent>/``.
-    """
-    return CATALOG.render(
-        "pages.Sharing",
-        title=title,
-        agent_id=agent_id,
-        service_name=service_name,
-        mngr_forward_origin=mngr_forward_origin,
-        initial_emails=initial_emails or [],
-        has_account=has_account,
-        accounts=accounts or [],
-        redirect_url=redirect_url,
-        ws_name=ws_name,
-        account_email=account_email,
-    )
 
 
 @pure
@@ -2171,35 +2194,6 @@ def render_ai_keys_page(
         workspace_display_name=workspace_display_name,
         account_email=account_email,
         error_message=error_message,
-    )
-
-
-@pure
-def render_sharing_modal_page(
-    agent_id: str,
-    service_name: str,
-    initial_emails: list[str] | None = None,
-    has_account: bool = True,
-    accounts: Sequence[object] | None = None,
-    ws_name: str = "",
-    account_email: str = "",
-) -> str:
-    """Render the centered sharing-editor modal page (``GET /sharing/<agent_id>/<service_name>/modal``).
-
-    Hosted in the shared modal WebContentsView; shows the same editor body as
-    :func:`render_sharing_editor` (the full-page browser fallback), minus the
-    linked heading and the Cancel-to-workspace-settings link (the modal is
-    dismissed via Cancel, its X, or a backdrop click).
-    """
-    return CATALOG.render(
-        "pages.SharingModal",
-        agent_id=agent_id,
-        service_name=service_name,
-        initial_emails=initial_emails or [],
-        has_account=has_account,
-        accounts=accounts or [],
-        ws_name=ws_name,
-        account_email=account_email,
     )
 
 
@@ -2247,10 +2241,11 @@ def render_workspace_settings(
 
 
 # The workspace's own web UI service -- what the desktop client shows as "the
-# workspace" and the default target of ``mngr forward``. Sharing it is what the
-# options panel offers as "Whole machine": it is an ordinary service as far as
-# the tunnel and the Cloudflare Access policy are concerned, so it needs no
-# special handling beyond being named here.
+# workspace" and the default target of ``mngr forward``. The options panel's
+# "Whole machine" entry stands in for it: under the machine-level sharing model
+# the shell is the machine's bare origin, gated by the grants document's
+# workspace scope (which admits every service), so it is never offered as a
+# per-app target.
 _WHOLE_MACHINE_SERVICE: Final[str] = "system_interface"
 
 # Registered services that are the workspace's own interfaces rather than apps
@@ -2258,8 +2253,15 @@ _WHOLE_MACHINE_SERVICE: Final[str] = "system_interface"
 # (see _split_share_targets). Singular and plural are both listed because the
 # name is whatever the in-workspace process registered, not a fixed vocabulary.
 _NON_APP_SHARE_SERVICES: Final[frozenset[str]] = frozenset(
-    {"chat", "chats", "terminal", "terminals", "browser", "browsers", "web"}
+    {"chat", "chats", "terminal", "terminals", "browser", "browsers"}
 )
+
+# A service can only be a per-app share target if its name can be a hostname
+# label: shared app links are real origins (``<name>.<machine domain>``), so a
+# name with underscores or other non-DNS characters has no origin to hand out.
+# Matches forward_port.py's validation in the workspace template (lowercase
+# alphanumerics with single hyphens).
+_DNS_SAFE_SERVICE_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 @pure
@@ -2272,17 +2274,45 @@ def _split_share_targets(servers: Sequence[str]) -> tuple[list[str], str]:
 
     Everything the workspace registers shows up in that service list, including
     the interfaces the workspace is built out of rather than apps built on top
-    of it. Those are excluded: handing someone a chat, a terminal, a browser or
-    the raw web surface is not the same act as handing them one app, and
-    offering them in the same flat list invites it by accident. The whole
-    machine remains the deliberate way to grant everything.
+    of it. Those are excluded: handing someone a chat, a terminal or a browser
+    is not the same act as handing them one app, and offering them in the same
+    flat list invites it by accident. The whole machine remains the deliberate
+    way to grant everything.
+
+    Names that cannot be a hostname label (underscores, reserved ``host-`` /
+    ``agent-`` coordinate prefixes) are excluded too: a per-app share link is a
+    real origin, and such a name has none to hand out. Those services are still
+    reachable through a whole-machine share.
     """
     app_services = [
         str(service)
         for service in servers
-        if str(service) != _WHOLE_MACHINE_SERVICE and str(service).lower() not in _NON_APP_SHARE_SERVICES
+        if str(service) != _WHOLE_MACHINE_SERVICE
+        and str(service).lower() not in _NON_APP_SHARE_SERVICES
+        and _DNS_SAFE_SERVICE_NAME.match(str(service)) is not None
+        and not str(service).startswith(("host-", "agent-"))
     ]
     return app_services, _WHOLE_MACHINE_SERVICE
+
+
+@pure
+def _share_target_labels(app_services: Sequence[str], service_labels: Mapping[str, str] | None) -> dict[str, str]:
+    """The origin-label map for the rendered share targets, keyed by service name.
+
+    Every share link is a real origin. A per-app link is ``<label>.<machine
+    domain>``; the whole-machine link is the SHELL's own label origin
+    (``<system_interface label>.<machine domain>``), because the bare machine
+    domain does not route on a share (only explicit ``<label>.<machine domain>``
+    origins are claimed on the relay and served). So the map
+    covers the rendered ``app_services`` plus the whole-machine (shell) service,
+    restricted to services that actually carry a label -- a service with none is
+    omitted, and workspace_options.js falls back accordingly.
+    """
+    labels = service_labels or {}
+    target_labels = {service: labels[service] for service in app_services if service in labels}
+    if _WHOLE_MACHINE_SERVICE in labels:
+        target_labels[_WHOLE_MACHINE_SERVICE] = labels[_WHOLE_MACHINE_SERVICE]
+    return target_labels
 
 
 @pure
@@ -2292,6 +2322,8 @@ def render_workspace_options_page(
     current_account: object | None,
     accounts: Sequence[object],
     servers: Sequence[str],
+    service_labels: Mapping[str, str] | None = None,
+    host_id: str = "",
     tab: str = "share",
     selected_target: str = "",
     account_email: str = "",
@@ -2319,10 +2351,12 @@ def render_workspace_options_page(
         "pages.WorkspaceOptions",
         agent_id=agent_id,
         ws_name=ws_name,
+        host_id=host_id,
         tab=tab,
         current_account=current_account,
         accounts=accounts,
         app_services=app_services,
+        service_labels=_share_target_labels(app_services, service_labels),
         whole_service=whole_service,
         selected_target=selected_target or whole_service,
         account_email=account_email,
@@ -2344,6 +2378,8 @@ def render_workspace_options_modal_page(
     current_account: object | None,
     accounts: Sequence[object],
     servers: Sequence[str],
+    service_labels: Mapping[str, str] | None = None,
+    host_id: str = "",
     tab: str = "share",
     selected_target: str = "",
     account_email: str = "",
@@ -2360,9 +2396,9 @@ def render_workspace_options_modal_page(
 ) -> str:
     """Render the workspace options panel (``GET /workspace/<agent_id>/options/modal``).
 
-    Hosted in the shared modal WebContentsView. The anchor is the titlebar's
+    Hosted as an overlay-layer modal iframe. The anchor is the titlebar's
     workspace icon-tab strip, measured by chrome.js and packed into the URL by
-    the Electron main process. Supplying it docks the panel under that strip and
+    the overlay layer. Supplying it docks the panel under that strip and
     draws the tab strip in its place; omitting it -- there is no such strip
     outside a workspace -- centers the panel and drops the tabs.
 
@@ -2374,6 +2410,7 @@ def render_workspace_options_modal_page(
         "pages.WorkspaceOptionsModal",
         agent_id=agent_id,
         ws_name=ws_name,
+        host_id=host_id,
         tab=tab,
         anchor_x=anchor_x,
         anchor_y=anchor_y,
@@ -2381,6 +2418,7 @@ def render_workspace_options_modal_page(
         current_account=current_account,
         accounts=accounts,
         app_services=app_services,
+        service_labels=_share_target_labels(app_services, service_labels),
         whole_service=whole_service,
         selected_target=selected_target or whole_service,
         account_email=account_email,
@@ -2523,7 +2561,7 @@ def render_settings_modal_page(
 ) -> str:
     """Render the centered "Minds Settings" modal page (``GET /settings/modal``).
 
-    Hosted in the shared modal WebContentsView; shows the same shared sections
+    Hosted as an overlay-layer modal iframe; shows the same shared sections
     as :func:`render_settings_page`, minus the "back to machines" link (the
     modal is dismissed via its X or a backdrop click).
     """
@@ -2546,8 +2584,8 @@ def render_accounts_modal_page(
 ) -> str:
     """Render the centered "Manage Accounts" modal page (``GET /accounts/modal``).
 
-    Hosted in the shared modal WebContentsView; the full accounts page
-    (:func:`render_accounts_page`) remains as the browser-mode fallback.
+    Hosted as an overlay-layer modal iframe; the full accounts page
+    (:func:`render_accounts_page`) remains as the standalone fallback.
     """
     return CATALOG.render(
         "pages.AccountsModal",
@@ -2576,7 +2614,7 @@ def render_destroyed_workspaces_page(retention_days: int, error: str = "") -> st
 
 @pure
 def render_destroyed_workspaces_rows_fragment(
-    # Row dicts from _collect_destroyed_workspace_rows (agent_id, display_name,
+    # Row dicts from _collect_destroyed_machine_rows (agent_id, display_name,
     # account_label, countdown/lock/delete affordance fields).
     rows: Sequence[Mapping[str, object]],
 ) -> str:
@@ -2600,4 +2638,43 @@ def render_account_plan_modal_page(acct_user_id: str, account_email: str) -> str
         "pages.AccountPlanModal",
         acct_user_id=acct_user_id,
         account_email=account_email,
+    )
+
+
+@pure
+def render_inspiration_modal_page(
+    git_url: str,
+    branch: str = "",
+    current_machine_id: str = "",
+    current_machine_name: str = "",
+    accounts: Sequence[object] | None = None,
+    default_account_id: str = "",
+    color: str = DEFAULT_WORKSPACE_COLOR,
+    mngr_forward_origin: str = "",
+    machine_rows: Sequence[InspirationMachineRow] = (),
+    region_options_by_launch_mode: Mapping[str, Sequence[str]] | None = None,
+    region_selected_by_launch_mode: Mapping[str, str] | None = None,
+) -> str:
+    """Render the Create from Inspiration stepper as a modal (``GET /create/inspiration/modal``).
+
+    The deeplink entry point when the app is already inside a workspace. It is
+    the SAME stepper the full page renders (``render_inspiration_create_page``),
+    hosted in the shared overlay's card instead of the page shell, so the create
+    flow behaves identically. The one difference: the add branch targets the
+    workspace the user is already in, so its last step drops the picker and just
+    says to paste the copied message into that chat, then dismisses itself.
+    """
+    return _render_inspiration_stepper(
+        git_url=git_url,
+        branch=branch,
+        accounts=accounts,
+        default_account_id=default_account_id,
+        color=color,
+        mngr_forward_origin=mngr_forward_origin,
+        machine_rows=machine_rows,
+        region_options_by_launch_mode=region_options_by_launch_mode,
+        region_selected_by_launch_mode=region_selected_by_launch_mode,
+        is_modal=True,
+        current_machine_id=current_machine_id,
+        current_machine_name=current_machine_name,
     )

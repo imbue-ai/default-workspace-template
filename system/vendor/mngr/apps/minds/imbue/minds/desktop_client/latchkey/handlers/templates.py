@@ -28,7 +28,6 @@ from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
-from imbue.minds.desktop_client.latchkey.permission_toggles import classify_permission
 from imbue.minds.desktop_client.templates import CATALOG
 from imbue.mngr_latchkey.account_scopes import ACCOUNT_SCOPE_SEPARATOR
 from imbue.mngr_latchkey.services_catalog import ServicePermissionInfo
@@ -38,8 +37,8 @@ from imbue.mngr_latchkey.workspace_permissions import WorkspaceVerb
 # The catch-all ``any`` permission is stored and submitted verbatim (it is
 # Detent's wildcard schema), but users find ``all`` clearer, so the dialog
 # shows this label in its place while the underlying checkbox value stays
-# ``any``.
-_WILDCARD_PERMISSION_LABEL = "all"
+# ``any``. Public: the typed inbox-detail payload carries it to the SPA.
+WILDCARD_PERMISSION_UI_LABEL: Final[str] = "all"
 
 # Form value of the predefined dialog's "sign a new account in" choice. Chosen
 # to be implausible as a real account name, but the grant flow does not rely on
@@ -65,80 +64,11 @@ class PermissionAccountChoice(FrozenModel):
     )
     label: str = Field(description="User-facing account label.")
     hint: str = Field(default="", description="Short qualifier shown next to the label (e.g. 'needs sign-in').")
-
-
-class PermissionRow(FrozenModel):
-    """One permission of the predefined dialog, with its display strings precomputed."""
-
-    permission: str = Field(description="Detent permission schema name (the stored / submitted checkbox value).")
-    shown_name: str = Field(
-        description=(
-            "Name rendered in the row's code pill: the raw schema name, except the wildcard which "
-            "shows the user-facing alias (see :data:`_WILDCARD_PERMISSION_LABEL`)."
-        ),
+    is_credential_setup_needed: bool = Field(
+        description="Whether picking this account has to establish credentials before the grant can apply.",
     )
-    label: str = Field(description="Human-readable row label from :func:`classify_permission`.")
-    description: str = Field(default="", description="Plain-English summary from the catalog; empty when absent.")
-    is_wildcard: bool = Field(description="Whether this is the detent catch-all (``data-wildcard`` checkbox).")
-    is_checked: bool = Field(description="Whether the row's checkbox starts checked.")
-
-
-class PermissionRowGroup(FrozenModel):
-    """A titled editor-view group of permission rows (``Full access``, ``Messages``, ...)."""
-
-    heading: str = Field(description="Group heading rendered as a section eyebrow.")
-    is_extras: bool = Field(description="Whether this is the trailing wildcard group (rendered behind a divider).")
-    rows: tuple[PermissionRow, ...] = Field(description="Permission rows in catalog order.")
-
-
-# Group keys :func:`classify_permission` reserves for the always-first
-# "Full access" group and the always-last wildcard "Extras" group.
-_FULL_ACCESS_GROUP_KEY: Final[str] = "aa-full-access"
-_EXTRAS_GROUP_KEY: Final[str] = "zz-extras"
-
-
-@pure
-def _build_permission_row_groups(
-    service: ServicePermissionInfo,
-    checked_permissions: frozenset[str],
-) -> tuple[PermissionRowGroup, ...]:
-    """Group the service's grantable permissions for the dialog's editor view.
-
-    Iterates the catalog's declared order and groups by
-    :func:`classify_permission`; group order is full access first, then first
-    appearance, the wildcard Extras group last -- mirroring the workspace
-    options Permissions tab so the same service reads the same way in both
-    places.
-    """
-    rows_by_group: dict[str, tuple[str, list[PermissionRow]]] = {}
-    for permission in service.permission_schemas:
-        group_key, heading, label = classify_permission(permission, service.scope, service.name)
-        is_wildcard = permission == WILDCARD_PERMISSION_NAME
-        row = PermissionRow(
-            permission=permission,
-            shown_name=_WILDCARD_PERMISSION_LABEL if is_wildcard else permission,
-            label=label,
-            description=service.description_by_permission_name.get(permission, ""),
-            is_wildcard=is_wildcard,
-            is_checked=permission in checked_permissions,
-        )
-        _, rows = rows_by_group.setdefault(group_key, (heading, []))
-        rows.append(row)
-    ordered_keys = sorted(
-        rows_by_group,
-        key=lambda key: (
-            key != _FULL_ACCESS_GROUP_KEY,
-            key == _EXTRAS_GROUP_KEY,
-            tuple(rows_by_group).index(key),
-        ),
-    )
-    return tuple(
-        PermissionRowGroup(
-            heading=rows_by_group[key][0],
-            is_extras=key == _EXTRAS_GROUP_KEY,
-            rows=tuple(rows_by_group[key][1]),
-        )
-        for key in ordered_keys
+    is_account_name_needed: bool = Field(
+        description="Whether picking this account also requires the user to name it (manual-credentials services).",
     )
 
 
@@ -163,27 +93,17 @@ def render_predefined_permission_dialog(
     ``selected_account_value`` is the one preselected. Grants are per account,
     so exactly one is submitted with the form.
 
-    ``will_open_browser`` controls the in-progress state shown after the
+    ``will_open_browser`` controls the in-progress notice shown after the
     user clicks Approve: when True (latchkey will run ``auth browser``),
-    it tells the user to finish the sign-in in their browser (and the
-    Approve button reads "Sign in & approve"); when False (credentials are
-    already valid, or the service requires manual credentials), it shows a
-    generic ``Granting permission...`` message. It is computed for the
-    preselected account; picking a different one may make it momentarily
-    inaccurate, which does not affect the outcome.
+    the notice tells the user to expect a browser pop-up; when False
+    (credentials are already valid, or the service requires manual
+    credentials), it shows a generic ``Granting permission...`` message. It is
+    computed for the preselected account; picking a different one may make it
+    momentarily inaccurate, which does not affect the outcome.
 
     ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin;
     the workspace link in the fragment points at ``{mngr_forward_origin}/goto/<agent>/``.
     """
-    permission_groups = _build_permission_row_groups(service, frozenset(checked_permissions))
-    # Simple-view summary: the checked rows in catalog order (what Approve
-    # grants without touching the editor).
-    row_by_permission = {row.permission: row for group in permission_groups for row in group.rows}
-    summary_rows = tuple(
-        row_by_permission[permission]
-        for permission in service.permission_schemas
-        if row_by_permission[permission].is_checked
-    )
     return CATALOG.render(
         "pages.LatchkeyPredefinedPermission",
         agent_id=agent_id,
@@ -191,13 +111,16 @@ def render_predefined_permission_dialog(
         ws_name=ws_name,
         rationale=rationale,
         display_name=service.display_name,
-        service_name=service.name,
-        summary_rows=summary_rows,
-        permission_groups=permission_groups,
+        scope=service.scope,
+        permission_schemas=service.permission_schemas,
+        description_by_permission_name=service.description_by_permission_name,
+        checked_permissions=set(checked_permissions),
         account_choices=account_choices,
         selected_account_value=selected_account_value,
+        new_account_value=NEW_ACCOUNT_FORM_VALUE,
+        wildcard_permission=WILDCARD_PERMISSION_NAME,
+        wildcard_label=WILDCARD_PERMISSION_UI_LABEL,
         will_open_browser=will_open_browser,
-        approve_label="Sign in & approve" if will_open_browser else "Approve",
         mngr_forward_origin=mngr_forward_origin,
     )
 
@@ -217,11 +140,10 @@ def render_file_sharing_permission_dialog(
 ) -> str:
     """Render the file-sharing permission detail fragment.
 
-    Mirrors the predefined dialog's title row, reason section, and
+    Mirrors the predefined dialog's header, rationale card, and
     submission form (via the shared Permissions* JinjaX components);
     swaps the per-permission checkbox list for a short explanation of
-    what the agent will be allowed to do with the path. The title reads
-    "Local files" (the path itself is shown in the editable field).
+    what the agent will be allowed to do with the path.
 
     ``access`` carries the agent's requested access mode (``READ`` or
     ``WRITE``) verbatim; ``access_human_label`` is the lower-case
@@ -251,7 +173,7 @@ def render_file_sharing_permission_dialog(
         access_human_label=access_human_label,
         allowed_roots_json=allowed_roots_json,
         home_dir=home_dir,
-        display_name="Local files",
+        display_name=file_path,
         mngr_forward_origin=mngr_forward_origin,
     )
 
@@ -266,11 +188,11 @@ def render_accounts_permission_dialog(
 ) -> str:
     """Render the accounts permission detail fragment.
 
-    Mirrors the file-sharing dialog's title row, reason section, and submission
-    form (via the shared Permissions* JinjaX components), but the accounts read
-    grant is all-or-nothing with no parameters, so there is no path/access/verb
-    input -- just a short explanation and a hidden ``permissions`` input so the
-    inbox shell's Approve button enables on first paint.
+    Mirrors the file-sharing dialog's header, rationale card, and submission form
+    (via the shared Permissions* JinjaX components), but the accounts read grant
+    is all-or-nothing with no parameters, so there is no path/access/verb input --
+    just a short explanation and a hidden ``permissions`` input so the inbox
+    shell's Approve button enables on first paint.
 
     ``mngr_forward_origin`` is the bare origin of the ``mngr forward`` plugin;
     the workspace link in the fragment points at ``{mngr_forward_origin}/goto/<agent>/``.
@@ -281,7 +203,7 @@ def render_accounts_permission_dialog(
         request_id=request_id,
         ws_name=ws_name,
         rationale=rationale,
-        display_name="Device accounts",
+        display_name="Account access",
         mngr_forward_origin=mngr_forward_origin,
     )
 
@@ -316,7 +238,7 @@ def render_workspace_permission_dialog(
         request_id=request_id,
         ws_name=ws_name,
         rationale=rationale,
-        display_name="Other machines",
+        display_name=target_workspace_name or "machines",
         verbs=verbs,
         checked_permissions=set(checked_permissions),
         target_workspace_id=target_workspace_id or "",

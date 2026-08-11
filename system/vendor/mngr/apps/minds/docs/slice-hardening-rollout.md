@@ -190,14 +190,31 @@ rows baked at several `repo_branch_or_tag` values. That is fine by design:
 Order matters per box: **prep before bake**, so every new slice VM boots with
 the 2.2.0 guestagent.
 
+One more mixed-version trap, found on the production rollout: a box whose
+staged guest image pre-bakes docker-ce 29.5.1 (the pre-2026-07-30 pin) fails
+every bake under lima 2.2.0 at `docker run` with `failed to create TTRPC
+connection: unsupported protocol: Yunix`. The pin is now 29.6.2 (verified
+against the same containerd.io); boxes staged with the old pin must have
+their image re-staged before baking: delete
+`~limahost/.cache/mngr-slice-base/debian-base.qcow2` on the box and re-run
+`just prep-server <id>` (re-download + virt-customize takes a few minutes).
+Boxes whose images predate the docker preinstall (2026-06-16) are unaffected
+-- their VMs install current docker at first boot.
+
 ### Dev tier notes
 
 - Dev bare-metal boxes are **shared across dev envs** (one box can carry
   slices for several `dev-<user>` envs, and `just list-servers` slot
-  accounting only counts the activated env's own DB rows -- trust the bake's
-  cross-env occupancy guard / `--dry-run`, not the fleet table, for free
-  slots). Re-prepping a shared box upgrades lima for everyone's slices on it;
-  running VMs are untouched, but give the other devs a heads-up.
+  accounting only counts the activated env's own DB rows -- trust `just
+  audit-boxes`, the bake's cross-env occupancy guard, or `--dry-run`, not the
+  fleet table, for free slots). Re-prepping a shared box upgrades lima for
+  everyone's slices on it; running VMs are untouched, but give the other devs
+  a heads-up.
+- Sharing is only legitimate **within** a tier. A box carrying slices from two
+  different tiers (e.g. a `dev-<user>` slice on a staging box) is refused at
+  bake time, as is a box whose lima user authorizes more than the one tier
+  pool key that `prep` writes. `just audit-boxes` surfaces both without a
+  failed bake.
 - To put a dev-env lease on the fast path from a *released* desktop binary,
   bake with `--from-tag <minds-vX.Y.Z>` (i.e. `just bake-slice-prod`, which is
   env-agnostic despite the name) so the row's `repo_branch_or_tag` equals the
@@ -222,13 +239,13 @@ the 2.2.0 guestagent.
   2.2.0 CLI (`just destroy-pool-hosts <old-row-id>`), which is the
   destroy-compat check dev could not perform.
 - A tier whose laptop-side mngr profile was last seeded by a pre-cutover
-  minds build fails every bake at the outer `mngr create` with `Cannot merge
-  AgentTypeConfig with ClaudeAgentConfig`: the stale seeded
+  minds build used to fail every bake at the outer `mngr create` with
+  `Cannot merge AgentTypeConfig with ClaudeAgentConfig`: the stale seeded
   `[agent_types.main] parent_type = "claude"` conflicts with the template's
-  command-parented `main`. Launching the current minds.app once against the
-  tier migrates it; headless, run
-  `seed_laptop_agent_types_for_minds(<env-root>/mngr)` (from
-  `imbue.minds.desktop_client.laptop_agent_types_seed`) before baking.
+  command-parented `main`. `minds pool create` now runs the seed migration
+  itself before invoking the admin bake, so this fixes itself on the first
+  bake from a current checkout; only an *older* checkout still needs the
+  manual remedy (launch the current minds.app once against the tier).
 - Only after the staging canary passes all checks, prep the remaining staging
   boxes, bake the new generation to capacity, and retire the old `available`
   rows.

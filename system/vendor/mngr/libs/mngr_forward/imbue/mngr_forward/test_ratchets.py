@@ -134,7 +134,11 @@ def test_prevent_async_await() -> None:
     # hypercorn serving-path tests (a minimal lifespan-only ASGI app and a
     # shutdown trigger), which necessarily run inside the asyncio loop under
     # test.
-    rc.check_async_await(_DIR, snapshot(48))
+    # 50: two more awaits in server.py's WebSocket forwarder, which is
+    # inherently async (FastAPI WS handler): racing the two relay legs with
+    # asyncio.wait and explicitly closing the client leg when the backend
+    # dies, so a send-quiet client cannot be left half-open forever.
+    rc.check_async_await(_DIR, snapshot(51))
 
 
 # --- Hardcoded paths ---
@@ -159,7 +163,7 @@ def test_prevent_num_prefix() -> None:
 
 
 def test_prevent_trailing_comments() -> None:
-    rc.check_trailing_comments(_DIR, snapshot(34))
+    rc.check_trailing_comments(_DIR, snapshot(29))
 
 
 def test_prevent_init_docstrings() -> None:
@@ -259,11 +263,11 @@ def test_prevent_bare_tmux_targets() -> None:
 
 
 def test_prevent_if_elif_without_else() -> None:
-    rc.check_if_elif_without_else(_DIR, snapshot(1))
+    rc.check_if_elif_without_else(_DIR, snapshot(0))
 
 
 def test_prevent_inline_functions() -> None:
-    rc.check_inline_functions(_DIR, snapshot(7))
+    rc.check_inline_functions(_DIR, snapshot(8))
 
 
 def test_prevent_underscore_imports() -> None:
@@ -296,3 +300,10 @@ def test_prevent_per_file_host_upload() -> None:
 
 def test_prevent_code_in_init_files() -> None:
     rc.check_code_in_init_files(_DIR, snapshot(1))
+
+
+# --- Modal images ---
+
+
+def test_prevent_unpinned_modal_pip_install() -> None:
+    rc.check_unpinned_modal_pip_install(_DIR, snapshot(0))

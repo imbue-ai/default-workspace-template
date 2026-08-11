@@ -462,6 +462,7 @@ describe("renderPermissionCard", () => {
     const vnode = renderCardFor(makeToolCall(PERMISSION_INPUT), makeResult(PERMISSION_OUTPUT));
     const button = findReviewButton(vnode) as { attrs?: { onclick?: (e: Event) => void } } | null;
 
+    resetEmbedEndpointForTesting();
     const postMessage = vi.fn();
     withStubbedEmbedder({ postMessage }, () =>
       button?.attrs?.onclick?.({ preventDefault() {}, stopPropagation() {} } as unknown as Event),
