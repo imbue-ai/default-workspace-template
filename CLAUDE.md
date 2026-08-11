@@ -266,7 +266,7 @@ When GitHub sync is not enabled, there is no auto-push and no GitHub remote to p
 
 If you get a failure in `test_no_type_errors` that seems spurious, try running `uv sync --all-packages` and then re-running the tests. If that doesn't work, the error is probably real, and should be fixed.
 
-If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running a command that is defined in this repo (like `mngr`), then run "uv tool uninstall imbue-mngr && uv tool install -e system/vendor/mngr" (for the relevant tool) to refresh the dependencies for that tool, and then try running the command again.
+If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running a command that is defined in this repo (like `mngr`), first run `uv sync --all-packages` -- in the standard workspace `mngr` runs from the root venv (no uv-managed tool is installed), so that refresh is the whole fix. Only if `uv tool list` actually shows the tool, refresh it with "uv tool uninstall imbue-mngr && uv tool install -e system/vendor/mngr/libs/mngr" (the vendored tree is the whole mngr monorepo, so the installable package is its `libs/mngr` -- installing the root fails with a setuptools flat-layout error). Then try running the command again.
 
 If you get a failure when trying to commit the first time, just try committing again (the pre-commit hook returns a non-zero exit code when ruff reformats files).
 

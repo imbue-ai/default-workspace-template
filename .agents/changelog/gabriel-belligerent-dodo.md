@@ -1,0 +1,11 @@
+Harden the update-self flow based on an audit of a real minds-v0.3.11 update run:
+
+- The worker's review gates are now decided by an explicit rule instead of worker judgment: they may be skipped only on a pure clean pull (no merge work at all, per a new `gates_required` flag that `classify-merge` computes, and no user-created code affected per the impact analysis). Otherwise the real `/autofix` gate runs at full scope -- no scoped-down or hand-rolled substitutes -- with a disposition rule that reverts fixes which would diverge clean-pulled upstream files from the release.
+
+- The worker's done report is now artifact-bearing: it must show either the skip rule's evidence or the gate run's artifacts, and any wholesale side-pick of a conflicted file must account for every change on the discarded side (diffed against the base, not asserted). The lead audits the report against this contract and sends incomplete reports back instead of composing an approval message over the gap; a worker-disclosed deviation is never repackaged as reassurance.
+
+- The lead's approval message now presents a kept-local-over-release conflict resolution as a reversible choice ("I kept your version; I can match the official release instead") rather than a settled fact.
+
+- The shared harden-creation worker guide states that review gates are part of the harden contract: a worker who believes they should not run surfaces that as a gate, never decides it alone.
+
+- Mechanical fixes from the same audit: the version-history note padding now guarantees a two-space gap before the sha (a 26-character origin note used to land the sha flush against the version); the always-erroring `git fetch . mngr/update-self:mngr/update-self` step in landing is removed (the worker branch already exists in the shared ref store); and the `editable_tool` reveal guidance points `uv tool install` at `system/vendor/mngr/libs/mngr` (the installable package inside the vendored monorepo) and notes that the standard workspace runs mngr from the root venv.

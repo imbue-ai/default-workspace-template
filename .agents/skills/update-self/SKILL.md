@@ -360,6 +360,20 @@ applied and the workspace is untouched.
 
 ### 5a. Approval gate
 
+**Audit the report before composing anything.** The worker contract (the
+staged copy's `references/update-self-worker.md`, §4c and §6) makes the review
+gates rule-driven and the report artifact-bearing: it must either show the
+clean-pull skip's conditions held (`gates_required: false` plus no impacted
+user-created code) or carry the gate run's artifacts (fix commits
+kept/reverted, or a clean gate run, plus architecture-gate verdicts). Likewise
+a side-picked conflict must carry the discarded-side accounting, not a bare
+"superset" claim. A report missing any of this -- including one that openly
+discloses skipping or narrowing a gate outside the rule -- goes back to the
+worker via `mngr message` to be completed. Do not compose an approval message
+over the gap, and never repackage a worker-disclosed deviation as reassurance:
+if you proceed while any deviation stands, the approval message must state the
+deviation itself where the user will read it.
+
 The `done` report is *your* raw material, not the user's message. It is a
 comprehensive, technical digest for the lead -- changelog entries in range, the
 conflicts and how the worker resolved them, reveal-class breakdown, impact
@@ -397,7 +411,14 @@ order:
    some readers want the specifics, others happily skim it as "great, they're on
    it." Do not thin it out -- carry the worker's digest, just in prose a lay reader
    parses (describe what each change does, not the file names).
-4. **Conflicts** -- "none," or what needed reconciling.
+4. **Conflicts** -- "none," or what needed reconciling. When the worker kept
+   local code over the release's version of the same file, do not present that
+   as a settled fact: say what was kept, what the release's version would have
+   changed, and offer the alternative in the same breath ("I kept your
+   version; if you'd rather match the official release exactly there, I can do
+   that instead"). The choice between a local divergence and the tested
+   release is one the user may well care about, and it is cheap to offer now
+   and expensive to unwind later.
 5. **Validation** -- did the suite pass; is any failure pre-existing/unrelated.
 6. **Caveats** -- only if any; what to expect after applying.
 7. **Pre-existing issues** -- only if any, and only after verifying attribution
@@ -462,9 +483,13 @@ off this exact `HEAD`, so the merge fast-forwards and **preserves the worker's
 
 ```bash
 ROLLBACK_TO=$(git rev-parse HEAD)
-git fetch . mngr/update-self:mngr/update-self   # materialize the worker branch locally
 git merge --ff-only mngr/update-self
 ```
+
+No fetch is needed first: the worker runs in a linked worktree of this same
+repository, so `mngr/update-self` already exists in the shared ref store (and a
+`git fetch . mngr/update-self:mngr/update-self` would be refused anyway while
+the worker's worktree has the branch checked out).
 
 If the fast-forward is refused, `HEAD` moved under the pass: treat it as stale
 per `.agents/shared/references/harden-contention.md` and re-dispatch off the
@@ -545,7 +570,10 @@ if ! grep -q "created from" docs/VERSION_HISTORY.md; then
     C_SHA=$(git rev-parse --short=7 "$CREATION")
     C_VERSION=$(git describe --tags --abbrev=0 --match 'minds-v*' "$CREATION" 2>/dev/null)
     # Then insert `- <C_DATE>  created from <C_VERSION or "the workspace template">
-    # <C_SHA>` as the FIRST line under the `## Workspace` heading, note padded to 26.
+    # <C_SHA>` as the FIRST line under the `## Workspace` heading, note padded
+    # per Part 3's rule (width 26, but never fewer than two spaces before the
+    # sha -- `created from minds-v0.3.NN` is exactly 26 chars, so a bare
+    # pad-to-26 would land the sha flush against the version).
 fi
 ```
 
@@ -566,8 +594,10 @@ existing line, append exactly one line of the form:
 - <today, YYYY-MM-DD>  updated to <$REF>  <7-char $MERGE_SHA>
 ```
 
-Pad the note (`updated to <$REF>`) to width 26 so the sha lines up; a longer note
-just pushes its own sha right, and earlier lines are never re-flowed. Compute the
+Pad the note (`updated to <$REF>`) to width 26 so the sha lines up, and always
+keep at least two spaces between the note and the sha: a note of 26 characters
+or more takes a two-space gap and pushes its own sha right rather than landing
+flush against it. Earlier lines are never re-flowed. Compute the
 sha as `git rev-parse --short=7 "$MERGE_SHA"`. **Idempotence:** if a `##
 Workspace` line already carries this exact note AND this exact 7-char sha, it is
 already recorded -- change nothing and skip the commit below.
@@ -644,8 +674,12 @@ The report says which classes merged. Apply each; a clean pull-in is still
   on stderr and is never a reason to stop.
 
 - **`editable_tool` (`system/vendor/mngr/**`)** -- `.py` is picked up live; a manifest
-  change needs an env refresh (`uv sync --all-packages`, or `uv tool install -e
-  system/vendor/mngr --reinstall` for a tool entry point). Any other `is_manifest` change
+  change needs an env refresh (`uv sync --all-packages`; only if `uv tool list`
+  shows `imbue-mngr` as a uv-managed tool, also `uv tool install -e
+  system/vendor/mngr/libs/mngr --reinstall` -- the vendored tree is the whole mngr
+  monorepo, whose root `pyproject.toml` is not installable, so the tool package
+  is its `libs/mngr`; in the standard workspace `mngr` runs from the root venv
+  and no uv tool is installed at all). Any other `is_manifest` change
   the report flags (a root-workspace `pyproject.toml` / `uv.lock`) likewise needs
   `uv sync --all-packages` so the new dependencies resolve.
 

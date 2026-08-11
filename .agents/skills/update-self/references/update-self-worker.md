@@ -67,7 +67,14 @@ Triage each conflict, first rule that applies wins:
 - **Mixed files (`CLAUDE.md` and similar) -> merge by judgment.** Do not blanket
   keep-local: upstream additions (new sections, updated shared guidance) are
   often worth integrating. Resolve by editing the file -- keep the
-  agent-specific customizations, fold in the upstream additions.
+  agent-specific customizations, fold in the upstream additions. Side-picking
+  one side of a code file (`git checkout --ours`/`--theirs` outside the
+  agent-owned rule above) is a last resort, and "ours is a superset" is a claim
+  you must **verify, not assert**: diff the discarded side against the base and
+  account for every change in it -- either present in the kept version, or
+  knowingly dropped and named as dropped in your report. A wholesale side-pick
+  is still a resolution of the merged set, so the kept file goes through the
+  4c review gate like any hand-edit.
 - **Files untouched locally -> take upstream**: `git checkout --theirs -- <path>
   && git add <path>`.
 - **No clear resolution -> gate, as a last resort.** Only after you have
@@ -323,12 +330,43 @@ tests, or exercise its scripts -- and called out in the report.
 
 ### 4c. Review gates
 
-Run the repo's review gates on the merged result, like every other harden pass:
-follow the "Review gates" section of
-`.agents/shared/worker/references/harden-creation.md` (unattended `/autofix`,
-then judge each fix commit yourself -- keep by default, revert only what undoes
-intended behavior -- plus the architecture gates). Record kept/reverted fixes
-and gate verdicts for your report.
+Whether the gates run is decided by a rule, not by your judgment. Apply it and
+record which branch applied (with its evidence) in your report:
+
+- **Skip the gates only on a pure clean pull**: Step 4's `classify-merge`
+  reports `gates_required` false (an empty merged set -- no conflicts, no file
+  changed on both sides, no lockfile you regenerated) **and** your 4a impact
+  analysis found no user-created code (apps, skills, local scripts) depending
+  on anything the update changed and no global-dep bump with a user-created
+  dependent. Every changed file then arrives exactly as upstream shipped and
+  tested it, and there is nothing local for a review to protect. Running
+  `/autofix` here would review *upstream's* code and could apply local fixes to
+  it -- manufacturing exactly the local divergence a future update would have
+  to reconcile -- so on a clean pull the skip is the correct outcome, not a
+  shortcut. Your report states that this branch fired and shows the evidence:
+  `gates_required: false` and the empty impact list.
+
+- **Otherwise run the real gates, at full scope**: follow the "Review gates"
+  section of `.agents/shared/worker/references/harden-creation.md` (unattended
+  `/autofix` over the whole merge, then judge each fix commit yourself -- keep
+  by default, revert only what undoes intended behavior -- plus the
+  architecture gates). Do not narrow the gate to the files you touched by hand
+  and do not substitute a review of your own design for it: this rule already
+  *is* the proportionality decision. "The merge is dominated by
+  upstream-tested code" licenses the skip branch above when its conditions
+  hold, and licenses nothing when they do not.
+
+  One disposition rule specific to update merges, for the keep/revert pass:
+  keep fixes that touch the merged set or local code, and **revert fixes that
+  would diverge a clean-pulled upstream file from the release** (note them as
+  `submit-upstream-changes` candidates instead). The gate's job here is the
+  reconciliation and local breakage, not improving upstream's code.
+
+If you believe the gates should not run -- or should run at some other scope --
+in a situation this rule does not cover, that is a `question` gate for the lead
+(Step 6), never a silent adaptation, however well-reasoned and however openly
+you would have disclosed it. Record kept/reverted fixes and gate verdicts for
+your report.
 
 ## 5. Gather the "what's new" inputs
 
@@ -348,7 +386,11 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
 - `done` (`type: status`) -- merged, triaged, validated on `mngr/update-self`. Body
   gives the lead everything for the approval gate and reveal:
   - **What's new** -- a digest of the changelog entries.
-  - **Conflicts** -- each one and how you resolved it.
+  - **Conflicts** -- each one and how you resolved it. For any conflict where
+    one side was taken wholesale (or where you claim the kept side subsumes the
+    other), list what the discarded side changed and where each of those
+    changes ended up -- present in the kept version, or dropped -- grounded in
+    the base-diff accounting Step 2 requires, not asserted from memory.
   - **Merged vs pulled-in** -- which reveal classes reconciled vs came in clean.
   - **Merge work per web surface** -- for the system interface and each user web
     service: "none" (upstream strictly newer, clean pull) or "nontrivial" with a
@@ -375,9 +417,16 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     validate -> rebuild-only, or `stuck` if it would break the running workspace).
     Judge by origin, not directory. Call out any gap honestly; the lead applies the
     built-in case and does not hot-apply the user case.
-  - **Validation** -- suites/boots/Playwright and review gates run, all passing;
-    autofix fixes kept vs reverted; and any validation **gap** (a coupled bump you
-    couldn't fully exercise) called out honestly rather than implied as covered.
+  - **Validation** -- suites/boots/Playwright run, all passing; **which branch
+    of the 4c review-gate rule applied, with its evidence**: either the
+    clean-pull skip (`gates_required: false` from classify-merge plus the empty
+    impact list) or the gate run's artifacts (the autofix fix commits kept vs
+    reverted -- or "gate ran clean, no fixes proposed" -- and the
+    architecture-gate verdicts). A report claiming the gates ran must carry
+    these artifacts; a report skipping them must show the rule's conditions
+    held; a report with neither is incomplete and the lead will send it back.
+    Also any validation **gap** (a coupled bump you couldn't fully exercise)
+    called out honestly rather than implied as covered.
 - `stuck` (`type: status`) -- you couldn't reach a clean, validated merge, or you
   hit the provisioning escape hatch above (a change you can neither apply live nor
   safely defer to a rebuild without breaking the running workspace); one sentence
