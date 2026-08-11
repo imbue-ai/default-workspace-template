@@ -14,8 +14,21 @@ preview tab.
   rebinding, and records the new pid before the health wait so a later `down`
   can still reap it if it never comes up.
 
-- `reveal_system_interface.py` gained `preview-refresh`: bounce the preview's
-  inner app for a backend round without disturbing the wrapper or the tab.
+- `reveal_system_interface.py` gained `preview-refresh` (bounce the preview's
+  inner app for a backend round without disturbing the wrapper or tab) and now
+  seeds each preview from a throwaway copy of *only* the live layout files, so
+  the preview opens with the user's real tabs while its own layout autosaves
+  land in the copy rather than clobbering the live layout; `unpreview` removes
+  that copy. The live layout is located by finding the workspace's *primary*
+  (`is_primary=true`) services agent -- the one the system interface itself runs
+  under, and the only agent that owns a `workspace_layout/` -- rather than by
+  deriving a path from the ambient `MNGR_AGENT_ID`, which names whichever agent
+  ran the script. Since the frontend hides `is_primary` agents from the agent
+  list, that is always a different agent with no layout of its own, so the
+  derived path never existed and every preview silently seeded nothing and opened
+  with default tabs. When there is genuinely nothing to seed, `preview` now says
+  which of the two reasons it was on stderr: an empty seed and a working preview
+  look identical on screen, which is precisely what hid this.
 
 - `create_worker.py` (`launch-task`) gained a `--branch` passthrough to
   `mngr create`, so the harden worker can check out and extend the branch the
@@ -33,6 +46,19 @@ preview tab.
   harden", or "harden only: verify, do not re-implement". Previously it told
   every system-interface worker to implement the brief, which on a harden-only
   handoff meant redoing work the user had already signed off on.
+
+- The layout copy is verbatim, including a layout that opens the preview tab
+  itself -- which is nearly all of them, since that tab stays open for the whole
+  editing pass. Rendering it would make the preview show *itself* (its inner app
+  resolves `service:si-preview` against the same live registry, so the panel
+  frames the wrapper that frames it, unboundedly). The previewed instance
+  refuses that instead, via the new
+  `SYSTEM_INTERFACE_SELF_REFERENTIAL_SERVICES`: that one tab shows a line saying
+  it is the preview you are already looking at, and the rest of the layout is
+  exactly as the user has it. Consequently `preview` needs no tab bookkeeping
+  before a re-run, and the skill's "close the tab first" step is gone.
+  A `preview` that fails to boot removes the layout copy it had already seeded,
+  instead of leaving it for an `unpreview` that is never coming.
 
 - The preview and the reveal pre-flight now **follow** the live agent-lifecycle
   event stream instead of competing for it. Both boot a second system interface

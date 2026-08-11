@@ -35,7 +35,7 @@ import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
 import { icon } from "./icons";
 import type { IconName } from "./icons";
-import { apiUrl, getPrimaryAgentId } from "../base-path";
+import { apiUrl, getPrimaryAgentId, getSelfReferentialServices } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
@@ -2460,11 +2460,15 @@ function createReactiveIframeRenderer(panelId: string): IContentRenderer {
       m.mount(element, {
         view: () => {
           const p = panelParams.get(panelId);
+          // Decided here rather than at open/restore time so it stays correct
+          // when ``replace-url`` retargets a live panel at another service.
+          const serviceName = p?.serviceName;
           return m(iframePanelComponent, {
             url: p?.url ?? "",
             title: p?.title ?? "Tab",
-            serviceName: p?.serviceName,
+            serviceName,
             panelId,
+            isSelfReferential: serviceName !== undefined && getSelfReferentialServices().has(serviceName),
           });
         },
       });

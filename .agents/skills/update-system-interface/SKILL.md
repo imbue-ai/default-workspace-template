@@ -145,19 +145,23 @@ describes, and it applies to every `close` below too. (`refresh` is the
 exception: it takes no `--layout`.)
 
 `preview` boots `uv run system-interface` from the worktree's already-built app
-dir on a free port, with layout persistence neutered (it drops `MNGR_AGENT_ID`, so
-it cannot touch the live `layout.json`) -- meaning the preview opens with the
-default tab layout, not the user's. Agent discovery is kept, so the user's real
-conversations render, and the whole thing is wrapped in a labeled "preview" frame
-the user opens as the `si-preview` tab. It never touches the served tree. (It
-refuses to boot if another pass's preview is already up rather than hijacking the
-tab; surface that and coordinate.)
+dir on a free port. It points layout persistence at a throwaway copy of the live
+layout, so the preview opens with the user's real tab layout while any drags they
+make in it autosave into the copy -- the live `layout.json` is never touched (it
+also drops `MNGR_AGENT_ID` as a backstop). Agent discovery is kept, so the user's
+real conversations render, and the whole thing is wrapped in a labeled "preview"
+frame the user opens as the `si-preview` tab. It never touches the served tree.
+(It refuses to boot if another pass's preview is already up rather than hijacking
+the tab; surface that and coordinate.)
 
 **Re-running `preview` mid-loop is safe** -- the instance died, or you are picking
-the pass back up in a later turn -- so just boot and re-open (`layout.py open`
-focuses the existing tab rather than stacking a duplicate). Prefer
-`preview-refresh` for ordinary rounds anyway -- it is much faster and leaves the
-tab in place.
+the pass back up in a later turn -- and needs no tab bookkeeping first. The copied
+layout almost always contains the `si-preview` tab itself, since it stays open for
+the whole pass; inside the preview that one tab shows a line explaining it is the
+preview you are already looking at, and every other tab is real. So just boot and
+re-open (`layout.py open` focuses the existing tab rather than stacking a
+duplicate). Prefer `preview-refresh` for ordinary rounds anyway -- it is much
+faster and leaves the tab in place.
 
 **Each subsequent round -- refresh in place; the tab never goes blank.** The tab
 points at the wrapper page, which never moves. After editing:
