@@ -12,7 +12,7 @@ import {
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, sendMessage } from "../models/Response";
-import { addOutgoing, dropOutgoing, registerPendingSend, resolveOutgoing } from "../models/OutgoingMessages";
+import { addOutgoing, dropOutgoing } from "../models/OutgoingMessages";
 import { describeRequestError } from "../models/request-error";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
@@ -187,23 +187,19 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         clearComposerAttachments(agentId);
         localStorage.removeItem(messageTextKey(agentId));
 
-        // Paint an optimistic "Sending…" bubble at the tail immediately. This is a
-        // client-only, self-terminating overlay (see models/OutgoingMessages): it
-        // drops the instant the real message arrives from the backend (a queued or
-        // committed bubble). The backend stays fully decoupled; it is never told
-        // about this state.
+        // Paint an optimistic "Sending…" bubble at the tail immediately -- the ONE
+        // optimism the frontend is allowed (contract A2). It is a client-only overlay
+        // (see models/OutgoingMessages) whose removal is BACKEND-DRIVEN: it drops only
+        // once the real message arrives from the backend (its queued chip or committed
+        // transcript turn), real-first, so there is never a gap.
         const outgoingId = addOutgoing(agentId, sentText);
-        // Track the in-flight send so Stop can wait for it to park (and so the shoulder
-        // tap greys out and folds it in) rather than racing it -- see OutgoingMessages.
-        const sendPromise = sendMessage(agentId, finalText);
-        registerPendingSend(agentId, sendPromise);
         m.redraw();
 
         try {
-          await sendPromise;
-          // Delivered (the backend confirms before resolving). Removal is
-          // arrival-driven; this only arms an anti-strand fallback.
-          resolveOutgoing(agentId, outgoingId);
+          await sendMessage(agentId, finalText);
+          // The send resolved: the message is now real (committed or queued), so its
+          // "Sending…" bubble is removed by the arriving transcript turn or queued
+          // snapshot (see OutgoingMessages.noteBackendArrivals) -- nothing to do here.
         } catch (err) {
           // The send genuinely failed (the backend confirms delivery before
           // resolving, so a rejection means the message was NOT accepted). Drop the

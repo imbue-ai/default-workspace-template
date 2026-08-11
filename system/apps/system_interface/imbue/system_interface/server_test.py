@@ -33,7 +33,6 @@ from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
-from imbue.system_interface.harnesses.codex.model import CodexInterruptToComposer
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
@@ -395,6 +394,131 @@ def test_send_message_success() -> None:
     assert messenger.sent == [(agent_id, "hello")]
 
 
+class _FakeCodexLedger:
+    """A stand-in for the live codex ledger the endpoints reach through the agent manager."""
+
+    def __init__(self, *, sending: bool = False, tap: bool = False, interrupt_block: str = "") -> None:
+        self._sending = sending
+        self._tap = tap
+        self._interrupt_block = interrupt_block
+        self.sent: list[tuple[str, str | None]] = []
+
+    def send(self, text: str, client_id: str | None = None) -> str:
+        self.sent.append((text, client_id))
+        return client_id or "cid"
+
+    def is_sending(self) -> bool:
+        return self._sending
+
+    def is_tap_available(self) -> bool:
+        return self._tap
+
+    def interrupt(self) -> str:
+        return self._interrupt_block
+
+
+def _codex_client(agent_info: AgentInfo) -> FlaskClient:
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    return create_application(build_test_state(agent_manager=manager)).test_client()
+
+
+def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
+    """A codex send is submitted through the live ledger (backend authority), not the mngr send."""
+    agent_id = "codex-agent-1"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger()
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(AgentManager, "ensure_codex_ledger", return_value=ledger),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi", "message_id": "m1"})
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+    assert ledger.sent == [("hi", "m1")]
+
+
+def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: Path) -> None:
+    """No live ledger (daemon starting) surfaces an explicit, retryable not-ready error."""
+    agent_id = "codex-agent-2"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(AgentManager, "ensure_codex_ledger", return_value=None),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi"})
+    assert response.status_code == 503
+
+
+def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
+    agent_id = "codex-agent-3"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger(sending=False, tap=True)
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "tapped"
+
+
+def test_shoulder_tap_codex_returns_500_when_a_send_is_in_flight(tmp_path: Path) -> None:
+    agent_id = "codex-agent-4"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger(sending=True)
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+    assert response.status_code == 500
+
+
+def test_shoulder_tap_codex_no_ledger_is_a_noop(tmp_path: Path) -> None:
+    agent_id = "codex-agent-5"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_codex_ledger", return_value=None),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "no_open_turn"
+
+
+def test_drain_to_composer_codex_returns_the_ledger_block(tmp_path: Path) -> None:
+    """codex's stop returns exactly the ledger's interrupt block (the non-committed messages)."""
+    agent_id = "codex-agent-6"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger(interrupt_block="bring me back to edit")
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/drain-to-composer")
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "bring me back to edit"
+
+
+def test_drain_to_composer_codex_no_ledger_returns_empty_block(tmp_path: Path) -> None:
+    agent_id = "codex-agent-7"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_codex_ledger", return_value=None),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/drain-to-composer")
+    assert response.status_code == 200
+    assert response.get_json()["block"] == ""
+
+
 def _model_agent_info(agent_id: str, tmp_path: Path, harness: HarnessType = HarnessType.CLAUDE) -> AgentInfo:
     """An AgentInfo with real (empty) config/state dirs for the given harness."""
     config_dir = tmp_path / "claude_config"
@@ -532,20 +656,46 @@ def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
     assert response.status_code == 404
 
 
-def test_set_model_switches_codex_via_slash_model(tmp_path: Path) -> None:
-    """Codex switching applies model + effort with one /model command."""
+class _RecordingSwitchClient:
+    """A stand-in for the short-lived app-server switch connection: records the settings_update
+    kwargs and its close, never touching the pane."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.closed = False
+
+    def settings_update(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_set_model_switches_codex_via_thread_settings_update(tmp_path: Path) -> None:
+    """Codex switching applies model + effort over thread/settings/update, not the pane send."""
     agent_id = "agent-00000000000000000000000000000007"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     manager, messenger = _manager_with_resolver(agent_info)
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
-    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+    application = create_application(build_test_state(agent_manager=manager))
+    client = application.test_client()
+    switch_client = _RecordingSwitchClient()
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch(
+            "imbue.system_interface.harnesses.codex.model.open_bound_codex_client",
+            return_value=switch_client,
+        ),
+    ):
         response = client.post(
             f"/api/agents/{agent_id}/model",
             json={"model_id": "gpt-5.6-sol", "effort": "high", "fast": False, "axes": ["model", "effort"]},
         )
 
     assert response.status_code == 200
-    assert messenger.sent == [(agent_id, "/model gpt-5.6-sol high")]
+    # The change went over the app-server (model + effort), and the pane send was never used.
+    assert switch_client.calls == [{"model": "gpt-5.6-sol", "effort": "high"}]
+    assert switch_client.closed is True
+    assert messenger.sent == []
 
 
 def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
@@ -882,43 +1032,10 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     mock_send.assert_not_called()
 
 
-def _events_watcher(events: list[dict[str, Any]]) -> SimpleNamespace:
-    """A stand-in watcher exposing just ``get_all_events`` for the atomic shoulder tap."""
-    return SimpleNamespace(get_all_events=lambda: events)
-
-
-def _codex_open_turn_events(turn_id: str) -> list[dict[str, Any]]:
-    return [{"type": "special", "kind": "turn_started", "turn_id": turn_id}]
-
-
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
     with patch("imbue.system_interface.server._find_agent", return_value=None):
         response = client.post("/api/agents/nonexistent/shoulder-tap-atomic")
     assert response.status_code == 404
-
-
-def test_shoulder_tap_atomic_writes_control_line_for_codex_open_turn(client: FlaskClient, tmp_path: Path) -> None:
-    """A codex agent with a live turn gets exactly one control line naming that turn, and the
-    agent is NOT restarted (the point of the atomic tap is that it stays alive)."""
-    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(
-            SystemInterfaceState,
-            "get_or_create_watcher",
-            return_value=_events_watcher(_codex_open_turn_events("tid-7")),
-        ),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
-    ):
-        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
-
-    assert response.status_code == 200
-    assert response.get_json()["status"] == "tapped"
-    # No restart -- the atomic tap merges into the live turn.
-    mock_run.assert_not_called()
-    control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
-    lines = control_path.read_text().splitlines()
-    assert lines == ['{"target_turn_id": "tid-7"}']
 
 
 def test_shoulder_tap_atomic_rejects_non_atomic_harness(client: FlaskClient, tmp_path: Path) -> None:
@@ -939,7 +1056,6 @@ def test_shoulder_tap_atomic_rejects_non_atomic_harness(client: FlaskClient, tmp
 
     assert response.status_code == 400
     assert "does not support an atomic shoulder tap" in response.get_json()["detail"]
-    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
 
 
 class _FakeClaudeTapWatcher:
@@ -1042,6 +1158,35 @@ def test_shoulder_tap_atomic_claude_flushed_presses_chord_and_never_restarts(
     assert watcher.clear_calls == []
 
 
+def test_shoulder_tap_atomic_claude_fails_when_a_send_is_in_flight(client: FlaskClient, tmp_path: Path) -> None:
+    """claude's tap takes the refresh-first mirror read under the same ``message.lock`` a send
+    holds: with a send in flight past the bounded wait it reports an explicit, retryable failure
+    rather than reading an empty mirror and no-oping the not-yet-parked message away -- never
+    pressing the chord or clearing the mirror (the codex/pi discipline)."""
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    agent_id = "agent-00000000000000000000000000000042"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    watcher = _FakeClaudeTapWatcher([[{"queued_id": "q1", "content": "hi"}], []])
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        _hold_message_lock(state_dir),
+        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+
+    assert response.status_code == 500
+    assert "in flight" in response.get_json()["detail"]
+    # No chord delivered, no restart, no mirror clear: the tap refused cleanly.
+    assert messenger.pressed == []
+    mock_run.assert_not_called()
+    assert watcher.clear_calls == []
+
+
 def test_shoulder_tap_atomic_writes_sentinel_for_pi(client: FlaskClient, tmp_path: Path) -> None:
     """A pi agent gets one interrupt sentinel appended to its inbox (a JSON object, so the queue
     watcher ignores it), the status is ``tapped``, and the agent is NOT restarted."""
@@ -1074,46 +1219,6 @@ def test_shoulder_tap_atomic_rejects_is_primary_agent(client: FlaskClient, tmp_p
     assert "is_primary" in response.get_json()["detail"]
 
 
-def test_shoulder_tap_atomic_no_open_turn_writes_nothing(client: FlaskClient, tmp_path: Path) -> None:
-    """With no turn running there is nothing to merge into, so no control line is written."""
-    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    completed = [
-        {"type": "special", "kind": "turn_started", "turn_id": "tid-1"},
-        {"type": "special", "kind": "turn_completed", "turn_id": "tid-1"},
-    ]
-    with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=_events_watcher(completed)),
-    ):
-        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
-
-    assert response.status_code == 200
-    assert response.get_json()["status"] == "no_open_turn"
-    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
-
-
-def test_shoulder_tap_atomic_codex_fails_when_a_send_is_in_flight(client: FlaskClient, tmp_path: Path) -> None:
-    """The codex flush writer takes the same ``message.lock`` a send holds: with a send in
-    flight past the bounded wait, no control line is written and the endpoint reports an
-    explicit, retryable failure (frontend button-greying alone used to guard this race)."""
-    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    with (
-        _hold_message_lock(tmp_path),
-        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(
-            SystemInterfaceState,
-            "get_or_create_watcher",
-            return_value=_events_watcher(_codex_open_turn_events("tid-7")),
-        ),
-    ):
-        response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
-
-    assert response.status_code == 500
-    assert "in flight" in response.get_json()["detail"]
-    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
-
-
 def test_shoulder_tap_atomic_pi_fails_when_a_send_is_in_flight(client: FlaskClient, tmp_path: Path) -> None:
     """The pi flush writer takes the same ``message.lock`` a send holds: with a send in flight
     past the bounded wait, no sentinel is written and the endpoint reports an explicit,
@@ -1137,6 +1242,7 @@ def _fake_claude_interrupt_watcher(
     queued: list[dict[str, Any]],
     session_file: Path | None = None,
     append_on_second_refresh: str | None = None,
+    in_flight_block: str = "",
 ) -> SimpleNamespace:
     """A claude-shaped watcher stand-in for the stop override: mirror + session + block methods.
 
@@ -1160,6 +1266,7 @@ def _fake_claude_interrupt_watcher(
         get_queued_messages=lambda: list(queued),
         get_queued_block=lambda: block,
         get_latest_main_session_file=lambda: session_file,
+        get_in_flight_block=lambda: in_flight_block,
         clear_queue=lambda: clear_calls.append(True),
         clear_calls=clear_calls,
     )
@@ -1285,116 +1392,14 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
 
 
 def test_drain_to_composer_dispatches_per_harness(tmp_path: Path) -> None:
-    """The stop button resolves the interrupt-to-composer implementation from the harness: codex
-    to its native retract override, pi to its own native override, and claude to its native
-    empty-queue chord override -- each plugs in without disturbing the others."""
-    codex = build_interrupt_to_composer(_agent_info(harness=HarnessType.CODEX, agent_state_dir=tmp_path))
+    """The stop button resolves the interrupt-to-composer implementation from the harness: pi to
+    its own native override and claude to its native empty-queue chord override, each plugging in
+    without disturbing the others. codex is not here: it is handled directly in the endpoint via
+    its live ledger, so it never routes through ``build_interrupt_to_composer``."""
     pi = build_interrupt_to_composer(_agent_info(harness=HarnessType.PI_CODING, agent_state_dir=tmp_path))
     claude = build_interrupt_to_composer(_agent_info(harness=HarnessType.CLAUDE))
-    assert isinstance(codex, CodexInterruptToComposer)
     assert isinstance(pi, PiInterruptToComposer)
     assert isinstance(claude, ClaudeInterruptToComposer)
-
-
-def _codex_aborted_turn_events(turn_id: str) -> list[dict[str, Any]]:
-    return [
-        {"type": "special", "kind": "turn_started", "turn_id": turn_id},
-        {"type": "special", "kind": "turn_aborted", "turn_id": turn_id},
-    ]
-
-
-def test_drain_to_composer_codex_appends_retract_line_and_returns_block(client: FlaskClient, tmp_path: Path) -> None:
-    """codex's native override: with a live turn, append a ``retract_turn_id`` line to the same
-    ``shoulder_tap_atomic.jsonl`` the flush writes, clear the mirror, and hand the block back --
-    without restarting the agent. Once the abort lands in the rollout, the stranded lifecycle
-    markers are cleared via the mngr_codex idle-marking primitive (codex fires no Stop hook on
-    an abort, so without this the agent reports RUNNING forever)."""
-    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    fake_watcher = _fake_queue_watcher(
-        "bring me back to edit",
-        events=_codex_open_turn_events("tid-9"),
-        events_after_clear=_codex_aborted_turn_events("tid-9"),
-    )
-    idle_marks: list[bool] = []
-    with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
-        patch(
-            "imbue.system_interface.harnesses.codex.model.mark_codex_agent_idle",
-            side_effect=lambda *_a, **_k: idle_marks.append(True),
-        ),
-    ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
-
-    assert response.status_code == 200
-    assert response.get_json()["block"] == "bring me back to edit"
-    # Native retract -> no restart.
-    mock_run.assert_not_called()
-    control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
-    assert control_path.read_text().splitlines() == ['{"retract_turn_id": "tid-9"}']
-    assert fake_watcher.clear_calls == [True]
-    # The abort was observed, so the stranded active/codex_root_active markers were cleared.
-    assert idle_marks == [True]
-    # Refresh-first: the mirror is brought current (get_all_events) BEFORE the block is captured.
-    assert fake_watcher.method_calls.index("get_all_events") < fake_watcher.method_calls.index("get_queued_block")
-
-
-def test_drain_to_composer_codex_no_open_turn_hands_back_queued_block_and_clears_mirror(
-    client: FlaskClient, tmp_path: Path
-) -> None:
-    """With no turn running there is nothing to retract, so codex writes no control line -- but
-    queued messages have nothing running to commit them, so the stop hands them back to the
-    composer and clears the mirror rather than stranding them as ghost chips."""
-    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    completed = [
-        {"type": "special", "kind": "turn_started", "turn_id": "tid-1"},
-        {"type": "special", "kind": "turn_completed", "turn_id": "tid-1"},
-    ]
-    fake_watcher = _fake_queue_watcher("still queued", events=completed)
-    with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
-    ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
-
-    assert response.status_code == 200
-    assert response.get_json()["block"] == "still queued"
-    mock_run.assert_not_called()
-    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
-    # The handed-back messages leave the mirror, so nothing lingers as a ghost chip.
-    assert fake_watcher.clear_calls == [True]
-
-
-def test_drain_to_composer_codex_empty_queue_open_turn_writes_line_and_returns_empty(
-    client: FlaskClient, tmp_path: Path
-) -> None:
-    """A codex stop mid-turn with nothing queued still writes the retract line -- a pure turn abort
-    (fixes the empty-queue no-op) -- clears the mirror, and returns '', still without a restart."""
-    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    fake_watcher = _fake_queue_watcher(
-        "", events=_codex_open_turn_events("tid-3"), events_after_clear=_codex_aborted_turn_events("tid-3")
-    )
-    idle_marks: list[bool] = []
-    with (
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
-        patch(
-            "imbue.system_interface.harnesses.codex.model.mark_codex_agent_idle",
-            side_effect=lambda *_a, **_k: idle_marks.append(True),
-        ),
-    ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
-
-    assert response.status_code == 200
-    assert response.get_json()["block"] == ""
-    mock_run.assert_not_called()
-    control_path = tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl"
-    assert control_path.read_text().splitlines() == ['{"retract_turn_id": "tid-3"}']
-    assert fake_watcher.clear_calls == [True]
-    assert idle_marks == [True]
 
 
 @contextmanager
@@ -1439,33 +1444,6 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
     assert fake_watcher.clear_calls == [True]
 
 
-def test_drain_to_composer_codex_falls_back_to_restart_when_a_send_is_in_flight(
-    client: FlaskClient, tmp_path: Path
-) -> None:
-    """A send holding ``message.lock`` blocks codex's native retract past the bounded wait, so the
-    stop falls back to the base restart hammer: it restarts, hands the block back, and writes NO
-    ``retract_turn_id`` control line."""
-    agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
-    fake_watcher = _fake_queue_watcher("bring me back to edit", events=_codex_open_turn_events("tid-9"))
-    with (
-        _hold_message_lock(tmp_path),
-        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
-        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
-        patch(
-            "imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()
-        ) as mock_run,
-        patch.object(AgentManager, "reset_activity_state"),
-    ):
-        response = client.post("/api/agents/agent-123/drain-to-composer")
-
-    assert response.status_code == 200
-    assert response.get_json()["block"] == "bring me back to edit"
-    assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "codex-agent", "--restart", "--no-resume"]
-    assert not (tmp_path / "plugin" / "codex" / "home" / "shoulder_tap_atomic.jsonl").exists()
-    assert fake_watcher.clear_calls == [True]
-
-
 def test_drain_to_composer_claude_falls_back_to_restart_when_a_send_is_in_flight(tmp_path: Path) -> None:
     """A send holding ``message.lock`` past the bounded wait blocks claude's chord path, so the
     stop falls back to the base restart hammer instead of stalling behind the send's turn-confirm:
@@ -1497,6 +1475,37 @@ def test_drain_to_composer_claude_falls_back_to_restart_when_a_send_is_in_flight
     assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "claude-agent", "--restart", "--no-resume"]
     assert messenger.pressed == []
     assert fake_watcher.clear_calls == [True]
+
+
+def test_drain_to_composer_claude_returns_in_flight_send_when_the_lock_stays_held(tmp_path: Path) -> None:
+    """A send still in flight when stop fires (message.lock held past the bounded wait) is aborted
+    by the hammer and returned to the composer, not lost -- the endpoint hands its text back in the
+    block (contract A4/B: return every not-Delivered message)."""
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+    agent_id = "agent-00000000000000000000000000000043"
+    agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
+    fake_watcher = _fake_claude_interrupt_watcher(
+        block="", queued=[], session_file=session, in_flight_block="message caught mid-send"
+    )
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    app = create_application(build_test_state(agent_manager=manager))
+    with (
+        _hold_message_lock(state_dir),
+        patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch.object(AgentManager, "reset_activity_state"),
+    ):
+        response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
+
+    assert response.status_code == 200
+    # The in-flight send is recovered to the composer instead of dying silently with the SIGKILL.
+    assert response.get_json()["block"] == "message caught mid-send"
+    assert messenger.pressed == []
 
 
 def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> None:

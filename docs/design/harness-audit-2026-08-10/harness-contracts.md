@@ -1,5 +1,12 @@
 # Cross-harness invariants and contracts
 
+> The message lifecycle (send, queue, shoulder-tap, interrupt, return-to-composer) has a
+> single canonical spec: **`docs/design/harness-message-lifecycle-contract.md`**. The U1
+> (conservation), U2 (stop wins), and the send/queue/flush/interrupt operation rows below are
+> a short index into it; the detailed guarantees, ordering, dumb-frontend rule, and
+> enforcement live there. This file remains the index for the create/destroy/transcript/model
+> invariants.
+
 What every harness (claude, codex, pi) and every harness operation must guarantee,
 as UX-observable statements. Each invariant carries its enforcement status:
 **[T]** = a test/ratchet exists that fails on violation, **[NONE]** = no enforcement

@@ -1,0 +1,153 @@
+"""One live app-server connection per codex agent -- the ledger's persistent home.
+
+The message-lifecycle contract (see ``docs/design/harness-message-lifecycle-contract.md``)
+makes the backend the sole authority for a codex agent's five message states, and
+:class:`~imbue.system_interface.harnesses.codex.ledger.CodexMessageLedger` is that authority.
+The ledger is a pure reducer over the stock ``codex app-server`` notification stream, so it needs
+exactly one long-lived, thread-bound
+:class:`~imbue.mngr_codex.app_server_client.CodexAppServerClient` feeding it. This class owns that
+connection for one agent:
+
+* it opens + handshakes + binds the agent's root thread (reusing the switch path's
+  :func:`~imbue.system_interface.harnesses.codex.model.open_bound_codex_client`) and seeds the
+  client's ``active_turn_id`` from the live ``thread/status`` so the very first send parks vs
+  starts correctly;
+* it builds the ledger over that client with the manager's queue/activity/model callbacks;
+* it runs a background reader thread that pumps ``poll_notifications`` into the ledger.
+
+The send / interrupt / shoulder-tap endpoints reach the ledger synchronously (through the agent
+manager) on their own request threads while the reader is polling; the client's frame lock
+serializes the two, so the reader and a live send never steal each other's frames.
+
+The connection is EPHEMERAL (contract): it lives with the agent's daemon generation. When the
+daemon dies the reader observes a closed transport and marks the connection not-alive; the agent
+manager reaps it and builds a fresh one on the next observe tick, whose ledger starts with an
+empty queue -- nothing from the dead generation is revived.
+"""
+
+from __future__ import annotations
+
+import threading
+from collections.abc import Callable
+from pathlib import Path
+
+from loguru import logger
+
+from imbue.mngr_codex.app_server_client import CodexAppServerClient
+from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import TransportClosedError
+from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
+from imbue.system_interface.harnesses.codex.model import open_bound_codex_client
+
+# How long the background reader blocks on one ``poll_notifications`` drain before looping. It
+# holds the client's frame lock for that span when the stream is idle, so a live send waits at
+# most this long for the lock -- short enough to feel immediate (contract A5), long enough to
+# avoid a hot spin. During an active turn the reader drains available frames and releases at once.
+_READER_POLL_TIMEOUT_SECONDS: float = 0.2
+
+# How long ``stop`` waits for the reader thread to unwind before closing the client under it.
+_READER_JOIN_TIMEOUT_SECONDS: float = 3.0
+
+
+class CodexLiveConnection:
+    """The persistent client + ledger + reader thread for one codex agent's daemon generation."""
+
+    _client: CodexAppServerClient
+    _ledger: CodexMessageLedger
+    _stop_event: threading.Event
+    _reader_thread: threading.Thread
+    # Flipped False when the reader observes a closed/failed transport (the daemon died). The
+    # agent manager treats a not-alive connection as absent and rebuilds.
+    _is_alive: bool
+
+    @classmethod
+    def build(
+        cls,
+        agent_state_dir: Path,
+        *,
+        on_queue_snapshot: Callable[[list[dict[str, str]]], None],
+        on_activity: Callable[[ActivityState], None],
+        model_state_path: Path,
+        open_client: Callable[[Path], CodexAppServerClient] = open_bound_codex_client,
+    ) -> "CodexLiveConnection | None":
+        """Open the connection and start pumping, or ``None`` if the daemon is not reachable yet.
+
+        A ``None`` return is the normal not-ready case (the socket is absent or the daemon is
+        still starting): the caller logs at debug and retries on the next observe tick. Only a
+        reachable daemon yields a live connection. ``open_client`` is the connect+handshake+bind
+        step (a test seam; production connects to the agent's daemon socket).
+        """
+        try:
+            client = open_client(agent_state_dir)
+        except (CodexAppServerError, OSError) as exc:
+            logger.debug("codex live connection: daemon not reachable for {} ({})", agent_state_dir, exc)
+            return None
+        try:
+            # Seed active_turn_id from the live thread status so the first send parks (busy) vs
+            # starts (idle) correctly on this fresh connection, exactly as the plugin's send does.
+            client.read_thread_status()
+        except (CodexAppServerError, OSError) as exc:
+            logger.debug("codex live connection: status read failed for {} ({}); closing", agent_state_dir, exc)
+            client.close()
+            return None
+        ledger = CodexMessageLedger.build(
+            client,
+            on_queue_snapshot=on_queue_snapshot,
+            on_activity=on_activity,
+            model_state_path=model_state_path,
+        )
+        self = cls.__new__(cls)
+        self._client = client
+        self._ledger = ledger
+        self._stop_event = threading.Event()
+        self._is_alive = True
+        self._reader_thread = threading.Thread(
+            target=self._read_loop, name="codex-ledger-reader", daemon=True
+        )
+        self._reader_thread.start()
+        return self
+
+    @property
+    def ledger(self) -> CodexMessageLedger:
+        """The ledger over this connection -- the backend authority for the agent's messages."""
+        return self._ledger
+
+    @property
+    def client(self) -> CodexAppServerClient:
+        """The persistent client this connection owns."""
+        return self._client
+
+    @property
+    def is_alive(self) -> bool:
+        """Whether the daemon connection is still up (reader running, transport not closed)."""
+        return self._is_alive and self._reader_thread.is_alive()
+
+    def _read_loop(self) -> None:
+        """Pump notifications into the ledger until stopped or the transport closes.
+
+        Every dispatched frame runs through the client's registered handler
+        (``ledger.handle_notification``), which is what advances the message states and fires the
+        queue/activity callbacks. A closed or failed transport ends the loop and marks the
+        connection not-alive so the manager rebuilds a fresh (empty-queue) connection.
+        """
+        while not self._stop_event.is_set():
+            try:
+                self._client.poll_notifications(timeout=_READER_POLL_TIMEOUT_SECONDS)
+            except TransportClosedError:
+                logger.info("codex live connection: transport closed; connection is done")
+                self._is_alive = False
+                return
+            except (CodexAppServerError, OSError) as exc:
+                logger.info("codex live connection: reader failed ({}); connection is done", exc)
+                self._is_alive = False
+                return
+
+    def stop(self) -> None:
+        """Stop the reader and close the client. Idempotent."""
+        self._stop_event.set()
+        self._reader_thread.join(timeout=_READER_JOIN_TIMEOUT_SECONDS)
+        try:
+            self._client.close()
+        except (CodexAppServerError, OSError) as exc:
+            logger.debug("codex live connection: error closing client ({})", exc)

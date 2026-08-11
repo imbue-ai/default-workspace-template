@@ -8,7 +8,6 @@ from typing import Any
 
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
-from imbue.system_interface.harnesses.interrupt import agent_message_lock
 from imbue.system_interface.harnesses.interrupt import restart_drain_under_message_lock
 from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 
@@ -72,14 +71,6 @@ def test_try_hold_message_lock_releases_so_a_later_acquire_succeeds(tmp_path: Pa
     # The block exited and unlocked, so a fresh contender can take it immediately.
     with try_hold_message_lock(tmp_path, wait_seconds=0.1) as second:
         assert second is True
-
-
-def test_agent_message_lock_blocks_a_bounded_contender(tmp_path: Path) -> None:
-    # The blocking variant and the bounded variant share one lock: while the blocking one is
-    # held, a bounded contender gives up with False.
-    with agent_message_lock(tmp_path):
-        with try_hold_message_lock(tmp_path, wait_seconds=0.05, poll_interval_seconds=0.01) as held:
-            assert held is False
 
 
 def _agent_info(agent_state_dir: Path) -> AgentInfo:

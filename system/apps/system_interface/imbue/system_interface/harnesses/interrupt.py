@@ -81,26 +81,6 @@ PressChord = Callable[[], bool]
 
 
 @contextmanager
-def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
-    """Hold mngr's per-agent ``message.lock`` for the duration of the block (blocking acquire).
-
-    dwt never drives raw tmux, but it shares this one flock so a stop reads a durable mirror:
-    acquiring blocks until any in-flight send has finished parking. Mirrors
-    ``BaseAgent._message_lock`` (same filename, same agent state dir), for local hosts -- the
-    only place the system interface runs. (mngr no-ops this lock for remote hosts, so the
-    serialization it provides holds only locally; that is the environment dwt runs in.)
-    """
-    lock_path = agent_state_dir / MESSAGE_LOCK_FILENAME
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-
-
-@contextmanager
 def try_hold_message_lock(
     agent_state_dir: Path,
     *,

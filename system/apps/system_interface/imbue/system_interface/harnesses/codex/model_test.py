@@ -1,17 +1,16 @@
-"""Unit tests for the Codex model resolver's switch side, a live-state conformance check, and
-the stop/flush control-line writers.
+"""Unit tests for the Codex model resolver's switch side, a live-state conformance check, and the
+root-thread bind helper.
 
-The live READ is harness-neutral (the shared reader), so the resolver only owns switching.
-The conformance test pins the reader against the codex-in-minds patch's NEW output schema --
-CI cannot execute the Rust binary, so the fixture is hand-written to that schema. The reader's
-graceful handling of the OLD schema (``reasoning_effort``/``service_tier``) lives in
-``harnesses/model_test.py``.
+The live READ is harness-neutral (the shared reader), so the resolver only owns switching. Switch
+applies over the app-server (``thread/settings/update``): the tests inject a scripted client that
+records the ``settings_update`` kwargs, proving each changed axis maps to the right field and the
+pane send is never used. The conformance test pins the reader against the uniform ``{model, effort,
+fast}`` schema the ledger mirrors from ``thread/settings/updated``.
 
-The stop-executor tests drive :func:`execute_codex_stop_to_composer` with plain fakes (no
-mocks): a scripted watcher whose rollout view flips after the mirror clear stands in for the
-patched binary's abort, and injected ``mark_idle`` / ``now`` / ``sleep`` observe the marker
-settle without real time. The endpoint-level dispatch (restart fallback, HTTP mapping) lives
-in ``server_test.py``.
+codex's stop/flush are no longer control-line writers: the live ledger
+(:mod:`~imbue.system_interface.harnesses.codex.ledger`) owns interrupt (``turn/interrupt`` + a
+per-id settle) and the shoulder-tap gate, exercised in ``ledger_test.py``; the endpoint-level
+dispatch (codex routing through the ledger, HTTP mapping) lives in ``server_test.py``.
 """
 
 import json
@@ -20,15 +19,14 @@ from typing import Any
 
 import pytest
 
+from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.codex_config import APP_SERVER_THREAD_FILENAME
 from imbue.mngr_codex.codex_config import get_codex_home
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
-from imbue.system_interface.harnesses.codex.model import CodexFlushTapStatus
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
-from imbue.system_interface.harnesses.codex.model import codex_control_path
-from imbue.system_interface.harnesses.codex.model import execute_codex_stop_to_composer
-from imbue.system_interface.harnesses.codex.model import flush_codex_queue_atomic
+from imbue.system_interface.harnesses.codex.model import _bind_root_thread
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
@@ -74,259 +72,171 @@ def test_reader_matches_the_new_patch_schema(tmp_path: Path) -> None:
     assert matched.id == "gpt-5.6-sol"
 
 
-def test_switch_model_and_effort_send_one_model_command(tmp_path: Path) -> None:
-    # Codex applies model + effort together, so a model change sends one
-    # `/model <model> <effort>` -- not a separate /effort.
-    resolver = CodexModelResolver.build(_agent_info(tmp_path))
-    sent: list[str] = []
+class _RecordingClient:
+    """A scripted app-server client that records ``settings_update`` kwargs and never touches the
+    pane. ``fail`` makes ``settings_update`` raise, standing in for an unreachable daemon."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.closed = False
+        self._fail = fail
+
+    def settings_update(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+        if self._fail:
+            raise CodexAppServerError("daemon unreachable")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _resolver_over(tmp_path: Path, client: _RecordingClient) -> tuple[CodexModelResolver, dict[str, int]]:
+    """Build a resolver whose switch connection yields ``client`` (counting opens)."""
+    opens = {"n": 0}
+
+    def _open() -> Any:
+        opens["n"] += 1
+        return client
+
+    return CodexModelResolver.build(_agent_info(tmp_path), open_client=_open), opens
+
+
+def _forbidden_send(_line: str) -> bool:
+    pytest.fail("codex switch must apply settings over the app-server, not the pane send")
+
+
+def test_switch_model_and_effort_updates_both_settings(tmp_path: Path) -> None:
+    # Codex applies the change over thread/settings/update, one call carrying every changed axis.
+    client = _RecordingClient()
+    resolver, opens = _resolver_over(tmp_path, client)
     result = resolver.switch(
         ModelIdentity(model_id="gpt-5.6-terra", effort="high", fast=False),
         frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
-        lambda line: sent.append(line) or True,
+        _forbidden_send,
     )
     assert result.ok
-    assert sent == ["/model gpt-5.6-terra high"]
+    assert client.calls == [{"model": "gpt-5.6-terra", "effort": "high"}]
+    assert opens["n"] == 1
+    assert client.closed is True
 
 
-def test_switch_effort_only_still_goes_through_model(tmp_path: Path) -> None:
-    # Effort has no standalone codex command; it rides /model with the current model.
-    resolver = CodexModelResolver.build(_agent_info(tmp_path))
-    sent: list[str] = []
+def test_switch_effort_only_sends_only_effort(tmp_path: Path) -> None:
+    # Only the changed axis is included; an omitted field leaves that setting unchanged.
+    client = _RecordingClient()
+    resolver, _opens = _resolver_over(tmp_path, client)
     result = resolver.switch(
         ModelIdentity(model_id="gpt-5.6-sol", effort="xhigh", fast=False),
         frozenset({ModelAxis.EFFORT}),
-        lambda line: sent.append(line) or True,
+        _forbidden_send,
     )
     assert result.ok
-    assert sent == ["/model gpt-5.6-sol xhigh"]
+    assert client.calls == [{"effort": "xhigh"}]
 
 
-def test_switch_fast_toggle_sends_only_fast(tmp_path: Path) -> None:
-    resolver = CodexModelResolver.build(_agent_info(tmp_path))
-    sent: list[str] = []
+def test_switch_fast_on_maps_to_priority_service_tier(tmp_path: Path) -> None:
+    client = _RecordingClient()
+    resolver, _opens = _resolver_over(tmp_path, client)
     result = resolver.switch(
         ModelIdentity(model_id="gpt-5.6-sol", effort="medium", fast=True),
         frozenset({ModelAxis.FAST}),
-        lambda line: sent.append(line) or True,
+        _forbidden_send,
     )
     assert result.ok
-    assert sent == ["/fast on"]
+    assert client.calls == [{"service_tier": "priority"}]
 
 
-def test_switch_with_no_axes_sends_nothing(tmp_path: Path) -> None:
-    resolver = CodexModelResolver.build(_agent_info(tmp_path))
-    sent: list[str] = []
+def test_switch_fast_off_clears_the_service_tier(tmp_path: Path) -> None:
+    # Fast off clears the tier (None) back to the default, non-fast tier.
+    client = _RecordingClient()
+    resolver, _opens = _resolver_over(tmp_path, client)
+    result = resolver.switch(
+        ModelIdentity(model_id="gpt-5.6-sol", effort="medium", fast=False),
+        frozenset({ModelAxis.FAST}),
+        _forbidden_send,
+    )
+    assert result.ok
+    assert client.calls == [{"service_tier": None}]
+
+
+def test_switch_with_no_axes_opens_no_connection(tmp_path: Path) -> None:
+    client = _RecordingClient()
+    resolver, opens = _resolver_over(tmp_path, client)
     result = resolver.switch(
         ModelIdentity(model_id="gpt-5.6-sol", effort="medium", fast=False),
         frozenset(),
-        lambda line: sent.append(line) or True,
+        _forbidden_send,
     )
     assert result.ok
-    assert sent == []
+    assert client.calls == []
+    assert opens["n"] == 0
+
+
+def test_switch_reports_failure_when_the_daemon_is_unreachable(tmp_path: Path) -> None:
+    # A transport/daemon failure surfaces as ok=False (and still closes the connection). An
+    # unavailable MODEL is a different, non-erroring path (the daemon echoes its fallback).
+    client = _RecordingClient(fail=True)
+    resolver, _opens = _resolver_over(tmp_path, client)
+    result = resolver.switch(
+        ModelIdentity(model_id="gpt-5.6-sol", effort="medium", fast=False),
+        frozenset({ModelAxis.MODEL}),
+        _forbidden_send,
+    )
+    assert result.ok is False
+    assert result.detail is not None
+    assert client.closed is True
 
 
 # =============================================================================
-# Stop executor (retract + marker settle) and the locked flush writer
+# Root-thread binding for the short-lived switch connection
 # =============================================================================
 
 
-class _FakeStopWatcher:
-    """Scripts the watcher slice the stop/flush paths read: the rollout view before the
-    retract, the view after the mirror clear (the patched binary's abort landing), and the
-    queued block. ``clear_calls`` counts ``clear_queue`` invocations."""
+class _BindFakeClient:
+    """Records how the switch connection binds a root thread from the loaded set."""
 
-    def __init__(
-        self,
-        block: str,
-        events: list[dict[str, Any]],
-        events_after_clear: list[dict[str, Any]] | None = None,
-    ) -> None:
-        self._block = block
-        self._events = events
-        self._events_after_clear = events_after_clear
-        self.clear_calls = 0
+    def __init__(self, loaded: tuple[str, ...]) -> None:
+        self._loaded = loaded
+        self.bound: str | None = None
+        self.resumed: str | None = None
 
-    def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
-        if self.clear_calls > 0 and self._events_after_clear is not None:
-            return list(self._events_after_clear)
-        return list(self._events)
+    def thread_loaded_list(self) -> tuple[str, ...]:
+        return self._loaded
 
-    def get_queued_block(self) -> str:
-        return self._block
+    def bind_thread(self, thread_id: str) -> None:
+        self.bound = thread_id
 
-    def clear_queue(self) -> None:
-        self.clear_calls += 1
+    def thread_resume(self, thread_id: str) -> Any:
+        self.resumed = thread_id
+        return None
 
 
-def _open_turn_events(turn_id: str) -> list[dict[str, Any]]:
-    return [{"type": "special", "kind": "turn_started", "turn_id": turn_id}]
+def _write_persisted_thread_id(tmp_path: Path, thread_id: str) -> None:
+    (tmp_path / APP_SERVER_THREAD_FILENAME).write_text(thread_id, encoding="utf-8")
 
 
-def _aborted_turn_events(turn_id: str) -> list[dict[str, Any]]:
-    return [
-        {"type": "special", "kind": "turn_started", "turn_id": turn_id},
-        {"type": "special", "kind": "turn_aborted", "turn_id": turn_id},
-    ]
+def test_bind_prefers_a_loaded_persisted_thread(tmp_path: Path) -> None:
+    _write_persisted_thread_id(tmp_path, "root-1")
+    client = _BindFakeClient(loaded=("root-1", "sub-2"))
+    _bind_root_thread(client, tmp_path)
+    assert client.bound == "root-1"
+    assert client.resumed is None
 
 
-def _unexpected_restart() -> str:
-    pytest.fail("the native retract path must not fall back to the restart hammer")
+def test_bind_resumes_a_persisted_thread_not_currently_loaded(tmp_path: Path) -> None:
+    _write_persisted_thread_id(tmp_path, "root-1")
+    client = _BindFakeClient(loaded=("sub-2",))
+    _bind_root_thread(client, tmp_path)
+    assert client.resumed == "root-1"
+    assert client.bound is None
 
 
-def _unexpected_mark_idle() -> None:
-    pytest.fail("mark_idle must not run when no retract was written")
+def test_bind_adopts_the_single_loaded_thread_without_a_persisted_id(tmp_path: Path) -> None:
+    client = _BindFakeClient(loaded=("only-1",))
+    _bind_root_thread(client, tmp_path)
+    assert client.bound == "only-1"
 
 
-def _unexpected_sleep(_seconds: float) -> None:
-    pytest.fail("the settle watch must not wait when its verdict is already visible")
-
-
-def test_stop_marks_idle_once_the_retract_abort_is_observed(tmp_path: Path) -> None:
-    """The core marker-hygiene fix: after the retract line lands and the rollout shows the
-    turn aborted, the executor clears the stranded lifecycle markers (via the injected
-    mngr_codex primitive) -- and still hands the captured block back."""
-    watcher = _FakeStopWatcher(
-        "bring me back to edit", _open_turn_events("tid-1"), events_after_clear=_aborted_turn_events("tid-1")
-    )
-    idle_calls: list[bool] = []
-
-    block = execute_codex_stop_to_composer(
-        agent_state_dir=tmp_path,
-        watcher=watcher,
-        mark_idle=lambda: idle_calls.append(True),
-        restart_drain_to_base=_unexpected_restart,
-        sleep=_unexpected_sleep,
-    )
-
-    assert block == "bring me back to edit"
-    assert watcher.clear_calls == 1
-    assert idle_calls == [True]
-    assert codex_control_path(tmp_path).read_text().splitlines() == ['{"retract_turn_id": "tid-1"}']
-
-
-def test_stop_leaves_markers_alone_when_the_abort_is_never_observed(tmp_path: Path) -> None:
-    """Confirm-before-clear: if the retracted turn never shows a boundary within the settle
-    deadline (version skew: an old binary skipped the line), the markers are NOT cleared --
-    the turn may genuinely still be running. The handback itself is unaffected."""
-    watcher = _FakeStopWatcher("bring me back to edit", _open_turn_events("tid-1"))
-    idle_calls: list[bool] = []
-    ticks = {"n": 0.0}
-
-    def _fake_now() -> float:
-        return ticks["n"]
-
-    def _fake_sleep(_seconds: float) -> None:
-        ticks["n"] += 1.0
-
-    block = execute_codex_stop_to_composer(
-        agent_state_dir=tmp_path,
-        watcher=watcher,
-        mark_idle=lambda: idle_calls.append(True),
-        restart_drain_to_base=_unexpected_restart,
-        now=_fake_now,
-        sleep=_fake_sleep,
-        settle_deadline_seconds=3.0,
-        poll_interval_seconds=0.2,
-    )
-
-    assert block == "bring me back to edit"
-    assert idle_calls == []
-    assert codex_control_path(tmp_path).read_text().splitlines() == ['{"retract_turn_id": "tid-1"}']
-
-
-def test_stop_skips_idle_marking_when_a_new_turn_already_opened(tmp_path: Path) -> None:
-    """If a fresh turn opened in the gap between the abort and the settle poll, the new
-    turn's own lifecycle hooks legitimately own the markers -- clearing them would flip a
-    genuinely RUNNING agent to WAITING."""
-    after = _aborted_turn_events("tid-1") + _open_turn_events("tid-2")
-    watcher = _FakeStopWatcher("queued text", _open_turn_events("tid-1"), events_after_clear=after)
-    idle_calls: list[bool] = []
-
-    block = execute_codex_stop_to_composer(
-        agent_state_dir=tmp_path,
-        watcher=watcher,
-        mark_idle=lambda: idle_calls.append(True),
-        restart_drain_to_base=_unexpected_restart,
-        sleep=_unexpected_sleep,
-    )
-
-    assert block == "queued text"
-    assert idle_calls == []
-
-
-def test_stop_still_hands_back_the_block_when_mark_idle_fails(tmp_path: Path) -> None:
-    """Marker cleanup is best-effort: the interrupt already succeeded, so a failing idle
-    primitive must not turn a completed stop into an error or lose the handback."""
-
-    def _raise() -> None:
-        raise OSError("marker state unreachable")
-
-    watcher = _FakeStopWatcher(
-        "bring me back to edit", _open_turn_events("tid-1"), events_after_clear=_aborted_turn_events("tid-1")
-    )
-
-    block = execute_codex_stop_to_composer(
-        agent_state_dir=tmp_path,
-        watcher=watcher,
-        mark_idle=_raise,
-        restart_drain_to_base=_unexpected_restart,
-        sleep=_unexpected_sleep,
-    )
-
-    assert block == "bring me back to edit"
-
-
-def test_stop_with_no_open_turn_hands_back_the_queued_block_and_clears_the_mirror(tmp_path: Path) -> None:
-    """Message conservation on the idle-stop path: queued messages with NO turn running have
-    nothing to drain into, so the stop returns them to the composer and clears the mirror
-    (no ghost chips) -- writing no control line, since there is nothing to retract."""
-    completed = [
-        {"type": "special", "kind": "turn_started", "turn_id": "tid-1"},
-        {"type": "special", "kind": "turn_completed", "turn_id": "tid-1"},
-    ]
-    watcher = _FakeStopWatcher("still queued", completed)
-    idle_calls: list[bool] = []
-
-    block = execute_codex_stop_to_composer(
-        agent_state_dir=tmp_path,
-        watcher=watcher,
-        mark_idle=lambda: idle_calls.append(True),
-        restart_drain_to_base=_unexpected_restart,
-        sleep=_unexpected_sleep,
-    )
-
-    assert block == "still queued"
-    assert watcher.clear_calls == 1
-    assert not codex_control_path(tmp_path).exists()
-    # No retract was written, so there are no stranded markers to settle.
-    assert idle_calls == []
-
-
-def test_stop_with_no_open_turn_and_empty_mirror_is_a_pure_noop(tmp_path: Path) -> None:
-    watcher = _FakeStopWatcher("", [])
-
-    block = execute_codex_stop_to_composer(
-        agent_state_dir=tmp_path,
-        watcher=watcher,
-        mark_idle=_unexpected_mark_idle,
-        restart_drain_to_base=_unexpected_restart,
-        sleep=_unexpected_sleep,
-    )
-
-    assert block == ""
-    assert watcher.clear_calls == 0
-    assert not codex_control_path(tmp_path).exists()
-
-
-def test_flush_writes_the_control_line_for_an_open_turn(tmp_path: Path) -> None:
-    watcher = _FakeStopWatcher("", _open_turn_events("tid-7"))
-    status = flush_codex_queue_atomic(tmp_path, watcher)
-    assert status == CodexFlushTapStatus.TAPPED
-    assert codex_control_path(tmp_path).read_text().splitlines() == ['{"target_turn_id": "tid-7"}']
-
-
-def test_flush_with_no_open_turn_writes_nothing(tmp_path: Path) -> None:
-    watcher = _FakeStopWatcher("", [])
-    status = flush_codex_queue_atomic(tmp_path, watcher)
-    assert status == CodexFlushTapStatus.NO_OPEN_TURN
-    assert not codex_control_path(tmp_path).exists()
+def test_bind_raises_when_no_unambiguous_root(tmp_path: Path) -> None:
+    client = _BindFakeClient(loaded=("a", "b"))
+    with pytest.raises(CodexAppServerError):
+        _bind_root_thread(client, tmp_path)

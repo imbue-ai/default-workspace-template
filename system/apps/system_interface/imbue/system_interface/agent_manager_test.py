@@ -1433,42 +1433,18 @@ def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentMana
         assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
 
 
-def test_codex_stale_transcript_tail_uses_the_codex_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """A codex agent's staleness override reads ``codex_process_started``.
-
-    The codex peer of ``test_stale_transcript_tail_after_restart_shows_idle``.
-    mngr_codex writes ``codex_process_started``, never the claude marker, so a
-    manager that stats a hardcoded ``claude_process_started`` finds nothing,
-    passes ``process_started_at=None``, and disables the override entirely --
-    leaving a codex agent that was killed mid-turn (an unclosed ``turn_started``)
-    pinned on "Thinking..." until the user sends another message.
-    """
+def test_codex_agent_gets_no_activity_tracker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """A codex agent drives activity through its ledger, so it builds NO transcript tracker (and its
+    daemon-less connection attempt is a graceful no-op)."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
-    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="RUNNING")
     agent_manager._ensure_activity_tracking("agent-1")
-
-    # A turn opened in the distant past and never closed: the restart killed
-    # codex before it could write task_complete.
-    agent_manager.update_session_events(
-        "agent-1",
-        [{"type": "special", "kind": "turn_started", "timestamp": "2020-01-01T00:00:00.000Z"}],
-    )
     with agent_manager._lock:
-        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
-
-    # The claude marker must NOT rescue a codex agent -- wrong harness, ignored.
-    (state_dir / "claude_process_started").touch()
-    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
-    with agent_manager._lock:
-        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
-
-    # mngr_codex touches its own marker on resume; now the tail reads stale.
-    (state_dir / "codex_process_started").touch()
-    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
-    with agent_manager._lock:
-        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
-        assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
+        assert "agent-1" in agent_manager._activity_tracked_agents
+        assert "agent-1" not in agent_manager._activity_tracker_by_agent
+    # No daemon in the test, so no live ledger is available.
+    assert agent_manager.get_codex_ledger("agent-1") is None
 
 
 def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -1654,42 +1630,20 @@ def test_queued_snapshot_arriving_while_idle_is_swept_before_broadcast(
 def test_stopped_codex_agent_snapshot_is_swept_before_any_broadcast(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """A replayed snapshot arriving via ``update_queued_messages`` AFTER the last
-    recompute, for a STOPPED codex agent whose transcript still derives non-IDLE (an
-    open turn latch), is swept before its broadcast: no broadcast ever contains the
-    phantoms, and activity broadcasts IDLE.
+    """A codex agent whose daemon generation died drops any cached queue chips before broadcast.
 
-    The arrival order is the point -- the watcher's event fan-out (and its recompute)
-    runs strictly before the snapshot push, and a permanently-dead agent never
-    re-enters the observe delta, so ``update_queued_messages`` itself must trigger the
-    sweep. Seeding the cache by hand would pass without that trigger. Codex is the
-    harness whose derive ignores the lifecycle (the turn latch owns the turn flap), so
-    only the dead-lifecycle override settles it to IDLE.
+    codex's queue is EPHEMERAL and lives with its live ledger; an abrupt daemon kill emits no idle
+    sweep, so the dead-lifecycle recompute is what clears the cached chips and settles the dot to
+    IDLE. No broadcast ever contains the phantoms.
     """
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="STOPPED")
     agent_manager._ensure_activity_tracking("agent-1")
 
-    idle_calls: list[bool] = []
-
-    def _drain_handler() -> list[dict[str, Any]]:
-        idle_calls.append(True)
-        return []
-
-    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
     try:
-        # The dead process left an open turn latch (no turn_completed will ever come).
-        # The turn latch alone would derive THINKING; the dead lifecycle forces IDLE.
-        agent_manager.update_session_events(
-            "agent-1",
-            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
-        )
-        with agent_manager._lock:
-            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
-
         listener = broadcaster.register()
-        # The dead generation's orphans arrive from the replayed ledger.
+        # The dead generation's orphan chips arrive from a late snapshot push.
         agent_manager.update_queued_messages(
             "agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}]
         )
@@ -1700,7 +1654,6 @@ def test_stopped_codex_agent_snapshot_is_swept_before_any_broadcast(
         for update in updates:
             assert update["agents"][0]["queued_messages"] == []
         assert updates[-1]["agents"][0]["activity_state"] == ActivityState.IDLE.value
-        assert idle_calls == [True]
         with agent_manager._lock:
             assert agent_manager._agents["agent-1"].queued_messages == ()
     finally:
@@ -1746,30 +1699,20 @@ def test_queued_snapshot_arriving_mid_turn_is_kept(
         agent_manager.stop()
 
 
-def test_unknown_lifecycle_neither_sweeps_nor_forces_idle(
+def test_unknown_lifecycle_codex_keeps_its_queued_snapshot(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """UNKNOWN is non-evidence (an unreachable provider, not a death): a codex agent
-    mid-turn under an UNKNOWN lifecycle keeps its THINKING dot and its queued snapshot."""
+    """UNKNOWN is non-evidence (an unreachable provider, not a death): a codex agent mid-turn under
+    an UNKNOWN lifecycle keeps its ledger-reported THINKING dot and its queued snapshot -- the
+    dead-lifecycle clear only fires on a positively-dead state."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="UNKNOWN")
     agent_manager._ensure_activity_tracking("agent-1")
 
-    idle_calls: list[bool] = []
-
-    def _drain_handler() -> list[dict[str, Any]]:
-        idle_calls.append(True)
-        return []
-
-    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
     try:
-        agent_manager.update_session_events(
-            "agent-1",
-            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
-        )
-        with agent_manager._lock:
-            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+        # The ledger reports a live turn (RUNNING until turn/completed, A6).
+        agent_manager.set_codex_activity("agent-1", ActivityState.THINKING)
 
         listener = broadcaster.register()
         snapshot = [{"queued_id": "q1", "content": "still parked", "timestamp": "t"}]
@@ -1779,35 +1722,24 @@ def test_unknown_lifecycle_neither_sweeps_nor_forces_idle(
         assert latest is not None
         assert latest["agents"][0]["queued_messages"] == snapshot
         assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
-        assert idle_calls == []
         with agent_manager._lock:
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
     finally:
         agent_manager.stop()
 
 
-def test_running_mid_turn_agent_snapshot_passes_through_unchanged(
+def test_running_mid_turn_codex_snapshot_passes_through_unchanged(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """A RUNNING codex agent mid-turn keeps its queued snapshot: the pre-broadcast
-    recompute derives non-IDLE, so no sweep fires and the broadcast carries it."""
+    """A RUNNING codex agent mid-turn keeps its queued snapshot: a non-dead lifecycle leaves the
+    ledger in charge, so no sweep fires and the broadcast carries the chips."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="RUNNING")
     agent_manager._ensure_activity_tracking("agent-1")
 
-    idle_calls: list[bool] = []
-
-    def _drain_handler() -> list[dict[str, Any]]:
-        idle_calls.append(True)
-        return []
-
-    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
     try:
-        agent_manager.update_session_events(
-            "agent-1",
-            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
-        )
+        agent_manager.set_codex_activity("agent-1", ActivityState.THINKING)
         listener = broadcaster.register()
         snapshot = [{"queued_id": "q1", "content": "queued mid-turn", "timestamp": "t"}]
         agent_manager.update_queued_messages("agent-1", snapshot)
@@ -1816,7 +1748,6 @@ def test_running_mid_turn_agent_snapshot_passes_through_unchanged(
         assert latest is not None
         assert latest["agents"][0]["queued_messages"] == snapshot
         assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
-        assert idle_calls == []
         with agent_manager._lock:
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
     finally:

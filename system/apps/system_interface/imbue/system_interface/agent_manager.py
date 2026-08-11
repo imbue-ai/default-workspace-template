@@ -53,6 +53,8 @@ from imbue.system_interface.harnesses.auth_check import find_unauthenticated_har
 from imbue.system_interface.harnesses.claude.launch_defaults import FAST_MODE_BEFORE_DECISION
 from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
 from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
+from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
@@ -337,6 +339,13 @@ class AgentManager:
     # backstop). Both are dropped when activity tracking stops.
     _queued_messages_by_agent: dict[str, tuple[QueuedMessageState, ...]]
     _queue_idle_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]]]]
+    # Per-codex-agent live app-server connection: the persistent client + ledger + background
+    # reader thread that make the ledger the backend authority for that agent's five message
+    # states (send/queue/deliver/return), its activity dot, and its model-bar mirror. Built lazily
+    # once the agent's daemon socket is reachable (``_ensure_codex_connection``) and torn down when
+    # activity tracking stops. A codex agent drives activity + queue through its ledger, NOT the
+    # transcript-derived tracker, so it has no ``_activity_tracker_by_agent`` entry.
+    _codex_connection_by_agent: dict[str, CodexLiveConnection]
     # The last computed model choice per agent, and the filesystem watcher that
     # re-derives it when the agent's minds_model_state.json changes. The live read is
     # harness-neutral (the shared reader + the harness's registered state-file path), so
@@ -398,6 +407,7 @@ class AgentManager:
         manager._activity_state_by_agent = {}
         manager._queued_messages_by_agent = {}
         manager._queue_idle_handler_by_agent = {}
+        manager._codex_connection_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
         manager._auto_opened_assist_ids = set()
@@ -443,12 +453,16 @@ class AgentManager:
             watcher.stop()
 
         with self._lock:
+            codex_connections = list(self._codex_connection_by_agent.values())
+            self._codex_connection_by_agent.clear()
             self._activity_tracked_agents.clear()
             self._activity_tracker_by_agent.clear()
             self._activity_state_by_agent.clear()
             self._queued_messages_by_agent.clear()
             self._queue_idle_handler_by_agent.clear()
             self._model_choice_by_agent.clear()
+        for connection in codex_connections:
+            connection.stop()
 
     @property
     def broadcaster(self) -> WebSocketBroadcaster:
@@ -1189,23 +1203,150 @@ class AgentManager:
             return
         with self._lock:
             self._activity_tracked_agents.add(agent_id)
-            # Built once, from the harness the agent was created with. This is the
-            # single place a harness name selects behavior; everything downstream
-            # just calls the tracker.
-            if agent_id not in self._activity_tracker_by_agent:
-                agent_state = self._agents.get(agent_id)
-                harness = agent_state.harness if agent_state is not None else DEFAULT_HARNESS
+            agent_state = self._agents.get(agent_id)
+            harness = agent_state.harness if agent_state is not None else DEFAULT_HARNESS
+            # codex drives activity + queue through its live ledger (below), not the
+            # transcript-derived tracker, so it gets NO tracker entry -- which is exactly what
+            # makes ``_recompute_activity_state`` / ``update_session_events`` / ``reset`` no-op
+            # for codex (they short-circuit on a missing tracker). Every other harness builds its
+            # tracker here, once, from the harness it was created with -- the single place a
+            # harness name selects the transcript-derived behavior.
+            needs_tracker = harness != HarnessType.CODEX and agent_id not in self._activity_tracker_by_agent
+            if needs_tracker:
                 self._activity_tracker_by_agent[agent_id] = build_tracker(harness)
+        if harness == HarnessType.CODEX:
+            # Give the agent its one live app-server connection + ledger (idempotent; rebuilds a
+            # connection whose daemon generation died). The ledger's callbacks own codex's
+            # activity dot and queue chips from here on.
+            self._ensure_codex_connection(agent_id)
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
     def _stop_activity_tracking(self, agent_id: str) -> None:
         """Stop activity tracking and clear cached activity + queued state."""
         with self._lock:
+            connection = self._codex_connection_by_agent.pop(agent_id, None)
             self._activity_tracked_agents.discard(agent_id)
             self._activity_tracker_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
             self._queued_messages_by_agent.pop(agent_id, None)
             self._queue_idle_handler_by_agent.pop(agent_id, None)
+        # Stop the reader + close the client outside the lock (join blocks on the reader thread).
+        if connection is not None:
+            connection.stop()
+
+    def _ensure_codex_connection(self, agent_id: str) -> None:
+        """Ensure a live app-server connection + ledger for a codex ``agent_id``.
+
+        Idempotent and self-healing: a live connection is left alone; a connection whose daemon
+        generation died (reader saw the transport close) is reaped and rebuilt, whose fresh ledger
+        starts with an empty queue (the queue is EPHEMERAL -- nothing from the dead generation is
+        revived). When the daemon is not yet reachable (a just-created agent still starting), the
+        build returns ``None`` and this simply retries on the next observe tick.
+
+        The connect + handshake is blocking network I/O, so it runs OUTSIDE the manager lock
+        (mirroring ``_ensure_model_tracking``); the built connection is stored under the lock, and
+        a concurrent build that lost the race is stopped rather than leaked.
+        """
+        with self._lock:
+            existing = self._codex_connection_by_agent.get(agent_id)
+            if existing is not None and existing.is_alive:
+                return
+            dead = existing if existing is not None else None
+            if dead is not None:
+                self._codex_connection_by_agent.pop(agent_id, None)
+        if dead is not None:
+            dead.stop()
+        state_dir = self._get_agent_state_dir(agent_id)
+        connection = CodexLiveConnection.build(
+            state_dir,
+            on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
+            on_activity=lambda activity: self.set_codex_activity(agent_id, activity),
+            model_state_path=get_model_state_path(HarnessType.CODEX, state_dir),
+        )
+        if connection is None:
+            return
+        with self._lock:
+            # Lost the build race, or tracking stopped while we connected: don't leak the new one.
+            if agent_id not in self._activity_tracked_agents or self._codex_connection_by_agent.get(agent_id) is not None:
+                stale = connection
+            else:
+                self._codex_connection_by_agent[agent_id] = connection
+                stale = None
+        if stale is not None:
+            stale.stop()
+            return
+        # Seed the activity slot from the freshly-bound thread's live state (IDLE, or a turn still
+        # running after a UI reconnect) so the dot is correct before the first notification.
+        self.set_codex_activity(agent_id, connection.ledger.activity_state())
+
+    def _reap_codex_connection(self, agent_id: str) -> None:
+        """Drop and stop a codex agent's live connection (its daemon generation is gone)."""
+        with self._lock:
+            connection = self._codex_connection_by_agent.pop(agent_id, None)
+        if connection is not None:
+            connection.stop()
+
+    def _clear_codex_queue(self, agent_id: str) -> None:
+        """Drop a codex agent's cached queue chips (its ephemeral queue died with the daemon).
+
+        Broadcasts the emptied state only when it actually changed; the caller's own activity
+        broadcast (if any) then carries the same cleared snapshot.
+        """
+        with self._lock:
+            if agent_id not in self._activity_tracked_agents:
+                return
+            agent_state = self._agents.get(agent_id)
+            if agent_state is None or not agent_state.queued_messages:
+                self._queued_messages_by_agent[agent_id] = ()
+                return
+            self._queued_messages_by_agent[agent_id] = ()
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().queued_messages, ())
+            )
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def get_codex_ledger(self, agent_id: str) -> CodexMessageLedger | None:
+        """The live message ledger for a codex ``agent_id``, or ``None`` if none is up.
+
+        ``None`` means no reachable daemon connection right now (agent not codex, not tracked, or
+        the daemon is down/starting). The send / interrupt / shoulder-tap endpoints read this.
+        """
+        with self._lock:
+            connection = self._codex_connection_by_agent.get(agent_id)
+        if connection is None or not connection.is_alive:
+            return None
+        return connection.ledger
+
+    def ensure_codex_ledger(self, agent_id: str) -> CodexMessageLedger | None:
+        """Build the codex connection if needed, then return its ledger (or ``None``).
+
+        The send endpoint uses this so the very first message to a just-ready agent does not race
+        the observe-driven connection build.
+        """
+        self._ensure_codex_connection(agent_id)
+        return self.get_codex_ledger(agent_id)
+
+    def set_codex_activity(self, agent_id: str, activity: ActivityState) -> None:
+        """Apply an activity state pushed by a codex agent's ledger, broadcasting on a real change.
+
+        This is codex's activity path (contract A6: RUNNING until ``turn/completed``), replacing
+        the transcript-derived tracker for codex. No-op for an untracked agent (a callback racing
+        teardown) or when the state did not change.
+        """
+        with self._lock:
+            if agent_id not in self._activity_tracked_agents:
+                return
+            agent_state = self._agents.get(agent_id)
+            if agent_state is None:
+                return
+            old_state = self._activity_state_by_agent.get(agent_id)
+            if old_state == activity and agent_state.activity_state == activity.value:
+                return
+            self._activity_state_by_agent[agent_id] = activity
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().activity_state, activity)
+            )
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def register_queue_idle_handler(self, agent_id: str, handler: Callable[[], list[dict[str, Any]]]) -> None:
         """Register the agent watcher's working->IDLE queue backstop.
@@ -1371,6 +1512,20 @@ class AgentManager:
         # must stay outside the lock (it is a filesystem call, not shared state).
         with self._lock:
             tracker = self._activity_tracker_by_agent.get(agent_id)
+            recompute_agent_state = self._agents.get(agent_id)
+        # codex has NO tracker -- its ledger drives the dot (contract A6, RUNNING until
+        # ``turn/completed``). The one thing the ledger cannot observe is its own daemon dying (no
+        # ``turn/completed`` ever arrives), so a positively-dead lifecycle here forces the dot IDLE
+        # and reaps the dead connection; otherwise the ledger stays in charge and this is a no-op.
+        if recompute_agent_state is not None and recompute_agent_state.harness == HarnessType.CODEX:
+            if is_lifecycle_dead(recompute_agent_state.state):
+                # The daemon generation is gone: reap the connection, drop any queue chips it left
+                # (the queue is EPHEMERAL -- it dies with the session, and an abrupt daemon kill
+                # emits no idle sweep to clear it), and settle the dot to IDLE.
+                self._reap_codex_connection(agent_id)
+                self._clear_codex_queue(agent_id)
+                self.set_codex_activity(agent_id, ActivityState.IDLE)
+            return
         if tracker is None:
             return
         # Re-read on every recompute so a restart that touches the marker is

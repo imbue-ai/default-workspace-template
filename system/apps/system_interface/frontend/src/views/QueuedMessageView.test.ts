@@ -31,7 +31,6 @@ vi.mock("../models/Response", () => ({
 vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
 import { renderQueuedMessages } from "./QueuedMessageView";
-import { noteBackendArrivals, registerPendingSend } from "../models/OutgoingMessages";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -114,8 +113,8 @@ describe("renderQueuedMessages", () => {
   });
 
   it("fires the restart-based flush intent when the harness lacks atomic shoulder tap", async () => {
-    // Distinct agent id per flush test: the freeze it leaves is module-level and
-    // keyed by agent id, so reusing one would hide the next test's button.
+    // Distinct agent id per flush test: the in-flight guard is module-level and
+    // keyed by agent id, so reusing one could mask the next test's button state.
     mocks.atomicFlag = false;
     mocks.queued = [queuedMessage("q1", "hi")];
     const button = findByClass(renderQueuedMessages("agent-restart"), "queued-action--flush");
@@ -133,46 +132,9 @@ describe("renderQueuedMessages", () => {
     expect(mocks.flushQueue).not.toHaveBeenCalled();
   });
 
-  it("releases the freeze immediately on a terminal no-op atomic status (no hang to the cap)", async () => {
-    const agent = "agent-noop-tap";
-    mocks.atomicFlag = true;
-    mocks.queued = [queuedMessage("q1", "hi")];
-    mocks.shoulderTapAtomic.mockResolvedValueOnce({ status: "no_open_turn" });
-
-    const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
-    await (button?.attrs?.onclick as () => Promise<void>)();
-
-    // Nothing was committed, so the freeze is dropped now rather than held to the 20s cap.
-    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeUndefined();
-  });
-
-  it("keeps the freeze arrival-released on a real ``tapped`` atomic status", async () => {
-    const agent = "agent-tapped";
-    mocks.atomicFlag = true;
-    mocks.queued = [queuedMessage("q1", "hi")];
-    mocks.shoulderTapAtomic.mockResolvedValueOnce({ status: "tapped" });
-
-    const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
-    await (button?.attrs?.onclick as () => Promise<void>)();
-
-    // A real tap commits a merged turn, so the freeze stays until that turn arrives.
-    mocks.queued = [];
-    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
-  });
-
-  it("greys the shoulder-tap button while a message is still in flight (cannot tap mid-send)", () => {
-    const agent = "agent-pending-send";
-    mocks.queued = [queuedMessage("q1", "hi")];
-    // Nothing in flight -> the button is live.
-    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);
-    // A message is mid-send -> the button greys out so the tap cannot race the send.
-    registerPendingSend(agent, new Promise<void>(() => {})); // stays in flight for the assertion
-    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(true);
-  });
-
-  it("freezes the queued group during the flush and releases it on a backend arrival (no blip, no countdown)", async () => {
-    // Its own agent id so the module-level freeze state cannot collide with others.
-    const agent = "agent-freeze";
+  it("renders the live backend snapshot during a flush -- no local freeze or reconstruction", async () => {
+    const agent = "agent-live-snapshot";
+    mocks.atomicFlag = false;
     mocks.queued = [queuedMessage("q1", "hi")];
     let resolveFlush: () => void = () => {};
     mocks.flushQueue.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFlush = resolve)));
@@ -180,29 +142,35 @@ describe("renderQueuedMessages", () => {
     const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
     const pending = (button?.attrs?.onclick as () => Promise<void>)();
 
-    // In flight: the group is frozen -- the captured message is still shown, the
-    // button is gone, and there is NO countdown.
-    const duringFlight = renderQueuedMessages(agent);
-    expect(findByClass(duringFlight, "queued-group--frozen")).toBeTruthy();
-    expect(findByClass(duringFlight, "queued-action--flush")).toBeUndefined();
-    expect(findByClass(duringFlight, "queued-countdown")).toBeUndefined();
-    expect(renderedText(duringFlight)).toContain("hi");
-
-    // Even when the backend snapshot empties during the restart, the frozen group
-    // holds the messages rather than blipping them out.
+    // No frozen group is ever painted; the frontend mirrors the backend snapshot.
+    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeUndefined();
+    // When the backend snapshot empties, the group empties with it -- nothing held back.
     mocks.queued = [];
-    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
+    expect(renderQueuedMessages(agent)).toEqual([]);
 
-    // The flush POST resolving does NOT release the hold -- that would clear it
-    // before the resent turn renders, reopening the blip.
     resolveFlush();
     await pending;
-    expect(findByClass(renderQueuedMessages(agent), "queued-group--frozen")).toBeTruthy();
-
-    // A genuinely-new backend arrival (the resent message landing) releases it, so
-    // the group hands off to the real (now empty) state exactly as it appears.
-    noteBackendArrivals(agent, ["resent-arrival-id"]);
-    expect(renderQueuedMessages(agent)).toEqual([]);
     expect(mocks.flushQueue).toHaveBeenCalledWith(agent);
+  });
+
+  it("greys the shoulder-tap button only while this tap's own request is in flight", async () => {
+    const agent = "agent-inflight-tap";
+    mocks.atomicFlag = false;
+    mocks.queued = [queuedMessage("q1", "hi")];
+    // Nothing in flight -> the button is live.
+    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);
+
+    let resolveFlush: () => void = () => {};
+    mocks.flushQueue.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFlush = resolve)));
+    const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
+    const pending = (button?.attrs?.onclick as () => Promise<void>)();
+
+    // The tap is running -> the button greys so it cannot double-fire.
+    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(true);
+
+    resolveFlush();
+    await pending;
+    // Settled -> the button is live again.
+    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);
   });
 });

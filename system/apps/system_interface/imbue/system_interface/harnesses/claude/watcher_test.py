@@ -1272,6 +1272,46 @@ def test_truncated_latest_session_re_derives_queue_from_scratch(tmp_path: Path) 
     assert _queued_contents(watcher) == ["first"]
 
 
+def test_queued_to_delivered_emits_chip_removal_before_the_transcript_turn(tmp_path: Path) -> None:
+    """A3b: when a queued message commits within one poll -- its LEAVE record and its committed
+    ``user`` record land together -- the queue snapshot (the chip REMOVAL) is broadcast BEFORE
+    the transcript turn. So the message is never shown as both a chip and a turn at once (the
+    two-unordered-channels double-show); the departing queue chip leaves before the turn arrives.
+    """
+    agent_state_dir, claude_config_dir, session_file = _setup_empty_agent(tmp_path)
+    order_log: list[str] = []
+    watcher = ClaudeSessionWatcher(
+        agent_id="test-agent",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+        on_events=lambda _aid, evts: order_log.append(f"turn:{len(evts)}"),
+    )
+    watcher.set_queue_snapshot_callback(
+        lambda snapshot: order_log.append(f"queue:{[entry['content'] for entry in snapshot]}")
+    )
+    watcher._discover_sessions()
+
+    # The message is queued first: a chip appears (a pure-enqueue cycle emits no transcript turn).
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_enqueue_record("do the thing", "test-session")) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+    assert _queued_contents(watcher) == ["do the thing"]
+    assert order_log == ["queue:['do the thing']"]
+
+    order_log.clear()
+    # In ONE poll the queued message commits: its LEAVE (dequeue) record and its committed
+    # ``user`` turn are appended together, exactly as a Queued->Delivered transition writes them.
+    with open(session_file, "ab") as f:
+        f.write((json.dumps(_queue_dequeue_record("test-session")) + "\n").encode("utf-8"))
+        f.write((json.dumps(_user_event(1, "do the thing")) + "\n").encode("utf-8"))
+    watcher._poll_for_changes()
+
+    assert watcher.get_queued_messages() == []
+    # The chip-removal (empty snapshot) is emitted BEFORE the transcript turn -- never the turn
+    # while the chip is still shown.
+    assert order_log == ["queue:[]", "turn:1"]
+
+
 def test_reprime_after_backend_restart_excludes_dead_epoch_enqueues(tmp_path: Path) -> None:
     """claude --resume RE-APPENDS to the same session file, so a backend restart's
     priming replay walks a ledger that can still hold enqueues a killed claude
@@ -1755,3 +1795,50 @@ def test_get_latest_main_session_file_none_without_history(tmp_path: Path) -> No
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
     assert watcher.get_latest_main_session_file() is None
+
+
+def test_note_sent_message_records_in_flight_and_commit_clears_it(tmp_path: Path) -> None:
+    """A noted send is in the in-flight (Sending) block until it resolves; commit clears it."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    (claude_config_dir / "projects").mkdir(parents=True)
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+
+    token = watcher.note_sent_message("in flight now", "2026-01-01T00:00:00Z", "msg-1")
+    assert token == "msg-1"
+    assert watcher.get_in_flight_block() == "in flight now"
+
+    watcher.commit_sent_message(token)
+    assert watcher.get_in_flight_block() == ""
+
+
+def test_note_sent_message_mints_a_token_when_none_supplied(tmp_path: Path) -> None:
+    """A legacy caller (no send-time id) still gets a distinct token so its record can resolve."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    (claude_config_dir / "projects").mkdir(parents=True)
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+
+    token = watcher.note_sent_message("no id supplied", "2026-01-01T00:00:00Z")
+    assert token
+    assert watcher.get_in_flight_block() == "no id supplied"
+    watcher.retract_sent_message(token)
+    assert watcher.get_in_flight_block() == ""
+
+
+def test_in_flight_block_preserves_send_order_across_two_sends(tmp_path: Path) -> None:
+    """Two concurrent in-flight sends return in send order; resolving one leaves the other."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir()
+    claude_config_dir = tmp_path / "claude_config"
+    (claude_config_dir / "projects").mkdir(parents=True)
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+
+    watcher.note_sent_message("first", "2026-01-01T00:00:00Z", "a")
+    watcher.note_sent_message("second", "2026-01-01T00:00:01Z", "b")
+    assert watcher.get_in_flight_block() == "first\nsecond"
+
+    watcher.commit_sent_message("a")
+    assert watcher.get_in_flight_block() == "second"

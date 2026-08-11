@@ -683,20 +683,34 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
   }
 }
 
-export async function sendMessage(agentId: string, message: string): Promise<void> {
-  if (!message.trim()) {
-    return;
+/** Mint a stable per-message id at send time (contract A4). The backend keys its
+ *  'Sending' record on it so an interrupt can reconcile the message per id and
+ *  return it to the composer if it never committed. Returned to the caller so a
+ *  later optimistic "Sending..." paint can carry the same id. */
+export function mintMessageId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export async function sendMessage(agentId: string, message: string, messageId?: string): Promise<string> {
+  const trimmed = message.trim();
+  const id = messageId ?? mintMessageId();
+  if (!trimmed) {
+    return id;
   }
 
   // The client identity rides along so the server can record which browser
   // (and which named layout) the message came from -- that is how agents
-  // attribute a request to a client via `layout.py context`.
+  // attribute a request to a client via `layout.py context`. The message_id is
+  // the stable send-time id the backend reconciles delivery against (A4).
   await m.request({
     method: "POST",
     url: apiUrl("/api/agents/:agentId/message"),
     params: { agentId },
     body: {
-      message: message.trim(),
+      message: trimmed,
+      message_id: id,
       client_id: getClientId(),
       active_layout: getActiveLayoutSlug(),
       device_kind: getDeviceKind(),
@@ -705,6 +719,7 @@ export async function sendMessage(agentId: string, message: string): Promise<voi
   // Bump this chat's OOM recency now that a message was accepted, so an actively
   // messaged chat is more protected from a memory shed than idler ones.
   reportMessaged(agentId);
+  return id;
 }
 
 export async function interruptAgent(agentId: string): Promise<void> {

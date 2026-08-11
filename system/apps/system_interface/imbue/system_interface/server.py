@@ -10,6 +10,7 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 from flask import Flask
@@ -52,10 +53,9 @@ from imbue.system_interface.harnesses.claude.tap import KEYBINDINGS_FILENAME
 from imbue.system_interface.harnesses.claude.tap import OK_TAP_STATUSES
 from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
 from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
-from imbue.system_interface.harnesses.codex.model import CodexFlushTapStatus
-from imbue.system_interface.harnesses.codex.model import flush_codex_queue_atomic
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import restart_drain
+from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.pi_coding.model import PiFlushTapStatus
 from imbue.system_interface.harnesses.pi_coding.model import flush_pi_queue_atomic
@@ -426,21 +426,40 @@ def _send_message_endpoint(agent_id: str) -> Response:
         return _agent_not_found_response(agent_id)
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
+    agent_manager: AgentManager = get_state().agent_manager
+    message_id = send_message_request.message_id or uuid4().hex
 
-    # A harness whose queue-enqueue source is the send itself (one with no on-disk
-    # enqueue ledger) parks the message in its watcher's outbox BEFORE delivery -- an
-    # idle agent can drain the turn within one watcher poll, so parking after
-    # confirmation would lose the race to its own drain and strand the bubble. A failed
-    # send retracts the parked entry. The base hook is a no-op returning None, and only
-    # an EXISTING watcher is told: if none is watching, no UI needs a bubble.
+    # codex owns the whole message lifecycle in its live ledger (contract A2: the backend is the
+    # sole authority). Submitting through the ledger records the message keyed by the frontend's
+    # stable id, so its queue chip and its committed-turn reconciliation join on that id. Delivery
+    # is COMMIT, not this ack (A4): ``send`` returns as soon as the daemon accepts the message
+    # (opening a turn, or parking a steer) -- the transcript watcher / queue snapshot then carry
+    # its real state, which is what removes the frontend's optimistic "Sending" bubble.
+    if agent_info.harness == HarnessType.CODEX:
+        ledger = agent_manager.ensure_codex_ledger(agent_info.id)
+        if ledger is None:
+            failure = ErrorResponse(
+                detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (codex daemon starting)."
+            )
+            return _json_response(failure.model_dump(), status_code=503)
+        ledger.send(send_message_request.message, client_id=message_id)
+        _record_client_message_activity(agent_info, send_message_request)
+        return _json_response(SendMessageResponse(status="ok").model_dump())
+
+    # Record the message as *Sending* (contract A1) on the watcher BEFORE delivery: while
+    # the synchronous send is in flight the message has no on-disk harness record yet, so a
+    # concurrent interrupt reads this to return a not-yet-committed send to the composer
+    # rather than lose it (A4). Keyed by the sender's stable send-time id (or a minted one
+    # for legacy callers). The send resolves it: committed/queued -> commit_sent_message,
+    # failed -> retract_sent_message. The base hook is a no-op, and only an EXISTING watcher
+    # is told: if none is watching, no UI needs a bubble.
     watcher = get_state().watchers.get(agent_info.id)
     queued_token = (
-        watcher.note_sent_message(send_message_request.message, datetime.now(timezone.utc).isoformat())
+        watcher.note_sent_message(send_message_request.message, datetime.now(timezone.utc).isoformat(), message_id)
         if watcher is not None
         else None
     )
 
-    agent_manager: AgentManager = get_state().agent_manager
     success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
 
     if not success:
@@ -449,9 +468,19 @@ def _send_message_endpoint(agent_id: str) -> Response:
         failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
         return _json_response(failure.model_dump(), status_code=500)
 
-    # Record which client (and layout) the message came from, so agents can
-    # attribute requests to a client via ``layout.py context``. Legacy callers
-    # without client metadata (curl, older frontends) are simply not recorded.
+    # Delivered or queued: the message now has a real representation, so it is no longer
+    # Sending -- clear its record so a later interrupt does not return an already-committed
+    # message to the composer.
+    if watcher is not None and queued_token is not None:
+        watcher.commit_sent_message(queued_token)
+
+    _record_client_message_activity(agent_info, send_message_request)
+    return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+def _record_client_message_activity(agent_info: AgentInfo, send_message_request: SendMessageRequest) -> None:
+    """Record which client (and layout) a message came from, so agents can attribute requests to a
+    client via ``layout.py context``. Legacy callers without client metadata are not recorded."""
     events_path = _client_activity_events_path()
     if events_path is not None and send_message_request.client_id:
         client_activity.append_message_event(
@@ -463,8 +492,6 @@ def _send_message_endpoint(agent_id: str) -> Response:
             agent_name=agent_info.name,
             message_text=send_message_request.message,
         )
-
-    return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
 def _get_harnesses_endpoint() -> Response:
@@ -892,23 +919,22 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
         # locked keypress, the bounded verdict watch, and the recovery send) to the executor.
         return _claude_shoulder_tap(agent_info)
 
-    # codex: the whole locked flush write (bounded lock acquire, open-turn resolution, control
-    # line append) lives with the codex harness -- see ``flush_codex_queue_atomic``.
-    watcher = get_state().get_or_create_watcher(agent_info)
-    try:
-        flush_status = flush_codex_queue_atomic(agent_info.agent_state_dir, watcher)
-    except OSError as e:
-        logger.opt(exception=e).error("Failed to write atomic shoulder-tap control line for {}", agent_info.name)
-        error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
-        return _json_response(error.model_dump(), status_code=500)
-    if flush_status == CodexFlushTapStatus.SEND_IN_FLIGHT:
-        # An explicit, retryable failure: a message send held the lock past the bounded wait,
-        # so no control line was written (writing it unordered could race the in-flight send).
+    # codex: the live ledger already parked every busy send as a ``turn/steer`` of the running
+    # turn, so a Queued chip is ALREADY a pending steer that auto-consumes at the next yield
+    # boundary -- a tap needs NO force write, only a gate check (contract Shoulder-tap). It is
+    # unavailable while anything is still Sending (its disposition is not yet known, so a tap
+    # could race it), and a no-op when the queue is empty.
+    ledger = get_state().agent_manager.get_codex_ledger(agent_info.id)
+    if ledger is None:
+        # No live daemon connection: nothing is parked to flush, so this is a clean no-op.
+        return _json_response(ShoulderTapAtomicResponse(status="no_open_turn").model_dump())
+    if ledger.is_sending():
         error = ErrorResponse(
             detail=f"A message send to agent '{agent_info.name}' is in flight; try the shoulder tap again."
         )
         return _json_response(error.model_dump(), status_code=500)
-    return _json_response(ShoulderTapAtomicResponse(status=flush_status.value).model_dump())
+    status = "tapped" if ledger.is_tap_available() else "no_open_turn"
+    return _json_response(ShoulderTapAtomicResponse(status=status).model_dump())
 
 
 def _claude_shoulder_tap(agent_info: AgentInfo) -> Response:
@@ -916,8 +942,11 @@ def _claude_shoulder_tap(agent_info: AgentInfo) -> Response:
 
     The keypress and the recovery send both route through the agent manager (which delegates
     to mngr's in-process message API, holding the per-agent ``message.lock``): dwt never drives
-    raw tmux. Terminal no-op / success statuses (``nothing_queued`` / ``no_open_turn`` /
-    ``tapped``) return 200; a dialog block returns 409; every other error returns 500.
+    raw tmux. The refresh-first mirror read is taken under a bounded acquire of that same lock,
+    so a tap racing a not-yet-parked send is refused with ``send_in_flight`` rather than no-oping
+    it away -- the codex/pi discipline. Terminal no-op / success statuses (``nothing_queued`` /
+    ``no_open_turn`` / ``tapped``) return 200; a dialog block returns 409; every other error
+    (including ``send_in_flight``, a retryable refusal) returns 500.
     """
     state = get_state()
     # The base watcher structurally satisfies the tap's watcher protocol (its shoulder-tap
@@ -933,6 +962,7 @@ def _claude_shoulder_tap(agent_info: AgentInfo) -> Response:
         watcher=watcher,
         press_chord=lambda: agent_manager.press_key_chord_on_agent(agent_id, TAP_CHORD),
         send_recovery=lambda text: agent_manager.send_message_to_agent(agent_id, text),
+        try_message_lock=lambda: try_hold_message_lock(agent_info.agent_state_dir),
     )
     if result.status in OK_TAP_STATUSES:
         return _json_response(ShoulderTapAtomicResponse(status=result.status.value).model_dump())
@@ -960,8 +990,20 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
     if refusal is not None:
         return refusal
 
-    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
     agent_manager: AgentManager = get_state().agent_manager
+
+    # codex interrupts natively through its live ledger: one ``turn/interrupt`` on the running
+    # turn, then an authoritative per-id settle -- every non-committed owned message (a parked
+    # steer, or an in-flight Sending) returns to the composer in send order, while a message that
+    # committed before the interrupt stays Delivered (contract Interrupt + A4). The ledger clears
+    # ``active_turn_id`` at once, so the dot clears immediately (A6). With no live connection there
+    # is nothing running and nothing parked, so the returned block is empty.
+    if agent_info.harness == HarnessType.CODEX:
+        ledger = agent_manager.get_codex_ledger(agent_info.id)
+        block = ledger.interrupt() if ledger is not None else ""
+        return _json_response(DrainToComposerResponse(block=block).model_dump())
+
+    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
     interrupter = build_interrupt_to_composer(agent_info)
     try:
         block = interrupter.drain_to_composer(

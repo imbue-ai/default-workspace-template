@@ -50,14 +50,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from enum import auto
 from typing import Any
 
 from loguru import logger as _loguru_logger
-from pydantic import Field
 
-from imbue.imbue_common.enums import UpperCaseStrEnum
-from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
@@ -265,82 +261,6 @@ def _user_message_events(timestamp: str, text: str | None) -> list[dict[str, Any
 # does not reach the rollout until the turn ends. The patched codex binary writes a full
 # queue LEDGER to ``$CODEX_HOME/queued_input.jsonl`` (a sidecar, not the rollout), one
 # JSON object per line, keyed by a stable ``queued_id`` (see the fork's
-# ``queued_input_log`` + ``docs/codex_queued_messages_impl.md``). One record per line:
-#   {"type":"queued_input","queued_id","thread_id","timestamp","content"}
-#   {"type":"queued_committed","queued_id","timestamp"}
-#   {"type":"queued_retracted","queued_id","timestamp"}
-# ``queued_input`` parks a message; ``queued_committed`` marks it injected into the turn;
-# ``queued_retracted`` marks it pulled back (interrupt / reject / resume).
-# Each ``queued_input`` gets exactly one terminating record, so a full replay nets to
-# exactly the currently-parked set (self-correcting, no cursor). Resolution is BY ID --
-# exact and content-free -- which is why the tracker feeds the shared QueuedSet via
-# ``resolve(queued_id)`` rather than Claude's positional resolve. The committed message
-# itself still reaches the UI as an ordinary rollout ``user_message`` (parsed by
-# ``parse_lines``); this ledger only drives the live queued snapshot, never the transcript.
-_QUEUED_INPUT_TYPE = "queued_input"
-_QUEUED_LEAVE_TYPES = frozenset({"queued_committed", "queued_retracted"})
-
-
-class CodexQueueSignalKind(UpperCaseStrEnum):
-    """The queue-ledger transitions the codex tracker acts on: a message entering the
-    queue, and a message leaving it (whether committed or retracted -- both resolve the
-    same entry by id)."""
-
-    ENQUEUE = auto()
-    LEAVE = auto()
-
-
-class CodexQueueSignal(FrozenModel):
-    """One recognized codex queue-ledger transition from a raw sidecar line."""
-
-    kind: CodexQueueSignalKind = Field(description="Whether this line parked a message or drained one")
-    queued_id: str = Field(description="The ledger's stable id; the join key for resolution")
-    # Carried only for ENQUEUE (used to add the entry); empty for a LEAVE.
-    content: str = Field(default="", description="Enqueued message text; empty for a LEAVE")
-    timestamp: str = Field(default="", description="Enqueue timestamp; empty for a LEAVE")
-
-
-def parse_codex_queue_signals(line: str) -> CodexQueueSignal | None:
-    """Recognize one ``queued_input.jsonl`` line as a queue-ledger transition, or None.
-
-    ENQUEUE for a non-blank ``queued_input``; LEAVE for a ``queued_committed`` /
-    ``queued_retracted``; None for anything else (a malformed line, a blank enqueue, or a
-    record missing its ``queued_id``). Because resolution is by ``queued_id``, skipping a
-    blank enqueue is harmless -- its later leave record resolves an id that was never
-    added, a no-op.
-    """
-    line = line.strip()
-    if not line:
-        return None
-    try:
-        raw = json.loads(line)
-    except json.JSONDecodeError as e:
-        # A complete but malformed ledger line means on-disk corruption worth
-        # surfacing (the watcher only ever hands whole lines here), not routine input.
-        logger.warning("codex watcher: skipping non-JSON queued-input line: {}", e)
-        return None
-    if not isinstance(raw, dict):
-        return None
-    queued_id = raw.get("queued_id")
-    if not isinstance(queued_id, str) or not queued_id:
-        return None
-    record_type = raw.get("type")
-    if record_type == _QUEUED_INPUT_TYPE:
-        content = raw.get("content")
-        if not isinstance(content, str) or not content.strip():
-            return None
-        timestamp = raw.get("timestamp")
-        return CodexQueueSignal(
-            kind=CodexQueueSignalKind.ENQUEUE,
-            queued_id=queued_id,
-            content=content,
-            timestamp=timestamp if isinstance(timestamp, str) else "",
-        )
-    if record_type in _QUEUED_LEAVE_TYPES:
-        return CodexQueueSignal(kind=CodexQueueSignalKind.LEAVE, queued_id=queued_id)
-    return None
-
-
 def parse_lines(
     record: dict[str, Any],
     line_index: int,

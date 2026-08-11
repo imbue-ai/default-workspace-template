@@ -14,11 +14,13 @@ without ever starting the agent manager.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import socket
 import sys
 import threading
 import time
+from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Sequence
 from contextlib import closing
@@ -39,6 +41,7 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import RestartProgress
+from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -50,6 +53,26 @@ from imbue.system_interface.wsgi import make_threaded_server
 # this binary explicitly via ``executable_path`` (see the
 # ``browser_type_launch_args`` fixture override in ``conftest.py``).
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
+
+
+@contextmanager
+def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
+    """Hold mngr's per-agent ``message.lock`` for the duration of the block (blocking acquire).
+
+    A test-only helper: the conservation storms stage a completed in-flight send by taking the
+    same exclusive flock mngr's send holds (``BaseAgent._message_lock`` -- same filename, same
+    agent state dir) so a stop/flush executor under test contends with it exactly as it would in
+    production. Nothing in production takes this blocking lock (the executors use the bounded
+    ``try_hold_message_lock``), which is why it lives here rather than in the harness code.
+    """
+    lock_path = agent_state_dir / MESSAGE_LOCK_FILENAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def is_e2e_browser_installed() -> bool:

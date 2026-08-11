@@ -1,32 +1,12 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // Mithril is mocked to a no-op redraw -- these tests exercise the pure client
 // state machine, not rendering.
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 
-import {
-  addOutgoing,
-  dropOutgoing,
-  getFlushFreeze,
-  getOutgoingMessages,
-  hasPendingSends,
-  noteBackendArrivals,
-  registerPendingSend,
-  releaseFlushFreeze,
-  resolveOutgoing,
-  startFlushFreeze,
-} from "./OutgoingMessages";
-
-const QM = (queued_id: string, content: string) => ({ queued_id, content, timestamp: "t" });
+import { addOutgoing, dropOutgoing, getOutgoingMessages, noteBackendArrivals } from "./OutgoingMessages";
 
 describe("OutgoingMessages", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("adds a sending bubble and preserves send order", () => {
     const agent = `a-${Math.random()}`;
     addOutgoing(agent, "first");
@@ -34,7 +14,7 @@ describe("OutgoingMessages", () => {
     expect(getOutgoingMessages(agent).map((o) => o.content)).toEqual(["first", "second"]);
   });
 
-  it("drops the oldest bubble when a backend arrival lands (no overlap)", () => {
+  it("drops the oldest bubble when a backend arrival lands (real first, then remove)", () => {
     const agent = `a-${Math.random()}`;
     addOutgoing(agent, "first");
     addOutgoing(agent, "second");
@@ -68,72 +48,5 @@ describe("OutgoingMessages", () => {
     const id = addOutgoing(agent, "hello");
     dropOutgoing(agent, id);
     expect(getOutgoingMessages(agent)).toHaveLength(0);
-  });
-
-  it("sweeps a delivered bubble via the fallback if no arrival is ever observed", () => {
-    const agent = `a-${Math.random()}`;
-    const id = addOutgoing(agent, "hello");
-    resolveOutgoing(agent, id); // POST resolved, arms the anti-strand fallback
-    expect(getOutgoingMessages(agent)).toHaveLength(1);
-    vi.advanceTimersByTime(7000);
-    expect(getOutgoingMessages(agent)).toHaveLength(0);
-  });
-
-  it("holds a shoulder-tap freeze and releases it on the next backend arrival", () => {
-    const agent = `a-${Math.random()}`;
-    startFlushFreeze(agent, [QM("q1", "one"), QM("q2", "two")]);
-    expect(getFlushFreeze(agent)?.messages.map((m) => m.content)).toEqual(["one", "two"]);
-
-    // A genuinely-new arrival (the resent message landing) releases the hold.
-    noteBackendArrivals(agent, ["resent-1"]);
-    expect(getFlushFreeze(agent)).toBeUndefined();
-  });
-
-  it("does not release the freeze on an already-seen arrival id", () => {
-    const agent = `a-${Math.random()}`;
-    noteBackendArrivals(agent, ["dup"]); // seen before the freeze exists
-    startFlushFreeze(agent, [QM("q1", "one")]);
-    noteBackendArrivals(agent, ["dup"]); // already seen -> no release
-    expect(getFlushFreeze(agent)).toBeDefined();
-    noteBackendArrivals(agent, ["fresh"]); // a new one releases
-    expect(getFlushFreeze(agent)).toBeUndefined();
-  });
-
-  it("releases the freeze via the cap if no arrival is ever observed", () => {
-    const agent = `a-${Math.random()}`;
-    startFlushFreeze(agent, [QM("q1", "one")]);
-    expect(getFlushFreeze(agent)).toBeDefined();
-    vi.advanceTimersByTime(21000);
-    expect(getFlushFreeze(agent)).toBeUndefined();
-  });
-
-  it("releaseFlushFreeze drops the hold (the flush-failure path)", () => {
-    const agent = `a-${Math.random()}`;
-    startFlushFreeze(agent, [QM("q1", "one")]);
-    releaseFlushFreeze(agent);
-    expect(getFlushFreeze(agent)).toBeUndefined();
-  });
-});
-
-describe("OutgoingMessages pending-send registry", () => {
-  it("reports a send in flight and clears it on settle", async () => {
-    const agent = `a-${Math.random()}`;
-    let resolve: () => void = () => {};
-    const send = new Promise<void>((r) => (resolve = r));
-    registerPendingSend(agent, send);
-    expect(hasPendingSends(agent)).toBe(true);
-    resolve();
-    await send;
-    await Promise.resolve(); // let the self-removing .then run
-    expect(hasPendingSends(agent)).toBe(false);
-  });
-
-  it("clears a send from the registry even when it fails", async () => {
-    const agent = `a-${Math.random()}`;
-    const send = Promise.reject(new Error("nope"));
-    registerPendingSend(agent, send);
-    await send.catch(() => {});
-    await Promise.resolve();
-    expect(hasPendingSends(agent)).toBe(false);
   });
 });

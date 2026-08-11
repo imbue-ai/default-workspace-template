@@ -121,3 +121,56 @@ no-op (nothing was queued, or no turn was running) instead of holding it to the 
 - Fixed: interrupting claude while a tool was running left a phantom "[Request
   interrupted by user for tool use]" bubble in the chat. The transcript parser now
   suppresses that mid-tool interrupt sentinel alongside the plain one.
+
+- The stop button now returns an in-flight message caught mid-send to the composer
+  instead of losing it. Every message carries a stable send-time id, and the backend
+  now tracks a "Sending" state (accepted, in flight, not yet committed or queued) on
+  the claude watcher for the duration of the send. When a stop fires while a send is
+  still in flight -- the message lock held past the bounded wait -- claude's interrupt
+  now folds that not-yet-committed message into the returned block alongside the queued
+  messages, in send order, on every interrupt branch (the empty-queue chord path used to
+  return nothing). A send that has already committed or queued is left as-is (reconciled
+  per id), so a delivered message is never double-returned.
+
+- The chat composer is now dumb about message state except for the one optimistic
+  "Sending..." bubble it is allowed to paint the instant a message is POSTed. Its
+  removal is backend-driven and ordered: the bubble drops only once the message's real
+  representation (its queued chip or its committed transcript turn) has appeared, real
+  first, so there is never a gap. Removed the frontend reconstruction that used to prop
+  this up: the 6-second anti-strand fallback timer, the in-flight send registry, and the
+  shoulder-tap "Sending queued messages..." freeze. The queued group now mirrors the
+  backend snapshot directly (no local hold or blip cover-up), and the shoulder-tap button
+  greys only while its own request is in flight -- whether the tap is otherwise available
+  is a backend decision, no longer guessed from a frontend promise set.
+
+- The claude "Shoulder tap" now takes its refresh-first queue read under the same
+  per-agent message lock a send holds -- the discipline codex and pi already use. If a
+  message send is still in flight past the bounded wait, the tap is refused with an
+  explicit, retryable "a message send is in flight; try again" instead of reading an
+  empty queue and quietly doing nothing, which used to let a tap racing a not-yet-parked
+  send miss that message. Backend only: the composer stops guessing tap availability from
+  its own promise set and simply surfaces the backend's refusal.
+
+- Fixed a brief double-show when a queued claude message commits: the chat used to
+  broadcast the committed transcript turn before removing the queued chip, so for one
+  frame the same message could appear as both a chip and a turn. The claude watcher now
+  emits the queue update (chip removal) BEFORE the transcript turn within the same poll,
+  so a message leaving the queue always vanishes as a chip first and only then appears as
+  a turn.
+
+- The claude stop button now clears the "Thinking..." indicator immediately on a
+  confirmed native interrupt. On the empty-queue chord path it now runs the same direct
+  activity-settle broadcast the restart path uses, in addition to clearing the on-disk
+  turn marker, so the dot dies at once instead of lingering until an indirect re-probe
+  catches up.
+
+- Added an end-to-end conservation check for claude's message lifecycle. It drives real
+  send, queue, shoulder-tap, and interrupt operations in seeded, randomized interleavings
+  against the real session watcher and stop/flush executors, and after every step verifies
+  that each message is in exactly one live state (Delivered, Queued, Sending, or Returned),
+  that nothing is lost or shown in two states at once, that the queue and returned messages
+  keep send order, that a message leaving the queue removes its chip before its turn appears,
+  and that the "Sending..." record is only cleared once the real state is visible. Interrupt
+  fired mid-flush -- with a partially committed queue and with a still-in-flight send -- is a
+  covered case. The dead-in-production blocking message-lock helper moved out of the harness
+  code into the shared test utilities.

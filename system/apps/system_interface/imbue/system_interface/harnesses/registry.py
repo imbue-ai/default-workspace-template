@@ -28,10 +28,8 @@ from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
-from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
-from imbue.system_interface.harnesses.codex.model import CodexInterruptToComposer
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -59,7 +57,11 @@ class HarnessSpec(FrozenModel):
 
     name: HarnessType
     watcher_class: type[AgentSessionWatcher]
-    tracker_class: type[HarnessActivityTracker]
+    # The transcript-derived activity tracker. Optional: a harness whose activity is driven
+    # directly by its backend (codex, off the app-server's turn lifecycle) has NO tracker and
+    # leaves this None. Only the transcript-inferring harnesses (claude, pi -- no turn
+    # boundaries) register one. ``build_tracker`` is only called for a harness that has one.
+    tracker_class: type[HarnessActivityTracker] | None = None
     # The model resolver class -- a true peer of watcher_class/tracker_class, so it
     # sits flat here and AgentManager calls ``.build(agent_info)`` on it the same way.
     resolver_class: type[HarnessModelResolver]
@@ -101,7 +103,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
         watcher_class=CodexSessionWatcher,
-        tracker_class=CodexActivityTracker,
+        # No tracker: codex's activity dot is driven directly by its live ledger off the
+        # app-server turn lifecycle (turn/started..turn/completed, contract A6), not inferred
+        # from the transcript. So tracker_class stays None (the default).
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
@@ -112,10 +116,10 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 SpecialEventKind.TURN_ABORTED,
             }
         ),
-        # codex interrupts natively via a retract control line on its shoulder-tap channel (the
-        # patched binary aborts the live turn and discards its parked steers), so it overrides the
-        # base restart-drain rather than SIGKILL-relaunching.
-        interrupt_to_composer_class=CodexInterruptToComposer,
+        # codex's stop button is handled directly in the drain-to-composer endpoint via its live
+        # ledger (``ledger.interrupt()`` -- one ``turn/interrupt`` + a per-id settle that returns
+        # every non-committed message to the composer in send order), so it never reaches this
+        # registered implementation; the default is inert for codex.
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -145,9 +149,20 @@ def build_watcher(agent_info: AgentInfo, on_events: OnEventsCallback) -> AgentSe
     return get_harness_spec(agent_info.harness).watcher_class.build(agent_info, on_events)
 
 
+class HarnessHasNoTrackerError(RuntimeError):
+    """A transcript tracker was requested for a harness whose activity is backend-driven.
+
+    Codex has no tracker (its dot comes from the live ledger); asking for one is a caller bug --
+    ``agent_manager`` only builds trackers for the transcript-inferring harnesses.
+    """
+
+
 def build_tracker(harness: HarnessType) -> HarnessActivityTracker:
-    """Build the activity tracker for ``harness``."""
-    return get_harness_spec(harness).tracker_class.build()
+    """Build the activity tracker for ``harness``. Only valid for a harness that has one."""
+    tracker_class = get_harness_spec(harness).tracker_class
+    if tracker_class is None:
+        raise HarnessHasNoTrackerError(f"harness {harness} has no activity tracker (its activity is backend-driven)")
+    return tracker_class.build()
 
 
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:
