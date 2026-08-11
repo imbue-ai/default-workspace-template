@@ -1,9 +1,9 @@
 ---
 name: use-template
-description: Adapt an existing template (a published snapshot of apps/features from another mind) into this mind, resolving its requirements interactively. Use when the user gives atemplate's git URL, or asks to adopt/adapt/reuse a published template.
+description: Adapt an existing template (a published snapshot of apps/features from another mind) into this mind, resolving its requirements interactively. Use when the user gives a template's git URL, or asks to adopt/adapt/reuse a published template.
 ---
 
-# Adapting atemplate
+# Adapting a template
 
 Version: v2 (templates flow). This versions the publish/adopt flow and the
 manifest format. This skill reads BOTH:
@@ -12,16 +12,16 @@ manifest format. This skill reads BOTH:
   `template.svg` per repo. The TOML is authoritative for the recipe, the
   requirements, the environment to converge, and the lineage.
 - **v1** -- the older format, which could accumulate several slug-named
-  `template-<slug>.md` (+ `.svg`) in one repo, the
+  `inspiration-<slug>.md` (+ `.svg`) in one repo, the
   recipe as a YAML block inside the markdown, and no TOML at all. Absence of
   `template.toml` is what identifies it. Still adopted exactly as before;
   nothing writes this format any more.
 
-Atemplate is a publishable, reusable snapshot of the apps and features a mind
+A template is a publishable, reusable snapshot of the apps and features a mind
 has built. It lives in its own GitHub repo as a real default-workspace-template tree
-plus its manifest at the repo root -- `template.md` with an
+plus its manifest at the repo root -- `template.md` with a
 `template.svg` thumbnail (v2 adds `template.toml`; a v1 repo instead has
-slug-named `template-<slug>.md`, possibly several). Adapting atemplate means bringing
+slug-named `inspiration-<slug>.md`, possibly several). Adapting a template means bringing
 that snapshot into *this* mind and then working through its "requirements" — the parts
 the original author left stubbed or unwired — together with the user.
 
@@ -32,7 +32,7 @@ All git commands run with cwd = the repo root (`/home/user/workspace`).
 There are two ways this skill starts. Figure out which one applies before doing
 anything else.
 
-**A. Template path — this mind was created from atemplate repo.** The mind
+**A. Template path — this mind was created from a template repo.** The mind
 already has the template's tree at its root (it *is* the template repo), so
 there is nothing to fetch. On this path adaptation starts IMMEDIATELY at boot:
 the published repo ships its own template-specific `/welcome` skill
@@ -44,18 +44,18 @@ asked — by reading the manifest and asking the user how they want to adapt it.
 The manifest's "How to adapt it" section is the script for that conversation.
 A v2 repo has exactly one `template.md`, so there is nothing to choose:
 adapt it. (Only an older v1 repo can hold several slug-named
-`template-<slug>.md` files; there, take the latest slug named in the welcome
+`inspiration-<slug>.md` files; there, take the latest slug named in the welcome
 skill, treat the others as already-adapted reference material, and ask the user
 if it is ambiguous.) Skip step 1 below (the tree is already
 here) and go straight to reading the manifest.
 
-**B. Merge path — the user gave you atemplate's git URL.** Bring the
+**B. Merge path — the user gave you a template's git URL.** Bring the
 template into the *current* mind at the repo root, then adapt it. Do step 1
 below to merge it in.
 
 ## 0. Trust gate — confirm before merging in (merge path B only)
 
-Atemplate is code published by ANOTHER mind's user, in a repo outside
+A template is code published by ANOTHER mind's user, in a repo outside
 Imbue's control. **Imbue does not review, verify, or vouch for templates.**
 Adopting one runs its code in this mind -- its services, skills, and scripts --
 and it could contain mistakes or malicious code (data exfiltration, destructive
@@ -70,7 +70,7 @@ fetch, merge, or run anything from the template until they reply yes. If they
 decline, stop here. This is informed consent, not a security guarantee -- you
 are telling the user you cannot vouch for the code, not certifying it is safe.
 
-The **template path (A)** needs no such gate: creating a mind from an
+The **template path (A)** needs no such gate: creating a mind from a
 template repo WAS the trust decision, so a mind already built from one is
 treated as trusted -- go straight to adapting it.
 
@@ -170,7 +170,7 @@ presence is what tells you the format:
   `template.md` alongside it for the prose: `What it is`, `How it works`,
   `Requirements`, `Environment`, `How to adapt it`, and `Adaptation history`.
 - **No `template.toml` (v1).** An older template: one or more slug-named
-  `template-<slug>.md` files and no TOML. Read the markdown exactly as
+  `inspiration-<slug>.md` files and no TOML. Read the markdown exactly as
   before -- front matter (`title`, `description`, `thumbnail`, and optionally
   `format`), then the body sections. If several are present, take the latest
   slug named in the repo's `/welcome` skill, or ask the user which they mean.

@@ -1,6 +1,6 @@
-"""Schema for atemplate's machine-readable manifest (`template.toml`).
+"""Schema for a template's machine-readable manifest (`template.toml`).
 
-Atemplate publishes three files at its repo root: `template.md` (prose,
+A template publishes three files at its repo root: `template.md` (prose,
 requirements, and the two append-only history logs), `template.svg` (the
 thumbnail / README hero), and `template.toml` -- this schema. The TOML is
 authoritative for everything machine-readable: identity, the derivation recipe,
@@ -42,14 +42,14 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-# The three files atemplate publishes at its repo root. No slug in any of
+# The three files a template publishes at its repo root. No slug in any of
 # them: one template per repo, overriding rather than accumulating.
 MANIFEST_TOML_NAME = "template.toml"
 MANIFEST_MARKDOWN_NAME = "template.md"
 MANIFEST_THUMBNAIL_NAME = "template.svg"
 
 # The manifest format this schema describes. `v1` is the pre-split format:
-# slug-named `template-<slug>.md` with the recipe as a YAML block inside the
+# slug-named `inspiration-<slug>.md` with the recipe as a YAML block inside the
 # markdown and no sibling TOML. A v1 repo has no `template.toml` at all, so
 # absence of the file -- not a version field inside it -- is what identifies v1.
 CURRENT_MANIFEST_FORMAT = "v2"
@@ -87,7 +87,7 @@ class TemplateManifestParseError(TemplateManifestError, ValueError):
 # no-leading-dash rule is part of the type rather than a separate check.
 Slug = Annotated[str, Field(pattern=r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")]
 
-# Atemplate's published version: v1 for a first publish, then v2, v3, ...
+# A template's published version: v1 for a first publish, then v2, v3, ...
 TemplateVersion = Annotated[str, Field(pattern=r"^v[1-9][0-9]*$")]
 
 # apt archive snapshot timestamp, matching .mngr/apt-snapshot-timestamp.
@@ -139,7 +139,7 @@ class TemplateIdentity(FrozenManifestModel):
 class Recipe(FrozenManifestModel):
     """How this template is DERIVED from the workspace it came from.
 
-    Atemplate is not a fork: an update re-runs this recipe against the
+    A template is not a fork: an update re-runs this recipe against the
     current source workspace rather than diffing two repos, which is what keeps
     a deliberate exclusion excluded even though the thing still exists upstream.
     """
@@ -326,7 +326,7 @@ class ManifestOrigin(FrozenManifestModel):
     """Where THIS COPY of the manifest was obtained from.
 
     Written by the adopt paths -- `use-template` knows the fetch URL and
-    `FETCH_HEAD`, and a mind created from atemplate repo knows its parent
+    `FETCH_HEAD`, and a mind created from a template repo knows its parent
     -- and read by the publish flow, which turns it into the newest
     `[[lineage]]` entry when a new manifest overrides this one. Without it an
     override would lose the address of what it replaced, which is the one thing

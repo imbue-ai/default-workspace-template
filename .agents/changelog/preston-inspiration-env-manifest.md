@@ -1,7 +1,7 @@
 Templates now declare what they need from the environment, and a published
 repo holds exactly one of them.
 
-Atemplate publishes `template.md`, `template.toml`, and
+A template publishes `template.md`, `template.toml`, and
 `template.svg` -- no slug in any filename. Publishing or adopting one
 OVERRIDES the previous manifest instead of piling up beside it; what survives
 is a lineage chain recording each predecessor's repo URL and the exact commit
@@ -12,7 +12,7 @@ The new `template.toml` is the machine-readable half: the derivation recipe
 (moved out of the markdown, where it was the last YAML in the repo), the
 structured prerequisites, the templates this one was built on, and a new
 `[environment]` section declaring the apt packages, npm globals, uv tools,
-cargo crates, and `env.d` units the code needs. Adopting atemplate
+cargo crates, and `env.d` units the code needs. Adopting a template
 converges those at the ADOPTING mind's own pinned apt snapshot timestamp, so
 versions come out consistent with the rest of that environment; a package that
 cannot be installed says so, and says whether an upgrade would fix it.
@@ -42,7 +42,7 @@ actually snapshots it into. It now searches the sibling copy first and then
 walks ancestors. Caught by running the flow in a real workspace container --
 the unit tests passed because they happened to run from a deeply-nested path.
 
-When publishing atemplate, the agent now renders the generated README into
+When publishing a template, the agent now renders the generated README into
 a preview tab and asks you whether it reads like a good description of what you
 built -- before anything is pushed. If it does not, it rewrites and shows you
 again. You review the page as a page, not as raw markdown in chat.
@@ -62,7 +62,7 @@ the same went for the generated welcome skill in the published template,
 which would have failed to load at all. Both are now emitted as quoted YAML
 scalars, and the skills say to do the same for any hand-edit.
 
-Adopting atemplate installs what it declares with ordinary commands rather
+Adopting a template installs what it declares with ordinary commands rather
 than a special convergence step. The workspace's apt sources are already pinned,
 so bare package names resolve at your snapshot rather than the publisher's, and
 env-converge already captures whatever gets installed -- so it lands in the

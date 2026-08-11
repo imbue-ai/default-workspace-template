@@ -49,7 +49,7 @@ set -euo pipefail
 # was superseded), the recipe and requirements moved into the TOML, an
 # [environment] declaration, and Holes + Prerequisites merged into one
 # Requirements list whose entries carry their own kind. v1 is the
-# original: slug-named template-<slug>.md with a YAML recipe block inside it
+# original: slug-named inspiration-<slug>.md with a YAML recipe block inside it
 # and no TOML at all. Adopters still read v1 -- absence of template.toml is
 # what identifies it -- but nothing writes v1 any more.
 TEMPLATE_FLOW_VERSION="v2"
@@ -608,7 +608,7 @@ description: ${welcome_description_yaml}
 
 # Welcome the user (template: ${TITLE})
 
-This mind was created from atemplate -- a published snapshot of apps
+This mind was created from a template -- a published snapshot of apps
 another mind built:
 
 - Title: ${TITLE}
@@ -711,9 +711,9 @@ machine-readable half (recipe, requirements, and the environment it needs
 installed) in [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}).
 README_EOF
 
-# --- 8.6 remove the version history so it never ships in atemplate ------
+# --- 8.6 remove the version history so it never ships in a template ------
 
-# docs/VERSION_HISTORY.md is WORKSPACE-only, never part of atemplate: it records
+# docs/VERSION_HISTORY.md is WORKSPACE-only, never part of a template: it records
 # where a mind came from and every template it has published (slugs, repo
 # URLs, source commits). None of that belongs in a published template -- and
 # after an update-self, BASE_REF's tree can carry an accumulated copy of it --

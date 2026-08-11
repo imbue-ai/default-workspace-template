@@ -260,7 +260,7 @@ def test_a_unit_outside_the_env_d_directory_is_flagged(tmp_path: Path) -> None:
 
 
 def test_a_unit_ordered_before_the_reserved_range_is_flagged(tmp_path: Path) -> None:
-    # Below 2000 atemplate's unit would interleave with the template's own
+    # Below 2000 a template's unit would interleave with the template's own
     # units, which is exactly the shared-ordering collision the convention exists
     # to prevent.
     manifest = _manifest_with_units(

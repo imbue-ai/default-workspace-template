@@ -3,14 +3,14 @@ name: publish-template
 description: Publish a clean, shareable snapshot of the apps/features this mind built to a new GitHub repo (an "template" another mind can adapt). Use when the user asks to publish, share, or export what they built as a reusable template.
 ---
 
-# Publish atemplate
+# Publish a template
 
 Version: v2 (templates flow). This versions the publish/adopt flow and the
 manifest format. v2 publishes ONE slug-free `template.md` + `template.toml`
 + `template.svg` per repo, overriding any previous manifest rather than
 accumulating beside it, with the machine-readable half (recipe, requirements,
 and the environment an adopter must install) in the TOML. v1 -- slug-named
-`template-<slug>.md` with a YAML recipe block inside it and no TOML -- is
+`inspiration-<slug>.md` with a YAML recipe block inside it and no TOML -- is
 still READ by the adopt paths, but nothing writes it any more.
 
 An "template" is a clean, shareable, **bootable** snapshot of something this
@@ -74,7 +74,7 @@ and then creates the repo and pushes -- directly from the worker's worktree.
 > §2, relaunch the worker, pick a different repo name) and retry the
 > documented flow from the failed step, or STOP and clearly tell the user what
 > failed, why, and that you did not publish -- never silently redefine what
-> "publishing atemplate" means.
+> "publishing a template" means.
 
 ## Shared conventions
 
@@ -176,8 +176,8 @@ Ask the user, in plain language. Never enumerate files at them:
 
 **If what they want to snapshot is not committed to git** -- an ephemeral chat
 behavior, the current conversation's history, runtime-only state, anything that
-lives only in memory or outside the repo tree -- it cannot go into atemplate
-as-is: atemplate must be reconstructable from the committed tree, so a
+lives only in memory or outside the repo tree -- it cannot go into a template
+as-is: a template must be reconstructable from the committed tree, so a
 snapshot that omits it would boot without the very thing that made it worth
 sharing. Recognize this and, before going further, suggest turning it into
 something committable first -- most often by crystallizing it into a skill (this
@@ -652,7 +652,7 @@ you still need for the push.
 in the worker's worktree: clean base + overlay + secret scan + the manifest
 pair (`template.md` prose skeleton and `template.toml`, the latter
 carrying forward the lineage of whatever manifest it overrides) + placeholder
-thumbnail + regenerated README + atemplate-specific `/welcome` written
+thumbnail + regenerated README + a template-specific `/welcome` written
 into the snapshot + boot smoke-check + manifest validation + a single
 commit. It communicates purely via its exit code -- `0` on success (the
 assembled commit is on `mngr/<slug>`), non-zero otherwise (see §5). It prints
@@ -990,7 +990,7 @@ JSON built from variables, never string-interpolated shell.
 
 **Step 1b -- lock down the collaboration surface (unconditional -- never ask
 the user).** Immediately after the repo exists, close every surface where a
-non-collaborator could open or inject content, so atemplate can never
+non-collaborator could open or inject content, so a template can never
 become a public forum on the author's account. Do it in ONE call to the "Update
 a repository" endpoint (`PATCH /repos/<owner>/<repo>`), NOT the create call above
 -- that is why this is a follow-up call. Set, unconditionally (public or
@@ -1074,7 +1074,7 @@ template)** -- a 3-way merge against `BASE_REF` brings in exactly this
 snapshot's changes and nothing else. An orphan single-commit repo has NO common
 ancestor with anything, so adopting it degenerates from "merge just the
 changes" into a whole-tree conflict (or a blind overwrite). Keeping the base
-history is what makes atemplate composable with other templates rather
+history is what makes a template composable with other templates rather
 than a dead-end snapshot.
 
 The worker's branch accumulates intermediate commits (the
@@ -1255,7 +1255,7 @@ report the blocker; do not improvise a substitute publish.
 
 ## 9. Override and lineage
 
-A repo holds exactly ONE template. Publishing from a mind that already has an
+A repo holds exactly ONE template. Publishing from a mind that already has a
 `template.md` / `.toml` / `.svg` **overrides** them -- the new manifest
 replaces the old rather than landing beside it, and the generated `/welcome`
 targets the newly-published slug.
