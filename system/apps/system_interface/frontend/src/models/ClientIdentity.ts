@@ -11,6 +11,7 @@
 
 const CLIENT_ID_STORAGE_KEY = "si-client-id";
 const ACTIVE_LAYOUT_STORAGE_KEY = "si-active-layout-slug";
+const ACTIVE_PROJECT_STORAGE_KEY = "si-active-project-id";
 
 export type DeviceKind = "mobile" | "desktop";
 
@@ -65,4 +66,23 @@ export function getActiveLayoutSlug(): string {
 export function setActiveLayoutSlug(slug: string): void {
   activeLayoutSlug = slug;
   localStorage.setItem(ACTIVE_LAYOUT_STORAGE_KEY, slug);
+}
+
+// The active project id, held and mirrored exactly like the layout slug above:
+// module state is the source of truth while the page lives, localStorage
+// restores the same project on this browser's next connect. Empty string means
+// "not chosen yet" (during startup, before the projects list has been fetched).
+let activeProjectId = "";
+
+export function getStoredProjectId(): string {
+  return localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY) ?? "";
+}
+
+export function getActiveProjectId(): string {
+  return activeProjectId;
+}
+
+export function setActiveProjectId(projectId: string): void {
+  activeProjectId = projectId;
+  localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectId);
 }

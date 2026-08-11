@@ -131,6 +131,25 @@ type WsEvent =
       layout_slug: string;
       display_name: string;
       target_client_id: string | null;
+    }
+  | {
+      // A project's content was saved (by any client). Clients mounted on that
+      // project (other than the saver) re-apply it; everyone re-lists.
+      type: "project_saved";
+      project_id: string;
+      saved_by_client_id: string;
+    }
+  | {
+      // A project was deleted; clients mounted on it switch to the fallback.
+      type: "project_deleted";
+      project_id: string;
+      fallback_id: string;
+    }
+  | {
+      // A project's display metadata (name / color / glyph) changed. The
+      // content is untouched, so consumers only re-list.
+      type: "project_updated";
+      project_id: string;
     };
 
 /** Layout registry / sync events pushed over the WebSocket. */
@@ -140,6 +159,19 @@ export type LayoutSyncEvent =
   | { kind: "load"; layoutSlug: string; displayName: string; targetClientId: string | null };
 
 export type LayoutSyncListener = (event: LayoutSyncEvent) => void;
+
+/**
+ * Project registry / sync events pushed over the WebSocket. The mirror of
+ * ``LayoutSyncEvent`` for projects: ``saved`` carries the writer's client id so
+ * the originator can skip its own echo, ``deleted`` carries the id everyone
+ * mounted on it should fall back to, and ``updated`` is display metadata only.
+ */
+export type ProjectSyncEvent =
+  | { kind: "saved"; projectId: string; savedByClientId: string }
+  | { kind: "deleted"; projectId: string; fallbackId: string }
+  | { kind: "updated"; projectId: string };
+
+export type ProjectSyncListener = (event: ProjectSyncEvent) => void;
 
 export type LayoutOpListener = (event: LayoutOpEvent) => void;
 export type AgentsUpdatedListener = (agents: AgentState[]) => void;
@@ -165,6 +197,7 @@ let apps: AppEntry[] = [];
 let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
+let projectSyncListeners: ProjectSyncListener[] = [];
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let terminalSessionListeners: TerminalSessionListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
@@ -331,6 +364,32 @@ function handleEvent(event: WsEvent): void {
         });
       }
       break;
+
+    case "project_saved":
+      for (const listener of projectSyncListeners) {
+        listener({
+          kind: "saved",
+          projectId: event.project_id,
+          savedByClientId: event.saved_by_client_id,
+        });
+      }
+      break;
+
+    case "project_deleted":
+      for (const listener of projectSyncListeners) {
+        listener({
+          kind: "deleted",
+          projectId: event.project_id,
+          fallbackId: event.fallback_id,
+        });
+      }
+      break;
+
+    case "project_updated":
+      for (const listener of projectSyncListeners) {
+        listener({ kind: "updated", projectId: event.project_id });
+      }
+      break;
   }
 }
 
@@ -429,6 +488,14 @@ export function addLayoutSyncListener(listener: LayoutSyncListener): void {
 
 export function removeLayoutSyncListener(listener: LayoutSyncListener): void {
   layoutSyncListeners = layoutSyncListeners.filter((l) => l !== listener);
+}
+
+export function addProjectSyncListener(listener: ProjectSyncListener): void {
+  projectSyncListeners.push(listener);
+}
+
+export function removeProjectSyncListener(listener: ProjectSyncListener): void {
+  projectSyncListeners = projectSyncListeners.filter((l) => l !== listener);
 }
 
 export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {

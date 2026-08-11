@@ -1183,6 +1183,35 @@ def test_layout_broadcast_mutating_op_unknown_layout_is_404(app: Flask) -> None:
     )
     assert response.status_code == 404
     assert "known layouts" in response.get_json()["detail"]
+    # Projects are addressable targets too, so the miss lists them as well.
+    assert "known projects" in response.get_json()["detail"]
+
+
+def test_layout_broadcast_mutating_op_targets_a_project(app: Flask) -> None:
+    """``--layout <project name>`` reaches the clients that have that project active.
+
+    A connected client reports its active *project* as its active layout (that
+    project is the arrangement it autosaves into), so a name that is not one of
+    the named layouts resolves through the projects registry instead.
+    """
+    matching_queue = _register_fake_client(app, "client-on-everything", "everything")
+    other_queue = _register_fake_client(app, "client-on-desktop", "desktop")
+
+    client = app.test_client()
+    response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "open", "args": {"ref": "service:web", "layout": "Everything"}, "agent_id": "agent-42"},
+    )
+    assert response.status_code == 200
+
+    msg = _next_broadcast_message(matching_queue)
+    assert msg == {
+        "type": "layout_op",
+        "op": "open",
+        "args": {"ref": "service:web"},
+        "requester_agent_id": "agent-42",
+    }
+    assert other_queue.empty()
 
 
 def _isolated_client_activity_events_path() -> Path:
@@ -2128,3 +2157,197 @@ def test_browsers_passthrough_returns_503_when_backend_is_unreachable() -> None:
     response = test_client.get("/api/browsers")
     assert response.status_code == 503
     assert "unreachable" in response.get_json()["detail"]
+
+
+def test_list_projects_seeds_the_everything_project(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh workspace lists only Everything: empty, and already the active one."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.get("/api/projects")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert [project["project_id"] for project in body["projects"]] == ["everything"]
+    assert body["projects"][0]["name"] == "Everything"
+    assert body["projects"][0]["has_content"] is False
+    assert body["last_active_id"] == "everything"
+
+
+def test_create_project_slugifies_and_registers(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Create returns the new project and appends it to the registry."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    response = client.post("/api/projects", json={"name": "Data Pipeline", "color": "#3B82F6", "glyph": 6})
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "project_id": "data-pipeline",
+        "name": "Data Pipeline",
+        "color": "#3B82F6",
+        "glyph": 6,
+        "has_content": False,
+    }
+    list_response = client.get("/api/projects")
+    assert [project["project_id"] for project in list_response.get_json()["projects"]] == [
+        "everything",
+        "data-pipeline",
+    ]
+
+
+def test_create_project_rejects_conflicts_and_bad_metadata(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slug collision is a 409; an unusable name, color, or glyph is a 400."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    first = client.post("/api/projects", json={"name": "My Work", "color": "#3B82F6", "glyph": 1})
+    assert first.status_code == 200
+    conflict = client.post("/api/projects", json={"name": "my work", "color": "#3B82F6", "glyph": 2})
+    assert conflict.status_code == 409
+    assert "conflicts" in conflict.get_json()["detail"]
+
+    unusable_name = client.post("/api/projects", json={"name": "!!!", "color": "#3B82F6", "glyph": 1})
+    assert unusable_name.status_code == 400
+    bad_color = client.post("/api/projects", json={"name": "Fine", "color": "blue", "glyph": 1})
+    assert bad_color.status_code == 400
+    out_of_range_glyph = client.post("/api/projects", json={"name": "Fine", "color": "#3B82F6", "glyph": 10})
+    assert out_of_range_glyph.status_code == 400
+    missing_glyph = client.post("/api/projects", json={"name": "Fine", "color": "#3B82F6"})
+    assert missing_glyph.status_code == 400
+
+
+def test_get_empty_project_returns_null_content(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registered-but-never-saved project reports null content (fresh state)."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.get("/api/projects/everything")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"layout": None}
+
+
+def test_get_unknown_project_returns_404(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.get("/api/projects/nonexistent")
+
+    assert response.status_code == 404
+
+
+def test_autosave_and_get_project_round_trips(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    layout_data = {"dockview": {"panels": {}}, "panelParams": {"chat-1": {"panelType": "chat"}}}
+    save_response = client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "client-1"})
+    assert save_response.status_code == 200
+    assert save_response.get_json()["status"] == "ok"
+
+    get_response = client.get("/api/projects/everything")
+    assert get_response.status_code == 200
+    assert get_response.get_json()["layout"] == layout_data
+    assert (tmp_path / "agents" / "agent-123" / "workspace_layout" / "projects" / "everything.json").exists()
+
+
+def test_autosave_unknown_project_returns_404(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An autosave against a just-deleted project must not resurrect it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    response = client.post("/api/projects/gone", json={"layout": {}, "client_id": "client-1"})
+
+    assert response.status_code == 404
+
+
+def test_update_project_settings_keeps_id_and_content(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rename changes only the display metadata; the id still keys the content."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects", json={"name": "Alpha", "color": "#3B82F6", "glyph": 2}).status_code == 200
+    layout_data = {"dockview": {"panels": {}}, "panelParams": {}}
+    assert client.post("/api/projects/alpha", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+
+    response = client.post(
+        "/api/projects/alpha/settings", json={"name": "Renamed Alpha", "color": "#F0603A", "glyph": 7}
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "project_id": "alpha",
+        "name": "Renamed Alpha",
+        "color": "#F0603A",
+        "glyph": 7,
+        "has_content": True,
+    }
+    assert client.get("/api/projects/alpha").get_json()["layout"] == layout_data
+    unknown = client.post("/api/projects/gone/settings", json={"name": "Gone", "color": "#F0603A", "glyph": 0})
+    assert unknown.status_code == 404
+
+
+def test_delete_project_and_everything_guard(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting reports the fallback project; Everything itself is protected."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
+
+    delete_scratch = client.post("/api/projects/scratch/delete")
+    assert delete_scratch.status_code == 200
+    assert delete_scratch.get_json() == {"fallback_id": "everything"}
+
+    delete_everything = client.post("/api/projects/everything/delete")
+    assert delete_everything.status_code == 409
+
+    delete_unknown = client.post("/api/projects/scratch/delete")
+    assert delete_unknown.status_code == 404
+
+
+def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
+    """Create, autosave, settings, and delete each reach all connected clients."""
+    client_queue = _register_fake_client(app, "client-1", "desktop")
+    client = app.test_client()
+
+    assert client.post("/api/projects", json={"name": "Alpha", "color": "#3B82F6", "glyph": 2}).status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "project_updated",
+        "project_id": "alpha",
+        "name": "Alpha",
+        "color": "#3B82F6",
+        "glyph": 2,
+        "has_content": False,
+    }
+
+    assert client.post("/api/projects/alpha", json={"layout": {}, "client_id": "client-1"}).status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "project_saved",
+        "project_id": "alpha",
+        "saved_by_client_id": "client-1",
+    }
+
+    settings = client.post("/api/projects/alpha/settings", json={"name": "Alpha", "color": "#F0603A", "glyph": 4})
+    assert settings.status_code == 200
+    settings_message = _next_broadcast_message(client_queue)
+    assert settings_message["type"] == "project_updated"
+    assert settings_message["glyph"] == 4
+    assert settings_message["has_content"] is True
+
+    assert client.post("/api/projects/alpha/delete").status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "project_deleted",
+        "project_id": "alpha",
+        "fallback_id": "everything",
+    }

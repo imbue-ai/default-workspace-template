@@ -27,6 +27,7 @@ from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
+from imbue.system_interface import projects
 from imbue.system_interface import workspace_layouts
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
@@ -859,6 +860,202 @@ def _delete_named_layout_endpoint(slug: str) -> Response:
     return _json_response({"status": "ok", "fallback_layout_slug": fallback_slug})
 
 
+def _default_project_infos() -> list[dict[str, Any]]:
+    """The always-present Everything project, for dev/test setups with no layout dir.
+
+    Mirrors the entry ``projects.py`` seeds into a real registry; nothing is
+    persisted in that case, so the display metadata is inlined here rather
+    than read back from a file that will never exist.
+    """
+    return [
+        projects.ProjectInfo(
+            project_id=projects.EVERYTHING_PROJECT_ID,
+            name=projects.EVERYTHING_PROJECT_NAME,
+            color="#F0603A",
+            glyph=0,
+            has_content=False,
+        ).model_dump()
+    ]
+
+
+def _parse_project_metadata_body() -> tuple[str, str, int] | Response:
+    """Parse the ``{name, color, glyph}`` body shared by project create and settings.
+
+    Only shape is checked here; the value rules (usable name, ``#RRGGBB``
+    color, in-range glyph) belong to ``projects.py`` and surface as its own
+    errors, so the two callers map them to HTTP identically.
+    """
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    name = body.get("name")
+    color = body.get("color")
+    glyph = body.get("glyph")
+    if not isinstance(name, str) or not name.strip():
+        error = ErrorResponse(detail="'name' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    if not isinstance(color, str):
+        error = ErrorResponse(detail="'color' must be a '#RRGGBB' string")
+        return _json_response(error.model_dump(), status_code=400)
+    # ``bool`` is an ``int`` subclass, so reject it explicitly rather than
+    # letting ``true`` address the second glyph.
+    if not isinstance(glyph, int) or isinstance(glyph, bool):
+        error = ErrorResponse(detail="'glyph' must be an integer index into the glyph table")
+        return _json_response(error.model_dump(), status_code=400)
+    return name.strip(), color, glyph
+
+
+def _project_metadata_error_response(e: ValueError) -> Response:
+    """Map a rejected name / color / glyph onto a 400 with the module's own message."""
+    return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+
+
+def _project_not_found_response(project_id: str) -> Response:
+    error = ErrorResponse(detail=f"Project '{project_id}' not found")
+    return _json_response(error.model_dump(), status_code=404)
+
+
+def _list_projects_endpoint() -> Response:
+    """List every project plus the last-active project id."""
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        # No primary agent configured (dev/test): expose the Everything
+        # project so the frontend can still pick an active one; nothing persists.
+        return _json_response({"projects": _default_project_infos(), "last_active_id": projects.EVERYTHING_PROJECT_ID})
+    infos = projects.list_projects(layout_dir)
+    return _json_response(
+        {
+            "projects": [info.model_dump() for info in infos],
+            "last_active_id": projects.get_last_active_id(layout_dir),
+        }
+    )
+
+
+def _create_project_endpoint() -> Response:
+    """Register a new empty project from the posted display metadata.
+
+    The server owns slugification, so two names that shorten to the same id
+    are rejected rather than silently sharing one content file.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    parsed = _parse_project_metadata_body()
+    if isinstance(parsed, Response):
+        return parsed
+    name, color, glyph = parsed
+    try:
+        info = projects.create_project(layout_dir, name, color, glyph)
+    except (projects.ProjectNameError, projects.ProjectColorError, projects.ProjectGlyphError) as e:
+        return _project_metadata_error_response(e)
+    except projects.ProjectConflictError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    get_state().broadcaster.broadcast({"type": "project_updated", **info.model_dump()})
+    return _json_response(info.model_dump())
+
+
+def _get_project_endpoint(project_id: str) -> Response:
+    """Get one project's saved content (null when the project is still empty)."""
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"layout": None})
+    try:
+        content = projects.read_project_content(layout_dir, project_id)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    return _json_response({"layout": content})
+
+
+def _autosave_project_endpoint(project_id: str) -> Response:
+    """Persist the posted content to an existing project (the autosave path)."""
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    layout_content = body.get("layout")
+    client_id = str(body.get("client_id") or "")
+    if not isinstance(layout_content, dict):
+        error = ErrorResponse(detail="'layout' must be a JSON object")
+        return _json_response(error.model_dump(), status_code=400)
+    try:
+        projects.write_project_content(layout_dir, project_id, layout_content)
+    except projects.ProjectNotFoundError:
+        # The project was deleted while this client's autosave was in flight;
+        # the client hears about the deletion over the WebSocket.
+        return _project_not_found_response(project_id)
+    get_state().broadcaster.broadcast(
+        {"type": "project_saved", "project_id": project_id, "saved_by_client_id": client_id}
+    )
+    return _json_response({"status": "ok"})
+
+
+def _update_project_settings_endpoint(project_id: str) -> Response:
+    """Replace one project's display metadata, keeping its id and its content.
+
+    A rename never re-slugifies the id: the id keys the content file, and a
+    tab is "in" a project by living in that file.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    parsed = _parse_project_metadata_body()
+    if isinstance(parsed, Response):
+        return parsed
+    name, color, glyph = parsed
+    try:
+        info = projects.update_project(layout_dir, project_id, name, color, glyph)
+    except (projects.ProjectNameError, projects.ProjectColorError, projects.ProjectGlyphError) as e:
+        return _project_metadata_error_response(e)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    get_state().broadcaster.broadcast({"type": "project_updated", **info.model_dump()})
+    return _json_response(info.model_dump())
+
+
+def _delete_project_endpoint(project_id: str) -> Response:
+    """Delete a project; the Everything project is permanent and cannot be deleted."""
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    try:
+        fallback_id = projects.delete_project(layout_dir, project_id)
+    except projects.ProjectNotFoundError:
+        return _project_not_found_response(project_id)
+    except projects.EverythingProjectDeletionError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
+    get_state().broadcaster.broadcast(
+        {"type": "project_deleted", "project_id": project_id, "fallback_id": fallback_id}
+    )
+    return _json_response({"fallback_id": fallback_id})
+
+
+def _delete_project_panel_endpoint(panel_id: str) -> Response:
+    """Drop one panel from every project that holds it.
+
+    Destroying a tab tears down the agent, terminal, or browser behind it, so
+    the panel has to leave the projects that are not currently mounted too --
+    otherwise switching to one of them would restore a tab whose identity can
+    no longer be resolved. Clients that have an affected project open re-apply
+    it from the broadcast.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    changed_project_ids = projects.remove_panel_from_all_projects(layout_dir, panel_id)
+    if changed_project_ids:
+        get_state().broadcaster.broadcast(
+            {"type": "project_panel_removed", "panel_id": panel_id, "project_ids": changed_project_ids}
+        )
+    return _json_response({"project_ids": changed_project_ids})
+
+
 def _tmux_prefix() -> str:
     """The mngr session-name prefix; agent sessions carry it, terminals do not."""
     return os.environ.get("MNGR_PREFIX", "mngr-")
@@ -1494,6 +1691,52 @@ def _start_agent(agent_id: str) -> Response:
     return _json_response(StartAgentResponse(status="ok").model_dump())
 
 
+def _resolve_project_id_for_layout_arg(layout_dir: Path, requested: str) -> str | None:
+    """Resolve a layout op's target name against the *projects* registry.
+
+    A connected client reports its active *project* as its active layout --
+    that project is the arrangement the client autosaves into -- so a layout
+    op naming something that is not a registered named layout still addresses
+    a real target when it names a project. Returns None when the name matches
+    no project either, leaving the caller to report the miss.
+    """
+    try:
+        project_id = projects.slugify_project_name(requested)
+    except projects.ProjectNameError:
+        return None
+    if any(info.project_id == project_id for info in projects.list_projects(layout_dir)):
+        return project_id
+    return None
+
+
+def _layout_op_display_name(layout_dir: Path, slug: str) -> str:
+    """The human-readable name of whatever ``slug`` resolved to.
+
+    Same precedence as the content path below: a registered named layout
+    keeps its own display name, and anything else is a project id whose name
+    comes from the projects registry.
+    """
+    try:
+        return workspace_layouts.get_layout_display_name(layout_dir, slug)
+    except workspace_layouts.LayoutNotFoundError:
+        for info in projects.list_projects(layout_dir):
+            if info.project_id == slug:
+                return info.name
+        return slug
+
+
+def _layout_op_content_path(layout_dir: Path, slug: str) -> Path:
+    """The saved-content file a read op should inspect for ``slug``.
+
+    Mirrors the resolution precedence above: a registered named layout keeps
+    its own file, and anything else came from the projects registry and reads
+    that project's content instead.
+    """
+    if slug in {info.slug for info in workspace_layouts.list_layouts(layout_dir)}:
+        return workspace_layouts.layout_content_path(layout_dir, slug)
+    return projects.project_content_path(layout_dir, slug)
+
+
 def _resolve_requested_layout_slug(
     args_raw: dict[str, Any],
     layout_dir: Path | None,
@@ -1517,8 +1760,14 @@ def _resolve_requested_layout_slug(
         except workspace_layouts.LayoutNameError as e:
             return None, _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
         except workspace_layouts.LayoutNotFoundError:
+            project_id = _resolve_project_id_for_layout_arg(layout_dir, requested)
+            if project_id is not None:
+                return project_id, None
             known = ", ".join(info.display_name for info in workspace_layouts.list_layouts(layout_dir))
-            error = ErrorResponse(detail=f"Layout {requested!r} not found (known layouts: {known})")
+            known_projects = ", ".join(info.name for info in projects.list_projects(layout_dir))
+            error = ErrorResponse(
+                detail=f"Layout {requested!r} not found (known layouts: {known}; known projects: {known_projects})"
+            )
             return None, _json_response(error.model_dump(), status_code=404)
     if layout_dir is None:
         return None, None
@@ -1585,9 +1834,7 @@ def _layout_broadcast_endpoint() -> Response:
         if error_response is not None:
             return error_response
         layout_path = (
-            workspace_layouts.layout_content_path(layout_dir, slug)
-            if layout_dir is not None and slug is not None
-            else None
+            _layout_op_content_path(layout_dir, slug) if layout_dir is not None and slug is not None else None
         )
         if op == "list":
             entries = layout_list(
@@ -1636,7 +1883,7 @@ def _layout_broadcast_endpoint() -> Response:
             # resolves to a slug or an error response.
             error = ErrorResponse(detail="Failed to resolve the requested layout")
             return _json_response(error.model_dump(), status_code=500)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
+        display_name = _layout_op_display_name(layout_dir, slug)
         # Target the explicitly-named client, else the client that most
         # recently messaged the requesting agent, else every client.
         explicit_client = args_raw.get("client")
@@ -1835,6 +2082,24 @@ def create_application(state: SystemInterfaceState) -> Flask:
         endpoint="_autosave_named_layout",
     )
     application.add_url_rule("/api/layouts/<slug>/delete", view_func=_delete_named_layout_endpoint, methods=["POST"])
+    application.add_url_rule("/api/projects", view_func=_list_projects_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/projects", view_func=_create_project_endpoint, methods=["POST"], endpoint="_create_project"
+    )
+    application.add_url_rule("/api/projects/<project_id>", view_func=_get_project_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/projects/<project_id>",
+        view_func=_autosave_project_endpoint,
+        methods=["POST"],
+        endpoint="_autosave_project",
+    )
+    application.add_url_rule(
+        "/api/projects/<project_id>/settings", view_func=_update_project_settings_endpoint, methods=["POST"]
+    )
+    application.add_url_rule("/api/projects/<project_id>/delete", view_func=_delete_project_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/projects/panels/<panel_id>/delete", view_func=_delete_project_panel_endpoint, methods=["POST"]
+    )
     application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
@@ -1858,9 +2123,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     )
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
     application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
-    application.add_url_rule(
-        "/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"]
-    )
+    application.add_url_rule("/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"])
     claude_auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
