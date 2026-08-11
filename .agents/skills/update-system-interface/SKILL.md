@@ -272,10 +272,12 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Pre-flights a backend change** by booting the merged code on a throwaway port
   before touching the live service. If it can't boot, the live service is never
   restarted -- the UI never goes down.
-- **Reveals**: rebuilds the gitignored `static/` bundle and broadcasts a
-  `reload_system_interface` op so open browsers reload into the new assets
-  (frontend); restarts the services agent so the editable backend re-imports the
-  merged `.py` (backend).
+- **Reveals**: rebuilds the gitignored `static/` bundle (frontend); restarts the
+  services agent so the editable backend re-imports the merged `.py` (backend).
+- **Rebuilds the user's view** afterwards, via
+  `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
+  since the restart leaves the open page rendering what it had already fetched.
+  Best-effort: it never fails a reveal that landed.
 - **Verifies** the live service is healthy by polling its loopback endpoint.
 - **Auto-rolls-back on any failure**: restores the tree to `--rollback-to` as a
   forward revert commit, rebuilds/restarts from it, and re-confirms the UI is
