@@ -78,30 +78,68 @@ chrome plus every child chat iframe -- so the browser picks up the new hashed
 assets. This is distinct from `system/scripts/layout.py refresh`, which only reloads a
 single inner iframe/panel for arranging the workspace.
 
-## Named layouts
+## Projects
 
-The dockview state is persisted as *named layouts* -- one JSON file per
-layout under the primary agent's `workspace_layout/layouts/` directory,
-with a `layouts_meta.json` registry (display names + last-active slug).
-Two defaults, `desktop` and `mobile`, always exist as names; a layout
-with no saved content renders as the fresh welcome-chat state. A
-pre-existing single `layout.json` is migrated into `desktop` on first
-access.
+Tabs are grouped into *projects*. A project is a named set of tabs plus
+the arrangement they are in, so switching projects swaps the whole tab
+set. Membership is implicit -- a tab is in a project exactly when a
+panel for it exists in that project's saved content -- so there is no
+separate membership map to keep in sync.
 
-Each browser client picks its layout on first connect by user agent
-(mobile browsers get `mobile`, everything else `desktop`), remembers
-the choice in localStorage, and can switch via the "+" menu's
-"Save layout... / Load layout... / Delete layout..." dialogs. Autosaves
-target the client's active layout; when one client saves a layout,
-other clients with it active re-apply it live. The REST surface is
-`GET /api/layouts`, `GET|POST /api/layouts/<slug>`,
-`POST /api/layouts` (save-as, server-side slugification), and
-`POST /api/layouts/<slug>/delete` (the last layout cannot be deleted).
+Each project is one JSON file under the primary agent's
+`workspace_layout/projects/` directory, with a `projects_meta.json`
+registry (per-project name, color, and glyph, plus the last-active id).
+A project with no saved content renders as the fresh welcome-chat
+state. The `everything` project always exists and cannot be deleted:
+every new tab is appended to its stored content as well as the active
+project's, which is what makes it the unfiltered view while still
+letting it keep its own arrangement.
 
-Chat messages sent through the UI (and every layout switch) are logged
+Each browser client remembers its active project in localStorage
+(`si-active-project-id`) and reopens it on the next connect, falling
+back to `everything` and then to the first project when the stored one
+is gone. Autosaves target the active project; when one client saves,
+deletes, or restyles a project, clients with it open re-apply it live
+and a deletion moves them onto the fallback project. The REST surface
+is `GET /api/projects`, `POST /api/projects` (create, server-side
+slugification of the name into the id), `GET|POST /api/projects/<id>`
+(read and autosave), `POST /api/projects/<id>/settings`,
+`POST /api/projects/<id>/delete`, and
+`POST /api/projects/panels/<panel_id>/delete` (drop one panel from
+every project that holds it).
+
+The switcher sits at the left of a bar across the top of the workspace:
+the active project's squiggle -- one of the ten glyphs in
+`frontend/src/views/squiggles.ts` -- its name, and a menu of every
+project, plus "New project..." and a per-project settings dialog (name,
+color, glyph, and delete). Down the left edge is a 37px icon rail that
+expands on hover, headed by the active project, with quick-add rows for
+a chat, file viewer, browser, or terminal tab and a row per app running
+on the machine. Everything the rail opens lands in the active project;
+unlike the "+" menu it does not hide an app that already has a tab, so
+one app can appear in several projects at once.
+
+Every tab carries the same controls: Refresh (reloads what the tab is
+showing -- service-wide for a service-backed iframe, the transcript and
+stream for a chat), Open in new window (disabled on chats and subagent
+views, which have no address of their own), Share, Destroy, and Close.
+Close drops the tab from the project on screen; Destroy is
+confirm-gated, tears down whatever backs the tab, and removes it from
+*every* project, including ones no client currently has open. A
+destroyed chat's transcript stays accessible.
+
+Chat messages sent through the UI (and every project switch) are logged
 to `workspace_layout/events/client_activity/events.jsonl` with the
-sending client's id, device kind, and active layout, so agents can
+sending client's id, device kind, and active project, so agents can
 attribute a request to a client via `layout.py context`.
+
+The named layouts that projects replace still exist on disk
+(`workspace_layout/layouts/`, `GET /api/layouts` and friends), but no
+client keeps one active any more and the "+" menu no longer exposes
+them. The agent-facing layout ops below therefore resolve their
+`--layout` against the projects registry whenever the name is not one
+of the named layouts, which is how an agent addresses the arrangement a
+client is actually looking at.
 
 ## Driving the workspace layout from an agent
 
@@ -116,29 +154,30 @@ replace-url / refresh`.
 # with open/running flags. YAML by default, ``--json`` to switch.
 python3 system/scripts/layout.py list
 
-# See which browser clients exist, their device kind, current layout,
-# and recent messages (to attribute a request to a client/layout).
+# See which browser clients exist, their device kind, current project,
+# and recent messages (to attribute a request to a client/project).
 python3 system/scripts/layout.py context
 
 # Surface the given service in a tab split alongside the primary chat
 # (reports a no-op if one is already open; use ``focus`` to bring it
-# to the foreground). Mutating ops always name their target layout.
-python3 system/scripts/layout.py open web --layout desktop
+# to the foreground). Mutating ops always name their target, which is
+# normally the project the client is in (``context`` reports it).
+python3 system/scripts/layout.py open web --layout Everything
 
 # Reload one tab (or, for ``service:<name>``, every iframe tied to
 # that service).
 python3 system/scripts/layout.py refresh web
 
 # Inspect the grid tree -- arrangements, sizes, active panel,
-# ref-resolved panel list -- of the last-active (or named) layout.
-python3 system/scripts/layout.py inspect --layout mobile
+# ref-resolved panel list -- of the named project or layout.
+python3 system/scripts/layout.py inspect --layout Everything
 ```
 
 Every op POSTs `{op, args, agent_id}` to the loopback-only
 `/api/layout/broadcast` endpoint on the system interface. Mutating ops
-require a target layout, are delivered only to connected clients with
-that layout active (HTTP 412 when there are none -- `load` a layout
-onto a client first), and acquire an in-process advisory mutex (HTTP
+require a target, are delivered only to connected clients that have it
+active (HTTP 412 when there are none -- the error lists each connected
+client and what it is on), and acquire an in-process advisory mutex (HTTP
 409 with the in-flight holder's metadata on contention); reads bypass
 both. Panels are addressed by stable, type-prefixed refs:
 `service:<name>`, `chat:<agent-name>`, `subagent:<session-id>`,

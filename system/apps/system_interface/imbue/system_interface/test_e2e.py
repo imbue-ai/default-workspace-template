@@ -27,6 +27,8 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.projects import EVERYTHING_PROJECT_ID
+from imbue.system_interface.projects import EVERYTHING_PROJECT_NAME
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
 from imbue.system_interface.testing import build_test_state
@@ -529,12 +531,14 @@ def _broadcast_layout_op(base_url: str, op: str, args: dict[str, Any], agent_id:
     here exercises the real frontend ``handleSplit`` handler (which carves the
     second group) rather than reaching into dockview internals from the test.
 
-    Mutating ops are layout-targeted: they carry the desktop layout (the one a
-    Playwright browser picks by default) and only succeed once the page's
-    ``client_state`` registration has landed, so a 412 is retried until the
-    registration catches up.
+    Mutating ops are layout-targeted, and a client reports its active *project*
+    as its active layout, so they carry the Everything project (the one a fresh
+    browser lands on). They only succeed once the page's ``client_state``
+    registration has landed, so a 412 is retried until it catches up.
     """
-    payload = json.dumps({"op": op, "args": {**args, "layout": "desktop"}, "agent_id": agent_id}).encode()
+    payload = json.dumps(
+        {"op": op, "args": {**args, "layout": EVERYTHING_PROJECT_NAME}, "agent_id": agent_id}
+    ).encode()
     request = urllib.request.Request(
         f"{base_url}/api/layout/broadcast",
         data=payload,
@@ -865,24 +869,40 @@ def test_no_agents_shows_empty_state(page: Page, tmp_path: Path) -> None:
             thread.join(timeout=5.0)
 
 
-_LAYOUT_DIALOG_PORT = 18867
+_PROJECT_DIALOG_PORT = 18867
 
 
-# Opening the "+" dropdown fetches the live terminal fleet, which shells out
-# to ``tmux list-sessions`` server-side -- hence the tmux mark.
-@pytest.mark.tmux
+def _create_project_over_http(base_url: str, name: str) -> str:
+    """Register a project through the real API, returning its server-minted id."""
+    payload = json.dumps({"name": name, "color": "#F0603A", "glyph": 1}).encode()
+    request = urllib.request.Request(
+        f"{base_url}/api/projects",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return str(json.loads(response.read())["project_id"])
+
+
+def _switch_project_via_picker(page: Page, project_name: str) -> None:
+    """Drive the top-left project picker to switch onto ``project_name``."""
+    page.locator(".project-picker-trigger").click()
+    page.locator(".project-picker-menu [role='menuitem']", has_text=project_name).first.click()
+
+
 @pytest.mark.timeout(120, func_only=False)
-def test_named_layout_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
-    """The "+" menu's Save/Load/Delete layout dialogs drive the named-layout registry.
+def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
+    """The project picker's create/delete dialogs drive the project registry.
 
-    End-to-end over the real frontend + server: initial UA-based selection
-    (desktop) with WebSocket registration, debounced autosave materializing
-    the fresh layout's file, save-as creating + switching to a new layout,
-    load switching to the (empty) mobile layout, and deleting the active
-    layout falling back to the first remaining one.
+    End-to-end over the real frontend + server: the initial landing on the
+    Everything project with its WebSocket registration, the debounced autosave
+    materializing that project's content file, "New project..." creating one
+    and switching onto it, and deleting the active project falling back to
+    Everything.
     """
     primary_agent_id = "primary-services-agent"
-    with _running_e2e_server(tmp_path, _LAYOUT_DIALOG_PORT, primary_agent_id=primary_agent_id) as (
+    with _running_e2e_server(tmp_path, _PROJECT_DIALOG_PORT, primary_agent_id=primary_agent_id) as (
         base_url,
         _agent_info,
         _session_file,
@@ -892,77 +912,61 @@ def test_named_layout_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(base_url)
 
-        # Initial: desktop is chosen (desktop UA), the fixture chat auto-opens,
-        # and the debounced autosave materializes desktop.json.
+        # Initial: Everything is chosen, the fixture chat auto-opens, and the
+        # debounced autosave materializes everything.json.
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
-        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'desktop'", timeout=10000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_PROJECT_ID}'", timeout=10000
+        )
         wait_for(
-            lambda: (layout_dir / "layouts" / "desktop.json").exists(),
+            lambda: (layout_dir / "projects" / f"{EVERYTHING_PROJECT_ID}.json").exists(),
             timeout=15.0,
             poll_interval=0.1,
-            error_message="autosave never materialized desktop.json",
+            error_message="autosave never materialized everything.json",
         )
 
-        # Save layout...: prefilled with the current name; saving under a new
-        # name creates it and switches onto it.
-        page.locator(".dockview-add-tab-button").first.click()
-        page.locator(".dockview-add-tab-dropdown-item", has_text="Save layout...").click()
+        # New project...: creating one switches onto it, and its own autosave
+        # materializes a second content file under the slugified id.
+        page.locator(".project-picker-trigger").click()
+        page.locator(".project-picker-menu [role='menuitem']", has_text="New project...").click()
         dialog_input = page.locator(".custom-url-dialog-input")
         expect(dialog_input).to_be_visible(timeout=5000)
-        assert dialog_input.input_value() == "desktop"
-        assert "desktop (current)" in page.locator(".layout-dialog-list").inner_text()
         dialog_input.fill("My Phone Setup")
         page.locator(".custom-url-dialog-open").click()
-        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'my-phone-setup'", timeout=10000)
+        page.wait_for_function("localStorage.getItem('si-active-project-id') === 'my-phone-setup'", timeout=10000)
         wait_for(
-            lambda: (layout_dir / "layouts" / "my-phone-setup.json").exists(),
+            lambda: (layout_dir / "projects" / "my-phone-setup.json").exists(),
             timeout=10.0,
             poll_interval=0.1,
-            error_message="save-as never wrote my-phone-setup.json",
+            error_message="create never wrote my-phone-setup.json",
         )
 
-        # Load layout...: switching to the never-saved mobile layout renders
-        # the fresh state (the welcome chat auto-opens again).
-        page.locator(".dockview-add-tab-button").first.click()
-        page.locator(".dockview-add-tab-dropdown-item", has_text="Load layout...").click()
-        page.locator(".layout-dialog-item", has_text="mobile").click()
-        page.locator(".custom-url-dialog-open").click()
-        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'mobile'", timeout=10000)
-        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
-
-        # Delete layout... on the active layout: the client auto-switches to
-        # the fallback and the registry drops the deleted entry.
-        page.locator(".dockview-add-tab-button").first.click()
-        page.locator(".dockview-add-tab-dropdown-item", has_text="Delete layout...").click()
-        page.locator(".layout-dialog-item", has_text="mobile (current)").click()
-        page.locator(".custom-url-dialog-open").click()
-        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'desktop'", timeout=10000)
-        registry = json.loads((layout_dir / "layouts_meta.json").read_text())
-        assert "mobile" not in registry["display_name_by_slug"]
-        assert "my-phone-setup" in registry["display_name_by_slug"]
+        # Delete on the active project: the client auto-switches to the
+        # fallback and the registry drops the deleted entry.
+        page.locator(".project-picker-trigger").click()
+        page.locator(".project-picker-menu [role='menuitem']", has_text="My Phone Setup").locator(
+            ".project-picker-settings"
+        ).click()
+        page.locator(".destroy-dialog-btn-cancel", has_text="Delete").click()
+        page.locator(".destroy-dialog-btn-destroy", has_text="Delete project").click()
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_PROJECT_ID}'", timeout=10000
+        )
+        registry = json.loads((layout_dir / "projects_meta.json").read_text())
+        assert "my-phone-setup" not in registry["project_by_id"]
+        assert EVERYTHING_PROJECT_ID in registry["project_by_id"]
 
 
 _LAYOUT_RESTORE_PORT = 18868
 
 
-def _switch_layout_via_dialog(page: Page, layout_label: str) -> None:
-    """Drive the "+" menu's Load-layout dialog to switch onto ``layout_label``."""
-    page.locator(".dockview-add-tab-button").first.click()
-    page.locator(".dockview-add-tab-dropdown-item", has_text="Load layout...").click()
-    page.locator(".layout-dialog-item", has_text=layout_label).first.click()
-    page.locator(".custom-url-dialog-open").click()
-
-
-# Opening the "+" dropdown fetches the live terminal fleet, which shells out to
-# ``tmux list-sessions`` server-side -- hence the tmux mark.
-@pytest.mark.tmux
 @pytest.mark.timeout(120, func_only=False)
-def test_switching_layouts_preserves_chat_transcript(tmp_path: Path, page: Page) -> None:
-    """A chat pane restored by a layout switch still shows its own transcript.
+def test_switching_projects_preserves_chat_transcript(tmp_path: Path, page: Page) -> None:
+    """A chat pane restored by a project switch still shows its own transcript.
 
     Regression test: ``fromJSON`` disposes the outgoing panels before creating
     the incoming ones, and the removal handler deletes their ``panelParams``.
-    Because panel ids are deterministic, a chat present in BOTH layouts had its
+    Because panel ids are deterministic, a chat present in BOTH projects had its
     freshly-seeded params deleted mid-restore and came back bound to the primary
     (services) agent -- the tab kept its title but showed an empty transcript.
     """
@@ -973,26 +977,32 @@ def test_switching_layouts_preserves_chat_transcript(tmp_path: Path, page: Page)
         _session_file,
     ):
         layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        # Registered before the page loads, so the picker lists it on first open.
+        _create_project_over_http(base_url, "Side Quest")
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(base_url)
 
-        # The fixture chat auto-opens on the desktop layout and shows its transcript.
+        # The fixture chat auto-opens on Everything and shows its transcript.
         expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
-        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'desktop'", timeout=10000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_PROJECT_ID}'", timeout=10000
+        )
         wait_for(
-            lambda: (layout_dir / "layouts" / "desktop.json").exists(),
+            lambda: (layout_dir / "projects" / f"{EVERYTHING_PROJECT_ID}.json").exists(),
             timeout=15.0,
             poll_interval=0.1,
-            error_message="autosave never materialized desktop.json",
+            error_message="autosave never materialized everything.json",
         )
 
-        # Away to the (empty) mobile layout, then back to desktop.
-        _switch_layout_via_dialog(page, "mobile")
-        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'mobile'", timeout=10000)
+        # Away to the (empty) second project, then back to Everything.
+        _switch_project_via_picker(page, "Side Quest")
+        page.wait_for_function("localStorage.getItem('si-active-project-id') === 'side-quest'", timeout=10000)
         expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
 
-        _switch_layout_via_dialog(page, "desktop")
-        page.wait_for_function("localStorage.getItem('si-active-layout-slug') === 'desktop'", timeout=10000)
+        _switch_project_via_picker(page, EVERYTHING_PROJECT_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_PROJECT_ID}'", timeout=10000
+        )
 
         # The restored chat must show ITS transcript -- not the primary agent's
         # (which would render an empty / no-conversation state under the same tab).
@@ -1003,11 +1013,11 @@ def test_switching_layouts_preserves_chat_transcript(tmp_path: Path, page: Page)
 
 @pytest.mark.timeout(120, func_only=False)
 def test_layout_missing_panel_params_recovers_chat_binding(tmp_path: Path, page: Page) -> None:
-    """A saved layout whose panelParams are missing still binds the chat correctly.
+    """A saved project whose panelParams are missing still binds the chat correctly.
 
     Panel ids encode identity (``chat-<agent-id>``), so a params-less panel is
     rebuilt from its id rather than silently defaulting to the primary agent.
-    This also self-heals layout files corrupted by the restore bug above.
+    This also self-heals content files corrupted by the restore bug above.
     """
     primary_agent_id = "primary-services-agent"
     with _running_e2e_server(tmp_path, _LAYOUT_RESTORE_PORT + 1, primary_agent_id=primary_agent_id) as (
@@ -1015,13 +1025,14 @@ def test_layout_missing_panel_params_recovers_chat_binding(tmp_path: Path, page:
         agent_info,
         _session_file,
     ):
-        # Hand-write a desktop layout holding the agent's chat panel with an
-        # EMPTY panelParams map -- the shape the restore bug used to persist.
+        # Hand-write the Everything project's content holding the agent's chat
+        # panel with an EMPTY panelParams map -- the shape the restore bug used
+        # to persist.
         layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
-        layouts_dir = layout_dir / "layouts"
-        layouts_dir.mkdir(parents=True)
+        projects_dir = layout_dir / "projects"
+        projects_dir.mkdir(parents=True)
         panel_id = f"chat-{agent_info.id}"
-        (layouts_dir / "desktop.json").write_text(
+        (projects_dir / f"{EVERYTHING_PROJECT_ID}.json").write_text(
             json.dumps(
                 {
                     "dockview": {

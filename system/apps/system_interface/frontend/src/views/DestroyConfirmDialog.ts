@@ -9,13 +9,18 @@ interface DestroyConfirmDialogAttrs {
   // Dialog heading. Defaults to "Destroy Agent"; terminal tabs pass
   // "Destroy terminal" so the same dialog serves both.
   title?: string;
+  // Extra copy under the main question, for consequences the caller has to
+  // spell out. Tab destroys use it to say that the tab leaves every project
+  // (unlike closing it, which only affects the project on screen) and, for a
+  // chat, that the agent's transcript stays readable afterwards.
+  details?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
 export const DestroyConfirmDialog: m.Component<DestroyConfirmDialogAttrs> = {
   view(vnode) {
-    const { agentName, onConfirm, onCancel } = vnode.attrs;
+    const { agentName, details, onConfirm, onCancel } = vnode.attrs;
     const title = vnode.attrs.title ?? "Destroy Agent";
 
     return m(
@@ -33,6 +38,7 @@ export const DestroyConfirmDialog: m.Component<DestroyConfirmDialogAttrs> = {
             m("strong", agentName),
             `? This cannot be undone.`,
           ]),
+          details === undefined ? null : m("p.destroy-dialog-message", details),
           m("div.destroy-dialog-actions", [
             m("button.destroy-dialog-btn.destroy-dialog-btn-cancel", { onclick: onCancel }, "Cancel"),
             m("button.destroy-dialog-btn.destroy-dialog-btn-destroy", { onclick: onConfirm }, "Destroy"),
