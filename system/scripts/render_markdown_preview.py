@@ -2,7 +2,7 @@
 """Render a markdown file to HTML for the `markdown-preview` service.
 
 Handing a user raw markdown in chat and asking them to picture the rendered
-page is a bad trade when the page is the deliverable -- an inspiration's README
+page is a bad trade when the page is the deliverable -- a template's README
 is the thing that decides whether anyone boots it. This renders the file the
 way GitHub will, into a tab the user can actually look at.
 
@@ -13,7 +13,7 @@ FOR and a plain text dump loses all of them:
   hero and the "Open in Minds" badge render as the block they are;
 - **tables render** (the `js-default` preset), which CommonMark alone does not;
 - **local images resolve**, because the server serves the markdown file's own
-  directory alongside the page -- a relative `inspiration.svg` is exactly what
+  directory alongside the page -- a relative `template.svg` is exactly what
   a README references, and a broken one is exactly what a preview should catch.
 
 Remote images (a shields.io badge) load in the browser as normal.

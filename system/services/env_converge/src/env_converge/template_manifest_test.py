@@ -5,32 +5,32 @@ from pathlib import Path
 
 import pytest
 
-from env_converge import inspiration_manifest
-from env_converge.inspiration_manifest import (
+from env_converge import template_manifest
+from env_converge.template_manifest import (
     CURRENT_MANIFEST_FORMAT,
     MANIFEST_MARKDOWN_NAME,
     MANIFEST_THUMBNAIL_NAME,
     MANIFEST_TOML_NAME,
-    InspirationManifest,
-    InspirationManifestNotFoundError,
-    InspirationManifestParseError,
     Requirements,
+    TemplateManifest,
+    TemplateManifestNotFoundError,
+    TemplateManifestParseError,
     check_env_d_units,
     check_markdown_agreement,
     check_unfinished_placeholders,
     find_manifest_path,
-    load_inspiration_manifest,
-    validate_inspiration_tree,
+    load_template_manifest,
+    validate_template_tree,
 )
 
 _MINIMAL_TOML = """
 format = "v2"
 
-[inspiration]
+[template]
 slug = "slack-inbox"
 title = "Slack Inbox"
 description = "A daily digest."
-thumbnail = "inspiration.svg"
+thumbnail = "template.svg"
 version = "v1"
 
 [recipe]
@@ -40,7 +40,7 @@ include = ["system/apps/slack_inbox"]
 _MINIMAL_MARKDOWN = """---
 title: Slack Inbox
 description: A daily digest.
-thumbnail: inspiration.svg
+thumbnail: template.svg
 format: v2
 ---
 
@@ -60,10 +60,10 @@ def _write_tree(
     return root
 
 
-def _manifest(toml_text: str, tmp_path: Path) -> InspirationManifest:
+def _manifest(toml_text: str, tmp_path: Path) -> TemplateManifest:
     path = tmp_path / MANIFEST_TOML_NAME
     path.write_text(toml_text)
-    return load_inspiration_manifest(path)
+    return load_template_manifest(path)
 
 
 # --- the schema itself ---
@@ -73,10 +73,10 @@ def test_a_minimal_manifest_loads_with_the_documented_defaults(tmp_path: Path) -
     manifest = _manifest(_MINIMAL_TOML, tmp_path)
 
     assert manifest.format == CURRENT_MANIFEST_FORMAT
-    assert manifest.inspiration.slug == "slack-inbox"
+    assert manifest.template.slug == "slack-inbox"
     assert manifest.recipe.include == ("system/apps/slack_inbox",)
     # Everything optional defaults to empty rather than requiring boilerplate:
-    # most inspirations declare no environment at all, and that must stay the
+    # most templates declare no environment at all, and that must stay the
     # cheap case.
     assert manifest.recipe.exclude == ()
     assert manifest.requirements.permission == ()
@@ -168,7 +168,7 @@ def test_malformed_identity_fields_are_rejected(
         for line in _MINIMAL_TOML.splitlines()
     )
 
-    with pytest.raises(InspirationManifestParseError):
+    with pytest.raises(TemplateManifestParseError):
         _manifest(toml_text, tmp_path)
 
 
@@ -177,14 +177,14 @@ def test_an_unknown_key_is_rejected_rather_than_silently_ignored(
 ) -> None:
     # extra="forbid" is what turns a typo'd declaration into a publish-time
     # failure instead of a dependency that silently never installs.
-    with pytest.raises(InspirationManifestParseError):
+    with pytest.raises(TemplateManifestParseError):
         _manifest(
             _MINIMAL_TOML + '\n[environment]\napt_packages = ["ripgrep"]\n', tmp_path
         )
 
 
 def test_a_bad_snapshot_timestamp_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(InspirationManifestParseError):
+    with pytest.raises(TemplateManifestParseError):
         _manifest(
             _MINIMAL_TOML + '\n[environment]\napt_snapshot_timestamp = "2026-07-25"\n',
             tmp_path,
@@ -192,20 +192,20 @@ def test_a_bad_snapshot_timestamp_is_rejected(tmp_path: Path) -> None:
 
 
 def test_malformed_toml_reports_the_path_and_the_reason(tmp_path: Path) -> None:
-    with pytest.raises(InspirationManifestParseError) as excinfo:
-        _manifest("[inspiration\nslug =", tmp_path)
+    with pytest.raises(TemplateManifestParseError) as excinfo:
+        _manifest("[template\nslug =", tmp_path)
 
     assert MANIFEST_TOML_NAME in str(excinfo.value)
     assert "not valid TOML" in str(excinfo.value)
 
 
 def test_a_missing_manifest_raises_the_not_found_error(tmp_path: Path) -> None:
-    with pytest.raises(InspirationManifestNotFoundError):
-        load_inspiration_manifest(tmp_path / MANIFEST_TOML_NAME)
+    with pytest.raises(TemplateManifestNotFoundError):
+        load_template_manifest(tmp_path / MANIFEST_TOML_NAME)
 
 
 def test_find_manifest_path_treats_absence_as_normal(tmp_path: Path) -> None:
-    # An ordinary workspace has no inspiration, and a v1 inspiration repo has
+    # An ordinary workspace has no template, and a v1 template repo has
     # slug-named markdown and no TOML -- neither is an error condition.
     assert find_manifest_path(tmp_path) is None
 
@@ -216,8 +216,8 @@ def test_find_manifest_path_treats_absence_as_normal(tmp_path: Path) -> None:
 def test_a_v1_repo_with_slug_named_manifests_is_not_mistaken_for_v2(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "inspiration-slack-inbox.md").write_text(_MINIMAL_MARKDOWN)
-    (tmp_path / "inspiration-slack-inbox.svg").write_text("<svg></svg>")
+    (tmp_path / "template-slack-inbox.md").write_text(_MINIMAL_MARKDOWN)
+    (tmp_path / "template-slack-inbox.svg").write_text("<svg></svg>")
 
     assert find_manifest_path(tmp_path) is None
 
@@ -227,7 +227,7 @@ def test_a_v1_repo_with_slug_named_manifests_is_not_mistaken_for_v2(
 
 def _manifest_with_units(
     units: list[str], include: list[str], tmp_path: Path
-) -> InspirationManifest:
+) -> TemplateManifest:
     include_toml = ", ".join(f'"{path}"' for path in include)
     units_toml = ", ".join(f'"{unit}"' for unit in units)
     return _manifest(
@@ -260,7 +260,7 @@ def test_a_unit_outside_the_env_d_directory_is_flagged(tmp_path: Path) -> None:
 
 
 def test_a_unit_ordered_before_the_reserved_range_is_flagged(tmp_path: Path) -> None:
-    # Below 2000 an inspiration's unit would interleave with the template's own
+    # Below 2000 a template's unit would interleave with the template's own
     # units, which is exactly the shared-ordering collision the convention exists
     # to prevent.
     manifest = _manifest_with_units(
@@ -346,7 +346,7 @@ def test_example_requires_lines_inside_fill_in_comments_are_not_counted(
     # The generated FILL-IN instructions quote example requires_ lines to show
     # the form. Counting those made a freshly-generated skeleton -- which
     # declares nothing yet -- look like it declared three of them, so
-    # build_inspiration.sh failed its own validation gate on every publish.
+    # build_template.sh failed its own validation gate on every publish.
     # Caught by running the assembly script end to end, not by the unit tests.
     manifest = _manifest(_MINIMAL_TOML, tmp_path)
 
@@ -403,14 +403,14 @@ def test_unreplaced_placeholders_are_caught() -> None:
 def test_a_complete_tree_validates_clean(tmp_path: Path) -> None:
     _write_tree(tmp_path)
 
-    assert validate_inspiration_tree(tmp_path) == ()
+    assert validate_template_tree(tmp_path) == ()
 
 
 def test_a_tree_missing_its_thumbnail_is_flagged(tmp_path: Path) -> None:
     _write_tree(tmp_path)
     (tmp_path / MANIFEST_THUMBNAIL_NAME).unlink()
 
-    problems = validate_inspiration_tree(tmp_path)
+    problems = validate_template_tree(tmp_path)
 
     assert any("thumbnail" in problem for problem in problems)
 
@@ -420,7 +420,7 @@ def test_a_tree_still_carrying_the_placeholder_thumbnail_is_flagged(
 ) -> None:
     _write_tree(tmp_path, thumbnail_text="<!-- minds-placeholder-thumbnail -->")
 
-    problems = validate_inspiration_tree(tmp_path)
+    problems = validate_template_tree(tmp_path)
 
     assert any("placeholder thumbnail" in problem for problem in problems)
 
@@ -429,7 +429,7 @@ def test_a_readme_with_an_unfinished_block_is_flagged(tmp_path: Path) -> None:
     _write_tree(tmp_path)
     (tmp_path / "README.md").write_text("<!-- FILL-IN (publishing agent): overview -->")
 
-    problems = validate_inspiration_tree(tmp_path)
+    problems = validate_template_tree(tmp_path)
 
     assert any("FILL-IN" in problem for problem in problems)
 
@@ -443,7 +443,7 @@ def test_every_problem_in_a_tree_is_reported_at_once(tmp_path: Path) -> None:
         thumbnail_text="<!-- minds-placeholder-thumbnail -->",
     )
 
-    problems = validate_inspiration_tree(tmp_path)
+    problems = validate_template_tree(tmp_path)
 
     assert len(problems) >= 2
 
@@ -458,7 +458,7 @@ def test_the_schema_module_imports_only_stdlib_and_pydantic() -> None:
     would break the gate in the worker's post-reset worktree -- where there is
     no venv -- and the failure would only surface during a real publish.
     """
-    module_path = Path(inspiration_manifest.__file__)
+    module_path = Path(template_manifest.__file__)
     tree = ast.parse(module_path.read_text())
 
     imported_roots: set[str] = set()
@@ -511,8 +511,8 @@ resolution = "ask the user which channel to watch"
     assert check_markdown_agreement(manifest, markdown) == ()
 
 
-def test_an_inspiration_needing_no_activation_says_so() -> None:
-    # use-inspiration branches on this: nothing to initiate means it can go
+def test_an_template_needing_no_activation_says_so() -> None:
+    # use-template branches on this: nothing to initiate means it can go
     # straight to the adaptation conversation instead of opening approval flows.
     assert not Requirements().has_activation_requirements()
     assert not Requirements(
@@ -553,7 +553,7 @@ def test_a_quoted_front_matter_title_matches_the_toml(
         "---\n"
         f"title: {json.dumps(title)}\n"
         'description: "A daily digest."\n'
-        'thumbnail: "inspiration.svg"\n'
+        'thumbnail: "template.svg"\n'
         "format: v2\n"
         "---\n\n# Heading\n"
     )
@@ -571,7 +571,7 @@ def test_a_single_quoted_scalar_is_also_understood(tmp_path: Path) -> None:
         "---\n"
         "title: 'Bob''s Digest'\n"
         "description: 'A daily digest.'\n"
-        "thumbnail: 'inspiration.svg'\n"
+        "thumbnail: 'template.svg'\n"
         "---\n\n# Heading\n"
     )
 

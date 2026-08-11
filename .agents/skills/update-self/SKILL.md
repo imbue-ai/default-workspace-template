@@ -486,7 +486,7 @@ MERGE_SHA=$(git rev-parse HEAD)
 
 Then write the entry directly into `docs/VERSION_HISTORY.md`. There is no helper
 skill -- this block is the whole recording contract, and it owns the format so
-`update-self`, `publish-inspiration`, and `update-published-inspiration` all write
+`update-self`, `publish-template`, and `update-published-template` all write
 identical lines. The rules: append-only (existing lines are copied through
 verbatim, never re-flowed); every `## Workspace` line ends in a commit; and a
 retried landing must be a no-op, never a duplicate. Do the three parts below in
@@ -494,7 +494,7 @@ order.
 
 **Part 1 -- if `docs/VERSION_HISTORY.md` is missing** (deleted since creation),
 recreate the shipped starter first, then append. This heredoc is the canonical
-starter that `publish-inspiration` and `update-published-inspiration` recreate by reference
+starter that `publish-template` and `update-published-template` recreate by reference
 to here:
 
 ```bash
@@ -502,24 +502,24 @@ to here:
 # Version history
 
 Where this workspace came from, what it has migrated in, what it has published,
-and the inspirations it has adopted. Entries are appended automatically -- by
+and the templates it has adopted. Entries are appended automatically -- by
 `update-self` when it lands a template update, by `migrate-workspace` when it
-pulls another workspace in, by `publish-inspiration` and
-`update-published-inspiration` when they publish, and by
-`update-installed-inspiration` when it pulls a newer version of an adopted
-inspiration -- and earlier lines are never rewritten. Each Workspace, Migrations,
-and Inspirations line ends in the commit it was cut from.
+pulls another workspace in, by `publish-template` and
+`update-published-template` when they publish, and by
+`update-installed-template` when it pulls a newer version of an adopted
+template -- and earlier lines are never rewritten. Each Workspace, Migrations,
+and Templates line ends in the commit it was cut from.
 
 ## Workspace
 
 ## Migrations
 
-## Inspirations
+## Templates
 
-## Adopted inspirations
+## Adopted templates
 
-Each inspiration this mind has adopted and the version it is on;
-`update-installed-inspiration` appends here when it pulls a newer version.
+Each template this mind has adopted and the version it is on;
+`update-installed-template` appends here when it pulls a newer version.
 VERSION_HISTORY_EOF
 ```
 
@@ -556,7 +556,7 @@ bootstrap writes ON TOP of the cloned template commit, and an `update-self:`
 marker is a merge commit -- in both cases the `minds-v*` tag is on an ancestor, so
 a pointing-at lookup always comes up empty and every origin line would silently
 degrade to the unnamed `created from the workspace template` fallback. (This walk
-takes the **OLDEST** marker -- where the mind *started*. `publish-inspiration`
+takes the **OLDEST** marker -- where the mind *started*. `publish-template`
 §2's `BASE_REF` walk uses the same markers but takes the **NEWEST**; the
 difference is load-bearing.)
 
@@ -599,7 +599,7 @@ That prints the newest template-state marker -- the merge you just landed -- and
 keeps printing it afterwards, so the whole block is safe to re-run.
 
 **Never give this commit an `update-self:` subject**: that prefix is the
-template-state marker `assist` and `publish-inspiration` §2 resolve `BASE_REF`
+template-state marker `assist` and `publish-template` §2 resolve `BASE_REF`
 from, it belongs to the merge commit alone, and `$MERGE_SHA` above depends on it
 staying that way.
 

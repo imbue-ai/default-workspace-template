@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Validate the inspiration assembled at a repo root. The publish flow's gate.
+"""Validate the template assembled at a repo root. The publish flow's gate.
 
 Checks, in one command:
 
-  - `inspiration.toml` parses and satisfies the schema;
-  - `inspiration.md` and `inspiration.toml` agree (front matter, and the
+  - `template.toml` parses and satisfies the schema;
+  - `template.md` and `template.toml` agree (front matter, and the
     activation half of the requirements);
   - the thumbnail exists and is not still the generated placeholder;
   - no `<!-- FILL-IN (publishing agent)` block was left unreplaced anywhere;
@@ -17,10 +17,10 @@ here rather than at some adopter's first boot.
 
 Run from the repo root being validated:
 
-    uv run --no-project --with 'pydantic>=2' python validate_inspiration.py [REPO_ROOT]
+    uv run --no-project --with 'pydantic>=2' python validate_template.py [REPO_ROOT]
 
 `--no-project` is load-bearing. This runs inside the assembly worker's
-worktree, which `build_inspiration.sh` has reset with `git read-tree -u --reset`
+worktree, which `build_template.sh` has reset with `git read-tree -u --reset`
 + `git clean -fdxq` -- deleting the gitignored `.venv`. Resolving the workspace
 project there would be slow on a cold base and can fail outright on an
 unrelated build error, aborting a publish that is otherwise fine (the same
@@ -40,31 +40,31 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-_SCHEMA_MODULE_NAME = "inspiration_manifest"
+_SCHEMA_MODULE_NAME = "template_manifest"
 _IN_REPO_SCHEMA_PATH = Path(
-    "system/services/env_converge/src/env_converge/inspiration_manifest.py"
+    "system/services/env_converge/src/env_converge/template_manifest.py"
 )
 _APT_RESOLVE_TIMEOUT_SECONDS = 120.0
 
 
-class ValidateInspirationError(Exception):
+class ValidateTemplateError(Exception):
     """Base exception for this script's own failures."""
 
 
-class SchemaModuleNotFoundError(ValidateInspirationError, FileNotFoundError):
+class SchemaModuleNotFoundError(ValidateTemplateError, FileNotFoundError):
     """Raised when the shared schema module cannot be located."""
 
     def __init__(self, searched: tuple[Path, ...]) -> None:
         self.searched = searched
         super().__init__(
-            "Cannot find inspiration_manifest.py (searched: "
+            "Cannot find template_manifest.py (searched: "
             + ", ".join(str(path) for path in searched)
-            + "). It is snapshotted next to this script by build_inspiration.sh; "
+            + "). It is snapshotted next to this script by build_template.sh; "
             "without it there is no validation and no fallback."
         )
 
 
-class AptUnavailableError(ValidateInspirationError, OSError):
+class AptUnavailableError(ValidateTemplateError, OSError):
     """Raised when apt is absent but apt packages were declared.
 
     Mirrors the secret scan's no-fallback stance: the publish flow only ever
@@ -74,7 +74,7 @@ class AptUnavailableError(ValidateInspirationError, OSError):
 
     def __init__(self) -> None:
         super().__init__(
-            "apt-get is not available, but this inspiration declares apt packages. "
+            "apt-get is not available, but this template declares apt packages. "
             "Declared packages cannot be verified against the pinned mirror here; "
             "run the publish flow inside the workspace container."
         )
@@ -86,7 +86,7 @@ def _schema_module_candidates(script_path: Path) -> tuple[Path, ...]:
     Never relative to the tree being validated: that is an assembled snapshot
     and does not necessarily carry a usable copy of the schema.
 
-    The sibling comes first -- that is the copy `build_inspiration.sh` snapshots
+    The sibling comes first -- that is the copy `build_template.sh` snapshots
     out of the worktree ahead of its reset, and in that mode the script lives in
     a shallow mktemp dir like `/tmp/tmp.XXXXXX/`. Walking every ancestor for the
     in-repo path (rather than indexing a fixed number of levels up) is what
@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         "repo_root",
         nargs="?",
         default=".",
-        help="Repo root holding inspiration.toml (default: the current directory)",
+        help="Repo root holding template.toml (default: the current directory)",
     )
     parser.add_argument(
         "--skip-apt-check",
@@ -167,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "Permit FILL-IN blocks and the placeholder thumbnail. Only for the "
-            "check build_inspiration.sh runs on the skeleton it just generated; "
+            "check build_template.sh runs on the skeleton it just generated; "
             "never for the worker's or the lead's pre-push run."
         ),
     )
@@ -179,35 +179,35 @@ def main(argv: list[str] | None = None) -> int:
     manifest_path = repo_root / schema.MANIFEST_TOML_NAME
     if not manifest_path.is_file():
         print(
-            f"validate_inspiration: no {schema.MANIFEST_TOML_NAME} at {repo_root}",
+            f"validate_template: no {schema.MANIFEST_TOML_NAME} at {repo_root}",
             file=sys.stderr,
         )
         return 1
 
     try:
         problems = list(
-            schema.validate_inspiration_tree(
+            schema.validate_template_tree(
                 repo_root, is_unfinished_allowed=args.allow_unfinished
             )
         )
-    except schema.InspirationManifestError as e:
-        print(f"validate_inspiration: {e}", file=sys.stderr)
+    except schema.TemplateManifestError as e:
+        print(f"validate_template: {e}", file=sys.stderr)
         return 1
 
     if not args.skip_apt_check:
-        manifest = schema.load_inspiration_manifest(manifest_path)
+        manifest = schema.load_template_manifest(manifest_path)
         problems.extend(check_apt_packages_resolve(manifest.environment.apt))
 
     if problems:
         print(
-            f"validate_inspiration: {len(problems)} problem(s) with the inspiration at {repo_root}:",
+            f"validate_template: {len(problems)} problem(s) with the template at {repo_root}:",
             file=sys.stderr,
         )
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
 
-    print(f"validate_inspiration: {manifest_path.name} is valid")
+    print(f"validate_template: {manifest_path.name} is valid")
     return 0
 
 

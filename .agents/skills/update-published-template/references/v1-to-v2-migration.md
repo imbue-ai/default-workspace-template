@@ -1,15 +1,15 @@
-# Migrating a published inspiration from v1 to v2
+# Migrating a published template from v1 to v2
 
 ## Two version numbers, unrelated
 
 The **flow version** is the manifest FORMAT. v2 is exactly one slug-free
-`inspiration.md` + `inspiration.toml` + `inspiration.svg` per repo; v1 is the
+`template.md` + `template.toml` + `template.svg` per repo; v1 is the
 older format, which used slug-named `inspiration-<slug>.md` (possibly several
 in one repo) with a YAML recipe inside the markdown and no TOML.
 
-An **inspiration's own version** (v1, v2, v3, ...) counts how many times THAT
-inspiration has been published. It keeps counting across a format migration --
-an inspiration on its fourth publish is v4 whether the format is v1 or v2.
+An **template's own version** (v1, v2, v3, ...) counts how many times THAT
+template has been published. It keeps counting across a format migration --
+a template on its fourth publish is v4 whether the format is v1 or v2.
 
 Both appear in this skill, so read each `v<n>` for which axis it is on.
 
@@ -23,16 +23,16 @@ reads only the markdown, which survives.
 - One or more slug-named `inspiration-<slug>.md` files at the repo root, each
   with a sibling `inspiration-<slug>.svg`.
 - The recipe is a fenced `yaml` block inside the markdown, under `## Recipe`.
-- No `inspiration.toml` anywhere. Absence of that file is what identifies v1 --
+- No `template.toml` anywhere. Absence of that file is what identifies v1 --
   not a version field inside it.
 - The adaptation agenda is called `Holes`.
 
 ## What the migration does
 
-1. `git mv` the target slug's manifest and thumbnail to `inspiration.md` and
-   `inspiration.svg`.
-2. Write `inspiration.toml`, lifting the recipe out of the markdown into the
-   `[recipe]` table, and mirroring the front matter into `[inspiration]`.
+1. `git mv` the target slug's manifest and thumbnail to `template.md` and
+   `template.svg`.
+2. Write `template.toml`, lifting the recipe out of the markdown into the
+   `[recipe]` table, and mirroring the front matter into `[template]`.
    Add one structured entry per `requires_` line already in the markdown --
    `[[requirements.permission]]`, `[[requirements.secret]]`,
    `[requirements.llm]` -- so the two files agree; the validator enforces that.
@@ -47,7 +47,7 @@ reads only the markdown, which survives.
    judgement; v2 makes the kind a property of the entry instead.
 5. Set `format: v2` in the markdown front matter.
 6. Leave `[environment]` empty unless the update itself adds a dependency. A v1
-   inspiration never declared one, and inventing declarations during a migration
+   template never declared one, and inventing declarations during a migration
    would be guessing at what the code needs.
 
 ## What is deliberately NOT carried forward

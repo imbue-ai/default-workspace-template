@@ -1,4 +1,4 @@
-# Betterleaks config for scan_secrets.sh (the publish-inspiration secret
+# Betterleaks config for scan_secrets.sh (the publish-template secret
 # scan). Betterleaks is one of the two scanners the scan runs; this config
 # applies only to it (kingfisher has no filename-based rules and runs with its
 # own flags).
