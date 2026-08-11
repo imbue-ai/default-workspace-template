@@ -166,23 +166,8 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache offload binary
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin/offload
-          key: cargo-offload-0.9.10-${{ runner.os }}
-
-      - name: Install offload
-        run: |
-          if ! command -v offload &> /dev/null || ! offload --version | grep -q '0.9.10'; then
-            cargo install offload@0.9.10 --force
-          fi
+      - name: Set up offload
+        uses: ./.github/actions/setup-offload
 
       - name: Restore offload test durations from previous run
         uses: actions/cache/restore@v5
@@ -551,23 +536,8 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache offload binary
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin/offload
-          key: cargo-offload-0.9.10-${{ runner.os }}
-
-      - name: Install offload
-        run: |
-          if ! command -v offload &> /dev/null || ! offload --version | grep -q '0.9.10'; then
-            cargo install offload@0.9.10 --force
-          fi
+      - name: Set up offload
+        uses: ./.github/actions/setup-offload
 
       - name: Restore offload test durations from previous run
         uses: actions/cache/restore@v5
@@ -1030,23 +1000,8 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache offload binary
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin/offload
-          key: cargo-offload-0.9.10-${{ runner.os }}
-
-      - name: Install offload
-        run: |
-          if ! command -v offload &> /dev/null || ! offload --version | grep -q '0.9.10'; then
-            cargo install offload@0.9.10 --force
-          fi
+      - name: Set up offload
+        uses: ./.github/actions/setup-offload
 
       # -- Sync e2e env plumbing (opt-in, same gate as build-minds-ci-env) --
       # The workspace-sync e2e tests (apps/minds/test_sync_e2e.py) run INSIDE

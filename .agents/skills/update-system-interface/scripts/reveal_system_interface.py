@@ -21,8 +21,11 @@ What it does, given the pre-merge revision (``--rollback-to``):
 4. For a backend change, *pre-flight* the merged code on a throwaway port before
    touching the live service -- if it cannot boot, the live service is never
    restarted and we go straight to rollback (the UI never went down).
-5. Build the frontend bundle, restart the backend, and tell open browsers to
-   reload, as applicable.
+5. Build the frontend bundle and restart the backend, as applicable, then ask
+   every open view of the workspace to reload, via
+   ``system/scripts/refresh_workspace_view.py`` -- for a backend-only change
+   too, since the restart leaves the open page rendering from what it had
+   already fetched.
 6. Probe the live service's loopback endpoint until healthy (with a deadline).
 7. On ANY failure, restore the served tree to the known-good revision (as a
    forward revert commit) and re-probe to *confirm* the UI is back. The live
@@ -79,7 +82,9 @@ is picked up in place, without disturbing the wrapper frame or the user's tab.
 Environment:
     MINDS_WORKSPACE_SERVER_URL  Base URL of the live workspace server
                                 (default http://127.0.0.1:8000).
-    MNGR_AGENT_ID               Sent for telemetry on the reload broadcast.
+    MNGR_AGENT_ID               Dropped for the preview boot so it cannot
+                                clobber the live layout. The refresh helper
+                                reads it (and the latchkey gateway vars) itself.
 
 Exit codes (``reveal``):
     0  Revealed successfully; live UI is healthy.
@@ -114,7 +119,6 @@ from typing import Callable, Sequence
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
 ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
-MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
 
 # The served app, the editable tool the live service runs from, and the build
 # surfaces. These mirror system/scripts/build_workspace.sh -- the source of truth for
@@ -129,7 +133,19 @@ FRONTEND_DIR = f"{APP_DIR}/frontend"
 # backend's "Frontend not built" placeholder.
 FRONTEND_BUILD_INDEX = f"{APP_DIR}/imbue/system_interface/static/index.html"
 TOOL_NAME = "system-interface"
-RELOAD_OP = "reload_system_interface"
+
+# The shared post-change refresh motion, repo-relative. Owns *how* a changed
+# interface is revealed to whoever is looking (which channels, in what order,
+# what is fatal); this script only decides *when*. Shared with the other flows
+# that restart the services agent (``update-app``, ``update-self``), so they
+# cannot drift on that policy. Stdlib-only, so it runs under our interpreter.
+_REFRESH_SCRIPT = "system/scripts/refresh_workspace_view.py"
+# The helper budgets its own calls to ~50s in total, so this is a backstop for a
+# child that ignores those budgets (a wedged ``mngr`` that does not answer a
+# SIGTERM), not the normal bound. A reveal that has already landed must not hang
+# on a courtesy reload; TimeoutExpired is a SubprocessError, so overrunning it
+# takes the same reported-and-continue path as a helper we cannot spawn.
+_REFRESH_TIMEOUT_SECONDS = 120.0
 
 # Pre-merge preview: the deterministic boot + teardown of a previewable instance
 # is the shared ``serve_isolated_instance.py`` motion that every service flow
@@ -304,26 +320,12 @@ class Runner:
 
 
 class HttpClient:
-    """Indirection over the loopback HTTP calls (health probe + reload broadcast)."""
+    """Indirection over the loopback health probes (live service + pre-flight boot)."""
 
     def get_status(self, url: str, timeout: float) -> int | None:
         """Return the HTTP status for a GET, or ``None`` if the host is unreachable."""
         try:
             with urllib.request.urlopen(url, timeout=timeout) as response:
-                return int(response.status)
-        except urllib.error.HTTPError as exc:
-            return int(exc.code)
-        except (urllib.error.URLError, OSError):
-            return None
-
-    def post_json(
-        self, url: str, payload: dict, headers: dict, timeout: float
-    ) -> int | None:
-        """POST a JSON body; return the HTTP status or ``None`` if unreachable."""
-        body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return int(response.status)
         except urllib.error.HTTPError as exc:
             return int(exc.code)
@@ -525,21 +527,43 @@ def _preflight_ok(
         spawned.terminate()
 
 
-def _broadcast_reload(http: HttpClient, base_url: str) -> None:
-    """Tell open browsers to reload the whole UI. Best-effort: a no-op when no
-    browser is connected, and never fatal on its own."""
-    agent_id = os.environ.get(ENV_MNGR_AGENT_ID, "")
-    status = http.post_json(
-        f"{base_url}/api/layout/broadcast",
-        {"op": RELOAD_OP, "args": {}, "agent_id": agent_id},
-        {"Content-Type": "application/json", MNGR_AGENT_ID_HEADER: agent_id},
-        timeout=10.0,
-    )
-    if status != 200:
-        sys.stderr.write(
-            f"warning: reload broadcast returned {status}; if a browser is open it may "
-            "not have refreshed (the new bundle is still on disk and will load on next visit).\n"
+def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
+    """Ask every open view of this workspace to reload the changed interface.
+
+    Delegates to the shared ``refresh_workspace_view.py`` helper, which fires
+    both the in-workspace reload broadcast (reaching browsers we cannot address
+    directly, including shared tunnel viewers) and the Minds app's refresh
+    endpoint (which works when the frontend's WebSocket never came back from the
+    restart, because it does not go through the workspace server at all).
+
+    Best-effort and never fatal: the helper always exits 0 and names any channel
+    that did not land on stderr, which we pass through. The change is already on
+    disk and will load on the next visit regardless. A helper we cannot even
+    spawn (no memory to fork right after the restart) is caught here for the
+    same reason: both callers run this once the reveal -- or the rollback
+    recovery -- has already succeeded, and neither treats it as a step that can fail.
+
+    ``UnicodeDecodeError`` is in that group because capturing text output decodes
+    it, and output the stdio encoding cannot decode is a ``ValueError`` rather
+    than a ``SubprocessError`` -- the same escape the helper's own ``_run_channel``
+    guards against on its side of the boundary.
+    """
+    try:
+        completed = runner.run(
+            [sys.executable, str(repo_root / _REFRESH_SCRIPT)],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=_REFRESH_TIMEOUT_SECONDS,
         )
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
+        sys.stderr.write(
+            f"refresh: could not run {_REFRESH_SCRIPT} ({type(exc).__name__}: {exc}); "
+            "an open view may still be showing the previous build until reloaded.\n"
+        )
+        return
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
 
 
 def _refresh_dependencies(changes: ChangeSet, repo_root: Path, runner: Runner) -> None:
@@ -597,8 +621,12 @@ def _apply_reveal(
                 "backend did not become healthy after restart",
                 live_service_restarted=True,
             )
-    if changes.frontend:
-        _broadcast_reload(http, base_url)
+    # Unconditional: this runs only when something changed (``reveal`` returns
+    # early otherwise), and a BACKEND-only change needs the reload just as much
+    # as a frontend one. The restart bounces the API underneath a page that
+    # keeps rendering from whatever it had already fetched, and a restart quick
+    # enough not to look unreachable never triggers a reload from anywhere else.
+    _refresh_workspace_view(repo_root, runner)
 
 
 def _restore_tree(
@@ -707,8 +735,10 @@ def _recover_running_state(
     except RevealFailed as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
         return False
-    if healthy and changes.frontend:
-        _broadcast_reload(http, base_url)
+    # Same reasoning as the reveal path: the rolled-back tree is a change to
+    # whatever the open view is currently rendering, whichever side it touched.
+    if healthy:
+        _refresh_workspace_view(repo_root, runner)
     return healthy
 
 

@@ -367,8 +367,11 @@ interleave.
    motion (you do not run `npm`/`uv`/`mngr` by hand). It classifies what changed;
    refreshes dependencies only if a manifest changed (`npm ci` / `uv tool install
    -e system/apps/system_interface --reinstall`); pre-flights a backend change on a
-   throwaway port before touching the live service; rebuilds `static/` and
-   broadcasts a reload (frontend) and/or restarts the services agent (backend);
+   throwaway port before touching the live service; rebuilds `static/` (frontend)
+   and/or restarts the services agent (backend); rebuilds the user's view
+   afterwards via `system/scripts/refresh_workspace_view.py` -- for a backend-only
+   change too, since the restart leaves the open page rendering what it had
+   already fetched, and best-effort, so it never fails a reveal that landed;
    health-checks the live service; and auto-rolls-back to `--rollback-to` on any
    failure. Interpret the exit code and report it:
 
