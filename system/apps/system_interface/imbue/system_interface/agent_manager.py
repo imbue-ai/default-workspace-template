@@ -30,6 +30,8 @@ from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import AgentRemovedEvent
 from imbue.mngr.api.observe import AgentStateEvent
 from imbue.mngr.api.observe import FullAgentStateEvent
+from imbue.mngr.api.observe import ObserveEventFollower
+from imbue.mngr.api.observe import ObserveStreamUnavailableError
 from imbue.mngr.api.observe import parse_observe_event_line
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
@@ -51,8 +53,6 @@ from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.agent_events import AgentEventsMode
 from imbue.system_interface.agent_events import AgentEventsStatus
-from imbue.system_interface.agent_events import ObserveEventFollower
-from imbue.system_interface.agent_events import ObserveStreamUnavailableError
 from imbue.system_interface.fast_mode_policy import FAST_MODE_BEFORE_DECISION
 from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
 from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
