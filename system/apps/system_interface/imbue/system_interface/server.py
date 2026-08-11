@@ -147,16 +147,25 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
   const errorBox = document.getElementById("error");
 
   function render(state) {
-    if (state.phase === "done") {
+    // Gated on is_built, not on the phase alone. The phase records how the last
+    // rebuild ended and outlives the bundle it produced, so "done" with the
+    // bundle gone is reachable -- a reveal empties the output directory before
+    // writing, and this page is only served while the bundle is missing.
+    // Reloading on the phase alone would spin the page in a tight reload loop
+    // for the length of that build.
+    if (state.phase === "done" && state.is_built) {
       status.textContent = "Rebuilt. Reloading...";
       window.location.reload();
       return;
     }
-    if (state.phase === "failed") {
+    if (state.phase === "failed" || state.phase === "done") {
       button.disabled = false;
       button.textContent = "Try again";
-      status.textContent = "The rebuild did not finish.";
-      errorBox.hidden = false;
+      status.textContent =
+        state.phase === "failed"
+          ? "The rebuild did not finish."
+          : "The interface went missing again after it was rebuilt.";
+      errorBox.hidden = !state.error;
       errorBox.textContent = state.error || "";
       return;
     }

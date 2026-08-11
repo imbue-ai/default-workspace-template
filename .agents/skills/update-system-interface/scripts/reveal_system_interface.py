@@ -624,16 +624,26 @@ def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
         sys.stderr.write(completed.stderr)
 
 
+def _reinstall_backend_tool(repo_root: Path, runner: Runner) -> None:
+    """Re-resolve the editable tool's dependencies.
+
+    Its own function because recovery needs exactly this half of the dependency
+    refresh and none of the frontend half (see :func:`_recover_running_state`),
+    and the two must not drift on how the tool is installed.
+    """
+    _run_checked(
+        runner,
+        ["uv", "tool", "install", "-e", APP_DIR, "--reinstall"],
+        repo_root,
+        "uv tool install --reinstall",
+    )
+
+
 def _refresh_dependencies(changes: ChangeSet, repo_root: Path, runner: Runner) -> None:
     if changes.frontend_manifest:
         _run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
     if changes.backend_manifest:
-        _run_checked(
-            runner,
-            ["uv", "tool", "install", "-e", APP_DIR, "--reinstall"],
-            repo_root,
-            "uv tool install --reinstall",
-        )
+        _reinstall_backend_tool(repo_root, runner)
 
 
 def _apply_reveal(
@@ -783,6 +793,15 @@ def _recover_running_state(
     failed once. A rebuild is only attempted when there is no snapshot, i.e. when
     there was no bundle to lose in the first place.
 
+    Known cost of skipping ``npm ci`` here: rolling back a *manifest* change
+    leaves ``node_modules`` holding the packages the failed reveal installed
+    while the restored tree holds the old lockfile. What is served is unaffected
+    (the restored bundle is already compiled), but the next reveal that touches
+    only frontend source builds against that skew, since no manifest changed for
+    it to notice. Re-running ``npm ci`` to avoid this is the worse trade: it is
+    the destructive step the snapshot exists to survive, and it would put the
+    recovery back at the mercy of the build environment that just failed.
+
     Unlike :func:`_apply_reveal`, nothing here raises -- this is the last line of
     defense, so a failed step just means "not recovered" (exit 3)."""
     try:
@@ -790,12 +809,7 @@ def _recover_running_state(
         # deliberately skipped: it deletes node_modules before installing, and
         # the restored bundle is already-compiled output that needs neither.
         if changes.backend_manifest:
-            _run_checked(
-                runner,
-                ["uv", "tool", "install", "-e", APP_DIR, "--reinstall"],
-                repo_root,
-                "uv tool install --reinstall",
-            )
+            _reinstall_backend_tool(repo_root, runner)
         if changes.frontend:
             if saved_bundle is not None:
                 restore_bundle(saved_bundle, repo_root)

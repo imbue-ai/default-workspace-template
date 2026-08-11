@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.system_interface.frontend_build import FrontendBuildError
 from imbue.system_interface.frontend_build import FrontendBuildPhase
@@ -21,11 +22,15 @@ _BUILD_ARGV = ["npm", "run", "build"]
 _INSTALL_ARGV = ["npm", "ci"]
 
 
-class _FakeResult:
-    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
+def _finished(returncode: int = 0, stdout: str = "", stderr: str = "") -> FinishedProcess:
+    """A real command result, so the fakes match what the runner actually returns."""
+    return FinishedProcess(
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+        command=("npm",),
+        is_output_already_logged=False,
+    )
 
 
 class _RecordingRunner:
@@ -39,16 +44,16 @@ class _RecordingRunner:
     def __init__(
         self,
         *,
-        result: _FakeResult | None = None,
+        result: FinishedProcess | None = None,
         bundle_to_write: Path | None = None,
         raises: BaseException | None = None,
     ) -> None:
         self.calls: list[list[str]] = []
-        self._result = result if result is not None else _FakeResult()
+        self._result = result if result is not None else _finished()
         self._bundle_to_write = bundle_to_write
         self._raises = raises
 
-    def __call__(self, command: Sequence[str], cwd: Path, timeout: float) -> _FakeResult:
+    def __call__(self, command: Sequence[str], cwd: Path, timeout: float) -> FinishedProcess:
         self.calls.append(list(command))
         if self._raises is not None:
             raise self._raises
@@ -99,7 +104,7 @@ def test_rebuild_skips_the_install_when_dependencies_are_present(tmp_path: Path)
 
 
 def test_failed_build_reports_the_command_output(tmp_path: Path) -> None:
-    runner = _RecordingRunner(result=_FakeResult(returncode=1, stderr="ENOTFOUND registry.npmjs.org"))
+    runner = _RecordingRunner(result=_finished(returncode=1, stderr="ENOTFOUND registry.npmjs.org"))
     service = _build_service(tmp_path, runner, has_node_modules=True)
 
     service._run_build_in_background()
@@ -156,10 +161,10 @@ def test_a_second_rebuild_is_refused_while_one_is_running(tmp_path: Path) -> Non
     release = threading.Event()
     finished = threading.Event()
 
-    def blocking_runner(command: Sequence[str], cwd: Path, timeout: float) -> _FakeResult:
+    def blocking_runner(command: Sequence[str], cwd: Path, timeout: float) -> FinishedProcess:
         release.wait(timeout=10.0)
         finished.set()
-        return _FakeResult(returncode=1)
+        return _finished(returncode=1)
 
     frontend = tmp_path / "frontend"
     frontend.mkdir()
