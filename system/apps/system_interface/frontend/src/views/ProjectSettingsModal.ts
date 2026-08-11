@@ -23,7 +23,7 @@
 
 import m from "mithril";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
-import type { ProjectInfo } from "../models/Projects";
+import type { MemberKind, ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 
 export interface ProjectSettingsModalAttrs {
@@ -37,6 +37,25 @@ export interface ProjectSettingsModalAttrs {
   // broadcast, the same path another client's delete takes.
   onDeleted: (projectId: string) => void;
   onCancel: () => void;
+  // What this project currently shows, in the order the rail lists it. The
+  // modal only renders and removes: the workspace owns membership, so dropping
+  // a row calls back rather than writing to the store here.
+  contents: readonly ProjectContentRow[];
+  // Stop showing this object in this project. The object keeps running and
+  // stays in every other project holding it -- a project is a view, so this
+  // hides it here and nowhere else.
+  onRemoveContent: (ref: string) => void;
+}
+
+/** One row of the "What's in this project" list. Mirrors the rail's tab row,
+ *  minus the parts only the rail needs. */
+export interface ProjectContentRow {
+  ref: string;
+  kind: MemberKind;
+  label: string;
+  // Whether the object has a tab in the dock right now. A member with no panel
+  // is backgrounded: still running, just not docked.
+  isOpen: boolean;
 }
 
 // The palette is exactly the glyphs' own signature colors, so every project
@@ -45,6 +64,18 @@ const PALETTE: readonly string[] = SQUIGGLE_GLYPHS.map((glyph) => glyph.color);
 
 const PREVIEW_GLYPH_SIZE = 40;
 const PICKER_GLYPH_SIZE = 28;
+
+// The rail draws each kind as a glyph, but its icon table is private to that
+// module and importing it here would make the two circular (the rail already
+// imports this modal). A settings list is prose-shaped anyway, so the kind
+// reads as a word.
+const KIND_LABEL: Record<MemberKind, string> = {
+  chat: "Chat",
+  browser: "Browser",
+  terminal: "Terminal",
+  app: "App",
+  url: "Page",
+};
 
 // `squiggleMarkup` wraps out-of-range indices on its own, but the picker
 // compares indices to decide which cell is selected, so a glyph read back from
@@ -126,6 +157,59 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
         color = swatch;
       },
     });
+  }
+
+  /** What the project currently shows, with a way to drop each row.
+   *
+   *  Removing hides the object in this project only -- it keeps running and
+   *  stays in every other project holding it, and in Everything -- so the
+   *  button says "Remove" rather than anything that sounds like stopping or
+   *  deleting it. Rows the dock is not currently showing are the backgrounded
+   *  ones, and read as tertiary the same way the rail draws them. */
+  function contentsList(attrs: ProjectSettingsModalAttrs): m.Vnode {
+    if (attrs.contents.length === 0) {
+      return m(
+        "p",
+        { class: "text-text-faint mb-3 text-[13px]" },
+        "Nothing yet. Open a chat, browser, terminal or app while this project is showing and it lands here.",
+      );
+    }
+    return m(
+      "div",
+      { class: "border-border mb-3 max-h-48 overflow-y-auto rounded-md border" },
+      attrs.contents.map((row) =>
+        m(
+          "div",
+          {
+            key: row.ref,
+            class: "border-border/60 group flex h-8 items-center gap-2 border-b px-2 last:border-b-0",
+          },
+          [
+            m("span", { class: "text-text-faint w-16 shrink-0 text-[11px]" }, KIND_LABEL[row.kind]),
+            m(
+              "span",
+              {
+                class: "min-w-0 flex-1 truncate text-[13px] " + (row.isOpen ? "text-text-primary" : "text-text-faint"),
+              },
+              row.label,
+            ),
+            m(
+              "button",
+              {
+                type: "button",
+                class:
+                  "text-text-faint hover:text-text-primary shrink-0 cursor-pointer bg-transparent px-1 text-[12px] " +
+                  "opacity-0 group-hover:opacity-100 disabled:opacity-50",
+                disabled: isSaving || isDeleting,
+                title: "Remove from this project. It keeps running and stays in Everything.",
+                onclick: () => attrs.onRemoveContent(row.ref),
+              },
+              "Remove",
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   function glyphCell(index: number): m.Vnode {
@@ -263,6 +347,9 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
                 { class: "mb-3 grid grid-cols-5 gap-2" },
                 SQUIGGLE_GLYPHS.map((_glyph, index) => glyphCell(index)),
               ),
+
+              m("label.custom-url-dialog-label", "In this project"),
+              contentsList(attrs),
 
               error ? m("p", { style: "color: red; font-size: 0.85em; margin-top: 4px;" }, error) : null,
 
