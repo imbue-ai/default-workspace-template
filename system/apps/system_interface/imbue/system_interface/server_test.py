@@ -796,35 +796,6 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
     assert response.get_json()["detail"] == "Failed to interrupt agent 'claude-agent': mngr start failed"
 
 
-def test_layout_dir_override_wins_over_the_agent_path(tmp_path: Path) -> None:
-    # The live-editing preview points system_interface_layout_dir at a throwaway
-    # copy of the live layout so it renders the user's real tabs without writing to
-    # the live one. That override must win even when a real MNGR_AGENT_ID is
-    # present (the autouse isolation fixture sets one) -- otherwise the preview's
-    # autosaves would land on the live layout, which is the exact thing this
-    # prevents.
-    override = tmp_path / "seeded-layout"
-    app = create_application(build_test_state(config=Config(system_interface_layout_dir=override)))
-
-    with app.app_context():
-        assert _primary_agent_layout_dir() == override
-
-
-def test_layout_dir_override_is_per_app_not_process_wide(tmp_path: Path) -> None:
-    # The override lives on each app's own config, so two servers in one process
-    # (how the test suite runs them) resolve to their own layout dirs. Reading it
-    # from the process env instead would make whichever booted last win, and a
-    # lingering connection on the other would write into the wrong workspace.
-    override = tmp_path / "seeded-layout"
-    previewing = create_application(build_test_state(config=Config(system_interface_layout_dir=override)))
-    plain = create_application(build_test_state(config=Config()))
-
-    with previewing.app_context():
-        assert _primary_agent_layout_dir() == override
-    with plain.app_context():
-        assert _primary_agent_layout_dir() != override
-
-
 def test_list_layouts_exposes_defaults(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A fresh workspace lists the two default layout names, both empty."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
@@ -1119,42 +1090,6 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
         response = test_client.get("/")
         assert response.status_code == 200
         assert "system-interface-hostname" in response.text
-
-
-def test_index_hands_the_self_referential_services_to_the_frontend(tmp_path: Path) -> None:
-    """The configured names reach the shell, which is the only place that can refuse them.
-
-    Each service owns a browser origin the frontend derives itself, so a panel
-    naming one of these never reaches this server -- the meta tag is the whole
-    delivery mechanism for the refusal.
-    """
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
-    config = Config(system_interface_self_referential_services=["si-preview", "si-preview-app"])
-
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state(config=config)).test_client()
-        response = test_client.get("/")
-
-    assert response.status_code == 200
-    assert '<meta name="system-interface-self-referential-services" content="si-preview,si-preview-app">' in (
-        response.text
-    )
-
-
-def test_index_omits_the_self_referential_meta_tag_when_none_are_configured(tmp_path: Path) -> None:
-    """The workspace's own system interface registers no services, so it has nothing to exclude."""
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
-
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
-
-    assert response.status_code == 200
-    assert "system-interface-self-referential-services" not in response.text
 
 
 def test_random_name_endpoint(client: FlaskClient) -> None:

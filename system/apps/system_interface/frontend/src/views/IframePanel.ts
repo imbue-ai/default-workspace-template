@@ -5,62 +5,14 @@ interface IframePanelAttrs {
   title: string;
   serviceName?: string;
   panelId?: string;
-  // Set when ``serviceName`` resolves back to the instance serving this shell
-  // (see ``getSelfReferentialServices``). The panel then explains itself
-  // instead of framing anything -- see ``renderSelfReferentialNotice``.
-  isSelfReferential?: boolean;
 }
 
 export const IFRAME_PANEL_SERVICE_NAME_ATTR = "data-service-name";
 export const IFRAME_PANEL_PANEL_ID_ATTR = "data-panel-id";
 
-/**
- * The panel body shown in place of a service that resolves back to this shell.
- *
- * Framing it would nest this instance inside itself, so the tab gets this
- * instead. It deliberately explains *why* the tab is not showing what the user
- * expects: a blank or erroring tab sitting in the middle of an otherwise
- * faithful layout reads as the preview being broken. There is no retry --
- * nothing about this resolves by waiting.
- */
-export function renderSelfReferentialNotice(serviceName: string): m.Vnode {
-  return m(
-    "div",
-    {
-      class: "iframe-panel-self-referential",
-      style:
-        "display: flex; flex-direction: column; justify-content: center; align-items: center; " +
-        "width: 100%; height: 100%; padding: 0 24px; text-align: center; " +
-        "color: var(--color-text-secondary); background: var(--color-bg);",
-    },
-    [
-      m(
-        "p",
-        { style: "margin: 0; max-width: 32rem; line-height: 1.5;" },
-        "This tab is the preview you are already looking at.",
-      ),
-      m(
-        "p",
-        {
-          style:
-            "margin: 10px 0 0; max-width: 32rem; line-height: 1.5; font-size: 14px; color: var(--color-text-faint);",
-        },
-        [
-          "Opening ",
-          m("code", serviceName),
-          " in here would nest the preview inside itself, so it is left out. Every other tab is the real thing.",
-        ],
-      ),
-    ],
-  );
-}
-
 export const IframePanel: m.Component<IframePanelAttrs> = {
   view(vnode) {
-    const { url, title, serviceName, panelId, isSelfReferential } = vnode.attrs;
-    if (isSelfReferential === true && serviceName !== undefined) {
-      return renderSelfReferentialNotice(serviceName);
-    }
+    const { url, title, serviceName, panelId } = vnode.attrs;
     const attrs: Record<string, string> = {
       src: url,
       title,
