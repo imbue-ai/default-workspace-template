@@ -15,7 +15,7 @@ idle previewer has no business sitting in your workspace.
 
 This is what lets an agent show you a rendered README instead of pasting raw
 markdown into chat -- the publish-template flow now does exactly that before
-shipping atemplate's landing page, and closes it afterwards.
+shipping a template's landing page, and closes it afterwards.
 
 Repoints the broken `docs/system/style_guide.md` symlink. It targeted
 `vendor/mngr/style_guide.md`, which resolves relative to `docs/system/` and so

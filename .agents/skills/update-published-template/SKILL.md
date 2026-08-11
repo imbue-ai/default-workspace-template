@@ -1,14 +1,14 @@
 ---
 name: update-published-template
-description: Create a NEW version of atemplate you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of atemplate they previously published.
+description: Create a NEW version of a template you already published (v2, v3, ...) -- re-cut the changes made since the last version on top of the published snapshot and advance the published repo by exactly one clean commit, preserving all of the hand-crafted content in the published repo. Use when the user asks to update, re-publish, revise, or ship a new version of a template they previously published.
 ---
 
 # Update a published template
 
 Version: v2 (templates flow). This is the PUBLISHER's re-publish path -- the
-companion to `publish-template` (atemplate's first publish),
+companion to `publish-template` (a template's first publish),
 `use-template` (adopt someone else's), and `update-installed-template`
-(pull a newer version of one you adopted). It produces the NEXT version of an
+(pull a newer version of one you adopted). It produces the NEXT version of a
 template THIS mind already published: it re-cuts the source workspace's
 changes since the last version onto the published snapshot and fast-forwards
 `main` by exactly one commit, leaving every hand-crafted thing in the published
@@ -22,7 +22,7 @@ latchkey permissioning (never the `gh` CLI), and pushes -- directly from the
 worker's worktree.
 
 Two unrelated `v<n>` axes appear below -- the flow version (v2, the manifest
-format) and atemplate's own publish count. See
+format) and a template's own publish count. See
 `references/v1-to-v2-migration.md`.
 
 > **THE ONE SAFETY REQUIREMENT ABOVE ALL OTHERS -- DO NOT REGENERATE, RE-ASSEMBLE

@@ -4,12 +4,12 @@
 
 The **flow version** is the manifest FORMAT. v2 is exactly one slug-free
 `template.md` + `template.toml` + `template.svg` per repo; v1 is the
-older format, which used slug-named `template-<slug>.md` (possibly several
+older format, which used slug-named `inspiration-<slug>.md` (possibly several
 in one repo) with a YAML recipe inside the markdown and no TOML.
 
 An **template's own version** (v1, v2, v3, ...) counts how many times THAT
 template has been published. It keeps counting across a format migration --
-atemplate on its fourth publish is v4 whether the format is v1 or v2.
+a template on its fourth publish is v4 whether the format is v1 or v2.
 
 Both appear in this skill, so read each `v<n>` for which axis it is on.
 
@@ -20,8 +20,8 @@ reads only the markdown, which survives.
 
 ## What v1 looks like
 
-- One or more slug-named `template-<slug>.md` files at the repo root, each
-  with a sibling `template-<slug>.svg`.
+- One or more slug-named `inspiration-<slug>.md` files at the repo root, each
+  with a sibling `inspiration-<slug>.svg`.
 - The recipe is a fenced `yaml` block inside the markdown, under `## Recipe`.
 - No `template.toml` anywhere. Absence of that file is what identifies v1 --
   not a version field inside it.
@@ -52,7 +52,7 @@ reads only the markdown, which survives.
 
 ## What is deliberately NOT carried forward
 
-Any OTHER accumulated `template-*.md` in the repo. v2 holds exactly one
+Any OTHER accumulated `inspiration-*.md` in the repo. v2 holds exactly one
 manifest, and superseding the rest is the point of the change. Each becomes a
 `[[lineage]]` entry instead -- slug, repo URL, and the commit it was used at --
 which is what makes dropping the file non-destructive: the manifest stays

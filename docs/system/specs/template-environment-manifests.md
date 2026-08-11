@@ -7,7 +7,7 @@ the workspace-root-relayout + template-manifest restructuring effort.
 
 Templates (publish-template / use-template) currently declare their
 runtime needs only as prose plus `requires_permission:` / `requires_secret:` /
-`requires_llm:` lines in `template-<slug>.md`. System packages an
+`requires_llm:` lines in `inspiration-<slug>.md`. System packages a
 template's code needs are implicit -- the adopting mind discovers them by
 running into failures. With env-converge in place, the environment side has a
 principled home for these declarations.
@@ -15,7 +15,7 @@ principled home for these declarations.
 ## Direction agreed so far
 
 - Split the machine-readable parts of the manifest out of the markdown into a
-  pydantic-validated `template-<slug>.toml` (prose, holes, and the two
+  pydantic-validated `inspiration-<slug>.toml` (prose, holes, and the two
   append-only history logs stay in the .md). Validation runs at publish time
   in `build_template.sh`'s gate, not just as instructions to the worker.
 - Add per-template declared dependency sections mirroring the environment
