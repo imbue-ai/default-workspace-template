@@ -65,7 +65,6 @@ transcript.
 ```bash
 cat > data/.tasks/harden/heal-$TARGET/task.md << TASK_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/harden/heal-$TARGET/reports/report.md
 operation: heal
 type: skill

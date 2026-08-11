@@ -260,14 +260,14 @@ Note the ticket id, then start it (its own tool call, nothing chained):
 tk start <ticket-id>
 ```
 
-Write the task file with the two-heredoc form -- an **unquoted** frontmatter block
-so the variables expand, then a **quoted** body so its backticks stay literal:
+Write the task file with the two-heredoc form the other worker skills use --
+an **unquoted** frontmatter block, then a **quoted** body so its backticks stay
+literal:
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/migrate-workspace/reports/report.md
 source_repo_root: <repo_root>
 source_host_dir: <host_dir>

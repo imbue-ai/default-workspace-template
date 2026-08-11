@@ -112,7 +112,10 @@ _QUALITY_DELAY_BUDGET_S = 0.10
 _QUALITY_RECOVER_DELAY_S = 0.04
 _CRF_SOFT_STEP = 4
 _CRF_RECOVER_STEP = 2
-_CRF_MAX = 38
+# Ceiling the servo may soften motion CRF to under congestion. Kept above the base motion
+# CRF (_VIDEO_CRF) so the servo retains headroom -- if it equalled the base the servo could
+# never step up and would be inert.
+_CRF_MAX = 44
 
 # Server-side floor between IDR requests (the request is global: every row's
 # encoder refreshes), so a struggling viewer cannot make the encoders spend
@@ -128,14 +131,21 @@ _IDR_REQUEST_MIN_INTERVAL = 0.4
 # only costs one extra keyframe.
 _ROW_STALL_TIMEOUT = 3.0
 
-# 60, not 30: the capture loop is a fixed tick nothing wakes early, so every
-# screen change waits half a tick on average before being seen -- ~8ms at 60
-# vs ~17ms at 30. Encode stays damage-driven, so an idle screen costs the same.
-_CAPTURE_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
+# The one frame-rate CAP: the ceiling on both the capture tick (pixelflux target_fps) AND
+# the AIMD capture-rate controller (_RATE_MAX_FPS below). Higher = smoother under motion but
+# more CPU (software H.264 at the cap ~= one core under continuous motion); lower halves that.
+# MUST stay <= _WINDOW_REFERENCE_FPS (66) or the delivery window can't carry the encoder's top
+# rate and the capture rate sawtooths -- the guard just below _WINDOW_REFERENCE_FPS enforces it.
+# 30 is the CPU/smoothness default; raise toward 60 for smoother motion, never past 66.
+_FPS_CAP = float(os.environ.get("BROWSER_VIDEO_FPS_CAP", "30"))
+# The capture loop is a fixed tick nothing wakes early, so every screen change waits half a
+# tick on average before being seen (~17ms at 30, ~8ms at 60). Encode stays damage-driven, so
+# an idle screen costs the same regardless of the tick.
+_CAPTURE_FPS = _FPS_CAP
 # Deliberately soft during motion (cheap to encode, cheap to ship); the
 # paint-over pass re-encodes the settled screen at the crisp CRF, so text is
 # sharp whenever the user could actually read it.
-_VIDEO_CRF = int(os.environ.get("BROWSER_VIDEO_CRF", "28"))
+_VIDEO_CRF = int(os.environ.get("BROWSER_VIDEO_CRF", "38"))
 _PAINTOVER_CRF = int(os.environ.get("BROWSER_VIDEO_PAINTOVER_CRF", "18"))
 # Trigger counts DAMAGED FRAMES at the capture tick, not wall time: 5 frames
 # at a 60fps tick is 83ms -- a mid-scroll micro-pause -- and each firing costs
@@ -166,7 +176,7 @@ class VideoPipeError(RuntimeError):
 # delivery rate alone -- avoids the ratchet-down trap where bursty damage
 # under-fills a rate window and locks the tick at the floor.
 _RATE_MIN_FPS = 8.0
-_RATE_MAX_FPS = float(os.environ.get("BROWSER_VIDEO_FPS", "60"))
+_RATE_MAX_FPS = _FPS_CAP  # same cap as the capture tick (BROWSER_VIDEO_FPS_CAP)
 _RATE_DECREASE_FACTOR = 0.6
 _RATE_INCREASE_FPS = 3.0
 # A single drop interval is ordinary AIMD probing overshoot -- shave a little and
@@ -186,6 +196,15 @@ _SUSTAINED_DROP_INTERVALS = 3
 # so the encoder chronically outran delivery, overwrote the mailbox, and the AIMD
 # sawtoothed down toward the floor. 66 ~= 60 / 0.9, leaving headroom above the cap.
 _WINDOW_REFERENCE_FPS = 66.0
+
+# The sawtooth invariant, enforced at import: the frame-rate cap must not exceed the window
+# reference, or the delivery window throttles below the encoder's top rate and the capture
+# rate sawtooths (the v7 failure mode). The default (30) is safe; this only fires if someone
+# sets BROWSER_VIDEO_FPS_CAP too high "to fix stutter" -- exactly the mistake to prevent.
+assert _FPS_CAP <= _WINDOW_REFERENCE_FPS, (
+    f"BROWSER_VIDEO_FPS_CAP ({_FPS_CAP}) must be <= the delivery-window reference "
+    f"({_WINDOW_REFERENCE_FPS}); a higher cap reintroduces capture-rate sawtoothing."
+)
 
 
 def target_capture_fps(

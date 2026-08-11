@@ -439,18 +439,66 @@ def test_http_handoff_returns_a_consistent_on_loop_control_snapshot(monkeypatch:
 
 
 def test_http_cast_closes_a_failed_launch_name_terminally(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A name whose background launch FAILED is closed 1008 (terminal) by the cast handler,
-    # so a late/retrying optimistic viewer stops looping on 1013 (finding [7]). We boot a
-    # real server because the close CODE is only observable over a real socket.
+    # A name whose background launch FAILED is closed terminally by the cast handler, so a
+    # late/retrying optimistic viewer stops looping on 1013 (finding [7]). The terminal reason
+    # rides a TEXT frame (`launch_failed`) sent BEFORE the close: the close CODE alone is not a
+    # reliable signal here -- werkzeug writes a trailing HTTP response onto the hijacked socket,
+    # so a real browser sees 1006 "Invalid frame header" and never the 1008 code. We boot a real
+    # server because both the message and the close CODE are only observable over a real socket.
     runner.manager._browsers.clear()
     runner.manager._failed_launch_names.append("alex-smith")  # valid name, but launch failed
     with _BootedServer() as server:
         ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/alex-smith/cast")
-        # The handler closes the socket terminally; the client sees it close (no messages).
+        # The reliable terminal signal is the message; the viewer marks itself closed-for-good
+        # on it regardless of whether the (corruptible) close code survives.
+        assert _ws_recv_json(ws, timeout=5)["type"] == "launch_failed"
         assert _wait_until(lambda: not ws.connected)
         # 1008 is terminal; a still-launching (not failed) valid name would have been 1013.
         assert ws.close_reason == 1008
     runner.manager._failed_launch_names.clear()
+
+
+def test_http_cast_closes_a_closed_browser_with_the_terminated_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A browser explicitly CLOSED by an agent is closed terminally, so a viewer whose tab is
+    # still open renders the "terminated by an agent" overlay instead of the generic "reopen"
+    # text or a "Starting browser…" retry loop. The viewer acts on the `closed` TEXT frame
+    # (delivered intact before the close), not the 4001 close code -- which a real browser never
+    # sees, because werkzeug corrupts the close handshake with a trailing HTTP response (1006).
+    runner.manager._browsers.clear()
+    runner.manager._closed_names.append("alex-smith")
+    try:
+        with _BootedServer() as server:
+            ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/alex-smith/cast")
+            assert _ws_recv_json(ws, timeout=5)["type"] == "closed"
+            assert _wait_until(lambda: not ws.connected)
+            assert ws.close_reason == runner._WS_CLOSE_TERMINATED
+    finally:
+        runner.manager._closed_names.clear()
+
+
+def test_http_cast_closes_a_stale_valid_name_terminally_once_restore_is_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A syntactically valid name that resolves to nothing is RETRYABLE (1013) while the fleet
+    # is still restoring -- it may yet come up -- but TERMINAL (4001 + `closed`) once restore is
+    # done: a layout-restored tab of a browser closed in a PRIOR daemon life (whose in-memory
+    # close memory didn't survive the restart) must show the terminated overlay, not loop forever
+    # on "Starting browser…".
+    runner.manager._browsers.clear()
+    runner.manager._closed_names.clear()
+    runner.manager._failed_launch_names.clear()
+    runner._init_done.clear()  # still restoring -> retryable
+    try:
+        with _BootedServer() as server:
+            ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/riley-jones/cast")
+            assert _wait_until(lambda: not ws.connected)
+            # Retryable: NO terminal message (the viewer must keep reconnecting), just 1013.
+            assert ws.close_reason == 1013
+    finally:
+        runner._init_done.set()  # restore done -> terminal (conftest also re-sets on teardown)
+    with _BootedServer() as server:
+        ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/riley-jones/cast")
+        assert _ws_recv_json(ws, timeout=5)["type"] == "closed"
+        assert _wait_until(lambda: not ws.connected)
+        assert ws.close_reason == runner._WS_CLOSE_TERMINATED
 
 
 def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(monkeypatch: pytest.MonkeyPatch) -> None:
