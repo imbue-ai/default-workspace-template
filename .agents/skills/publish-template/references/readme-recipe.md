@@ -1,4 +1,4 @@
-# Writing an template's README
+# Writing atemplate's README
 
 The published repo's `README.md` is its landing page -- the first thing a person
 sees on github.com and what convinces them to boot it. `build_template.sh`

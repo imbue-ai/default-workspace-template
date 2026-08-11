@@ -1,9 +1,9 @@
 ---
 name: use-template
-description: Adapt an existing template (a published snapshot of apps/features from another mind) into this mind, resolving its requirements interactively. Use when the user gives an template's git URL, or asks to adopt/adapt/reuse a published template.
+description: Adapt an existing template (a published snapshot of apps/features from another mind) into this mind, resolving its requirements interactively. Use when the user gives atemplate's git URL, or asks to adopt/adapt/reuse a published template.
 ---
 
-# Adapting an template
+# Adapting atemplate
 
 Version: v2 (templates flow). This versions the publish/adopt flow and the
 manifest format. This skill reads BOTH:
@@ -17,11 +17,11 @@ manifest format. This skill reads BOTH:
   `template.toml` is what identifies it. Still adopted exactly as before;
   nothing writes this format any more.
 
-An template is a publishable, reusable snapshot of the apps and features a mind
+Atemplate is a publishable, reusable snapshot of the apps and features a mind
 has built. It lives in its own GitHub repo as a real default-workspace-template tree
 plus its manifest at the repo root -- `template.md` with an
 `template.svg` thumbnail (v2 adds `template.toml`; a v1 repo instead has
-slug-named `template-<slug>.md`, possibly several). Adapting an template means bringing
+slug-named `template-<slug>.md`, possibly several). Adapting atemplate means bringing
 that snapshot into *this* mind and then working through its "requirements" — the parts
 the original author left stubbed or unwired — together with the user.
 
@@ -32,7 +32,7 @@ All git commands run with cwd = the repo root (`/home/user/workspace`).
 There are two ways this skill starts. Figure out which one applies before doing
 anything else.
 
-**A. Template path — this mind was created from an template repo.** The mind
+**A. Template path — this mind was created from atemplate repo.** The mind
 already has the template's tree at its root (it *is* the template repo), so
 there is nothing to fetch. On this path adaptation starts IMMEDIATELY at boot:
 the published repo ships its own template-specific `/welcome` skill
@@ -49,13 +49,13 @@ skill, treat the others as already-adapted reference material, and ask the user
 if it is ambiguous.) Skip step 1 below (the tree is already
 here) and go straight to reading the manifest.
 
-**B. Merge path — the user gave you an template's git URL.** Bring the
+**B. Merge path — the user gave you atemplate's git URL.** Bring the
 template into the *current* mind at the repo root, then adapt it. Do step 1
 below to merge it in.
 
 ## 0. Trust gate — confirm before merging in (merge path B only)
 
-An template is code published by ANOTHER mind's user, in a repo outside
+Atemplate is code published by ANOTHER mind's user, in a repo outside
 Imbue's control. **Imbue does not review, verify, or vouch for templates.**
 Adopting one runs its code in this mind -- its services, skills, and scripts --
 and it could contain mistakes or malicious code (data exfiltration, destructive

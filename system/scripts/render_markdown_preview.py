@@ -2,7 +2,7 @@
 """Render a markdown file to HTML for the `markdown-preview` service.
 
 Handing a user raw markdown in chat and asking them to picture the rendered
-page is a bad trade when the page is the deliverable -- an template's README
+page is a bad trade when the page is the deliverable -- atemplate's README
 is the thing that decides whether anyone boots it. This renders the file the
 way GitHub will, into a tab the user can actually look at.
 

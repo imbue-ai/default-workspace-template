@@ -1,5 +1,5 @@
 Adds the template-manifest schema: a pydantic model for `template.toml`
-covering an template's identity, its derivation recipe, the activation
+covering atemplate's identity, its derivation recipe, the activation
 prerequisites an adopter must satisfy, the environment it declares (apt package
 names, npm globals, uv tools, cargo crates, and carried `env.d` units), and the
 lineage of templates it was built on.
