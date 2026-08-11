@@ -38,7 +38,7 @@ import re
 import tomllib
 from datetime import date
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -386,8 +386,71 @@ def find_manifest_path(workspace_dir: Path) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def load_template_manifest(path: Path) -> TemplateManifest:
+class LoadedManifest(FrozenManifestModel):
+    """A parsed manifest, plus whatever the parse had to set aside."""
+
+    manifest: TemplateManifest = Field(description="The validated manifest")
+    ignored_keys: tuple[str, ...] = Field(
+        default=(),
+        description="Dotted paths this workspace did not understand and dropped",
+    )
+
+
+def _nested_manifest_model(annotation: object) -> type[BaseModel] | None:
+    """The manifest model a field wraps, if it wraps one.
+
+    Covers a plain model, `Model | None`, and `tuple[Model, ...]`. `dict` is
+    deliberately excluded: its keys are data (package names), so nothing inside
+    one can be an unknown *field*.
+    """
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    if get_origin(annotation) is dict:
+        return None
+    for argument in get_args(annotation):
+        if isinstance(argument, type) and issubclass(argument, BaseModel):
+            return argument
+    return None
+
+
+def _without_unknown_keys(
+    raw: object, model: type[BaseModel], path: tuple[str, ...], ignored: list[str]
+) -> object:
+    """`raw` with every key `model` does not declare removed, recording each."""
+    if not isinstance(raw, dict):
+        return raw
+    kept: dict[str, object] = {}
+    for key, value in raw.items():
+        field = model.model_fields.get(key)
+        if field is None:
+            ignored.append(".".join((*path, key)))
+            continue
+        nested = _nested_manifest_model(field.annotation)
+        if nested is None:
+            kept[key] = value
+        elif isinstance(value, list):
+            kept[key] = [
+                _without_unknown_keys(item, nested, (*path, f"{key}[{index}]"), ignored)
+                for index, item in enumerate(value)
+            ]
+        else:
+            kept[key] = _without_unknown_keys(value, nested, (*path, key), ignored)
+    return kept
+
+
+def load_template_manifest(path: Path) -> LoadedManifest:
     """Parse and validate one `template.toml`.
+
+    A manifest declaring the format this workspace knows is parsed STRICTLY: an
+    unrecognised key there is a typo in something we just wrote, and silently
+    dropping it would mean silently not installing a package.
+
+    A manifest declaring any OTHER format is parsed leniently -- unknown keys
+    are dropped and returned in `ignored_keys` rather than failing the read.
+    A newer template is mostly still readable, and refusing all of it because
+    of one table this workspace has never heard of helps nobody. Reporting what
+    was dropped is what keeps that from being a silent half-install; a caller
+    that ignores `ignored_keys` turns a loud problem into a quiet one.
 
     Raises TemplateManifestNotFoundError when the file is absent, and
     TemplateManifestParseError when it cannot be read, is not valid TOML, or
@@ -405,10 +468,17 @@ def load_template_manifest(path: Path) -> TemplateManifest:
         raise TemplateManifestParseError(path, f"not valid UTF-8: {e}") from e
     except tomllib.TOMLDecodeError as e:
         raise TemplateManifestParseError(path, f"not valid TOML: {e}") from e
+    ignored: list[str] = []
+    declared_format = raw_manifest.get("format", CURRENT_MANIFEST_FORMAT)
+    if declared_format != CURRENT_MANIFEST_FORMAT:
+        raw_manifest = _without_unknown_keys(
+            raw_manifest, TemplateManifest, (), ignored
+        )
     try:
-        return TemplateManifest.model_validate(raw_manifest)
+        manifest = TemplateManifest.model_validate(raw_manifest)
     except ValidationError as e:
         raise TemplateManifestParseError(path, str(e)) from e
+    return LoadedManifest(manifest=manifest, ignored_keys=tuple(ignored))
 
 
 def lineage_after_override(
@@ -629,7 +699,7 @@ def validate_template_tree(
     reach the checks, not findings from them.
     """
     manifest_path = repo_root / MANIFEST_TOML_NAME
-    manifest = load_template_manifest(manifest_path)
+    manifest = load_template_manifest(manifest_path).manifest
 
     problems: list[str] = []
     markdown_path = repo_root / MANIFEST_MARKDOWN_NAME
