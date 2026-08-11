@@ -14,16 +14,25 @@ survives is the `[[lineage]]` chain, which records each predecessor's repo URL
 and commit hash so the superseded manifest stays retrievable where it is
 authoritative.
 
-**Why this module imports only pydantic and the standard library.** It is used
-from two very different places. At converge time it is imported normally, from
-the workspace venv. At publish time it runs inside a worker's worktree that
-`build_template.sh` has just reset with `git read-tree -u --reset` +
-`git clean -fdxq`, which deletes the gitignored `.venv` -- so the validator is
-snapshotted out of the tree before that reset and re-run under
-`uv run --no-project --with pydantic`. That deliberately resolves no workspace
-project (the assembly script documents why: building the full environment on a
-cold base is slow and can fail on an unrelated build error, aborting an
-otherwise fine publish), which means no workspace package is importable here.
+**Who imports this, and why it lives here.** One caller: the publish gate,
+`validate_template.py`, which loads it *by file path* rather than as a package.
+Nothing on the adopt side comes through here at all -- an agent reads the TOML
+and makes what it can of it -- and `env_converge` itself does not import it
+either. It sits in this package because the declaration is written in
+env_converge's vocabulary: `[environment]` is source-for-source the shape of
+the environment record -- apt, npm globals, uv tools, cargo -- plus the `env.d`
+units for what has no package database to be recorded from. A template declares
+its needs in the same terms the machine already records its own.
+
+**Why it imports only pydantic and the standard library.** The gate runs inside
+a worker's worktree that `build_template.sh` has just reset with
+`git read-tree -u --reset` + `git clean -fdxq`, which deletes the gitignored
+`.venv` -- so both the validator and this module are snapshotted out of the
+tree before that reset and re-run under `uv run --no-project --with pydantic`.
+That deliberately resolves no workspace project (the assembly script documents
+why: building the full environment on a cold base is slow and can fail on an
+unrelated build error, aborting an otherwise fine publish), which means no
+workspace package is importable here.
 
 That is why the frozen base below is declared locally instead of using
 `imbue.imbue_common.frozen_model.FrozenModel`, which the style guide would
