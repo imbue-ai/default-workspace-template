@@ -809,8 +809,6 @@ flagged as missing or wrong into its "Requirements" section AND the matching
 `.svg`, and any README rewrites into `README.md`), and COMMIT that change with
 cwd = `$WT` before proceeding to §7/§8.
 
-**Then close the preview** (`render_markdown_preview.py --close`), so the user
-is not left with a panel they did not ask for once the review is over.
 Never push first and fix up the manifest or thumbnail with a second
 commit-and-re-push. This commit -- like everything else in this skill after
 assembly -- happens IN `$WT`, never `/home/user/workspace`.

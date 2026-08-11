@@ -1,21 +1,12 @@
-Adds a **markdown preview** service. `render_markdown_preview.py` renders a
-markdown file the way GitHub will -- raw HTML, centered heroes, badges, and
-tables all intact -- and the `markdown-preview` service serves it as a tab you
-can open with `layout.py open service:markdown-preview`.
+Before a template is published, the agent now shows you its README and asks
+whether it describes what you built. It pastes the text into the chat, which
+renders markdown, so you review a page rather than a wall of source, and if the
+answer is no it rewrites and shows you again until you are happy.
 
-It serves the previewed file's own directory alongside the page, so relative
-images resolve; a preview that showed every local image broken would hide the
-exact problem it exists to catch. The page shows the file's absolute path with
-a one-click Copy path button.
-
-The preview is on-demand, not a permanent tab: the service is never
-autostarted, rendering something is what brings it up, and
-`render_markdown_preview.py --close` stops it and takes the tab away again. An
-idle previewer has no business sitting in your workspace.
-
-This is what lets an agent show you a rendered README instead of pasting raw
-markdown into chat -- the publish-template flow now does exactly that before
-shipping a template's landing page, and closes it afterwards.
+The relative hero image does not resolve in a chat message, so the agent says
+so rather than letting you read it as a broken README. The image itself is the
+thumbnail you already approved, and the flow verifies the live GitHub page
+after pushing, which is what actually catches a bad image path.
 
 Repoints the broken `docs/system/style_guide.md` symlink. It targeted
 `vendor/mngr/style_guide.md`, which resolves relative to `docs/system/` and so
