@@ -132,6 +132,7 @@ fetch anonymously.
 
 ```bash
 git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
+    ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
     fetch "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" main
 PUBLISHED_TIP="$(git rev-parse FETCH_HEAD)"
 ```
@@ -390,6 +391,7 @@ create one or change its settings. Never fall back to a token-in-URL push.
       && test "$(git rev-list --count "$SNAPSHOT_COMMIT")" -gt 1 \
       && git \
       -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
+      ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
       push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" "${SNAPSHOT_COMMIT}:refs/heads/main" )
   ```
 
@@ -409,6 +411,7 @@ create one or change its settings. Never fall back to a token-in-URL push.
       && git tag -f -a "inspiration/<slug>/v(n+1)" "$SNAPSHOT_COMMIT" -m "inspiration <slug> v(n+1)" \
       && git \
       -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
+      ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
       push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" "refs/tags/inspiration/<slug>/v(n+1)" )
   ```
 

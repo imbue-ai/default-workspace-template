@@ -271,14 +271,13 @@ tk start <ticket-id>
 ```
 
 Write the task file. Use the two-heredoc form the other worker skills use: an
-**unquoted** frontmatter block so `$MNGR_AGENT_NAME` and `$REF` expand, then a
-**quoted** body so its backticks stay literal:
+**unquoted** frontmatter block so `$REF` expands, then a **quoted** body so its
+backticks stay literal:
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
@@ -627,12 +626,22 @@ The report says which classes merged. Apply each; a clean pull-in is still
   cause is fixed. Exit 3 means the restore itself failed -- surface immediately.
 
 - **`service` / `system/supervisord.conf` / `bootstrap`** -- restart the whole services
-  agent (do not use `supervisorctl reread && update` here), then refresh any
-  affected tab (`python3 system/scripts/layout.py refresh <name>`):
+  agent (do not use `supervisorctl reread && update` here), then rebuild the
+  user's view of the workspace, then refresh any affected tab
+  (`python3 system/scripts/layout.py refresh <name>`):
 
   ```bash
   mngr start --restart system-services
+  python3 system/scripts/refresh_workspace_view.py
   ```
+
+  The refresh is not optional. Restarting the services agent bounces the system
+  interface underneath whatever the user has open, and nothing reloads that view
+  on its own: the Minds app only steps in when a workspace looks unreachable for
+  a sustained stretch, which a quick restart never does. Without this the user
+  keeps reading the page the *previous* build rendered. The helper is
+  fire-and-forget and always exits 0 -- it names any channel that did not land
+  on stderr and is never a reason to stop.
 
 - **`editable_tool` (`system/vendor/mngr/**`)** -- `.py` is picked up live; a manifest
   change needs an env refresh (`uv sync --all-packages`, or `uv tool install -e
@@ -714,8 +723,9 @@ The report says which classes merged. Apply each; a clean pull-in is still
   `system/libs/**`, `system/services/**`, `system/apps/**`, `.agents/**`)** -- applies to
   future agents automatically unless a live service depends on the file. The
   report's impact analysis names any live consumer; restart that service
-  (usually `mngr start --restart system-services`). Only "nothing to reveal"
-  when the analysis found none.
+  (usually `mngr start --restart system-services`, followed by
+  `python3 system/scripts/refresh_workspace_view.py` for the same reason as
+  above). Only "nothing to reveal" when the analysis found none.
 
 ## 5c. Advance the environment (bundled, not optional)
 

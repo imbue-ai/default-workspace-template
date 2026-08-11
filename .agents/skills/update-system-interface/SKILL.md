@@ -81,7 +81,7 @@ specifics:
   `update-$SLUG` / `mngr/update-$SLUG`; the runtime dir is
   `data/.tasks/harden/update-$SLUG/`.
 - **Task-file frontmatter:** `operation: update`, `type: system-interface`,
-  plus the standard `lead_agent` / `finish_report_path`
+  plus the standard `finish_report_path`
   (`data/.tasks/harden/update-$SLUG/reports/report.md`). Per the system-interface
   exception in `op-update.md`, there is **no `## Change origin` marker** -- the
   body is a plain change brief, not an absorb/verify incident.
@@ -278,11 +278,13 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Pre-flights a backend change** by booting the merged code on a throwaway port
   before touching the live service. If it can't boot, the live service is never
   restarted -- the UI never goes down.
-- **Reveals**: rebuilds the gitignored `static/` bundle and broadcasts a
-  `reload_system_interface` op so open browsers reload into the new assets
-  (frontend); restarts the services agent so the editable backend re-imports the
-  merged `.py` (backend). A build that exits 0 without producing a bundle counts
-  as a failure.
+- **Reveals**: rebuilds the gitignored `static/` bundle (frontend); restarts the
+  services agent so the editable backend re-imports the merged `.py` (backend).
+  A build that exits 0 without producing a bundle counts as a failure.
+- **Rebuilds the user's view** afterwards, via
+  `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
+  since the restart leaves the open page rendering what it had already fetched.
+  Best-effort: it never fails a reveal that landed.
 - **Verifies** the live service is healthy by polling its loopback endpoint, and
   that the app shell really is the built app and that its module script serves as
   JavaScript. The backend endpoint alone cannot see either failure: the "frontend
