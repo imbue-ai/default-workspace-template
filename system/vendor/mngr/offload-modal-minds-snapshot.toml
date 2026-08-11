@@ -30,7 +30,6 @@ max_parallel = 20
 # fails INSIDE pytest -- with junit and diagnostics -- instead of being killed
 # here with nothing to show for it.
 test_timeout_secs = 1200
-stream_output = true
 sandbox_project_root = "/code/mngr"
 
 # No post_patch_cmd: the snapshot already has the synced venv + the
@@ -80,7 +79,7 @@ type = "pytest"
 # `apps/minds/test_snapshot_resume.py::...`. Those ids are passed VERBATIM
 # as argv to pytest at execution time, where the cwd is the repo root
 # (/code/mngr) -- so an unprefixed id would not resolve and every test
-# would error. The `discovery_args = "-c pyproject.toml"` below (a
+# would error. The `-c pyproject.toml` in `discovery_args` below (a
 # discovery-only arg, applied to `pytest --collect-only` but never to
 # execution) pins the root config so discovery emits repo-root-relative
 # ids, exactly as unscoped discovery did. offload 0.9.12 (OFFLOAD-9) makes
@@ -109,9 +108,10 @@ paths = ["apps/minds/test_snapshot_resume.py", "apps/minds/test_sync_e2e.py"]
 command = "bash -c '[ -d /code/mngr ] && cd /code/mngr; exec uv run pytest \"$@\"' --"
 run_args = "--no-cov -p no:xdist"
 # Discovery-only args: pin the repo-root pytest config (see the rootdir note
-# above) without polluting the group `filters`, which are semantically test
-# selectors. offload 0.9.12's single-pass discovery honors this (OFFLOAD-9).
-discovery_args = "-c pyproject.toml"
+# above) without polluting the group `filters`, and skip coverage tracing during
+# `pytest --collect-only` (`--no-cov`, pure overhead there). offload does not
+# auto-inject discovery args (by design they stay explicit), so both are set here.
+discovery_args = "-c pyproject.toml --no-cov"
 
 # Split into `all` and `flaky` (mirroring offload-modal.toml) so retries apply
 # ONLY to flaky-marked tests: a real failure must surface, not be masked by a

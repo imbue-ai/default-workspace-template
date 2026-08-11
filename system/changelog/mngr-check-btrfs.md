@@ -39,10 +39,12 @@
   the volume is not mounted, and starts the path watcher immediately so
   re-running it on a live VM takes effect without a reboot.
 
-- Fixed the stale services-agent path in the gcp and azure templates' boot
-  units (`/mngr/code/scripts/...` -> `/mngr/code/system/scripts/...`): the
-  July tree restructure missed these two blocks, and the `|| true` swallowed
-  the resulting exec failure, so the relaunch had been silently broken there.
+- The gcp and azure boot units now use the same
+  `/home/user/workspace/system/scripts/...` services-agent path as the other
+  templates (their pre-restructure `/mngr/code/scripts/...` path had been
+  silently broken by the `|| true`; upstream migrated those templates in the
+  meantime and this branch adopts that path), so all five templates install
+  byte-identical autostart machinery.
 
 - Note: fleet VMs have the old unit baked in; this change only covers new
   bakes until the installer block is re-run on existing VMs (tracked as the

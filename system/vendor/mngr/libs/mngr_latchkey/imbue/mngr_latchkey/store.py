@@ -368,6 +368,22 @@ def opaque_permissions_dir(data_dir: Path) -> Path:
     return data_dir / _OPAQUE_PERMISSIONS_DIR_NAME
 
 
+def opaque_handles_for_host(data_dir: Path, host_id: HostId) -> list[Path]:
+    """Return opaque permission handles that point at ``host_id``'s canonical file.
+
+    TEMPORARY -- legacy remote workspaces only. Exists solely so
+    ``remote_gateway._materialize_legacy_override_targets`` can find the paths a
+    pre-existing workspace's baked-in permissions-override JWT still names. New
+    VPS-gateway workspaces carry no override, so this can be deleted together
+    with that shim once no workspace predates the one-gateway rollout.
+    """
+    root = opaque_permissions_dir(data_dir)
+    if not root.is_dir():
+        return []
+    canonical_path = permissions_path_for_host(data_dir, host_id).resolve()
+    return sorted(path for path in root.glob("*.json") if path.is_symlink() and path.resolve() == canonical_path)
+
+
 def shared_schemas_path(data_dir: Path) -> Path:
     """Return the desktop path of the shared additional-services schemas file.
 
@@ -504,7 +520,6 @@ def save_permissions(path: Path, config: LatchkeyPermissionsConfig) -> None:
     from the output (detent accepts both shapes); ``rules`` is always
     emitted, even when empty.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
     # Pydantic's ``exclude=`` drops the field entirely; we drop
     # ``schemas``/``include`` when empty so existing on-disk files (and the
     # gateway's own writers) keep emitting the same ``{"rules": ...}``
@@ -514,10 +529,10 @@ def save_permissions(path: Path, config: LatchkeyPermissionsConfig) -> None:
         exclude.add("schemas")
     if not config.include:
         exclude.add("include")
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(config.model_dump_json(indent=2, exclude=exclude))
-    tmp_path.chmod(0o600)
-    os.replace(tmp_path, path)
+    # ``atomic_write`` uses a uniquely-named temp file, so concurrent writers
+    # (e.g. the minds auto-register callback firing from two threads) cannot
+    # steal each other's temp file the way a fixed ``.tmp`` name allowed.
+    atomic_write(path, config.model_dump_json(indent=2, exclude=exclude))
     logger.debug("Wrote permissions config to {} ({} rule(s))", path, len(config.rules))
 
 
