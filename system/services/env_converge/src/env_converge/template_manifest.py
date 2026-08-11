@@ -673,6 +673,13 @@ def validate_template_tree(
         thumbnail_text = thumbnail_path.read_text(encoding="utf-8", errors="replace")
 
     problems.extend(check_env_d_units(manifest))
+    # `check_env_d_units` proves a unit is named right and WOULD ship if it
+    # existed; only the assembled tree can prove it does. A declared unit with
+    # a typo in its path passes every name check and then simply never runs on
+    # the adopter's machine, which is the failure this manifest exists to stop.
+    for unit in manifest.environment.env_d_units:
+        if not (repo_root / unit).is_file():
+            problems.append(f"env.d unit {unit!r} is declared but is not in the tree")
 
     if not is_unfinished_allowed:
         problems.extend(check_unfinished_placeholders(markdown_text, thumbnail_text))
