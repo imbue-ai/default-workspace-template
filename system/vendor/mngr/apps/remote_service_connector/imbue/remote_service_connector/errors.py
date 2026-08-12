@@ -151,6 +151,23 @@ class R2BucketActiveWorkspaceError(RuntimeError):
         )
 
 
+class EmailNotVerifiedError(PermissionError):
+    """Raised when an action that authorizes by email ownership is attempted with an unverified email.
+
+    Mapped to a structured 403 (``code: email_not_verified``) so clients can
+    respond with a contextual "verify your email" prompt. Only raised by the
+    ``require_verified_email`` guard -- most endpoints accept unverified
+    accounts.
+    """
+
+    def __init__(self, email: str | None) -> None:
+        self.email = email
+        super().__init__(
+            f"This action requires a verified email address ({email or 'no email on the account'}). "
+            "Verify it via the link we email you, then retry."
+        )
+
+
 class QuotaExceededError(RuntimeError):
     """Raised when an operation would exceed one of the account's entitlements.
 

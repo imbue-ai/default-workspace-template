@@ -16,6 +16,7 @@ from uuid import UUID
 # Note: psycopg2.errors is reachable through the base import, matching app.py;
 # an explicit ``import psycopg2.errors`` makes ty resolve the module and then
 # reject its dynamically-generated members (UniqueViolation) as unknown.
+import paramiko
 import psycopg2
 import pytest
 from fastapi import HTTPException
@@ -45,6 +46,7 @@ from supertokens_python.types import User
 from supertokens_python.types.base import AccountInfoInput
 
 import imbue.remote_service_connector.accounts as accounts_module
+import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.app as app_mod
 import imbue.remote_service_connector.auth as auth_mod
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
@@ -57,6 +59,7 @@ import imbue.remote_service_connector.r2.stores as r2_stores_mod
 import imbue.remote_service_connector.share_broker as share_broker_module
 import imbue.remote_service_connector.sync as sync_mod
 from imbue.remote_service_connector.auth import UserAuth
+from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.cloudflare import CloudflareCtx
 from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import PoolHostCleanupError
@@ -347,6 +350,7 @@ class FakeSessionContainer:
     access_token: str
     refresh_token: str
     user_id: str
+    access_token_payload: dict[str, Any]
 
     def get_user_id(self) -> str:
         return self.user_id
@@ -354,12 +358,21 @@ class FakeSessionContainer:
     def get_all_session_tokens_dangerously(self) -> dict[str, str]:
         return {"accessToken": self.access_token, "refreshToken": self.refresh_token}
 
+    def get_access_token_payload(self) -> dict[str, Any]:
+        return self.access_token_payload
+
+    def get_handle(self) -> str:
+        # The fake keys sessions by access token, so the token doubles as the
+        # session handle the revoke fake resolves.
+        return self.access_token
+
 
 def _make_session(user_id: str) -> FakeSessionContainer:
     session = FakeSessionContainer()
     session.user_id = user_id
     session.access_token = f"at-{secrets.token_hex(8)}"
     session.refresh_token = f"rt-{secrets.token_hex(8)}"
+    session.access_token_payload = {}
     return session
 
 
@@ -436,6 +449,14 @@ class FakeSuperTokensBackend:
     # tests exercise the /auth/* SDK-outage code paths through the real handler
     # without patching module-level attributes.
     sdk_errors_by_method: dict[str, Exception]
+    # The most recent browser session minted through the accounts-web seam,
+    # for the test to plant on its client as the BROWSER_SESSION_COOKIE.
+    last_browser_session: "FakeSessionContainer | None"
+    # Whether the fake Turnstile verifier accepts tokens (flip to False to
+    # exercise the TURNSTILE_FAILED path).
+    is_turnstile_passing: bool
+    # In-memory device-auth-code store installed onto accounts_web.
+    device_code_store: "InMemoryDeviceAuthCodeStore"
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Swap every SuperTokens SDK call site with a fake.
@@ -455,6 +476,7 @@ class FakeSuperTokensBackend:
             "create_new_session_without_request_response": self.create_new_session,
             "refresh_session_without_request_response": self.refresh_session,
             "revoke_all_sessions_for_user": self.revoke_all_sessions_for_user,
+            "revoke_session": self.revoke_session,
             "get_user": self.get_user,
             "get_session_without_request_response": self.get_session,
             "list_users_by_account_info": self.list_users_by_account_info,
@@ -464,10 +486,25 @@ class FakeSuperTokensBackend:
             "create_email_verification_token": self.create_email_verification_token,
             "verify_email_using_token": self.verify_email_using_token,
             "get_provider": self.get_provider,
-            "get_broker_oauth_provider": self.get_broker_oauth_provider,
+            "get_accounts_oauth_provider": self.get_accounts_oauth_provider,
             "manually_create_or_update_user": self.manually_create_or_update_user,
+            "_sdk_create_browser_session": self.sdk_create_browser_session,
+            "_sdk_get_browser_session": self.sdk_get_browser_session,
+            # Not SuperTokens seams, but accounts-surface test plumbing that
+            # rides the same single-loop install: the Turnstile verifier
+            # (driven by ``is_turnstile_passing``) and the in-memory
+            # device-auth-code store.
+            "_verify_turnstile_token": self.verify_turnstile_token,
+            "_device_code_store": self.device_code_store,
         }
-        target_modules = [app_mod, auth_mod, auth_proxy_module, accounts_module, share_broker_module]
+        target_modules = [
+            app_mod,
+            auth_mod,
+            auth_proxy_module,
+            accounts_module,
+            share_broker_module,
+            accounts_web_module,
+        ]
         for name, fake in fakes.items():
             matching_modules = [module for module in target_modules if hasattr(module, name)]
             # A fake that matches no module would leave the real SDK function in
@@ -663,6 +700,9 @@ class FakeSuperTokensBackend:
         del self.sessions_by_refresh_token[refresh_token]
         self.sessions_by_access_token.pop(old.access_token, None)
         session = _make_session(old.user_id)
+        # Like the real SDK, custom access token payload survives a refresh
+        # (the ~30-day cap's started-at stamp must keep its original value).
+        session.access_token_payload = dict(old.access_token_payload)
         self.sessions_by_access_token[session.access_token] = session
         self.sessions_by_refresh_token[session.refresh_token] = session
         return session
@@ -683,6 +723,20 @@ class FakeSuperTokensBackend:
                 self.sessions_by_access_token.pop(session.access_token, None)
                 self.sessions_by_refresh_token.pop(session.refresh_token, None)
         return revoked
+
+    def revoke_session(
+        self,
+        session_handle: str,
+        user_context: dict[str, Any] | None = None,
+    ) -> bool:
+        del user_context
+        # The fake's session handle IS the access token (see
+        # ``FakeSessionContainer.get_handle``).
+        session = self.sessions_by_access_token.pop(session_handle, None)
+        if session is None:
+            return False
+        self.sessions_by_refresh_token.pop(session.refresh_token, None)
+        return True
 
     def get_user(self, user_id: str, user_context: dict[str, Any] | None = None) -> User | None:
         del user_context
@@ -830,9 +884,42 @@ class FakeSuperTokensBackend:
         del tenant_id, client_type, user_context
         return self.registered_providers.get(third_party_id)
 
-    def get_broker_oauth_provider(self) -> FakeProvider | None:
-        """Stand-in for the broker's env-driven Google provider: configured iff 'google' is registered."""
+    def get_accounts_oauth_provider(self) -> FakeProvider | None:
+        """Stand-in for the accounts surface's env-driven Google provider: configured iff 'google' is registered."""
         return self.registered_providers.get("google")
+
+    # The browser-session cookie name the fake seams speak. Tests set it on
+    # their TestClient after a fake signin (``last_browser_session``); the
+    # real SDK middleware owns the equivalent cookies in production.
+    BROWSER_SESSION_COOKIE = "st_browser"
+
+    def sdk_create_browser_session(self, request: Any, user_id: str) -> FakeSessionContainer:
+        """Fake for ``accounts_web._sdk_create_browser_session``.
+
+        Cannot set response cookies from here (no response object flows
+        through the seam), so the created session is exposed as
+        ``last_browser_session`` for the test to plant on its client.
+        """
+        del request
+        session = _make_session(user_id)
+        # Mirror the real seam's payload (the ~30-day cap is measured against
+        # the started-at stamp it carries).
+        session.access_token_payload = accounts_web_module._new_browser_session_access_token_payload()
+        self.sessions_by_access_token[session.access_token] = session
+        self.sessions_by_refresh_token[session.refresh_token] = session
+        self.last_browser_session = session
+        return session
+
+    def sdk_get_browser_session(self, request: Any) -> FakeSessionContainer | None:
+        """Fake for ``accounts_web._sdk_get_browser_session``: resolves the test cookie."""
+        self._raise_if_configured("sdk_get_browser_session")
+        token = request.cookies.get(self.BROWSER_SESSION_COOKIE, "")
+        return self.sessions_by_access_token.get(token)
+
+    def verify_turnstile_token(self, token: str, remote_ip: str | None) -> bool:
+        """Fake for ``accounts_web._verify_turnstile_token``: driven by ``is_turnstile_passing``."""
+        del token, remote_ip
+        return self.is_turnstile_passing
 
     def manually_create_or_update_user(
         self,
@@ -894,6 +981,9 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     backend.sent_verification_emails = []
     backend.sent_reset_emails = []
     backend.sdk_errors_by_method = {}
+    backend.last_browser_session = None
+    backend.is_turnstile_passing = True
+    backend.device_code_store = InMemoryDeviceAuthCodeStore()
     return backend
 
 
@@ -1110,6 +1200,27 @@ class FakeCursor:
                     row.host_name = host_name
                     break
 
+        elif query_lower.startswith("select leased_to_user, status, vps_address"):
+            # Enable-sharing endpoint: lookup by id returning the columns the
+            # server-side share injection needs (ownership, status, the
+            # container SSH coordinates, host id, and the pinned container key).
+            raw_host_id = params[0]
+            host_id = UUID(raw_host_id) if isinstance(raw_host_id, str) else raw_host_id
+            for row in self._backend.pool_rows:
+                if row.host_id == host_id:
+                    self._results = [
+                        (
+                            row.leased_to_user,
+                            row.status,
+                            row.vps_address,
+                            row.container_ssh_port,
+                            row.ssh_user,
+                            row.host_id_str,
+                            row.container_host_public_key,
+                        )
+                    ]
+                    break
+
         elif "select leased_to_user, status from pool_hosts" in query_lower:
             # Rename endpoint: a narrow ownership/status lookup by id (only
             # ``leased_to_user`` and ``status``). Matched before the broader
@@ -1312,14 +1423,20 @@ class FakeCursor:
 
         elif query_lower.startswith("insert into account_key_bundles"):
             user_id, kdf_salt, kdf_time_cost, kdf_memory_kib, kdf_parallelism, wrapped_dek, key_epoch = params
-            self._backend.sync_bundle_by_user[user_id] = {
-                "kdf_salt": _adapted_bytes(kdf_salt),
-                "kdf_time_cost": kdf_time_cost,
-                "kdf_memory_kib": kdf_memory_kib,
-                "kdf_parallelism": kdf_parallelism,
-                "wrapped_dek": _adapted_bytes(wrapped_dek),
-                "key_epoch": key_epoch,
-            }
+            if "do nothing" in query_lower and user_id in self._backend.sync_bundle_by_user:
+                # The create-only insert: an existing row wins and the
+                # statement affects nothing, mirroring ON CONFLICT DO NOTHING.
+                self.rowcount = 0
+            else:
+                self.rowcount = 1
+                self._backend.sync_bundle_by_user[user_id] = {
+                    "kdf_salt": _adapted_bytes(kdf_salt),
+                    "kdf_time_cost": kdf_time_cost,
+                    "kdf_memory_kib": kdf_memory_kib,
+                    "kdf_parallelism": kdf_parallelism,
+                    "wrapped_dek": _adapted_bytes(wrapped_dek),
+                    "key_epoch": key_epoch,
+                }
 
         elif query_lower.startswith("delete from account_key_bundles"):
             self._backend.sync_bundle_by_user.pop(params[0], None)
@@ -1336,8 +1453,8 @@ class FakeCursor:
             self._results = [(active_count,)]
 
         elif query_lower.startswith("insert into shares"):
-            host_id, user_label, region, workspace_domain = params
-            self._backend.upsert_share(host_id, user_label, region, workspace_domain)
+            host_id, user_label, region, workspace_domain, entry_label = params
+            self._backend.upsert_share(host_id, user_label, region, workspace_domain, entry_label=entry_label)
 
         elif "from shares where host_id = %s and user_id = %s" in query_lower:
             share = self._backend.find_share(params[0], params[1])
@@ -1522,6 +1639,25 @@ class FakePoolBackend:
 
     pool_rows: list[FakePoolRow]
     append_key_calls: list[tuple[str, int, str, str, str, str]]
+    # Recorded server-side share-materials injections (SSH is faked): each entry
+    # is ``(host, container_ssh_port, {remote_path: content})``.
+    written_container_files: list[tuple[str, int, dict[str, str]]]
+    # The seed-if-absent path set of each recorded injection, parallel to
+    # ``written_container_files`` (paths whose write skips when the file exists).
+    written_container_seed_only_paths: list[frozenset[str]]
+    # Recorded web-claim adopts (SSH is faked): each entry is
+    # ``(host, container_ssh_port, agent_id, host_name, display_name, connector_url)``.
+    # Set ``adopt_should_fail`` to simulate an adopt that dies over SSH.
+    adopted_containers: list[tuple[str, int, str, str, str, str]]
+    adopt_should_fail: bool
+    # Recorded web-claim agent starts (SSH is faked): each entry is
+    # ``(host, container_ssh_port)``. Set ``agent_start_should_fail`` to
+    # simulate a start script that exits non-zero.
+    started_agent_containers: list[tuple[str, int]]
+    agent_start_should_fail: bool
+    # What the faked apps.toml read reports as the workspace's shell label
+    # (None simulates a workspace whose services have not registered).
+    workspace_entry_label: str | None
     # Recorded slice-VM teardowns (the box SSH is faked); set
     # ``slice_teardown_should_fail`` to simulate a teardown that cannot complete.
     slice_teardowns: list[tuple[Any, Any, str | None, str | None]]
@@ -1566,7 +1702,9 @@ class FakePoolBackend:
         assert seeded is not None
         seeded["state"] = state
 
-    def upsert_share(self, host_id: str, user_label: str, region: str, workspace_domain: str) -> None:
+    def upsert_share(
+        self, host_id: str, user_label: str, region: str, workspace_domain: str, entry_label: str | None = None
+    ) -> None:
         """Mirror the endpoint's INSERT ... ON CONFLICT (host_id, user_id) upsert."""
         existing = self.find_share(host_id, user_label)
         if existing is not None:
@@ -1574,6 +1712,9 @@ class FakePoolBackend:
             existing["workspace_domain"] = workspace_domain
             existing["state"] = "active"
             existing["updated_at"] = _SHARE_ROW_UPDATED_AT
+            # COALESCE semantics: a caller with no label keeps the recorded one.
+            if entry_label is not None:
+                existing["entry_label"] = entry_label
             return
         self.share_rows.append(
             {
@@ -1585,6 +1726,7 @@ class FakePoolBackend:
                 "created_at": _SHARE_ROW_CREATED_AT,
                 "updated_at": _SHARE_ROW_CREATED_AT,
                 "last_tunnel_login_at": None,
+                "entry_label": entry_label,
             }
         )
 
@@ -1651,6 +1793,10 @@ class FakePoolBackend:
         fakes: list[tuple[Any, str, Any]] = [
             (db_mod, "get_pool_db_connection", self.get_connection),
             (hosts_module, "_append_authorized_key", self.append_authorized_key),
+            (hosts_module, "_write_files_on_container", self.write_files_on_container),
+            (hosts_module, "_adopt_workspace_on_container", self.adopt_workspace_on_container),
+            (hosts_module, "_read_workspace_entry_label", self.read_workspace_entry_label),
+            (hosts_module, "_start_workspace_agent_on_container", self.start_workspace_agent_on_container),
             (hosts_module, "clean_up_slice_on_box", self.clean_up_slice_on_box),
         ]
         for target_module, name, fake in fakes:
@@ -1810,6 +1956,61 @@ class FakePoolBackend:
             (host, port, user, management_key_pem, public_key_to_add, expected_host_public_key)
         )
 
+    def read_workspace_entry_label(
+        self,
+        host: str,
+        port: int,
+        user: str,
+        management_key_pem: str,
+        expected_host_public_key: str,
+    ) -> str | None:
+        """Return the configured entry label instead of reading apps.toml over SSH."""
+        return self.workspace_entry_label
+
+    def adopt_workspace_on_container(
+        self,
+        host: str,
+        port: int,
+        user: str,
+        management_key_pem: str,
+        expected_host_public_key: str,
+        agent_id: str,
+        host_name: str,
+        display_name: str,
+        connector_url: str,
+    ) -> None:
+        """Record a web-claim adopt instead of touching a container over SSH."""
+        if self.adopt_should_fail:
+            raise paramiko.SSHException("injected adopt failure")
+        self.adopted_containers.append((host, port, agent_id, host_name, display_name, connector_url))
+
+    def start_workspace_agent_on_container(
+        self,
+        host: str,
+        port: int,
+        user: str,
+        management_key_pem: str,
+        expected_host_public_key: str,
+    ) -> None:
+        """Record a web-claim agent start instead of running the start script over SSH."""
+        if self.agent_start_should_fail:
+            raise paramiko.SSHException("injected agent start failure")
+        self.started_agent_containers.append((host, port))
+
+    def write_files_on_container(
+        self,
+        host: str,
+        port: int,
+        user: str,
+        management_key_pem: str,
+        files_by_remote_path: dict[str, str],
+        expected_host_public_key: str,
+        seed_only_remote_paths: frozenset[str],
+    ) -> None:
+        """Capture a server-side share-materials injection instead of SSHing."""
+        self.written_container_files.append((host, port, files_by_remote_path))
+        self.written_container_seed_only_paths.append(frozenset(seed_only_remote_paths))
+
     def add_available_host(
         self,
         host_id: UUID,
@@ -1824,6 +2025,7 @@ class FakePoolBackend:
         region: str | None = None,
         outer_host_public_key: str | None = _FAKE_OUTER_HOST_PUBLIC_KEY,
         container_host_public_key: str | None = _FAKE_CONTAINER_HOST_PUBLIC_KEY,
+        attributes: dict[str, Any] | None = None,
     ) -> FakePoolRow:
         """Add an available host to the in-memory pool."""
         row = _make_pool_row(
@@ -1840,6 +2042,8 @@ class FakePoolBackend:
             outer_host_public_key=outer_host_public_key,
             container_host_public_key=container_host_public_key,
         )
+        if attributes is not None:
+            row.attributes = attributes
         self.pool_rows.append(row)
         return row
 
@@ -1907,6 +2111,13 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend = FakePoolBackend()
     backend.pool_rows = []
     backend.append_key_calls = []
+    backend.written_container_files = []
+    backend.written_container_seed_only_paths = []
+    backend.adopted_containers = []
+    backend.adopt_should_fail = False
+    backend.started_agent_containers = []
+    backend.agent_start_should_fail = False
+    backend.workspace_entry_label = "system_interface-testlbl"
     backend.slice_teardowns = []
     backend.slice_teardown_should_fail = False
     backend.paid_domains = {}
@@ -2018,6 +2229,12 @@ class InMemorySyncStore:
         stored = dict(bundle)
         stored["updated_at"] = self._next_timestamp()
         self.bundle_by_user_id[user_id] = stored
+
+    def put_bundle_if_absent(self, user_id: str, bundle: dict[str, Any]) -> bool:
+        if user_id in self.bundle_by_user_id:
+            return False
+        self.put_bundle(user_id, bundle)
+        return True
 
     def delete_bundle(self, user_id: str) -> None:
         self.bundle_by_user_id.pop(user_id, None)
@@ -2353,7 +2570,9 @@ def _make_quota_test_client(
     def _stub_supertokens(token: str) -> UserAuth:
         if token != _USER_STUB_TOKEN:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return UserAuth(user_id_prefix=_USER_STUB_USER_ID_PREFIX, email=_USER_STUB_EMAIL)
+        # The stub user simulates a fully-verified account (it is paid-listed
+        # below, and ally eligibility requires a verified email).
+        return UserAuth(user_id_prefix=_USER_STUB_USER_ID_PREFIX, email=_USER_STUB_EMAIL, is_email_verified=True)
 
     entitlements_store = make_fake_entitlements_store()
     litellm = make_fake_litellm_backend()
@@ -2438,6 +2657,23 @@ def _make_pool_test_client(
     """Pool test client without the quota handles (see ``_make_pool_quota_test_client``)."""
     client, backend, _entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch, pool_backend)
     return client, backend
+
+
+def _make_pool_quota_web_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, FakePoolBackend, InMemoryEntitlementsStore, FakeLiteLLMBackend, FakeSuperTokensBackend]:
+    """Pool/quota client plus the browser-session seams, for web-chrome auth tests.
+
+    On top of ``_make_pool_quota_test_client``, installs the SuperTokens fake
+    so a test can establish a cookie-based browser session (sign up via
+    ``st_backend``, then ``client.cookies.set(FakeSuperTokensBackend.
+    BROWSER_SESSION_COOKIE, session.access_token)``) and exercise the
+    resource endpoints without a Bearer header.
+    """
+    client, backend, entitlements_store, litellm = _make_pool_quota_test_client(monkeypatch)
+    st_backend = make_fake_supertokens_backend()
+    st_backend.install_on_app_module(app_mod, monkeypatch)
+    return client, backend, entitlements_store, litellm, st_backend
 
 
 def _admin_key_headers() -> dict[str, str]:
@@ -2553,13 +2789,77 @@ def _make_share_test_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient
             raise HTTPException(status_code=401, detail="Invalid token")
         return _SHARE_STUB_USER_ID
 
+    # The share endpoints resolve identity through the shared web-identity
+    # path, whose Bearer leg also calls authenticate_request; stub both.
+    def _stub_authenticate_request(request: Any) -> UserAuth:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header != f"Bearer {_SHARE_STUB_TOKEN}":
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return UserAuth(
+            user_id_prefix=derive_user_id_prefix(_SHARE_STUB_USER_ID),
+            email=_SHARE_STUB_EMAIL,
+            is_email_verified=True,
+        )
+
     return _make_share_test_client_with_fakes(
         monkeypatch,
         {
             "get_user_id_from_access_token": _stub_user_id_from_token,
-            "default_email_getter": lambda user_id: _SHARE_STUB_EMAIL,
+            "authenticate_request": _stub_authenticate_request,
         },
     )
+
+
+class InMemoryDeviceAuthCodeStore:
+    """In-memory stand-in for the Neon device-auth-code table."""
+
+    def __init__(self) -> None:
+        self.rows_by_code_hash: dict[str, dict[str, Any]] = {}
+
+    def insert_code(
+        self,
+        code_hash: str,
+        user_id: str,
+        code_challenge: str,
+        redirect_uri: str,
+        expires_at: datetime,
+    ) -> None:
+        self.rows_by_code_hash[code_hash] = {
+            "user_id": user_id,
+            "code_challenge": code_challenge,
+            "redirect_uri": redirect_uri,
+            "expires_at": expires_at,
+            "consumed_at": None,
+        }
+
+    def consume_code(self, code_hash: str) -> dict[str, Any] | None:
+        row = self.rows_by_code_hash.get(code_hash)
+        if row is None or row["consumed_at"] is not None:
+            return None
+        if row["expires_at"] <= datetime.now(timezone.utc):
+            return None
+        row["consumed_at"] = datetime.now(timezone.utc)
+        return {
+            "user_id": row["user_id"],
+            "code_challenge": row["code_challenge"],
+            "redirect_uri": row["redirect_uri"],
+        }
+
+
+def _make_accounts_web_test_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, FakeSuperTokensBackend, InMemoryDeviceAuthCodeStore]:
+    """Test client for the hosted accounts surface (browser session seams + in-memory code store).
+
+    The client speaks https so Secure cookies round-trip. After a fake
+    signin/signup, plant the browser session with
+    ``client.cookies.set(FakeSuperTokensBackend.BROWSER_SESSION_COOKIE,
+    st_backend.last_browser_session.access_token)``.
+    """
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
+    st_backend = make_fake_supertokens_backend()
+    st_backend.install_on_app_module(app_mod, monkeypatch)
+    return TestClient(web_app, base_url="https://testserver"), st_backend, st_backend.device_code_store
 
 
 def _make_share_test_client_with_fakes(

@@ -340,6 +340,27 @@ def test_postgres_sync_store_bundle_crud(monkeypatch: pytest.MonkeyPatch) -> Non
     assert store.get_bundle("user-1") is None
 
 
+def test_postgres_sync_store_put_bundle_if_absent_never_replaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two clients racing to mint the account's first DEK: exactly one
+    # create-only put wins, and the loser's bundle never lands.
+    store, _backend = _make_postgres_sync_store(monkeypatch)
+    bundle = {
+        "kdf_salt": b"salt-bytes",
+        "kdf_time_cost": 3,
+        "kdf_memory_kib": 65536,
+        "kdf_parallelism": 4,
+        "wrapped_dek": b"first-tab-dek",
+        "key_epoch": 1,
+    }
+
+    assert store.put_bundle_if_absent("user-1", bundle) is True
+    assert store.put_bundle_if_absent("user-1", {**bundle, "wrapped_dek": b"second-tab-dek"}) is False
+
+    fetched = store.get_bundle("user-1")
+    assert fetched is not None
+    assert fetched["wrapped_dek"] == base64.b64encode(b"first-tab-dek").decode("ascii")
+
+
 def test_get_sync_store_returns_a_cached_postgres_store() -> None:
     assert isinstance(get_sync_store(), PostgresSyncStore)
     assert get_sync_store() is get_sync_store()
