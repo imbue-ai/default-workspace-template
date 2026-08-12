@@ -26,10 +26,12 @@ them at request time (see ``/version``).
 
 import functools
 import logging
+import os
 from pathlib import Path
 
 import modal
 from fastapi import FastAPI
+from supertokens_python.framework.fastapi import get_middleware as get_supertokens_middleware
 
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
@@ -45,6 +47,8 @@ from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 from imbue.remote_service_connector import db
+from imbue.remote_service_connector.auth_proxy import EnsureAsgiRootPathMiddleware
+from imbue.remote_service_connector.auth_proxy import PartitionedCookieMiddleware
 from imbue.remote_service_connector.auth_proxy import init_supertokens
 from imbue.remote_service_connector.cloudflare import current_minds_env_name
 from imbue.remote_service_connector.hosts import reconcile_slice_boxes
@@ -89,7 +93,21 @@ _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
 # invalidate the image cache (Modal enforces the ordering). The entrypoint
 # (this file) ships separately via Modal's automatic file mount and is
 # excluded from the package mount by ``shipped_python_source_ignore``.
-image = pinned_image(locate_image_requirements(Path(__file__))).add_local_python_source(
+#
+# The built accounts frontend bundle (login/signup/account pages) is attached
+# the same way: ``minds env deploy`` runs the Vite build before ``modal
+# deploy``, and the dist directory rides along as a container-startup mount at
+# the path ``accounts_web.frontend_dist_dir`` reads. The directory may be
+# absent on a bare ``modal deploy`` from a checkout that never built it -- the
+# accounts pages then serve a 503 placeholder rather than failing the deploy.
+_ACCOUNTS_FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
+_WEB_CHROME_FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend_web" / "dist"
+_base_image = pinned_image(locate_image_requirements(Path(__file__)))
+if _ACCOUNTS_FRONTEND_DIST.is_dir():
+    _base_image = _base_image.add_local_dir(_ACCOUNTS_FRONTEND_DIST, remote_path="/root/accounts_frontend_dist")
+if _WEB_CHROME_FRONTEND_DIST.is_dir():
+    _base_image = _base_image.add_local_dir(_WEB_CHROME_FRONTEND_DIST, remote_path="/root/web_chrome_frontend_dist")
+image = _base_image.add_local_python_source(
     "imbue.remote_service_connector",
     "imbue.modal_app_kit",
     ignore=shipped_python_source_ignore,
@@ -140,6 +158,26 @@ def _connector_secrets() -> list[modal.Secret]:
 @modal.asgi_app()
 def fastapi_app() -> FastAPI:
     init_supertokens()
+    # The SuperTokens middleware serves the accounts surface's browser-session
+    # machinery (cookie attachment, the refresh route under
+    # ACCOUNTS_AUTH_API_BASE_PATH). Added here -- after init, before the first
+    # request -- because it resolves the initialized SDK instance per request;
+    # unit tests exercise web_app without it via the accounts_web seams.
+    # Guarded on the same condition init_supertokens() no-ops on: the
+    # middleware calls Supertokens.get_instance() on EVERY request and raises
+    # when init never ran, which would turn an unconfigured deployment's
+    # graceful 503s (require_supertokens_configured) into 500s on all routes.
+    if os.environ.get("SUPERTOKENS_CONNECTION_URI"):
+        web_app.add_middleware(get_supertokens_middleware())
+        # Added after (outside) the SuperTokens middleware: root_path first, then
+        # Modal's ASGI shim omits root_path from the scope and the SuperTokens
+        # middleware raises on every request without it (see
+        # EnsureAsgiRootPathMiddleware).
+        web_app.add_middleware(EnsureAsgiRootPathMiddleware)
+        # Added last = outermost, so its response-header rewrite runs after the
+        # SuperTokens middleware has attached its SameSite=None session cookies,
+        # appending the CHIPS Partitioned attribute the SDK cannot emit itself.
+        web_app.add_middleware(PartitionedCookieMiddleware)
     return web_app
 
 

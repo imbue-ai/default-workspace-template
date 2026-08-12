@@ -1,10 +1,20 @@
+from typing import Any
+
 import pytest
 from starlette.testclient import TestClient
 from supertokens_python.exceptions import GeneralError as SuperTokensGeneralError
+from supertokens_python.recipe.emailpassword.api.implementation import (
+    APIImplementation as EmailPasswordAPIImplementation,
+)
+from supertokens_python.recipe.emailverification.recipe import APIImplementation as EmailVerificationAPIImplementation
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
+from supertokens_python.recipe.thirdparty.api.implementation import APIImplementation as ThirdPartyAPIImplementation
 
 import imbue.remote_service_connector.app as app_mod
 import imbue.remote_service_connector.auth_proxy as auth_proxy_mod
+from imbue.remote_service_connector.auth_proxy import EnsureAsgiRootPathMiddleware
+from imbue.remote_service_connector.auth_proxy import PartitionedCookieMiddleware
+from imbue.remote_service_connector.auth_proxy import _add_partitioned_to_cross_site_cookies
 from imbue.remote_service_connector.testing import FakePoolBackend
 from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import make_fake_pool_backend
@@ -66,27 +76,6 @@ def test_auth_session_revoke_requires_bearer_auth(
     assert resp.status_code == 401
 
 
-def test_auth_verify_email_missing_token_shows_failed_page(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The verify-email endpoint renders an HTML failure page when the token is missing."""
-    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
-    client = TestClient(web_app, raise_server_exceptions=False)
-    resp = client.get("/auth/verify-email")
-    assert resp.status_code == 400
-    assert "Verification failed" in resp.text
-
-
-def test_auth_reset_password_page_renders_form(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The reset-password page renders an HTML form embedding the token."""
-    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
-    client = TestClient(web_app, raise_server_exceptions=False)
-    resp = client.get("/auth/reset-password", params={"token": "tok-xyz"})
-    assert resp.status_code == 200
-    assert "tok-xyz" in resp.text
-    assert "Reset password" in resp.text
-
-
 def _install_fake_supertokens(monkeypatch: pytest.MonkeyPatch) -> FakeSuperTokensBackend:
     """Wire the FakeSuperTokensBackend into the app module and return it."""
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
@@ -96,7 +85,12 @@ def _install_fake_supertokens(monkeypatch: pytest.MonkeyPatch) -> FakeSuperToken
 
 
 def test_auth_signup_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """/auth/signup creates an account, issues a session, and sends a verification email."""
+    """/auth/signup creates an account and issues a session; verification is non-blocking.
+
+    No verification email is sent at signup (the first verification-gated
+    action triggers a contextual send), and ``needs_email_verification`` is
+    pinned False for wire compat with released clients.
+    """
     backend = _install_fake_supertokens(monkeypatch)
     client = TestClient(web_app, raise_server_exceptions=False)
     resp = client.post("/auth/signup", json={"email": "new@example.com", "password": "password123"})
@@ -105,9 +99,10 @@ def test_auth_signup_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["status"] == "OK"
     assert body["user"]["email"] == "new@example.com"
     assert body["tokens"]["access_token"].startswith("at-")
-    assert body["needs_email_verification"] is True
-    assert len(backend.sent_verification_emails) == 1
+    assert body["needs_email_verification"] is False
+    assert backend.sent_verification_emails == []
     assert "new@example.com" in backend.accounts_by_email
+    assert backend.accounts_by_email["new@example.com"].is_verified is False
 
 
 def test_auth_signup_field_error_on_empty_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,6 +112,27 @@ def test_auth_signup_field_error_on_empty_credentials(monkeypatch: pytest.Monkey
     resp = client.post("/auth/signup", json={"email": "  ", "password": "x"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "FIELD_ERROR"
+
+
+def test_auth_signup_field_error_on_weak_password_or_malformed_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    """/auth/signup enforces the SDK's default form validation server-side.
+
+    The recipe function bypasses the SDK API layer's form-field validators
+    (which this app disables anyway), so the endpoint applies the same
+    defaults itself rather than trusting frontend validation.
+    """
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+
+    weak = client.post("/auth/signup", json={"email": "weak@example.com", "password": "short"})
+    assert weak.status_code == 200
+    assert weak.json()["status"] == "FIELD_ERROR"
+
+    malformed = client.post("/auth/signup", json={"email": "not-an-email", "password": "password123"})
+    assert malformed.status_code == 200
+    assert malformed.json()["status"] == "FIELD_ERROR"
+
+    assert backend.accounts_by_email == {}
 
 
 def test_auth_signup_duplicate_email_returns_status(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -306,8 +322,13 @@ def _install_paid_pool_backend(monkeypatch: pytest.MonkeyPatch, *paid_emails: st
     return pool_backend
 
 
-def test_auth_signup_paid_email_is_auto_verified(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A paid user's email/password signup is auto-verified: no email sent, account already verified."""
+def test_auth_signup_paid_email_is_not_auto_verified(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A paid-listed email's signup is NOT auto-verified: nothing may mark an email verified without proof.
+
+    (The old behavior auto-verified paid emails so the then-global verified
+    gate would not lock them out; with verification non-blocking, that
+    shortcut is an impersonation hole and is gone.)
+    """
     st_backend = _install_fake_supertokens(monkeypatch)
     _install_paid_pool_backend(monkeypatch, "paid@example.com")
     client = TestClient(web_app, raise_server_exceptions=False)
@@ -317,25 +338,8 @@ def test_auth_signup_paid_email_is_auto_verified(monkeypatch: pytest.MonkeyPatch
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "OK"
-    # The paid account skips the verification round trip entirely.
-    assert body["needs_email_verification"] is False
     assert st_backend.sent_verification_emails == []
-    assert st_backend.accounts_by_email["paid@example.com"].is_verified is True
-
-
-def test_auth_signup_unpaid_email_still_requires_verification(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-paid signup keeps the verify-by-email flow (control for the paid case)."""
-    st_backend = _install_fake_supertokens(monkeypatch)
-    _install_paid_pool_backend(monkeypatch, "someone-else@example.com")
-    client = TestClient(web_app, raise_server_exceptions=False)
-
-    resp = client.post("/auth/signup", json={"email": "free@example.com", "password": "password123"})
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["needs_email_verification"] is True
-    assert len(st_backend.sent_verification_emails) == 1
-    assert st_backend.accounts_by_email["free@example.com"].is_verified is False
+    assert st_backend.accounts_by_email["paid@example.com"].is_verified is False
 
 
 def test_auth_signin_happy_path_with_verified_email(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -366,31 +370,21 @@ def test_auth_signin_wrong_password_returns_wrong_credentials(monkeypatch: pytes
     assert body["tokens"] is None
 
 
-def test_auth_signin_unverified_email_triggers_resend(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Signing in to an unverified account sends another verification email (once the cooldown allows)."""
+def test_auth_signin_unverified_email_succeeds_without_sending_mail(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Signing in to an unverified account succeeds and sends no verification email.
+
+    Verification is non-blocking; the contextual send happens only when the
+    user hits a verification-gated action (via /auth/email/send-verification).
+    """
     backend = _install_fake_supertokens(monkeypatch)
     client = TestClient(web_app, raise_server_exceptions=False)
     client.post("/auth/signup", json={"email": "unv@example.com", "password": "password123"})
-    before = len(backend.sent_verification_emails)
-    # Signup just sent a verification email; age the cooldown out so the
-    # signin resend is not suppressed (simulates a later re-signin).
-    auth_proxy_mod._verification_email_sent_at_monotonic_by_user_id.clear()
     resp = client.post("/auth/signin", json={"email": "unv@example.com", "password": "password123"})
     assert resp.status_code == 200
-    assert resp.json()["needs_email_verification"] is True
-    assert len(backend.sent_verification_emails) == before + 1
-
-
-def test_auth_signin_resend_is_suppressed_within_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unverified signin right after signup does not send a second email (per-user cooldown)."""
-    backend = _install_fake_supertokens(monkeypatch)
-    client = TestClient(web_app, raise_server_exceptions=False)
-    client.post("/auth/signup", json={"email": "unv2@example.com", "password": "password123"})
-    before = len(backend.sent_verification_emails)
-    resp = client.post("/auth/signin", json={"email": "unv2@example.com", "password": "password123"})
-    assert resp.status_code == 200
-    assert resp.json()["needs_email_verification"] is True
-    assert len(backend.sent_verification_emails) == before
+    body = resp.json()
+    assert body["status"] == "OK"
+    assert body["needs_email_verification"] is False
+    assert backend.sent_verification_emails == []
 
 
 def test_auth_signin_returns_error_on_sdk_outage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -444,6 +438,86 @@ def test_auth_session_revoke_happy_path(monkeypatch: pytest.MonkeyPatch) -> None
     assert len(backend.sessions_by_access_token) == 0
 
 
+def test_auth_session_revoke_current_revokes_only_presented_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """/auth/session/revoke-current tears down only the presented session, leaving other devices alone."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    first = client.post("/auth/signup", json={"email": "dev1@e.com", "password": "password123"}).json()
+    second = client.post("/auth/signin", json={"email": "dev1@e.com", "password": "password123"}).json()
+    first_access = first["tokens"]["access_token"]
+    second_access = second["tokens"]["access_token"]
+    assert len(backend.sessions_by_access_token) == 2
+
+    resp = client.post(
+        "/auth/session/revoke-current",
+        headers={"Authorization": f"Bearer {first_access}"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "OK", "revoked": True}
+    # The other device's session survives; the revoked token is gone.
+    assert first_access not in backend.sessions_by_access_token
+    assert second_access in backend.sessions_by_access_token
+
+
+def test_auth_session_revoke_current_rejects_stale_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An already-revoked (or unknown) token gets a 401, like any other stale token."""
+    _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    resp = client.post(
+        "/auth/session/revoke-current",
+        headers={"Authorization": "Bearer at-nonexistent"},
+    )
+    assert resp.status_code == 401
+
+
+def test_admin_test_signup_requires_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """/admin/test-signup rejects callers without the operator admin key."""
+    _install_fake_supertokens(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", "test-admin-key-77aa")
+    client = TestClient(web_app, raise_server_exceptions=False)
+    resp = client.post(
+        "/admin/test-signup",
+        json={"email": "t@example.com", "password": "password123", "verified": True},
+    )
+    assert resp.status_code == 401
+
+
+def test_admin_test_signup_creates_verified_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With verified=true, the test account is created pre-verified and gets session tokens."""
+    backend = _install_fake_supertokens(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", "test-admin-key-77aa")
+    client = TestClient(web_app, raise_server_exceptions=False)
+    resp = client.post(
+        "/admin/test-signup",
+        json={"email": "t-verified@example.com", "password": "password123", "verified": True},
+        headers={"Authorization": "Bearer test-admin-key-77aa"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "OK"
+    assert body["tokens"]["access_token"].startswith("at-")
+    assert body["needs_email_verification"] is False
+    assert backend.accounts_by_email["t-verified@example.com"].is_verified is True
+
+
+def test_admin_test_signup_creates_unverified_account_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without the verified flag, the test account is created unverified (the default signup shape)."""
+    backend = _install_fake_supertokens(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", "test-admin-key-77aa")
+    client = TestClient(web_app, raise_server_exceptions=False)
+    resp = client.post(
+        "/admin/test-signup",
+        json={"email": "t-unverified@example.com", "password": "password123"},
+        headers={"Authorization": "Bearer test-admin-key-77aa"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "OK"
+    assert body["needs_email_verification"] is True
+    assert backend.accounts_by_email["t-unverified@example.com"].is_verified is False
+
+
 def test_auth_send_verification_email(monkeypatch: pytest.MonkeyPatch) -> None:
     """/auth/email/send-verification resends the caller's verification email."""
     backend = _install_fake_supertokens(monkeypatch)
@@ -464,17 +538,16 @@ def test_auth_send_verification_email(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_auth_send_verification_email_suppressed_within_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A resend right after signup reports sent=False and delivers nothing (per-user cooldown)."""
+    """A second send right after the first reports sent=False and delivers nothing (per-user cooldown)."""
     backend = _install_fake_supertokens(monkeypatch)
     client = TestClient(web_app, raise_server_exceptions=False)
     signup = client.post("/auth/signup", json={"email": "vc@e.com", "password": "password123"}).json()
     access_token = signup["tokens"]["access_token"]
+    auth_headers = {"Authorization": f"Bearer {access_token}"}
+    first = client.post("/auth/email/send-verification", headers=auth_headers, json={"email": "vc@e.com"})
+    assert first.json() == {"status": "OK", "sent": True}
     before = len(backend.sent_verification_emails)
-    resp = client.post(
-        "/auth/email/send-verification",
-        headers={"Authorization": f"Bearer {access_token}"},
-        json={"email": "vc@e.com"},
-    )
+    resp = client.post("/auth/email/send-verification", headers=auth_headers, json={"email": "vc@e.com"})
     assert resp.status_code == 200
     assert resp.json() == {"status": "OK", "sent": False}
     assert len(backend.sent_verification_emails) == before
@@ -556,25 +629,35 @@ def test_auth_is_email_verified_requires_bearer_token(monkeypatch: pytest.Monkey
 
 
 def test_auth_verify_email_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The verify-email page consumes a valid token and marks the account verified."""
+    """The verify-email consume API accepts a valid token and marks the account verified."""
     backend = _install_fake_supertokens(monkeypatch)
     client = TestClient(web_app, raise_server_exceptions=False)
-    client.post("/auth/signup", json={"email": "ve@e.com", "password": "password123"})
+    signup = client.post("/auth/signup", json={"email": "ve@e.com", "password": "password123"}).json()
+    # Signup no longer sends the verification email; the contextual send is
+    # what mints the token the emailed link carries.
+    client.post(
+        "/auth/email/send-verification",
+        headers={"Authorization": f"Bearer {signup['tokens']['access_token']}"},
+        json={"email": "ve@e.com"},
+    )
     token = next(iter(backend.verification_tokens.keys()))
-    resp = client.get("/auth/verify-email", params={"token": token})
+    resp = client.post("/accounts/api/verify-email", json={"token": token})
     assert resp.status_code == 200
-    assert "Email verified" in resp.text
+    assert resp.json()["status"] == "OK"
     user_id = backend.accounts_by_email["ve@e.com"].user_id
     assert backend.accounts_by_id[user_id].is_verified is True
 
 
 def test_auth_verify_email_invalid_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Submitting an invalid verification token renders the failure page."""
+    """Submitting an invalid (or missing) verification token reports INVALID_TOKEN."""
     _install_fake_supertokens(monkeypatch)
     client = TestClient(web_app, raise_server_exceptions=False)
-    resp = client.get("/auth/verify-email", params={"token": "bogus"})
-    assert resp.status_code == 400
-    assert "Verification failed" in resp.text
+    resp = client.post("/accounts/api/verify-email", json={"token": "bogus"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "INVALID_TOKEN"
+    missing = client.post("/accounts/api/verify-email", json={"token": ""})
+    assert missing.status_code == 200
+    assert missing.json()["status"] == "INVALID_TOKEN"
 
 
 def test_auth_forgot_password_sends_reset_email_for_known_email(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -750,3 +833,107 @@ def test_build_oauth_providers_builds_github_when_configured(monkeypatch: pytest
     providers = auth_proxy_mod._build_oauth_providers()
 
     assert [provider.config.third_party_id for provider in providers] == ["github"]
+
+
+def test_sdk_middleware_default_recipe_apis_are_all_disabled() -> None:
+    """The SDK middleware must only serve session routes: every other recipe API is disabled.
+
+    The recipe's own signup/signin/reset/verify routes would bypass the
+    hand-rolled endpoints' Turnstile gate, cross-method signup rejection, and
+    verification-email cooldown. Iterating over the concrete implementations'
+    ``disable_*`` flags means an SDK upgrade that adds a new API makes this
+    test fail, forcing an explicit decision about the new route.
+    """
+    apis = (
+        auth_proxy_mod.disable_emailpassword_default_apis(EmailPasswordAPIImplementation()),
+        auth_proxy_mod.disable_thirdparty_default_apis(ThirdPartyAPIImplementation()),
+        auth_proxy_mod.disable_emailverification_default_apis(EmailVerificationAPIImplementation()),
+    )
+    for api in apis:
+        disable_flags = {name: value for name, value in vars(api).items() if name.startswith("disable_")}
+        assert disable_flags, "expected the SDK APIInterface to expose disable_* flags"
+        assert all(disable_flags.values()), disable_flags
+
+
+def test_ensure_asgi_root_path_middleware_defaults_a_missing_root_path() -> None:
+    """Modal's ASGI shim omits root_path; the wrapper must default it to "".
+
+    The coroutines are stepped synchronously (they never suspend on anything
+    unresolved), so no event loop is needed.
+    """
+    recorded_scopes: list[dict[str, Any]] = []
+
+    class _RecordingAsgiApp:
+        async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+            recorded_scopes.append(scope)
+
+    middleware = EnsureAsgiRootPathMiddleware(_RecordingAsgiApp())
+
+    with pytest.raises(StopIteration):
+        middleware({"type": "http", "path": "/health/liveness"}, None, None).send(None)
+    assert recorded_scopes[0]["root_path"] == ""
+    assert recorded_scopes[0]["path"] == "/health/liveness"
+
+    # A scope that already carries a root_path passes through untouched.
+    with pytest.raises(StopIteration):
+        middleware({"type": "http", "root_path": "/api"}, None, None).send(None)
+    assert recorded_scopes[1]["root_path"] == "/api"
+
+
+def test_add_partitioned_only_to_cross_site_secure_cookies() -> None:
+    headers = [
+        (b"content-type", b"application/json"),
+        # A SameSite=None; Secure cookie gets Partitioned appended.
+        (b"set-cookie", b"sAccessToken=abc; Path=/; Secure; HttpOnly; SameSite=None"),
+        # A Lax cookie is left alone (not meant to cross sites).
+        (b"set-cookie", b"other=1; Path=/; Secure; HttpOnly; SameSite=Lax"),
+        # An already-partitioned cookie is not double-appended.
+        (b"set-cookie", b"sRefreshToken=xyz; Path=/; Secure; SameSite=None; Partitioned"),
+    ]
+
+    rewritten = _add_partitioned_to_cross_site_cookies(headers)
+
+    assert rewritten[0] == (b"content-type", b"application/json")
+    assert rewritten[1] == (b"set-cookie", b"sAccessToken=abc; Path=/; Secure; HttpOnly; SameSite=None; Partitioned")
+    assert rewritten[2] == (b"set-cookie", b"other=1; Path=/; Secure; HttpOnly; SameSite=Lax")
+    assert rewritten[3] == (b"set-cookie", b"sRefreshToken=xyz; Path=/; Secure; SameSite=None; Partitioned")
+    # Applied exactly once across the whole header set.
+    assert sum(v.lower().count(b"partitioned") for _n, v in rewritten) == 2
+
+
+def test_partitioned_cookie_middleware_rewrites_response_start_headers() -> None:
+    captured: list[dict[str, Any]] = []
+
+    async def _capturing_send(message: dict[str, Any]) -> None:
+        captured.append(message)
+
+    class _CookieSettingApp:
+        async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"set-cookie", b"sAccessToken=abc; Secure; SameSite=None")],
+                }
+            )
+
+    middleware = PartitionedCookieMiddleware(_CookieSettingApp())
+
+    with pytest.raises(StopIteration):
+        middleware({"type": "http"}, None, _capturing_send).send(None)
+
+    assert captured[0]["headers"] == [(b"set-cookie", b"sAccessToken=abc; Secure; SameSite=None; Partitioned")]
+
+
+def test_partitioned_cookie_middleware_ignores_non_http_scopes() -> None:
+    seen: list[Any] = []
+
+    class _PassthroughApp:
+        async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+            seen.append(scope)
+
+    middleware = PartitionedCookieMiddleware(_PassthroughApp())
+
+    with pytest.raises(StopIteration):
+        middleware({"type": "lifespan"}, None, None).send(None)
+    assert seen[0]["type"] == "lifespan"

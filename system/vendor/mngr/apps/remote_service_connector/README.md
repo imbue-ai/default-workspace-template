@@ -134,8 +134,10 @@ Running `modal deploy` directly without the wrapper defaults to
 All non-`/auth/*` endpoints require a Bearer token, with the exceptions noted below:
 
 - **User (SuperTokens JWT)**: `Authorization: Bearer <access_token>` — the signed-in user's SuperTokens session. A signed-in user has full authority over their own resources; their user-id prefix (the first 16 hex chars of their SuperTokens user ID) namespaces their leases and buckets.
+- **Email verification is non-blocking**: an unverified account authenticates like any other. Only the actions where the email is an authorization identity require a verified email (the `require_verified_email` guard): satisfying a share grant as a visitor (the accounts broker), and ally-plan eligibility (the explicit plan switch and the lazy pre-cutoff backfill). Gated endpoints return a structured 403 `{"code": "email_not_verified", ...}` so clients can prompt verification contextually. Nothing ever auto-marks an email verified (the old paid-list auto-verification is gone); the admin-key test-signup endpoint is the sole, operator-trust exception.
 - The share-certificate endpoint (`POST /shares/cert`) is instead authenticated by the share's relay token (see `share_certs.py`), and the frps plugin callback by its shared secret (see `shares.py`).
-- The accounts-broker routes (`GET /share/login`, `POST /share/session`, `GET /share/authorize`) are a browser-facing flow authenticated by the login form and the `imbue_sso_session` cookie; `GET /share/jwks.json` is public (it serves only the broker's verification keys).
+- **Browser sessions (the hosted accounts surface)**: the `/login` / `/signup` / `/manage` pages and their `/accounts/api/*` JSON API use SuperTokens' native cookie-based sessions (the SDK middleware serves refresh under `/accounts/auth/`). Sessions roll via refresh but are capped at ~30 days from creation: a creation-time stamp in the access token payload (which survives refreshes) is checked on every resolution, and a session past the cap -- or without a readable stamp -- is revoked on sight. The cap lives in the connector because the SDK cannot configure the SuperTokens core's refresh-token validity. The device handoff (`GET /accounts/authorize` + `POST /auth/device/token`) mints independent bearer-token sessions for the desktop app / CLI; those are not subject to the browser-session cap (clients hold a refresh token and rotate it).
+- The share-authorization route (`GET /share/authorize`) resolves the same browser session; `GET /share/jwks.json` is public (it serves only the broker's verification keys).
 
 The `/auth/*` endpoints are themselves the authentication flow, so they do not require a token.
 
@@ -168,7 +170,7 @@ A shared workspace lives at `<service>.<host-id>.<user-label>.<region>.<content-
 - `GET /shares/{host_id}/status` -- One share's domain, tunnel-liveness signal, and certificate expiry.
 - `POST /shares/cert` -- Sign the workspace's CSR via ACME DNS-01 (authenticated by the share's relay token; the workspace keeps its private key).
 - `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` operations.
-- `GET /share/login`, `POST /share/session`, `GET /share/authorize`, `GET /share/jwks.json` -- the accounts broker: browser login + short-lived handoff JWTs for visiting a shared workspace.
+- `GET /share/authorize`, `GET /share/jwks.json` -- the accounts broker: authorizes a visit to a shared workspace against the hosted accounts surface's browser session and mints the short-lived handoff JWT (`GET /share/login` survives only as a permanent redirect to the merged `/login` page).
 
 ### Buckets (signed-in user only)
 
@@ -230,18 +232,24 @@ Email-addressed operator management of per-account entitlements, authenticated b
 
 ### Auth
 
-These endpoints front the SuperTokens core so that clients (e.g. the `minds` desktop client) never need the SuperTokens API key. They require `SUPERTOKENS_CONNECTION_URI` (and usually `SUPERTOKENS_API_KEY`) to be configured on the server; otherwise they return 503. All of them are unauthenticated *except* `/auth/session/revoke`, `/auth/email/send-verification`, and `/auth/email/is-verified`, which must be called with the caller's own access token (see below); those three deliberately accept a session whose email is not yet verified.
+These endpoints front the SuperTokens core so that clients (e.g. the `minds` desktop client) never need the SuperTokens API key. They require `SUPERTOKENS_CONNECTION_URI` (and usually `SUPERTOKENS_API_KEY`) to be configured on the server; otherwise they return 503. All of them are unauthenticated *except* `/auth/session/revoke`, `/auth/session/revoke-current`, `/auth/email/send-verification`, and `/auth/email/is-verified`, which must be called with the caller's own access token (see below); those deliberately accept a session whose email is not yet verified.
 
-- `POST /auth/signup` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending. Refused with status `ACCOUNT_EXISTS_WITH_OTHER_METHOD` when the email is already registered under a different login method (e.g. Google).
-- `POST /auth/signin` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending.
+#### Deprecated JSON auth endpoints
+
+`POST /auth/signup`, `POST /auth/signin`, and the OAuth pair (`/auth/oauth/authorize` + `/auth/oauth/callback`) are **deprecated** in favor of the browser-based accounts surface (consumed by `mngr imbue_cloud auth login`). They stay up, unchanged in shape, for released desktop clients and for the headless CLI (`mngr imbue_cloud auth signin/signup`). Removal condition: after every supported desktop client ships the browser login flow, restrict signup on production/staging to the browser (dev/CI tiers keep JSON/CLI signup; the admin-key `POST /admin/test-signup` endpoint covers deployment tests everywhere). Their `needs_email_verification` response field is pinned `false` for wire compat -- verification is non-blocking, and old clients treat `true` as "blocked pending verification".
+
+- `POST /auth/signup` (deprecated, see above) -- Body: `{email, password}`. Returns status, user info, and session tokens. No verification email is sent at signup (the first verification-gated action triggers a contextual send). Refused with status `ACCOUNT_EXISTS_WITH_OTHER_METHOD` when the email is already registered under a different login method (e.g. Google).
+- `POST /auth/signin` (deprecated, see above) -- Body: `{email, password}`. Returns status, user info, and session tokens; an unverified email does not block sign-in.
 - `POST /auth/session/refresh` -- Body: `{refresh_token}`. Returns a new access/refresh token pair.
-- `POST /auth/session/revoke` -- Header: `Authorization: Bearer <access_token>`. Revokes every SuperTokens session for the caller's user. The user_id is derived from the access token, so an anonymous caller cannot revoke another user's sessions. Called on sign-out so that access/refresh tokens stored on the client's machine become useless even if copied off-box.
-- `POST /auth/email/send-verification` -- Header: `Authorization: Bearer <access_token>`. Body: `{email}`; the email must belong to the authenticated caller (403 otherwise). Resends the verification email; returns `{status, sent}` where `sent` is false when the per-user cooldown suppressed the send (a verification email went out moments ago via signup, an unverified signin, or an earlier resend).
+- `POST /auth/session/revoke` -- Header: `Authorization: Bearer <access_token>`. Revokes every SuperTokens session for the caller's user. The user_id is derived from the access token, so an anonymous caller cannot revoke another user's sessions. The hosted account page's "sign out of all devices" action.
+- `POST /auth/session/revoke-current` -- Header: `Authorization: Bearer <access_token>`. Revokes only the presented session. Called on desktop sign-out so signing out of one install does not kill the user's browser session or other devices.
+- `POST /admin/test-signup` -- Admin-key authenticated (like `/admin/accounts/*`). Body: `{email, password, verified}`. Creates a test account, optionally pre-verified (the only path that marks an email verified without a clicked link); used by the deployment tests.
+- `POST /auth/email/send-verification` -- Header: `Authorization: Bearer <access_token>`. Body: `{email}`; the email must belong to the authenticated caller (403 otherwise). Sends the verification email; returns `{status, sent}` where `sent` is false when the per-user cooldown suppressed the send.
 - `POST /auth/email/is-verified` -- Header: `Authorization: Bearer <access_token>`. Body: `{email}`; the email must belong to the authenticated caller (403 otherwise). Returns `{verified: bool}`.
-- `GET /auth/verify-email?token=...` -- Renders an HTML result page. Used by the link inside verification emails.
+- `GET /auth/verify-email?token=...` -- Serves the hosted accounts bundle's verify-email result page (the page consumes the token via `POST /accounts/api/verify-email`). Used by the link inside verification emails.
 - `POST /auth/password/forgot` -- Body: `{email}`. Always returns OK (to avoid account enumeration).
 - `POST /auth/password/reset` -- Body: `{token, new_password}`. Consumes a reset token and sets a new password.
-- `GET /auth/reset-password?token=...` -- Renders an HTML form. Used by the link inside password-reset emails.
+- `GET /auth/reset-password?token=...` -- Serves the hosted accounts bundle's password-reset form (the form posts to `POST /auth/password/reset`). Used by the link inside password-reset emails.
 - `POST /auth/oauth/authorize` -- Body: `{provider_id, callback_url}`. Returns the URL to redirect the user to.
 - `POST /auth/oauth/callback` -- Body: `{provider_id, callback_url, query_params}`. Exchanges OAuth params for a session. Refused with status `ACCOUNT_EXISTS_WITH_OTHER_METHOD` (before any user is created) when the email already has a password or other-provider account.
 - `GET /auth/users/{user_id}` -- Returns basic info about a user (email, login provider).
