@@ -338,7 +338,10 @@ record which branch applied (with its evidence) in your report:
   changed on both sides, no lockfile you regenerated) **and** your 4a impact
   analysis found no user-created code (apps, skills, local scripts) depending
   on anything the update changed and no global-dep bump with a user-created
-  dependent. Every changed file then arrives exactly as upstream shipped and
+  dependent **and** you authored no in-branch edits of your own -- a 4a mirror
+  edit, or any other commit you added on top of the merge, is merge work even
+  though `classify-merge` (which diffs `HEAD^1` against the base) cannot see
+  it, and puts you on the run branch below. Every changed file then arrives exactly as upstream shipped and
   tested it, and there is nothing local for a review to protect. Running
   `/autofix` here would review *upstream's* code and could apply local fixes to
   it -- manufacturing exactly the local divergence a future update would have
@@ -419,8 +422,9 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     built-in case and does not hot-apply the user case.
   - **Validation** -- suites/boots/Playwright run, all passing; **which branch
     of the 4c review-gate rule applied, with its evidence**: either the
-    clean-pull skip (`gates_required: false` from classify-merge plus the empty
-    impact list) or the gate run's artifacts (the autofix fix commits kept vs
+    clean-pull skip (`gates_required: false` from classify-merge, the empty
+    impact list, and no in-branch edits of your own) or the gate run's
+    artifacts (the autofix fix commits kept vs
     reverted -- or "gate ran clean, no fixes proposed" -- and the
     architecture-gate verdicts). A report claiming the gates ran must carry
     these artifacts; a report skipping them must show the rule's conditions
