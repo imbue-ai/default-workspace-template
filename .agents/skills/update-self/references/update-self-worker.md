@@ -362,15 +362,17 @@ record which branch applied (with its evidence) in your report:
   upstream-tested code" licenses the skip branch above when its conditions
   hold, and licenses nothing when they do not.
 
-  One disposition rule specific to update merges, for the keep/revert pass:
-  keep fixes that touch the merged set or local code, and **revert fixes that
-  would diverge a clean-pulled upstream file from the release** (note them as
-  `submit-upstream-changes` candidates instead). The gate's job here is the
-  reconciliation and local breakage, not improving upstream's code. "Clean-pulled"
-  here means *still* byte-identical to the release: a file you edited in-branch
-  yourself (a 4a mirror edit) is local code for this rule even though
-  `classify-merge` lists it as pulled-in -- those edits are a reason the gate is
-  running, so fixes to them are kept and judged on their merits.
+  One disposition rule specific to update merges, for the keep/revert pass. The
+  test is the file's merged **content**, not which set `classify-merge` put it
+  in: **keep fixes to a file whose content differs from the release** -- one you
+  reconciled by hand, or one you edited in-branch yourself (a 4a mirror edit)
+  even though `classify-merge` lists it as pulled-in, since those edits are a
+  reason the gate is running -- and **revert fixes to a file that is still
+  byte-identical to the release** (note them as `submit-upstream-changes`
+  candidates instead), including a conflicted file you resolved by taking
+  upstream wholesale (`--theirs`), which lands byte-identical even though
+  `classify-merge` lists it as merged. The gate's job here is the reconciliation
+  and local breakage, not improving upstream's code.
 
 If you believe the gates should not run -- or should run at some other scope --
 in a situation this rule does not cover, that is a `question` gate for the lead
