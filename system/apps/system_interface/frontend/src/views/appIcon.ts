@@ -43,6 +43,7 @@
 
 import DOMPurify from "dompurify";
 import { getApps } from "../models/AgentManager";
+import { SQUIGGLE_GLYPHS, monogramMarkup } from "./squiggles";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
@@ -293,9 +294,45 @@ function sanitizeUncached(markup: string, sizePx: number): string | null {
  * an app on their own grid -- and an app without an icon must look exactly as
  * it looked before icons existed.
  */
-export function appIconMarkup(rawIcon: string | undefined | null, sizePx: number, fallbackMarkup: string): string {
-  if (rawIcon === undefined || rawIcon === null) return fallbackMarkup;
-  return sanitizeIconMarkup(rawIcon, sizePx) ?? fallbackMarkup;
+export function appIconMarkup(
+  rawIcon: string | undefined | null,
+  sizePx: number,
+  fallbackMarkup: string,
+  appName?: string,
+): string {
+  const sanitized = rawIcon === undefined || rawIcon === null ? null : sanitizeIconMarkup(rawIcon, sizePx);
+  if (sanitized !== null) return sanitized;
+  return appName === undefined ? fallbackMarkup : appMonogramMarkup(appName, sizePx);
+}
+
+/**
+ * What an app wears when it has registered no icon of its own.
+ *
+ * Almost every app is in this case, so the fallback cannot be one shared glyph:
+ * a list of them all wearing the same box tells the reader nothing, which is
+ * what "notes" and "counter" looked like side by side. A monogram in a colour
+ * derived from the name at least differs per app and stays put, so the same app
+ * is recognisable in the rail, the launcher and its tab.
+ *
+ * The colour comes from the squiggle palette, so an unnamed app sits in the
+ * same family as the project glyphs rather than introducing a second one, and
+ * it is picked by hashing the name so it never moves between renders or
+ * machines.
+ */
+export function appMonogramMarkup(appName: string, sizePx: number): string {
+  return monogramMarkup(appName, SQUIGGLE_GLYPHS[paletteIndexForName(appName)].color, sizePx);
+}
+
+/** A stable palette slot for a name: the same app is always the same colour,
+ *  here and on any other machine showing it. */
+function paletteIndexForName(name: string): number {
+  let hash = 0;
+  for (let index = 0; index < name.length; index += 1) {
+    // The classic djb2-ish rolling hash, kept in 32-bit range with `| 0` so a
+    // long name cannot drift into float territory and quantise.
+    hash = (hash * 31 + name.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash) % SQUIGGLE_GLYPHS.length;
 }
 
 /**
@@ -309,5 +346,9 @@ export function appIconMarkup(rawIcon: string | undefined | null, sizePx: number
 export function serviceIconMarkup(serviceName: string | null, sizePx: number, fallbackMarkup: string): string {
   if (serviceName === null) return fallbackMarkup;
   const app = getApps().find((candidate) => candidate.name === serviceName);
-  return appIconMarkup(app?.icon, sizePx, fallbackMarkup);
+  // A name the machine no longer registers keeps the caller's generic glyph:
+  // there is no app to monogram, and inventing one would dress up a dead ref as
+  // a real app.
+  if (app === undefined) return fallbackMarkup;
+  return appIconMarkup(app.icon, sizePx, fallbackMarkup, app.name);
 }

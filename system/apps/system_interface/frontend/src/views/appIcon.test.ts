@@ -305,9 +305,32 @@ describe("serviceIconMarkup", () => {
     expect(parsed(markup).querySelector("path")?.getAttribute("d")).toBe("M6 6h12v12H6z");
   });
 
-  it("falls back for an app with no icon, a malformed one, and a name nothing answers to", () => {
-    expect(serviceIconMarkup("plain", 16, FALLBACK)).toBe(FALLBACK);
-    expect(serviceIconMarkup("broken", 16, FALLBACK)).toBe(FALLBACK);
+  it("monograms a registered app whose icon is missing or malformed", () => {
+    // A registered app always gets something of its own rather than the shared
+    // glyph: an unnamed app is the common case, and a list of them all wearing
+    // the caller's fallback tells the reader nothing.
+    for (const name of ["plain", "broken"]) {
+      const markup = serviceIconMarkup(name, 16, FALLBACK);
+      expect(markup).not.toBe(FALLBACK);
+      expect(parsed(markup).textContent?.trim()).toBe(name.charAt(0).toUpperCase());
+    }
+    // Two apps must not collide on the same colour by accident.
+    const plainFill = parsed(serviceIconMarkup("plain", 16, FALLBACK))
+      .querySelector("rect")
+      ?.getAttribute("fill");
+    const brokenFill = parsed(serviceIconMarkup("broken", 16, FALLBACK))
+      .querySelector("rect")
+      ?.getAttribute("fill");
+    expect(plainFill).not.toBe(brokenFill);
+  });
+
+  it("is stable: the same app monograms identically every time", () => {
+    expect(serviceIconMarkup("plain", 16, FALLBACK)).toBe(serviceIconMarkup("plain", 16, FALLBACK));
+  });
+
+  it("keeps the caller's glyph for a name the machine does not register", () => {
+    // Nothing to monogram, and inventing one would dress a dead ref up as a
+    // real app.
     expect(serviceIconMarkup("never-registered", 16, FALLBACK)).toBe(FALLBACK);
   });
 

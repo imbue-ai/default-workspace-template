@@ -626,7 +626,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         const label = displayNameForMember(memberRef("app", app.name), app.name);
         return shortcutRow({
           key: `app:${app.name}`,
-          iconMarkup: appIconMarkup(app.icon, ROW_GLYPH_SIZE, railIcon("app", ROW_GLYPH_SIZE)),
+          iconMarkup: appIconMarkup(app.icon, ROW_GLYPH_SIZE, railIcon("app", ROW_GLYPH_SIZE), app.name),
           label,
           tooltip: label,
           onclick: () => pick(() => attrs.onOpenApp(app)),
