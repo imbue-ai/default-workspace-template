@@ -33,6 +33,15 @@ SUPERVISORD_CONF = Path("system/supervisord.conf")
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
 
 STATE_DIR = Path("data/.state")
+# The Cloudflare-tunnel-era share token file. Nothing consumes it anymore
+# (the cloudflared service was replaced by share-gateway, whose materials
+# live in share.env); a workspace updated from a pre-share-gateway template
+# may still carry one, and removing it retires the last live credential of
+# the old sharing stack.
+# CLEANUP: drop this constant and _remove_stale_cloudflare_tunnel_env once
+# no supported workspace predates the share gateway (every workspace
+# created from, or updated to, a post-minds-v0.3.11 template).
+STALE_CLOUDFLARE_TUNNEL_ENV = Path("data/.secrets/cloudflare_tunnel.env")
 
 # Durable home for user-editable cron entries. /etc/cron.d lives on the
 # container rootfs and is lost when the container is recreated; files under
@@ -685,6 +694,20 @@ def _run_env_converge_fast_phase() -> None:
         )
 
 
+def _remove_stale_cloudflare_tunnel_env() -> None:
+    """Delete the dead Cloudflare tunnel token left behind by pre-share-gateway templates.
+
+    Idempotent and best-effort: the file is inert either way (no service reads
+    it in this template), so a failure to remove it must never block boot.
+    """
+    try:
+        if STALE_CLOUDFLARE_TUNNEL_ENV.exists():
+            STALE_CLOUDFLARE_TUNNEL_ENV.unlink()
+            logger.info("Removed the stale Cloudflare tunnel token ({})", STALE_CLOUDFLARE_TUNNEL_ENV)
+    except OSError as e:
+        logger.warning("Could not remove {}: {}", STALE_CLOUDFLARE_TUNNEL_ENV, e)
+
+
 def main() -> None:
     logger.info("Bootstrap starting: first-boot setup, then supervisord")
 
@@ -705,6 +728,10 @@ def main() -> None:
         _apply_container_timezone(tz_name)
 
     _maybe_create_initial_chat()
+
+    # A workspace updated from a pre-share-gateway template may still hold
+    # the old cloudflared token; retire it (see the constant's CLEANUP note).
+    _remove_stale_cloudflare_tunnel_env()
 
     # Overlay symlinks must exist before services start writing.
     _run_env_converge_fast_phase()

@@ -31,6 +31,7 @@ from bootstrap.manager import (
     _read_host_name,
     _read_main_agent_labels,
     _read_workspace_fast_mode_enabled,
+    _remove_stale_cloudflare_tunnel_env,
 )
 
 # --- _configure_git_global ---
@@ -750,3 +751,26 @@ def test_parse_timezone_response_rejects_wrong_shapes(body: bytes) -> None:
 def test_parse_timezone_response_rejects_a_non_json_body() -> None:
     with pytest.raises(ValueError):
         _parse_timezone_response(b"<html>bad gateway</html>")
+
+
+def test_remove_stale_cloudflare_tunnel_env_deletes_the_leftover_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    token_path = tmp_path / "data" / ".secrets" / "cloudflare_tunnel.env"
+    token_path.parent.mkdir(parents=True)
+    token_path.write_text("TUNNEL_TOKEN=stale\n")
+
+    _remove_stale_cloudflare_tunnel_env()
+
+    assert not token_path.exists()
+    # The rest of the secrets directory is untouched.
+    assert token_path.parent.is_dir()
+
+
+def test_remove_stale_cloudflare_tunnel_env_is_a_noop_without_the_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _remove_stale_cloudflare_tunnel_env()
+    assert not (tmp_path / "data" / ".secrets").exists()
