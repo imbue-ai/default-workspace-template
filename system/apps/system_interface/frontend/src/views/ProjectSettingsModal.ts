@@ -25,6 +25,7 @@ import m from "mithril";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
 import type { MemberKind, ProjectInfo } from "../models/Projects";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
+import { normalizeTabTitle, tabRenameBlockedReason } from "./tab-rename";
 
 export interface ProjectSettingsModalAttrs {
   project: ProjectInfo;
@@ -41,10 +42,19 @@ export interface ProjectSettingsModalAttrs {
   // modal only renders and removes: the workspace owns membership, so dropping
   // a row calls back rather than writing to the store here.
   contents: readonly ProjectContentRow[];
-  // Stop showing this object in this project. The object keeps running and
-  // stays in every other project holding it -- a project is a view, so this
-  // hides it here and nowhere else.
-  onRemoveContent: (ref: string) => void;
+  // Stop showing this object in this project, called once per staged row when
+  // Save commits. The object keeps running and stays in every other project
+  // holding it -- a project is a view, so this hides it here and nowhere else.
+  // Awaited, so a rejection surfaces as the dialog's error rather than leaving
+  // the list disagreeing with the store.
+  onRemoveContent: (ref: string) => Promise<void>;
+  // Rename this object's tab, called once per staged rename when Save commits.
+  // Synchronous, unlike the removal above: a rename is an edit to this view's
+  // own layout that the autosave carries, with no request of its own to wait
+  // on. False means the object no longer has a tab to name -- the dialog offers
+  // the gesture only on rows that have one, so that is the tab having been
+  // closed while the dialog was up, and it is reported rather than swallowed.
+  onRenameContent: (ref: string, title: string) => boolean;
 }
 
 /** One row of the "What's in this project" list. Mirrors the rail's tab row,
@@ -92,6 +102,15 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
   let isSaving = false;
   let isDeleting = false;
   let isConfirmingDelete = false;
+  // Rows the user has marked for removal. Staged rather than applied on click
+  // so this control obeys Save/Cancel like every other field in the dialog.
+  let refsToRemove = new Set<string>();
+  // New names, by ref, staged for the same reason and applied by the same Save.
+  let titlesByRef = new Map<string, string>();
+  // The row whose label is currently a text field, and what has been typed into
+  // it. One at a time: this is a list, not a form.
+  let editingRef: string | null = null;
+  let editingTitle = "";
   let error: string | null = null;
   // The Escape handler is registered on the document once, so it reaches the
   // callbacks through this rather than through a vnode captured at create time.
@@ -117,6 +136,25 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     m.redraw();
 
     try {
+      // Renames first, then removals, then the metadata: the metadata save is
+      // what closes the dialog, so doing it last means a failure anywhere
+      // before it can still report itself here instead of vanishing behind the
+      // dialog it just dismissed.
+      const unnameable = [...titlesByRef].filter(([ref, title]) => !attrs.onRenameContent(ref, title));
+      titlesByRef = new Map<string, string>();
+      if (unnameable.length > 0) {
+        error =
+          unnameable.length === 1
+            ? "That tab was closed while this dialog was open, so it could not be renamed."
+            : `${unnameable.length} of those tabs were closed while this dialog was open, so they could not be renamed.`;
+        isSaving = false;
+        m.redraw();
+        return;
+      }
+      for (const ref of refsToRemove) {
+        await attrs.onRemoveContent(ref);
+      }
+      refsToRemove = new Set<string>();
       attrs.onSaved(await updateProjectSettings(attrs.project.project_id, chosen, color, glyphIndex));
     } catch (e) {
       error = (e as Error).message ?? "The project could not be saved.";
@@ -159,13 +197,117 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     });
   }
 
-  /** What the project currently shows, with a way to drop each row.
+  /** What a row is called right now: the name staged for it, else the one the
+   *  workspace derived. */
+  function stagedLabel(row: ProjectContentRow): string {
+    return titlesByRef.get(row.ref) ?? row.label;
+  }
+
+  /** Turn a row's label into a text field, seeded with what it says now. */
+  function beginRowEdit(row: ProjectContentRow): void {
+    editingRef = row.ref;
+    editingTitle = stagedLabel(row);
+  }
+
+  /** Leave the editor, staging what was typed or throwing it away. A title that
+   *  is empty once trimmed is not a name, so it stages nothing -- the same
+   *  outcome as Escape. */
+  function endRowEdit(row: ProjectContentRow, isCommitting: boolean): void {
+    if (editingRef !== row.ref) return;
+    editingRef = null;
+    if (!isCommitting) return;
+    const title = normalizeTabTitle(editingTitle);
+    if (title === null) return;
+    if (title === row.label) titlesByRef.delete(row.ref);
+    else titlesByRef.set(row.ref, title);
+  }
+
+  /** One row's label: a name, or the field it becomes while being renamed. */
+  function rowLabel(row: ProjectContentRow, isStaged: boolean): m.Vnode {
+    const isRenamed = titlesByRef.has(row.ref);
+    const labelClass =
+      "min-w-0 flex-1 truncate text-[13px] " +
+      (isStaged
+        ? "text-text-faint line-through"
+        : isRenamed
+          ? "text-text-primary italic"
+          : row.isOpen
+            ? "text-text-primary"
+            : "text-text-faint");
+
+    if (editingRef === row.ref) {
+      return m("input", {
+        class: "border-accent bg-bg text-text-primary min-w-0 flex-1 rounded border px-1 text-[13px] outline-none",
+        type: "text",
+        value: editingTitle,
+        disabled: isSaving || isDeleting,
+        oncreate(vnode: m.VnodeDOM) {
+          const field = vnode.dom as HTMLInputElement;
+          field.focus();
+          field.select();
+        },
+        oninput(e: InputEvent) {
+          editingTitle = (e.target as HTMLInputElement).value;
+        },
+        onkeydown(e: KeyboardEvent) {
+          if (e.key !== "Enter" && e.key !== "Escape") return;
+          // Escape backs out of the edit rather than out of the dialog, so it
+          // must not reach the document-level handler that closes this.
+          e.stopPropagation();
+          e.preventDefault();
+          endRowEdit(row, e.key === "Enter");
+        },
+        onblur() {
+          endRowEdit(row, true);
+        },
+      });
+    }
+
+    // A struck-through row is on its way out, so there is nothing worth naming;
+    // a backgrounded one has no tab to carry a name at all, and says why.
+    const blockedReason = isStaged ? "This is being removed from the project on save." : tabRenameBlockedReason(row);
+    return m(
+      "span",
+      {
+        class: labelClass,
+        title:
+          blockedReason ??
+          (isRenamed
+            ? `Renamed from "${row.label}" on save. Double-click to change it again.`
+            : "Double-click to rename this tab."),
+        ondblclick:
+          blockedReason === null
+            ? () => {
+                beginRowEdit(row);
+              }
+            : undefined,
+      },
+      stagedLabel(row),
+    );
+  }
+
+  /** What the project currently shows, with a way to rename or drop each row.
    *
    *  Removing hides the object in this project only -- it keeps running and
    *  stays in every other project holding it, and in Everything -- so the
    *  button says "Remove" rather than anything that sounds like stopping or
    *  deleting it. Rows the dock is not currently showing are the backgrounded
-   *  ones, and read as tertiary the same way the rail draws them. */
+   *  ones, and read as tertiary the same way the rail draws them.
+   *
+   *  Removals are STAGED, not applied on click: a row marked for removal is
+   *  struck through until Save commits it, and Cancel throws the marks away
+   *  with the rest of the form. Applying immediately would have made this the
+   *  one control in the dialog that ignored Save -- the user would rename, hit
+   *  Cancel expecting to have changed nothing, and find their tabs gone.
+   *
+   *  Renames stage the same way and for the same reason. Double-clicking a
+   *  label turns it into a field; the new name shows in italic until Save
+   *  applies it, and Cancel throws it away with everything else. The tab strip's
+   *  own double-click rename commits on the spot, which is not a disagreement:
+   *  there is no Save button on a tab strip, so Enter/Escape is the whole
+   *  contract there, while everything inside a dialog with a Save button obeys
+   *  it. Only a row with a tab can be renamed -- see ``tabRenameBlockedReason``,
+   *  whose sentence is the tooltip a backgrounded row wears. */
   function contentsList(attrs: ProjectSettingsModalAttrs): m.Vnode {
     if (attrs.contents.length === 0) {
       return m(
@@ -174,42 +316,72 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
         "Nothing yet. Open a chat, browser, terminal or app while this project is showing and it lands here.",
       );
     }
-    return m(
-      "div",
-      { class: "border-border mb-3 max-h-48 overflow-y-auto rounded-md border" },
-      attrs.contents.map((row) =>
-        m(
-          "div",
-          {
-            key: row.ref,
-            class: "border-border/60 group flex h-8 items-center gap-2 border-b px-2 last:border-b-0",
-          },
-          [
-            m("span", { class: "text-text-faint w-16 shrink-0 text-[11px]" }, KIND_LABEL[row.kind]),
-            m(
-              "span",
-              {
-                class: "min-w-0 flex-1 truncate text-[13px] " + (row.isOpen ? "text-text-primary" : "text-text-faint"),
-              },
-              row.label,
-            ),
-            m(
-              "button",
-              {
-                type: "button",
-                class:
-                  "text-text-faint hover:text-text-primary shrink-0 cursor-pointer bg-transparent px-1 text-[12px] " +
-                  "opacity-0 group-hover:opacity-100 disabled:opacity-50",
-                disabled: isSaving || isDeleting,
-                title: "Remove from this project. It keeps running and stays in Everything.",
-                onclick: () => attrs.onRemoveContent(row.ref),
-              },
-              "Remove",
-            ),
-          ],
-        ),
+    const removeCount = attrs.contents.filter((row) => refsToRemove.has(row.ref)).length;
+    const renameCount = attrs.contents.filter((row) => titlesByRef.has(row.ref)).length;
+    return m("div", { class: "mb-3" }, [
+      // The count names what the box is, and the fixed max height plus a scroll
+      // region is what makes it read as a list you can page through rather than
+      // as a few stray rows. What is staged is counted beside it, so a dialog
+      // left open a while still says what pressing Save would do.
+      m("div", { class: "text-text-faint mb-1 flex items-baseline justify-between text-[11px]" }, [
+        m("span", `${attrs.contents.length} ${attrs.contents.length === 1 ? "item" : "items"}`),
+        m("span", { class: "flex gap-2" }, [
+          renameCount === 0 ? null : m("span", `${renameCount} to rename on save`),
+          removeCount === 0 ? null : m("span", { class: "text-red-600" }, `${removeCount} to remove on save`),
+        ]),
+      ]),
+      m(
+        "div",
+        { class: "border-border bg-bg max-h-48 overflow-y-auto rounded-md border" },
+        attrs.contents.map((row) => {
+          const isStaged = refsToRemove.has(row.ref);
+          return m(
+            "div",
+            {
+              key: row.ref,
+              class:
+                "project-contents-row border-border/60 group flex h-8 items-center gap-2 border-b px-2 last:border-b-0 " +
+                (isStaged ? "bg-red-50" : "hover:bg-bg-hover"),
+            },
+            [
+              m("span", { class: "text-text-faint w-16 shrink-0 text-[11px]" }, KIND_LABEL[row.kind]),
+              rowLabel(row, isStaged),
+              m(
+                "button",
+                {
+                  type: "button",
+                  // Shown on hover so the list stays quiet at rest, but always
+                  // shown on a staged row -- that row's only way back is this
+                  // button, so it must not be hidden behind a hover.
+                  class:
+                    "shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-[12px] bg-transparent disabled:opacity-50 " +
+                    (isStaged
+                      ? "text-text-secondary hover:bg-bg-active opacity-100"
+                      : "text-text-faint opacity-0 group-hover:opacity-100 hover:bg-red-100 hover:text-red-700"),
+                  disabled: isSaving || isDeleting,
+                  title: isStaged
+                    ? "Keep this in the project after all"
+                    : "Remove from this project on save. It keeps running and stays in Everything.",
+                  onclick: () => {
+                    if (isStaged) {
+                      refsToRemove.delete(row.ref);
+                      return;
+                    }
+                    refsToRemove.add(row.ref);
+                    // Nothing left to name: the row is leaving the project, and
+                    // a rename staged behind a removal would apply to a tab
+                    // that is about to be closed.
+                    titlesByRef.delete(row.ref);
+                    if (editingRef === row.ref) editingRef = null;
+                  },
+                },
+                isStaged ? "Undo" : "Remove",
+              ),
+            ],
+          );
+        }),
       ),
-    );
+    ]);
   }
 
   function glyphCell(index: number): m.Vnode {
@@ -274,6 +446,10 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
       name = attrs.project.name;
       color = attrs.project.color;
       glyphIndex = normalizedGlyphIndex(attrs.project.glyph);
+      refsToRemove = new Set<string>();
+      titlesByRef = new Map<string, string>();
+      editingRef = null;
+      editingTitle = "";
     },
 
     view(vnode) {

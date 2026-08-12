@@ -101,6 +101,12 @@ export interface SidebarAttrs {
   // nothing can be removed from the home. The object keeps running and stays
   // in every other project showing it.
   onRemoveFromView: (row: SidebarTabRow) => void;
+  // The settings dialog's staged removals, applied on Save. Rejects so the
+  // dialog can show the reason instead of the rail alerting behind it.
+  onRemoveContentFromView: (ref: string) => Promise<void>;
+  // The settings dialog's staged renames, applied by the same Save. False when
+  // the object has no tab left to name, which the dialog reports.
+  onRenameContentInView: (ref: string, title: string) => boolean;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
   // Destroy the object behind this row, machine-wide. The workspace confirms
@@ -1081,11 +1087,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         label: row.label,
         isOpen: row.isOpen,
       })),
-      onRemoveContent: (ref: string) => {
-        const row = attrs.rows.find((candidate) => candidate.ref === ref);
-        if (row === undefined) return;
-        attrs.onRemoveFromView(row);
-      },
+      onRemoveContent: (ref: string) => attrs.onRemoveContentFromView(ref),
+      onRenameContent: (ref: string, title: string) => attrs.onRenameContentInView(ref, title),
     });
   }
 

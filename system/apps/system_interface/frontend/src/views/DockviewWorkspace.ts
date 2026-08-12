@@ -70,6 +70,7 @@ import type { LaunchKind, LauncherRow } from "./NewTabLauncher";
 import { placeMenu } from "./Sidebar";
 import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
+import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "./hoverTooltip";
 import {
   addActivityOverlayListener,
@@ -811,6 +812,11 @@ const tabHandlesByPanelId = new Map<string, { element: HTMLElement; refreshTitle
  * asks for the title. They are toggled from here rather than by a CSS
  * ``:hover`` rule because the menu has to hold them open while it is up, after
  * the pointer has left the tab for the menu card.
+ *
+ * Double-clicking the title renames the tab: it becomes a text field seeded
+ * with the current name, Enter and blur commit, Escape puts the old one back.
+ * The commit goes through ``applyPanelRename`` like every other rename, so the
+ * name is saved with the panel and survives a reload.
  */
 function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const element = document.createElement("div");
@@ -833,6 +839,17 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   content.style.textOverflow = "clip";
   element.appendChild(content);
 
+  // The rename editor, swapped in for the title on a double-click. A real input
+  // rather than a contenteditable title, so the caret, the selection and
+  // Escape behave the way a text field is expected to.
+  const editor = document.createElement("input");
+  editor.type = "text";
+  editor.className = "dv-custom-tab-title-input";
+  editor.spellcheck = false;
+  editor.setAttribute("aria-label", "Tab name");
+  editor.style.display = "none";
+  element.appendChild(editor);
+
   const actions = document.createElement("div");
   actions.className = "dv-custom-tab-actions";
   actions.style.display = "none";
@@ -841,6 +858,9 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const disposables: Array<{ dispose: () => void }> = [];
   let isPointerOver = false;
   let isMenuOpen = false;
+  let isEditingTitle = false;
+  // What dockview had the tab's draggable set to before an edit borrowed it.
+  let wasTabDraggable: boolean | null = null;
 
   /** Fade the title's last 20px, and only while it really is cut off. */
   const refreshTitleFade = (): void => {
@@ -852,11 +872,83 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   };
 
   const updateActionsVisibility = (): void => {
-    actions.style.display = isPointerOver || isMenuOpen ? "flex" : "none";
+    // The buttons stand down for the length of an edit: the row is a text field
+    // for the moment, and the field wants the whole width.
+    actions.style.display = !isEditingTitle && (isPointerOver || isMenuOpen) ? "flex" : "none";
     // Revealing the buttons takes room from the title, so the fade is re-judged
     // against the box the title actually has now.
     refreshTitleFade();
   };
+
+  /** The ``.dv-tab`` dockview wraps this renderer in. That element, not this
+   *  one, is what carries the tab drag. */
+  const tabElement = (): HTMLElement | null => element.closest(".dv-tab");
+
+  const beginTitleEdit = (): void => {
+    if (isEditingTitle) return;
+    isEditingTitle = true;
+    editor.value = content.textContent ?? "";
+    content.style.display = "none";
+    editor.style.display = "block";
+    // dockview marks every tab draggable, and a draggable ancestor swallows the
+    // press-and-sweep that places a caret and selects text inside it -- typing
+    // works, but nothing can be clicked into or selected with the mouse. So the
+    // drag stands down for the length of the edit and is handed straight back.
+    const tab = tabElement();
+    if (tab !== null) {
+      wasTabDraggable = tab.draggable;
+      tab.draggable = false;
+    }
+    updateActionsVisibility();
+    editor.focus();
+    editor.select();
+  };
+
+  /** Leave the editor, committing what was typed or throwing it away. Blur
+   *  commits, so this runs on the way out of every path including a click
+   *  elsewhere in the workspace. */
+  const endTitleEdit = (isCommitting: boolean): void => {
+    if (!isEditingTitle) return;
+    isEditingTitle = false;
+    const typed = editor.value;
+    editor.style.display = "none";
+    content.style.display = "";
+    const tab = tabElement();
+    if (tab !== null && wasTabDraggable !== null) tab.draggable = wasTabDraggable;
+    wasTabDraggable = null;
+    updateActionsVisibility();
+    if (!isCommitting) return;
+    // An empty or whitespace-only title is not a name, so it is treated as
+    // Escape rather than leaving a tab with nothing to click on.
+    const title = normalizeTabTitle(typed);
+    if (title === null || title === content.textContent) return;
+    applyPanelRename(options.id, title);
+  };
+
+  content.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginTitleEdit();
+  });
+  // Everything below the input would otherwise read a click meant for the caret
+  // as a tab activation, a key as a workspace shortcut, and a right-click as a
+  // request for the tab menu instead of the field's own cut/copy/paste one.
+  editor.addEventListener("pointerdown", (event) => event.stopPropagation());
+  editor.addEventListener("dblclick", (event) => event.stopPropagation());
+  editor.addEventListener("contextmenu", (event) => event.stopPropagation());
+  editor.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      endTitleEdit(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      endTitleEdit(false);
+    }
+  });
+  editor.addEventListener("blur", () => {
+    endTitleEdit(true);
+  });
 
   return {
     element,
@@ -1451,8 +1543,16 @@ function machineInventory(): MachineInventory {
 /** What a member ref is called in the sidebar. A chat is filed under its agent
  *  id, so its label is looked up live and follows a rename; everything else is
  *  named by the identity it is filed under. An ad-hoc page has no name of its
- *  own beyond its tab's title, which only exists while it is open. */
+ *  own beyond its tab's title, which only exists while it is open.
+ *
+ *  A name the user gave the tab wins over all of that, for as long as that tab
+ *  is open: the point of renaming is that the rail and the settings list say
+ *  what the tab says. It is only ever a *chosen* name that wins, so an agent
+ *  renamed elsewhere still drags its chat row along with it. */
 function labelForMemberRef(ref: string): string {
+  const openPanelId = panelIdForMemberRef(ref);
+  const chosen = openPanelId === null ? undefined : panelParams.get(openPanelId)?.customTitle;
+  if (chosen !== undefined) return chosen;
   const body = memberRefBody(ref);
   switch (memberKindFromRef(ref)) {
     case "chat":
@@ -1463,10 +1563,8 @@ function labelForMemberRef(ref: string): string {
       return `Browser ${serviceSessionLabel(parseServiceRefBody(body).query)}`;
     case "app":
       return body;
-    case "url": {
-      const panelId = panelIdForMemberRef(ref);
-      return (panelId === null ? undefined : panelParams.get(panelId)?.title) ?? "Page";
-    }
+    case "url":
+      return (openPanelId === null ? undefined : panelParams.get(openPanelId)?.title) ?? "Page";
   }
 }
 
@@ -1568,24 +1666,35 @@ export function openMemberRow(row: SidebarTabRow): void {
  * removal drove it.
  */
 export function removeMemberRow(row: SidebarTabRow): void {
+  void removeMemberRefFromView(row.ref).catch((e: Error) => {
+    alert(`Failed to remove from project: ${e.message}`);
+  });
+}
+
+/**
+ * Stop showing one ref in the mounted view, reporting failure to the caller.
+ *
+ * The awaitable half of ``removeMemberRow``. The rail's row menu removes on
+ * click and can only shout about a failure, but the project settings dialog
+ * stages its removals and applies them on Save, so it needs the rejection to
+ * put next to its own Save button rather than behind an alert.
+ */
+export async function removeMemberRefFromView(ref: string): Promise<void> {
   const viewId = mountedViewId;
   // Nothing can be removed from Everything: it is the home, and an object
   // leaves it only by being destroyed.
   if (viewId === null || isEverythingView(viewId)) return;
-  const panelId = panelIdForMemberRef(row.ref);
+  const panelId = panelIdForMemberRef(ref);
   if (panelId !== null && dockview) {
     const panel = dockview.panels.find((candidate) => candidate.id === panelId);
     if (panel) dockview.removePanel(panel);
   }
-  void (async () => {
-    try {
-      await removeMember(viewId, row.ref);
-      await refreshProjectsList();
-    } catch (e) {
-      alert(`Failed to remove from project: ${(e as Error).message}`);
-    }
+  try {
+    await removeMember(viewId, ref);
+    await refreshProjectsList();
+  } finally {
     m.redraw();
-  })();
+  }
 }
 
 /** Open the machine's share surface for an app row. */
@@ -3464,19 +3573,61 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
   });
 }
 
-async function handleRename(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
-  if (!dockview) return;
-  const ref = asString(args.ref);
-  const title = asString(args.title);
-  if (!ref || !title) return;
-  const panelId = await resolveRefToPanelId(ref, requesterAgentId);
-  if (panelId === null) return;
+/**
+ * Give a panel a name, and keep it.
+ *
+ * The one rename path: the agent-facing ``layout_op``, the tab's own
+ * double-click editor and the project settings dialog all land here. Titles
+ * live in two places and both are written -- ``setTitle`` is what the strip
+ * draws, ``params.title`` is what the view's saved layout carries -- and the
+ * autosave is scheduled here rather than left to the caller, since a name that
+ * lasted only as long as the page would not be a rename at all.
+ *
+ * ``customTitle`` records that the name was *chosen* rather than derived from
+ * whatever the tab happens to show. That is what lets the sidebar and the
+ * settings list prefer it over the object's own name (see
+ * ``labelForMemberRef``), and what stops a tmux session rename from taking a
+ * user's name back off a terminal tab.
+ *
+ * Returns false when there is no panel to name -- the caller decides whether
+ * that is worth reporting.
+ */
+function applyPanelRename(panelId: string, title: string): boolean {
+  if (!dockview) return false;
   const panel = dockview.panels.find((p) => p.id === panelId);
-  if (!panel) return;
+  if (!panel) return false;
   panel.api.setTitle(title);
   mutatePanelParams(panelId, (params) => {
     params.title = title;
+    params.customTitle = title;
   });
+  m.redraw();
+  scheduleSave();
+  return true;
+}
+
+/**
+ * Rename the tab a member is showing in the mounted view.
+ *
+ * The project settings dialog's half of the rename, exported the way its
+ * removal counterpart is. False means the member had no tab to name: the dialog
+ * only offers the gesture on open rows, so that is the tab having been closed
+ * while the dialog was up, which it reports rather than swallows.
+ */
+export function renameMemberRefInView(ref: string, title: string): boolean {
+  const panelId = panelIdForMemberRef(ref);
+  if (panelId === null) return false;
+  return applyPanelRename(panelId, title);
+}
+
+async function handleRename(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
+  if (!dockview) return;
+  const ref = asString(args.ref);
+  const title = normalizeTabTitle(asString(args.title) ?? "");
+  if (!ref || title === null) return;
+  const panelId = await resolveRefToPanelId(ref, requesterAgentId);
+  if (panelId === null) return;
+  applyPanelRename(panelId, title);
 }
 
 async function handleMaximize(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
@@ -3883,14 +4034,17 @@ function handleTerminalSessionUpdate(terminalId: string | null, sessionId: strin
     }
   }
   if (targetPanelId === null) return;
+  // A tab the user named keeps that name: the session it attached to is being
+  // renamed, not the tab. The identity still moves either way.
+  const hasChosenTitle = panelParams.get(targetPanelId)?.customTitle !== undefined;
   // A rename moves the terminal's identity, so the page is re-filed under the
   // new session name here too (see ``mutatePanelParams``).
   mutatePanelParams(targetPanelId, (params) => {
     params.terminalSessionName = sessionName;
     params.terminalSessionId = sessionId;
-    params.title = sessionName;
+    if (!hasChosenTitle) params.title = sessionName;
   });
-  dockview.panels.find((p) => p.id === targetPanelId)?.api.setTitle(sessionName);
+  if (!hasChosenTitle) dockview.panels.find((p) => p.id === targetPanelId)?.api.setTitle(sessionName);
   m.redraw();
   scheduleSave();
 }
