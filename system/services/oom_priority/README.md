@@ -14,7 +14,7 @@ into one of a few bands.
 
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
-  services (`SERVICE_BANDS`, 10-70, ending with the browser coordinator) <
+  services (`SERVICE_BANDS`, 5-70, ending with the browser coordinator) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
   (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
   at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
