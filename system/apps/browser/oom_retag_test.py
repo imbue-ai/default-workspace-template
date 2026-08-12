@@ -43,17 +43,31 @@ def _sweep(proc: _FakeProc, descendants: list[int]) -> list[tuple[int, int, int]
 
 def test_chrome_lowered_values_are_remapped_into_the_band_preserving_order() -> None:
     # A realistic post-launch Chromium tree: main 0, gpu/utility 200, renderers
-    # 300 -- plus the node driver and crashpad still at the inherited ceiling.
-    proc = _FakeProc({10: 0, 11: 200, 12: 300, 13: 300, 20: 1000, 21: 1000})
+    # 300 -- plus the node driver and crashpad, which never self-write and so
+    # still carry the daemon's inherited service band.
+    inherited = bands.SERVICE_BANDS["browser"]
+    proc = _FakeProc({10: 0, 11: 200, 12: 300, 13: 300, 20: inherited, 21: inherited})
     writes = _sweep(proc, [10, 11, 12, 13, 20, 21])
-    assert [pid for pid, _, _ in writes] == [10, 11, 12, 13]
+    assert [pid for pid, _, _ in writes] == [10, 11, 12, 13, 20, 21]
     for _, old, new in writes:
         assert new == bands.shared_browser_oom_score_adj(old)
         assert bands.SHARED_BROWSER_FLOOR <= new <= bands.SHARED_BROWSER
     # Chrome's ordering survives: main < gpu/utility < renderers.
     assert proc.adj[10] < proc.adj[11] < proc.adj[12] == proc.adj[13]
-    # The inherited-ceiling processes are untouched.
-    assert proc.adj[20] == proc.adj[21] == 1000
+    # Renderers are the most expendable thing in the tree, so the helpers that
+    # merely inherited a value must land below them -- they hold almost no
+    # memory, and shedding one kills the session rather than a single tab.
+    assert proc.adj[20] == proc.adj[21] < proc.adj[12]
+
+
+def test_the_daemon_itself_is_never_swept_into_the_browser_band() -> None:
+    # The sweep walks *descendants* of the daemon, never the daemon, so the
+    # coordinator keeps the service band it was tagged with at spawn. If it were
+    # swept in it would outrank the renderers and be shed first while freeing
+    # none of Chromium's memory.
+    proc = _FakeProc({1: bands.SERVICE_BANDS["browser"], 10: 300})
+    _sweep(proc, [10])
+    assert proc.adj[1] == bands.SERVICE_BANDS["browser"]
 
 
 def test_repeating_the_sweep_writes_nothing_more() -> None:

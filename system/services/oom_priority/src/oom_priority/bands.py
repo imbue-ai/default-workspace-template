@@ -181,9 +181,10 @@ def chat_agent_oom_score_adj(
 # The services are ordered from least- to most-expendable by how much losing one
 # hurts: the terminal (raw shell access) and the UI come first, then the sharing
 # stack, then the runtime-state sync (github-sync, opt-in) and the host backup,
-# then the app-watcher. ``user`` is the single band every *user-created* service
-# shares; it sits above every built-in service so a user's own service is shed
-# before any built-in one, while staying below USER_AGENT.
+# then the app-watcher, and last the browser coordinator. ``user`` is the single
+# band every *user-created* service shares; it sits above every built-in service
+# so a user's own service is shed before any built-in one, while staying below
+# USER_AGENT.
 #
 # sshd and the other never-kill infrastructure (supervisord, earlyoom, tini,
 # tmux) are deliberately absent: they keep the inherited PROTECTED default (0)
@@ -207,14 +208,26 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "github-sync": 40,
     "host-backup": 50,
     "app-watcher": 60,
+    # The browser coordinator: the daemon that launches and drives Chromium, not
+    # Chromium itself. The most expendable built-in service, but a *service*
+    # nonetheless -- it holds little memory, the Chromium processes it manages
+    # outlive its death, and supervisord restarts it straight back into the same
+    # session, so shedding it frees almost nothing. It therefore must stay well
+    # below SHARED_BROWSER, where those Chromium processes live: a coordinator
+    # ranked above them would be picked first every time and free nothing.
+    "browser": 70,
     "user": USER_SERVICE,
 }
 
 # The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a
 # browser always outranks even an agent's build/test subprocess and is shed first.
-# The browser program tags itself at spawn (inline in its supervisord command,
-# which cannot import this module); the constant exists so the backstop listener
-# can re-assert the value if that self-tag failed.
+#
+# Only the processes that actually hold a browser's memory belong here. Nothing
+# is tagged into this band at spawn: Chromium's processes arrive by self-writing
+# a value that the browser service's sweep remaps (see
+# ``shared_browser_oom_score_adj``). The coordinator that launches them is tagged
+# as a service instead (``SERVICE_BANDS["browser"]``) -- shedding it frees none of
+# Chromium's memory, so it must not outrank the renderers it manages.
 SHARED_BROWSER: Final[int] = 1000
 
 # The floor of the browser band's *range*. Chromium deliberately overwrites any
@@ -227,24 +240,38 @@ SHARED_BROWSER: Final[int] = 1000
 # tree and remaps every self-lowered value into ``[SHARED_BROWSER_FLOOR,
 # SHARED_BROWSER]`` via ``shared_browser_oom_score_adj``: the whole browser tree
 # stays above AGENT_SUBPROCESS, while Chromium's relative ordering (which is worth
-# keeping -- shedding one renderer kills one tab, not the whole browser) is
-# preserved in compressed form. Chromium only writes each value once, so a
+# keeping -- shedding one renderer kills one tab, not the whole browser) decides
+# where in the band each process lands. Chromium only writes each value once, so a
 # remapped value sticks.
 SHARED_BROWSER_FLOOR: Final[int] = 910
 
+# The top of Chromium's own gradation: what it self-assigns to a renderer, the
+# most expendable thing it runs. This is the *input* range of the remap below --
+# a value Chromium writes, never one this workspace assigns.
+CHROMIUM_SELF_ASSIGNED_MAX: Final[int] = 300
+
 
 def shared_browser_oom_score_adj(self_assigned: int) -> int:
-    """Map a value Chromium assigned within its own 0..1000 gradation into the
-    browser band's range ``[SHARED_BROWSER_FLOOR, SHARED_BROWSER]``.
+    """Map a value Chromium assigned within its own gradation into the browser
+    band's range ``[SHARED_BROWSER_FLOOR, SHARED_BROWSER]``.
 
     Order-preserving (a more-expendable Chromium process stays more expendable)
     and clamped, so any input lands inside the band range -- in particular at or
     above the floor, which is what makes the browser service's sweep idempotent
     (it only remaps values *below* the floor).
+
+    The input range is Chromium's own gradation, ``0..CHROMIUM_SELF_ASSIGNED_MAX``,
+    rather than the full 0..1000 an ``oom_score_adj`` could span. Scaling against
+    1000 would squeeze every Chromium process into the bottom third of the band
+    (renderers reaching only 937), leaving the top of the band to whatever merely
+    *inherited* a high value -- which is never a renderer, because a renderer
+    always self-writes. Renderers hold nearly all of a browser's memory and cost
+    only one tab to shed, so they belong at the ceiling. Anything Chromium marks
+    as even more expendable than a renderer clamps there too.
     """
-    clamped = max(0, min(1000, self_assigned))
+    clamped = max(0, min(CHROMIUM_SELF_ASSIGNED_MAX, self_assigned))
     span = SHARED_BROWSER - SHARED_BROWSER_FLOOR
-    return SHARED_BROWSER_FLOOR + round(clamped * span / 1000)
+    return SHARED_BROWSER_FLOOR + round(clamped * span / CHROMIUM_SELF_ASSIGNED_MAX)
 
 
 # Expected band per supervisord program whose *program name* is not a
@@ -257,7 +284,6 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     "earlyoom": PROTECTED,
     "oom-tag-backstop": PROTECTED,
     "deferred-install": PROTECTED,
-    "browser": SHARED_BROWSER,
 }
 
 
