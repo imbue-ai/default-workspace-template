@@ -1,17 +1,16 @@
-{#def agent_id, request_id, ws_name, rationale, display_name="Device accounts", mngr_forward_origin #}
+{#def agent_id, request_id, ws_name, rationale, display_name="Account access", mngr_forward_origin #}
 {#
   Latchkey accounts permission request fragment. Rendered inside the inbox
-  modal's dialog body (the shell's eyebrow names the requesting workspace).
-  The accounts read grant is all-or-nothing with no parameters, so -- like the
-  file-sharing fragment -- it provides a single hidden checked
-  ``name="permissions"`` input so the Approve button enables on first paint.
-  Chrome and form submission JS live in the inbox shell.
+  modal's right pane. The accounts read grant is all-or-nothing with no
+  parameters, so -- like the file-sharing fragment -- it provides a single
+  hidden checked ``name="permissions"`` input so the Approve button enables on
+  first paint. Chrome and form submission JS live in the inbox shell.
 #}
 <div class="permissions-detail">
-  <PermissionsForm :request_id="request_id">
-    <PermissionsHeader :display_name="display_name" icon_name="user" :rationale="rationale" />
+  <PermissionsHeader :display_name="display_name" :ws_name="ws_name" :agent_id="agent_id" :rationale="rationale" />
 
-    <p class="mt-4 type-body text-primary">
+  <PermissionsForm :request_id="request_id">
+    <p class="type-body text-primary mb-3">
       Approving will let {{ ws_name or agent_id }} and its sibling agents
       <strong>list the accounts signed in on this device</strong> (their ids and emails),
       so it can associate a machine with one of them. It does not grant access to any
@@ -24,10 +23,9 @@
   </PermissionsForm>
 
   <div id="permissions-progress" class="hidden mt-4">
-    <div class="flex flex-col items-center gap-3 py-6 text-center">
-      <Spinner />
-      <p class="type-body text-primary">Granting permission…</p>
-    </div>
+    <Notice variant="info">
+      <span class="font-semibold">Granting permission...</span>
+    </Notice>
   </div>
 
   <PermissionsManualCredentials />

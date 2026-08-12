@@ -50,7 +50,6 @@ from imbue.mngr_latchkey.core import MINDS_GOOGLE_OAUTH_CLIENT_SECRET
 from imbue.mngr_latchkey.core import MINDS_GOOGLE_OAUTH_SERVICES
 from imbue.mngr_latchkey.core import _log_gateway_output_line
 from imbue.mngr_latchkey.core import merge_hidden_builtin_services
-from imbue.mngr_latchkey.core import summarize_latchkey_failure
 from imbue.mngr_latchkey.discovery import LatchkeyDestructionHandler
 from imbue.mngr_latchkey.discovery import LatchkeyDiscoveryHandler
 from imbue.mngr_latchkey.discovery import _GatewayRoute
@@ -2550,50 +2549,6 @@ def test_add_account_non_google_failure_surfaces_error(tmp_path: Path) -> None:
     # The prepare step fails, so the sign-in is never attempted and there is no
     # Minds Google OAuth client registration for a non-Google service.
     assert [record["argv"] for record in _read_recording_report(tmp_path)] == [["auth", "browser-prepare", "slack"]]
-
-
-def test_add_account_failure_detail_is_condensed_to_the_error_line(tmp_path: Path) -> None:
-    """A latchkey CLI crash dump is condensed to its meaningful line for the UI.
-
-    The detail travels verbatim into the settings page / permission dialogs,
-    so a raw Node.js uncaught-exception dump (internal frames, ``Call log:``,
-    the stack) must not surface there -- only the error message itself.
-    """
-    crash_dump = (
-        "node:internal/process/promises:394\n"
-        "          triggerUncaughtException(err, true /* fromPromise */);\n"
-        "          ^\n"
-        'page.goto: Navigation to "https://app.todoist.com/x" is interrupted\n'
-        "Call log:\n"
-        '- navigating to "https://app.todoist.com/x", waiting until "load"\n'
-        "    at TodoistServiceSession.performBrowserFollowup (/x/todoist.js:43:20)\n"
-        " { name: 'Error' }\n"
-        "Node.js v24.15.0"
-    )
-    binary = _make_env_recording_binary(tmp_path, exit_code=1, stderr=crash_dump)
-    latchkey = Latchkey(latchkey_directory=tmp_path, latchkey_binary=str(binary))
-
-    is_success, detail = latchkey.add_account("todoist")
-
-    assert is_success is False
-    assert detail == 'page.goto: Navigation to "https://app.todoist.com/x" is interrupted'
-
-
-def test_summarize_latchkey_failure_prefers_explicit_error_lines() -> None:
-    dump = "some noise line\nError: No credentials found for todoist\nmore noise"
-    assert summarize_latchkey_failure(dump, fallback="f") == "Error: No credentials found for todoist"
-
-
-def test_summarize_latchkey_failure_falls_back_when_only_noise() -> None:
-    dump = "node:internal/process/promises:394\n    at foo (/x.js:1:1)\n^\nNode.js v24.15.0"
-    assert summarize_latchkey_failure(dump, fallback="latchkey auth browser failed") == "latchkey auth browser failed"
-
-
-def test_summarize_latchkey_failure_caps_the_summary_length() -> None:
-    long_line = "Error: " + "x" * 500
-    summary = summarize_latchkey_failure(long_line, fallback="f")
-    assert len(summary) <= 300
-    assert summary.endswith("…")
 
 
 def test_add_account_google_falls_back_to_browser_prepare_when_official_client_fails(tmp_path: Path) -> None:

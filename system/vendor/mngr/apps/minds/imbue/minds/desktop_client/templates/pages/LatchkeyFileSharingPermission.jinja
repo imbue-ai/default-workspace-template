@@ -1,21 +1,20 @@
 {#def agent_id, request_id, ws_name, rationale, file_path, access, access_human_label, display_name, allowed_roots_json="[]", home_dir="", mngr_forward_origin #}
 {#
   Latchkey file-sharing permission request fragment. Rendered inside the
-  inbox modal's dialog body (the shell's eyebrow names the requesting
-  workspace). Provides a single hidden checked ``name="permissions"``
-  input so the Approve button enables on first paint (file sharing has
-  no per-permission choice). Chrome and form submission JS live in the
-  inbox shell.
+  inbox modal's right pane. Provides a single hidden checked
+  ``name="permissions"`` input so the Approve button enables on first
+  paint (file sharing has no per-permission choice). Chrome and form
+  submission JS live in the inbox shell.
 #}
 <div class="permissions-detail">
-  <PermissionsForm :request_id="request_id">
-    <PermissionsHeader :display_name="display_name" icon_name="box" :rationale="rationale" />
+  <PermissionsHeader :display_name="display_name" :ws_name="ws_name" :agent_id="agent_id" :rationale="rationale" />
 
+  <PermissionsForm :request_id="request_id">
     {# Single summary sentence (mirroring the predefined dialog's simple view)
        naming the requesting workspace and the access level, followed by an
        editable path field (with an access badge beside its label) and a
        Browse button that opens the OS file picker. #}
-    <p class="mt-4 type-body text-primary">
+    <p class="type-body text-primary mb-3">
       {% if access == 'WRITE' %}
         Approving will grant {{ ws_name or agent_id }} and its sibling agents
         <strong>read and write</strong> access (including delete) to the file/directory below.
@@ -23,7 +22,7 @@
         Approving will grant {{ ws_name or agent_id }} and its sibling agents
         <strong>read-only</strong> access to the file/directory below.
       {% endif %}
-      You can edit the path before approving — paste a different one or pick it with Browse.
+      You can edit the path before approving -- paste a different one or pick it with Browse.
     </p>
     {# Editable share path. The input is pre-filled with the path the
        agent requested; the user may change it (paste or native file
@@ -35,7 +34,7 @@
        reads as labelling the field rather than floating above the Browse
        control on the right edge. Emerald tint for read-only, amber for
        read+write so the broader grant stands out visually. #}
-    <div class="flex items-center gap-2 mt-3 mb-1.5">
+    <div class="flex items-center gap-2 mb-1.5">
       <FormLabel inline target="file-sharing-path-input">Path to share</FormLabel>
       {% if access == 'WRITE' %}
         <span class="shrink-0 type-section px-2 py-0.5 rounded-full bg-warning/12 text-warning border border-warning/30">
@@ -93,10 +92,9 @@
   </PermissionsForm>
 
   <div id="permissions-progress" class="hidden mt-4">
-    <div class="flex flex-col items-center gap-3 py-6 text-center">
-      <Spinner />
-      <p class="type-body text-primary">Granting permission…</p>
-    </div>
+    <Notice variant="info">
+      <span class="font-semibold">Granting permission...</span>
+    </Notice>
   </div>
 
   <PermissionsManualCredentials />

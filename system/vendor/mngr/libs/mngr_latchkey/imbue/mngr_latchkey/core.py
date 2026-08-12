@@ -625,50 +625,6 @@ def _materialize_bundled_extensions(latchkey_directory: Path) -> Path:
     return extensions_dir
 
 
-# Maximum length of a condensed latchkey failure detail. Long enough for a real
-# error sentence (Playwright messages name both URLs), short enough that a
-# surface showing it verbatim stays readable.
-_FAILURE_SUMMARY_MAX_CHARS: Final[int] = 300
-
-# Line shapes that are Node.js crash scaffolding rather than the error itself.
-# A latchkey CLI crash prints the uncaught-exception preamble, the message, a
-# Playwright "Call log:", then the stack -- only the message line is meaningful
-# to a user.
-_FAILURE_NOISE_PREFIXES: Final[tuple[str, ...]] = (
-    "node:",
-    "at ",
-    "- ",
-    "{",
-    "}",
-    "^",
-    "call log:",
-    "node.js v",
-    "throw ",
-    "triggeruncaughtexception",
-)
-
-
-def summarize_latchkey_failure(raw_output: str, fallback: str) -> str:
-    """Condense a failed latchkey CLI's output to the single meaningful line.
-
-    The raw output of a crashed ``latchkey`` invocation is a Node.js uncaught
-    -exception dump -- internal frames, a ``Call log:``, the stack -- with the
-    actual error message buried in the middle. Surfaces show the returned
-    detail verbatim, so this keeps only the first line that reads as an error
-    message: preferring an explicit ``Error: ...`` line, then the first line
-    that is not recognizable crash scaffolding, then ``fallback``. The result
-    is capped at a sentence-ish length; callers that need the full output log
-    it before summarizing.
-    """
-    lines = [line.strip() for line in raw_output.splitlines() if line.strip()]
-    meaningful = [line for line in lines if not line.lower().startswith(_FAILURE_NOISE_PREFIXES)]
-    explicit_errors = [line for line in meaningful if line.lower().startswith("error")]
-    summary = explicit_errors[0] if explicit_errors else meaningful[0] if meaningful else fallback
-    if len(summary) > _FAILURE_SUMMARY_MAX_CHARS:
-        summary = summary[: _FAILURE_SUMMARY_MAX_CHARS - 1] + "…"
-    return summary
-
-
 def merge_hidden_builtin_services(existing_config_json: str | None) -> str:
     """Merge :data:`HIDDEN_BUILTIN_SERVICES` into a latchkey ``config.json``.
 
@@ -1540,11 +1496,6 @@ class Latchkey(MutableModel):
         ``timeout_seconds`` bounds the child; leave it ``None`` for the
         interactive flows that wait on a human.
 
-        The failure ``detail`` is user-facing (the settings page and the
-        permission dialogs show it verbatim), so it is condensed to the
-        meaningful line via :func:`summarize_latchkey_failure`; the full
-        raw output still lands in the log.
-
         When ``is_ephemeral`` is set, :data:`LATCHKEY_EPHEMERAL_BROWSER_ENV_VAR`
         is exported to the child so any browser flow starts from a clean session
         (used by :meth:`add_account`).
@@ -1572,15 +1523,15 @@ class Latchkey(MutableModel):
         if result.returncode == 0:
             logger.info("latchkey {} {} succeeded", log_label, service_name)
             return True, ""
-        raw_message = result.stderr.strip() or result.stdout.strip() or f"latchkey {log_label} failed"
+        message = result.stderr.strip() or result.stdout.strip() or f"latchkey {log_label} failed"
         logger.warning(
             "latchkey {} {} exited {}: {}",
             log_label,
             service_name,
             result.returncode,
-            raw_message,
+            message,
         )
-        return False, summarize_latchkey_failure(raw_message, fallback=f"latchkey {log_label} failed")
+        return False, message
 
     # -- Internals -----------------------------------------------------------
 

@@ -71,7 +71,7 @@ def _message_sender() -> MngrMessageSender:
     """Build a recording message sender bound to the test's concurrency group."""
     cg = _MESSAGE_CONCURRENCY_GROUP["cg"]
     assert cg is not None
-    return MngrMessageSender(mngr_caller=RecordingMngrCaller(), concurrency_group=cg, retry_delays_seconds=())
+    return MngrMessageSender(mngr_caller=RecordingMngrCaller(), concurrency_group=cg)
 
 
 def _recorded_caller(handler: LatchkeyPermissionGrantHandler) -> RecordingMngrCaller:
@@ -440,17 +440,13 @@ def test_render_detail_fragment_with_unknown_credentials_does_not_promise_browse
         mngr_forward_origin="",
     )
 
-    assert "Granting permission…" in body
-    assert "Finish signing in to" not in body
-    # No browser flow, so the Approve button keeps its plain caption.
-    assert ">Approve</span>" in body
-    assert "Sign in &amp; approve" not in body
+    assert "Granting permission..." in body
+    assert "Opening a browser window for you to sign in to" not in body
 
 
 def test_render_detail_fragment_with_missing_credentials_promises_browser(tmp_path: Path) -> None:
     # MISSING credentials with a browser auth option still run
-    # ``latchkey auth browser`` on Approve, so the progress state must say
-    # so -- and the Approve button warns about the sign-in up front.
+    # ``latchkey auth browser`` on Approve, so the notice must say so.
     handler = _build_handler(tmp_path, credential_status="missing")
     event = create_latchkey_predefined_permission_request_event(
         agent_id=str(AgentId()),
@@ -464,8 +460,7 @@ def test_render_detail_fragment_with_missing_credentials_promises_browser(tmp_pa
         mngr_forward_origin="",
     )
 
-    assert "Finish signing in to" in body
-    assert "Sign in &amp; approve" in body
+    assert "Opening a browser window for you to sign in to" in body
 
 
 def test_grant_failed_browser_flow_stays_pending_without_denying(tmp_path: Path) -> None:
@@ -1032,8 +1027,7 @@ def test_deny_sends_mngr_message(tmp_path: Path) -> None:
     mngr_argvs = _wait_for_recorded_mngr_argvs(handler)
     assert len(mngr_argvs) == 1
     argv = mngr_argvs[0]
-    message_text = argv[argv.index("-m") + 1]
-    assert "denied" in message_text.lower()
+    assert "denied" in argv[2].lower()
 
 
 def test_grant_calls_gateway_client_set_permission_and_delete_request(tmp_path: Path) -> None:
@@ -1170,9 +1164,8 @@ def test_apply_deny_request_succeeds_for_unknown_scope(tmp_path: Path) -> None:
     mngr_argvs = _wait_for_recorded_mngr_argvs(handler)
     assert len(mngr_argvs) == 1
     argv = mngr_argvs[0]
-    message_text = argv[argv.index("-m") + 1]
-    assert "denied" in message_text.lower()
-    assert "not-in-catalog-scope" in message_text
+    assert "denied" in argv[2].lower()
+    assert "not-in-catalog-scope" in argv[2]
 
 
 def test_grant_preserves_existing_schemas_block_in_permissions_file(tmp_path: Path) -> None:
@@ -1468,7 +1461,7 @@ def test_render_detail_fragment_offers_a_requested_account_that_is_not_connected
     assert re.findall(r'name="account" value="([^"]*)"[^>]*\bchecked\b', body) == ["bob@x"]
     assert "not connected yet" in body
     # Approving will therefore open a browser rather than granting silently.
-    assert "Finish signing in to" in body
+    assert "Opening a browser window for you to sign in to" in body
 
 
 def test_grant_for_a_requested_account_that_is_not_connected_signs_it_in(tmp_path: Path) -> None:

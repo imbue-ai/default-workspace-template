@@ -1,14 +1,13 @@
 {#def agent_id, request_id, ws_name, rationale, display_name, verbs, checked_permissions, target_workspace_id, target_workspace_name, show_target_choice, mngr_forward_origin #}
 {#
   Latchkey cross-workspace (``minds-workspaces``) permission request fragment.
-  Rendered inside the inbox modal's dialog body (the shell's eyebrow names the
-  requesting workspace). The verbs split into two clearly-labeled groups:
-  "general" (non-targeted) permissions that apply across all workspaces
-  (list/read, create), and "workspace-specific" (targeted) permissions that act
-  on a single workspace (destroy / lifecycle / backups-export / ssh / ...).
-  Each group pre-checks the verbs the agent requested. Chrome and form
-  submission JS live in the inbox shell and operate on the shared element ids
-  (#permissions-form, #permissions-approve-btn, ...).
+  Rendered inside the inbox modal's right pane. The verbs split into two
+  clearly-labeled groups: "general" (non-targeted) permissions that apply
+  across all workspaces (list/read, create), and "workspace-specific"
+  (targeted) permissions that act on a single workspace (destroy / lifecycle /
+  backups-export / ssh / ...). Each group pre-checks the verbs the agent
+  requested. Chrome and form submission JS live in the inbox shell and operate
+  on the shared element ids (#permissions-form, #permissions-approve-btn, ...).
 
   The workspace-specific group is always shown. Its target radio depends on the
   request: when it named a target workspace the user chooses "Only this
@@ -21,33 +20,33 @@
   general verbs (read / create) ignore it.
 #}
 <div class="permissions-detail">
-  <PermissionsForm :request_id="request_id">
-    <PermissionsHeader :display_name="display_name" icon_name="panels-top-left" :rationale="rationale" />
+  <PermissionsHeader :display_name="display_name" :ws_name="ws_name" :agent_id="agent_id" :rationale="rationale" />
 
-    <p class="mt-4 type-body text-primary">
+  <PermissionsForm :request_id="request_id">
+    <p class="type-body text-primary mb-3">
       Approving will grant {{ ws_name or agent_id }} and its sibling agents the selected
       cross-machine permissions below.
     </p>
 
     {# General (non-targeted) permissions: apply across all workspaces (current
        and future), so they carry no target and always appear. #}
-    <h3 class="type-section text-tertiary mt-4">General permissions</h3>
-    <p class="type-helper text-tertiary mt-0.5 mb-1">These apply across all machines (current and future).</p>
-    <div class="space-y-2">
+    <h2 class="type-label text-primary mb-2">General permissions</h2>
+    <p class="type-body text-primary mb-2">These apply across all machines (current and future).</p>
+    <Card extra="space-y-3">
       {% for verb in verbs if not verb.is_targeted %}
         <label class="flex items-start gap-2 cursor-pointer">
           <input type="checkbox" name="permissions" value="{{ verb.permission }}"
                  class="mt-1 shrink-0"
                  {% if verb.permission in checked_permissions %}checked{% endif %}>
           <span class="min-w-0">
-            <span class="type-body text-primary font-semibold">{{ verb.display_name }}</span>
+            <code class="type-body font-mono text-primary">{{ verb.display_name }}</code>
             {% if verb.description %}
-              <span class="block type-helper text-secondary mt-0.5">{{ verb.description }}</span>
+              <span class="block type-body text-primary mt-0.5">{{ verb.description }}</span>
             {% endif %}
           </span>
         </label>
       {% endfor %}
-    </div>
+    </Card>
 
     {# Workspace-specific (targeted) permissions and their target radio. These
        verbs are gated per-target, so they are always offered, but the scope
@@ -59,9 +58,9 @@
        * without a named target there is no workspace to pin, so the only
          possible scope is broad -- we say so with a caution notice and offer a
          single, pre-selected "All workspaces" option. #}
-    <h3 class="type-section text-tertiary mt-6">Machine-specific permissions</h3>
+    <h2 class="type-label text-primary mt-6 mb-2">Machine-specific permissions</h2>
     {% if show_target_choice %}
-      <p class="type-helper text-tertiary mt-0.5 mb-1">These act on individual machines.</p>
+      <p class="type-body text-primary mb-2">These act on individual machines.</p>
     {% else %}
       {# The request named no target workspace, so any of these the user grants
          necessarily apply to all workspaces. Shown in place of the usual hint,
@@ -73,25 +72,25 @@
         Grant them only if you intend that broad access.
       </Notice>
     {% endif %}
-    <div class="space-y-2">
+    <Card extra="space-y-3">
       {% for verb in verbs if verb.is_targeted %}
         <label class="flex items-start gap-2 cursor-pointer">
           <input type="checkbox" name="permissions" value="{{ verb.permission }}"
                  class="mt-1 shrink-0"
                  {% if verb.permission in checked_permissions %}checked{% endif %}>
           <span class="min-w-0">
-            <span class="type-body text-primary font-semibold">{{ verb.display_name }}</span>
+            <code class="type-body font-mono text-primary">{{ verb.display_name }}</code>
             {% if verb.description %}
-              <span class="block type-helper text-secondary mt-0.5">{{ verb.description }}</span>
+              <span class="block type-body text-primary mt-0.5">{{ verb.description }}</span>
             {% endif %}
           </span>
         </label>
       {% endfor %}
-    </div>
+    </Card>
 
-    <h3 class="type-section text-tertiary mt-6 mb-1">Apply machine-specific permissions to</h3>
+    <h2 class="type-label text-primary mt-6 mb-2">Apply machine-specific permissions to:</h2>
     {% if show_target_choice %}
-      <div class="space-y-2">
+      <Card extra="space-y-2">
         <label class="flex items-start gap-2 cursor-pointer">
           <input type="radio" name="target_scope" value="selected" class="mt-1 shrink-0" checked>
           <span class="min-w-0">
@@ -103,35 +102,34 @@
           <input type="radio" name="target_scope" value="all" class="mt-1 shrink-0">
           <span class="min-w-0">
             <span class="type-body text-primary">All machines</span>
-            <span class="block type-helper text-secondary mt-0.5">
+            <span class="block type-body text-primary mt-0.5">
               Grant the selected actions for every machine (current and future).
             </span>
           </span>
         </label>
-      </div>
+      </Card>
     {% else %}
       {# No target workspace named: the only possible scope is broad. Carry the
          choice through a single checked "All workspaces" radio (submitting
          ``target_scope=all``); the caution above the checkboxes explains it. #}
-      <div class="space-y-2">
+      <Card extra="space-y-2">
         <label class="flex items-start gap-2 cursor-pointer">
           <input type="radio" name="target_scope" value="all" class="mt-1 shrink-0" checked>
           <span class="min-w-0">
             <span class="type-body text-primary">All machines</span>
-            <span class="block type-helper text-secondary mt-0.5">
+            <span class="block type-body text-primary mt-0.5">
               Grant the selected actions for every machine (current and future).
             </span>
           </span>
         </label>
-      </div>
+      </Card>
     {% endif %}
   </PermissionsForm>
 
   <div id="permissions-progress" class="hidden mt-4">
-    <div class="flex flex-col items-center gap-3 py-6 text-center">
-      <Spinner />
-      <p class="type-body text-primary">Granting permission…</p>
-    </div>
+    <Notice variant="info">
+      <span class="font-semibold">Granting permission...</span>
+    </Notice>
   </div>
 
   <PermissionsManualCredentials />

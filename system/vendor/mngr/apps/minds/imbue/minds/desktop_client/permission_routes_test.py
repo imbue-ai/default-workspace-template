@@ -224,8 +224,9 @@ def _make_recording_handler(
         services_catalog=ServicesCatalog.from_catalog_payload(_TEST_SERVICES_CATALOG_PAYLOAD),
         mngr_message_sender=MngrMessageSender(
             mngr_caller=RecordingMngrCaller(),
+            # ``_RecordingHandler`` overrides grant/deny, so the sender is never
+            # used; an un-entered group satisfies the required field.
             concurrency_group=ConcurrencyGroup(name="permission-routes-test-unused"),
-            retry_delays_seconds=(),
         ),
         gateway_client=gateway_client,
         grant_outcome=grant_outcome,

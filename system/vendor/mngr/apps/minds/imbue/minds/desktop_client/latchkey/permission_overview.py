@@ -61,27 +61,25 @@ _WILDCARD_DESCRIPTION = "Unrestricted access: any request to this service is per
 # unions per-feature permission schemas onto it rather than minting dedicated
 # scopes). So the whole ``latchkey-self`` rule must never be deleted; each
 # feature is read back by its permission-name prefix and revoked by removing
-# only its own permission names from the rule. Public because the
-# per-workspace toggle screen (:mod:`permission_toggles`) rewrites the same
-# rule.
-SELF_SCOPE = "latchkey-self"
+# only its own permission names from the rule.
+_SELF_SCOPE = "latchkey-self"
 
 # File-sharing grants: per-path permission schemas named
 # ``minds-file-server-<access>-<absolute-path>`` (see the gateway's
 # ``permission_requests.mjs``).
-FILE_SHARING_PERMISSION_PREFIX = "minds-file-server-"
+_FILE_SHARING_PERMISSION_PREFIX = "minds-file-server-"
 _FILE_SHARING_READ = "read"
 _FILE_SHARING_WRITE = "write"
 # User-facing labels: a write grant is a read+write superset, so it reads as
 # "read and write"; a read-only grant reads as "read".
-FILE_SHARING_READ_LABEL = "read"
-FILE_SHARING_WRITE_LABEL = "read and write"
+_FILE_SHARING_READ_LABEL = "read"
+_FILE_SHARING_WRITE_LABEL = "read and write"
 
 # Cross-workspace-management grants: verb permission schemas named
 # ``minds-workspaces-<verb>`` (an all-workspaces grant) or
 # ``minds-workspaces-<verb>-<target_agent_id>`` (a grant pinned to one target
 # workspace). ``read`` / ``create`` are all-or-nothing; the rest are targeted.
-WORKSPACE_PERMISSION_PREFIX = "minds-workspaces-"
+_WORKSPACE_PERMISSION_PREFIX = "minds-workspaces-"
 _WORKSPACE_VERB_BY_PERMISSION = {verb.permission: verb for verb in WORKSPACE_VERBS}
 _TARGETED_WORKSPACE_VERB_PERMISSIONS = tuple(verb.permission for verb in WORKSPACE_VERBS if verb.is_targeted)
 
@@ -367,7 +365,7 @@ def build_permission_overview(
         account_overviews = tuple(
             ServiceAccountOverview(
                 account=account,
-                label=account_label(account),
+                label=_account_label(account),
                 is_connected=account in stored_account_names,
                 workspace_grants=_workspace_grants_for_account(
                     service_infos,
@@ -433,7 +431,7 @@ def _workspace_grants_for_account(
     return tuple(cards)
 
 
-def account_label(account: str) -> str:
+def _account_label(account: str) -> str:
     """Render a latchkey account key as a user-facing label (default account is unnamed)."""
     return _DEFAULT_ACCOUNT_LABEL if account == DEFAULT_ACCOUNT else account
 
@@ -445,7 +443,7 @@ def _service_accounts(accounts: Sequence[ServiceAccountCredential]) -> tuple[Ser
     any) shown last.
     """
     return tuple(
-        ServiceAccount(account=account.account, label=account_label(account.account))
+        ServiceAccount(account=account.account, label=_account_label(account.account))
         for account in sorted(accounts, key=lambda entry: (entry.account == DEFAULT_ACCOUNT, entry.account.lower()))
     )
 
@@ -466,7 +464,7 @@ def disconnect_account(latchkey: Latchkey, service_name: str, account: str) -> b
     return len(remaining) == 0
 
 
-def parse_file_sharing_permission(permission_name: str) -> tuple[str, str] | None:
+def _parse_file_sharing_permission(permission_name: str) -> tuple[str, str] | None:
     """Split a ``minds-file-server-<access>-<path>`` name into ``(access, path)``.
 
     Returns ``None`` for any permission name that is not a well-formed
@@ -475,9 +473,9 @@ def parse_file_sharing_permission(permission_name: str) -> tuple[str, str] | Non
     before the first ``-`` after the prefix; the remainder (which starts with
     ``/``) is the absolute path.
     """
-    if not permission_name.startswith(FILE_SHARING_PERMISSION_PREFIX):
+    if not permission_name.startswith(_FILE_SHARING_PERMISSION_PREFIX):
         return None
-    remainder = permission_name[len(FILE_SHARING_PERMISSION_PREFIX) :]
+    remainder = permission_name[len(_FILE_SHARING_PERMISSION_PREFIX) :]
     access, separator, path = remainder.partition("-")
     if not separator or access not in (_FILE_SHARING_READ, _FILE_SHARING_WRITE) or not path:
         return None
@@ -503,11 +501,11 @@ def build_file_sharing_overview(
     grants: list[WorkspaceFileSharingGrant] = []
     for host in _list_active_workspace_hosts(backend_resolver):
         path = permissions_path_for_host(plugin_data_dir, host.host_id)
-        permissions = gateway_client.get_permission_rules(path).get(SELF_SCOPE, ())
+        permissions = gateway_client.get_permission_rules(path).get(_SELF_SCOPE, ())
         read_paths: set[str] = set()
         write_paths: set[str] = set()
         for permission_name in permissions:
-            parsed = parse_file_sharing_permission(permission_name)
+            parsed = _parse_file_sharing_permission(permission_name)
             if parsed is None:
                 continue
             access, shared_path = parsed
@@ -519,7 +517,7 @@ def build_file_sharing_overview(
         shared_paths = tuple(
             SharedPath(
                 path=shared_path,
-                access_label=FILE_SHARING_WRITE_LABEL if shared_path in write_paths else FILE_SHARING_READ_LABEL,
+                access_label=_FILE_SHARING_WRITE_LABEL if shared_path in write_paths else _FILE_SHARING_READ_LABEL,
             )
             for shared_path in sorted(all_paths)
         )
@@ -545,11 +543,11 @@ def _revoke_file_sharing_at_path(gateway_client: LatchkeyGatewayClient, permissi
     ``schemas`` object; they are unreferenced and harmless, and a re-grant
     overwrites them by name.)
     """
-    permissions = gateway_client.get_permission_rules(permissions_file_path).get(SELF_SCOPE, ())
-    kept = tuple(name for name in permissions if parse_file_sharing_permission(name) is None)
+    permissions = gateway_client.get_permission_rules(permissions_file_path).get(_SELF_SCOPE, ())
+    kept = tuple(name for name in permissions if _parse_file_sharing_permission(name) is None)
     if len(kept) == len(permissions):
         return
-    gateway_client.set_permission_rule(permissions_file_path, SELF_SCOPE, kept)
+    gateway_client.set_permission_rule(permissions_file_path, _SELF_SCOPE, kept)
 
 
 def revoke_file_sharing_for_workspace(
@@ -562,7 +560,7 @@ def revoke_file_sharing_for_workspace(
 
     Raises :class:`PermissionOverviewError` for an unresolvable workspace.
     """
-    host_id = resolve_workspace_host_id(backend_resolver, workspace_agent_id)
+    host_id = _resolve_host_id(backend_resolver, workspace_agent_id)
     if host_id is None:
         raise PermissionOverviewError(
             f"Could not resolve host for workspace '{workspace_agent_id}'; cannot revoke.",
@@ -616,7 +614,7 @@ class WorkspaceDelegationGrant(FrozenModel):
     verbs: tuple[WorkspaceDelegationVerb, ...] = Field(description="Granted verbs, in catalog order.")
 
 
-def parse_workspace_permission(permission_name: str) -> tuple[str, str | None] | None:
+def _parse_workspace_permission(permission_name: str) -> tuple[str, str | None] | None:
     """Split a ``minds-workspaces-*`` permission into ``(verb_permission, target)``.
 
     ``target`` is ``None`` for an all-workspaces grant (a broad verb name) and the
@@ -626,7 +624,7 @@ def parse_workspace_permission(permission_name: str) -> tuple[str, str | None] |
     the known verb names (not naive ``-`` splitting) because verb names such as
     ``minds-workspaces-backups-export`` themselves contain hyphens.
     """
-    if not permission_name.startswith(WORKSPACE_PERMISSION_PREFIX):
+    if not permission_name.startswith(_WORKSPACE_PERMISSION_PREFIX):
         return None
     if permission_name in _WORKSPACE_VERB_BY_PERMISSION:
         return permission_name, None
@@ -639,7 +637,7 @@ def parse_workspace_permission(permission_name: str) -> tuple[str, str | None] |
     return None
 
 
-def resolve_target_workspace_name(backend_resolver: BackendResolverInterface, target_workspace_id: str) -> str:
+def _resolve_target_workspace_name(backend_resolver: BackendResolverInterface, target_workspace_id: str) -> str:
     """Resolve a target workspace agent id to a display name, falling back to the raw id."""
     try:
         parsed = AgentId(target_workspace_id)
@@ -673,11 +671,11 @@ def build_workspace_overview(
     for host in _list_active_workspace_hosts(backend_resolver):
         permissions = gateway_client.get_permission_rules(
             permissions_path_for_host(plugin_data_dir, host.host_id)
-        ).get(SELF_SCOPE, ())
+        ).get(_SELF_SCOPE, ())
         # verb permission -> the targets it is granted on (``None`` == all workspaces).
         targets_by_verb: dict[str, set[str | None]] = {}
         for permission_name in permissions:
-            parsed = parse_workspace_permission(permission_name)
+            parsed = _parse_workspace_permission(permission_name)
             if parsed is None:
                 continue
             verb_permission, target = parsed
@@ -696,14 +694,14 @@ def build_workspace_overview(
             if not is_all_workspaces:
                 target_names = tuple(
                     sorted(
-                        (resolve_target_workspace_name(backend_resolver, target) for target in targets if target),
+                        (_resolve_target_workspace_name(backend_resolver, target) for target in targets if target),
                         key=str.lower,
                     )
                 )
             verbs.append(
                 WorkspaceDelegationVerb(
                     verb_permission=verb.permission,
-                    label=verb.permission.removeprefix(WORKSPACE_PERMISSION_PREFIX),
+                    label=verb.permission.removeprefix(_WORKSPACE_PERMISSION_PREFIX),
                     description=verb.description,
                     is_all_workspaces=is_all_workspaces,
                     target_names=target_names,
@@ -723,7 +721,7 @@ def build_workspace_overview(
 
 def _workspace_permission_has_verb(permission_name: str, verb_permission: str) -> bool:
     """Whether ``permission_name`` is a grant of ``verb_permission`` (any target)."""
-    parsed = parse_workspace_permission(permission_name)
+    parsed = _parse_workspace_permission(permission_name)
     return parsed is not None and parsed[0] == verb_permission
 
 
@@ -741,19 +739,19 @@ def revoke_workspace_verb_for_workspace(
     """
     if verb_permission not in _WORKSPACE_VERB_BY_PERMISSION:
         raise PermissionOverviewError(f"Unknown machine verb '{verb_permission}'.")
-    host_id = resolve_workspace_host_id(backend_resolver, workspace_agent_id)
+    host_id = _resolve_host_id(backend_resolver, workspace_agent_id)
     if host_id is None:
         raise PermissionOverviewError(
             f"Could not resolve host for workspace '{workspace_agent_id}'; cannot revoke.",
         )
     path = permissions_path_for_host(latchkey.plugin_data_dir, host_id)
-    permissions = gateway_client.get_permission_rules(path).get(SELF_SCOPE, ())
+    permissions = gateway_client.get_permission_rules(path).get(_SELF_SCOPE, ())
     kept = tuple(name for name in permissions if not _workspace_permission_has_verb(name, verb_permission))
     if len(kept) != len(permissions):
-        gateway_client.set_permission_rule(path, SELF_SCOPE, kept)
+        gateway_client.set_permission_rule(path, _SELF_SCOPE, kept)
 
 
-def resolve_workspace_host_id(
+def _resolve_host_id(
     backend_resolver: BackendResolverInterface,
     workspace_agent_id: str,
 ) -> HostId | None:
@@ -809,7 +807,7 @@ def revoke_service_account_for_workspace(
     """
     if not services_catalog.get(service_name):
         raise PermissionOverviewError(f"Unknown service '{service_name}'.")
-    host_id = resolve_workspace_host_id(backend_resolver, workspace_agent_id)
+    host_id = _resolve_host_id(backend_resolver, workspace_agent_id)
     if host_id is None:
         raise PermissionOverviewError(
             f"Could not resolve host for workspace '{workspace_agent_id}'; cannot revoke.",
