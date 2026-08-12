@@ -60,7 +60,6 @@ import {
 import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
 import { CreateAgentModal } from "./CreateAgentModal";
-import { CreateBrowserModal } from "./CreateBrowserModal";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ShareModal } from "./ShareModal";
 import { pickableApps } from "./AllAppsPicker";
@@ -127,10 +126,13 @@ import { loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
   applyMemberTitleChange,
   displayNameForMember,
+  getMemberTitles,
   loadMemberTitles,
   moveMemberTitle,
+  nextFreeAutoName,
   setMemberTitle,
 } from "../models/MemberTitles";
+import { createBrowser, validateBrowserName } from "../models/Browsers";
 import {
   applyMemberLastUsedChange,
   getMemberLastUsed,
@@ -245,26 +247,18 @@ function rebuildAgentTerminalUrl(url: string): string | null {
 }
 
 // Modal state
-let showNewChatModal = false;
 let showNewAgentModal = false;
-let showNewBrowserModal = false;
-// When a background create POST fails, the New-browser modal is re-opened
-// pre-filled with the name the user typed and the daemon's reason, so the user
-// always learns WHY the browser didn't open (rather than the optimistic pane
-// silently vanishing). Both are cleared on a clean open / cancel.
-let newBrowserPrefillName: string | null = null;
-let newBrowserError: string | null = null;
 
-// The dockview group whose "+" (or whose launcher tab) opened the New chat /
-// New agent / New browser modal. Captured at click time because those modals
-// create their panel asynchronously (after the user confirms), by which point
-// the active group may have changed. Consumed in the modal's onCreated
-// callback so the new tab lands in the pane it was asked for, then cleared.
+// The dockview group whose "+" (or whose launcher tab) asked for a new chat /
+// browser tab. Captured at click time because those creates finish
+// asynchronously (a create POST has to return first), by which point the
+// active group may have changed. Consumed when the new tab is opened so it
+// lands in the pane it was asked for, then cleared.
 let newTabTargetGroup: DockviewGroupPanel | null = null;
-// The launcher tab the pending modal was started from, if any. A launcher is
+// The launcher tab the pending create was started from, if any. A launcher is
 // the question "what do you want in this pane", so answering it replaces the
 // launcher rather than leaving it behind -- but only once the answer actually
-// arrives, which for these modals is after the user confirms.
+// arrives, which for the async creates is when the object exists.
 let newTabSourceLauncherPanelId: string | null = null;
 
 // Second paragraph of each destroy confirmation. Destroying is not a louder
@@ -444,7 +438,11 @@ function refreshPanelContent(panelId: string): void {
 // of tabs stays readable and a strip holding one does not stretch it across the
 // pane.
 const TAB_STRIP_RESERVED_PX = 44;
-const TAB_WIDTH_MIN_PX = 100;
+// The floor is set by what a tab must still show at its narrowest, hover
+// included: the kind glyph, the revealed minus and kebab, their paddings, and
+// at least three legible characters of title before the fade. 100px held the
+// chrome but could pinch the title to nothing once the controls appeared.
+const TAB_WIDTH_MIN_PX = 140;
 const TAB_WIDTH_MAX_PX = 220;
 // A title too long for its tab fades out over its last 20px instead of taking
 // an ellipsis: the tail of a truncated name is more legible than "...", and the
@@ -465,7 +463,8 @@ export interface TabStripMetrics {
  * Per strip the ideal is what is left of its width once the "+" is accounted
  * for, shared between its tabs; the narrowest of those ideals wins, so no strip
  * ends up scrolling while another has room to spare. The result is clamped to
- * [100, 220]: below the floor a tab shows no usable title, and above the
+ * [TAB_WIDTH_MIN_PX, 220]: below the floor a hovered tab cannot keep three
+ * characters of title visible beside its controls, and above the
  * ceiling a lone tab looks like a mistake. Strips with no tabs are skipped, and
  * a dock with no tabs at all answers with the ceiling -- there is nothing to
  * apply it to.
@@ -720,6 +719,17 @@ function tabMenuEntries(panelId: string): TabMenuEntry[] {
     });
   }
   if (entries.length > 0) entries.push(MENU_DIVIDER);
+  if (params.panelType !== "launcher") {
+    entries.push({
+      label: "Rename",
+      iconName: "edit",
+      run: () => {
+        // The same inline editor the double-click opens, reached through the
+        // tab's handle so the menu and the gesture stay one mechanism.
+        tabHandlesByPanelId.get(panelId)?.beginTitleEdit();
+      },
+    });
+  }
   entries.push({
     label: "Close tab",
     iconName: "minus",
@@ -820,7 +830,10 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
 /** The live tabs, so the width recompute can size them and re-measure their
  *  titles, and so a "+" can flash the launcher its pane already holds. Entries
  *  are added as tabs are rendered and dropped as they are disposed. */
-const tabHandlesByPanelId = new Map<string, { element: HTMLElement; refreshTitleFade: () => void }>();
+const tabHandlesByPanelId = new Map<
+  string,
+  { element: HTMLElement; refreshTitleFade: () => void; beginTitleEdit: () => void }
+>();
 
 /**
  * One tab: kind glyph, title, then the right-aligned minus and ⋮ that hover
@@ -1059,7 +1072,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
         updateActionsVisibility();
       });
       updateActionsVisibility();
-      tabHandlesByPanelId.set(options.id, { element, refreshTitleFade });
+      tabHandlesByPanelId.set(options.id, { element, refreshTitleFade, beginTitleEdit });
     },
     dispose() {
       tabHandlesByPanelId.delete(options.id);
@@ -1251,7 +1264,7 @@ function reportChatTabActivity(): void {
  *  letting dockview fall back to the currently-active group. Returns an empty
  *  object -- i.e. default placement -- when no target is given (the dock had no
  *  pane yet) or the target group has since been disposed (e.g. it was closed
- *  while a New chat / New agent modal was open). */
+ *  while an async create was still in flight). */
 function placementForGroup(targetGroup: DockviewGroupPanel | null | undefined): AddPanelPlacementOptions {
   if (targetGroup && dockview?.groups.some((g) => g.id === targetGroup.id)) {
     return { position: { referenceGroup: targetGroup.id } };
@@ -1281,8 +1294,8 @@ interface BrowserInfo {
 // Note: we no longer gate the "New browser" button on the daemon's
 // ``can_create``. A create is accepted even during startup/restore (it queues
 // behind the serialized restore on the daemon's shared launch lock) and the
-// fleet cap / duplicate-name rejections come back as inline errors in the
-// New-browser modal, so the button stays always clickable.
+// fleet cap rejections are surfaced by the create flow (see
+// ``openNewBrowser``), so the button stays always clickable.
 let browserFleet: BrowserInfo[] = [];
 
 /** Fetch the live browser fleet into the cache. ``onUpdate`` runs after the
@@ -1322,9 +1335,9 @@ if (typeof document !== "undefined") {
  *  group.
  *
  *  This is also the optimistic 'starting' pane: when called right after the
- *  user accepts a name in the New-browser modal (before the launch finishes),
- *  the viewer shows "Browser starting…" and retries the cast connection until
- *  the daemon registers the name.
+ *  create flow mints a name (before the launch finishes), the viewer shows
+ *  "Browser starting…" and retries the cast connection until the daemon
+ *  registers the name.
  *
  *  Returns ``true`` when this call CREATED a new pane, ``false`` when it merely
  *  deduped onto (focused) a pane that was already open for the same browser.
@@ -1344,7 +1357,7 @@ function openBrowserSessionTab(name: string, targetGroup?: DockviewGroupPanel | 
 
 /** Close the (optimistic) pane for browser ``name`` if it is open, and tear its
  *  page down with it. Used when a create POST fails after the pane was opened
- *  on modal-accept: the launch never registered the name, so the pane would
+ *  optimistically: the launch never registered the name, so the pane would
  *  otherwise sit on a stale "Browser starting…" / "browser closed" banner
  *  forever. Closing a tab normally leaves the page running -- but there is no
  *  object here to keep running, so this is one of the destroy paths. Dedup keys
@@ -1422,8 +1435,8 @@ function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | nul
 
 /** Retire the launcher a just-opened tab was asked for from. The launcher asks
  *  "what do you want in this pane", so an answer replaces it -- but only once
- *  the answer has actually arrived, which for the naming modals is after the
- *  user confirms. */
+ *  the answer has actually arrived, which for the async creates is when the
+ *  object exists. */
 function retireLauncher(panelId: string | null): void {
   if (panelId === null || !dockview) return;
   if (panelParams.get(panelId)?.panelType !== "launcher") return;
@@ -1646,6 +1659,50 @@ function derivedLabelForMemberRef(ref: string): string {
     case "url":
       return (openPanelId === null ? undefined : panelParams.get(openPanelId)?.title) ?? "Page";
   }
+}
+
+/**
+ * The first free "Chat N" / "Terminal N" / "Browser N" name on this machine.
+ *
+ * The taken set matches the title store's scope -- the whole machine, not the
+ * mounted view: every chosen name (including ones on backgrounded or
+ * other-project objects) plus every derived label, so a user who renamed
+ * something to "Chat 2" by hand, or an object whose derived label happens to
+ * read "Chat 2", blocks that slot. Destroy clears titles server-side, so a
+ * destroyed "Chat 1" frees its slot for the next create.
+ *
+ * Known and accepted limitation: two clients creating simultaneously can both
+ * compute "Chat 1". The titles POST is per-ref last-write-wins, so both
+ * objects survive with duplicate display names; a rename fixes it.
+ */
+function autoNameForKind(word: "Chat" | "Terminal" | "Browser"): string {
+  const taken = new Set<string>(Object.values(getMemberTitles()));
+  for (const row of buildEverythingMembers(machineInventory(), {})) {
+    taken.add(labelForMemberRef(row.ref));
+  }
+  return nextFreeAutoName(word, taken);
+}
+
+/**
+ * File the first free "<word> N" as ``ref``'s display name, best-effort.
+ *
+ * This is how a UI-created object comes into being already wearing a friendly
+ * name -- exactly as if the user had renamed it the moment it appeared -- while
+ * its identifier stays machine-generated and is never surfaced as something to
+ * pick. Best-effort by design: the object works fine under its derived name,
+ * so a failed write costs only the nicety, and the tab repaints to "<word> N"
+ * whenever the write lands (this client via the sync below, every other via
+ * the broadcast).
+ */
+function fileAutoTitle(ref: string, word: "Chat" | "Terminal" | "Browser"): void {
+  void setMemberTitle(ref, autoNameForKind(word))
+    .then(() => {
+      syncTabTitlesFromStore();
+      m.redraw();
+    })
+    .catch(() => {
+      // Best-effort: the object keeps its derived name.
+    });
 }
 
 /** The project registry, for the sidebar's switcher and its member lists.
@@ -2219,8 +2276,9 @@ function addTerminalPanel(
 }
 
 /** "New terminal": allocate the next free ``terminal-N`` name from the backend,
- *  then open a tab attached to it. Returns the new panel's id, or null when the
- *  allocation failed. */
+ *  then open a tab attached to it. The tmux session name stays the identity;
+ *  the tab wears the auto-filed "Terminal N" display name. Returns the new
+ *  panel's id, or null when the allocation failed. */
 async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise<string | null> {
   if (!dockview) return null;
   let sessionName: string;
@@ -2233,7 +2291,93 @@ async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise
     alert(`Failed to open terminal: ${(e as Error).message}`);
     return null;
   }
-  return addTerminalPanel(sessionName, { targetGroup });
+  const panelId = addTerminalPanel(sessionName, { targetGroup });
+  if (panelId !== null) {
+    // The ref exists once the allocation resolved; the tab opens either way
+    // and keeps its derived ``terminal-N`` title if the write fails.
+    fileAutoTitle(memberRef("terminal", sessionName), "Terminal");
+  }
+  return panelId;
+}
+
+/**
+ * "New chat": start a chat agent under a machine petname and open its tab
+ * wearing the auto-filed "Chat N" display name.
+ *
+ * No dialog: the petname is the agent's identity, never something the user
+ * picks -- what they see is the friendly name, filed the moment the create
+ * returns the agent id. A chat started while a project is mounted carries that
+ * project's id in its agent's ``project`` label, matching ``startProjectChat``
+ * (a chat started in Everything carries none). On failure the launcher stays
+ * and the reason is surfaced, matching ``openNewTerminal``.
+ */
+async function openNewChat(targetGroup: DockviewGroupPanel | null, launcherPanelId: string | null): Promise<void> {
+  const agentName = await fetchRandomAgentName();
+  const viewId = mountedViewId;
+  const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
+  let agentId: string;
+  try {
+    agentId = await createChatAgent(agentName, projectId);
+  } catch (e) {
+    alert(`Failed to create chat: ${(e as Error).message}`);
+    return;
+  }
+  // The ref exists as soon as the create returned the id -- before the agent
+  // finishes starting -- so the tab reads "Chat N" from its first paint on.
+  fileAutoTitle(memberRef("chat", agentId), "Chat");
+  focusOrCreateChatPanel(agentId, agentName, targetGroup);
+  retireLauncher(launcherPanelId);
+  m.redraw();
+}
+
+/**
+ * "New browser": mint a machine name, open the optimistic 'starting' pane
+ * wearing the auto-filed "Browser N" display name, and register the browser
+ * with the daemon in the background.
+ *
+ * No dialog: the name IS the browser's identity everywhere (ref, cast socket,
+ * profile dir), but it is machine-minted -- a coolname satisfies the daemon's
+ * rule (lowercase words joined by dashes), and the guard below falls back to a
+ * timestamp name if the generator misbehaves or the name already names a
+ * fleet browser (opening a pane for an existing name would dedup onto that
+ * browser's healthy pane, which a failure teardown must never close).
+ *
+ * The pane opens before the POST resolves (the daemon registers instantly and
+ * launches in the background). On failure the user must still learn WHY: the
+ * optimistic pane is torn down (only if this flow created it), the auto-title
+ * is cleared (no browser was registered, so the server-side destroy hooks that
+ * normally clear titles never run), and the daemon's reason is surfaced with
+ * the alert pattern the other create flows use.
+ */
+async function openNewBrowser(targetGroup: DockviewGroupPanel | null, launcherPanelId: string | null): Promise<void> {
+  let name = await fetchRandomAgentName();
+  if (validateBrowserName(name) !== null || browserFleet.some((browser) => browser.id === name)) {
+    name = `browser-${Date.now().toString(36)}`;
+  }
+  const ref = memberRef("browser", name);
+  // The ref exists the instant the name is minted -- before the POST even
+  // runs -- so the optimistic pane's tab reads "Browser N" immediately.
+  fileAutoTitle(ref, "Browser");
+  const createdPane = openBrowserSessionTab(name, targetGroup);
+  retireLauncher(launcherPanelId);
+  m.redraw();
+
+  const result = await createBrowser(name);
+  if (result.ok) {
+    // The pane is already open; just refresh the fleet so the sidebar and the
+    // launcher list the new browser.
+    refreshBrowserFleet();
+    return;
+  }
+  if (createdPane) {
+    closeBrowserSessionTab(name);
+  }
+  void setMemberTitle(ref, "").catch(() => {
+    // Best-effort: an uncleared title on a never-registered browser only
+    // shadows one "Browser N" slot until someone renames over it.
+  });
+  alert(`Failed to create browser: ${result.reason}`);
+  m.redraw();
 }
 
 /** Dedup-then-add for a ``service:``, ``chat:``, or ``https://`` ref.
@@ -2611,10 +2755,12 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
  * browser and a terminal start new instances, and a custom app focuses its
  * single one. That is what the launcher's "Open new" tiles ask for by name; the
  * rail's shortcuts go through ``openTabOfType``, which looks for something to
- * focus first. A chat and a browser open their naming modal here -- neither the
- * rail nor the launcher is a place to type a name -- so the launcher that asked
- * is only retired once the modal reports back, which is why it is parked in
- * ``newTabSourceLauncherPanelId`` rather than closed here.
+ * focus first. Nothing here asks the user for a name: identities are
+ * machine-minted, and each create files the first free "Chat N" /
+ * "Terminal N" / "Browser N" display name as it goes (see ``fileAutoTitle``).
+ * The launcher that asked is only retired once the object actually exists,
+ * which is why it is parked in ``newTabSourceLauncherPanelId`` rather than
+ * closed here.
  */
 function openTabOfTypeInGroup(
   tabType: QuickAddTabType,
@@ -2624,8 +2770,11 @@ function openTabOfTypeInGroup(
   newTabTargetGroup = targetGroup;
   newTabSourceLauncherPanelId = launcherPanelId;
   if (tabType === "chat") {
-    showNewChatModal = true;
-    m.redraw();
+    void openNewChat(targetGroup, launcherPanelId).then(() => {
+      newTabTargetGroup = null;
+      newTabSourceLauncherPanelId = null;
+      m.redraw();
+    });
     return;
   }
   if (tabType === "terminal") {
@@ -2637,12 +2786,11 @@ function openTabOfTypeInGroup(
     return;
   }
   if (tabType === "browser") {
-    // Clean open: drop any leftover failure pre-fill so the modal fetches a
-    // fresh random name and shows no error.
-    newBrowserPrefillName = null;
-    newBrowserError = null;
-    showNewBrowserModal = true;
-    m.redraw();
+    void openNewBrowser(targetGroup, launcherPanelId).then(() => {
+      newTabTargetGroup = null;
+      newTabSourceLauncherPanelId = null;
+      m.redraw();
+    });
     return;
   }
   // What is left ("files") is not a tab type the workspace builds itself -- it
@@ -3274,10 +3422,13 @@ export async function startProjectChat(projectId: string): Promise<void> {
     );
     return;
   }
+  // The petname stays the agent's identity; what the user sees is the
+  // auto-filed "Chat N", best-effort like every other UI create.
+  fileAutoTitle(memberRef("chat", chatAgentId), "Chat");
   if (mountedViewId === projectId) {
     // The agent is still starting -- it is a proto agent until mngr registers
     // it -- and its chat panel opens on that id right away, exactly as the
-    // create-chat modal's does.
+    // launcher's Chat tile does.
     const launcherPanelId = soleLauncherPanelId();
     focusOrCreateChatPanel(chatAgentId, chatName, launcherPanelId === null ? null : groupForPanel(launcherPanelId));
     retireLauncher(launcherPanelId);
@@ -4340,25 +4491,6 @@ export const DockviewWorkspace: m.Component = {
         style: "width: 100%; height: 100%;",
       },
       [
-        showNewChatModal
-          ? m(CreateAgentModal, {
-              mode: "chat",
-              onCreated(newAgentId: string, newAgentName: string) {
-                showNewChatModal = false;
-                const targetGroup = newTabTargetGroup;
-                newTabTargetGroup = null;
-                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
-                retireLauncher(newTabSourceLauncherPanelId);
-                newTabSourceLauncherPanelId = null;
-              },
-              onCancel() {
-                showNewChatModal = false;
-                newTabTargetGroup = null;
-                newTabSourceLauncherPanelId = null;
-              },
-            })
-          : null,
-
         showNewAgentModal
           ? m(CreateAgentModal, {
               mode: "worktree",
@@ -4374,79 +4506,6 @@ export const DockviewWorkspace: m.Component = {
                 showNewAgentModal = false;
                 newTabTargetGroup = null;
                 newTabSourceLauncherPanelId = null;
-              },
-            })
-          : null,
-
-        showNewBrowserModal
-          ? m(CreateBrowserModal, {
-              // NO `key` here. This modal sits in a children array among unkeyed
-              // sibling vnodes (the other modals/dialogs); Mithril throws "vnodes must
-              // either all have keys or none" if one child is keyed and the rest aren't,
-              // which silently kills the entire render so the modal never appears. A key
-              // isn't needed anyway: onAccept sets showNewBrowserModal=false before the
-              // POST, so a failure re-open (showNewBrowserModal back to true) is a fresh
-              // mount and oninit re-reads initialName/initialError on its own.
-              // Names of browsers already in the fleet, so the modal can
-              // pre-validate a typed name and reject a duplicate inline BEFORE
-              // opening a pane or calling create -- never optimistically
-              // touching the pane of the browser that already owns that name.
-              existingBrowserNames: browserFleet.map((b) => b.id),
-              // Set only when re-opened after a background create failed: the
-              // modal pre-fills the input with this name and shows the error
-              // inline (instead of fetching a fresh random name).
-              initialName: newBrowserPrefillName ?? undefined,
-              initialError: newBrowserError,
-              // Fires the instant the user accepts a name: open the optimistic
-              // 'starting' pane (which shows the full "Starting browser…" overlay
-              // and flips to the live page on its own when the daemon broadcasts
-              // ``running``) AND close the modal immediately -- we don't wait for
-              // the create POST. Returns whether THIS call created a new pane (vs
-              // deduped onto an existing one) so a later failure only tears down a
-              // pane this flow created. ``newTabTargetGroup`` is cleared here too
-              // since the modal is done; the background POST's success/failure
-              // callbacks reference the pane by name, not the group.
-              onAccept(browserName: string): boolean {
-                const createdPane = openBrowserSessionTab(browserName, newTabTargetGroup);
-                showNewBrowserModal = false;
-                newTabTargetGroup = null;
-                retireLauncher(newTabSourceLauncherPanelId);
-                newTabSourceLauncherPanelId = null;
-                // The accept succeeded optimistically; clear any leftover failure
-                // pre-fill so a subsequent clean open starts fresh.
-                newBrowserPrefillName = null;
-                newBrowserError = null;
-                return createdPane;
-              },
-              // The background create POST succeeded: the modal is already closed
-              // and the pane already open, so just refresh the fleet so the
-              // sidebar and the launcher list the new browser.
-              onCreated() {
-                refreshBrowserFleet();
-              },
-              // Create failed (400 invalid / 409 duplicate-or-full / 503
-              // installing / network). Two things must happen so the user always
-              // learns WHY the browser didn't open: (1) tear down the optimistic
-              // pane ONLY if this flow created it (``createdPane``) -- if the open
-              // deduped onto a pre-existing browser's healthy pane, leave it
-              // alone; and (2) RE-OPEN this modal pre-filled with the typed name
-              // and the daemon's ``reason`` shown inline, so the failure is
-              // surfaced rather than the pane silently vanishing.
-              onFailed(browserName: string, createdPane: boolean, reason: string) {
-                if (createdPane) {
-                  closeBrowserSessionTab(browserName);
-                }
-                newBrowserPrefillName = browserName;
-                newBrowserError = reason;
-                showNewBrowserModal = true;
-                m.redraw();
-              },
-              onCancel() {
-                showNewBrowserModal = false;
-                newTabTargetGroup = null;
-                newTabSourceLauncherPanelId = null;
-                newBrowserPrefillName = null;
-                newBrowserError = null;
               },
             })
           : null,
