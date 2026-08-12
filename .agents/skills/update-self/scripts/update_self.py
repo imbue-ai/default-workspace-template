@@ -44,8 +44,9 @@ validation depth, reveal by change class). This script owns the parts that are
     is the mechanical half of the review-gate rule: true whenever the merged
     set is non-empty (any merge work at all happened). A false value is
     necessary but not sufficient to skip the gates -- the worker's impact
-    analysis must also find no user-created code affected; the worker
-    reference owns that half.
+    analysis must also find no user-created code affected, and the worker must
+    have authored no in-branch edits of its own (which this diff cannot see at
+    all); the worker reference owns that half.
 
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
@@ -595,7 +596,10 @@ class MergeClassification(NamedTuple):
     git silently auto-merging both sides' edits), so the review gates must run.
     An empty merged set makes this false, which permits -- but does not by
     itself license -- skipping the gates: the worker must also establish that
-    no user-created code depends on anything the update changed.
+    no user-created code depends on anything the update changed, and that it
+    added no commits of its own on top of the merge. That last condition is
+    invisible here by construction -- the caller passes the *pre-merge* local
+    ref, so nothing the worker committed afterwards is in either diff.
     """
 
     merged: list[dict[str, object]]
