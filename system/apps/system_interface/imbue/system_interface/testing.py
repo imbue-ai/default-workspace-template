@@ -140,13 +140,16 @@ def build_test_state(
     fixed to their production defaults inline.
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
+    event_queues = AgentEventQueues()
+    # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
+    manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
     return SystemInterfaceState(
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),
         exclude_filters=(),
         agent_manager=manager,
-        event_queues=AgentEventQueues(),
+        event_queues=event_queues,
         layout_mutex=LayoutMutex(),
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
         welcome_resender=welcome_resender

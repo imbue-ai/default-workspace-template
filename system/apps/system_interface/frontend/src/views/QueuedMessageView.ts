@@ -20,6 +20,7 @@ import m from "mithril";
 import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
 import { shoulderTap } from "../models/Response";
+import { prependToComposer } from "./MessageInput";
 import { describeRequestError } from "../models/request-error";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
@@ -40,9 +41,12 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
   inFlightAgentIds.add(agentId);
   m.redraw();
   try {
-    // One harness-agnostic call; the backend dispatches per harness. The frontend paints
-    // nothing local: the next backend queue snapshot and the committed turn reflect the result.
-    await shoulderTap(agentId);
+    // One harness-agnostic call; the backend dispatches per harness. The frontend paints nothing
+    // local: the next backend queue snapshot and the committed turn reflect the result. The one
+    // exception is a non-empty ``block`` -- a native tap whose combined resend failed to submit hands
+    // the parked text back for the composer (like Stop), so it is never swallowed (contract A1a).
+    const { block } = await shoulderTap(agentId);
+    prependToComposer(agentId, block);
   } catch (err) {
     const detail = describeRequestError(err);
     console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);
@@ -55,8 +59,26 @@ async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
 
 /** Render one queued message as a user bubble. Reuses the user-bubble *view* (the
  *  same markup ``StableUserMessage`` produces for a plain prompt) directly, rather
- *  than the classifier -- a queued message is always shown verbatim. */
+ *  than the classifier -- a queued message is always shown verbatim.
+ *
+ *  A chip the backend reports as ``is_sending`` (a codex shoulder-tap's interrupt+resend)
+ *  renders identically to the optimistic "Sending…" bubble (see OutgoingMessageView) -- same
+ *  markup, same caption -- so a re-sent message stays continuously visible and reads "Sending…"
+ *  through the resend rather than blinking out (contract A1a); the backend drives the transition
+ *  to the committed turn. */
 function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
+  if (queued.is_sending === true) {
+    return m(
+      "div",
+      { class: "message message-user outgoing-message outgoing-message--sending", key: `queued-${queued.queued_id}` },
+      [
+        m("div", { class: "message-user-bubble" }, [
+          m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),
+        ]),
+        m("div", { class: "outgoing-status" }, "Sending…"),
+      ],
+    );
+  }
   return m("div", { class: "message message-user queued-message", key: `queued-${queued.queued_id}` }, [
     m("div", { class: "message-user-bubble" }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, queued.content),

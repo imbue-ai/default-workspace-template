@@ -27,6 +27,7 @@ from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.codex.model import _bind_root_thread
+from imbue.system_interface.harnesses.codex.model import _subscribe_root_thread
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
@@ -240,3 +241,44 @@ def test_bind_raises_when_no_unambiguous_root(tmp_path: Path) -> None:
     client = _BindFakeClient(loaded=("a", "b"))
     with pytest.raises(CodexAppServerError):
         _bind_root_thread(client, tmp_path)
+
+
+# =============================================================================
+# Root-thread SUBSCRIBING for the persistent live connection
+# =============================================================================
+#
+# The live-connection path must RESUME (thread/resume) rather than bind, because only a resume
+# subscribes the connection to the thread's turn/*/item/* event stream. Unlike the switch path
+# (above), it resumes even a thread the daemon still holds loaded -- a bind would be local-only and
+# leave the ledger deaf to delivery/reconcile.
+
+
+def test_subscribe_resumes_a_persisted_thread_even_when_loaded(tmp_path: Path) -> None:
+    # The key divergence from the switch path: a persisted root that IS loaded is still resumed
+    # (bind would skip the RPC and never subscribe), so the connection joins the event stream.
+    _write_persisted_thread_id(tmp_path, "root-1")
+    client = _BindFakeClient(loaded=("root-1", "sub-2"))
+    _subscribe_root_thread(client, tmp_path)
+    assert client.resumed == "root-1"
+    assert client.bound is None
+
+
+def test_subscribe_resumes_a_persisted_thread_not_loaded(tmp_path: Path) -> None:
+    _write_persisted_thread_id(tmp_path, "root-1")
+    client = _BindFakeClient(loaded=("sub-2",))
+    _subscribe_root_thread(client, tmp_path)
+    assert client.resumed == "root-1"
+    assert client.bound is None
+
+
+def test_subscribe_adopts_and_resumes_the_single_loaded_thread(tmp_path: Path) -> None:
+    client = _BindFakeClient(loaded=("only-1",))
+    _subscribe_root_thread(client, tmp_path)
+    assert client.resumed == "only-1"
+    assert client.bound is None
+
+
+def test_subscribe_raises_when_no_unambiguous_root(tmp_path: Path) -> None:
+    client = _BindFakeClient(loaded=("a", "b"))
+    with pytest.raises(CodexAppServerError):
+        _subscribe_root_thread(client, tmp_path)

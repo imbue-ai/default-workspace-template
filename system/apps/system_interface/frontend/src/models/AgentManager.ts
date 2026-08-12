@@ -53,6 +53,10 @@ export interface QueuedMessage {
   queued_id: string;
   content: string;
   timestamp: string;
+  // True while the backend is actively re-sending this chip (a codex shoulder-tap's
+  // interrupt+resend): it stays continuously visible but renders "Sending…" rather than as a
+  // plain queued chip, so it never blinks out (contract A1a). Absent/false = a plain queued chip.
+  is_sending?: boolean;
 }
 
 export interface AppEntry {

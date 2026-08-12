@@ -110,7 +110,8 @@ def test_marker_takes_precedence_over_newest_rollout(tmp_path: Path) -> None:
     other = _write_rollout_without_marker(
         tmp_path, [_user_line("unmarked-newer", "2026-08-03T00:00:09Z")], name="rollout-2026-08-03T00-00-09-other.jsonl"
     )
-    os.utime(other, (10**10, 10**10))  # force it newest by mtime
+    # Force it newest by mtime.
+    os.utime(other, (10**10, 10**10))
     assert (tmp_path / "codex_transcript_path").read_text().strip() == str(marked)
     watcher, _ = _build_watcher(tmp_path)
 
@@ -122,20 +123,46 @@ def test_a_read_does_not_stop_the_loop_broadcasting_those_events(tmp_path: Path)
 
     Without the split, a read would consume the bytes and the loop would then have
     nothing to broadcast -- so the live stream would silently lose exactly the events a
-    reader happened to pull in first.
+    reader happened to pull in first. Uses an assistant line (agent output the file reader
+    still owns live) rather than a user line (now suppressed live -- see the suppression test).
     """
-    _write_rollout(tmp_path, [_user_line("only", "2026-08-03T00:00:01Z")])
+    _write_rollout(tmp_path, [_assistant_line("m1", "only", "2026-08-03T00:00:01Z")])
     watcher, broadcast = _build_watcher(tmp_path)
 
     assert len(watcher.get_tail_events(50)) == 1
     assert broadcast == []
 
     watcher._emit_unsent()
-    assert [event["content"] for event in broadcast] == ["only"]
+    assert [event["text"] for event in broadcast] == ["only"]
 
     # Idempotent: a second pass re-broadcasts nothing.
     watcher._emit_unsent()
     assert len(broadcast) == 1
+
+
+def test_live_user_turns_are_suppressed_from_the_broadcast_but_served_by_reads(tmp_path: Path) -> None:
+    """Fix 1: the subscribed ledger owns the LIVE user-turn, so the file reader must NOT broadcast
+    its own copy (that is the unordered second channel A3b forbids). The user-turn still lives in
+    the store, so the read paths -- the hydration a page load rebuilds from -- serve it; only the
+    live broadcast omits it. Agent output on the same pass is still broadcast."""
+    _write_rollout(
+        tmp_path,
+        [
+            _user_line("hi there", "2026-08-03T00:00:01Z"),
+            _assistant_line("m1", "reply", "2026-08-03T00:00:02Z"),
+        ],
+    )
+    watcher, broadcast = _build_watcher(tmp_path)
+    watcher._emit_unsent()
+
+    # The broadcast carries the agent message but NOT the user turn.
+    assert [event["type"] for event in broadcast] == ["assistant_message"]
+    # The reads (hydration/backfill) DO include the user turn.
+    all_types = [event["type"] for event in watcher.get_all_events()]
+    assert all_types == ["user_message", "assistant_message"]
+    # Suppressed events are still counted-as-sent: a later pass never leaks them into the broadcast.
+    watcher._emit_unsent()
+    assert [event["type"] for event in broadcast] == ["assistant_message"]
 
 
 def test_reads_pick_up_lines_appended_after_the_first_read(tmp_path: Path) -> None:
@@ -178,21 +205,21 @@ def test_start_tails_the_rollout_via_the_shared_watcher(tmp_path: Path) -> None:
 
     This is the path the shared ``PathWatcher`` now drives (it replaced the watcher's
     own thread/observer/poll loop): ``start`` emits whatever is already on disk, then a
-    later append reaches the broadcast via the watch loop.
-    """
+    later append reaches the broadcast via the watch loop. Uses assistant lines -- agent
+    output the file reader still broadcasts live (user turns are ledger-owned now)."""
     broadcast_signal = threading.Event()
-    rollout = _write_rollout(tmp_path, [_user_line("first", "2026-08-03T00:00:01Z")])
+    rollout = _write_rollout(tmp_path, [_assistant_line("m1", "first", "2026-08-03T00:00:01Z")])
     watcher, broadcast = _build_watcher(tmp_path, broadcast_signal)
     watcher.start()
     try:
-        _wait_for(broadcast_signal, lambda: [event["content"] for event in broadcast] == ["first"])
-        assert [event["content"] for event in broadcast] == ["first"]
+        _wait_for(broadcast_signal, lambda: [event["text"] for event in broadcast] == ["first"])
+        assert [event["text"] for event in broadcast] == ["first"]
 
         with rollout.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(_user_line("second", "2026-08-03T00:00:02Z")) + "\n")
+            handle.write(json.dumps(_assistant_line("m2", "second", "2026-08-03T00:00:02Z")) + "\n")
 
-        _wait_for(broadcast_signal, lambda: [event["content"] for event in broadcast] == ["first", "second"])
-        assert [event["content"] for event in broadcast] == ["first", "second"]
+        _wait_for(broadcast_signal, lambda: [event["text"] for event in broadcast] == ["first", "second"])
+        assert [event["text"] for event in broadcast] == ["first", "second"]
     finally:
         watcher.stop()
 

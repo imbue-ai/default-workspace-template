@@ -26,7 +26,9 @@ from typing import Any
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
+from imbue.system_interface.harnesses.codex.ledger import LedgerEntry
 from imbue.system_interface.harnesses.codex.ledger import MessageState
+from imbue.system_interface.harnesses.codex.session_parser import codex_user_turn_event_id
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.model import ModelIdentity
@@ -87,11 +89,15 @@ def _handshaken_client(transport: ScriptedTransport, *, status_type: str = "idle
 
 
 class _Sink:
-    """Records every queue snapshot and activity state the ledger pushed, in call order."""
+    """Records every queue snapshot, user-turn, and activity state the ledger pushed, in call order.
+
+    ``channel_log`` interleaves the three channels so a test can assert the A3b ordered handoff:
+    a committed steer's queue removal is logged BEFORE its user-turn."""
 
     def __init__(self) -> None:
         self.queue_calls: list[list[dict[str, str]]] = []
         self.activity_calls: list[ActivityState] = []
+        self.user_turns: list[dict[str, Any]] = []
         self.channel_log: list[str] = []
 
     def on_queue(self, snapshot: list[dict[str, str]]) -> None:
@@ -101,6 +107,10 @@ class _Sink:
     def on_activity(self, state: ActivityState) -> None:
         self.activity_calls.append(state)
         self.channel_log.append("activity")
+
+    def on_user_turn(self, event: dict[str, Any]) -> None:
+        self.user_turns.append(event)
+        self.channel_log.append("user_turn")
 
 
 def _build_ledger(
@@ -121,20 +131,33 @@ def _build_ledger(
         client,
         on_queue_snapshot=sink.on_queue,
         on_activity=sink.on_activity,
+        on_user_turn=sink.on_user_turn,
         mint_client_id=mint,
         now=lambda: "2026-08-11T00:00:00Z",
     )
     return ledger, client, sink
 
 
-def _push_user_message_committed(transport: ScriptedTransport, client: CodexAppServerClient, client_id: str | None) -> None:
-    transport.push(
-        {
-            "jsonrpc": "2.0",
-            "method": "item/completed",
-            "params": {"item": {"type": "userMessage", "id": f"item-{client_id}", "clientId": client_id}},
-        }
-    )
+def _push_user_message_committed(
+    transport: ScriptedTransport,
+    client: CodexAppServerClient,
+    client_id: str | None,
+    *,
+    item_id: str | None = None,
+    content: str | None = None,
+    completed_at_ms: int | None = None,
+) -> None:
+    item: dict[str, Any] = {
+        "type": "userMessage",
+        "id": item_id if item_id is not None else f"item-{client_id}",
+        "clientId": client_id,
+    }
+    if content is not None:
+        item["content"] = [{"type": "text", "text": content}]
+    params: dict[str, Any] = {"item": item}
+    if completed_at_ms is not None:
+        params["completedAtMs"] = completed_at_ms
+    transport.push({"jsonrpc": "2.0", "method": "item/completed", "params": params})
     client.poll_notifications()
 
 
@@ -350,7 +373,9 @@ def test_a3b_queue_removal_emitted_on_commit() -> None:
     _push_user_message_committed(transport, client, first)
     transport.respond_result("turn/steer", {"turnId": "turn-1"})
     second = ledger.send("second")
-    assert sink.queue_calls[-1] == [{"queued_id": second, "content": "second", "timestamp": "2026-08-11T00:00:00Z"}]
+    assert sink.queue_calls[-1] == [
+        {"queued_id": second, "content": "second", "timestamp": "2026-08-11T00:00:00Z", "is_sending": False}
+    ]
 
     sink.queue_calls.clear()
     _push_user_message_committed(transport, client, second)
@@ -358,6 +383,122 @@ def test_a3b_queue_removal_emitted_on_commit() -> None:
     assert sink.queue_calls == [[]]
     assert ledger.queued_snapshot() == []
     assert ledger.state_of(second) == MessageState.DELIVERED
+
+
+def test_a3b_chip_removal_is_emitted_before_the_user_turn() -> None:
+    """The ordered handoff (A3b): when a Queued entry commits, the ledger broadcasts the chip
+    REMOVAL (queue snapshot) and THEN the committed user-turn -- never the turn while the chip is
+    still shown. The interleaved channel log proves the order across the two channels."""
+    transport = ScriptedTransport()
+    sink = _Sink()
+    ledger, client, _sink = _build_ledger(transport, sink=sink)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    first = ledger.send("first")
+    _push_user_message_committed(transport, client, first)
+    transport.respond_result("turn/steer", {"turnId": "turn-1"})
+    second = ledger.send("second")
+
+    sink.channel_log.clear()
+    sink.user_turns.clear()
+    _push_user_message_committed(transport, client, second, content="second")
+
+    # Exactly one user-turn, and the queue removal was logged strictly before it.
+    assert [event["content"] for event in sink.user_turns] == ["second"]
+    assert "queue" in sink.channel_log and "user_turn" in sink.channel_log
+    assert sink.channel_log.index("queue") < sink.channel_log.index("user_turn")
+
+
+def test_delivery_records_the_app_server_item_id() -> None:
+    """Fix 2: delivery adopts codex's own ``item.id`` onto the entry (the identity we track), while
+    the minted token remains only the correlation link."""
+    transport = ScriptedTransport()
+    ledger, client, _sink = _build_ledger(transport)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    cid = ledger.send("hello")
+    assert ledger.entries[cid].item_id is None
+
+    _push_user_message_committed(transport, client, cid, item_id="codex-item-xyz", content="hello")
+    assert ledger.state_of(cid) == MessageState.DELIVERED
+    assert ledger.entries[cid].item_id == "codex-item-xyz"
+
+
+def test_delivered_user_turn_is_emitted_keyed_on_the_correlation_token() -> None:
+    """The ledger emits the live user-turn on commit; its event_id keys on the echoed client_id so
+    the rollout file reader's hydration copy of the same message dedups against it."""
+    transport = ScriptedTransport()
+    sink = _Sink()
+    ledger, client, _sink = _build_ledger(transport, sink=sink)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    cid = ledger.send("hello")
+    _push_user_message_committed(transport, client, cid, content="hello", completed_at_ms=1786526413296)
+
+    assert len(sink.user_turns) == 1
+    event = sink.user_turns[0]
+    assert event["type"] == "user_message"
+    assert event["content"] == "hello"
+    assert event["event_id"] == f"codex-user-cid-{cid}"
+    assert event["source"] == "codex/common_transcript"
+
+
+def test_foreign_user_message_emits_a_source_agnostic_user_turn() -> None:
+    """Fix 1/2 source-agnostic: a userMessage committed with a null (TUI) or another client's id is
+    emitted as a live user-turn, but creates NO entry and never touches our chips (A3)."""
+    transport = ScriptedTransport()
+    sink = _Sink()
+    ledger, client, _sink = _build_ledger(transport, sink=sink)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    ours = ledger.send("ours")
+    _push_user_message_committed(transport, client, ours, content="ours")
+    transport.respond_result("turn/steer", {"turnId": "turn-1"})
+    parked = ledger.send("parked")
+    assert ledger.state_of(parked) == MessageState.QUEUED
+    sink.user_turns.clear()
+
+    # A TUI human types (clientId null) and another client sends (clientId not ours). Both commit.
+    _push_user_message_committed(transport, client, None, item_id="foreign-tui", content="from the TUI", completed_at_ms=1786526420000)
+    _push_user_message_committed(transport, client, "someone-elses", item_id="foreign-other", content="from another client")
+
+    # Both surfaced as live user-turns, source-agnostic.
+    assert [event["content"] for event in sink.user_turns] == ["from the TUI", "from another client"]
+    # The anon (null-clientId) turn keys on epoch-ms + content; the tagged one keys on its own id.
+    assert sink.user_turns[0]["event_id"] == codex_user_turn_event_id(None, 1786526420000, "from the TUI")
+    assert sink.user_turns[1]["event_id"] == codex_user_turn_event_id("someone-elses", None, "from another client")
+    assert sink.user_turns[1]["event_id"] == "codex-user-cid-someone-elses"
+    # Neither created an entry, and our parked chip is untouched.
+    assert "foreign-tui" not in ledger.entries
+    assert "someone-elses" not in ledger.entries
+    assert ledger.state_of("someone-elses") is None
+    assert [chip["content"] for chip in ledger.queued_snapshot()] == ["parked"]
+
+
+def test_user_turn_emitted_once_across_item_completed_and_reconcile() -> None:
+    """A message delivered via item/completed and then re-settled by the turn/completed reconcile
+    emits its live user-turn exactly once (deduped by event_id)."""
+    transport = ScriptedTransport()
+    sink = _Sink()
+    ledger, client, _sink = _build_ledger(transport, sink=sink)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    cid = ledger.send("hello")
+    _push_user_message_committed(transport, client, cid, content="hello")
+    _push_turn_completed(
+        transport, client, "turn-1", items_view="full", items=[{"type": "userMessage", "clientId": cid}]
+    )
+    assert [event["content"] for event in sink.user_turns] == ["hello"]
+
+
+def test_reconcile_only_delivery_still_emits_the_user_turn() -> None:
+    """When a commit is seen ONLY via the turn's full item view (its own item/completed was missed),
+    the reconcile both delivers the entry AND emits its live user-turn (from the entry's text)."""
+    transport = ScriptedTransport()
+    sink = _Sink()
+    ledger, client, _sink = _build_ledger(transport, sink=sink)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    cid = ledger.send("hello")
+    _push_turn_completed(
+        transport, client, "turn-1", items_view="full", items=[{"type": "userMessage", "clientId": cid}]
+    )
+    assert ledger.state_of(cid) == MessageState.DELIVERED
+    assert [event["content"] for event in sink.user_turns] == ["hello"]
 
 
 # =============================================================================
@@ -375,11 +516,50 @@ def test_idle_status_sweeps_the_queue_to_returned() -> None:
     second = ledger.send("second")
     assert ledger.state_of(second) == MessageState.QUEUED
 
-    # The thread goes idle with a still-parked steer: it can never commit, so it Returns and the
-    # queue is empty (the EPHEMERAL backstop).
+    # The thread goes idle with a still-parked steer: the idle sweep reconciles via thread/read, which
+    # shows only the committed first, so the uncommitted steer Returns and the queue is empty.
+    transport.respond_result(
+        "thread/read",
+        {"thread": {"id": "thread-1", "turns": [{"id": "turn-1", "items": [{"type": "userMessage", "clientId": first}]}]}},
+    )
     transport.push({"jsonrpc": "2.0", "method": "thread/status/changed", "params": {"status": {"type": "idle"}}})
     client.poll_notifications()
     assert ledger.state_of(second) == MessageState.RETURNED
+    assert ledger.queued_snapshot() == []
+
+
+def test_idle_sweep_keeps_a_steer_that_committed_just_before_idle() -> None:
+    """The idle sweep is a reconcile, not a blind return (Fix 4): a steer whose commit landed on the
+    daemon just before the idle edge (its item/completed still in flight) stays Delivered."""
+    transport = ScriptedTransport()
+    ledger, client, _sink = _build_ledger(transport)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    first = ledger.send("first")
+    _push_user_message_committed(transport, client, first)
+    transport.respond_result("turn/steer", {"turnId": "turn-1"})
+    second = ledger.send("second")
+
+    # The thread/read at the idle edge shows BOTH committed -> second stays Delivered, not returned.
+    transport.respond_result(
+        "thread/read",
+        {
+            "thread": {
+                "id": "thread-1",
+                "turns": [
+                    {
+                        "id": "turn-1",
+                        "items": [
+                            {"type": "userMessage", "clientId": first},
+                            {"type": "userMessage", "clientId": second},
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+    transport.push({"jsonrpc": "2.0", "method": "thread/status/changed", "params": {"status": {"type": "idle"}}})
+    client.poll_notifications()
+    assert ledger.state_of(second) == MessageState.DELIVERED
     assert ledger.queued_snapshot() == []
 
 
@@ -535,9 +715,12 @@ def test_interrupt_clears_the_dot_immediately() -> None:
     assert client.active_turn_id is None
 
 
-def test_interrupt_during_flush_keeps_the_committed_prefix() -> None:
-    """Interrupt mid-flush: the steers that already committed (observed, plus one committed on the
-    daemon but not yet observed) stay/settle Delivered; only the genuinely non-committed tail Returns."""
+def test_interrupt_optimistically_returns_then_a_late_commit_corrects_to_delivered() -> None:
+    """Async interrupt (A5, Fix 4): the block is computed from the CURRENT live state (no blocking
+    thread/read), so a steer that committed on the daemon JUST before the interrupt but whose
+    ``item/completed`` had not yet arrived is optimistically Returned -- then its LATE ``item/completed``
+    CORRECTS it to Delivered (delivery = COMMIT, A4, prefer the committed truth), so the accepted-then-
+    committed micro-race is never double-counted. The genuinely-uncommitted tail stays Returned."""
     transport = ScriptedTransport()
     ledger, client, _sink = _build_ledger(transport)
     transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
@@ -551,34 +734,23 @@ def test_interrupt_during_flush_keeps_the_committed_prefix() -> None:
     _push_user_message_committed(transport, client, m2)
     assert ledger.state_of(m2) == MessageState.DELIVERED
 
+    # Stop: m3 committed on the daemon but its item/completed is still in flight, so it is optimistically
+    # Returned alongside the never-committed m4 -- the block is every still-live entry, in send order.
     transport.respond_result("turn/interrupt", {})
-    # The committed prefix is m1, m2, and m3 (m3 landed on the daemon but its item/completed was still
-    # in flight when the interrupt fired); m4 never committed.
-    transport.respond_result(
-        "thread/read",
-        {
-            "thread": {
-                "id": "thread-1",
-                "turns": [
-                    {
-                        "id": "turn-1",
-                        "items": [
-                            {"type": "userMessage", "clientId": m1},
-                            {"type": "userMessage", "clientId": m2},
-                            {"type": "userMessage", "clientId": m3},
-                        ],
-                    }
-                ],
-            }
-        },
-    )
     block = ledger.interrupt()
+    assert block == "m3\nm4"
+    assert ledger.state_of(m3) == MessageState.RETURNED
+    assert ledger.state_of(m4) == MessageState.RETURNED
 
-    assert block == "m4"
+    # m3's item/completed lands late on the subscribed stream: it is definitive proof of commit, so it
+    # corrects m3 to Delivered rather than leaving it wrongly Returned. m4 (never committed) stays.
+    _push_user_message_committed(transport, client, m3)
     assert ledger.state_of(m1) == MessageState.DELIVERED
     assert ledger.state_of(m2) == MessageState.DELIVERED
     assert ledger.state_of(m3) == MessageState.DELIVERED
     assert ledger.state_of(m4) == MessageState.RETURNED
+    # Conservation: m3 is counted once (Delivered), never as both Returned and Delivered.
+    assert ledger.reconcile_returned() == "m4"
 
 
 def test_interrupt_with_no_active_turn_hands_back_without_an_rpc() -> None:
@@ -595,9 +767,10 @@ def test_interrupt_with_no_active_turn_hands_back_without_an_rpc() -> None:
     assert "turn/interrupt" not in _sent_methods(transport)
 
 
-def test_interrupt_settles_even_when_the_interrupt_rpc_fails() -> None:
-    """A failed turn/interrupt still settles the parked steers against the committed thread (best
-    effort): the daemon's thread is the delivery authority regardless of the RPC's fate."""
+def test_interrupt_returns_optimistically_regardless_of_the_interrupt_rpc_fate() -> None:
+    """The interrupt is fired FIRE-AND-FORGET (A5): the block is computed optimistically from the live
+    state and returned at once, so even a turn/interrupt that would error never blocks or changes the
+    hand-off. The parked steer Returns regardless of the RPC's fate."""
     transport = ScriptedTransport()
     ledger, client, _sink = _build_ledger(transport)
     transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
@@ -607,13 +780,11 @@ def test_interrupt_settles_even_when_the_interrupt_rpc_fails() -> None:
     second = ledger.send("second")
 
     transport.respond_error("turn/interrupt", -32000, "daemon exploded")
-    transport.respond_result(
-        "thread/read",
-        {"thread": {"id": "thread-1", "turns": [{"id": "turn-1", "items": [{"type": "userMessage", "clientId": first}]}]}},
-    )
     block = ledger.interrupt()
     assert block == "second"
     assert ledger.state_of(second) == MessageState.RETURNED
+    # The turn/interrupt frame was still sent (fire-and-forget), just not awaited.
+    assert "turn/interrupt" in _sent_methods(transport)
 
 
 def test_second_interrupt_does_not_re_return_already_returned() -> None:
@@ -640,6 +811,194 @@ def test_second_interrupt_does_not_re_return_already_returned() -> None:
     # It stays Returned (terminal) and is still the cumulative snapshot; it just is not handed off again.
     assert ledger.state_of(second) == MessageState.RETURNED
     assert ledger.reconcile_returned() == "second"
+
+
+# =============================================================================
+# Shoulder-tap: deliver the parked queue EARLY (interrupt + combined resend, Fix 3)
+# =============================================================================
+
+
+def _last_turn_start_client_id(transport: ScriptedTransport) -> str:
+    """The ``clientUserMessageId`` on the most recent ``turn/start`` -- the combined resend's id."""
+    for frame in reversed(transport.sent):
+        request = json.loads(frame)
+        if request.get("method") == "turn/start":
+            return request["params"]["clientUserMessageId"]
+    raise AssertionError("no turn/start was sent")
+
+
+def _queue_two_steers(
+    transport: ScriptedTransport, ledger: CodexMessageLedger, client: CodexAppServerClient
+) -> tuple[str, str]:
+    """Open a turn (delivering ``first``) and park two steers ``second``/``third`` -- the tap setup."""
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    first = ledger.send("first")
+    _push_user_message_committed(transport, client, first)
+    transport.respond_result("turn/steer", {"turnId": "turn-1"})
+    second = ledger.send("second")
+    third = ledger.send("third")
+    assert [chip["content"] for chip in ledger.queued_snapshot()] == ["second", "third"]
+    return second, third
+
+
+def test_shoulder_tap_is_a_benign_noop_when_a_send_is_in_flight() -> None:
+    """A tap racing an in-flight Sending is a benign no-op (``send_in_flight``), never an error."""
+    transport = ScriptedTransport()
+    ledger, _client, _sink = _build_ledger(transport)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    # A Sending (not committed) message makes the tap unavailable.
+    ledger.send("in-flight")
+    assert ledger.is_sending() is True
+    assert ledger.shoulder_tap().status == "send_in_flight"
+
+
+def test_shoulder_tap_is_a_noop_when_the_queue_is_empty() -> None:
+    transport = ScriptedTransport()
+    ledger, client, _sink = _build_ledger(transport)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    first = ledger.send("first")
+    # ``first`` is Delivered and nothing is queued, so a tap has nothing to do.
+    _push_user_message_committed(transport, client, first)
+    assert ledger.shoulder_tap().status == "no_open_turn"
+
+
+def test_shoulder_tap_resends_the_queue_as_one_combined_turn_delivered_together() -> None:
+    """The tap interrupts, then re-sends the parked queue as ONE combined ``turn/start``; when that
+    turn commits, every member resolves to Delivered together and ONE user-turn is emitted (Fix 3)."""
+    transport = ScriptedTransport()
+    sink = _Sink()
+    ledger, client, _sink = _build_ledger(transport, sink=sink)
+    second, third = _queue_two_steers(transport, ledger, client)
+
+    transport.respond_result("turn/interrupt", {})
+    # After the (fire-and-forget) interrupt the daemon is idle; the combined resend opens a fresh turn.
+    transport.respond_result("turn/start", {"turn": {"id": "turn-2", "status": "inProgress"}})
+    sink.user_turns.clear()
+    assert ledger.shoulder_tap().status == "tapped"
+
+    # Through the resend the two messages stay visible as "Sending..." chips (A1a), never removed.
+    assert ledger.state_of(second) == MessageState.SENDING
+    assert ledger.state_of(third) == MessageState.SENDING
+    assert [(chip["content"], chip["is_sending"]) for chip in ledger.queued_snapshot()] == [
+        ("second", True),
+        ("third", True),
+    ]
+    # While a resend is in flight the tap greys (nothing Queued, something Sending).
+    assert ledger.is_tap_available() is False
+    assert "turn/interrupt" in _sent_methods(transport)
+
+    combined_id = _last_turn_start_client_id(transport)
+    _push_user_message_committed(transport, client, combined_id, content="second\n\nthird")
+    # The combined turn committed: both members Delivered, chips gone, ONE user-turn (the concat).
+    assert ledger.state_of(second) == MessageState.DELIVERED
+    assert ledger.state_of(third) == MessageState.DELIVERED
+    assert ledger.queued_snapshot() == []
+    assert [event["content"] for event in sink.user_turns] == ["second\n\nthird"]
+
+
+def test_shoulder_tap_does_not_resend_an_already_committed_steer() -> None:
+    """A steer already Delivered (its commit observed on the subscribed stream) is no longer a Queued
+    chip, so the tap never re-sends it -- only the genuinely-uncommitted remainder rides the combined
+    resend (Fix 3, reconcile per id via observed commits, no blocking thread/read)."""
+    transport = ScriptedTransport()
+    ledger, client, _sink = _build_ledger(transport)
+    second, third = _queue_two_steers(transport, ledger, client)
+
+    # ``second`` commits at a yield boundary before the tap -> Delivered (observed via item/completed).
+    _push_user_message_committed(transport, client, second)
+    assert ledger.state_of(second) == MessageState.DELIVERED
+
+    transport.respond_result("turn/interrupt", {})
+    transport.respond_result("turn/start", {"turn": {"id": "turn-2", "status": "inProgress"}})
+    assert ledger.shoulder_tap().status == "tapped"
+
+    # ``second`` stayed Delivered and was not re-sent; ``third`` is the only thing being re-sent.
+    assert ledger.state_of(second) == MessageState.DELIVERED
+    assert ledger.state_of(third) == MessageState.SENDING
+    combined_id = _last_turn_start_client_id(transport)
+    combined_frame = json.loads(transport.sent[-1])
+    assert combined_frame["params"]["input"] == [{"type": "text", "text": "third"}]
+
+    _push_user_message_committed(transport, client, combined_id, content="third")
+    assert ledger.state_of(third) == MessageState.DELIVERED
+
+
+def test_shoulder_tap_returns_the_queue_to_composer_when_the_resend_fails() -> None:
+    """If the combined resend itself fails to submit, the parked messages are not lost: they Return AND
+    the Returned block is handed back through the result for the composer, in send order (A1a, Fix 3)."""
+    transport = ScriptedTransport()
+    ledger, client, _sink = _build_ledger(transport)
+    second, third = _queue_two_steers(transport, ledger, client)
+
+    transport.respond_result("turn/interrupt", {})
+    transport.respond_error("turn/start", -32000, "resend boom")
+    result = ledger.shoulder_tap()
+    assert result.status == "tapped"
+    # The parked text is handed back to the composer (send order), never swallowed.
+    assert result.returned_block == "second\nthird"
+    assert ledger.state_of(second) == MessageState.RETURNED
+    assert ledger.state_of(third) == MessageState.RETURNED
+    assert ledger.queued_snapshot() == []
+    # Once handed off, a following stop does not re-prepend the same text (once-only hand-off).
+    assert ledger.interrupt() == ""
+
+
+# =============================================================================
+# Interrupt reconciles ALL live entries, incl. an unbound in-flight Sending (Fix 4)
+# =============================================================================
+
+
+def test_interrupt_returns_queued_and_unbound_inflight_sending_together() -> None:
+    """The required interrupt-during-flush case: a stop while the queue is non-empty AND a message is
+    in-flight Sending (still mid-``submit``, so unbound) returns BOTH, in send order (Fix 4)."""
+    transport = ScriptedTransport()
+    ledger, client, _sink = _build_ledger(transport)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
+    first = ledger.send("first")
+    _push_user_message_committed(transport, client, first)
+    transport.respond_result("turn/steer", {"turnId": "turn-1"})
+    queued = ledger.send("queued")
+    assert ledger.state_of(queued) == MessageState.QUEUED
+
+    # A fresh send whose ``submit`` has not resolved yet: a Sending entry with no turn binding, which
+    # the old turn-scoped reconcile missed entirely (the gap Fix 4 closes).
+    inflight = LedgerEntry(
+        client_id="inflight", send_seq=ledger._next_seq(), text="in-flight", state=MessageState.SENDING
+    )
+    ledger.entries["inflight"] = inflight
+    assert ledger.is_sending() is True
+
+    transport.respond_result("turn/interrupt", {})
+    transport.respond_result(
+        "thread/read",
+        {"thread": {"id": "thread-1", "turns": [{"id": "turn-1", "items": [{"type": "userMessage", "clientId": first}]}]}},
+    )
+    block = ledger.interrupt()
+
+    assert block == "queued\nin-flight"
+    assert ledger.state_of(first) == MessageState.DELIVERED
+    assert ledger.state_of(queued) == MessageState.RETURNED
+    assert ledger.state_of("inflight") == MessageState.RETURNED
+
+
+def test_late_submit_after_interrupt_reconciles_to_returned() -> None:
+    """A send whose ``submit`` result lands AFTER an interrupt cleared the turn reconciles itself to
+    Returned rather than leaving a stray Sending entry / opening a turn on the idle daemon (Fix 4)."""
+    transport = ScriptedTransport()
+    ledger, _client, _sink = _build_ledger(transport)
+
+    # A ``turn/start`` responder that bumps the interrupt generation mid-RPC simulates an interrupt
+    # landing while this send's submit is in flight.
+    def bump_then_respond(request: Mapping[str, Any]) -> None:
+        ledger.interrupt_generation += 1
+        transport.push(
+            {"jsonrpc": "2.0", "id": request["id"], "result": {"turn": {"id": "turn-1", "status": "inProgress"}}}
+        )
+
+    transport._responders["turn/start"] = bump_then_respond
+    cid = ledger.send("racy")
+    assert ledger.state_of(cid) == MessageState.RETURNED
+    assert ledger.is_sending() is False
 
 
 # =============================================================================

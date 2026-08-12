@@ -430,11 +430,13 @@ def _send_message_endpoint(agent_id: str) -> Response:
     message_id = send_message_request.message_id or uuid4().hex
 
     # codex owns the whole message lifecycle in its live ledger (contract A2: the backend is the
-    # sole authority). Submitting through the ledger records the message keyed by the frontend's
-    # stable id, so its queue chip and its committed-turn reconciliation join on that id. Delivery
-    # is COMMIT, not this ack (A4): ``send`` returns as soon as the daemon accepts the message
-    # (opening a turn, or parking a steer) -- the transcript watcher / queue snapshot then carry
-    # its real state, which is what removes the frontend's optimistic "Sending" bubble.
+    # sole authority). The frontend's ``message_id`` is passed only as a CORRELATION TOKEN
+    # (``clientUserMessageId``), which codex echoes back on the committed item so the ledger can
+    # link the commit to this send -- it is NOT the delivery key (Fix 2): delivery is decided by
+    # observing the committed ``userMessage`` item, keyed on codex's own ``item.id`` (contract A4).
+    # ``send`` returns as soon as the daemon accepts the message (opening a turn, or parking a
+    # steer); the ledger then carries its real state -- a queue chip, or (at commit) the live
+    # user-turn it emits itself -- which is what drops the frontend's optimistic "Sending" bubble.
     if agent_info.harness == HarnessType.CODEX:
         ledger = agent_manager.ensure_codex_ledger(agent_info.id)
         if ledger is None:
@@ -925,22 +927,22 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
         # locked keypress, the bounded verdict watch, and the recovery send) to the executor.
         return _claude_shoulder_tap(agent_info)
 
-    # codex: the live ledger already parked every busy send as a ``turn/steer`` of the running
-    # turn, so a Queued chip is ALREADY a pending steer that auto-consumes at the next yield
-    # boundary -- a tap needs NO force write, only a gate check (contract Shoulder-tap). It is
-    # unavailable while anything is still Sending (its disposition is not yet known, so a tap
-    # could race it), and a no-op when the queue is empty.
+    # codex: deliver the parked queue EARLY through the live ledger (Fix 3). The ledger interrupts
+    # the running turn and re-sends the queue as ONE combined turn, keeping every message
+    # continuously visible as a "Sending..." chip through the interrupt+resend (contract A1a) rather
+    # than blinking it out. A raw send racing the tap is a BENIGN 200 no-op (``send_in_flight``), never
+    # a 500 dialog -- the pushed ``shoulder_tap_available`` flag already greys the button while a send
+    # is in flight. An empty queue is likewise a clean no-op (``no_open_turn``).
     ledger = get_state().agent_manager.get_codex_ledger(agent_info.id)
     if ledger is None:
         # No live daemon connection: nothing is parked to flush, so this is a clean no-op.
         return _json_response(ShoulderTapAtomicResponse(status="no_open_turn").model_dump())
-    if ledger.is_sending():
-        error = ErrorResponse(
-            detail=f"A message send to agent '{agent_info.name}' is in flight; try the shoulder tap again."
-        )
-        return _json_response(error.model_dump(), status_code=500)
-    status = "tapped" if ledger.is_tap_available() else "no_open_turn"
-    return _json_response(ShoulderTapAtomicResponse(status=status).model_dump())
+    result = ledger.shoulder_tap()
+    # ``block`` is non-empty only when the combined resend failed to submit: the parked text is handed
+    # back to the composer (like Stop's drain-to-composer) so it is never swallowed (contract A1a).
+    return _json_response(
+        ShoulderTapAtomicResponse(status=result.status, block=result.returned_block).model_dump()
+    )
 
 
 def _claude_shoulder_tap(agent_info: AgentInfo) -> Response:

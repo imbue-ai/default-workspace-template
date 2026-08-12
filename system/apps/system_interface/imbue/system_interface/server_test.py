@@ -37,6 +37,7 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.harnesses.codex.ledger import ShoulderTapResult
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
@@ -397,11 +398,22 @@ def test_send_message_success() -> None:
 class _FakeCodexLedger:
     """A stand-in for the live codex ledger the endpoints reach through the agent manager."""
 
-    def __init__(self, *, sending: bool = False, tap: bool = False, interrupt_block: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        sending: bool = False,
+        tap: bool = False,
+        interrupt_block: str = "",
+        tap_status: str = "tapped",
+        tap_returned_block: str = "",
+    ) -> None:
         self._sending = sending
         self._tap = tap
         self._interrupt_block = interrupt_block
+        self._tap_status = tap_status
+        self._tap_returned_block = tap_returned_block
         self.sent: list[tuple[str, str | None]] = []
+        self.tap_calls = 0
 
     def send(self, text: str, client_id: str | None = None) -> str:
         self.sent.append((text, client_id))
@@ -412,6 +424,10 @@ class _FakeCodexLedger:
 
     def is_tap_available(self) -> bool:
         return self._tap
+
+    def shoulder_tap(self) -> ShoulderTapResult:
+        self.tap_calls += 1
+        return ShoulderTapResult(status=self._tap_status, returned_block=self._tap_returned_block)
 
     def interrupt(self) -> str:
         return self._interrupt_block
@@ -452,9 +468,10 @@ def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: P
 
 
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
+    """The codex tap delivers the queue early through the ledger's ``shoulder_tap`` (Fix 3)."""
     agent_id = "codex-agent-3"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
-    ledger = _FakeCodexLedger(sending=False, tap=True)
+    ledger = _FakeCodexLedger(tap_status="tapped")
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
@@ -463,19 +480,23 @@ def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> N
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
     assert response.get_json()["status"] == "tapped"
+    assert ledger.tap_calls == 1
 
 
-def test_shoulder_tap_codex_returns_500_when_a_send_is_in_flight(tmp_path: Path) -> None:
+def test_shoulder_tap_codex_is_a_benign_200_when_a_send_is_in_flight(tmp_path: Path) -> None:
+    """A tap racing an in-flight send is a BENIGN 200 no-op (``send_in_flight``), never a 500 dialog
+    (Fix 3): the pushed availability flag already greys the button, so a raced tap just does nothing."""
     agent_id = "codex-agent-4"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
-    ledger = _FakeCodexLedger(sending=True)
+    ledger = _FakeCodexLedger(sending=True, tap_status="send_in_flight")
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
-    assert response.status_code == 500
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "send_in_flight"
 
 
 def test_shoulder_tap_codex_no_ledger_is_a_noop(tmp_path: Path) -> None:
@@ -489,6 +510,24 @@ def test_shoulder_tap_codex_no_ledger_is_a_noop(tmp_path: Path) -> None:
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
     assert response.get_json()["status"] == "no_open_turn"
+
+
+def test_shoulder_tap_codex_resend_failure_hands_the_block_back_to_the_composer(tmp_path: Path) -> None:
+    """When the ledger's combined resend fails to submit, the endpoint returns the parked text as a
+    composer block (contract A1a) so the frontend places it, rather than swallowing it (Fix 3)."""
+    agent_id = "codex-agent-8"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    ledger = _FakeCodexLedger(tap_status="tapped", tap_returned_block="first\nsecond")
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "tapped"
+    assert body["block"] == "first\nsecond"
 
 
 def test_drain_to_composer_codex_returns_the_ledger_block(tmp_path: Path) -> None:

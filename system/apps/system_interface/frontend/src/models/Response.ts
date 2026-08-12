@@ -737,12 +737,16 @@ export async function interruptAgent(agentId: string): Promise<void> {
  *  nothing is painted locally. Whether the tap is available at all is the backend's
  *  ``shoulder_tap_available`` flag, which greys the button -- so this is never called when the
  *  backend would refuse it, and a benign no-op status is returned rather than an error. */
-export async function shoulderTap(agentId: string): Promise<{ status: string }> {
-  return await m.request<{ status: string }>({
+export async function shoulderTap(agentId: string): Promise<{ status: string; block: string }> {
+  const result = await m.request<{ status: string; block?: string }>({
     method: "POST",
     url: apiUrl("/api/agents/:agentId/shoulder-tap-atomic"),
     params: { agentId },
   });
+  // ``block`` is non-empty only when a native (codex) tap's combined resend failed to submit: the
+  // parked text is handed back for the composer so it is never swallowed (contract A1a). Default to
+  // "" for the harnesses/paths that never return one.
+  return { status: result.status, block: result.block ?? "" };
 }
 
 /** Interrupt to composer: restart the agent and get the queued messages back as

@@ -28,6 +28,26 @@ function messageTextKey(agentId: string): string {
   return `${MESSAGE_TEXT_KEY_PREFIX}${agentId}`;
 }
 
+// Blocks handed back to the composer from OUTSIDE this component (a native shoulder tap whose combined
+// resend failed -- see QueuedMessageView), keyed by agent. The composer's own ``messageText`` is a
+// per-instance closure, so a sibling view cannot merge into it directly; it drops the block here and
+// redraws, and the composer applies it on its next view pass (prepend, then persist), the same
+// merge-not-drop rule Stop's drain-to-composer uses. Persisted to localStorage regardless, so the text
+// survives even if the composer is not currently mounted -- never swallowed (contract A1a).
+const pendingComposerPrepends = new Map<string, string>();
+
+/** Hand ``block`` back to ``agentId``'s composer (prepended above any draft), from a sibling view. */
+export function prependToComposer(agentId: string, block: string): void {
+  if (!block) {
+    return;
+  }
+  const existingDraft = localStorage.getItem(messageTextKey(agentId)) ?? "";
+  const merged = existingDraft.trim().length === 0 ? block : `${block}\n\n${existingDraft}`;
+  localStorage.setItem(messageTextKey(agentId), merged);
+  pendingComposerPrepends.set(agentId, merged);
+  m.redraw();
+}
+
 function autoResizeTextarea(textarea: HTMLTextAreaElement): void {
   textarea.style.height = "auto";
   textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
@@ -143,6 +163,14 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // The notice names a command typed for the previous agent, so it must not follow the user
         // to the next one.
         declinedSlashCommand = null;
+      }
+
+      // A sibling view (a native tap whose resend failed) merged a returned block into this agent's
+      // persisted draft; adopt it into the live composer so it is visible at once, then clear the flag.
+      const pendingPrepend = pendingComposerPrepends.get(agentId);
+      if (pendingPrepend !== undefined) {
+        pendingComposerPrepends.delete(agentId);
+        messageText = pendingPrepend;
       }
 
       async function handleSend(): Promise<void> {
