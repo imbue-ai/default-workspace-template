@@ -28,9 +28,10 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
 from imbue.system_interface.harnesses.codex.ledger import LedgerEntry
 from imbue.system_interface.harnesses.codex.ledger import MessageState
+from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface.harnesses.codex.session_parser import codex_user_turn_event_id
-from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
+from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import model_state_path
@@ -1035,7 +1036,21 @@ def test_settings_updated_mirrors_to_minds_model_state_and_reads_back(tmp_path: 
     identity = read_model_identity(state_path)
     assert identity is not None
     assert identity == ModelIdentity(model_id="gpt-5.6-sol", effort="high", fast=True)
-    matched = match_option(identity, CODEX_CATALOG.options)
+    # Codex has no static catalog; the chip-match is against the per-agent model/list set.
+    options = codex_models_to_options(
+        (
+            CodexModel.model_validate(
+                {
+                    "id": "gpt-5.6-sol",
+                    "model": "gpt-5.6-sol",
+                    "displayName": "GPT-5.6-Sol",
+                    "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                    "serviceTiers": [{"id": "priority"}],
+                }
+            ),
+        )
+    )
+    matched = match_option(identity, options)
     assert matched is not None
     assert matched.id == "gpt-5.6-sol"
 

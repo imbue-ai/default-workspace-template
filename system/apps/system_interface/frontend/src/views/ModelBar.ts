@@ -61,6 +61,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   let offeredModels: Set<string> | null = null;
   let offeredLoaded = false;
   let offeredLoading = false;
+  // The FULL per-agent options for a DYNAMIC picker (codex), fetched fresh each time the picker
+  // opens (D2 -- so a subscription-tier change shows up live). `null` until the first fetch (or when
+  // the harness is not dynamic). Codex has no static catalog, so these ARE the picker's model rows.
+  let dynamicOptions: CatalogModelOption[] | null = null;
 
   function handleOutsideMousedown(event: MouseEvent): void {
     if (barElement !== null && !barElement.contains(event.target as Node)) {
@@ -151,17 +155,22 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     offeredLoading = true;
     offeredLoaded = false;
     offeredModels = null;
+    dynamicOptions = null;
     m.redraw();
     try {
-      const response = await m.request<{ models: string[] | null }>({
+      const response = await m.request<{ models: string[] | null; options?: CatalogModelOption[] | null }>({
         method: "GET",
         url: apiUrl("/api/agents/:agentId/model-options"),
         params: { agentId },
       });
-      offeredModels = response.models === null ? null : new Set(response.models);
+      // A DYNAMIC harness (codex) answers with the full per-agent `options`; a static/gated harness
+      // answers with `models` (ids), null meaning "offer the whole catalog".
+      offeredModels = response.models == null ? null : new Set(response.models);
+      dynamicOptions = response.options ?? null;
     } catch (error) {
       console.warn(`Failed to load offered models for agent ${agentId}`, error);
       offeredModels = null;
+      dynamicOptions = null;
     } finally {
       offeredLoading = false;
       offeredLoaded = true;
@@ -178,6 +187,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     interactive: boolean;
     tooltip: string;
     searchable?: boolean;
+    // Re-fetch the offer set every time this picker opens (search + dynamic pickers). A static
+    // list picker leaves this false and renders the catalog directly.
+    refetchOnOpen?: boolean;
     loading?: boolean;
     onOpen?: () => void;
     onPick: (id: string) => void;
@@ -206,8 +218,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             if (!opts.interactive) return;
             const opening = !isOpen;
             openDropdown = isOpen ? null : opts.kind;
-            // Reset the search and recompute the offer set each time the picker opens.
-            if (opening && opts.searchable) {
+            // Reset the search and re-fetch the offer set each time a search/dynamic picker opens.
+            if (opening && opts.refetchOnOpen) {
               modelQuery = "";
               opts.onOpen?.();
             }
@@ -282,7 +294,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               !opts.loading && hiddenCount > 0
                 ? m("div", { class: "model-selector-more" }, `+${hiddenCount} more — keep typing to narrow`)
                 : null,
-              !opts.loading && opts.searchable && visible.length === 0
+              !opts.loading && opts.refetchOnOpen && visible.length === 0
                 ? m("div", { class: "model-selector-more" }, "No matching models")
                 : null,
             ],
@@ -326,6 +338,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       // governs whether a pick shows immediately or waits for the pushed live choice;
       // all three harnesses (claude, codex, pi) are EAGER_THEN_RECONCILE.
       const interactive = catalog.switch_mode !== "read_only";
+      // Only EAGER_THEN_RECONCILE moves the chip optimistically on click. codex is ON_CHANGE:
+      // interactive, but the chip waits for the pushed (confirmed) live choice -- no overlay.
       const optimistic = catalog.switch_mode === "eager_then_reconcile";
       const currentEffort = choice.identity.effort;
       const currentFast = choice.identity.fast;
@@ -334,12 +348,18 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       // model change iff the picked catalog id differs -- an effort/fast click keeps this id.
       const currentIdentity: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: currentFast };
 
-      // A searchable picker offers only the account-gated set fetched on open (matched
-      // back to the catalog for labels/efforts); everything else offers the whole catalog.
-      // While that fetch is in flight the picker shows a loading row, not a stale full list.
+      // Where the picker's model rows come from, by picker mode:
+      //  - "dynamic" (codex): the FULL per-agent options fetched on open -- there is NO static
+      //    catalog, so `dynamicOptions` IS the source (empty until the first fetch resolves).
+      //  - "search" (pi): the static catalog, narrowed to the account-gated ids fetched on open.
+      //  - "list" (claude): the static catalog verbatim.
+      // A search/dynamic picker re-fetches on every open and shows a loading row while in flight.
       const searchable = catalog.picker_mode === "search";
+      const dynamic = catalog.picker_mode === "dynamic";
+      const refetchOnOpen = searchable || dynamic;
+      const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : catalog.options;
       const offeredIds = searchable && offeredLoaded ? offeredModels : null;
-      const modelItems = catalog.options
+      const modelItems = sourceOptions
         .filter((option) => option.in_picker)
         .filter((option) => offeredIds === null || offeredIds.has(option.id))
         .map((option) => ({ id: option.id, label: option.label }));
@@ -353,10 +373,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         interactive,
         tooltip: "Select model",
         searchable,
-        loading: searchable && (offeredLoading || !offeredLoaded),
+        refetchOnOpen,
+        loading: refetchOnOpen && (offeredLoading || !offeredLoaded),
         onOpen: () => void fetchOfferedModels(agentId),
         onPick: (modelId) => {
-          const option = catalog.options.find((candidate) => candidate.id === modelId);
+          const option = sourceOptions.find((candidate) => candidate.id === modelId);
           if (option === undefined) {
             return;
           }

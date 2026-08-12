@@ -156,14 +156,19 @@ def _input_preview(tool_name: str, raw_input: str) -> str:
     return raw_input
 
 
-def _assistant_event(timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, str]]) -> dict[str, Any]:
+def _assistant_event(
+    timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, str]], model: str = _UNKNOWN_MODEL
+) -> dict[str, Any]:
     return {
         "timestamp": timestamp,
         "type": "assistant_message",
         "event_id": event_id,
         "source": SOURCE,
         "role": "assistant",
-        "model": _UNKNOWN_MODEL,
+        # The EFFECTIVE per-turn model, sourced from the rollout's ``turn_context.model`` (the model
+        # the turn actually RAN on -- which can be a framework fallback differing from the selected
+        # setting). ``_UNKNOWN_MODEL`` only until the first ``turn_context`` is seen (§4b).
+        "model": model,
         "text": text,
         "tool_calls": tool_calls,
         # deferred (derive from task_complete later)
@@ -300,6 +305,7 @@ def parse_lines(
     record: dict[str, Any],
     line_index: int,
     tool_name_by_call_id: dict[str, str],
+    turn_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Map one codex rollout line to zero or more UI event dicts (``[]`` to skip).
 
@@ -308,6 +314,11 @@ def parse_lines(
     ``line_index`` is the stable physical line number (for event-id synthesis).
     ``tool_name_by_call_id`` is a mutable cross-line map so a ``function_call_output``
     can recover its tool name from the earlier ``function_call``.
+    ``turn_state`` is a mutable cross-line dict carrying the EFFECTIVE per-turn model/effort read
+    from each ``turn_context`` line (§4b): a ``turn_context`` updates it and every following
+    assistant message is stamped with it, so the bar can reflect the model the turn actually ran on
+    (a framework fallback, not just the selected setting). ``None`` disables the tracking (the model
+    stays ``_UNKNOWN_MODEL``) -- used by callers that only want the transcript events.
     """
     outer = record.get("type")
     payload = record.get("payload")
@@ -315,6 +326,19 @@ def parse_lines(
     if not isinstance(payload, dict) or not isinstance(timestamp, str):
         return []
     payload_type = payload.get("type")
+
+    # --- turn_context: the per-turn effective model/effort (§4b) ---
+    # Not a transcript event (returns []), but its ``model`` / ``effort`` are the truth of what the
+    # turn ran on. Record them in ``turn_state`` so the following assistant messages are stamped and
+    # the watcher can reflect a fallback in the model bar.
+    if outer == "turn_context":
+        if turn_state is not None:
+            context_model = payload.get("model")
+            if isinstance(context_model, str) and context_model:
+                turn_state["model"] = context_model
+                context_effort = payload.get("effort")
+                turn_state["effort"] = context_effort if isinstance(context_effort, str) and context_effort else None
+        return []
 
     # --- event_msg: the clean human prompt + the turn-abort marker ---
     if outer == "event_msg":
@@ -392,8 +416,13 @@ def parse_lines(
         return []
 
     if outer != "response_item":
-        # session_meta, turn_context -> drop
+        # session_meta / other non-content records -> drop (turn_context handled above).
         return []
+
+    # The effective model to stamp on this response's assistant events -- the latest turn_context's
+    # model (the model the turn ran on), or the placeholder until one is seen (§4b).
+    effective_model = turn_state.get("model") if turn_state is not None else None
+    effective_model = effective_model if isinstance(effective_model, str) and effective_model else _UNKNOWN_MODEL
 
     # --- response_item: assistant messages + tool calls/results ---
     if payload_type == "message":
@@ -408,6 +437,7 @@ def parse_lines(
                     event_id,
                     text=_join_output_text(payload.get("content")),
                     tool_calls=[],
+                    model=effective_model,
                 )
             ]
         # role=user (and developer/system) -> skip; user bubbles come from event_msg.
@@ -426,6 +456,7 @@ def parse_lines(
                 event_id,
                 text="",
                 tool_calls=[_labelled_tool_call(call_id, tool_name, _tool_call_raw_input(payload))],
+                model=effective_model,
             )
         ]
 

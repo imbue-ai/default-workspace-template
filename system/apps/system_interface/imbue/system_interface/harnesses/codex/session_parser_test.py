@@ -275,3 +275,32 @@ def test_non_conversation_lines_are_dropped() -> None:
     assert parse_lines({"timestamp": "t", "type": "turn_context", "payload": {}}, 0, {}) == []
     non_dict_payload: dict[str, Any] = {"type": "event_msg", "payload": "not-a-dict"}
     assert parse_lines(non_dict_payload, 0, {}) == []
+
+
+def _assistant_line(msg_id: str, text: str) -> dict[str, Any]:
+    return {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "message", "role": "assistant", "id": msg_id, "content": [{"type": "output_text", "text": text}]},
+    }
+
+
+def test_turn_context_effective_model_stamps_assistant_messages() -> None:
+    # §4b: the EFFECTIVE per-turn model is read from turn_context and stamped on the assistant
+    # messages that follow it, replacing the "unknown" placeholder.
+    turn_state: dict[str, Any] = {}
+    before = parse_lines(_assistant_line("m1", "hi"), 0, {}, turn_state)
+    assert before[0]["model"] == "unknown"
+
+    context = {"timestamp": "t", "type": "turn_context", "payload": {"model": "gpt-5.6-sol", "effort": "high"}}
+    assert parse_lines(context, 1, {}, turn_state) == []
+    assert turn_state == {"model": "gpt-5.6-sol", "effort": "high"}
+
+    after = parse_lines(_assistant_line("m2", "yo"), 2, {}, turn_state)
+    assert after[0]["model"] == "gpt-5.6-sol"
+
+    # A later turn's fallback model (differing from the first) is reflected on its assistant messages.
+    fallback = {"timestamp": "t", "type": "turn_context", "payload": {"model": "gpt-5.2", "effort": "low"}}
+    assert parse_lines(fallback, 3, {}, turn_state) == []
+    later = parse_lines(_assistant_line("m3", "z"), 4, {}, turn_state)
+    assert later[0]["model"] == "gpt-5.2"

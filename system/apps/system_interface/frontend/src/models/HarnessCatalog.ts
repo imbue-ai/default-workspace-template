@@ -30,9 +30,11 @@ export interface CatalogModelOption {
 }
 
 export interface HarnessCatalog {
+  // The static catalog options. EMPTY for a "dynamic" picker (codex): its options are per-agent,
+  // fetched from /model-options on open, not carried here.
   options: CatalogModelOption[];
-  switch_mode: string; // "eager_then_reconcile" (the only mode any harness currently uses)
-  picker_mode: string; // "list" | "search" -- how the model dropdown renders (orthogonal to switch_mode)
+  switch_mode: string; // "eager_then_reconcile" (claude/pi -- optimistic) | "on_change" (codex -- no overlay)
+  picker_mode: string; // "list" | "search" | "dynamic" -- how the model dropdown sources/renders options
   // Whether the "Shoulder tap" button can flush the queue atomically (merge into the live
   // turn without a restart). True only for codex; false harnesses use the restart-based flush.
   native_atomic_shoulder_tap_possible: boolean;

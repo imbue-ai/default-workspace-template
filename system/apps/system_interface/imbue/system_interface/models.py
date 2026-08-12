@@ -7,6 +7,7 @@ from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelChoice
+from imbue.system_interface.harnesses.model import ModelOption
 
 
 class AgentCreationError(ValueError):
@@ -75,10 +76,22 @@ class SetModelChoiceRequest(FrozenModel):
 
 
 class ModelOptionsResponse(FrozenModel):
-    """Response from GET /api/agents/{id}/model-options."""
+    """Response from GET /api/agents/{id}/model-options.
+
+    Two shapes, one per picker kind. A static/catalog-backed harness (claude, pi) returns ``models``
+    -- the ids to offer, matched back to the static catalog for labels/efforts (or null = offer the
+    whole catalog). A DYNAMIC harness (codex) has no static catalog, so it returns ``options`` --
+    the FULL per-agent :class:`ModelOption`s (id, label, per-model efforts, fast support), fetched
+    fresh from ``model/list`` on this open. Exactly one of the two is populated for a given harness.
+    """
 
     models: tuple[str, ...] | None = Field(
-        description="Model ids to offer in the picker right now, or null to offer the whole catalog"
+        default=None,
+        description="Model ids to offer in the picker right now, or null to offer the whole catalog",
+    )
+    options: tuple[ModelOption, ...] | None = Field(
+        default=None,
+        description="The full per-agent options for a DYNAMIC picker (codex), or null for a static harness",
     )
 
 

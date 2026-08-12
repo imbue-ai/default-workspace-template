@@ -29,6 +29,7 @@ from loguru import logger
 
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.mngr_codex.app_server_client import connect_app_server_transport
 from imbue.mngr_codex.codex_config import APP_SERVER_THREAD_FILENAME
 from imbue.mngr_codex.codex_config import CODEX_HOME_RELATIVE_PATH
@@ -45,34 +46,24 @@ from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import SwitchResult
 
-# Codex efforts: low..xhigh shown; max/ultra declared-but-hidden (valid + matchable,
-# never offered). Plain strings, as the catalog carries them.
-_CODEX_EFFORTS: tuple[EffortChoice, ...] = (
-    EffortChoice(level="low"),
-    EffortChoice(level="medium"),
-    EffortChoice(level="high"),
-    EffortChoice(level="xhigh"),
-    EffortChoice(level="max", in_picker=False),
-    EffortChoice(level="ultra", in_picker=False),
-)
-
+# Codex has NO static catalog: its model set, each model's efforts, and its fast support are all
+# per-account and per-model (subscription-tier dependent), sourced live from the daemon's
+# ``model/list`` (see :func:`codex_model_to_option`). The harness-level catalog therefore carries
+# an EMPTY options tuple -- the per-agent options are computed on demand -- plus the config the bar
+# still needs (switch mode, dynamic picker, credit label, atomic-tap capability).
 CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
-    options=(
-        ModelOption(id="gpt-5.6-sol", label="GPT-5.6-Sol", efforts=_CODEX_EFFORTS, supports_fast=True),
-        ModelOption(id="gpt-5.6-terra", label="GPT-5.6-Terra", efforts=_CODEX_EFFORTS, supports_fast=True),
-        ModelOption(id="gpt-5.6-luna", label="GPT-5.6-Luna", efforts=_CODEX_EFFORTS, supports_fast=True),
-        ModelOption(id="gpt-5.5", label="GPT-5.5", efforts=_CODEX_EFFORTS, supports_fast=True),
-        ModelOption(id="gpt-5.2", label="GPT-5.2", efforts=_CODEX_EFFORTS, supports_fast=True),
-    ),
-    # EAGER_THEN_RECONCILE: switch() applies thread/settings/update over the app-server and the
-    # daemon echoes thread/settings/updated, which the ledger mirrors to minds_model_state.json in
-    # well under a second; the shared reader reconciles the chip. That round-trip is fast and
-    # reliable enough to move the chip optimistically on click and snap it to the pushed live choice
-    # a beat later (the frontend's 5-minute pending fallback only fires if the switch never lands).
-    # A model the account cannot use is not an RPC error -- the daemon falls back and echoes the
-    # effective value, which the mirror reconciles -- so a failed switch is a silent no-op (no popup).
-    switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
-    picker_mode=PickerMode.LIST,
+    # Empty by design: the picker is DYNAMIC (per-agent options fetched from model-options), and the
+    # chip-match is against the per-agent set (see AgentManager._model_options_for), not this.
+    options=(),
+    # ON_CHANGE: switch() applies thread/settings/update over the app-server and the daemon echoes
+    # thread/settings/updated, which the ledger mirrors to minds_model_state.json in well under a
+    # second; the shared reader reconciles the chip. That round-trip is fast enough that the chip
+    # moves on the CONFIRMED, pushed change (no optimistic overlay). A model the account cannot use
+    # is not an RPC error -- the daemon falls back and echoes the effective value, which the mirror
+    # reconciles -- so a failed switch is a silent no-op (no popup).
+    switch_mode=SwitchMode.ON_CHANGE,
+    # DYNAMIC: the picker's options are per-agent (from model/list), re-fetched on every open.
+    picker_mode=PickerMode.DYNAMIC,
     powered_by_label="Codex",
     # Codex's patched binary watches shoulder_tap_atomic.jsonl and merges parked steer
     # messages into the live turn (ABA-gated on the turn id), so the "Shoulder tap" button
@@ -80,13 +71,42 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
     native_atomic_shoulder_tap_possible=True,
 )
 
+
+def codex_model_to_option(model: CodexModel) -> ModelOption:
+    """Map one ``model/list`` entry to a catalog :class:`ModelOption` (the one pure mapper).
+
+    The single translation from the daemon's per-account model shape to the harness-neutral option
+    the chip-match, the picker, and switch-validation all agree on:
+
+    * ``id`` = ``model`` (the id ``thread/settings/update`` switches to, and the id the live state
+      file reports -- so no ``harness_reported_model_id`` is needed);
+    * ``label`` = ``display_name``;
+    * ``efforts`` = ``supported_reasoning_efforts`` verbatim, per-model (no static uniform set);
+    * ``supports_fast`` = whether the model offers the ``priority`` service tier;
+    * ``in_picker`` = ``not hidden`` (a hidden model is still matchable if the live state reports it,
+      but never offered -- mirroring claude's ``ultra``).
+    """
+    return ModelOption(
+        id=model.model,
+        label=model.display_name,
+        efforts=tuple(EffortChoice(level=effort.reasoning_effort) for effort in model.supported_reasoning_efforts),
+        supports_fast=any(tier.id == FAST_SERVICE_TIER for tier in model.service_tiers),
+        in_picker=not model.hidden,
+    )
+
+
+def codex_models_to_options(models: tuple[CodexModel, ...]) -> tuple[ModelOption, ...]:
+    """Map a whole ``model/list`` result to the per-agent catalog options (in daemon order)."""
+    return tuple(codex_model_to_option(model) for model in models)
+
 # Codex writes its live state under CODEX_HOME (``<state_dir>/plugin/codex/home``), not at
 # the state-dir root, so the shared reader/watch path takes this relative directory as data.
 CODEX_STATE_RELATIVE_PATH: Path = Path(*CODEX_HOME_RELATIVE_PATH)
 
 # The service tier codex's fast toggle maps onto; ``None`` clears the tier (back to the default,
-# non-fast tier). The ledger's mirror reads it back as ``fast = serviceTier == "priority"``.
-_FAST_SERVICE_TIER: str = "priority"
+# non-fast tier). The ledger's mirror reads it back as ``fast = serviceTier == "priority"``. Public
+# so the live connection can seed the same fast<->tier mapping from the resume ThreadInfo (§8).
+FAST_SERVICE_TIER: str = "priority"
 
 # Cosmetic ``clientInfo`` for the short-lived switch connection's ``initialize`` handshake.
 _SWITCH_CLIENT_NAME: str = "minds-system-interface"
@@ -230,18 +250,49 @@ class CodexModelResolver(HarnessModelResolver):
         )
         return self
 
+    def list_offered_options(self) -> tuple[ModelOption, ...] | None:
+        """The per-agent picker options, fetched FRESH from ``model/list`` on every open (D2).
+
+        Codex's picker is DYNAMIC: its options are account/daemon-derived, not a static catalog, so
+        this opens a short-lived bound connection (the switch opener), reads ``model/list``, and maps
+        each entry to a :class:`ModelOption`. Always fresh, so a subscription-tier change shows up
+        without a restart. A daemon/transport failure yields an empty tuple (the picker shows no
+        models rather than a stale list); the chip still renders from the pushed live choice.
+        """
+        try:
+            client = self._open_client()
+        except (CodexAppServerError, OSError) as exc:
+            logger.debug("codex model-options: daemon not reachable ({})", exc)
+            return ()
+        try:
+            models = client.model_list()
+        except (CodexAppServerError, OSError) as exc:
+            logger.debug("codex model-options: model/list failed ({})", exc)
+            return ()
+        finally:
+            client.close()
+        return codex_models_to_options(models)
+
     def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
         # Codex applies the change over the app-server, NOT by typing into the pane, so ``send`` is
-        # unused. Each axis maps to a ``thread/settings/update`` field; only the axes the click
-        # changed are included (an omitted field leaves that setting unchanged -- the shared switch
-        # contract). Fast maps onto the ``priority`` service tier (cleared to default when off).
+        # unused. Each axis maps to a ``thread/settings/update`` field. Fast maps onto the
+        # ``priority`` service tier (cleared to default when off).
+        #
+        # A MODEL-axis change (re)asserts ALL THREE axes together, not just the diffed ones: the
+        # daemon does NOT enforce a model's ``service_tiers`` (verified live -- switching to a
+        # no-priority model while ``serviceTier`` is still ``priority`` KEEPS priority), so a stale
+        # ``priority`` would survive a model switch unless we clear it explicitly. Re-sending the
+        # new model's effort likewise lands it valid. So effort/service_tier ride along whenever the
+        # model axis changes OR their own axis did; a pure effort/fast click sends only its own axis,
+        # leaving the others unchanged (the shared switch contract).
+        model_changed = ModelAxis.MODEL in axes
         settings: dict[str, Any] = {}
-        if ModelAxis.MODEL in axes:
+        if model_changed:
             settings["model"] = identity.model_id
-        if ModelAxis.EFFORT in axes:
+        if model_changed or ModelAxis.EFFORT in axes:
             settings["effort"] = identity.effort
-        if ModelAxis.FAST in axes:
-            settings["service_tier"] = _FAST_SERVICE_TIER if identity.fast else None
+        if model_changed or ModelAxis.FAST in axes:
+            settings["service_tier"] = FAST_SERVICE_TIER if identity.fast else None
         if not settings:
             return SwitchResult(ok=True)
         client = self._open_client()
@@ -255,6 +306,6 @@ class CodexModelResolver(HarnessModelResolver):
             return SwitchResult(ok=False, detail="Failed to apply the model change")
         finally:
             client.close()
-        # EAGER_THEN_RECONCILE: the chip moved optimistically on click; the daemon's
-        # thread/settings/updated echo, mirrored to minds_model_state.json, reconciles it.
+        # ON_CHANGE: the daemon's thread/settings/updated echo, mirrored to minds_model_state.json,
+        # is pushed back as the authoritative choice, moving the chip on the confirmed change.
         return SwitchResult(ok=True)

@@ -55,10 +55,12 @@ from imbue.system_interface.harnesses.claude.launch_defaults import get_workspac
 from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
 from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
+from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
 from imbue.system_interface.harnesses.model import ModelChoice
+from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import read_model_identity
 from imbue.system_interface.harnesses.path_watch import PathWatcher
@@ -354,6 +356,15 @@ class AgentManager:
     # activity tracking stops. A codex agent drives activity + queue through its ledger, NOT the
     # transcript-derived tracker, so it has no ``_activity_tracker_by_agent`` entry.
     _codex_connection_by_agent: dict[str, CodexLiveConnection]
+    # The ONE reconciled per-agent codex model set (mapped ``ModelOption``s), shared by all three
+    # consumers -- the picker offer set, the chip-match (``_recompute_model_choice``), and the switch
+    # endpoint's validation. Seeded on connect from the live connection's ``model/list`` and REFRESHED
+    # by each picker-open fetch (D2, ``store_codex_model_options``), so immediately after an open all
+    # three agree. It deliberately OUTLIVES connection churn: a momentarily-absent connection does not
+    # drop it (the chip keeps matching), and a picker-open can populate/refresh it with no live
+    # connection at all, as long as the daemon is reachable. ``None`` (absent key) until the first
+    # connect-seed or picker-open populates it -> the chip falls back to logo-only / the live file.
+    _codex_model_options_by_agent: dict[str, tuple[ModelOption, ...]]
     # The last computed model choice per agent, and the filesystem watcher that
     # re-derives it when the agent's minds_model_state.json changes. The live read is
     # harness-neutral (the shared reader + the harness's registered state-file path), so
@@ -423,6 +434,7 @@ class AgentManager:
         manager._queue_idle_handler_by_agent = {}
         manager._send_in_flight_by_agent = set()
         manager._codex_connection_by_agent = {}
+        manager._codex_model_options_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
         manager._auto_opened_assist_ids = set()
@@ -1260,6 +1272,8 @@ class AgentManager:
         """Stop activity tracking and clear cached activity + queued state."""
         with self._lock:
             connection = self._codex_connection_by_agent.pop(agent_id, None)
+            # The reconciled option set outlives connection churn (rebuilds) but not a real teardown.
+            self._codex_model_options_by_agent.pop(agent_id, None)
             self._activity_tracked_agents.discard(agent_id)
             self._activity_tracker_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
@@ -1314,6 +1328,11 @@ class AgentManager:
         if stale is not None:
             stale.stop()
             return
+        # Seed the ONE reconciled per-agent option set from the connect-time ``model/list`` (D2), so
+        # the chip can match before any picker-open. A failed connect fetch (empty) is NOT stored --
+        # it must not clobber a set a prior picker-open already populated.
+        if connection.codex_models:
+            self.store_codex_model_options(agent_id, codex_models_to_options(connection.codex_models))
         # The dot is derived by the tracker path from mngr's lifecycle + transcript; recompute now so a
         # freshly (re)built connection's agent shows the right dot immediately.
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
@@ -1374,6 +1393,45 @@ class AgentManager:
         if connection is None or not connection.is_alive:
             return None
         return connection.ledger
+
+    def get_codex_model_options(self, agent_id: str) -> tuple[ModelOption, ...] | None:
+        """The ONE reconciled per-agent codex option set -- the SAME set the picker, the chip-match,
+        and the switch endpoint's validation all read (D2).
+
+        Seeded on connect from the live connection's ``model/list`` and refreshed by each picker-open
+        fetch (:meth:`store_codex_model_options`), so immediately after an open all three agree.
+        ``None`` until a connect-seed or a picker-open has populated it (the chip then falls back to
+        logo-only / whatever the live state file already holds). Read straight from the stored set --
+        no daemon call in the hot chip-recompute path.
+        """
+        with self._lock:
+            return self._codex_model_options_by_agent.get(agent_id)
+
+    def store_codex_model_options(self, agent_id: str, options: tuple[ModelOption, ...]) -> None:
+        """Record the fresh per-agent codex option set (a connect-seed or a picker-open fetch, D2).
+
+        This is the reconciliation point: the picker-open fetch and the connect-seed both land here,
+        so the chip-match and the switch-validation read EXACTLY the set the picker just offered. A
+        failed fetch (an empty tuple) is NOT stored by the callers, so a transient daemon miss never
+        clobbers the last-known set.
+        """
+        with self._lock:
+            self._codex_model_options_by_agent[agent_id] = options
+
+    def _model_options_for(self, agent_state: AgentStateItem) -> tuple[ModelOption, ...]:
+        """The option set an agent's live identity matches against (chip-match + switch-validation).
+
+        Per-agent for codex (the ONE reconciled set seeded on connect and refreshed by each
+        picker-open, empty until first populated); the static harness catalog for every other
+        harness. This is the ONE spine seam the dynamic codex catalog needs -- the match SOURCE
+        becomes per-agent, while the matcher, the file read, and the broadcast stay shared. Never
+        holds ``_lock`` (``get_codex_model_options`` takes it), so callers must not invoke it while
+        holding the lock.
+        """
+        if agent_state.harness == HarnessType.CODEX:
+            options = self.get_codex_model_options(agent_state.id)
+            return options if options is not None else ()
+        return get_catalog(agent_state.harness).options
 
     def ensure_codex_ledger(self, agent_id: str) -> CodexMessageLedger | None:
         """Build the codex connection if needed, then return its ledger (or ``None``).
@@ -1528,6 +1586,10 @@ class AgentManager:
         # The disk read (minds_model_state.json) stays outside the lock. Only harness +
         # state dir are needed -- not claude_config_dir, which would cost an env-file read.
         identity = read_model_identity(get_model_state_path(harness_state.harness, self._get_agent_state_dir(agent_id)))
+        # The match SOURCE is per-agent for a dynamic harness (codex): its options come from the
+        # cached model/list, not a static catalog. Computed OUTSIDE the lock (it takes the lock
+        # itself), then matched below -- the matcher, read, and broadcast are otherwise unchanged.
+        options = self._model_options_for(harness_state)
         with self._lock:
             agent_state = self._agents.get(agent_id)
             if agent_state is None:
@@ -1537,7 +1599,7 @@ class AgentManager:
             if identity is None:
                 choice: ModelChoice | None = None
             else:
-                matched = match_option(identity, get_catalog(agent_state.harness).options)
+                matched = match_option(identity, options)
                 choice = ModelChoice(identity=identity, matched=matched)
             old_choice = self._model_choice_by_agent.get(agent_id)
             if not force and old_choice == choice and agent_state.model_choice == choice:

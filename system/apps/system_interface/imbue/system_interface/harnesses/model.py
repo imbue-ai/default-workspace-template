@@ -121,11 +121,18 @@ class ModelChoice(FrozenModel):
 class SwitchMode(StrEnum):
     """How a harness's model bar behaves. ONE value per harness; it governs the
     model, effort, and fast axes uniformly. It has nothing to do with which axes
-    are *shown* -- that is decided purely by the matched model's data. All three
-    harnesses (claude, codex, pi) currently use EAGER_THEN_RECONCILE."""
+    are *shown* -- that is decided purely by the matched model's data. claude and pi
+    use EAGER_THEN_RECONCILE; codex uses ON_CHANGE."""
 
     # Optimistic: the chip moves on click, then reconciles from disk.
     EAGER_THEN_RECONCILE = "eager_then_reconcile"
+    # Interactive but NOT optimistic: the switch is a fast app-server request whose confirmed
+    # effective settings are pushed straight back as the authoritative ModelChoice, so the chip
+    # moves on the CONFIRMED change (a beat later, no overlay), never on the raw click. Codex uses
+    # it -- thread/settings/update round-trips in well under a second, so waiting for the pushed
+    # choice reads as instant while never showing a value the daemon has not accepted. The frontend
+    # derives ``optimistic = switch_mode === "eager_then_reconcile"``, so this yields no overlay.
+    ON_CHANGE = "on_change"
 
 
 class PickerMode(StrEnum):
@@ -134,10 +141,15 @@ class PickerMode(StrEnum):
     fast); this governs only the model picker's *presentation*. A five-model harness
     and a thousand-model harness need different affordances for identical behavior."""
 
-    # Every option as a row (claude/codex -- small, hand-written catalogs).
+    # Every option as a row (claude -- a small, hand-written catalog).
     LIST = "list"
     # A search box filters the options by tag (pi -- huge, auth-gated sets).
     SEARCH = "search"
+    # A LIST-rendered picker whose OPTIONS are per-agent, fetched live from the model-options
+    # endpoint (not the static catalog, which is empty). Codex uses it: its model set, each
+    # model's efforts, and fast support all come from the daemon's ``model/list``, so there is
+    # no static list to render -- the picker sources the full options per open (D2: always fresh).
+    DYNAMIC = "dynamic"
 
 
 class HarnessCatalog(FrozenModel):
@@ -292,6 +304,17 @@ class HarnessModelResolver(ABC):
         ids absent from the catalog are simply not shown. The default -- for a small,
         static, non-gated catalog (claude, codex) -- returns None: offer everything.
         """
+        return None
+
+    def list_offered_options(self) -> tuple["ModelOption", ...] | None:
+        """The FULL per-agent options to render in a DYNAMIC picker, or None for a static catalog.
+
+        A dynamic harness (codex) has no static catalog: its model set, each model's efforts, and
+        fast support are all account/daemon-derived, so ids alone (:meth:`list_offered_models`)
+        cannot carry the per-model effort/fast the picker needs. Such a harness overrides this to
+        return the full :class:`ModelOption`s, fetched fresh per picker-open (D2). The default --
+        for a static, catalog-backed harness (claude, pi) -- returns None: the picker renders the
+        catalog options (narrowed by :meth:`list_offered_models`)."""
         return None
 
     @abstractmethod

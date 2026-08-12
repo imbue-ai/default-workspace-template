@@ -17,8 +17,11 @@ from typing import Any
 from typing import Callable
 
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.model import model_state_path
+from imbue.system_interface.harnesses.model import read_model_identity
 
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
 
@@ -75,6 +78,56 @@ def test_reads_serve_history_without_the_thread_having_run(tmp_path: Path) -> No
     assert watcher.get_total_event_count() == 2
     assert [event["content"] for event in watcher.get_tail_events(50)] == ["first", "second"]
     assert len(watcher.get_all_events()) == 2
+
+
+def _turn_context_line(model: str, effort: str, timestamp: str) -> dict[str, Any]:
+    return {"timestamp": timestamp, "type": "turn_context", "payload": {"model": model, "effort": effort}}
+
+
+def test_effective_model_from_turn_context_is_reflected_in_the_state_file(tmp_path: Path) -> None:
+    """§4b: the watcher writes the EFFECTIVE per-turn model (from turn_context) into the model-bar
+    state file, preserving the ledger-owned fast bit, so a framework fallback shows in the bar."""
+    state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    # The ledger already mirrored the SELECTED settings (fast on).
+    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "high", "fast": True}))
+    # The turn actually RAN on a fallback model/effort (over-quota downgrade).
+    _write_rollout(
+        tmp_path,
+        [
+            _turn_context_line("gpt-5.2", "low", "2026-08-03T00:00:01Z"),
+            _assistant_line("m-done", "done", "2026-08-03T00:00:02Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    # A read drives _refresh -> the effective-model reflection.
+    watcher.get_all_events()
+
+    identity = read_model_identity(state_path)
+    assert identity is not None
+    assert identity.model_id == "gpt-5.2"
+    assert identity.effort == "low"
+    # Fast is preserved from the ledger's selected-settings write (turn_context carries no tier).
+    assert identity.fast is True
+
+
+def test_effective_model_matching_the_file_writes_nothing_new(tmp_path: Path) -> None:
+    """When the effective model equals what the file already holds (selected == effective), the
+    watcher does not rewrite it (no churn), leaving the existing content untouched."""
+    state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "high", "fast": True}))
+    before = state_path.read_text()
+    _write_rollout(
+        tmp_path,
+        [
+            _turn_context_line("gpt-5.6-sol", "high", "2026-08-03T00:00:01Z"),
+            _assistant_line("m-done", "done", "2026-08-03T00:00:02Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    watcher.get_all_events()
+    assert state_path.read_text() == before
 
 
 def _write_rollout_without_marker(

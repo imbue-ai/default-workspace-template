@@ -57,6 +57,7 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.model import ModelIdentity
+from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.pi_coding.model import PiFlushTapStatus
 from imbue.system_interface.harnesses.pi_coding.model import flush_pi_queue_atomic
 from imbue.system_interface.harnesses.registry import HARNESS_SPECS
@@ -526,23 +527,40 @@ def _get_harnesses_endpoint() -> Response:
     return _json_response(catalogs)
 
 
+def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) -> tuple[ModelOption, ...]:
+    """The option set the switch endpoint validates against: per-agent for codex, static otherwise.
+
+    Codex has no static catalog, so its valid model/effort/fast set is per-agent -- the ONE reconciled
+    set (:meth:`AgentManager.get_codex_model_options`) that the picker offered and the chip matches
+    against, seeded on connect and refreshed by each picker-open (D2). Empty until first populated -- a
+    switch then fails validation, which is correct: nothing to switch to until a connect or a
+    picker-open has read the account's ``model/list``. Every other harness validates against its static
+    catalog options.
+    """
+    if agent_info.harness == HarnessType.CODEX:
+        options = agent_manager.get_codex_model_options(agent_info.id)
+        return options if options is not None else ()
+    return get_catalog(agent_info.harness).options
+
+
 def _set_model_choice_endpoint(agent_id: str) -> Response:
     """Apply a model/effort/fast selection by asking the agent's resolver to switch.
 
-    Harness-blind: it validates the request against the harness's catalog, then hands
-    a concrete identity to the resolver's ``switch`` (which decides how to apply it).
-    Returns 400 for an invalid selection, 404 for an unknown agent, 500 when the
-    switch fails. On success it forces one authoritative model-choice broadcast so
-    the optimistic frontend reconciles.
+    Harness-blind: it validates the request against the agent's option set (the static catalog for
+    claude/pi, the per-agent ``model/list`` set for codex), then hands a concrete identity to the
+    resolver's ``switch`` (which decides how to apply it). Returns 400 for an invalid selection, 404
+    for an unknown agent, 500 when the switch fails. On success it forces one authoritative
+    model-choice broadcast so the frontend reconciles.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
     req = SetModelChoiceRequest.model_validate(request.get_json())
-    catalog = get_catalog(agent_info.harness)
-    # The picker only ever sends a catalog id, so validation is an exact id lookup.
-    option = next((opt for opt in catalog.options if opt.id == req.model_id), None)
+    agent_manager: AgentManager = get_state().agent_manager
+    options = _agent_switch_options(agent_manager, agent_info)
+    # The picker only ever sends a valid option id, so validation is an exact id lookup.
+    option = next((opt for opt in options if opt.id == req.model_id), None)
     if option is None:
         return _json_response(ErrorResponse(detail=f"Unknown model '{req.model_id}'").model_dump(), status_code=400)
 
@@ -562,7 +580,6 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
     if req.fast and not option.supports_fast:
         return _json_response(ErrorResponse(detail=f"'{req.model_id}' does not support fast mode").model_dump(), 400)
 
-    agent_manager: AgentManager = get_state().agent_manager
     # The live read is harness-neutral (shared reader), so the resolver -- which now owns
     # only the switch/offer side -- is built inline from agent_info rather than cached.
     resolver = build_resolver(agent_info)
@@ -582,19 +599,31 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
 
 
 def _get_model_options_endpoint(agent_id: str) -> Response:
-    """The model ids this agent should OFFER in the picker right now, or null for all.
+    """The models this agent should OFFER in the picker right now.
 
-    Recomputed per request (the frontend calls it each time the picker opens) so a
-    dynamic, account-gated offer set -- pi's authenticated models -- reflects a
-    fresh login without a catalog refetch. ``null`` means offer the whole catalog (the
-    default for a static, non-gated harness). The catalog itself still supplies each
-    id's label and thinking levels; this only narrows which are shown.
+    Recomputed per request (the frontend calls it each time the picker opens). Two shapes:
+
+    * a DYNAMIC harness (codex) has no static catalog, so it returns the FULL per-agent
+      :class:`ModelOption`s (``options``) -- id, label, per-model efforts, fast support -- fetched
+      fresh from ``model/list`` on this open (D2), so a subscription-tier change shows up live.
+    * a static/catalog-backed harness (claude, pi) returns ``models`` -- the ids to offer, matched
+      back to the static catalog for labels/efforts (``null`` = offer the whole catalog). This
+      reflects an account-gated set (pi's authenticated models) on a fresh login without a refetch.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
-    offered = build_resolver(agent_info).list_offered_models()
-    return _json_response(ModelOptionsResponse(models=offered).model_dump())
+    resolver = build_resolver(agent_info)
+    dynamic_options = resolver.list_offered_options()
+    if dynamic_options is not None:
+        # Reconcile (D2): this fresh per-open fetch becomes the ONE per-agent set the chip-match and
+        # the switch-validation also read, so immediately after this open all three agree. A failed
+        # fetch (empty) is NOT stored -- it must not clobber the last-known set (seeded on connect or
+        # from an earlier open) that the chip is still matching against.
+        if dynamic_options:
+            get_state().agent_manager.store_codex_model_options(agent_id, dynamic_options)
+        return _json_response(ModelOptionsResponse(options=dynamic_options).model_dump())
+    return _json_response(ModelOptionsResponse(models=resolver.list_offered_models()).model_dump())
 
 
 def _get_powered_by_endpoint(agent_id: str) -> Response:
