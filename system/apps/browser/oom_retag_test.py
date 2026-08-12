@@ -43,8 +43,9 @@ def _sweep(proc: _FakeProc, descendants: list[int]) -> list[tuple[int, int, int]
 
 def test_chrome_lowered_values_are_remapped_into_the_band_preserving_order() -> None:
     # A realistic post-launch Chromium tree: main 0, gpu/utility 200, renderers
-    # 300 -- plus the node driver and crashpad, which never self-write and so
-    # still carry the daemon's inherited service band.
+    # 300 -- plus helpers like the node/Playwright driver, which never self-write
+    # and so still carry the daemon's inherited service band. (Crashpad is not
+    # among them: it re-parents to init, so the sweep never sees it at all.)
     inherited = bands.SERVICE_BANDS["browser"]
     proc = _FakeProc({10: 0, 11: 200, 12: 300, 13: 300, 20: inherited, 21: inherited})
     writes = _sweep(proc, [10, 11, 12, 13, 20, 21])
