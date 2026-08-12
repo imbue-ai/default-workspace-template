@@ -658,7 +658,10 @@ def test_new_tab_opens_in_clicked_split(e2e_server: tuple[str, list[AgentInfo], 
     page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
 
     # The new tab must render in the RIGHT split, not the left, and must tab
-    # into the existing right group rather than carving a third.
+    # into the existing right group rather than carving a third. Matched
+    # case-insensitively: the tab opens as ``terminal-N`` and repaints to the
+    # auto-filed "Terminal N" whenever that title write lands, and this test
+    # cares about placement rather than which of the two names is up.
     expect(page.locator(".dv-default-tab-content", has_text="terminal").first).to_be_visible(timeout=10000)
     placement = page.evaluate(
         """
@@ -666,7 +669,7 @@ def test_new_tab_opens_in_clicked_split(e2e_server: tuple[str, list[AgentInfo], 
           const groups = Array.from(document.querySelectorAll('.dv-groupview'))
             .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
           const has = (g) => Array.from(g.querySelectorAll('.dv-default-tab-content'))
-            .some((e) => (e.textContent || '').includes(title));
+            .some((e) => (e.textContent || '').toLowerCase().includes(title));
           return {
             count: groups.length,
             inLeft: groups.length > 0 ? has(groups[0]) : false,
@@ -1569,6 +1572,65 @@ def test_double_click_renames_a_tab_and_the_name_survives_a_reload(tmp_path: Pat
         expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         # And the derived name is gone rather than restored onto a second tab.
         expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
+
+
+_AUTO_TITLE_PORT = 18878
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_ui_created_terminal_wears_an_auto_filed_friendly_name(tmp_path: Path, page: Page) -> None:
+    """A terminal created from the UI comes into being already named "Terminal 1".
+
+    No create flow asks the user for a name: the tmux session name
+    (``terminal-N``) stays the identity, machine-allocated and never surfaced
+    as something to pick, and the create files the first free "Terminal N"
+    into the machine's title store the moment the session name is allocated --
+    exactly as if the user had renamed it. The store on disk is asserted
+    alongside the strip because that is what makes it a name rather than a tab
+    title: it is keyed by the terminal's ref, where every view (and a reload)
+    reads it from, and where double-click rename writes over it.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _AUTO_TITLE_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.goto(base_url)
+
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        assert _member_titles(layout_dir) == {}, "something was named before anything was created"
+
+        # The launcher's Terminal tile creates directly -- no naming dialog
+        # ever appears.
+        page.locator(".dockview-add-tab-button").first.click()
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+        page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
+        expect(page.locator(".custom-url-dialog")).to_have_count(0)
+
+        # The tab repaints to the friendly name once the title write lands
+        # (the strings differ by more than case -- "Terminal 1" never matches
+        # the derived ``terminal-N`` -- so this is the auto-filed name).
+        expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=10000)
+
+        # And it landed in the machine's store, keyed by the terminal's ref,
+        # whose body is the machine-allocated session name the user never saw
+        # a prompt for.
+        titles = _member_titles(layout_dir)
+        terminal_titles = {ref: title for ref, title in titles.items() if ref.startswith("terminal:terminal-")}
+        assert list(terminal_titles.values()) == ["Terminal 1"], f"unexpected titles: {titles}"
+
+        # A second create counts on: "Terminal 1" is taken (by the title just
+        # filed), so the next free slot is "Terminal 2".
+        page.locator(".dockview-add-tab-button").first.click()
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+        page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
+        expect(page.locator(".dv-default-tab-content", has_text="Terminal 2").first).to_be_visible(timeout=10000)
+
+        titles = _member_titles(layout_dir)
+        terminal_titles = {ref: title for ref, title in titles.items() if ref.startswith("terminal:terminal-")}
+        assert sorted(terminal_titles.values()) == ["Terminal 1", "Terminal 2"], f"unexpected titles: {titles}"
 
 
 _TWO_VIEW_RENAME_PORT = 18874

@@ -17,18 +17,18 @@ describe("equalTabWidth", () => {
   });
 
   it("takes the narrowest strip's ideal so no strip has to scroll", () => {
-    // The 4-tab strip wants 150, the 6-tab one wants 106; everybody gets 106.
+    // The 4-tab strip wants 150, the 6-tab one wants 144; everybody gets 144.
     expect(
       equalTabWidth([
         { width: 644, tabCount: 4 },
-        { width: 680, tabCount: 6 },
+        { width: 908, tabCount: 6 },
       ]),
-    ).toBe(106);
+    ).toBe(144);
   });
 
-  it("clamps a crowded strip up to the 100px floor", () => {
+  it("clamps a crowded strip up to the floor", () => {
     // (400 - 44) / 12 = 29.7, far below anything readable.
-    expect(equalTabWidth([{ width: 400, tabCount: 12 }])).toBe(100);
+    expect(equalTabWidth([{ width: 400, tabCount: 12 }])).toBe(140);
   });
 
   it("clamps a roomy strip down to the 220px ceiling", () => {
@@ -53,11 +53,11 @@ describe("equalTabWidth", () => {
 
   it("rounds to whole pixels", () => {
     // (500 - 44) / 7 = 65.14 -> clamped to the floor; (700 - 44) / 5 = 131.2.
-    expect(equalTabWidth([{ width: 700, tabCount: 5 }])).toBe(131);
+    expect(equalTabWidth([{ width: 700, tabCount: 5 }])).toBe(140);
   });
 
   it("never goes negative on a strip narrower than its own reserved space", () => {
-    expect(equalTabWidth([{ width: 20, tabCount: 1 }])).toBe(100);
+    expect(equalTabWidth([{ width: 20, tabCount: 1 }])).toBe(140);
   });
 });
 

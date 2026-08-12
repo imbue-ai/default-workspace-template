@@ -214,16 +214,15 @@ def _create_chat_through_ui(page: Page, base_url: str) -> None:
     """Drive the New Tab launcher's Chat tile, exactly as a user would.
 
     The "+" no longer drops a menu down: it opens a full-page launcher tab whose
-    "Open new" row starts a chat, which is what raises the naming modal.
+    "Open new" row starts a chat. There is no naming dialog: the tile creates
+    the agent directly under a machine-minted name and files a friendly
+    "Chat N" display title on its own.
     """
     page.goto(base_url)
     page.wait_for_selector(".dockview-add-tab-button", timeout=_RECOVERY_TIMEOUT_MS)
     page.locator(".dockview-add-tab-button").first.click()
     page.wait_for_selector(".new-tab-launcher", timeout=_RECOVERY_TIMEOUT_MS)
     page.locator(".new-tab-launcher-tile:visible", has_text="Chat").click()
-    page.wait_for_selector(".custom-url-dialog-input", timeout=_RECOVERY_TIMEOUT_MS)
-    page.locator(".custom-url-dialog-input").fill("recovery-chat")
-    page.locator(".custom-url-dialog-open").click()
 
 
 @pytest.mark.tmux
@@ -240,6 +239,14 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
     """
     with _serving_workspace(tmp_path, monkeypatch, port=_PORT, release_on_completion=False) as base_url:
         _create_chat_through_ui(page, base_url)
+
+        # The tile filed the first free "Chat N" the moment the create
+        # returned, so the new tab wears the friendly display name -- the
+        # machine petname the agent actually runs under never shows on the
+        # strip and was never asked for.
+        expect(page.locator(".dv-default-tab-content", has_text="Chat 1").first).to_be_visible(
+            timeout=_RECOVERY_TIMEOUT_MS
+        )
 
         not_found = page.locator(".message-list-not-found")
         expect(not_found).to_be_visible(timeout=_RECOVERY_TIMEOUT_MS)
