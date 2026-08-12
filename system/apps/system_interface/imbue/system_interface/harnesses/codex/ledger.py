@@ -174,6 +174,21 @@ class ShoulderTapResult(MutableModel):
     returned_block: str = ""
 
 
+def write_codex_model_state(model_state_path: Path, model: str, effort: str | None, fast: bool) -> None:
+    """Write the uniform ``{model, effort, fast}`` model-bar state file for codex.
+
+    The shared, harness-neutral writer for codex's live model chip: the ledger calls it on every
+    ``thread/settings/updated`` (the selected settings), and the live connection calls it once on
+    connect to seed from the ``thread/resume`` settings (§8). Both feed the same harness-neutral read
+    path (``agent_manager._recompute_model_choice``). A write failure is logged, never raised: a stale
+    chip is preferable to breaking the caller (the event stream, or a connect)."""
+    state = {"model": model, "effort": effort if isinstance(effort, str) and effort else None, "fast": fast}
+    try:
+        atomic_write(model_state_path, json.dumps(state))
+    except OSError as exc:
+        logger.opt(exception=exc).warning("codex: failed to write model state to {}", model_state_path)
+
+
 def _iso_now() -> str:
     """An ISO-8601 UTC timestamp for a chip's ``enqueue_ts`` (display/order only)."""
     return datetime.now(timezone.utc).isoformat()
@@ -447,17 +462,12 @@ class CodexMessageLedger(MutableModel):
         if not isinstance(model, str) or not model:
             return
         effort = settings.get("effort")
-        state = {
-            "model": model,
-            "effort": effort if isinstance(effort, str) and effort else None,
-            "fast": settings.get("serviceTier") == _FAST_SERVICE_TIER,
-        }
-        try:
-            atomic_write(self.model_state_path, json.dumps(state))
-        except OSError as exc:
-            logger.opt(exception=exc).warning(
-                "codex ledger: failed to mirror model settings to {}", self.model_state_path
-            )
+        write_codex_model_state(
+            self.model_state_path,
+            model,
+            effort if isinstance(effort, str) and effort else None,
+            settings.get("serviceTier") == _FAST_SERVICE_TIER,
+        )
 
     # -- reconcile / sweep ------------------------------------------------------
 

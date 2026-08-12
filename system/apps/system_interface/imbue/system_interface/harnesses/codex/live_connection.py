@@ -42,9 +42,12 @@ from loguru import logger
 
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.mngr_codex.app_server_client import TransportClosedError
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
+from imbue.system_interface.harnesses.codex.ledger import write_codex_model_state
+from imbue.system_interface.harnesses.codex.model import FAST_SERVICE_TIER
 from imbue.system_interface.harnesses.codex.model import open_subscribed_codex_client
 
 # How long the background reader blocks on one ``poll_notifications`` drain before looping. It
@@ -57,6 +60,32 @@ _READER_POLL_TIMEOUT_SECONDS: float = 0.2
 _READER_JOIN_TIMEOUT_SECONDS: float = 3.0
 
 
+def _fetch_codex_models(client: CodexAppServerClient, agent_state_dir: Path) -> tuple[CodexModel, ...]:
+    """Read the account's ``model/list`` for the chip-match cache, tolerating a daemon/transport miss.
+
+    A failure returns an empty tuple rather than raising -- the connection is still fully usable for
+    messages; the chip simply falls back to whatever the live state file already reports."""
+    try:
+        return client.model_list()
+    except (CodexAppServerError, OSError) as exc:
+        logger.debug("codex live connection: model/list failed for {} ({})", agent_state_dir, exc)
+        return ()
+
+
+def _seed_model_state_from_resume(client: CodexAppServerClient, model_state_path: Path) -> None:
+    """Seed the model-state file from the settings the opener's ``thread/resume`` reported (§8).
+
+    On connect the daemon has NOT emitted a ``thread/settings/updated``, so the ledger's mirror has
+    nothing to write yet; the durable file could be stale or absent. The ``thread/resume`` response
+    carried the thread's live ``model`` / ``effort`` / ``serviceTier``, captured on the client as
+    ``last_thread_info`` -- write it so the chip matches the daemon on connect. No info (a bound test
+    client that never resumed) or no model is a no-op."""
+    info = client.last_thread_info
+    if info is None or not info.model:
+        return
+    write_codex_model_state(model_state_path, info.model, info.effort, info.service_tier == FAST_SERVICE_TIER)
+
+
 class CodexLiveConnection:
     """The persistent client + ledger + reader thread for one codex agent's daemon generation."""
 
@@ -67,6 +96,12 @@ class CodexLiveConnection:
     # Flipped False when the reader observes a closed/failed transport (the daemon died). The
     # agent manager treats a not-alive connection as absent and rebuilds.
     _is_alive: bool
+    # The account's models from ``model/list``, fetched once on connect and cached for the whole
+    # daemon generation. This is the per-agent model set the chip-match reads (via AgentManager) --
+    # no daemon call in the hot recompute path. The picker re-fetches fresh per open (D2); this
+    # cache only backs the chip-match. Empty when the fetch failed (the chip still renders logo-only
+    # or falls back to whatever the live state file already holds).
+    _codex_models: tuple[CodexModel, ...]
 
     @classmethod
     def build(
@@ -100,6 +135,13 @@ class CodexLiveConnection:
             logger.debug("codex live connection: status read failed for {} ({}); closing", agent_state_dir, exc)
             client.close()
             return None
+        # Cache the account's model set once for this daemon generation -- the per-agent set the
+        # chip-match reads. A failure yields an empty cache (the chip falls back to the live file).
+        codex_models = _fetch_codex_models(client, agent_state_dir)
+        # Seed the durable model-state file from the settings the daemon RESUMED with (§8), so the
+        # chip matches the daemon on connect even before any thread/settings/updated fires. The
+        # opener captured this ThreadInfo on its thread/resume; None (e.g. a bound test client) skips.
+        _seed_model_state_from_resume(client, model_state_path)
         ledger = CodexMessageLedger.build(
             client,
             on_queue_snapshot=on_queue_snapshot,
@@ -110,6 +152,7 @@ class CodexLiveConnection:
         self = cls.__new__(cls)
         self._client = client
         self._ledger = ledger
+        self._codex_models = codex_models
         self._stop_event = threading.Event()
         self._is_alive = True
         self._reader_thread = threading.Thread(
@@ -127,6 +170,12 @@ class CodexLiveConnection:
     def client(self) -> CodexAppServerClient:
         """The persistent client this connection owns."""
         return self._client
+
+    @property
+    def codex_models(self) -> tuple[CodexModel, ...]:
+        """The account's models (from ``model/list``), cached on connect -- the per-agent set the
+        chip-match reads. Empty when the connect-time fetch failed."""
+        return self._codex_models
 
     @property
     def is_alive(self) -> bool:

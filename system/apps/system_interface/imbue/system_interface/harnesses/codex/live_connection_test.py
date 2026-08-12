@@ -20,11 +20,13 @@ from pathlib import Path
 from typing import Any
 
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
+from imbue.mngr_codex.app_server_client import ThreadInfo
 from imbue.mngr_codex.app_server_client import TransportClosedError
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.ledger import MessageState
 from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
 from imbue.system_interface.harnesses.codex.model import open_subscribed_codex_client
+from imbue.system_interface.harnesses.model import read_model_identity
 
 
 class _LocalTransport:
@@ -59,8 +61,10 @@ class _LocalTransport:
 
 
 def _bound_client(transport: _LocalTransport) -> CodexAppServerClient:
-    """A client bound to a thread, with ``thread/read`` scripted for the status seed."""
+    """A client bound to a thread, with ``thread/read`` scripted for the status seed and
+    ``model/list`` scripted for the connect-time model-set cache."""
     transport.respond_result("thread/read", {"thread": {"status": {"type": "idle"}, "turns": []}})
+    transport.respond_result("model/list", {"data": []})
     client = CodexAppServerClient(transport=transport)
     client.thread_id = "thread-1"
     return client
@@ -181,4 +185,64 @@ def test_reader_marks_not_alive_when_the_transport_closes(tmp_path: Path) -> Non
     # The daemon dies: the next reader poll sees a closed transport and the connection goes not-alive.
     transport.closed = True
     assert _wait_until(lambda: not connection.is_alive)
+    connection.stop()
+
+
+def test_build_caches_the_account_model_list(tmp_path: Path) -> None:
+    # The connection fetches model/list once on connect and exposes it as the per-agent chip-match set.
+    transport = _LocalTransport()
+    transport.respond_result("thread/read", {"thread": {"status": {"type": "idle"}, "turns": []}})
+    transport.respond_result(
+        "model/list",
+        {
+            "data": [
+                {
+                    "id": "gpt-5.6-sol",
+                    "model": "gpt-5.6-sol",
+                    "displayName": "GPT-5.6-Sol",
+                    "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                    "serviceTiers": [{"id": "priority"}],
+                }
+            ]
+        },
+    )
+    client = CodexAppServerClient(transport=transport)
+    client.thread_id = "thread-1"
+    connection = CodexLiveConnection.build(
+        tmp_path,
+        on_queue_snapshot=lambda snapshot: None,
+        on_activity=lambda activity: None,
+        on_user_turn=lambda event: None,
+        model_state_path=tmp_path / "model.json",
+        open_client=lambda _: client,
+    )
+    assert connection is not None
+    assert [model.model for model in connection.codex_models] == ["gpt-5.6-sol"]
+    connection.stop()
+
+
+def test_build_seeds_model_state_from_the_resume_thread_info(tmp_path: Path) -> None:
+    # On connect the durable model-state file is seeded from the settings the thread resumed with
+    # (captured on the client as last_thread_info), so the chip matches the daemon before any
+    # thread/settings/updated fires.
+    transport = _LocalTransport()
+    client = _bound_client(transport)
+    client.last_thread_info = ThreadInfo(
+        thread_id="thread-1", model="gpt-5.6-sol", effort="high", service_tier="priority"
+    )
+    state_path = tmp_path / "model.json"
+    connection = CodexLiveConnection.build(
+        tmp_path,
+        on_queue_snapshot=lambda snapshot: None,
+        on_activity=lambda activity: None,
+        on_user_turn=lambda event: None,
+        model_state_path=state_path,
+        open_client=lambda _: client,
+    )
+    assert connection is not None
+    identity = read_model_identity(state_path)
+    assert identity is not None
+    assert identity.model_id == "gpt-5.6-sol"
+    assert identity.effort == "high"
+    assert identity.fast is True
     connection.stop()

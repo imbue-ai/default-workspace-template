@@ -41,14 +41,18 @@ from typing import Callable
 
 from loguru import logger as _loguru_logger
 
+from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
+from imbue.system_interface.harnesses.codex.ledger import write_codex_model_state
+from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.session_parser import SOURCE as _SOURCE
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
+from imbue.system_interface.harnesses.model import model_state_path
 
 logger = _loguru_logger
 
@@ -156,6 +160,13 @@ class CodexSessionWatcher(AgentSessionWatcher):
     _partial: bytes
     _line_index: int
     _tool_name_by_call_id: dict[str, str]
+    # The EFFECTIVE per-turn model/effort, updated from each rollout ``turn_context`` line (§4b):
+    # the model the turn actually RAN on. Threaded through ``parse_lines`` to stamp assistant events
+    # and reflected into the model-bar state file (:meth:`_reflect_effective_model`) so a framework
+    # fallback shows in the bar rather than the selected model lying.
+    _turn_state: dict[str, Any]
+    # The agent's uniform ``minds_model_state.json`` -- where the effective model is reflected.
+    _model_state_path: Path
     # The shared watch loop: a recursive watchdog on the sessions dir plus the poll
     # safety net, invoking _emit_unsent once at start and on every wake. Replaces the
     # bespoke thread/observer/poll block this watcher used to hand-roll.
@@ -209,6 +220,10 @@ class CodexSessionWatcher(AgentSessionWatcher):
         # from the earlier function_call. Persists across files (a resume re-serialises
         # the calls, but keeping the map is harmless and covers output-only cases).
         self._tool_name_by_call_id = {}
+        # The effective per-turn model/effort, accumulated from turn_context lines (§4b).
+        self._turn_state = {}
+        # Where the effective model is reflected for the bar (same file the shared reader parses).
+        self._model_state_path = model_state_path(agent_state_dir, CODEX_STATE_RELATIVE_PATH)
 
         self._path_watcher = None
         return self
@@ -353,7 +368,37 @@ class CodexSessionWatcher(AgentSessionWatcher):
                         for synthetic in self._interrupt_results(event.get("timestamp", "")):
                             self._ingest_event(synthetic, new_events)
 
+            # Snapshot the effective model UNDER the lock (parse_lines mutated it above), so the
+            # file reflection below runs off a consistent read even if a read-path call races.
+            effective_model = self._turn_state.get("model")
+            effective_effort = self._turn_state.get("effort")
+
+        # Reflect the effective per-turn model into the model-bar state file OUTSIDE the lock (§4b):
+        # a framework fallback (turn_context.model differing from the selected setting) shows in the
+        # bar. A no-op when the file already reflects it (selected == effective, the common case).
+        self._reflect_effective_model(effective_model, effective_effort)
         return new_events
+
+    def _reflect_effective_model(self, model: Any, effort: Any) -> None:
+        """Write the effective per-turn model into ``minds_model_state.json`` when it DIVERGES from
+        what the file already holds (§4b).
+
+        The file is the harness-neutral model-bar read path; the ledger writes the SELECTED settings
+        to it on ``thread/settings/updated``. This writer reflects the EFFECTIVE model the rollout
+        records per turn -- so a per-turn framework fallback (over-quota / tier downgrade) shows in
+        the bar instead of the selected model lying. It writes only on divergence (model or effort
+        differs from the current file), preserving the file's ``fast`` bit -- ``turn_context`` carries
+        no service tier, so fast is owned by the ledger's selected-settings write. The subsequent
+        model-state watch fires the harness-neutral recompute, exactly as the ledger's write does.
+        """
+        if not isinstance(model, str) or not model:
+            return
+        effective_effort = effort if isinstance(effort, str) and effort else None
+        current = read_json_dict(self._model_state_path)
+        if current.get("model") == model and current.get("effort") == effective_effort:
+            return
+        # Preserve the ledger-owned fast bit (turn_context has no service tier of its own).
+        write_codex_model_state(self._model_state_path, model, effective_effort, current.get("fast") is True)
 
     def _ingest_event(self, event: dict[str, Any], new_events: list[dict[str, Any]]) -> None:
         """Add one parsed event to the view: append a new id, supersede a changed one in
@@ -418,7 +463,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
             return []
         if not isinstance(record, dict):
             return []
-        return parse_lines(record, line_index, self._tool_name_by_call_id)
+        return parse_lines(record, line_index, self._tool_name_by_call_id, self._turn_state)
 
     # --- read API (mirrors AgentSessionWatcher) ----------------------------
     #

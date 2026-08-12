@@ -24,6 +24,8 @@ from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
+from imbue.mngr_codex.app_server_client import CodexModel
+from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -42,6 +44,7 @@ from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
+from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
@@ -697,27 +700,46 @@ def test_set_model_unknown_agent_returns_404(client: FlaskClient) -> None:
 
 class _RecordingSwitchClient:
     """A stand-in for the short-lived app-server switch connection: records the settings_update
-    kwargs and its close, never touching the pane."""
+    kwargs and its close, never touching the pane. ``models`` backs the dynamic model-options fetch."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.closed = False
+        self.models: tuple[CodexModel, ...] = ()
 
     def settings_update(self, **kwargs: Any) -> None:
         self.calls.append(kwargs)
+
+    def model_list(self) -> tuple[CodexModel, ...]:
+        return self.models
 
     def close(self) -> None:
         self.closed = True
 
 
 def test_set_model_switches_codex_via_thread_settings_update(tmp_path: Path) -> None:
-    """Codex switching applies model + effort over thread/settings/update, not the pane send."""
+    """Codex switching validates against the per-agent model/list set and applies model + effort +
+    fast over thread/settings/update (all three on a model change), not the pane send."""
     agent_id = "agent-00000000000000000000000000000007"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     manager, messenger = _manager_with_resolver(agent_info)
     application = create_application(build_test_state(agent_manager=manager))
     client = application.test_client()
     switch_client = _RecordingSwitchClient()
+    # The per-agent option set the endpoint validates against is the ONE reconciled set on the
+    # manager (seeded on connect / refreshed by each picker-open); seed it here (no live daemon).
+    codex_models = (
+        CodexModel.model_validate(
+            {
+                "id": "gpt-5.6-sol",
+                "model": "gpt-5.6-sol",
+                "displayName": "GPT-5.6-Sol",
+                "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                "serviceTiers": [{"id": "priority"}],
+            }
+        ),
+    )
+    manager.store_codex_model_options(agent_id, codex_models_to_options(codex_models))
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch(
@@ -731,10 +753,122 @@ def test_set_model_switches_codex_via_thread_settings_update(tmp_path: Path) -> 
         )
 
     assert response.status_code == 200
-    # The change went over the app-server (model + effort), and the pane send was never used.
-    assert switch_client.calls == [{"model": "gpt-5.6-sol", "effort": "high"}]
+    # A model switch (re)asserts all three axes over the app-server -- service_tier None clears any
+    # stale priority -- and the pane send was never used.
+    assert switch_client.calls == [{"model": "gpt-5.6-sol", "effort": "high", "service_tier": None}]
     assert switch_client.closed is True
     assert messenger.sent == []
+
+
+def test_model_options_returns_full_per_agent_options_for_codex(tmp_path: Path) -> None:
+    """The DYNAMIC codex picker gets full per-agent options (from model/list), not just ids."""
+    agent_id = "agent-00000000000000000000000000000012"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager, _messenger = _manager_with_resolver(agent_info)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    dynamic_client = _RecordingSwitchClient()
+    dynamic_client.models = (
+        CodexModel.model_validate(
+            {
+                "id": "gpt-5.6-sol",
+                "model": "gpt-5.6-sol",
+                "displayName": "GPT-5.6-Sol",
+                "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                "serviceTiers": [{"id": "priority"}],
+            }
+        ),
+        CodexModel.model_validate({"id": "gpt-5.2", "model": "gpt-5.2", "displayName": "GPT-5.2"}),
+    )
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch(
+            "imbue.system_interface.harnesses.codex.model.open_bound_codex_client",
+            return_value=dynamic_client,
+        ),
+    ):
+        response = client.get(f"/api/agents/{agent_id}/model-options")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    # The dynamic shape: full options (not the `models` id list).
+    assert data["models"] is None
+    assert [opt["id"] for opt in data["options"]] == ["gpt-5.6-sol", "gpt-5.2"]
+    assert data["options"][0]["supports_fast"] is True
+    assert data["options"][1]["supports_fast"] is False
+
+
+def test_picker_open_reconciles_the_chip_and_switch_model_sets_for_codex(tmp_path: Path) -> None:
+    """A codex picker-open fetch (``model/list``) becomes the ONE per-agent set the chip-match and the
+    switch-validation ALSO read (D2): after the open, all three agree, and a model the open just
+    offered validates on switch."""
+    agent_id = "agent-00000000000000000000000000000014"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager, messenger = _manager_with_resolver(agent_info)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    # Before any open, the chip-match and switch-validation sets are unpopulated -- the model below
+    # would 400 on a switch.
+    assert manager.get_codex_model_options(agent_id) is None
+    assert _agent_switch_options(manager, agent_info) == ()
+
+    # A fresh picker-open fetch offers a model the sets did not have.
+    picker_client = _RecordingSwitchClient()
+    picker_client.models = (
+        CodexModel.model_validate(
+            {
+                "id": "gpt-5.6-terra",
+                "model": "gpt-5.6-terra",
+                "displayName": "GPT-5.6-Terra",
+                "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                "serviceTiers": [{"id": "priority"}],
+            }
+        ),
+    )
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch(
+            "imbue.system_interface.harnesses.codex.model.open_bound_codex_client",
+            return_value=picker_client,
+        ),
+    ):
+        options_response = client.get(f"/api/agents/{agent_id}/model-options")
+        assert options_response.status_code == 200
+        picker_ids = [opt["id"] for opt in options_response.get_json()["options"]]
+
+        # The reconciliation: the picker offer set, the chip-match set, and the switch-validation set
+        # are now the SAME set -- the open's fetch updated the one stored per-agent set.
+        chip_options = manager.get_codex_model_options(agent_id)
+        assert chip_options is not None
+        chip_ids = [opt.id for opt in chip_options]
+        switch_ids = [opt.id for opt in _agent_switch_options(manager, agent_info)]
+        assert picker_ids == chip_ids == switch_ids == ["gpt-5.6-terra"]
+
+        # The newly-offered model validates on switch (200), applied over thread/settings/update.
+        switch_response = client.post(
+            f"/api/agents/{agent_id}/model",
+            json={
+                "model_id": "gpt-5.6-terra",
+                "effort": "high",
+                "fast": True,
+                "axes": ["model", "effort", "fast"],
+            },
+        )
+
+    assert switch_response.status_code == 200
+    assert picker_client.calls == [{"model": "gpt-5.6-terra", "effort": "high", "service_tier": "priority"}]
+    assert messenger.sent == []
+
+
+def test_model_options_returns_null_models_for_claude(client: FlaskClient, tmp_path: Path) -> None:
+    """A static/catalog-backed harness (claude) returns `models` (null = whole catalog), no options."""
+    agent_id = "agent-00000000000000000000000000000013"
+    agent_info = _model_agent_info(agent_id, tmp_path)
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        response = client.get(f"/api/agents/{agent_id}/model-options")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["models"] is None
+    assert data["options"] is None
 
 
 def test_workspace_fast_mode_starts_undecided_and_records_an_answer(

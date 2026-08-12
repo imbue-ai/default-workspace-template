@@ -20,21 +20,48 @@ from typing import Any
 import pytest
 
 from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.mngr_codex.codex_config import APP_SERVER_THREAD_FILENAME
 from imbue.mngr_codex.codex_config import get_codex_home
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
+from imbue.system_interface.harnesses.codex.model import codex_model_to_option
+from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.codex.model import _bind_root_thread
 from imbue.system_interface.harnesses.codex.model import _subscribe_root_thread
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity
+from imbue.system_interface.harnesses.model import PickerMode
 from imbue.system_interface.harnesses.model import SwitchMode
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import model_state_path
 from imbue.system_interface.harnesses.model import read_model_identity
+
+
+def _codex_model(
+    model: str,
+    display_name: str,
+    efforts: tuple[str, ...],
+    *,
+    tiers: tuple[str, ...] = (),
+    hidden: bool = False,
+) -> CodexModel:
+    """A ``model/list`` entry for tests (id == model, given per-model efforts and service tiers).
+
+    Built from the wire (alias) shape via ``model_validate`` so it matches what the daemon sends."""
+    return CodexModel.model_validate(
+        {
+            "id": model,
+            "model": model,
+            "displayName": display_name,
+            "hidden": hidden,
+            "supportedReasoningEfforts": [{"reasoningEffort": level} for level in efforts],
+            "serviceTiers": [{"id": tier} for tier in tiers],
+        }
+    )
 
 
 def _agent_info(tmp_path: Path) -> AgentInfo:
@@ -48,8 +75,33 @@ def _agent_info(tmp_path: Path) -> AgentInfo:
     )
 
 
-def test_catalog_is_eager_then_reconcile() -> None:
-    assert CODEX_CATALOG.switch_mode == SwitchMode.EAGER_THEN_RECONCILE
+def test_catalog_is_on_change_and_dynamic_with_no_static_options() -> None:
+    # Codex is fully dynamic: ON_CHANGE (interactive, no optimistic overlay), a DYNAMIC per-agent
+    # picker, and NO static options (the model set comes from the daemon's model/list).
+    assert CODEX_CATALOG.switch_mode == SwitchMode.ON_CHANGE
+    assert CODEX_CATALOG.picker_mode == PickerMode.DYNAMIC
+    assert CODEX_CATALOG.options == ()
+    assert CODEX_CATALOG.powered_by_label == "Codex"
+    assert CODEX_CATALOG.native_atomic_shoulder_tap_possible is True
+
+
+def test_model_mapper_pulls_efforts_and_fast_per_model() -> None:
+    # The one pure mapper: id=model, label=display_name, efforts verbatim, fast iff a priority tier,
+    # in_picker iff not hidden.
+    fast_model = _codex_model("gpt-5.6-sol", "GPT-5.6-Sol", ("low", "high", "ultra"), tiers=("priority", "default"))
+    option = codex_model_to_option(fast_model)
+    assert option.id == "gpt-5.6-sol"
+    assert option.label == "GPT-5.6-Sol"
+    assert tuple(effort.level for effort in option.efforts) == ("low", "high", "ultra")
+    assert option.supports_fast is True
+    assert option.in_picker is True
+
+    # A model without a priority tier does not support fast; a hidden model is matchable but never offered.
+    plain = _codex_model("gpt-5.2", "GPT-5.2", ("low", "xhigh"), tiers=())
+    plain_option = codex_model_to_option(plain)
+    assert plain_option.supports_fast is False
+    hidden = _codex_model("gpt-secret", "Secret", ("medium",), hidden=True)
+    assert codex_model_to_option(hidden).in_picker is False
 
 
 def test_state_relative_path_is_under_codex_home() -> None:
@@ -60,32 +112,51 @@ def test_state_relative_path_is_under_codex_home() -> None:
     )
 
 
-def test_reader_matches_the_new_patch_schema(tmp_path: Path) -> None:
-    # A hand-written fixture of the codex-in-minds patch's NEW {model, effort, fast} output.
+def test_live_identity_matches_the_per_agent_model_set(tmp_path: Path) -> None:
+    # The reader is unchanged (uniform {model, effort, fast}); the chip-match is now against the
+    # PER-AGENT options (mapped from model/list), not a static catalog. A live read matches the
+    # mapped option, with per-model efforts/fast honored.
     state_path = model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps({"model": "gpt-5.6-sol", "effort": "high", "fast": True}))
     identity = read_model_identity(state_path)
-    assert identity is not None
     assert identity == ModelIdentity(model_id="gpt-5.6-sol", effort="high", fast=True)
-    matched = match_option(identity, CODEX_CATALOG.options)
+
+    options = codex_models_to_options(
+        (
+            _codex_model("gpt-5.6-sol", "GPT-5.6-Sol", ("low", "high", "max"), tiers=("priority",)),
+            _codex_model("gpt-5.2", "GPT-5.2", ("low", "xhigh")),
+        )
+    )
+    assert identity is not None
+    matched = match_option(identity, options)
     assert matched is not None
     assert matched.id == "gpt-5.6-sol"
+    assert matched.label == "GPT-5.6-Sol"
+    # fast on a no-priority model is a shrug (per-model fast, daemon-sourced).
+    assert match_option(ModelIdentity(model_id="gpt-5.2", effort="low", fast=True), options) is None
 
 
 class _RecordingClient:
     """A scripted app-server client that records ``settings_update`` kwargs and never touches the
-    pane. ``fail`` makes ``settings_update`` raise, standing in for an unreachable daemon."""
+    pane. ``fail`` makes ``settings_update`` raise, standing in for an unreachable daemon.
+    ``models`` is returned from ``model_list`` (for the dynamic-options fetch)."""
 
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, models: tuple[CodexModel, ...] = ()) -> None:
         self.calls: list[dict[str, Any]] = []
         self.closed = False
         self._fail = fail
+        self._models = models
 
     def settings_update(self, **kwargs: Any) -> None:
         self.calls.append(kwargs)
         if self._fail:
             raise CodexAppServerError("daemon unreachable")
+
+    def model_list(self) -> tuple[CodexModel, ...]:
+        if self._fail:
+            raise CodexAppServerError("daemon unreachable")
+        return self._models
 
     def close(self) -> None:
         self.closed = True
@@ -106,8 +177,10 @@ def _forbidden_send(_line: str) -> bool:
     pytest.fail("codex switch must apply settings over the app-server, not the pane send")
 
 
-def test_switch_model_and_effort_updates_both_settings(tmp_path: Path) -> None:
-    # Codex applies the change over thread/settings/update, one call carrying every changed axis.
+def test_switch_on_model_change_sends_all_three_axes(tmp_path: Path) -> None:
+    # A MODEL-axis change (re)asserts model + effort + fast TOGETHER, even for a fast=False pick that
+    # changed only model + effort: the daemon does not enforce tiers, so service_tier must be sent
+    # explicitly (None here) to clear any stale priority on the switch.
     client = _RecordingClient()
     resolver, opens = _resolver_over(tmp_path, client)
     result = resolver.switch(
@@ -116,8 +189,48 @@ def test_switch_model_and_effort_updates_both_settings(tmp_path: Path) -> None:
         _forbidden_send,
     )
     assert result.ok
-    assert client.calls == [{"model": "gpt-5.6-terra", "effort": "high"}]
+    assert client.calls == [{"model": "gpt-5.6-terra", "effort": "high", "service_tier": None}]
     assert opens["n"] == 1
+    assert client.closed is True
+
+
+def test_switch_to_a_no_priority_model_clears_a_stale_fast(tmp_path: Path) -> None:
+    # Even when only the model axis is reported changed (effort/fast unchanged on the frontend), a
+    # codex model switch re-asserts all three, so switching to a model that dropped fast clears the
+    # service tier rather than leaving a stale priority the daemon would keep.
+    client = _RecordingClient()
+    resolver, _opens = _resolver_over(tmp_path, client)
+    result = resolver.switch(
+        ModelIdentity(model_id="gpt-5.2", effort="low", fast=False),
+        frozenset({ModelAxis.MODEL}),
+        _forbidden_send,
+    )
+    assert result.ok
+    assert client.calls == [{"model": "gpt-5.2", "effort": "low", "service_tier": None}]
+
+
+def test_list_offered_options_maps_model_list_fresh(tmp_path: Path) -> None:
+    # The dynamic picker fetches model/list fresh and maps each entry to a full ModelOption.
+    models = (
+        _codex_model("gpt-5.6-sol", "GPT-5.6-Sol", ("low", "high"), tiers=("priority",)),
+        _codex_model("gpt-5.2", "GPT-5.2", ("low", "xhigh")),
+    )
+    client = _RecordingClient(models=models)
+    resolver, opens = _resolver_over(tmp_path, client)
+    options = resolver.list_offered_options()
+    assert options is not None
+    assert [opt.id for opt in options] == ["gpt-5.6-sol", "gpt-5.2"]
+    assert options[0].supports_fast is True
+    assert options[1].supports_fast is False
+    assert opens["n"] == 1
+    assert client.closed is True
+
+
+def test_list_offered_options_tolerates_a_daemon_failure(tmp_path: Path) -> None:
+    # A model/list failure yields an empty (non-None) tuple: the picker shows no models, never a crash.
+    client = _RecordingClient(fail=True)
+    resolver, _opens = _resolver_over(tmp_path, client)
+    assert resolver.list_offered_options() == ()
     assert client.closed is True
 
 
