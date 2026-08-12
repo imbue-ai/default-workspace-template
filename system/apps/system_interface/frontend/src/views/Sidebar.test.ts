@@ -82,16 +82,35 @@ describe("pinnedAppNamesForView", () => {
 });
 
 describe("nextProjectName", () => {
+  const project = (name: string, projectId?: string) => ({
+    name,
+    // The id the server would have minted for the name, unless the test says
+    // otherwise -- which is exactly the renamed-project case below.
+    project_id:
+      projectId ??
+      name
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-"),
+  });
+
   it("starts at one on an empty machine", () => {
     expect(nextProjectName([])).toBe("Project 1");
   });
 
   it("skips the numbers already taken, whatever their casing", () => {
-    expect(nextProjectName(["project 1", "Newsreader", "PROJECT 2"])).toBe("Project 3");
+    expect(nextProjectName([project("project 1"), project("Newsreader"), project("PROJECT 2")])).toBe("Project 3");
   });
 
   it("fills a gap rather than counting past it", () => {
-    expect(nextProjectName(["Project 1", "Project 3"])).toBe("Project 2");
+    expect(nextProjectName([project("Project 1"), project("Project 3")])).toBe("Project 2");
+  });
+
+  it("skips an id a renamed project still owns", () => {
+    // A rename keeps the id, so the starter project renamed to "Something"
+    // still holds project-1. Proposing "Project 1" would bounce off the id
+    // conflict at create time; the mint has to step past it.
+    expect(nextProjectName([project("Something", "project-1")])).toBe("Project 2");
   });
 });
 

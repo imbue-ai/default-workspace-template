@@ -336,13 +336,21 @@ export function pinnedAppNamesForView(rows: readonly SidebarTabRow[], isEverythi
 
 // ---------- New projects ----------
 
-/** The name a fresh project gets: the first "Project N" nobody is using. A
- *  machine holding n projects always leaves one of "Project 1".."Project n+1"
- *  free, so this settles immediately. */
-export function nextProjectName(existingNames: readonly string[]): string {
-  const taken = new Set(existingNames.map((name) => name.trim().toLowerCase()));
+/** The name a fresh project gets: the first "Project N" nobody is using.
+ *
+ *  "Using" covers both halves of a project's identity. The server slugifies
+ *  "Project N" to the id \`project-n\`, and a RENAME keeps the id -- that is
+ *  what lets a rename never move the content file -- so a starter project
+ *  renamed to "Something" still owns \`project-1\`. Checking names alone then
+ *  proposes "Project 1" and the create bounces off the id conflict, which is
+ *  exactly the error this function exists to make impossible. A machine
+ *  holding n projects always leaves one of "Project 1".."Project n+1" free,
+ *  so this settles immediately. */
+export function nextProjectName(projects: readonly Pick<ProjectInfo, "name" | "project_id">[]): string {
+  const takenNames = new Set(projects.map((project) => project.name.trim().toLowerCase()));
+  const takenIds = new Set(projects.map((project) => project.project_id));
   let index = 1;
-  while (taken.has(`project ${index}`)) index += 1;
+  while (takenNames.has(`project ${index}`) || takenIds.has(`project-${index}`)) index += 1;
   return `Project ${index}`;
 }
 
@@ -498,11 +506,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   async function createNewProject(attrs: SidebarAttrs): Promise<void> {
     const glyph = nextGlyphIndex(attrs.projects.map((project) => project.glyph));
     try {
-      const created = await createProject(
-        nextProjectName(attrs.projects.map((project) => project.name)),
-        SQUIGGLE_GLYPHS[glyph].color,
-        glyph,
-      );
+      const created = await createProject(nextProjectName(attrs.projects), SQUIGGLE_GLYPHS[glyph].color, glyph);
       closeMenus();
       attrs.onProjectsChanged();
       // A project is made to be worked in, so creating mounts it -- and every
