@@ -337,16 +337,16 @@ proportionality decision), so reply, consume, and re-arm without involving the
 user. Escalate only if the worker has surfaced a real question of user intent
 inside it.
 
-**Compose the question per the §5a rules -- plain-language and pointed at a
-resolution, not the worker's raw conflict dump.** Lead with where things stand
-("The update is almost ready -- one file needs a decision from you before I can
-finish"), explain the choice in plain terms (what the new version does vs. what
-your workspace currently does, and what's at stake each way), and **propose a way
-forward**: a recommended option when you have one, the concrete trade-offs when
-you genuinely don't. Close by inviting the user to resolve it *with* you rather
-than only to rule on it -- "tell me which you'd prefer, or talk it through with me
-and we'll land on the best option together." Reassure that nothing has been
-applied and the workspace is untouched.
+For the conflict case, **compose the question per the §5a rules -- plain-language
+and pointed at a resolution, not the worker's raw conflict dump.** Lead with
+where things stand ("The update is almost ready -- one file needs a decision from
+you before I can finish"), explain the choice in plain terms (what the new
+version does vs. what your workspace currently does, and what's at stake each
+way), and **propose a way forward**: a recommended option when you have one, the
+concrete trade-offs when you genuinely don't. Close by inviting the user to
+resolve it *with* you rather than only to rule on it -- "tell me which you'd
+prefer, or talk it through with me and we'll land on the best option together."
+Reassure that nothing has been applied and the workspace is untouched.
 
 ## 5. Terminal status
 
