@@ -675,12 +675,13 @@ The report says which classes merged. Apply each; a clean pull-in is still
   on stderr and is never a reason to stop.
 
 - **`editable_tool` (`system/vendor/mngr/**`)** -- `.py` is picked up live; a manifest
-  change needs an env refresh (`uv sync --all-packages`; only if `uv tool list`
-  shows `imbue-mngr` as a uv-managed tool, also `uv tool install -e
-  system/vendor/mngr/libs/mngr --reinstall` -- the vendored tree is the whole mngr
-  monorepo, whose root `pyproject.toml` is not installable, so the tool package
-  is its `libs/mngr`; in the standard workspace `mngr` runs from the root venv
-  and no uv tool is installed at all). Any other `is_manifest` change
+  change needs an env refresh of **both** mngr installs a standard workspace
+  carries: the root venv `uv run mngr` uses (`uv sync --all-packages`) and the
+  uv-managed tool the bare `mngr` on PATH is, which
+  `system/scripts/build_workspace.sh` installs (`uv tool install -e
+  system/vendor/mngr/libs/mngr --reinstall`; check with `uv tool list`). The
+  vendored tree is the whole mngr monorepo, whose root `pyproject.toml` is not
+  installable, so the tool package is its `libs/mngr`. Any other `is_manifest` change
   the report flags (a root-workspace `pyproject.toml` / `uv.lock`) likewise needs
   `uv sync --all-packages` so the new dependencies resolve.
 
