@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Hard-failing secret scan over explicit paths, shared by the
-# publish-inspiration flow: build_inspiration.sh (section 5) runs it over the
+# publish-template flow: build_template.sh (section 5) runs it over the
 # staged overlay, and the assembly worker re-runs it over any
 # published-version-modified files.
 #

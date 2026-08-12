@@ -1,11 +1,11 @@
-# Betterleaks config for scan_secrets.sh (the publish-inspiration secret
+# Betterleaks config for scan_secrets.sh (the publish-template secret
 # scan). Betterleaks is one of the two scanners the scan runs; this config
 # applies only to it (kingfisher has no filename-based rules and runs with its
 # own flags).
 #
 # Scope: the scan runs `betterleaks dir` over the STAGING directory, which
 # holds exactly the files overlaid out of the live mind (the selected
-# --include / --data-include paths plus carried-forward inspiration-*.md/.svg).
+# --include / --data-include paths; the manifest files are generated after).
 # The clean template base is trusted, public, and never scanned -- its own
 # test fixtures legitimately contain placeholder token strings.
 #
