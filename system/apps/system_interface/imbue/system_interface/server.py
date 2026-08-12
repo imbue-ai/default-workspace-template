@@ -147,34 +147,39 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
   const errorBox = document.getElementById("error");
 
   function render(state) {
-    // Gated on is_built, not on the phase alone. The phase records how the last
-    // rebuild ended and outlives the bundle it produced, so "done" with the
-    // bundle gone is reachable -- a reveal empties the output directory before
-    // writing, and this page is only served while the bundle is missing.
-    // Reloading on the phase alone would spin the page in a tight reload loop
-    // for the length of that build.
-    if (state.phase === "done" && state.is_built) {
-      status.textContent = "Rebuilt. Reloading...";
+    // Reloading is driven by is_built, never by the phase. The phase records
+    // how the last rebuild ended and outlives the bundle it produced, and this
+    // page is only served while the bundle is missing -- so reloading on
+    // "done" alone would spin the page for the length of an update that clears
+    // the bundle before writing the new one. Keying on is_built also means a
+    // bundle restored by something else entirely (an update completing, a
+    // fresh workspace build) brings the page back on its own.
+    if (state.is_built) {
+      status.textContent = "The interface is back. Reloading...";
       window.location.reload();
       return;
     }
-    if (state.phase === "failed" || state.phase === "done") {
-      button.disabled = false;
+    if (state.phase === "installing" || state.phase === "building") {
+      button.disabled = true;
+      status.textContent = (state.detail || "Working") + "...";
+      errorBox.hidden = true;
+      window.setTimeout(poll, 2000);
+      return;
+    }
+    // Nothing running: never started, failed, or finished and then lost the
+    // bundle again. Offer the repair, and keep watching slowly so the page is
+    // not stranded on a stale message if the bundle returns another way.
+    button.disabled = false;
+    if (state.phase) {
       button.textContent = "Try again";
       status.textContent =
         state.phase === "failed"
           ? "The rebuild did not finish."
           : "The interface went missing again after it was rebuilt.";
-      errorBox.hidden = !state.error;
-      errorBox.textContent = state.error || "";
-      return;
     }
-    if (state.phase) {
-      button.disabled = true;
-      status.textContent = (state.detail || "Working") + "...";
-      errorBox.hidden = true;
-      window.setTimeout(poll, 2000);
-    }
+    errorBox.hidden = !state.error;
+    errorBox.textContent = state.error || "";
+    window.setTimeout(poll, 10000);
   }
 
   async function poll() {

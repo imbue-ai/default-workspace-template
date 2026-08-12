@@ -1,10 +1,9 @@
 import threading
 import time
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import Final
-from typing import Protocol
-from typing import runtime_checkable
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -37,15 +36,13 @@ _NPM_BUILD_SLOW_SECONDS: Final[float] = 120.0
 _ERROR_OUTPUT_CHARACTER_LIMIT: Final[int] = 2000
 
 # The injection seam for the build commands, mirroring ``claude_auth``: tests
-# pass a deterministic fake, production uses the module default. Spelled as a
-# protocol rather than ``Callable[..., Any]`` so both the arguments and the
+# pass a deterministic fake, production uses the module default. Spelled out
+# rather than ``Callable[..., Any]`` so both the arguments and the
 # ``FinishedProcess`` result are checked -- a fake that returns some other shape
 # is then a type error here rather than an AttributeError inside a build thread.
-@runtime_checkable
-class CommandRunner(Protocol):
-    """Runs one build command to completion and reports how it went."""
-
-    def __call__(self, command: list[str], cwd: Path, timeout: float) -> FinishedProcess: ...
+# Named for the build so it does not read as a second definition of
+# ``claude_auth.CommandRunner``, which is a different (looser) alias.
+BuildCommandRunner = Callable[[list[str], Path, float], FinishedProcess]
 
 
 def _default_command_runner(command: list[str], cwd: Path, timeout: float) -> FinishedProcess:
@@ -97,7 +94,7 @@ class FrontendBuildService(MutableModel):
     frontend_directory: Path = Field(
         default=FRONTEND_DIRECTORY, frozen=True, description="Directory the bundle is compiled from"
     )
-    command_runner: CommandRunner = _default_command_runner
+    command_runner: BuildCommandRunner = _default_command_runner
 
     _state_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _build_thread: threading.Thread | None = PrivateAttr(default=None)
@@ -116,12 +113,26 @@ class FrontendBuildService(MutableModel):
 
     def current_status(self) -> FrontendBuildStatus:
         with self._state_lock:
+            phase, detail, error = self._phase, self._detail, self._error
+            # A running phase with no live thread means the build thread died
+            # without recording an outcome -- ``_run_build_in_background``
+            # handles the failures it knows about, but nothing else is watching
+            # that thread. Reported as failed rather than left as-is: this is a
+            # recovery surface, and a phase that can never advance would leave
+            # the page polling a disabled button forever, which is the dead end
+            # the whole page exists to prevent.
+            if phase in (FrontendBuildPhase.INSTALLING, FrontendBuildPhase.BUILDING) and not (
+                self._build_thread is not None and self._build_thread.is_alive()
+            ):
+                phase = FrontendBuildPhase.FAILED
+                detail = None
+                error = error or "The rebuild stopped unexpectedly before it finished."
             return FrontendBuildStatus(
                 is_built=self.is_built,
                 is_repairable=self.is_repairable,
-                phase=self._phase,
-                detail=self._detail,
-                error=self._error,
+                phase=phase,
+                detail=detail,
+                error=error,
             )
 
     def start_background_build(self) -> None:
