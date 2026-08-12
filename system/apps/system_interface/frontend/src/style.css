@@ -1656,30 +1656,26 @@ body {
   border-color: var(--si-pane-border);
 }
 
-/* A transient fill under the pointer, the same affordance the rail's rows use.
-   An inactive tab is otherwise unpainted. Spelled out down the whole chain
-   because that is the shape dockview paints tab backgrounds with, and a shorter
-   selector would simply lose to it. The fill wears the tab's own card shape --
-   rounded top, square bottom -- because it reaches down to the pane and reads
-   as a preview of the join the active tab has. */
+/* Hovering an inactive tab paints NOTHING. A fill at the strip's edges always
+   fights the pane's rounded corner below it (two attempts at that shape both
+   read as a boxy cutoff), so the hover affordance is everything except a
+   background: the pointer cursor, the title going bold, and the tab's own
+   action buttons appearing -- which the strip already reveals on hover.
+   Spelled out down the whole chain because that is the shape dockview paints
+   tab states with, and a shorter selector would simply lose to it. */
 .dockview-theme-light
   .dv-groupview
   > .dv-tabs-and-actions-container
   .dv-tabs-container
   > .dv-tab.dv-inactive-tab:hover {
-  background-color: rgba(0, 0, 0, 0.04);
+  cursor: pointer;
 }
 
-/* Complete that join at the strip's left edge. When the FIRST tab is hovered,
-   the pane corner under it squares off -- the same move the active first tab
-   makes -- so the fill's square bottom meets a square pane corner. Without
-   this, the fill ended in a straight line directly above the pane's rounded
-   corner, and the concave sliver of canvas between the two shapes read as a
-   boxy cutoff instead of the fill reaching the pane. */
-.dockview-theme-light
-  .dv-groupview:has(> .dv-tabs-and-actions-container .dv-tabs-container > .dv-tab:first-child.dv-inactive-tab:hover)
-  > .dv-content-container {
-  border-top-left-radius: 0;
+/* Bolding is confined to the title span. The tab's width is fixed by the
+   equal-width rule, so the heavier face cannot reflow the strip -- at worst a
+   long title fades a character earlier while hovered. */
+.dockview-theme-light .dv-tab.dv-inactive-tab:hover .dv-default-tab-content {
+  font-weight: 600;
 }
 
 /* dockview outlines a focused tab in the (now transparent) divider color, so
