@@ -958,6 +958,12 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   };
 
   content.addEventListener("dblclick", (event) => {
+    // A launcher stands for no object, so there is nothing to name: the
+    // gesture is refused outright rather than opening an editor whose commit
+    // would have nowhere to go. The event still propagates -- to dockview a
+    // double-click on a tab is just a click, and the launcher tab should keep
+    // behaving like one.
+    if (panelParams.get(options.id)?.panelType === "launcher") return;
     event.preventDefault();
     event.stopPropagation();
     beginTitleEdit();
