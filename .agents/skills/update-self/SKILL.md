@@ -300,8 +300,8 @@ this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
 Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
-`question` (mid-flight gate for a genuine, unresolvable conflict), `done` /
-`stuck` (terminal). Substitutions: `<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
+`question` (mid-flight gate: a genuine, unresolvable conflict, or the §4c
+review-gate escape hatch), `done` / `stuck` (terminal). Substitutions: `<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
 `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
@@ -323,10 +323,18 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 ## 4. Proxy the `question` gate
 
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
-`mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). The worker
-surfaces only genuine, unresolvable conflicts -- a real decision about how to
+`mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). Almost
+always this is a genuine, unresolvable conflict -- a real decision about how to
 reconcile a file both sides rewrote incompatibly. **Escalate it to the user**,
 relay their resolution via `mngr message`, consume the report, and re-arm.
+
+The one other thing a `question` can be is the worker's review-gate escape hatch
+(its §4c): a *process* question about whether or at what scope the gates run.
+That is not the user's to answer -- **answer it yourself** per `lead-proxy.md`,
+and the answer is to apply the §4c rule as written (the rule already is the
+proportionality decision), so reply, consume, and re-arm without involving the
+user. Escalate only if the worker has surfaced a real question of user intent
+inside it.
 
 **Compose the question per the §5a rules -- plain-language and pointed at a
 resolution, not the worker's raw conflict dump.** Lead with where things stand

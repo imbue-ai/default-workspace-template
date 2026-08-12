@@ -392,7 +392,12 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
 `data/.tasks/update-self/reports`). Valid `name:` values:
 
 - `question` (`type: gate`) -- a genuine, unresolvable conflict; body: the file,
-  what each side did, the options. Push and stop; resume on the lead's reply.
+  what each side did, the options. Also the channel for the 4c review-gate
+  escape hatch, which is a *process* question rather than a conflict; body: the
+  rule's conditions as you read them, what your situation is, and what you would
+  do instead. Say which of the two it is in the first line -- the lead escalates
+  a conflict to the user and answers a process question itself. Push and stop;
+  resume on the lead's reply.
 - `done` (`type: status`) -- merged, triaged, validated on `mngr/update-self`. Body
   gives the lead everything for the approval gate and reveal:
   - **What's new** -- a digest of the changelog entries.
