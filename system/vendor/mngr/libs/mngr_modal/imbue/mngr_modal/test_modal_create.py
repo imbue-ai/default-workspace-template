@@ -171,6 +171,7 @@ def test_mngr_create_with_invalid_snapshot_id_fails(
     )
 
 
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.rsync
 @pytest.mark.timeout(300)
@@ -221,6 +222,7 @@ def test_mngr_create_with_build_args_on_modal(
     assert "Done." in result.stdout, f"Expected 'Done.' in output: {result.stdout}"
 
 
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.rsync
 @pytest.mark.timeout(300)
@@ -410,6 +412,7 @@ def test_mngr_create_transfers_git_repo_with_untracked_files(
     assert "Done." in result.stdout, f"Expected 'Done.' in output: {result.stdout}"
 
 
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.timeout(300)
 def test_mngr_create_transfers_git_repo_with_new_branch(

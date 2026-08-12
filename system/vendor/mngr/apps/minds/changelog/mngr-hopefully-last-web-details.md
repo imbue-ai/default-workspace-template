@@ -11,3 +11,5 @@ Fixed the create form's "enable web access" toggle for local docker/lima workspa
 Hid the internal `owner-exec` service from the workspace Share dialog's per-app targets, alongside the chat/terminal/browser interfaces. owner-exec is the SSH-equivalent exec channel authorized by request signatures (never a share grant), so it should never be offered as an individually shareable app.
 
 Also hid `owner-exec` from the SPA workspace-options endpoint's share targets (`ui_api_options.py`), which carries its own copy of the interface-exclusion set that the desktop SPA's Share tab actually reads -- the earlier `templates.py` change only covered the legacy server-side options modal.
+
+Broadened the desktop's restic auth-propagation retry (`restic_cli.py`) to also match restic's rendered "The request signature we calculated does not match ..." phrasing, not just the bare `SignatureDoesNotMatch` S3 code -- the same not-yet-propagated-credential window the in-workspace provisioning handles.

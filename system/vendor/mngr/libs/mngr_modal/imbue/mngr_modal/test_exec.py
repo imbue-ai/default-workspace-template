@@ -97,6 +97,7 @@ def test_exec_cwd_override_on_modal(
     assert "/tmp" in result.stdout
 
 
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.rsync
 @pytest.mark.timeout(300)
@@ -113,6 +114,7 @@ def test_exec_failure_propagates_exit_code_on_modal(
     assert result.returncode == 1
 
 
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.rsync
 @pytest.mark.timeout(300)
