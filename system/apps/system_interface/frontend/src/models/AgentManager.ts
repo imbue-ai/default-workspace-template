@@ -180,6 +180,16 @@ type WsEvent =
       type: "member_title_changed";
       ref: string;
       title: string | null;
+    }
+  | {
+      // One object was used, machine-wide; ``at_ms`` is the epoch-millisecond
+      // moment the server stamped, or null when the entry was dropped because
+      // the object was destroyed. Recency belongs to the object rather than to
+      // a panel, so this reaches clients offering it in a launcher this one
+      // never opened.
+      type: "member_last_used_changed";
+      ref: string;
+      at_ms: number | null;
     };
 
 /** Layout registry / sync events pushed over the WebSocket. */
@@ -215,6 +225,14 @@ export type ProjectSyncListener = (event: ProjectSyncEvent) => void;
  */
 export type MemberTitleListener = (ref: string, title: string | null) => void;
 
+/**
+ * Notified when one object's machine-wide recency changed; ``atMs`` is null
+ * when the object was destroyed and its entry dropped. Delivered to every
+ * client, mounted on a view showing the object or not, because recency is a
+ * fact about the machine rather than about any one view's layout.
+ */
+export type MemberLastUsedListener = (ref: string, atMs: number | null) => void;
+
 export type LayoutOpListener = (event: LayoutOpEvent) => void;
 export type AgentsUpdatedListener = (agents: AgentState[]) => void;
 /**
@@ -241,6 +259,7 @@ let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
 let projectSyncListeners: ProjectSyncListener[] = [];
 let memberTitleListeners: MemberTitleListener[] = [];
+let memberLastUsedListeners: MemberLastUsedListener[] = [];
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let terminalSessionListeners: TerminalSessionListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
@@ -445,6 +464,12 @@ function handleEvent(event: WsEvent): void {
         listener(event.ref, event.title);
       }
       break;
+
+    case "member_last_used_changed":
+      for (const listener of memberLastUsedListeners) {
+        listener(event.ref, event.at_ms);
+      }
+      break;
   }
 }
 
@@ -559,6 +584,14 @@ export function addMemberTitleListener(listener: MemberTitleListener): void {
 
 export function removeMemberTitleListener(listener: MemberTitleListener): void {
   memberTitleListeners = memberTitleListeners.filter((l) => l !== listener);
+}
+
+export function addMemberLastUsedListener(listener: MemberLastUsedListener): void {
+  memberLastUsedListeners.push(listener);
+}
+
+export function removeMemberLastUsedListener(listener: MemberLastUsedListener): void {
+  memberLastUsedListeners = memberLastUsedListeners.filter((l) => l !== listener);
 }
 
 export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {

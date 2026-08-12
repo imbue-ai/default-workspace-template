@@ -1800,11 +1800,16 @@ _PINNABLE_APP_LABEL = f"{_PINNABLE_APP_NAME}-e2elabel"
 # The "All apps" heading an app's row currently sits under, read by walking back
 # up the list to the nearest thing that is not a row. The grouping is what the
 # two headings MEAN, so asserting on the heading above the row is what proves an
-# app moved between them -- a heading's mere presence would not.
+# app moved between them -- a heading's mere presence would not. The row is found
+# by its label span rather than its whole textContent, because the row's glyph
+# may be a monogram whose SVG <text> initial leaks into the latter.
 _HEADING_ABOVE_APP_JS = """
 (appName) => {
   const rows = Array.from(document.querySelectorAll('.project-rail-app'));
-  const row = rows.find((candidate) => candidate.textContent.trim() === appName);
+  const row = rows.find((candidate) => {
+    const label = candidate.querySelector('.truncate');
+    return label !== null && label.textContent.trim() === appName;
+  });
   if (row === undefined) return null;
   for (let node = row.previousElementSibling; node !== null; node = node.previousElementSibling) {
     if (!node.classList.contains('project-rail-app')) return node.textContent.trim();
@@ -1941,3 +1946,166 @@ def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Pat
         assert after_unpin["frameCount"] == 1, f"unpinning stopped the app or forked its page: {after_unpin}"
         assert after_unpin["stamped"] == "the-original-element", f"unpinning re-created the app's page: {after_unpin}"
         assert after_unpin["removals"] == 0, f"a live surface left the DOM when the app was unpinned: {after_unpin}"
+
+
+_LAUNCHER_RECENCY_PORT = 18876
+_LAUNCHER_FILTER_PORT = 18877
+
+
+def _member_last_used(layout_dir: Path) -> dict[str, int]:
+    """When each object was last in front of the user, straight off the disk.
+
+    Like ``_member_titles``, this reads the machine's store rather than a
+    view's file, because recency belongs to the object machine-wide. A
+    workspace where nothing has been used has no file at all, which reads as
+    an empty map -- and so does a file caught mid-write, because the server
+    writes it non-atomically while this test polls it, and the poll simply
+    reads again.
+    """
+    last_used_path = layout_dir / "member_last_used.json"
+    if not last_used_path.exists():
+        return {}
+    try:
+        last_used_ms_by_ref = json.loads(last_used_path.read_text())["last_used_ms_by_ref"]
+    except json.JSONDecodeError:
+        return {}
+    assert isinstance(last_used_ms_by_ref, dict)
+    return last_used_ms_by_ref
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_launcher_shows_an_opened_tabs_recency_and_it_survives_a_reload(tmp_path: Path, page: Page) -> None:
+    """Opening a tab gives its launcher row a recency, and a reload keeps it.
+
+    The launcher's last-used column is fed by real uses: the dock's focus
+    landing on a panel records the moment against the OBJECT's ref,
+    machine-wide, and the server stamps it with its own clock. Mount-time
+    arrivals are deliberately not uses -- the auto-opened chat was not touched
+    by anyone -- so its row starts on the dash of an untouched object, and only
+    the user's own click onto the tab moves it to "just now".
+
+    The reload is the other half. The map lives in ``member_last_used.json``
+    beside the titles store, so a fresh page load -- which restores the saved
+    layout without re-touching anything, for the same mount-time reason -- has
+    to get the recency back from disk. The stored stamp is read before and
+    after to pin that down: it must still be there, and must never have moved
+    backwards.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _LAUNCHER_RECENCY_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        # The fixture chat auto-opens into the starter project. That is a
+        # mount-time arrival, not a use, so nothing has touched the store yet.
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        wait_for(
+            lambda: _FIXTURE_CHAT_REF in _project_members(layout_dir),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the fixture chat was never filed as a member of the starter project",
+        )
+        assert _FIXTURE_CHAT_REF not in _member_last_used(layout_dir), "something was used before anyone used anything"
+
+        # The launcher's row for the chat wears the dash of an untouched object.
+        page.locator(".dockview-add-tab-button").first.click()
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+        chat_row = page.locator(
+            ".new-tab-launcher-section[data-section='in-project'] .new-tab-launcher-row", has_text="test-agent"
+        ).first
+        expect(chat_row).to_be_visible(timeout=10000)
+        expect(chat_row).to_contain_text("—")
+
+        # Click onto the chat tab -- the dock's focus landing on it is what
+        # "using" the object looks like -- and the touch reaches the store.
+        page.locator(".dv-default-tab-content", has_text="test-agent").first.click()
+        wait_for(
+            lambda: _FIXTURE_CHAT_REF in _member_last_used(layout_dir),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="focusing the chat never touched the machine's last-used store",
+        )
+
+        # Back on the launcher, the row now wears that recency.
+        page.locator(".dv-default-tab-content", has_text="New tab").first.click()
+        expect(chat_row).to_be_visible(timeout=10000)
+        expect(chat_row).to_contain_text("just now")
+
+        stored_ms_before_reload = _member_last_used(layout_dir)[_FIXTURE_CHAT_REF]
+
+        # Let the autosave record the arrangement, so the reload restores the
+        # chat from the saved layout instead of auto-opening (and re-touching)
+        # it: whatever recency the row shows next came back from the store.
+        page.wait_for_timeout(AUTOSAVE_SETTLE_MS)
+        page.reload()
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+
+        # A launcher may have been restored with the layout; the "+" opens one
+        # if not and flashes the existing one if so, so either way one is up.
+        page.locator(".dockview-add-tab-button").first.click()
+        expect(page.locator(".new-tab-launcher").first).to_be_visible(timeout=10000)
+        chat_row = page.locator(
+            ".new-tab-launcher-section[data-section='in-project'] .new-tab-launcher-row", has_text="test-agent"
+        ).first
+        expect(chat_row).to_be_visible(timeout=10000)
+        expect(chat_row).to_contain_text(re.compile(r"just now|\dm ago"))
+
+        # And the stamp itself survived: still stored, never moved backwards.
+        stored_ms_after_reload = _member_last_used(layout_dir).get(_FIXTURE_CHAT_REF)
+        assert stored_ms_after_reload is not None, "the reload lost the chat's recency from the store"
+        assert stored_ms_after_reload >= stored_ms_before_reload, (
+            f"the chat's recency moved backwards across the reload: "
+            f"{stored_ms_before_reload} -> {stored_ms_after_reload}"
+        )
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_launcher_kind_filter_hides_a_kind_and_reset_restores_it(tmp_path: Path, page: Page) -> None:
+    """Unchecking a kind in a table's filter hides its rows; Reset re-checks all.
+
+    The filter is a checkbox menu per table: one row per kind the table holds,
+    plus a reset. Unchecking "Chats" must drop the chat rows and ONLY the chat
+    rows -- the app seeded beside them stays -- and "Reset filters" must bring
+    them straight back. The machine offers an extra agent and an app so the
+    "On this machine" table holds two kinds to tell apart.
+    """
+    with _running_e2e_server(
+        tmp_path,
+        _LAUNCHER_FILTER_PORT,
+        additional_agents=(("agent-filter-999", "filter-agent"),),
+        apps=("docs-viewer",),
+    ) as (base_url, _agent_info, _session_file):
+        page.goto(base_url)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+
+        page.locator(".dockview-add-tab-button").first.click()
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+
+        # Both kinds start visible in the machine-wide table.
+        section = page.locator(".new-tab-launcher-section[data-section='on-machine']")
+        chat_row = section.locator(".new-tab-launcher-row", has_text="filter-agent")
+        app_row = section.locator(".new-tab-launcher-row", has_text="docs-viewer")
+        expect(chat_row).to_have_count(1, timeout=10000)
+        expect(app_row).to_have_count(1)
+
+        # Uncheck "Chats" in this table's filter menu: the chat rows go, and
+        # nothing else does.
+        section.locator("button[aria-expanded]").click()
+        chats_checkbox = section.locator("label", has_text="Chats")
+        expect(chats_checkbox).to_be_visible(timeout=5000)
+        chats_checkbox.click()
+        expect(chat_row).to_have_count(0)
+        expect(app_row).to_have_count(1)
+
+        # Reset re-checks everything, so the chat rows come straight back.
+        section.locator("button", has_text="Reset filters").click()
+        expect(chat_row).to_have_count(1)
+        expect(app_row).to_have_count(1)

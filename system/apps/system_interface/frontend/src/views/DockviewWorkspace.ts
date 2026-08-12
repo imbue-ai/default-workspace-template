@@ -88,6 +88,7 @@ import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
+  addMemberLastUsedListener,
   addMemberTitleListener,
   addProjectSyncListener,
   addTerminalSessionListener,
@@ -108,6 +109,7 @@ import {
   type AppEntry,
   type LayoutOpEvent,
   type LayoutOpListener,
+  type MemberLastUsedListener,
   type MemberTitleListener,
   type ProjectSyncEvent,
   type ProjectSyncListener,
@@ -129,6 +131,12 @@ import {
   moveMemberTitle,
   setMemberTitle,
 } from "../models/MemberTitles";
+import {
+  applyMemberLastUsedChange,
+  getMemberLastUsed,
+  loadMemberLastUsed,
+  touchMemberLastUsed,
+} from "../models/MemberLastUsed";
 import {
   addMember,
   autosaveProject,
@@ -325,6 +333,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _layoutOpListener: LayoutOpListener | null = null;
 let _projectSyncListener: ProjectSyncListener | null = null;
 let _memberTitleListener: MemberTitleListener | null = null;
+let _memberLastUsedListener: MemberLastUsedListener | null = null;
 let _terminalSessionListener: TerminalSessionListener | null = null;
 let initialized = false;
 // True while a view's content is being mounted. The teardown half of that
@@ -1513,11 +1522,33 @@ function openFromMachine(ref: string, launcherPanelId: string): void {
 
 /** Every object on the machine, as launcher rows. Rows are named through
  *  ``labelForMemberRef`` like every other surface, so a renamed object is
- *  offered here under the name it was given. The machine reports no per-object
- *  last-activity yet, so the recency column reads as unknown rather than being
- *  invented here. */
+ *  offered here under the name it was given, and dated through the machine-wide
+ *  last-used map, so an object used in any view ranks by that use here. A ref
+ *  the map has no entry for keeps ``lastActiveMs`` null and renders as unknown
+ *  rather than being invented here. */
 function launcherRows(): LauncherRow[] {
-  return buildLauncherRows(machineInventory(), {}).map((row) => ({ ...row, label: labelForMemberRef(row.ref) }));
+  return buildLauncherRows(machineInventory(), getMemberLastUsed()).map((row) => ({
+    ...row,
+    label: labelForMemberRef(row.ref),
+  }));
+}
+
+/**
+ * Record that the object behind a panel is in front of the user.
+ *
+ * Called when a panel is opened and when the dock's focus lands on one. The
+ * ref resolution is the same as everywhere else (the cached entry, else the
+ * async derivation -- a ``url:`` ref is a hash the platform computes
+ * asynchronously), and a panel that stands for no object (the launcher)
+ * records nothing. The per-ref throttle lives in ``touchMemberLastUsed``:
+ * focus flapping between two panes must not produce a write per click.
+ */
+function touchPanelLastUsed(panelId: string): void {
+  void (async () => {
+    const ref = memberRefByPanelId.get(panelId) ?? (await rememberMemberRef(panelId));
+    if (ref === null) return;
+    touchMemberLastUsed(ref);
+  })();
 }
 
 /** The active view's member refs, which the launcher splits the machine
@@ -3148,9 +3179,11 @@ function setActiveView(viewId: string): void {
  * at startup, after the dockview exists.
  */
 async function initializeActiveView(): Promise<void> {
-  // Before anything is mounted: the names are machine-wide, so the first paint
-  // of the rail and the dock already says what things are called.
+  // Before anything is mounted: the names and recencies are machine-wide, so
+  // the first paint of the rail and the dock already says what things are
+  // called, and the first launcher already ranks by recency.
   await loadMemberTitles();
+  await loadMemberLastUsed();
   const listResponse = await fetchProjectsList();
   availableProjects = listResponse.projects;
   const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
@@ -4048,8 +4081,22 @@ function initializeDockview(parentElement: HTMLElement): void {
     ensureDockIsNotEmpty();
     scheduleTabWidthRecompute();
   });
-  dv.api.onDidAddPanel(() => {
+  dv.api.onDidAddPanel((panel) => {
     scheduleTabWidthRecompute();
+    // A freshly-opened object is in front of the user by definition. Guarded
+    // while a view's saved content is being mounted: those panels arrive all
+    // at once and were not touched by anyone.
+    if (!isApplyingLayout) touchPanelLastUsed(panel.id);
+  });
+
+  // The dock's focus moving onto a panel is what "using" an object looks like
+  // from here. Mount-time activations are skipped for the same reason as
+  // above: switching views must not stamp the incoming view's active panel as
+  // just-used. The per-ref throttle in ``touchMemberLastUsed`` keeps focus
+  // flapping between two panes from producing a write per click.
+  dv.api.onDidActivePanelChange((panel) => {
+    if (panel === undefined || isApplyingLayout) return;
+    touchPanelLastUsed(panel.id);
   });
 
   // While awaitingInitialChat is true, every agents_updated event is
@@ -4091,6 +4138,16 @@ function initializeDockview(parentElement: HTMLElement): void {
     m.redraw();
   };
   addMemberTitleListener(_memberTitleListener);
+
+  // A use anywhere on the machine -- another client's focus, or the entry
+  // dropped when an object was destroyed. It dates the object rather than a
+  // panel, so an open launcher re-orders its tables on the next redraw, in
+  // this view and in Everything alike.
+  _memberLastUsedListener = (ref: string, atMs: number | null) => {
+    applyMemberLastUsedChange(ref, atMs);
+    m.redraw();
+  };
+  addMemberLastUsedListener(_memberLastUsedListener);
 
   // Terminal session updates (client switched session / session renamed) push
   // over the same WebSocket; reflect them onto the owning tab's title.

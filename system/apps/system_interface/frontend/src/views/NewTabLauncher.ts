@@ -79,13 +79,23 @@ const SECTION_HEADING_CLASS = "text-text-faint text-[11px] font-semibold trackin
 /** The order kinds are offered in, in the filter menu and in kindsInRows. */
 const KIND_ORDER: readonly MemberKind[] = ["chat", "browser", "terminal", "app", "url"];
 
-/** What each kind is called in the launcher's kind column and filter menu. */
+/** What each kind is called in the launcher's kind column. */
 export const LAUNCHER_KIND_LABELS: Readonly<Record<MemberKind, string>> = {
   chat: "Chat",
   browser: "Browser",
   terminal: "Terminal",
   app: "App",
   url: "Page",
+};
+
+/** The filter menu names kinds in the plural -- each row toggles a whole group
+ *  of rows, not one object. */
+export const LAUNCHER_KIND_PLURAL_LABELS: Readonly<Record<MemberKind, string>> = {
+  chat: "Chats",
+  browser: "Browsers",
+  terminal: "Terminals",
+  app: "Apps",
+  url: "Pages",
 };
 
 /**
@@ -170,6 +180,13 @@ export function sortRowsByRecency(rows: readonly LauncherRow[]): LauncherRow[] {
 export function kindsInRows(rows: readonly LauncherRow[]): MemberKind[] {
   const present = new Set(rows.map((row) => row.kind));
   return KIND_ORDER.filter((kind) => present.has(kind));
+}
+
+/** Re-check everything in one table's filter: emptying the hidden set is the
+ *  whole reset, since the resting state is "nothing hidden" (see
+ *  filterRowsByKind). */
+export function resetHiddenKinds(hiddenKinds: Set<MemberKind>): void {
+  hiddenKinds.clear();
 }
 
 const MINUTE_MS = 60_000;
@@ -316,14 +333,64 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     if (event.key === "Escape") closeFilterMenu();
   };
 
-  /** The funnel menu for one table: one checkbox per kind the table holds. */
+  /** One checkbox row of the funnel menu. The input is real -- appearance-none
+   *  with a styled box painted over it -- so assistive tech and the keyboard
+   *  see an ordinary checkbox. The check overlay is rendered from the same
+   *  state the input reads, not peer-selectors, since a redraw follows every
+   *  toggle anyway. */
+  function filterMenuRow(section: LauncherSection, kind: MemberKind): m.Vnode {
+    const hidden = hiddenKindsBySection[section.key];
+    const isShown = !hidden.has(kind);
+    return m(
+      "label",
+      {
+        key: kind,
+        class: "flex h-8 cursor-pointer items-center gap-2 px-3 text-[13px] text-text-primary hover:bg-bg-hover",
+      },
+      [
+        m("span", { class: "relative flex h-4 w-4 shrink-0 items-center justify-center" }, [
+          m("input", {
+            type: "checkbox",
+            checked: isShown,
+            onchange: () => {
+              if (hidden.has(kind)) {
+                hidden.delete(kind);
+              } else {
+                hidden.add(kind);
+              }
+            },
+            class:
+              "absolute inset-0 m-0 h-4 w-4 cursor-pointer appearance-none rounded border " +
+              (isShown ? "border-accent bg-accent" : "border-border bg-surface"),
+          }),
+          isShown
+            ? m(
+                "span",
+                { class: "pointer-events-none relative text-white" },
+                m.trust(icon("check", { size: 11, strokeWidth: 3 })),
+              )
+            : null,
+        ]),
+        m(
+          "span",
+          { class: "text-text-faint flex w-5 shrink-0 items-center justify-center" },
+          m.trust(kindIconMarkup(kind)),
+        ),
+        LAUNCHER_KIND_PLURAL_LABELS[kind],
+      ],
+    );
+  }
+
+  /** The funnel menu for one table: one checkbox row per kind the table holds,
+   *  then a reset row that re-checks everything. */
   function filterMenu(section: LauncherSection): m.Vnode {
     const hidden = hiddenKindsBySection[section.key];
+    const isPristine = hidden.size === 0;
     return m(
       "div",
       {
         class:
-          "absolute top-full right-0 z-30 mt-1 min-w-[150px] rounded-lg border border-border bg-surface py-1 shadow-lg",
+          "absolute top-full right-0 z-30 mt-1 min-w-[170px] rounded-lg border border-border bg-surface py-1 shadow-lg",
         oncreate: (vnode: m.VnodeDOM) => {
           menuElement = vnode.dom as HTMLElement;
           document.addEventListener("pointerdown", onDocumentPointerDown);
@@ -335,29 +402,24 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           document.removeEventListener("keydown", onDocumentKeyDown);
         },
       },
-      kindsInRows(section.rows).map((kind) =>
+      [
+        kindsInRows(section.rows).map((kind) => filterMenuRow(section, kind)),
+        m("div", { class: "my-1 border-t border-border" }),
+        // Muted like a secondary action either way; only clickable (and only
+        // wearing the rows' hover) while a filter is actually on.
         m(
-          "label",
+          "button",
           {
-            key: kind,
-            class: "flex h-8 cursor-pointer items-center gap-2 px-3 text-[13px] text-text-primary hover:bg-bg-hover",
+            type: "button",
+            disabled: isPristine,
+            class:
+              "flex h-8 w-full items-center px-3 text-left text-[13px] " +
+              (isPristine ? "text-text-faint cursor-default" : "text-text-secondary cursor-pointer hover:bg-bg-hover"),
+            onclick: () => resetHiddenKinds(hidden),
           },
-          [
-            m("input", {
-              type: "checkbox",
-              checked: !hidden.has(kind),
-              onchange: () => {
-                if (hidden.has(kind)) {
-                  hidden.delete(kind);
-                } else {
-                  hidden.add(kind);
-                }
-              },
-            }),
-            LAUNCHER_KIND_LABELS[kind],
-          ],
+          "Reset filters",
         ),
-      ),
+      ],
     );
   }
 

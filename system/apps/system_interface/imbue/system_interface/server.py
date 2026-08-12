@@ -3,6 +3,7 @@ import os
 import queue
 import socket
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -27,6 +28,7 @@ from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
+from imbue.system_interface import member_last_used
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface import workspace_layouts
@@ -1226,6 +1228,56 @@ def _set_member_title_endpoint() -> Response:
     return _json_response({"ref": ref.strip(), "title": stored_title})
 
 
+def _broadcast_member_last_used_changed(ref: str, at_ms: int | None) -> None:
+    """Tell every client when this object was last used; None means never again.
+
+    Recency belongs to the object rather than to a panel, so a client offering
+    it in a launcher this one never opened still has to re-order. Hence a plain
+    broadcast, as renames get.
+    """
+    get_state().broadcaster.broadcast({"type": "member_last_used_changed", "ref": ref, "at_ms": at_ms})
+
+
+def _list_member_last_used_endpoint() -> Response:
+    """When each object was last in front of the user, keyed by its ref.
+
+    One flat map for the whole machine: recency is a fact about the object, so
+    the same ordering is what every client's launcher draws, and a ref that is
+    absent has simply never been used -- the caller renders it with no recency
+    rather than inventing one.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"last_used": {}})
+    return _json_response({"last_used": member_last_used.read_last_used(layout_dir)})
+
+
+def _touch_member_last_used_endpoint() -> Response:
+    """Record that one object is in front of the user, machine-wide, right now.
+
+    The client sends only the ref; the moment is this server's own clock, which
+    kills the clock-skew question -- every entry in the store is stamped by the
+    one clock that also serves the map back. The ref is not required to be
+    filed anywhere, for the same reason a name is not: an object in no project
+    at all still shows in Everything, and a backgrounded member can be used
+    again the moment it is opened.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    ref = body.get("ref")
+    if not isinstance(ref, str) or not ref.strip():
+        error = ErrorResponse(detail="'ref' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    stored_ms = member_last_used.touch_last_used(layout_dir, ref, int(time.time() * 1000))
+    _broadcast_member_last_used_changed(ref.strip(), stored_ms)
+    return _json_response({"ref": ref.strip(), "at_ms": stored_ms})
+
+
 def _stop_project_members(refs: list[str]) -> dict[str, list[str]]:
     """Tear down the members of a deleted project that have a stop verb.
 
@@ -1277,14 +1329,17 @@ def _delete_project_endpoint(project_id: str) -> Response:
     except projects.LastProjectDeletionError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     stop_report = _stop_project_members(members)
-    # A stopped object's name goes with it, for the same reason a destroyed
-    # one's does: refs are handed out again -- the terminal allocator reuses the
-    # lowest free ``terminal-<N>`` -- so a name left behind would land on
-    # whatever answers to that ref next. Only what actually stopped is cleared;
-    # anything still running keeps the name it is known by everywhere else.
+    # A stopped object's name and recency go with it, for the same reason a
+    # destroyed one's do: refs are handed out again -- the terminal allocator
+    # reuses the lowest free ``terminal-<N>`` -- so either left behind would
+    # land on whatever answers to that ref next. Only what actually stopped is
+    # cleared; anything still running keeps the name it is known by everywhere
+    # else, and its place in the launcher.
     for stopped_ref in stop_report["stopped"]:
         if member_titles.clear_title(layout_dir, stopped_ref):
             _broadcast_member_title_changed(stopped_ref, None)
+        if member_last_used.clear_last_used(layout_dir, stopped_ref):
+            _broadcast_member_last_used_changed(stopped_ref, None)
     logger.info(
         "Deleted project {} (stopped {}, failed {}, left running {})",
         project_id,
@@ -1337,6 +1392,10 @@ def _delete_project_panel_endpoint(panel_id: str) -> Response:
             _broadcast_members_changed(changed_project_ids)
     if ref is not None and member_titles.clear_title(layout_dir, ref):
         _broadcast_member_title_changed(ref, None)
+    # The recency goes for the same reason as the name: a reused ref must not
+    # surface at the top of the launcher on the strength of a dead object.
+    if ref is not None and member_last_used.clear_last_used(layout_dir, ref):
+        _broadcast_member_last_used_changed(ref, None)
     return _json_response({"project_ids": changed_project_ids})
 
 
@@ -2540,6 +2599,14 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(
         "/api/member-titles", view_func=_set_member_title_endpoint, methods=["POST"], endpoint="_set_member_title"
     )
+    # Last-used is keyed by ref and machine-wide for the same reason titles are.
+    application.add_url_rule("/api/member-last-used", view_func=_list_member_last_used_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/member-last-used",
+        view_func=_touch_member_last_used_endpoint,
+        methods=["POST"],
+        endpoint="_touch_member_last_used",
+    )
     application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
     application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
@@ -2564,7 +2631,9 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
     application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
     application.add_url_rule("/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"])
-    application.add_url_rule("/api/apps/<string:name>/deregister", view_func=_deregister_app_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/apps/<string:name>/deregister", view_func=_deregister_app_endpoint, methods=["POST"]
+    )
     claude_auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
