@@ -50,6 +50,7 @@ _BUILTIN_SERVICE_ORDER = (
     "github-sync",
     "host-backup",
     "app-watcher",
+    "browser",
 )
 
 
@@ -96,7 +97,9 @@ def test_supervisord_program_bands_preserve_the_shedding_order() -> None:
     assert bands.supervisord_program_band("earlyoom") == bands.PROTECTED
     assert bands.supervisord_program_band("oom-tag-backstop") == bands.PROTECTED
     assert bands.SHARED_BROWSER > bands.AGENT_SUBPROCESS
-    assert bands.supervisord_program_band("browser") == bands.SHARED_BROWSER
+    # The `browser` program is the coordinator, not Chromium: it resolves to its
+    # service band, never to the shared-browser band its children occupy.
+    assert bands.supervisord_program_band("browser") == bands.SERVICE_BANDS["browser"]
 
 
 def test_primary_agent_is_pinned_to_the_never_shed_band() -> None:
@@ -153,9 +156,9 @@ def test_chat_score_monotonic_in_each_signal() -> None:
 
 def test_browser_remap_lands_inside_the_band_and_preserves_chromes_order() -> None:
     # Chrome's self-assigned gradation (browser/zygote 0, gpu/utility 200,
-    # renderers 300, up to 1000) must map to strictly increasing values that all
-    # sit inside the browser band's range -- i.e. above every agent subprocess.
-    remapped = [bands.shared_browser_oom_score_adj(v) for v in (0, 200, 300, 1000)]
+    # renderers 300) must map to strictly increasing values that all sit inside
+    # the browser band's range -- i.e. above every agent subprocess.
+    remapped = [bands.shared_browser_oom_score_adj(v) for v in (0, 200, 300)]
     assert remapped == sorted(remapped)
     assert len(set(remapped)) == len(remapped), (
         "Chrome's gradation must survive the remap"
@@ -163,6 +166,32 @@ def test_browser_remap_lands_inside_the_band_and_preserves_chromes_order() -> No
     for value in remapped:
         assert bands.SHARED_BROWSER_FLOOR <= value <= bands.SHARED_BROWSER
     assert bands.AGENT_SUBPROCESS < bands.SHARED_BROWSER_FLOOR < bands.SHARED_BROWSER
+
+
+def test_renderers_land_at_the_very_top_of_the_browser_band() -> None:
+    # A renderer holds most of a browser's memory and costs a single tab to shed,
+    # so it must be the most expendable process in the workspace -- not merely
+    # somewhere inside the band. Scaling Chrome's gradation against 0..1000
+    # rather than its real 0..300 range put renderers at 937, leaving the top of
+    # the band to processes that had only *inherited* a high value and held
+    # almost no memory.
+    assert (
+        bands.shared_browser_oom_score_adj(bands.CHROMIUM_SELF_ASSIGNED_MAX)
+        == bands.SHARED_BROWSER
+    )
+    assert bands.shared_browser_oom_score_adj(0) == bands.SHARED_BROWSER_FLOOR
+
+
+def test_browser_coordinator_is_shed_after_the_chromium_it_manages() -> None:
+    # The coordinator is a service, not a browser: it holds little memory, the
+    # Chromium processes outlive its death, and supervisord restarts it straight
+    # back into the same session. Ranked inside the browser band it would be
+    # picked first under pressure and free none of the memory that matters, so it
+    # must sit below the whole band -- and, like any service, below the agents.
+    coordinator = bands.SERVICE_BANDS["browser"]
+    assert coordinator < bands.SHARED_BROWSER_FLOOR
+    assert coordinator < bands.shared_browser_oom_score_adj(0)
+    assert coordinator < bands.USER_AGENT
 
 
 def test_browser_remap_output_is_never_below_the_floor() -> None:

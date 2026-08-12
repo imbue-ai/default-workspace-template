@@ -14,9 +14,10 @@ into one of a few bands.
 
 - **`bands`** -- the `oom_score_adj` value per band and the helper that writes
   it. From least- to most-expendable: never-kill infrastructure (0) < built-in
-  services (`SERVICE_BANDS`, 10-70) < user-created services (`USER_SERVICE`, 200)
-  < user agent (300) < worker agent (600) < agent subprocess (900) < shared
-  browser (1000). Chat agents occupy a *dynamic* range that straddles the worker
+  services (`SERVICE_BANDS`, 10-70, ending with the browser coordinator) <
+  user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
+  (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
+  at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
   band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
@@ -46,8 +47,8 @@ without inspecting the process tree:
 | a user-created supervisord service | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
 | an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/claude_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/claude_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
-| a shared browser | launch | `SHARED_BROWSER` (1000, the ceiling) | inline `oom_score_adj` write in the `browser` program |
-| Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000) | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
+| the browser coordinator | launch | its `SERVICE_BANDS` value (70, the most expendable built-in service) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
+| Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
 its `command` in `system/supervisord.conf` runs `system/services/oom_priority/bin/oom_tag_service.py <key> <the
@@ -67,9 +68,9 @@ program's expected band by *program name* (`bands.supervisord_program_band`: a
 built-in's own band; `USER_SERVICE` for anything unrecognized) and raises the
 process -- plus any children it already spawned, found via a
 `/proc/<pid>/task/*/children` walk -- up to that band. It only ever raises,
-never lowers, so a self-tagged process (the browser at the ceiling) and the
-`PROTECTED` programs (earlyoom, deferred-install, the listener itself) are never
-demoted. The prefix remains the primary mechanism because it tags at spawn:
+never lowers, so a process already tagged higher (a Chromium process the
+browser sweep has remapped into its band) and the `PROTECTED` programs
+(earlyoom, deferred-install, the listener itself) are never demoted. The prefix remains the primary mechanism because it tags at spawn:
 the RUNNING event fires only after `startsecs` (~1s), leaving a short window
 where an unwrapped service runs untagged.
 
@@ -96,10 +97,9 @@ keeps the band. Chromium is the one process in the workspace that breaks this.
 Each Chromium process overwrites any inherited `oom_score_adj` once at its own
 startup with Chrome's internal gradation (browser/zygote 0, gpu/utility 200,
 renderers 300 -- `AdjustLinuxOOMScore` in chromium's `chrome_main_delegate.cc`,
-with no flag to disable it). So the browser daemon's ceiling tag survives only
-on processes that never self-write (the node/Playwright driver, crashpad), while
-the memory-heavy renderers end up at 300 -- *more* protected than workers (600)
-and agent subprocesses (900), inverting the design.
+with no flag to disable it). Left alone the memory-heavy renderers would end up
+at 300 -- *more* protected than workers (600) and agent subprocesses (900),
+inverting the design.
 
 The kernel cannot forbid the lowering: without `CAP_SYS_RESOURCE` any process
 may lower its own value back down to its inherited floor (`oom_score_adj_min`,
@@ -108,10 +108,28 @@ may lower its own value back down to its inherited floor (`oom_score_adj_min`,
 The browser service therefore sweeps its descendants and remaps every value
 found below `SHARED_BROWSER_FLOOR` (910) into `[SHARED_BROWSER_FLOOR,
 SHARED_BROWSER]` via `bands.shared_browser_oom_score_adj`. The mapping is
-order-preserving, so Chrome's gradation survives in compressed form -- worth
-keeping, because it means earlyoom sheds one tab's renderer before the whole
-browser. The sweep only remaps values below the floor, so it is idempotent and
-never touches the inherited-ceiling processes.
+order-preserving, so Chrome's gradation decides where in the band each process
+lands -- which is what makes earlyoom shed one tab's renderer before the whole
+browser. The sweep only remaps values below the floor, so it is idempotent.
+
+The input range is Chrome's own gradation (0-300), **not** 0-1000. Scaling
+against 1000 would compress every Chromium process into 910-937, the bottom
+third of the band, and leave the top to whatever merely *inherited* a high value
+-- which is never a renderer, since a renderer always self-writes. That is
+exactly backwards: the renderers hold nearly all of a browser's memory and cost
+one tab to shed, so they belong at the ceiling.
+
+The same reasoning is why the **coordinator is not in this band at all**. It is
+the daemon that launches and drives Chromium, and it is tagged as an ordinary
+(if most-expendable) service. Shedding it frees almost nothing: it holds little
+memory, the Chromium processes outlive its death, and supervisord restarts it
+straight back into the same session. Sitting at the ceiling it was picked first
+under every memory-pressure episode while releasing none of the memory that
+mattered. A descendant that never self-writes inherits its low service value and
+so is remapped near the band's floor, below every renderer -- correct, since it
+too holds almost no memory. Crashpad is never remapped at all: it re-parents to
+init, so the sweep (which walks the daemon's descendants) never sees it, and it
+just keeps the service band it inherited at fork time.
 
 The sweep is event-driven, not periodic: Chromium processes appear only at
 moments the fleet observes -- a browser launch, a new page (the CDP observer's
