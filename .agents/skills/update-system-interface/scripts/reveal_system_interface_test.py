@@ -23,6 +23,7 @@ from __future__ import annotations
 import importlib.util
 import shutil
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -671,6 +672,27 @@ def test_a_bundle_that_cannot_be_copied_aside_still_reveals(repo: Path) -> None:
 
     assert code == 0
     assert runner.ran("npm", "run", "build")
+
+
+def test_a_bundle_that_cannot_be_copied_aside_leaves_no_temporary_copy(
+    repo: Path, tmp_path: Path
+) -> None:
+    # The half-written copy has to go with the failure. The documented reasons
+    # to get here are a full or read-only disk, so leaving a partial bundle
+    # behind on every attempt would make the next one likelier to fail the same
+    # way -- and nothing else cleans it up, since the reveal only discards a
+    # snapshot it was actually given.
+    (repo / reveal_mod.STATIC_DIR / "dangling").symlink_to("no-such-file")
+    temporary_root = tmp_path / "tmp"
+    temporary_root.mkdir()
+    previous_tempdir = tempfile.tempdir
+    tempfile.tempdir = str(temporary_root)
+    try:
+        assert reveal_mod.snapshot_bundle(repo) is None
+    finally:
+        tempfile.tempdir = previous_tempdir
+
+    assert list(temporary_root.iterdir()) == []
 
 
 def test_a_bundle_that_cannot_be_restored_reports_failure_rather_than_crashing(
