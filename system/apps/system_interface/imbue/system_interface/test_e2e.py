@@ -1104,3 +1104,307 @@ def test_layout_missing_panel_params_recovers_chat_binding(tmp_path: Path, page:
         expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(page.locator(".message-list-empty")).to_have_count(0)
         expect(page.locator(".message-list-not-found")).to_have_count(0)
+
+
+_LIVE_SURFACE_PORT = 18870
+
+# A page for the framed tab below, served by a Playwright route rather than by a
+# server. The workspace only opens ad-hoc URL tabs for ``https://`` refs, so this
+# is cross-origin from the shell -- which is also the production shape, since
+# every service pane is a cross-origin iframe. The document is therefore driven
+# through Playwright (which crosses origins) rather than from the shell's own JS.
+# Its state is an ``<input>``: typing into it is a change no reload survives,
+# because the served markup has it empty.
+_FRAMED_PAGE_URL = "https://e2e-live-page.example/"
+_FRAMED_PAGE_HTML = "<!doctype html><html><body><input id='held' value='' /></body></html>"
+
+# Count every ``.si-live-surface`` that leaves the document from here on. The
+# requirement is not "a page comes back looking right" but "the element holding
+# it never leaves the DOM" -- removing an iframe destroys its document -- so this
+# watches the mechanism directly rather than inferring it from what is on screen.
+_WATCH_SURFACE_REMOVALS_JS = """
+() => {
+  window.__e2eRemovedSurfaces = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        if (node instanceof Element && node.classList.contains('si-live-surface')) {
+          window.__e2eRemovedSurfaces.push(node.className);
+        }
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+"""
+
+# The surfaces holding a chat transcript, as a plain-object report. Identity is
+# carried by ``__e2eChatStamp``, a property set on the ELEMENT rather than an
+# attribute: nothing serializes it, so a surface that answers to it is
+# necessarily the very element that was stamped, not a rebuilt look-alike.
+_CHAT_SURFACE_REPORT_JS = """
+(stamp) => {
+  const surfaces = Array.from(document.querySelectorAll('.si-live-surface'))
+    .filter((surface) => surface.querySelector('.message-user') !== null);
+  if (stamp) {
+    for (const surface of surfaces) surface.__e2eChatStamp = stamp;
+  }
+  const shown = surfaces.filter((surface) => {
+    const box = surface.getBoundingClientRect();
+    return getComputedStyle(surface).display !== 'none' && box.width > 0 && box.height > 0;
+  });
+  return {
+    count: surfaces.length,
+    shownCount: shown.length,
+    stamps: surfaces.map((surface) => surface.__e2eChatStamp ?? null),
+    removals: window.__e2eRemovedSurfaces.length,
+  };
+}
+"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page: Page) -> None:
+    """A page keeps running, and keeps its state, while no view is showing it.
+
+    The requirement in full: there is one live page per object, machine-wide, and
+    a project is only a view that may or may not include it. Type into an app,
+    switch to a project that does not have it, switch back -- the same document
+    is still there, still holding what was typed, resized into whatever pane
+    shows it now. It must not reload and must not fork into a second copy.
+
+    This drives a real iframe document, not a stand-in. The page is typed into
+    through Playwright, exactly as a user would, and read back afterwards: a
+    reload would put back the empty field the route serves, and a fork would show
+    that empty copy beside the typed one, so surviving the round trip is only
+    possible if the very same document lived through the switch untouched.
+
+    Asserted on three independent things, because each rules out a different
+    failure: the framed document's own state (proves it was neither reloaded nor
+    re-created), the surface element's identity via a non-serializable property
+    (proves nothing rebuilt it), and a MutationObserver count of surfaces removed
+    from the document (proves the element never left the DOM at all, which is the
+    mechanism the whole design rests on).
+
+    The framed page is cross-origin, as every real service pane is, so the shell
+    cannot read into its document -- which is why its state is asserted through
+    Playwright's frame locator, and why the checks made while it is hidden are
+    limited to the element holding it.
+    """
+    primary_agent_id = "primary-services-agent"
+    framed_page_selector = 'iframe[src*="e2e-live-page"]'
+    with _running_e2e_server(tmp_path, _LIVE_SURFACE_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.route(
+            "**e2e-live-page.example/**",
+            lambda route: route.fulfill(status=200, content_type="text/html", body=_FRAMED_PAGE_HTML),
+        )
+        page.goto(base_url)
+
+        # Land on the starter project with the fixture chat open.
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
+
+        # Open the framed page beside it, through the same layout-op path an
+        # agent would use, and wait for its document to actually be there.
+        _broadcast_layout_op(
+            base_url,
+            "open",
+            {"ref": _FRAMED_PAGE_URL, "new_group": True},
+            agent_id="agent-test-123",
+        )
+        expect(page.locator(framed_page_selector)).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        held_field = page.frame_locator(framed_page_selector).locator("#held")
+        expect(held_field).to_have_value("", timeout=15000)
+
+        # Type into the page, and stamp the element holding it. The typed text
+        # dies on a reload; the stamp dies if anything re-creates the element.
+        held_field.fill("typed-by-the-user")
+        expect(held_field).to_have_value("typed-by-the-user")
+        page.evaluate(
+            """
+            () => {
+              const iframe = document.querySelector('iframe[src*="e2e-live-page"]');
+              iframe.closest('.si-live-surface').__e2eSurfaceStamp = 'the-original-element';
+            }
+            """
+        )
+
+        # Let the debounced autosave record the arrangement, so switching away
+        # and back is a real round trip through the project's stored layout.
+        wait_for(
+            lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").exists()
+            and "e2e-live-page.example" in (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").read_text(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="autosave never recorded the framed page in the starter project",
+        )
+
+        # Over to Everything, which has its own empty layout and therefore does
+        # not include this page at all -- it mounts a launcher instead.
+        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+        )
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+        # Nothing is showing the page, so its surface is hidden -- the same
+        # ``display: none`` dockview already uses for an inactive tab.
+        page.wait_for_function(
+            """
+            () => {
+              const iframe = document.querySelector('iframe[src*="e2e-live-page"]');
+              if (iframe === null) return false;
+              return getComputedStyle(iframe.closest('.si-live-surface')).display === 'none';
+            }
+            """,
+            timeout=15000,
+        )
+
+        while_away = page.evaluate(
+            """
+            () => {
+              const iframe = document.querySelector('iframe[src*="e2e-live-page"]');
+              if (iframe === null) return { present: false };
+              return {
+                present: true,
+                stamped: iframe.closest('.si-live-surface').__e2eSurfaceStamp ?? null,
+                removals: window.__e2eRemovedSurfaces.length,
+              };
+            }
+            """
+        )
+        assert while_away["present"], "the page was taken out of the DOM by a view that does not include it"
+        assert while_away["stamped"] == "the-original-element", f"the element was rebuilt while hidden: {while_away}"
+        assert while_away["removals"] == 0, f"a live surface left the DOM on the way out: {while_away}"
+
+        # Back to the project that includes it. The page must be the same one --
+        # not reloaded, not forked -- resized into the pane showing it now.
+        _switch_view_via_rail(page, DEFAULT_PROJECT_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        page.wait_for_function(
+            """
+            () => {
+              const iframe = document.querySelector('iframe[src*="e2e-live-page"]');
+              if (iframe === null) return false;
+              const surface = iframe.closest('.si-live-surface');
+              const box = surface.getBoundingClientRect();
+              return getComputedStyle(surface).display !== 'none' && box.width > 0 && box.height > 0;
+            }
+            """,
+            timeout=15000,
+        )
+
+        on_return = page.evaluate(
+            """
+            () => {
+              const iframes = Array.from(document.querySelectorAll('iframe[src*="e2e-live-page"]'));
+              const iframe = iframes[0] ?? null;
+              return {
+                frameCount: iframes.length,
+                stamped: iframe === null ? null : (iframe.closest('.si-live-surface').__e2eSurfaceStamp ?? null),
+                removals: window.__e2eRemovedSurfaces.length,
+              };
+            }
+            """
+        )
+        assert on_return["frameCount"] == 1, f"the page forked into a second copy: {on_return}"
+        assert on_return["stamped"] == "the-original-element", (
+            f"the element was re-created on the way back: {on_return}"
+        )
+        assert on_return["removals"] == 0, f"a live surface left the DOM during the round trip: {on_return}"
+        # The document itself carried on: it still holds what was typed, which a
+        # reload would have replaced with the empty field the route serves.
+        expect(held_field).to_have_value("typed-by-the-user")
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_one_object_is_one_element_in_every_view_showing_it(tmp_path: Path, page: Page) -> None:
+    """An object shown by two views is ONE element, shown twice -- never two.
+
+    The starter project and Everything both end up showing the fixture chat, so
+    two views want it at once. There must still be exactly one live surface for
+    it, and it must be *the same element* from either side: a design that gave
+    each view its own dock and rebuilt panels inside it would pass a
+    "something rendered" check while quietly running two copies of the object.
+
+    Identity is asserted rather than presence. The element is stamped with a
+    plain JS property, which nothing serializes and no rebuild reproduces, so
+    reading that stamp back from the other view is only possible if it is
+    literally the same element. Alongside it the surface count is pinned at one,
+    which is what rules out the fork the stamp alone could not see.
+
+    A chat is a mithril-mounted page rather than an iframe, so what this test
+    checks is the element's identity and singularity across the switch -- the
+    survival of a framed document's own state is covered by
+    ``test_live_page_survives_a_view_that_does_not_include_it`` above.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _LIVE_SURFACE_PORT + 1, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        # The starter project shows the chat; stamp the one surface holding it.
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
+        in_project = page.evaluate(_CHAT_SURFACE_REPORT_JS, "the-original-element")
+        assert in_project["count"] == 1, f"the starter project should hold exactly one chat page: {in_project}"
+        assert in_project["shownCount"] == 1, f"the starter project's chat page should be on screen: {in_project}"
+        wait_for(
+            lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").exists(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message=f"autosave never materialized {DEFAULT_PROJECT_ID}.json",
+        )
+
+        # Everything lists the machine's agent whatever project shows it. Opening
+        # it here must reach for the page that already exists, not start a second.
+        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+        )
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+        page.locator(".new-tab-launcher-row:visible", has_text="test-agent").first.click()
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+
+        in_everything = page.evaluate(_CHAT_SURFACE_REPORT_JS, None)
+        assert in_everything["count"] == 1, f"opening the chat in Everything forked its page: {in_everything}"
+        assert in_everything["shownCount"] == 1, f"Everything is not showing the chat page: {in_everything}"
+        assert in_everything["stamps"] == ["the-original-element"], (
+            f"Everything is showing a different element than the starter project: {in_everything}"
+        )
+        assert in_everything["removals"] == 0, f"a live surface left the DOM on the way in: {in_everything}"
+
+        # And back: still one element, still that element.
+        _switch_view_via_rail(page, DEFAULT_PROJECT_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+
+        back_in_project = page.evaluate(_CHAT_SURFACE_REPORT_JS, None)
+        assert back_in_project["count"] == 1, f"switching back forked the chat page: {back_in_project}"
+        assert back_in_project["shownCount"] == 1, f"the chat page is not on screen again: {back_in_project}"
+        assert back_in_project["stamps"] == ["the-original-element"], (
+            f"switching back re-created the chat's element: {back_in_project}"
+        )
+        assert back_in_project["removals"] == 0, (
+            f"a live surface left the DOM during the round trip: {back_in_project}"
+        )

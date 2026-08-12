@@ -1590,6 +1590,45 @@ body {
   overflow: hidden;
 }
 
+/* A live surface is a .dv-render-overlay we own rather than one dockview owns.
+   There is one per object, machine-wide, created when the object is first
+   opened and left in the DOM until the object is destroyed -- because removing
+   an iframe destroys its document and re-parenting one reloads it. Its rect
+   and its visibility are mirrored from whichever pane is showing it, so it
+   carries the same clip as the overlays beside it and only the layout differs.
+   It is hidden with `display: none`, exactly as dockview hides an inactive
+   tab's content.
+
+   The selector is doubled on purpose: dockview's own `.dv-render-overlay` rule
+   declares `z-index: 1` at the same specificity and is loaded after this file,
+   so a bare `.si-live-surface` would lose the tie and sit at 1 alongside the
+   slot overlay -- which, being a later sibling, would then paint over the page
+   and swallow every click into it. */
+.dv-render-overlay.si-live-surface {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  /* Above the (now empty) panel overlay standing in for it, which is a sibling
+     at z-index 1 and comes later in the DOM. Drop targets sit at 1000/9999 and
+     still paint over both. */
+  z-index: 2;
+}
+
+/* While a tab is being dragged the surface stops taking pointer events, so the
+   drag reaches the panel overlay underneath -- which is what forwards it to the
+   pane's drop target. Without this a drop over a pane would land inside the
+   framed page instead. */
+.si-live-surface--drag {
+  pointer-events: none;
+}
+
+/* The slot a panel is reduced to: it holds no content, it just gives dockview a
+   pane-sized box to position and dispose. */
+.si-live-slot {
+  width: 100%;
+  height: 100%;
+}
+
 .dockview-theme-light .dv-tabs-and-actions-container {
   /* Above the pane, so the active tab's white closes over the 1px of card
      border the negative margin above tucked under the strip. */
