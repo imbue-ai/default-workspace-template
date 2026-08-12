@@ -160,9 +160,12 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
  *
  * That response routinely runs past the transcript's per-result output limit,
  * so it is read from the `permission_request` field the backend parsed off the
- * untruncated output; the output scan is the fallback for an event emitted
- * before that field existed, and it repairs a truncated body rather than
- * abandoning a request the user still has to answer.
+ * untruncated output. The output scan below is the fallback for the one case
+ * the backend deliberately refuses to preserve: a response past its
+ * preservation ceiling (an agent's rationale has no length limit), which
+ * arrives with no structured field and a head-truncated body. The scan then
+ * repairs what it can of that body rather than abandoning a request the user
+ * still has to answer.
  *
  * Returns the parsed details when the call is such a creation POST that
  * succeeded and carries a request_id; otherwise null (the request is still
