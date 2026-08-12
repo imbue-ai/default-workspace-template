@@ -635,6 +635,51 @@ def test_build_that_writes_no_bundle_is_a_failure_not_a_success(repo: Path) -> N
     assert _bundle_exists(repo)
 
 
+def test_a_bundle_that_cannot_be_copied_aside_still_reveals(repo: Path) -> None:
+    # The snapshot is a precaution. Refusing to reveal because the copy failed
+    # would make a full or read-only disk fatal to a change that is otherwise
+    # fine, so it degrades to the behaviour from before the snapshot existed.
+    # A dangling symlink in the bundle is what makes copytree fail here.
+    (repo / reveal_mod.STATIC_DIR / "dangling").symlink_to("no-such-file")
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner(), repo)
+
+    assert code == 0
+    assert runner.ran("npm", "run", "build")
+
+
+def test_a_bundle_that_cannot_be_restored_reports_failure_rather_than_crashing(
+    repo: Path, tmp_path: Path
+) -> None:
+    # Recovery is the last line of defense and the exit code is all the caller
+    # has: a filesystem error putting the snapshot back (the temp copy reaped
+    # from under us, a full disk) has to read as "not recovered" -- exit 3 --
+    # and not as a traceback, which would exit 1, the code meaning "nothing was
+    # changed", after the rollback commit has already landed.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+
+    recovered = reveal_mod._recover_running_state(
+        reveal_mod.classify_changes(
+            ["system/apps/system_interface/frontend/src/views/Chat.ts"]
+        ),
+        repo,
+        _LIVE_BASE,
+        runner,
+        _FakeHttp(_all_healthy),
+        lambda _seconds: None,
+        live_service_restarted=False,
+        saved_bundle=tmp_path / "reaped" / "static",
+        is_frontend_expected=True,
+    )
+
+    assert recovered is False
+
+
 def _breaks_after_the_build(
     runner: _RecordingRunner, broken: Callable[[str], reveal_mod.FetchedPage]
 ) -> Callable[[str], reveal_mod.FetchedPage]:
