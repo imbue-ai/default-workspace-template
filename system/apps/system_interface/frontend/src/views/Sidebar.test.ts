@@ -14,8 +14,15 @@ vi.mock("../models/AgentManager", () => ({
   getApps: () => [],
 }));
 
-import { nextGlyphIndex, nextProjectName, placeMenu, shortcutAppNames, togglePins } from "./Sidebar";
+import type { SidebarTabRow } from "./Sidebar";
+import { nextGlyphIndex, nextProjectName, pinnedAppNamesForView, placeMenu } from "./Sidebar";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
+
+/** A tab-list row, built the way the workspace builds them (see
+ *  `getSidebarRows`): the ref carries the kind, and nothing else matters here. */
+function row(ref: string, kind: SidebarTabRow["kind"]): SidebarTabRow {
+  return { ref, kind, label: ref, isOpen: false };
+}
 
 const VIEWPORT = { width: 1000, height: 800 };
 
@@ -47,43 +54,30 @@ describe("placeMenu", () => {
   });
 });
 
-describe("shortcutAppNames", () => {
-  it("lists the view's own apps by default", () => {
-    expect(shortcutAppNames(["docs", "grafana"], { pinned: [], unpinned: [] })).toEqual(["docs", "grafana"]);
+describe("pinnedAppNamesForView", () => {
+  const ROWS = [
+    row("chat:agent-1", "chat"),
+    row("service:grafana", "app"),
+    row("terminal:build", "terminal"),
+    row("service:browser?session=2", "browser"),
+    row("service:docs", "app"),
+    row("url:abc123", "url"),
+  ];
+
+  it("takes the app members, in member order", () => {
+    // Member order, not alphabetical: the rail's shortcuts read in the order
+    // the apps were pinned.
+    expect(pinnedAppNamesForView(ROWS, false)).toEqual(["grafana", "docs"]);
   });
 
-  it("drops the ones this view unpinned and appends the ones it pinned", () => {
-    expect(shortcutAppNames(["docs", "grafana"], { pinned: ["redis"], unpinned: ["docs"] })).toEqual([
-      "grafana",
-      "redis",
-    ]);
+  it("pins nothing in Everything", () => {
+    // The unfiltered view lists every app on the machine already, so there is
+    // nothing for it to shortcut.
+    expect(pinnedAppNamesForView(ROWS, true)).toEqual([]);
   });
 
-  it("never lists an app twice when a pin and the view agree", () => {
-    expect(shortcutAppNames(["docs"], { pinned: ["docs"], unpinned: [] })).toEqual(["docs"]);
-  });
-});
-
-describe("togglePins", () => {
-  it("records unpinning an app the view shows", () => {
-    expect(togglePins({ pinned: [], unpinned: [] }, "docs", true, false)).toEqual({ pinned: [], unpinned: ["docs"] });
-  });
-
-  it("records pinning an app the view does not show", () => {
-    expect(togglePins({ pinned: [], unpinned: [] }, "redis", false, true)).toEqual({
-      pinned: ["redis"],
-      unpinned: [],
-    });
-  });
-
-  it("keeps no entry that would have no effect", () => {
-    // Re-pinning one of the view's own apps just clears the unpin, and
-    // unpinning an app from elsewhere just drops the explicit pin.
-    expect(togglePins({ pinned: [], unpinned: ["docs"] }, "docs", true, true)).toEqual({ pinned: [], unpinned: [] });
-    expect(togglePins({ pinned: ["redis"], unpinned: [] }, "redis", false, false)).toEqual({
-      pinned: [],
-      unpinned: [],
-    });
+  it("is empty for a view holding no apps", () => {
+    expect(pinnedAppNamesForView([row("chat:agent-1", "chat")], false)).toEqual([]);
   });
 });
 

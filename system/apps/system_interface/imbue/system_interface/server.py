@@ -1262,7 +1262,8 @@ def _delete_project_endpoint(project_id: str) -> Response:
     stopped is stopped and what cannot is listed instead, so nothing is
     silently killed and nothing silently survives. The last remaining project
     cannot be deleted, since the fallback clients switch to is always another
-    project.
+    project. Whatever actually stopped also loses the name it was given, exactly
+    as a destroyed tab's object does.
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
@@ -1276,6 +1277,14 @@ def _delete_project_endpoint(project_id: str) -> Response:
     except projects.LastProjectDeletionError as e:
         return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     stop_report = _stop_project_members(members)
+    # A stopped object's name goes with it, for the same reason a destroyed
+    # one's does: refs are handed out again -- the terminal allocator reuses the
+    # lowest free ``terminal-<N>`` -- so a name left behind would land on
+    # whatever answers to that ref next. Only what actually stopped is cleared;
+    # anything still running keeps the name it is known by everywhere else.
+    for stopped_ref in stop_report["stopped"]:
+        if member_titles.clear_title(layout_dir, stopped_ref):
+            _broadcast_member_title_changed(stopped_ref, None)
     logger.info(
         "Deleted project {} (stopped {}, failed {}, left running {})",
         project_id,
