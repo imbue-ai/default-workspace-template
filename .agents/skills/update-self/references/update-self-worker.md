@@ -252,7 +252,7 @@ dependent -- does its code come from the upstream template, or was it built in
 this workspace? Decide this by *origin, not directory*: the layout is only a
 hint (a workspace's own `build-app` app lands under `system/apps/`, and
 the template's built-in services under `system/services/`, but an adapted
-inspiration can bring third-party creations along). The check is whether the
+template can bring third-party creations along). The check is whether the
 dependent's code exists in upstream at the target ref -- e.g. `git cat-file -e
 "$TARGET_REF":<path>` for its files, or whether it's part of the merge base's
 template rather than added locally.

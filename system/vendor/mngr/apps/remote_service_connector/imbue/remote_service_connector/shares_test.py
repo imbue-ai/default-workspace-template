@@ -324,6 +324,39 @@ def test_share_status_reports_state_endpoint_and_login_stamp(monkeypatch: pytest
     assert backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL) is not None
 
 
+def test_create_share_records_and_status_reports_the_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The desktop's client-side flow supplies the shell label with the create;
+    # the status read is where the chrome learns its routable entry origin. A
+    # later create WITHOUT a label must keep the recorded one (COALESCE).
+    client, _backend = _make_share_test_client(monkeypatch)
+    created = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "entry_label": "system_interface-abc123"},
+        headers=_share_headers(),
+    )
+    assert created.status_code == 200
+
+    status = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers()).json()
+    assert status["entry_label"] == "system_interface-abc123"
+
+    recreated = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers())
+    assert recreated.status_code == 200
+    status_after = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers()).json()
+    assert status_after["entry_label"] == "system_interface-abc123"
+
+
+def test_create_share_rejects_a_malformed_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+
+    resp = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "entry_label": "not a label."},
+        headers=_share_headers(),
+    )
+
+    assert resp.status_code == 422
+
+
 def test_share_status_404s_for_unknown_host(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
 

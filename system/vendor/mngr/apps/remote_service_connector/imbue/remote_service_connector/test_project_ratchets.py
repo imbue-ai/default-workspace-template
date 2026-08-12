@@ -38,9 +38,15 @@ _MODULE_ATTRIBUTE_SEAMS = (
     "get_orphan_bucket_store",
     "litellm_request",
     "get_user_id_from_access_token",
-    "default_email_getter",
+    "resolve_account_email",
+    "get_backfill_email",
     "issue_share_certificate",
-    "get_broker_oauth_provider",
+    "get_accounts_oauth_provider",
+    "get_browser_session_identity",
+    "_sdk_create_browser_session",
+    "_sdk_get_browser_session",
+    "_verify_turnstile_token",
+    "get_device_code_store",
 )
 
 

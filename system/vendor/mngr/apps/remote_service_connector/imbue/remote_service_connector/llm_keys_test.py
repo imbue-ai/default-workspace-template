@@ -120,6 +120,34 @@ def test_key_bundle_round_trip_and_delete(monkeypatch: pytest.MonkeyPatch) -> No
     assert client.get("/sync/bundle", headers=_user_headers()).status_code == 404
 
 
+def test_key_bundle_if_absent_put_conflicts_when_one_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    # First-time setup uses if_absent=true so two tabs racing to mint the
+    # account's first DEK cannot clobber each other: the loser gets a 409
+    # (and unlocks with the winner's password) instead of orphaning a DEK.
+    client, _store, _caller = _make_sync_test_client(monkeypatch)
+    body = {
+        "kdf_salt": base64.b64encode(b"0123456789abcdef").decode("ascii"),
+        "kdf_time_cost": 3,
+        "kdf_memory_kib": 65536,
+        "kdf_parallelism": 4,
+        "wrapped_dek": base64.b64encode(b"first-tab-dek").decode("ascii"),
+        "key_epoch": 1,
+    }
+
+    assert client.put("/sync/bundle?if_absent=true", json=body, headers=_user_headers()).status_code == 200
+    losing_body = {**body, "wrapped_dek": base64.b64encode(b"second-tab-dek").decode("ascii")}
+    conflict = client.put("/sync/bundle?if_absent=true", json=losing_body, headers=_user_headers())
+
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "bundle_exists"
+    # The first tab's bundle survived, and a plain (unconditional) put still
+    # replaces -- the change-password flow depends on that.
+    assert client.get("/sync/bundle", headers=_user_headers()).json()["wrapped_dek"] == body["wrapped_dek"]
+    assert client.put("/sync/bundle", json=losing_body, headers=_user_headers()).status_code == 200
+    fetched = client.get("/sync/bundle", headers=_user_headers())
+    assert fetched.json()["wrapped_dek"] == losing_body["wrapped_dek"]
+
+
 def test_key_bundle_rejects_oversized_wrapped_dek(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _store, _caller = _make_sync_test_client(monkeypatch)
     body = {
