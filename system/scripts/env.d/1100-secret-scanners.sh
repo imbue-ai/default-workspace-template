@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# env.d unit: the publish-inspiration scan gate's secret-scanner binaries
+# env.d unit: the publish-template scan gate's secret-scanner binaries
 # (betterleaks + kingfisher). Normally baked into the image by setup_system.sh;
 # this unit re-converges them if they ever go missing (or after an image that
 # skipped them), reusing the single source of truth for version pins and

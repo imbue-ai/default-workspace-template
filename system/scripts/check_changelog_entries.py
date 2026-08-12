@@ -144,12 +144,34 @@ def resolve_diff_base(repo_root: Path) -> str:
     (the exact bug this gate exists to prevent), so such candidates are
     rejected. Raises ``RuntimeError`` if none qualify -- the caller turns that
     into a loud non-zero exit, never a pass.
+
+    When ``GITHUB_BASE_REF`` names a base that cannot be resolved, this raises
+    rather than falling through to ``main``. On a STACKED PR those are wildly
+    different questions: main is several PRs below the real base, so the diff
+    grows to the whole stack and the gate demands entries for projects this PR
+    never touched. That happened, and the silent fallback is what made it read
+    as flakiness instead of as a misresolved ref.
     """
     head = _rev_parse("HEAD", repo_root)
     candidates: list[str] = []
-    base_ref = os.environ.get("GITHUB_BASE_REF", "")
+    # CHANGELOG_BASE_REF first: GitHub reserves the `GITHUB_` prefix, so a
+    # workflow cannot correct GITHUB_BASE_REF when the runner's value is wrong
+    # (as it was on a stacked PR, where it said `main` rather than the parent
+    # branch). The workflow sets this one from the event payload instead.
+    base_ref = os.environ.get("CHANGELOG_BASE_REF", "") or os.environ.get(
+        "GITHUB_BASE_REF", ""
+    )
     if base_ref:
         candidates.extend([f"origin/{base_ref}", base_ref])
+        if all(_rev_parse(ref, repo_root) is None for ref in candidates):
+            raise RuntimeError(
+                f"GITHUB_BASE_REF names {base_ref!r}, but neither "
+                f"'origin/{base_ref}' nor '{base_ref}' resolves here. Refusing "
+                "to fall back to main: on a stacked PR that diffs against the "
+                "wrong base and reports entries the PR does not owe. Fetch the "
+                f"base first: git fetch origin refs/heads/{base_ref} && "
+                f"git update-ref refs/remotes/origin/{base_ref} FETCH_HEAD"
+            )
     candidates.extend(["origin/main", "main"])
 
     saw_head_collision = False

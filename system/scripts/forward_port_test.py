@@ -41,7 +41,16 @@ def _read_apps(apps_file: Path) -> list[dict[str, str]]:
 
 
 @pytest.mark.parametrize(
-    "name", ["terminal", "browser", "my-app", "app2", "a", "openvscode-server-4", "system_interface"]
+    "name",
+    [
+        "terminal",
+        "browser",
+        "my-app",
+        "app2",
+        "a",
+        "openvscode-server-4",
+        "system_interface",
+    ],
 )
 def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> None:
     apps_file = tmp_path / "apps.toml"
@@ -71,7 +80,9 @@ def test_valid_names_register_and_are_persisted(tmp_path: Path, name: str) -> No
         "localhost",
     ],
 )
-def test_invalid_names_are_rejected_with_a_clear_error(tmp_path: Path, name: str) -> None:
+def test_invalid_names_are_rejected_with_a_clear_error(
+    tmp_path: Path, name: str
+) -> None:
     apps_file = tmp_path / "apps.toml"
     # ``--name=<value>`` keeps argparse from eating a leading-hyphen name as
     # an option token, so every case exercises the validator itself.
@@ -148,7 +159,12 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
     forward_port = _load_module("_forward_port_drift_check", _SCRIPT)
     scaffold = _load_module(
         "_scaffold_drift_check",
-        repo_root / ".agents" / "skills" / "build-app" / "scripts" / "scaffold_flask_lib.py",
+        repo_root
+        / ".agents"
+        / "skills"
+        / "build-app"
+        / "scripts"
+        / "scaffold_flask_lib.py",
     )
     names = (
         "web",
@@ -170,7 +186,9 @@ def test_scaffold_name_rule_stays_a_subset_of_the_registration_rule() -> None:
     for name in names:
         is_scaffold_accepted = (
             bool(scaffold.KEBAB_RE.match(name))
-            and not any(name.startswith(prefix) for prefix in scaffold.RESERVED_NAME_PREFIXES)
+            and not any(
+                name.startswith(prefix) for prefix in scaffold.RESERVED_NAME_PREFIXES
+            )
             and name not in scaffold.RESERVED_NAMES
             and scaffold._kebab_to_snake(name) not in scaffold.RESERVED_NAMES
         )
