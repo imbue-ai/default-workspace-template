@@ -43,7 +43,6 @@
 
 import DOMPurify from "dompurify";
 import { getApps } from "../models/AgentManager";
-import { SQUIGGLE_GLYPHS, monogramMarkup } from "./squiggles";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
@@ -310,29 +309,33 @@ export function appIconMarkup(
  *
  * Almost every app is in this case, so the fallback cannot be one shared glyph:
  * a list of them all wearing the same box tells the reader nothing, which is
- * what "notes" and "counter" looked like side by side. A monogram in a colour
- * derived from the name at least differs per app and stays put, so the same app
- * is recognisable in the rail, the launcher and its tab.
+ * what "notes" and "counter" looked like side by side. A monogram -- the app's
+ * initial in an outlined tile -- at least differs per app and stays put, so the
+ * same app is recognisable in the rail, the launcher and its tab.
  *
- * The colour comes from the squiggle palette, so an unnamed app sits in the
- * same family as the project glyphs rather than introducing a second one, and
- * it is picked by hashing the name so it never moves between renders or
- * machines.
+ * It is drawn in the house icon style: currentColor strokes on a transparent
+ * background, the same frame every glyph in icons.ts uses, so an unnamed app
+ * sits beside the built-in kinds instead of introducing colour the rest of the
+ * chrome does not have. (Colour is the projects' identity language -- the
+ * squiggles and their palette -- not the apps'.)
  */
 export function appMonogramMarkup(appName: string, sizePx: number): string {
-  return monogramMarkup(appName, SQUIGGLE_GLYPHS[paletteIndexForName(appName)].color, sizePx);
-}
-
-/** A stable palette slot for a name: the same app is always the same colour,
- *  here and on any other machine showing it. */
-function paletteIndexForName(name: string): number {
-  let hash = 0;
-  for (let index = 0; index < name.length; index += 1) {
-    // The classic djb2-ish rolling hash, kept in 32-bit range with `| 0` so a
-    // long name cannot drift into float territory and quantise.
-    hash = (hash * 31 + name.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash) % SQUIGGLE_GLYPHS.length;
+  // App names are agent/user text, so the letter is escaped before it lands in
+  // markup that callers hand to `m.trust` / `innerHTML`.
+  const initial = appName
+    .trim()
+    .charAt(0)
+    .toUpperCase()
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${sizePx}" height="${sizePx}" viewBox="0 0 24 24" ` +
+    `fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ` +
+    `aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/>` +
+    `<text x="12" y="12.7" stroke="none" fill="currentColor" font-size="11" font-weight="600" ` +
+    `text-anchor="middle" dominant-baseline="central">${initial}</text></svg>`
+  );
 }
 
 /**

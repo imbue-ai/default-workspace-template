@@ -314,14 +314,18 @@ describe("serviceIconMarkup", () => {
       expect(markup).not.toBe(FALLBACK);
       expect(parsed(markup).textContent?.trim()).toBe(name.charAt(0).toUpperCase());
     }
-    // Two apps must not collide on the same colour by accident.
-    const plainFill = parsed(serviceIconMarkup("plain", 16, FALLBACK))
-      .querySelector("rect")
-      ?.getAttribute("fill");
-    const brokenFill = parsed(serviceIconMarkup("broken", 16, FALLBACK))
-      .querySelector("rect")
-      ?.getAttribute("fill");
-    expect(plainFill).not.toBe(brokenFill);
+  });
+
+  it("draws the monogram in the house icon style, not in colour", () => {
+    // Monochrome currentColor strokes on a transparent background, like every
+    // glyph in icons.ts. Colour is the projects' identity language, not the
+    // apps' -- an app told apart by its letter needs no palette of its own.
+    const root = parsed(serviceIconMarkup("plain", 16, FALLBACK));
+    expect(root.getAttribute("stroke")).toBe("currentColor");
+    expect(root.getAttribute("fill")).toBe("none");
+    expect(root.getAttribute("viewBox")).toBe("0 0 24 24");
+    expect(root.querySelector("rect")?.getAttribute("fill")).toBeNull();
+    expect(root.querySelector("text")?.getAttribute("fill")).toBe("currentColor");
   });
 
   it("is stable: the same app monograms identically every time", () => {
