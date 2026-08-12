@@ -508,6 +508,23 @@ Flags:
   most 16384 characters -- registration fails loudly otherwise.
   Omitting both leaves any icon already registered for the app in
   place, so a service that re-registers on restart keeps its icon.
+
+  **Draw the icon in the workspace's house style**: monochrome line
+  art on a transparent background, exactly like the built-in glyphs.
+  The frame to author in is
+
+  ```svg
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="..."/>
+  </svg>
+  ```
+
+  -- strokes only, no `fill` on the shapes, no hardcoded colors.
+  `currentColor` is what lets the workspace ink the glyph to match the
+  text beside it, and a transparent background is what keeps it from
+  reading as a sticker in a row of line icons. Only use color if the
+  user explicitly asks for a colored icon.
 - `--remove`: remove the named entry from
   `data/.state/apps.toml`. Use this when tearing down a service.
 

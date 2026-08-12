@@ -340,7 +340,9 @@ def main() -> None:
         "--icon",
         help=(
             "SVG markup for the app's icon, stored verbatim on the entry. Must "
-            "be a single <svg> element. Omit to leave any icon already "
+            "be a single <svg> element. House style: monochrome line art -- "
+            "stroke='currentColor', fill='none', transparent background -- like "
+            "the workspace's built-in glyphs. Omit to leave any icon already "
             "registered for this app untouched."
         ),
     )
