@@ -347,10 +347,10 @@ record which branch applied (with its evidence) in your report:
   `/autofix` here would review *upstream's* code and could apply local fixes to
   it -- manufacturing exactly the local divergence a future update would have
   to reconcile -- so on a clean pull the skip is the correct outcome, not a
-  shortcut. Your report states that this branch fired and shows the evidence:
-  `gates_required: false` and an impact analysis with no user-created code in
-  it (built-in impacts -- a service the lead must restart -- do not block the
-  skip).
+  shortcut. Your report states that this branch fired and shows the evidence for
+  all three conditions: `gates_required: false`, an impact analysis with no
+  user-created code in it (built-in impacts -- a service the lead must restart --
+  do not block the skip), and no in-branch edits of your own.
 
 - **Otherwise run the real gates, at full scope**: follow the "Review gates"
   section of `.agents/shared/worker/references/harden-creation.md` (unattended
