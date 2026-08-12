@@ -70,7 +70,13 @@ process -- plus any children it already spawned, found via a
 `/proc/<pid>/task/*/children` walk -- up to that band. It only ever raises,
 never lowers, so a process already tagged higher (a Chromium process the
 browser sweep has remapped into its band) and the `PROTECTED` programs
-(earlyoom, deferred-install, the listener itself) are never demoted. The prefix remains the primary mechanism because it tags at spawn:
+(earlyoom, the listener itself, and the one-shots env-converge and eval-worker)
+are never demoted. Because this path *raises*, a built-in missing from either
+band map is not merely left alone but actively pushed to `USER_SERVICE`, above
+every other built-in -- so
+`oom_tag_service_test.test_every_supervisord_program_has_an_explicit_band`
+requires every program in `supervisord.conf` to name its band outright. The
+prefix remains the primary mechanism because it tags at spawn:
 the RUNNING event fires only after `startsecs` (~1s), leaving a short window
 where an unwrapped service runs untagged.
 

@@ -82,8 +82,12 @@ def test_never_lowers_a_self_tagged_process() -> None:
 
 
 def test_protected_programs_are_never_touched() -> None:
+    # The one-shots (env-converge, eval-worker) matter as much as the OOM
+    # machinery here: the backstop *raises*, so a program missing from
+    # _NON_SERVICE_PROGRAM_BANDS is not merely left alone but actively pushed to
+    # USER_SERVICE (200), above every built-in.
     proc = _FakeProc({400: 0})
-    for program_name in ("earlyoom", "oom-tag-backstop", "deferred-install"):
+    for program_name in ("earlyoom", "oom-tag-backstop", "env-converge", "eval-worker"):
         oom_tag_backstop.handle_running_event(
             _running_payload(program_name, 400),
             read_adj=proc.read,
