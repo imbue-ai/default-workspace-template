@@ -22,7 +22,9 @@ _spec.loader.exec_module(migration)
 
 
 @pytest.fixture
-def workspace_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+def workspace_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
     host_dir = tmp_path / "host"
     host_dir.mkdir()
     config_dir = tmp_path / "claude-config"
@@ -32,7 +34,9 @@ def workspace_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Pat
     return host_dir, config_dir
 
 
-def test_migrate_moves_keys_into_settings_and_scrubs_host_env(workspace_dirs: tuple[Path, Path]) -> None:
+def test_migrate_moves_keys_into_settings_and_scrubs_host_env(
+    workspace_dirs: tuple[Path, Path],
+) -> None:
     host_dir, config_dir = workspace_dirs
     (host_dir / "env").write_text(
         "CLAUDE_CONFIG_DIR=/home/user/.mngr/claude\nANTHROPIC_API_KEY=sk-old-key\nANTHROPIC_BASE_URL=https://litellm.example\n"
@@ -53,7 +57,9 @@ def test_migrate_moves_keys_into_settings_and_scrubs_host_env(workspace_dirs: tu
     assert "CLAUDE_CONFIG_DIR=/home/user/.mngr/claude" in host_env_text
 
 
-def test_migrate_is_noop_when_host_env_holds_no_auth_keys(workspace_dirs: tuple[Path, Path]) -> None:
+def test_migrate_is_noop_when_host_env_holds_no_auth_keys(
+    workspace_dirs: tuple[Path, Path],
+) -> None:
     host_dir, config_dir = workspace_dirs
     (host_dir / "env").write_text("CLAUDE_CONFIG_DIR=/home/user/.mngr/claude\n")
 
@@ -71,7 +77,9 @@ def test_migrate_rerun_after_success_is_noop(workspace_dirs: tuple[Path, Path]) 
     assert migration._migrate_env_files() is False
 
 
-def test_migrate_keeps_existing_settings_credentials_over_host_env(workspace_dirs: tuple[Path, Path]) -> None:
+def test_migrate_keeps_existing_settings_credentials_over_host_env(
+    workspace_dirs: tuple[Path, Path],
+) -> None:
     """A modal-written credential outranks the stale host-env one.
 
     The stale host key is still scrubbed (that is the point of the
@@ -79,7 +87,9 @@ def test_migrate_keeps_existing_settings_credentials_over_host_env(workspace_dir
     """
     host_dir, config_dir = workspace_dirs
     (host_dir / "env").write_text("ANTHROPIC_API_KEY=sk-stale\n")
-    (config_dir / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-modal"}}))
+    (config_dir / "settings.json").write_text(
+        json.dumps({"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-modal"}})
+    )
 
     changed = migration._migrate_env_files()
 

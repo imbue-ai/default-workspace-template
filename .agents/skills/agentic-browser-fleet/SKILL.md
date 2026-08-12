@@ -150,7 +150,7 @@ uv run agentic-browser-fleet tab alex-smith close 2        # close tab index 2
 
 ```bash
 uv run agentic-browser-fleet acquire alex-smith            # reserve browser alex-smith across commands
-uv run agentic-browser-fleet acquire alex-smith --reclaim  # take it back from a human -- ONLY on their say-so
+uv run agentic-browser-fleet acquire alex-smith --reclaim  # take control back from a human -- ONLY after you ask and they explicitly confirm
 uv run agentic-browser-fleet release alex-smith            # let it go (alias: unlock alex-smith)
 uv run agentic-browser-fleet handoff alex-smith "solve the CAPTCHA"  # hand to the human (alias: request-human)
 ```
@@ -168,7 +168,7 @@ Every browser has exactly one controller; every command's output names the owner
   - You switch to a different browser for the rest of the task -> release the one you're leaving.
   - Driving several at once -> keep them until fully done, then release each.
   - If you forget, an idle lease auto-frees after ~90s; if a later command says you no longer hold it, just acquire it again.
-- **The human always wins.** If a human takes control, your next command comes back with status `busy_human`/`lost_control` (exit 2). You lost control: **stop, tell the user the human took the wheel, and end your turn.** Do not retry, poll, or `--reclaim` on your own. You're queued to resume first; you'll be messaged when they hand it back. On resume, **re-run `state <name>` first** (the page changed -- and the view may have been resized while they held it, reflowing the layout, so treat every element number as stale), then continue. Resume early only on an explicit "keep going": `acquire <name> --reclaim`, then `state <name>`.
+- **The human always wins.** If a human takes control, your next command comes back with status `busy_human`/`lost_control` (exit 2). You lost control: **stop, tell the user the human took the wheel, and end your turn.** Do not retry, poll, or `--reclaim` on your own. You're queued to resume first; you'll be messaged when they hand it back. On resume, **re-run `state <name>` first** (the page changed -- and the view may have been resized while they held it, reflowing the layout, so treat every element number as stale), then continue. **Never `--reclaim` a browser the human is holding on your own initiative** -- taking control away from a human mid-session is disruptive. If you believe you need it back before they hand it over, **end your turn and ask**; run `acquire <name> --reclaim` only after they explicitly confirm (a bare "keep going" from the user counts as that confirmation), then `state <name>`.
 - **Agents never preempt each other.** A browser another agent holds returns (exit 3):
 
   ```text
@@ -257,7 +257,8 @@ uv run agentic-browser-fleet handoff alex-smith "solve the CAPTCHA on the sign-i
 # -> tell the user what to do, end your turn; you resume first when they hand back.
 uv run agentic-browser-fleet state alex-smith            # (on resume) confirm the challenge cleared
 
-# Human took over, then said "keep going" -- and ONLY then:
+# Human took over. To resume BEFORE they hand it back, ask first and end your turn;
+# reclaim ONLY after they explicitly confirm (a "keep going" counts):
 uv run agentic-browser-fleet acquire riley-jones --reclaim
 uv run agentic-browser-fleet state riley-jones            # re-state after regaining control
 ```
@@ -276,7 +277,7 @@ This streams the agent's `[thinking]`/`[action]` trace into your output and ends
 
 - Don't `click <index>` without a fresh `state` first -- indices go stale the moment the page changes.
 - Don't "take control" -- that's a human-only UI action. You drive by issuing commands.
-- Don't pass `--reclaim` unless the human explicitly told you to resume a browser they took over.
+- Don't pass `--reclaim` on your own initiative to take control from a human. End your turn and ask first; reclaim only after the user explicitly confirms.
 - Don't auto-retry on exit `2` (preempted). Stop and wait for the human.
 - Don't tell the user to "look in the tab" for results -- your CLI output is the source of truth; the tab is just the live picture.
 - Don't jump to `task` for ordinary pages. Drive them yourself.
