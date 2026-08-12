@@ -635,6 +635,28 @@ def test_build_that_writes_no_bundle_is_a_failure_not_a_success(repo: Path) -> N
     assert _bundle_exists(repo)
 
 
+def test_recovery_rebuilds_when_there_was_no_bundle_to_snapshot(tmp_path: Path) -> None:
+    # A workspace that never built a bundle has nothing to restore, so recovery
+    # falls back to building the known-good tree -- the behaviour from before
+    # the snapshot existed, and the only path left for that case.
+    repo_root = tmp_path / "repo"
+    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n",
+        repo_root=repo_root,
+    )
+    # The reveal's build fails; the recovery build from known-good succeeds.
+    runner.respond(
+        ("npm", "run", "build"), [_Result(returncode=1, stderr="type error"), _Result()]
+    )
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner(), repo_root)
+
+    assert code == 2
+    assert _bundle_exists(repo_root)
+    assert len(runner.argvs_starting("npm", "run", "build")) == 2
+
+
 def test_a_bundle_that_cannot_be_copied_aside_still_reveals(repo: Path) -> None:
     # The snapshot is a precaution. Refusing to reveal because the copy failed
     # would make a full or read-only disk fatal to a change that is otherwise
