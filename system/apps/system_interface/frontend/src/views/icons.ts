@@ -22,6 +22,10 @@ const STROKE_PATHS = {
   // attachment-remove chip, the tab close button, the login modal, the image
   // lightbox).
   close: '<path d="M18 6L6 18"/><path d="M6 6l12 12"/>',
+  // Closing a tab and taking its object off the machine are different acts, so
+  // they get different glyphs: a minus puts the tab away and leaves the thing
+  // running, an "x" ends it everywhere.
+  minus: '<path d="M6 12h12"/>',
   file: '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/>',
   // Up-arrow, shared by the composer "send" button and the pending-message
   // "interrupt and send now" action.

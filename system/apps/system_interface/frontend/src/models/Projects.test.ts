@@ -23,6 +23,7 @@ import {
   removeMember,
   removePanelFromAllProjects,
   searchMembers,
+  serviceNameFromRef,
   shareMember,
   updateProjectSettings,
   type MachineInventory,
@@ -473,6 +474,26 @@ describe("memberRef", () => {
     for (const kind of kinds) {
       expect(memberKindFromRef(memberRef(kind, "thing"))).toBe(kind);
     }
+  });
+});
+
+describe("serviceNameFromRef", () => {
+  it("recovers the name an app ref was built from", () => {
+    expect(serviceNameFromRef(memberRef("app", "web"))).toBe("web");
+    expect(serviceNameFromRef("service:notes")).toBe("notes");
+  });
+
+  it("answers null for a ref that addresses no installed app", () => {
+    expect(serviceNameFromRef("chat:a1b2c3")).toBeNull();
+    expect(serviceNameFromRef("terminal:build")).toBeNull();
+    expect(serviceNameFromRef("url:9f86d081")).toBeNull();
+    expect(serviceNameFromRef("nonsense")).toBeNull();
+    expect(serviceNameFromRef("")).toBeNull();
+    expect(serviceNameFromRef("service:")).toBeNull();
+  });
+
+  it("answers null for a fleet browser, which is a session rather than an app", () => {
+    expect(serviceNameFromRef(memberRef("browser", "quiet-otter"))).toBeNull();
   });
 });
 

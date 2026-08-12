@@ -111,12 +111,33 @@ _DEFAULT_TAIL_COUNT = 50
 # local backend URL from this registry entry.
 _BROWSER_SERVICE_NAME = "browser"
 
+# The name this shell registers itself under. It is an app like any other in
+# the registry, so the deregister endpoint has to refuse it explicitly -- pulling
+# its own row would leave the workspace with no origin to serve the UI from.
+_SHELL_SERVICE_NAME = "system_interface"
+
 # The two member-ref forms whose objects this workspace can stop when a project
 # is deleted: a named tmux session and one browser out of the fleet. Every other
 # ref kind (a supervised app, a chat agent, an ad-hoc URL) has no stop control
 # here and is reported back untouched instead.
 _TERMINAL_REF_PREFIX = "terminal:"
-_BROWSER_SESSION_REF_PREFIX = f"service:{_BROWSER_SERVICE_NAME}?session="
+_SERVICE_REF_PREFIX = "service:"
+_BROWSER_SESSION_REF_PREFIX = f"{_SERVICE_REF_PREFIX}{_BROWSER_SERVICE_NAME}?session="
+
+# ``system/scripts/forward_port.py`` owns the app registry at
+# ``data/.state/apps.toml`` -- its lock file and its atomic replace -- so
+# deregistering an app shells out to the script rather than growing a second
+# writer of the same file here. The script imports tomlkit, a workspace-venv
+# dependency that this app does not declare, so it runs under ``uv run`` from
+# the workspace root, exactly as ``.agents/shared/scripts/serve_isolated_instance.py``
+# invokes it. The root is this package's own location walked back out of
+# ``system/apps/system_interface/imbue/system_interface``.
+_WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
+_FORWARD_PORT_SCRIPT = _WORKSPACE_ROOT_DIRECTORY / "system" / "scripts" / "forward_port.py"
+
+# Generous: the registration script runs under ``uv run``, which may have to
+# resolve the workspace environment before the (near-instant) TOML rewrite.
+_FORWARD_PORT_TIMEOUT_SECONDS = 60.0
 
 # How often flask-sock sends a keepalive ping on each WebSocket connection.
 # Pings detect (and tear down) half-dead peers without any asyncio machinery --
@@ -1570,6 +1591,62 @@ def _destroy_browser_passthrough(name: str) -> Response:
     )
 
 
+def _run_forward_port_removal(name: str) -> str | None:
+    """Drop one app's row from the port registry, returning the failure text.
+
+    Thin wrapper over ``forward_port.py --remove``: the script holds the
+    registry's lock and does the atomic replace, so this only has to invoke it
+    and report what it said when it refused.
+    """
+    result = run_local_command_modern_version(
+        command=["uv", "run", "python3", str(_FORWARD_PORT_SCRIPT), "--remove", "--name", name],
+        cwd=_WORKSPACE_ROOT_DIRECTORY,
+        is_checked=False,
+        timeout=_FORWARD_PORT_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        _loguru_logger.warning("Failed to deregister app {}: {}", name, result.stderr.strip())
+        return result.stderr.strip() or f"forward_port.py exited {result.returncode}"
+    return None
+
+
+def _deregister_app_endpoint(name: str) -> Response:
+    """Take one app out of the port registry and out of every project.
+
+    Deregistering is the whole of what this workspace can do to an app, and the
+    response says so rather than dressing it up as a destroy: nothing here
+    supervises the program behind a registered port. Its row leaves
+    ``data/.state/apps.toml`` (so it stops being an addressable service and
+    stops appearing in the app list), its ``service:<name>`` member leaves every
+    project's list, and whatever is listening on that port keeps listening until
+    whoever started it stops it -- which ``is_process_stopped`` reports as the
+    constant false it always is. An app whose program is supervised simply
+    re-registers itself the next time that program starts.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    if name == _SHELL_SERVICE_NAME:
+        error = ErrorResponse(detail=f"Refusing to deregister the workspace shell itself: {name!r}")
+        return _json_response(error.model_dump(), status_code=400)
+    if get_state().agent_manager.get_service_url(name) is None:
+        error = ErrorResponse(detail=f"No registered app named {name!r}")
+        return _json_response(error.model_dump(), status_code=404)
+    failure = _run_forward_port_removal(name)
+    if failure is not None:
+        error = ErrorResponse(detail=f"Failed to deregister app {name!r}: {failure}")
+        return _json_response(error.model_dump(), status_code=500)
+    ref = f"{_SERVICE_REF_PREFIX}{name}"
+    project_ids = projects.projects_showing(layout_dir, ref)
+    for project_id in project_ids:
+        projects.remove_member(layout_dir, project_id, ref)
+    if project_ids:
+        _broadcast_members_changed(project_ids)
+    logger.info("Deregistered app {} (left {} project(s); its process was not stopped)", name, len(project_ids))
+    return _json_response({"name": name, "project_ids": project_ids, "is_process_stopped": False})
+
+
 def _get_screen_capture(agent_id: str) -> Response:
     """Capture the tmux pane content for an agent.
 
@@ -2407,6 +2484,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
     application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
     application.add_url_rule("/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"])
+    application.add_url_rule("/api/apps/<string:name>/deregister", view_func=_deregister_app_endpoint, methods=["POST"])
     claude_auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])

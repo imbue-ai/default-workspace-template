@@ -499,6 +499,15 @@ Flags:
   loudly on an invalid name.
 - `--url`: full URL where the app is reachable from inside the
   container (e.g. `http://localhost:8090`).
+- `--icon` / `--icon-file`: optional SVG icon for the app, so the
+  workspace draws its glyph instead of the generic one. `--icon` takes
+  the markup itself; `--icon-file` takes a path whose *contents* are
+  read now and stored (the path is not recorded). Either way the
+  registry holds the markup, which must be a single `<svg>` element
+  with no script, style, event handler, or external reference, and at
+  most 16384 characters -- registration fails loudly otherwise.
+  Omitting both leaves any icon already registered for the app in
+  place, so a service that re-registers on restart keeps its icon.
 - `--remove`: remove the named entry from
   `data/.state/apps.toml`. Use this when tearing down a service.
 

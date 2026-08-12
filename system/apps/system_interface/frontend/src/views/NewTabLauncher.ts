@@ -30,8 +30,9 @@
  */
 
 import m from "mithril";
-import { buildEverythingMembers, partitionByMembership } from "../models/Projects";
+import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
 import type { MachineInventory, MemberKind } from "../models/Projects";
+import { serviceIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 
@@ -225,20 +226,32 @@ function launcherIcon(name: keyof typeof LAUNCHER_PATHS, size: number): string {
   );
 }
 
+// The size every glyph in the launcher is drawn at: the tiles, the row glyphs
+// and the filter funnel.
+const GLYPH_SIZE = 15;
+
 /** The glyph for a row, by what the object is. */
 function kindIconMarkup(kind: MemberKind): string {
   switch (kind) {
     case "chat":
-      return launcherIcon("chat", 15);
+      return launcherIcon("chat", GLYPH_SIZE);
     case "browser":
-      return launcherIcon("browser", 15);
+      return launcherIcon("browser", GLYPH_SIZE);
     case "terminal":
-      return launcherIcon("terminal", 15);
+      return launcherIcon("terminal", GLYPH_SIZE);
     case "app":
-      return launcherIcon("app", 15);
+      return launcherIcon("app", GLYPH_SIZE);
     case "url":
-      return icon("external-link", { size: 15 });
+      return icon("external-link", { size: GLYPH_SIZE });
   }
+}
+
+/** The glyph one table row wears: a registered app's own icon when it has one,
+ *  and the kind's built-in glyph otherwise. */
+function rowIconMarkup(row: LauncherRow): string {
+  const fallback = kindIconMarkup(row.kind);
+  if (row.kind !== "app") return fallback;
+  return serviceIconMarkup(serviceNameFromRef(row.ref), GLYPH_SIZE, fallback);
 }
 
 const OPEN_NEW_TILES: readonly { kind: LaunchKind; label: string }[] = [
@@ -364,7 +377,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         m(
           "span",
           { class: "text-text-faint flex w-5 shrink-0 items-center justify-center" },
-          m.trust(kindIconMarkup(row.kind)),
+          m.trust(rowIconMarkup(row)),
         ),
         m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
         m("span", { class: "text-text-faint w-24 shrink-0 truncate" }, LAUNCHER_KIND_LABELS[row.kind]),
@@ -403,7 +416,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             },
             ...hoverTooltipAttrs("Filter by kind"),
           },
-          m.trust(launcherIcon("filter", 15)),
+          m.trust(launcherIcon("filter", GLYPH_SIZE)),
         ),
         openFilterFor === section.key ? filterMenu(section) : null,
       ]),
@@ -445,7 +458,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
                 m(
                   "span",
                   { class: "text-text-faint flex shrink-0 items-center" },
-                  m.trust(launcherIcon(tile.kind, 15)),
+                  m.trust(launcherIcon(tile.kind, GLYPH_SIZE)),
                 ),
                 tile.label,
               ],

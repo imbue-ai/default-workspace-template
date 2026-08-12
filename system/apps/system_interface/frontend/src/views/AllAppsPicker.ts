@@ -28,6 +28,7 @@
 import m from "mithril";
 import type { AppEntry } from "../models/AgentManager";
 import { getApps } from "../models/AgentManager";
+import { appIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 
@@ -41,6 +42,9 @@ const FILTER_ROW_THRESHOLD = 8;
 // shortcut rows, reached by creating a session rather than by opening the
 // service. Same exclusions the rail's own shortcut list makes.
 const HIDDEN_APP_NAMES: ReadonlySet<string> = new Set(["system_interface", "terminal", "browser"]);
+
+// The size every glyph in this list is drawn at, app icon and generic alike.
+const ROW_GLYPH_SIZE = 14;
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
@@ -129,7 +133,9 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
         m(
           "span",
           { class: "flex shrink-0 items-center text-text-faint" },
-          m.trust(icon("external-link", { size: 14 })),
+          // An app that registered an icon wears it here too; one that did not
+          // keeps the generic "opens somewhere" glyph this list has always used.
+          m.trust(appIconMarkup(app.icon, ROW_GLYPH_SIZE, icon("external-link", { size: ROW_GLYPH_SIZE }))),
         ),
         m("span", { class: "min-w-0 flex-1 truncate" }, app.name),
         m(

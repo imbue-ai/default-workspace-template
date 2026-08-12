@@ -35,6 +35,7 @@ from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
+from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
@@ -2622,6 +2623,129 @@ def test_delete_project_panel_also_unfiles_the_member(
     panel_only = client.post("/api/projects/panels/terminal-panel-1/delete")
     assert panel_only.status_code == 200
     assert panel_only.get_json() == {"project_ids": []}
+
+
+def _app_with_registered_app(name: str) -> Flask:
+    """A workspace app whose port registry holds exactly one app, under ``name``."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster())
+    agent_manager._apps = [AppEntry(name=name, url="http://localhost:8090")]
+    return create_application(build_test_state(agent_manager=agent_manager))
+
+
+def _forward_port_removal_result(returncode: int, stderr: str = "") -> FinishedProcess:
+    """What ``forward_port.py --remove`` looks like coming back from the runner."""
+    return FinishedProcess(
+        returncode=returncode,
+        stdout="",
+        stderr=stderr,
+        command=("uv", "run", "python3", "forward_port.py", "--remove", "--name", "docs-viewer"),
+        is_output_already_logged=False,
+    )
+
+
+def test_deregister_app_unregisters_it_and_unfiles_it_everywhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The registry row goes through forward_port.py and the ref leaves every project.
+
+    Deregistering is name-scoped rather than view-scoped: the app stops being an
+    addressable service at all, so it drops out of each project showing it, not
+    just the one on screen. The response says outright that nothing stopped the
+    program behind the port.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("docs-viewer").test_client()
+    assert test_client.post("/api/projects", json={"name": "Alpha", "color": "#3B82F6", "glyph": 2}).status_code == 200
+    for project_id in ("project-1", "alpha"):
+        assert (
+            test_client.post(f"/api/projects/{project_id}/members", json={"ref": "service:docs-viewer"}).status_code
+            == 200
+        )
+
+    with patch(
+        "imbue.system_interface.server.run_local_command_modern_version",
+        return_value=_forward_port_removal_result(0),
+    ) as mock_run:
+        response = test_client.post("/api/apps/docs-viewer/deregister")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "name": "docs-viewer",
+        "project_ids": ["project-1", "alpha"],
+        "is_process_stopped": False,
+    }
+    assert mock_run.call_args.kwargs["command"] == [
+        "uv",
+        "run",
+        "python3",
+        str(_FORWARD_PORT_SCRIPT),
+        "--remove",
+        "--name",
+        "docs-viewer",
+    ]
+    assert [project["members"] for project in test_client.get("/api/projects").get_json()["projects"]] == [[], []]
+
+
+def test_deregister_app_reports_a_registry_removal_that_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusing forward_port.py is surfaced, and the memberships stay put."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("docs-viewer").test_client()
+    assert (
+        test_client.post("/api/projects/project-1/members", json={"ref": "service:docs-viewer"}).status_code == 200
+    )
+
+    with patch(
+        "imbue.system_interface.server.run_local_command_modern_version",
+        return_value=_forward_port_removal_result(2, "invalid app name"),
+    ):
+        response = test_client.post("/api/apps/docs-viewer/deregister")
+
+    assert response.status_code == 500
+    assert "invalid app name" in response.get_json()["detail"]
+    # The app is still registered, so it must still be filed where it was filed.
+    assert test_client.get("/api/projects").get_json()["projects"][0]["members"] == ["service:docs-viewer"]
+
+
+def test_deregister_app_refuses_the_shell_and_unknown_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell's own row and an unregistered name are both rejected untouched."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    test_client = _app_with_registered_app("system_interface").test_client()
+
+    with patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run:
+        shell = test_client.post("/api/apps/system_interface/deregister")
+        unknown = test_client.post("/api/apps/docs-viewer/deregister")
+
+    assert shell.status_code == 400
+    assert unknown.status_code == 404
+    mock_run.assert_not_called()
+
+
+def test_deregister_app_broadcasts_the_projects_it_left(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clients hear the membership change, as they do for every other member mutation."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    workspace_app = _app_with_registered_app("docs-viewer")
+    test_client = workspace_app.test_client()
+    assert test_client.post("/api/projects/project-1/members", json={"ref": "service:docs-viewer"}).status_code == 200
+    client_queue = _register_fake_client(workspace_app, "client-1", "desktop")
+
+    with patch(
+        "imbue.system_interface.server.run_local_command_modern_version",
+        return_value=_forward_port_removal_result(0),
+    ):
+        assert test_client.post("/api/apps/docs-viewer/deregister").status_code == 200
+
+    assert _next_broadcast_message(client_queue) == {
+        "type": "project_members_changed",
+        "project_ids": ["project-1"],
+    }
 
 
 def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
