@@ -17,9 +17,26 @@ from pathlib import Path
 from oom_priority import bands
 
 _SCRIPT = Path(__file__).parent / "oom_tag_service.py"
+_SUPERVISORD_CONF = Path(__file__).resolve().parents[3] / "supervisord.conf"
 
 _PROC_OOM = Path("/proc/self/oom_score_adj")
 _HAS_WRITABLE_PROC_OOM = os.access(_PROC_OOM, os.W_OK)
+
+
+def _service_keys_used_by_supervisord() -> list[str]:
+    """Every key ``system/supervisord.conf`` passes to this wrapper, in order.
+
+    Only ``command=`` lines count -- the file's prose comments mention the
+    wrapper by name too, and those are not invocations.
+    """
+    keys = []
+    for line in _SUPERVISORD_CONF.read_text().splitlines():
+        if not line.startswith("command="):
+            continue
+        _, marker, rest = line.partition("oom_tag_service.py ")
+        if marker and rest.split():
+            keys.append(rest.split()[0])
+    return keys
 
 
 def _fake_command(tmp_path: Path) -> tuple[Path, Path]:
@@ -77,6 +94,21 @@ def test_missing_command_exits_nonzero_with_usage(tmp_path: Path) -> None:
     result = _run(["system_interface"], bindir)
     assert result.returncode == 2
     assert "usage:" in result.stderr
+
+
+def test_every_service_key_in_supervisord_conf_has_a_band() -> None:
+    # A built-in service whose key is missing from SERVICE_BANDS silently falls
+    # back to USER_SERVICE (200) -- which sits ABOVE every built-in, so it would
+    # be shed before all of them, the opposite of what a built-in wants. The only
+    # runtime signal is a warning on that service's own stderr, which is easy to
+    # miss for months (this is what happened to `xvfb`). Catch it here instead.
+    keys = _service_keys_used_by_supervisord()
+    assert keys, f"no oom_tag_service.py invocations found in {_SUPERVISORD_CONF}"
+    unbanded = sorted({key for key in keys if key not in bands.SERVICE_BANDS})
+    assert not unbanded, (
+        f"supervisord.conf passes service keys with no SERVICE_BANDS entry: {unbanded}. "
+        "Add each to SERVICE_BANDS (or pass 'user' if it really is user-created)."
+    )
 
 
 def test_applies_the_service_band_and_it_survives_the_exec(tmp_path: Path) -> None:

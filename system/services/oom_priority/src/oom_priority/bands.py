@@ -181,10 +181,16 @@ def chat_agent_oom_score_adj(
 # The services are ordered from least- to most-expendable by how much losing one
 # hurts: the terminal (raw shell access) and the UI come first, then the sharing
 # stack, then the runtime-state sync (github-sync, opt-in) and the host backup,
-# then the app-watcher, and last the browser coordinator. ``user`` is the single
-# band every *user-created* service shares; it sits above every built-in service
-# so a user's own service is shed before any built-in one, while staying below
-# USER_AGENT.
+# then the app-watcher, and last the browser stack (its X display, then the
+# coordinator). ``user`` is the single band every *user-created* service shares;
+# it sits above every built-in service so a user's own service is shed before any
+# built-in one, while staying below USER_AGENT.
+#
+# Every built-in service must appear here. A service whose command passes its own
+# name to ``oom_tag_service.py`` but is missing from this map silently falls back
+# to ``USER_SERVICE`` (200) -- which is *above every built-in*, so it would be shed
+# before all of them. That is the opposite of what a built-in wants, and the only
+# signal is a warning on the service's stderr.
 #
 # sshd and the other never-kill infrastructure (supervisord, earlyoom, tini,
 # tmux) are deliberately absent: they keep the inherited PROTECTED default (0)
@@ -208,6 +214,12 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "github-sync": 40,
     "host-backup": 50,
     "app-watcher": 60,
+    # The shared X display Chromium renders into. Losing it breaks the browser
+    # subsystem, so it is *less* expendable than the coordinator below -- whose
+    # death Chromium survives -- but more so than the workspace's own services:
+    # by the time the service bands are being shed at all, every Chromium process
+    # (910-1000) is long gone and this display is holding nothing.
+    "xvfb": 65,
     # The browser coordinator: the daemon that launches and drives Chromium, not
     # Chromium itself. The most expendable built-in service, but a *service*
     # nonetheless -- it holds little memory, the Chromium processes it manages
