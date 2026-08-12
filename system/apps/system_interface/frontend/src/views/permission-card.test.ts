@@ -770,14 +770,14 @@ describe("openPermissionRequest", () => {
   });
 });
 
-// The instant card flip exists only once the vendored embed contract defines
-// PERMISSION_REQUEST_RESOLVED, which arrives with the next mngr release sync
-// (mngr-internal#224 adds it; this repo deliberately does not edit
-// system/vendor by hand). Until then the shell never sends the message and the
-// card falls back to the transcript-driven flip, so these tests skip -- and
-// un-skip themselves the moment the sync lands, since the probe reads the
-// vendored contract itself. A namespace import on purpose: a named import of a
-// missing export could fail at module link time and take the whole file down.
+// The instant card flip works only once the vendored embed contract defines
+// PERMISSION_REQUEST_RESOLVED: the workspace endpoint validates incoming types
+// against the vendored contract and drops unknown ones before any handler
+// runs (mngr-internal#224 adds the type; this repo deliberately does not edit
+// system/vendor by hand). Until the release sync lands, cards fall back to
+// the transcript-driven flip and these tests skip -- and un-skip themselves
+// the moment the sync arrives, since the probe reads the vendored contract
+// itself.
 const HAS_RESOLVED_MESSAGE = "PERMISSION_REQUEST_RESOLVED" in embedContract;
 
 describe.skipIf(!HAS_RESOLVED_MESSAGE)("shell permission resolutions", () => {
