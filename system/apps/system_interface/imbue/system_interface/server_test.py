@@ -2802,6 +2802,142 @@ def test_member_title_changes_broadcast_to_every_client(app: Flask) -> None:
     }
 
 
+def test_touch_member_last_used_stamps_the_server_clock(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The client sends only the ref; the moment stored is this server's own clock.
+
+    One clock stamps every entry and also serves the map back, which is what
+    kills the clock-skew question -- the client never gets to say when.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    before_ms = int(time.time() * 1000)
+
+    response = client.post("/api/member-last-used", json={"ref": "  service:docs-viewer  "})
+
+    after_ms = int(time.time() * 1000)
+    assert response.status_code == 200
+    stamped_ms = response.get_json()["at_ms"]
+    assert response.get_json()["ref"] == "service:docs-viewer"
+    assert before_ms <= stamped_ms <= after_ms
+    assert client.get("/api/member-last-used").get_json() == {"last_used": {"service:docs-viewer": stamped_ms}}
+
+
+def test_member_last_used_does_not_need_the_object_to_be_filed_anywhere(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown ref is touched without complaint, and an untouched one is absent.
+
+    Nothing checks a ref against the machine or against a project: an object
+    filed in no project still shows in Everything, and a backgrounded member is
+    used again the moment it is opened.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    response = client.post("/api/member-last-used", json={"ref": "chat:agent-nowhere"})
+
+    assert response.status_code == 200
+    assert set(client.get("/api/member-last-used").get_json()["last_used"]) == {"chat:agent-nowhere"}
+
+
+def test_touch_member_last_used_rejects_bad_bodies(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank or missing ref is a 400, and nothing is stored for it."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    assert client.post("/api/member-last-used", json={"ref": " "}).status_code == 400
+    assert client.post("/api/member-last-used", json={}).status_code == 400
+    assert client.post("/api/member-last-used", json={"ref": 7}).status_code == 400
+    assert client.get("/api/member-last-used").get_json() == {"last_used": {}}
+
+
+def test_delete_project_panel_drops_the_objects_recency(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Destroying an object drops its recency, so a reused ref inherits no dead one.
+
+    Terminal names are handed out again once a session is gone, so a timestamp
+    left behind would rank whatever answers to that ref next as recently used.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-4"}).status_code == 200
+    assert client.post("/api/member-last-used", json={"ref": "terminal:terminal-4"}).status_code == 200
+    assert client.post("/api/member-last-used", json={"ref": "chat:agent-7"}).status_code == 200
+
+    response = client.post("/api/projects/panels/terminal-panel-4/delete", json={"ref": "terminal:terminal-4"})
+
+    assert response.status_code == 200
+    # Only the destroyed object's recency goes; nothing else on the machine moves.
+    assert set(client.get("/api/member-last-used").get_json()["last_used"]) == {"chat:agent-7"}
+
+
+def test_delete_project_drops_the_recency_of_what_it_stopped(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stopped member loses its recency along with its name.
+
+    Only what actually stopped is cleared: a member the delete left running was
+    genuinely in front of the user and keeps its place in the launcher.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
+    killed_session = FinishedProcess(
+        returncode=0,
+        stdout="",
+        stderr="",
+        command=("tmux", "kill-session", "-t", "=terminal-4"),
+        is_output_already_logged=False,
+    )
+    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
+    for ref in ("terminal:terminal-4", "chat:agent-9"):
+        assert client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
+        assert client.post("/api/member-last-used", json={"ref": ref}).status_code == 200
+
+    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
+        response = client.post("/api/projects/scratch/delete")
+
+    assert response.status_code == 200
+    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
+    # The chat was only left project-less, not stopped, so it keeps its recency.
+    assert set(client.get("/api/member-last-used").get_json()["last_used"]) == {"chat:agent-9"}
+
+
+def test_member_last_used_changes_broadcast_to_every_client(app: Flask) -> None:
+    """A touch and a destroy each announce the object's recency, machine-wide.
+
+    Recency belongs to the object, so a client that never opened the project
+    holding it still has to re-order its launcher; hence a plain broadcast,
+    exactly as renames get. A destroyed object's entry is announced as gone
+    (``at_ms`` null), so no client keeps ranking a dead ref.
+    """
+    client = app.test_client()
+    client_queue = _register_fake_client(app, "client-1", "desktop")
+
+    touched = client.post("/api/member-last-used", json={"ref": "terminal:terminal-4"})
+    assert touched.status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_last_used_changed",
+        "ref": "terminal:terminal-4",
+        "at_ms": touched.get_json()["at_ms"],
+    }
+
+    assert (
+        client.post("/api/projects/panels/terminal-panel-4/delete", json={"ref": "terminal:terminal-4"}).status_code
+        == 200
+    )
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_last_used_changed",
+        "ref": "terminal:terminal-4",
+        "at_ms": None,
+    }
+
+
 def _app_with_registered_app(name: str) -> Flask:
     """A workspace app whose port registry holds exactly one app, under ``name``."""
     agent_manager = AgentManager.build(WebSocketBroadcaster())
@@ -2871,9 +3007,7 @@ def test_deregister_app_reports_a_registry_removal_that_failed(
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     test_client = _app_with_registered_app("docs-viewer").test_client()
-    assert (
-        test_client.post("/api/projects/project-1/members", json={"ref": "service:docs-viewer"}).status_code == 200
-    )
+    assert test_client.post("/api/projects/project-1/members", json={"ref": "service:docs-viewer"}).status_code == 200
 
     with patch(
         "imbue.system_interface.server.run_local_command_modern_version",
@@ -2887,9 +3021,7 @@ def test_deregister_app_reports_a_registry_removal_that_failed(
     assert test_client.get("/api/projects").get_json()["projects"][0]["members"] == ["service:docs-viewer"]
 
 
-def test_deregister_app_refuses_the_shell_and_unknown_names(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_deregister_app_refuses_the_shell_and_unknown_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The shell's own row and an unregistered name are both rejected untouched."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")

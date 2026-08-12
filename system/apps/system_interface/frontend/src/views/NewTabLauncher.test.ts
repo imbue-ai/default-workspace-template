@@ -16,6 +16,7 @@ import {
   filterRowsByKind,
   formatRecency,
   kindsInRows,
+  resetHiddenKinds,
   sortRowsByRecency,
   type LauncherRow,
   type NewTabLauncherAttrs,
@@ -181,6 +182,14 @@ describe("kindsInRows", () => {
   });
 });
 
+describe("resetHiddenKinds", () => {
+  it("re-shows everything by emptying the hidden set", () => {
+    const hidden = new Set<MemberKind>(["chat", "terminal"]);
+    resetHiddenKinds(hidden);
+    expect(hidden.size).toBe(0);
+  });
+});
+
 describe("formatRecency", () => {
   it("reads coarsely, from just now out to weeks", () => {
     expect(formatRecency(NOW - 20_000, NOW)).toBe("just now");
@@ -341,6 +350,28 @@ describe("NewTabLauncher", () => {
     expect(filtered).toContain("Newsreader");
     // The machine table has its own filter, so its chat-free list is unchanged.
     expect(filtered).toContain("GTD");
+  });
+
+  it("arms Reset filters only once something is hidden, and it re-checks everything", () => {
+    const component = NewTabLauncher();
+    const vnode = { attrs: launcherAttrs() } as Parameters<LauncherView>[0];
+    const resetOf = (rendered: unknown): VnodeLike =>
+      buttonsOf(rendered).find((each) => texts(each.children).includes("Reset filters")) as VnodeLike;
+
+    // Open the "In this project" funnel. Its menu names kinds in the plural,
+    // and its reset row is inert while nothing is hidden.
+    (buttonsOf(component.view(vnode))[4].attrs?.onclick as () => void)();
+    let tree = component.view(vnode);
+    expect(texts(tree)).toContain("Chats");
+    expect(resetOf(tree).attrs?.disabled).toBe(true);
+
+    // Hide chats: the reset row arms, and clicking it brings the chat back.
+    (inputsOf(tree)[0].attrs?.onchange as () => void)();
+    tree = component.view(vnode);
+    expect(texts(tree)).not.toContain("Fix source authorization");
+    expect(resetOf(tree).attrs?.disabled).toBe(false);
+    (resetOf(tree).attrs?.onclick as () => void)();
+    expect(texts(component.view(vnode))).toContain("Fix source authorization");
   });
 
   it("says which table is empty, and distinguishes empty from filtered empty", () => {
