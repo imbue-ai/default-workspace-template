@@ -23,14 +23,14 @@ mngr create my-workspace main -t local \
 - `vendor/mngr/` - A vendored, mutable copy of mngr. Note that making changes here *will* affect the behavior of the `mngr` command
 - `vendor/tk/` - A vendored copy of the [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script (also callable as `tk`) manages tickets stored as markdown. We point `TICKETS_DIR` at `runtime/tickets/` (set in `.mngr/settings.toml`'s `host_env`) so tickets live alongside the rest of `runtime/` (and are covered by the opt-in GitHub sync when the `github-sync` skill has enabled it).
 
-## Running on OpenHost
+## Running on Cloud in a Bottle
 
-This template is adapted to run as an [OpenHost](https://github.com/imbue-openhost/openhost) app
-("minds"): a single workspace host behind the OpenHost router, with the rewritten `latchkey`
-skill, the OpenHost-aware bootstrap, and the update-self reconcile mechanism
+This template is adapted to run as an [Cloud in a Bottle](https://github.com/imbue-openhost/Cloud in a Bottle) app
+("minds"): a single workspace host behind the Cloud in a Bottle router, with the rewritten `latchkey`
+skill, the Cloud in a Bottle-aware bootstrap, and the update-self reconcile mechanism
 (`scripts/openhost_template_update.py`) living here in the workspace. The app wrapper itself --
 manifest, Dockerfile, entrypoint, and end-to-end harness tests -- lives in
-[openhost-minds](https://github.com/imbue-openhost/openhost-minds), which checks this repo out as
+[bottled-minds](https://github.com/imbue-openhost/bottled-minds), which checks this repo out as
 a git submodule.
 
 ## Create templates
