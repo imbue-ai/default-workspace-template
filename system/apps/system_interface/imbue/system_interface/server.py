@@ -27,6 +27,7 @@ from imbue.mngr_claude.claude_config import get_managed_settings_path
 from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
+from imbue.system_interface import member_titles
 from imbue.system_interface import projects
 from imbue.system_interface import workspace_layouts
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -1169,6 +1170,62 @@ def _list_project_members_endpoint() -> Response:
     return _json_response({"members": projects.all_members(layout_dir)})
 
 
+def _broadcast_member_title_changed(ref: str, title: str | None) -> None:
+    """Tell every client what this object is called now; None means unnamed again.
+
+    A title belongs to the object rather than to a panel, so a client showing
+    it in a project this one never opened -- or listing it backgrounded, with no
+    panel at all -- still has to repaint. Hence a plain broadcast, as membership
+    changes get.
+    """
+    get_state().broadcaster.broadcast({"type": "member_title_changed", "ref": ref, "title": title})
+
+
+def _list_member_titles_endpoint() -> Response:
+    """Every name the user has given an object, keyed by its ref.
+
+    One flat map for the whole machine: a rename names the object, so the same
+    name is what every view showing it draws, and a ref that is absent is simply
+    unnamed -- the caller falls back to whatever the object calls itself.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        return _json_response({"titles": {}})
+    return _json_response({"titles": member_titles.read_titles(layout_dir)})
+
+
+def _set_member_title_endpoint() -> Response:
+    """Name one object, machine-wide, or clear its name with a blank one.
+
+    The ref is not required to be filed anywhere: an object in no project at all
+    still shows in Everything and can still be renamed there, and a backgrounded
+    member can be renamed with no panel to hang the name on -- which is the
+    point of keying this by ref. The stored name comes back in the response and
+    in the broadcast, ``null`` when the entry was cleared.
+    """
+    layout_dir = _primary_agent_layout_dir()
+    if layout_dir is None:
+        error = ErrorResponse(detail="No primary agent configured for this workspace")
+        return _json_response(error.model_dump(), status_code=500)
+    body = _parse_json_object_body()
+    if isinstance(body, Response):
+        return body
+    ref = body.get("ref")
+    title = body.get("title")
+    if not isinstance(ref, str) or not ref.strip():
+        error = ErrorResponse(detail="'ref' must be a non-empty string")
+        return _json_response(error.model_dump(), status_code=400)
+    if not isinstance(title, str):
+        error = ErrorResponse(detail="'title' must be a string (an empty one clears the name)")
+        return _json_response(error.model_dump(), status_code=400)
+    try:
+        stored_title = member_titles.set_title(layout_dir, ref, title)
+    except member_titles.MemberTitleLengthError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
+    _broadcast_member_title_changed(ref.strip(), stored_title)
+    return _json_response({"ref": ref.strip(), "title": stored_title})
+
+
 def _stop_project_members(refs: list[str]) -> dict[str, list[str]]:
     """Tear down the members of a deleted project that have a stop verb.
 
@@ -1243,6 +1300,12 @@ def _delete_project_panel_endpoint(panel_id: str) -> Response:
     panel stood for; a caller that knows only the panel omits it and drops the
     panel alone. Clients that have an affected project open re-apply it from
     the broadcast.
+
+    The name the user gave the object goes with it, since refs are handed out
+    again -- the terminal allocator reuses the lowest free ``terminal-<N>`` --
+    and a name left behind would land on whatever answers to that ref next. It
+    is dropped here rather than inside ``projects``, which knows about member
+    lists and layouts and deliberately not about a machine-wide store.
     """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
@@ -1263,6 +1326,8 @@ def _delete_project_panel_endpoint(panel_id: str) -> Response:
         )
         if ref is not None:
             _broadcast_members_changed(changed_project_ids)
+    if ref is not None and member_titles.clear_title(layout_dir, ref):
+        _broadcast_member_title_changed(ref, None)
     return _json_response({"project_ids": changed_project_ids})
 
 
@@ -2459,6 +2524,12 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/api/projects/<project_id>/delete", view_func=_delete_project_endpoint, methods=["POST"])
     application.add_url_rule(
         "/api/projects/panels/<panel_id>/delete", view_func=_delete_project_panel_endpoint, methods=["POST"]
+    )
+    # Titles are keyed by ref and belong to the machine rather than to any one
+    # project, so they hang off their own route rather than under /api/projects.
+    application.add_url_rule("/api/member-titles", view_func=_list_member_titles_endpoint, methods=["GET"])
+    application.add_url_rule(
+        "/api/member-titles", view_func=_set_member_title_endpoint, methods=["POST"], endpoint="_set_member_title"
     )
     application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])

@@ -48,13 +48,12 @@ export interface ProjectSettingsModalAttrs {
   // Awaited, so a rejection surfaces as the dialog's error rather than leaving
   // the list disagreeing with the store.
   onRemoveContent: (ref: string) => Promise<void>;
-  // Rename this object's tab, called once per staged rename when Save commits.
-  // Synchronous, unlike the removal above: a rename is an edit to this view's
-  // own layout that the autosave carries, with no request of its own to wait
-  // on. False means the object no longer has a tab to name -- the dialog offers
-  // the gesture only on rows that have one, so that is the tab having been
-  // closed while the dialog was up, and it is reported rather than swallowed.
-  onRenameContent: (ref: string, title: string) => boolean;
+  // Name this object, called once per staged rename when Save commits. The name
+  // belongs to the object rather than to the tab showing it, so it reaches
+  // every view holding it -- and a row with no tab is renamed like any other.
+  // Awaited like the removal above, so a refusal surfaces as the dialog's error
+  // rather than leaving the list disagreeing with the machine.
+  onRenameContent: (ref: string, title: string) => Promise<void>;
 }
 
 /** One row of the "What's in this project" list. Mirrors the rail's tab row,
@@ -140,17 +139,10 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
       // what closes the dialog, so doing it last means a failure anywhere
       // before it can still report itself here instead of vanishing behind the
       // dialog it just dismissed.
-      const unnameable = [...titlesByRef].filter(([ref, title]) => !attrs.onRenameContent(ref, title));
-      titlesByRef = new Map<string, string>();
-      if (unnameable.length > 0) {
-        error =
-          unnameable.length === 1
-            ? "That tab was closed while this dialog was open, so it could not be renamed."
-            : `${unnameable.length} of those tabs were closed while this dialog was open, so they could not be renamed.`;
-        isSaving = false;
-        m.redraw();
-        return;
+      for (const [ref, title] of titlesByRef) {
+        await attrs.onRenameContent(ref, title);
       }
+      titlesByRef = new Map<string, string>();
       for (const ref of refsToRemove) {
         await attrs.onRemoveContent(ref);
       }
@@ -263,9 +255,10 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
       });
     }
 
-    // A struck-through row is on its way out, so there is nothing worth naming;
-    // a backgrounded one has no tab to carry a name at all, and says why.
-    const blockedReason = isStaged ? "This is being removed from the project on save." : tabRenameBlockedReason(row);
+    // A struck-through row is on its way out of this list, so it is not offered
+    // a name in the same visit. A backgrounded row is renameable like any
+    // other: the name belongs to the object, not to a tab it may not have.
+    const blockedReason = tabRenameBlockedReason({ isStagedForRemoval: isStaged });
     return m(
       "span",
       {
@@ -274,7 +267,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
           blockedReason ??
           (isRenamed
             ? `Renamed from "${row.label}" on save. Double-click to change it again.`
-            : "Double-click to rename this tab."),
+            : "Double-click to rename this. The name is the object's, so every project showing it says the same."),
         ondblclick:
           blockedReason === null
             ? () => {
@@ -306,8 +299,10 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
    *  own double-click rename commits on the spot, which is not a disagreement:
    *  there is no Save button on a tab strip, so Enter/Escape is the whole
    *  contract there, while everything inside a dialog with a Save button obeys
-   *  it. Only a row with a tab can be renamed -- see ``tabRenameBlockedReason``,
-   *  whose sentence is the tooltip a backgrounded row wears. */
+   *  it. Every row can be renamed, backgrounded ones included -- the name is
+   *  filed against the object, not against a tab -- except one already staged
+   *  for removal, which is on its way out of this list (see
+   *  ``tabRenameBlockedReason``, whose sentence is that row's tooltip). */
   function contentsList(attrs: ProjectSettingsModalAttrs): m.Vnode {
     if (attrs.contents.length === 0) {
       return m(

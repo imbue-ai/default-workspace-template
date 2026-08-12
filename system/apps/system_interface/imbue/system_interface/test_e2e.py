@@ -907,6 +907,20 @@ def _switch_view_via_rail(page: Page, view_name: str) -> None:
     page.locator(".project-rail-menu [role='menuitem']", has_text=view_name).first.click()
 
 
+def _collapse_rail(page: Page) -> None:
+    """Fold the hover-expanded rail back up, so the dock underneath is clickable.
+
+    Driving the rail leaves the pointer resting on it, and an expanded rail is a
+    240px panel floating OVER the dock rather than beside it -- so a test that
+    just switched views and then reaches for a tab is reaching through it.
+    Moving the pointer away is what a user does without thinking about it. The
+    wait is for the rows the rail only draws while expanded, because folding up
+    is a 150ms transition rather than an instant.
+    """
+    page.mouse.move(600, 400)
+    expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_project_dialogs_end_to_end(tmp_path: Path, page: Page) -> None:
     """The rail's switcher and settings modal drive the project registry.
@@ -1416,18 +1430,61 @@ _TAB_RENAME_PORT = 18872
 # for the writes an action already triggered to land before provoking the next.
 AUTOSAVE_SETTLE_MS = 3000
 
+_FIXTURE_CHAT_REF = "chat:agent-test-123"
+
+
+def _member_titles(layout_dir: Path) -> dict[str, str]:
+    """Every name the user has given an object, straight out of the store on disk.
+
+    The store is the machine's, not a view's, so this is read from the layout
+    dir itself rather than from under ``projects/`` -- which is the whole point
+    of the tests below. A workspace where nothing has been renamed has no file
+    at all, which reads as an empty map.
+    """
+    titles_path = layout_dir / "member_titles.json"
+    if not titles_path.exists():
+        return {}
+    title_by_ref = json.loads(titles_path.read_text())["title_by_ref"]
+    assert isinstance(title_by_ref, dict)
+    return title_by_ref
+
+
+def _saved_panel_params(layout_dir: Path, project_id: str) -> dict[str, Any]:
+    """One view's saved per-panel params, as autosaved."""
+    saved = json.loads((layout_dir / "projects" / f"{project_id}.json").read_text())
+    panel_params = saved["panelParams"]
+    assert isinstance(panel_params, dict)
+    return panel_params
+
+
+def _saved_panel_titles(layout_dir: Path, project_id: str) -> list[str]:
+    """The titles dockview serialized into one view's saved layout.
+
+    Dockview writes down whatever is on the tab strip, so this is what a view
+    would draw if it drew names from its own saved layout -- which is exactly
+    what a rename must no longer depend on.
+    """
+    saved = json.loads((layout_dir / "projects" / f"{project_id}.json").read_text())
+    panels = saved["dockview"]["panels"]
+    assert isinstance(panels, dict)
+    return [panel["title"] for panel in panels.values() if "title" in panel]
+
 
 @pytest.mark.timeout(120, func_only=False)
 def test_double_click_renames_a_tab_and_the_name_survives_a_reload(tmp_path: Path, page: Page) -> None:
     """Double-clicking a tab's title renames it, and the name is kept.
 
     The gesture is only half of it. A name that lasted as long as the page would
-    not be a rename at all, so the commit has to write the title into the view's
-    saved layout and schedule the autosave that persists it -- which is what
-    makes the reload here a real assertion rather than a formality. It also
-    pins the name to the *object*: the pane behind the renamed tab still shows
-    the agent's transcript afterwards, so the tab was renamed rather than
-    replaced.
+    not be a rename at all, so the commit has to file the title under the
+    object's ref in the machine's title store -- which is what makes the reload
+    here a real assertion rather than a formality. It also pins the name to the
+    *object*: the pane behind the renamed tab still shows the agent's transcript
+    afterwards, so the tab was renamed rather than replaced.
+
+    Where the name landed is asserted too, because that is the difference
+    between naming an object and naming a tab: the store holds it, and the
+    view's saved ``panelParams`` -- where a name used to go -- holds no name at
+    all.
     """
     primary_agent_id = "primary-services-agent"
     with _running_e2e_server(tmp_path, _TAB_RENAME_PORT, primary_agent_id=primary_agent_id) as (
@@ -1454,13 +1511,11 @@ def test_double_click_renames_a_tab_and_the_name_survives_a_reload(tmp_path: Pat
             error_message=f"autosave never materialized {DEFAULT_PROJECT_ID}.json",
         )
 
-        # Let the opening flurry of autosaves settle first. Without this the
-        # rename would ride out on a save that was already pending, and the
-        # persistence check below would pass whether or not committing a name
-        # schedules one of its own.
+        # Let the opening flurry of autosaves settle first, so the panel params
+        # inspected at the end are the ones this view saved with the chat open
+        # rather than a half-written intermediate.
         page.wait_for_timeout(AUTOSAVE_SETTLE_MS)
-        before_rename = project_file.read_text()
-        assert "Design notes" not in before_rename
+        assert _member_titles(layout_dir) == {}, "something was named before anyone renamed anything"
 
         # The title becomes a field seeded with the name it has now, so typing
         # over a name is one gesture rather than a select-all first.
@@ -1476,14 +1531,23 @@ def test_double_click_renames_a_tab_and_the_name_survives_a_reload(tmp_path: Pat
         expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=5000)
         expect(page.locator(".dv-custom-tab-title-input:visible")).to_have_count(0)
 
-        # The commit schedules the autosave, which writes the name into this
-        # view's layout. Without that the reload below would find the old one.
+        # The commit files the name under the object's ref. Without that the
+        # reload below would find the old one.
         wait_for(
-            lambda: "Design notes" in project_file.read_text(),
+            lambda: _member_titles(layout_dir).get(_FIXTURE_CHAT_REF) == "Design notes",
             timeout=15.0,
             poll_interval=0.1,
-            error_message="the rename never reached the project's saved layout",
+            error_message="the rename never reached the machine's title store",
         )
+
+        # Nothing wrote a name into the view. The saved layout still carries the
+        # panel's title, because dockview serializes what is on the strip, but
+        # the params beside it -- the ``customTitle`` a rename used to write, and
+        # the only thing the client would read back as a name -- hold none. Read
+        # once the save the rename may have provoked has had time to land.
+        page.wait_for_timeout(AUTOSAVE_SETTLE_MS)
+        for params in _saved_panel_params(layout_dir, DEFAULT_PROJECT_ID).values():
+            assert "customTitle" not in params, f"a rename wrote a name into the view's layout: {params}"
 
         page.reload()
         expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=15000)
@@ -1493,9 +1557,122 @@ def test_double_click_renames_a_tab_and_the_name_survives_a_reload(tmp_path: Pat
         expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
 
 
-_SETTINGS_STAGING_PORT = 18873
+_TWO_VIEW_RENAME_PORT = 18874
 
-_FIXTURE_CHAT_REF = "chat:agent-test-123"
+
+@pytest.mark.timeout(180, func_only=False)
+def test_renaming_an_object_in_one_view_names_it_in_the_other(tmp_path: Path, page: Page) -> None:
+    """A rename names the OBJECT, so the other view showing it says the new name.
+
+    This is the reason names are filed by ref, so it is asserted across two
+    views rather than inside one. The same chat is shown in the starter project
+    and in Everything -- one object in two views, which the many-to-many model
+    makes ordinary -- renamed in the starter project, and then read back in
+    Everything. Under the arrangement this replaces, where the name was kept on
+    the panel and therefore in one view's saved layout, Everything would still
+    be reading the name derived from the agent.
+
+    The reload afterwards is the other half. Everything is where the page lands,
+    so what it re-reads is the view the rename was *not* done in: the name has
+    to come back from the machine's store rather than from the layout that
+    happened to be saved with it on the strip.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _TWO_VIEW_RENAME_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        # The fixture chat auto-opens in the starter project wearing the name
+        # derived from its agent.
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+
+        # Show the SAME object in Everything too. Opening it from Everything's
+        # machine-wide table adds it there and takes it from nowhere, so after
+        # this both views list the one chat.
+        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+        )
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+        page.locator(".new-tab-launcher-row:visible", has_text="test-agent").first.click()
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        wait_for(
+            lambda: (layout_dir / "projects" / f"{EVERYTHING_VIEW_ID}.json").exists(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="autosave never materialized everything.json",
+        )
+
+        # Rename it in the starter project, which is the only view touched from
+        # here on.
+        _switch_view_via_rail(page, DEFAULT_PROJECT_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        _collapse_rail(page)
+        tab_title = page.locator(".dv-default-tab-content", has_text="test-agent").first
+        expect(tab_title).to_be_visible(timeout=15000)
+        tab_title.dblclick()
+        editor = page.locator(".dv-custom-tab-title-input:visible")
+        expect(editor).to_be_visible(timeout=5000)
+        editor.fill("Design notes")
+        editor.press("Enter")
+        expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=5000)
+        wait_for(
+            lambda: _member_titles(layout_dir).get(_FIXTURE_CHAT_REF) == "Design notes",
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the rename never reached the machine's title store",
+        )
+
+        # Everything was not mounted for any of that, so its saved layout is
+        # untouched and still names the panel the old way. That is what makes
+        # the next few lines an assertion about the object rather than about a
+        # layout: whatever Everything is about to draw, it cannot have got the
+        # new name from its own file.
+        everything_titles = _saved_panel_titles(layout_dir, EVERYTHING_VIEW_ID)
+        assert "test-agent" in everything_titles, f"Everything's saved layout lost the old name: {everything_titles}"
+        assert "Design notes" not in everything_titles, (
+            f"the rename reached a view that was not even mounted: {everything_titles}"
+        )
+
+        # The point: the other view says the new name, and says the old one
+        # nowhere.
+        _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+        )
+        expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=15000)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+
+        # It is still the name after a reload -- read back here, in the view the
+        # rename was not done in ...
+        page.reload()
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+        )
+        expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=15000)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
+
+        # ... and in the one it was.
+        _switch_view_via_rail(page, DEFAULT_PROJECT_NAME)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=15000)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
+
+
+_SETTINGS_STAGING_PORT = 18873
 
 
 def _open_project_settings(page: Page) -> None:

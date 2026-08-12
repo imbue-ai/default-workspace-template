@@ -45,15 +45,19 @@ describe("normalizeTabTitle", () => {
 });
 
 describe("tabRenameBlockedReason", () => {
-  it("allows a row that has a tab", () => {
-    expect(tabRenameBlockedReason({ isOpen: true })).toBeNull();
+  it("allows any row, backgrounded ones included", () => {
+    // The whole point of keying names by ref: a member with no panel -- still
+    // running, just not docked -- has somewhere to keep a name, so the gesture
+    // is offered on it like on any other row. Whether a row is open no longer
+    // reaches this decision at all, which is what the argument shape asserts.
+    expect(tabRenameBlockedReason({ isStagedForRemoval: false })).toBeNull();
   });
 
-  it("refuses a backgrounded row, and says why", () => {
-    // A member with no panel has nothing to carry a name, so the affordance is
-    // withheld with an explanation rather than silently doing nothing.
-    const reason = tabRenameBlockedReason({ isOpen: false });
+  it("refuses a row already staged for removal, and says why", () => {
+    // That row is struck through and leaving this list on Save; naming it in
+    // the same visit is withheld with an explanation and one click of Undo.
+    const reason = tabRenameBlockedReason({ isStagedForRemoval: true });
     expect(reason).not.toBeNull();
-    expect(reason).toContain("Open this to rename it");
+    expect(reason).toContain("Undo the removal");
   });
 });

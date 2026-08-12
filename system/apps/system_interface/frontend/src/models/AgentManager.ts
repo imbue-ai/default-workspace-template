@@ -170,6 +170,16 @@ type WsEvent =
       // reaches clients that do not have any of these projects mounted.
       type: "project_members_changed";
       project_ids: string[];
+    }
+  | {
+      // One object was renamed, machine-wide; ``title`` is null when its name
+      // was cleared (or dropped because the object was destroyed). A name
+      // belongs to the object rather than to a panel, so this reaches clients
+      // showing it in a project this one never opened -- and clients listing it
+      // backgrounded, with no panel at all.
+      type: "member_title_changed";
+      ref: string;
+      title: string | null;
     };
 
 /** Layout registry / sync events pushed over the WebSocket. */
@@ -197,6 +207,14 @@ export type ProjectSyncEvent =
 
 export type ProjectSyncListener = (event: ProjectSyncEvent) => void;
 
+/**
+ * Notified when one object's machine-wide name changed; ``title`` is null when
+ * the object is unnamed again. Delivered to every client, mounted on a view
+ * showing the object or not, because a name is a fact about the machine rather
+ * than about any one view's layout.
+ */
+export type MemberTitleListener = (ref: string, title: string | null) => void;
+
 export type LayoutOpListener = (event: LayoutOpEvent) => void;
 export type AgentsUpdatedListener = (agents: AgentState[]) => void;
 /**
@@ -222,6 +240,7 @@ let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
 let projectSyncListeners: ProjectSyncListener[] = [];
+let memberTitleListeners: MemberTitleListener[] = [];
 let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
 let terminalSessionListeners: TerminalSessionListener[] = [];
 let agentActivityListeners: AgentActivityListener[] = [];
@@ -420,6 +439,12 @@ function handleEvent(event: WsEvent): void {
         listener({ kind: "members", projectIds: event.project_ids });
       }
       break;
+
+    case "member_title_changed":
+      for (const listener of memberTitleListeners) {
+        listener(event.ref, event.title);
+      }
+      break;
   }
 }
 
@@ -526,6 +551,14 @@ export function addProjectSyncListener(listener: ProjectSyncListener): void {
 
 export function removeProjectSyncListener(listener: ProjectSyncListener): void {
   projectSyncListeners = projectSyncListeners.filter((l) => l !== listener);
+}
+
+export function addMemberTitleListener(listener: MemberTitleListener): void {
+  memberTitleListeners.push(listener);
+}
+
+export function removeMemberTitleListener(listener: MemberTitleListener): void {
+  memberTitleListeners = memberTitleListeners.filter((l) => l !== listener);
 }
 
 export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {

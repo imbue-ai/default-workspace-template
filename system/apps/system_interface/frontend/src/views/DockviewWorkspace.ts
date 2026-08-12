@@ -88,6 +88,7 @@ import { deriveServiceOrigin } from "../origin";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
+  addMemberTitleListener,
   addProjectSyncListener,
   addTerminalSessionListener,
   allocateTerminalName,
@@ -107,6 +108,7 @@ import {
   type AppEntry,
   type LayoutOpEvent,
   type LayoutOpListener,
+  type MemberTitleListener,
   type ProjectSyncEvent,
   type ProjectSyncListener,
   type TerminalSessionInfo,
@@ -120,6 +122,13 @@ import {
   setActiveProjectId,
 } from "../models/ClientIdentity";
 import { loadSnapshotWithStream } from "../models/StreamingMessage";
+import {
+  applyMemberTitleChange,
+  displayNameForMember,
+  loadMemberTitles,
+  moveMemberTitle,
+  setMemberTitle,
+} from "../models/MemberTitles";
 import {
   addMember,
   autosaveProject,
@@ -315,6 +324,7 @@ const panelParams = new Map<string, PanelParams>();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let _layoutOpListener: LayoutOpListener | null = null;
 let _projectSyncListener: ProjectSyncListener | null = null;
+let _memberTitleListener: MemberTitleListener | null = null;
 let _terminalSessionListener: TerminalSessionListener | null = null;
 let initialized = false;
 // True while a view's content is being mounted. The teardown half of that
@@ -813,10 +823,11 @@ const tabHandlesByPanelId = new Map<string, { element: HTMLElement; refreshTitle
  * ``:hover`` rule because the menu has to hold them open while it is up, after
  * the pointer has left the tab for the menu card.
  *
- * Double-clicking the title renames the tab: it becomes a text field seeded
- * with the current name, Enter and blur commit, Escape puts the old one back.
- * The commit goes through ``applyPanelRename`` like every other rename, so the
- * name is saved with the panel and survives a reload.
+ * Double-clicking the title renames the object this tab is showing: it becomes
+ * a text field seeded with the current name, Enter and blur commit, Escape puts
+ * the old one back. The commit goes through ``renameMemberRef`` like every
+ * other rename, so the name is the machine's rather than this tab's -- every
+ * view showing the object says it, and it survives the tab being closed.
  */
 function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   const element = document.createElement("div");
@@ -922,7 +933,19 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     // Escape rather than leaving a tab with nothing to click on.
     const title = normalizeTabTitle(typed);
     if (title === null || title === content.textContent) return;
-    applyPanelRename(options.id, title);
+    // The name is filed against the OBJECT this tab is showing, so it reaches
+    // every other view showing it and outlives this tab. A tab opened a moment
+    // ago may not have been filed yet, hence the fallback; a launcher stands
+    // for no object and so has nothing to name.
+    void (async () => {
+      const ref = memberRefByPanelId.get(options.id) ?? (await rememberMemberRef(options.id));
+      if (ref === null) return;
+      try {
+        await renameMemberRef(ref, title);
+      } catch (e) {
+        alert(`Failed to rename: ${(e as Error).message}`);
+      }
+    })();
   };
 
   content.addEventListener("dblclick", (event) => {
@@ -1488,11 +1511,13 @@ function openFromMachine(ref: string, launcherPanelId: string): void {
   })();
 }
 
-/** Every object on the machine, as launcher rows. The machine reports no
- *  per-object last-activity yet, so the recency column reads as unknown rather
- *  than being invented here. */
+/** Every object on the machine, as launcher rows. Rows are named through
+ *  ``labelForMemberRef`` like every other surface, so a renamed object is
+ *  offered here under the name it was given. The machine reports no per-object
+ *  last-activity yet, so the recency column reads as unknown rather than being
+ *  invented here. */
 function launcherRows(): LauncherRow[] {
-  return buildLauncherRows(machineInventory(), {});
+  return buildLauncherRows(machineInventory(), {}).map((row) => ({ ...row, label: labelForMemberRef(row.ref) }));
 }
 
 /** The active view's member refs, which the launcher splits the machine
@@ -1540,19 +1565,37 @@ function machineInventory(): MachineInventory {
   };
 }
 
-/** What a member ref is called in the sidebar. A chat is filed under its agent
- *  id, so its label is looked up live and follows a rename; everything else is
- *  named by the identity it is filed under. An ad-hoc page has no name of its
- *  own beyond its tab's title, which only exists while it is open.
+/**
+ * What an object is called, everywhere it is listed.
  *
- *  A name the user gave the tab wins over all of that, for as long as that tab
- *  is open: the point of renaming is that the rail and the settings list say
- *  what the tab says. It is only ever a *chosen* name that wins, so an agent
- *  renamed elsewhere still drags its chat row along with it. */
+ * The chosen name wins when the object has one, and it is filed by ref, so the
+ * same object shows the same name in every view that lists it -- and keeps it
+ * while it is backgrounded, with no panel to hang a name on. Failing that, the
+ * name is derived from what the object is, which is what lets an agent renamed
+ * through mngr drag its chat row along with it.
+ *
+ * A layout saved before names were kept by ref may still carry one on the panel
+ * (``customTitle``); it is read as a last fallback so such a layout does not
+ * lose its name, and never overrides the store.
+ */
 function labelForMemberRef(ref: string): string {
+  return displayNameForMember(ref, derivedLabelForMemberRef(ref), legacyPanelTitleForRef(ref));
+}
+
+/** The name a saved layout is still carrying for this object on the panel
+ *  showing it, from before names were filed by ref. Nothing writes one now. */
+function legacyPanelTitleForRef(ref: string): string | undefined {
   const openPanelId = panelIdForMemberRef(ref);
-  const chosen = openPanelId === null ? undefined : panelParams.get(openPanelId)?.customTitle;
-  if (chosen !== undefined) return chosen;
+  return openPanelId === null ? undefined : panelParams.get(openPanelId)?.customTitle;
+}
+
+/** What a member ref is called before anybody renamed it. A chat is filed under
+ *  its agent id, so its name is looked up live and follows the agent;
+ *  everything else is named by the identity it is filed under. An ad-hoc page
+ *  has no name of its own beyond its tab's title, which only exists while it is
+ *  open. */
+function derivedLabelForMemberRef(ref: string): string {
+  const openPanelId = panelIdForMemberRef(ref);
   const body = memberRefBody(ref);
   switch (memberKindFromRef(ref)) {
     case "chat":
@@ -1593,6 +1636,9 @@ export function refreshProjects(): void {
  * simply backgrounded and stays listed. Everything lists the machine, because
  * an object filed in no project at all has to appear somewhere and that
  * somewhere is the home.
+ *
+ * Both halves name their rows through ``labelForMemberRef``, so an object two
+ * views hold reads the same in both: a name belongs to the object.
  */
 export function getSidebarRows(): SidebarTabRow[] {
   const viewId = mountedViewId;
@@ -1601,7 +1647,7 @@ export function getSidebarRows(): SidebarTabRow[] {
     return buildEverythingMembers(machineInventory(), {}).map((row) => ({
       ref: row.ref,
       kind: row.kind,
-      label: row.label,
+      label: labelForMemberRef(row.ref),
       isOpen: panelIdForMemberRef(row.ref) !== null,
     }));
   }
@@ -2537,7 +2583,7 @@ function openTabOfTypeInGroup(
 
 /** The shortcuts that go to an object the active view already shows instead of
  *  starting another one. See ``refForShortcutFocus``. */
-export type FocusableTabType = "chat" | "browser";
+export type FocusableTabType = "chat" | "browser" | "terminal";
 
 /**
  * Which object a Chat or Browser shortcut should go to, or null when the view
@@ -2607,15 +2653,15 @@ function originatingProjectByChatRef(): Record<string, string> {
   return byRef;
 }
 
-/** Go to the Chat or Browser the active view already shows, reporting whether
+/** Go to the Chat, Browser or Terminal the active view already shows, reporting whether
  *  there was one. Focuses its tab when it has one and opens it into the active
  *  pane when it is backgrounded -- ``openMemberRef`` is the same path the
  *  sidebar rows take, so a member with no panel is opened rather than
  *  ignored. */
 function focusExistingForShortcut(tabType: FocusableTabType): boolean {
   const memberRefs = getSidebarRows().map((row) => row.ref);
-  // Only a chat has a per-view singleton to prefer. A browser has no notion of
-  // the view's *own* one, so the first the view lists wins.
+  // Only a chat has a per-view singleton to prefer. A browser and a terminal
+  // have no notion of the view's *own* one, so the first the view lists wins.
   const preferredRef =
     tabType === "chat"
       ? preferredChatRefForView(memberRefs, mountedViewId ?? "", originatingProjectByChatRef(), getPrimaryAgentId())
@@ -2631,10 +2677,11 @@ function focusExistingForShortcut(tabType: FocusableTabType): boolean {
  * Open ``tabType`` in the active pane. Exported for the sidebar's shortcut rows,
  * which offer the machine's starting points as one-click rows.
  *
- * Chat and Browser go to what the active view already shows and only create when
- * it shows none. This deliberately REVERSES spec §7, which has Chat always
- * create a new agent and Browser always create a new session: Preston asked for
- * the rail's chat to be "a singleton to refer to the primary chat of each
+ * Chat, Browser and Terminal all go to what the active view already shows and
+ * only create when it shows none. This deliberately REVERSES spec §7, which has
+ * Chat always create a new agent and Browser and Terminal always create a new
+ * session: Preston asked for the rail's chat to be "a singleton to refer to the
+ * primary chat of each
  * project", and for the browser to behave the same way. Do not "fix" it back --
  * starting another one from scratch is what the launcher's "Open new" tiles are
  * for. Terminals were NOT extended, because only chat and browser were named.
@@ -2645,7 +2692,7 @@ function focusExistingForShortcut(tabType: FocusableTabType): boolean {
  * so its shortcut keeps creating one on the machine when it lists none.
  */
 export function openTabOfType(tabType: QuickAddTabType): void {
-  if ((tabType === "chat" || tabType === "browser") && focusExistingForShortcut(tabType)) return;
+  if (tabType !== "files" && focusExistingForShortcut(tabType)) return;
   openTabOfTypeInGroup(tabType, null, null);
 }
 
@@ -2746,6 +2793,9 @@ function reconcileMembersWithPanels(): void {
     for (const panelId of panelParams.keys()) {
       await rememberMemberRef(panelId);
     }
+    // The restored tabs were titled from the layout's derived names; now that
+    // each one knows which object it is showing, the chosen names go back on.
+    syncTabTitlesFromStore();
     m.redraw();
     for (const panelId of panelParams.keys()) {
       recordMembership(panelId);
@@ -2780,6 +2830,10 @@ function recordMembership(panelId: string): void {
   void (async () => {
     const ref = await rememberMemberRef(panelId);
     if (ref === null) return;
+    // A freshly-opened tab is titled from what it shows; now that its object is
+    // known, a name that object was given -- possibly while it had no tab at
+    // all -- goes on the strip.
+    syncTabTitlesFromStore();
     const viewId = mountedViewId;
     // Nothing mounted means no project registry was reachable at startup, so
     // there is nowhere to file this either.
@@ -3057,6 +3111,9 @@ function setActiveView(viewId: string): void {
  * at startup, after the dockview exists.
  */
 async function initializeActiveView(): Promise<void> {
+  // Before anything is mounted: the names are machine-wide, so the first paint
+  // of the rail and the dock already says what things are called.
+  await loadMemberTitles();
   const listResponse = await fetchProjectsList();
   availableProjects = listResponse.projects;
   const chosenId = chooseInitialViewId(availableProjects, getStoredProjectId());
@@ -3574,50 +3631,49 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
 }
 
 /**
- * Give a panel a name, and keep it.
+ * Name an object, machine-wide.
  *
  * The one rename path: the agent-facing ``layout_op``, the tab's own
- * double-click editor and the project settings dialog all land here. Titles
- * live in two places and both are written -- ``setTitle`` is what the strip
- * draws, ``params.title`` is what the view's saved layout carries -- and the
- * autosave is scheduled here rather than left to the caller, since a name that
- * lasted only as long as the page would not be a rename at all.
+ * double-click editor and the project settings dialog all land here. The name
+ * goes to the machine's title store keyed by the object's ref (see
+ * models/MemberTitles), not into this view's saved layout, so every view
+ * showing the object says the same thing and an object with no panel anywhere
+ * -- backgrounded, or filed in no project at all -- can be named too. Nothing
+ * is written to ``panelParams``: ``params.title`` stays the *derived* name,
+ * which is what the tab falls back to if the chosen one is ever cleared.
  *
- * ``customTitle`` records that the name was *chosen* rather than derived from
- * whatever the tab happens to show. That is what lets the sidebar and the
- * settings list prefer it over the object's own name (see
- * ``labelForMemberRef``), and what stops a tmux session rename from taking a
- * user's name back off a terminal tab.
- *
- * Returns false when there is no panel to name -- the caller decides whether
- * that is worth reporting.
+ * The tab strip is repainted here rather than waiting for the broadcast that
+ * follows, so the tab the user just typed into settles immediately; the
+ * broadcast repaints every other client (and this one again, harmlessly).
+ * Throws with the server's detail when the rename is refused, which is why the
+ * settings dialog -- the one caller with somewhere to put a message -- awaits
+ * it.
  */
-function applyPanelRename(panelId: string, title: string): boolean {
-  if (!dockview) return false;
-  const panel = dockview.panels.find((p) => p.id === panelId);
-  if (!panel) return false;
-  panel.api.setTitle(title);
-  mutatePanelParams(panelId, (params) => {
-    params.title = title;
-    params.customTitle = title;
-  });
+export async function renameMemberRef(ref: string, title: string): Promise<void> {
+  await setMemberTitle(ref, title);
+  syncTabTitlesFromStore();
   m.redraw();
-  scheduleSave();
-  return true;
 }
 
 /**
- * Rename the tab a member is showing in the mounted view.
+ * Put the name each object is called by onto the tab showing it.
  *
- * The project settings dialog's half of the rename, exported the way its
- * removal counterpart is. False means the member had no tab to name: the dialog
- * only offers the gesture on open rows, so that is the tab having been closed
- * while the dialog was up, which it reports rather than swallows.
+ * The chosen name when the object has one, and the name the panel derived for
+ * itself when it does not -- so clearing a name puts the derived one back
+ * rather than freezing the last chosen one on the strip. Panels that stand for
+ * no object (the launcher) are left alone. Called whenever the store moves and
+ * whenever a panel learns which object it is showing.
  */
-export function renameMemberRefInView(ref: string, title: string): boolean {
-  const panelId = panelIdForMemberRef(ref);
-  if (panelId === null) return false;
-  return applyPanelRename(panelId, title);
+function syncTabTitlesFromStore(): void {
+  if (!dockview) return;
+  for (const panel of dockview.panels) {
+    const ref = memberRefByPanelId.get(panel.id);
+    if (ref === undefined) continue;
+    const params = panelParams.get(panel.id);
+    if (params === undefined) continue;
+    const shown = displayNameForMember(ref, params.title ?? "", params.customTitle);
+    if (shown !== "" && shown !== panel.title) panel.api.setTitle(shown);
+  }
 }
 
 async function handleRename(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
@@ -3627,7 +3683,16 @@ async function handleRename(args: Record<string, unknown>, requesterAgentId: str
   if (!ref || title === null) return;
   const panelId = await resolveRefToPanelId(ref, requesterAgentId);
   if (panelId === null) return;
-  applyPanelRename(panelId, title);
+  // An agent addresses a *panel* (``self``, a service name, a tab id), so the
+  // object behind it is resolved here before the name is filed by ref. A panel
+  // that stands for no object -- a launcher -- has nothing to name.
+  const memberRefForRename = memberRefByPanelId.get(panelId) ?? (await rememberMemberRef(panelId));
+  if (memberRefForRename === null) return;
+  try {
+    await renameMemberRef(memberRefForRename, title);
+  } catch (e) {
+    console.warn(`Cannot rename ${ref}: ${(e as Error).message}`);
+  }
 }
 
 async function handleMaximize(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
@@ -3979,6 +4044,17 @@ function initializeDockview(parentElement: HTMLElement): void {
   };
   addProjectSyncListener(_projectSyncListener);
 
+  // A rename anywhere on the machine -- another client's, an agent's, or the
+  // name dropped when an object was destroyed. It names the object rather than
+  // a panel, so it repaints the dock tab showing it, the rail's rows, the
+  // launcher and the settings list, in this view and in Everything alike.
+  _memberTitleListener = (ref: string, title: string | null) => {
+    applyMemberTitleChange(ref, title);
+    syncTabTitlesFromStore();
+    m.redraw();
+  };
+  addMemberTitleListener(_memberTitleListener);
+
   // Terminal session updates (client switched session / session renamed) push
   // over the same WebSocket; reflect them onto the owning tab's title.
   _terminalSessionListener = (terminalId, sessionId, sessionName) => {
@@ -4034,17 +4110,28 @@ function handleTerminalSessionUpdate(terminalId: string | null, sessionId: strin
     }
   }
   if (targetPanelId === null) return;
-  // A tab the user named keeps that name: the session it attached to is being
-  // renamed, not the tab. The identity still moves either way.
-  const hasChosenTitle = panelParams.get(targetPanelId)?.customTitle !== undefined;
+  const previousRef = memberRefByPanelId.get(targetPanelId);
   // A rename moves the terminal's identity, so the page is re-filed under the
-  // new session name here too (see ``mutatePanelParams``).
+  // new session name here too (see ``mutatePanelParams``), and so is the name
+  // the user gave it: the object is the same one, and it is filed by ref.
   mutatePanelParams(targetPanelId, (params) => {
     params.terminalSessionName = sessionName;
     params.terminalSessionId = sessionId;
-    if (!hasChosenTitle) params.title = sessionName;
+    params.title = sessionName;
   });
-  if (!hasChosenTitle) dockview.panels.find((p) => p.id === targetPanelId)?.api.setTitle(sessionName);
+  void (async () => {
+    const nextRef = await rememberMemberRef(targetPanelId);
+    if (previousRef !== undefined && nextRef !== null) {
+      // A tab the user named keeps that name: the session it attached to is
+      // being renamed, not the object.
+      await moveMemberTitle(previousRef, nextRef).catch(() => {
+        // Best-effort: the terminal is attached either way, and the name it
+        // falls back to is the session's own.
+      });
+    }
+    syncTabTitlesFromStore();
+    m.redraw();
+  })();
   m.redraw();
   scheduleSave();
 }

@@ -28,6 +28,7 @@
 
 import m from "mithril";
 import type { AppEntry } from "../models/AgentManager";
+import { displayNameForMember } from "../models/MemberTitles";
 import {
   EVERYTHING_VIEW_ID,
   EVERYTHING_VIEW_NAME,
@@ -104,9 +105,9 @@ export interface SidebarAttrs {
   // The settings dialog's staged removals, applied on Save. Rejects so the
   // dialog can show the reason instead of the rail alerting behind it.
   onRemoveContentFromView: (ref: string) => Promise<void>;
-  // The settings dialog's staged renames, applied by the same Save. False when
-  // the object has no tab left to name, which the dialog reports.
-  onRenameContentInView: (ref: string, title: string) => boolean;
+  // The settings dialog's staged renames, applied by the same Save. The name is
+  // the object's, machine-wide, so a rejection is the dialog's to report.
+  onRenameMember: (ref: string, title: string) => Promise<void>;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
   // Destroy the object behind this row, machine-wide. The workspace confirms
@@ -463,9 +464,6 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   // because an open menu has to hold it open even once the pointer has left.
   let expanded = false;
   let openMenu: OpenMenu | null = null;
-  // The "Remove" submenu, anchored to its parent row. Tracked separately so it
-  // survives the pointer moving off that row and onto the flyout itself.
-  let flyoutAnchor: MenuAnchor | null = null;
   // The project whose settings modal is up, or null while it is closed.
   let settingsProject: ProjectInfo | null = null;
   let searchQuery = "";
@@ -481,15 +479,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
    *  rail's own box), so no further mouseleave is coming to do it. */
   function closeMenus(): void {
     openMenu = null;
-    flyoutAnchor = null;
     menuError = null;
     expanded = false;
   }
 
   // The two document listeners are registered once for the rail's life rather
-  // than per menu: several cards can be up at once (a menu and its flyout), and
-  // add/remove pairs per card would have the first card removed unregistering
-  // the handler the second still needs.
+  // than per menu, so a menu closing cannot unregister the handler another one
+  // still needs.
   function handleOutsideMousedown(event: MouseEvent): void {
     if (!isAnyMenuOpen()) return;
     // Every floating card is rendered inside the rail's slot, so one
@@ -502,19 +498,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
 
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key !== "Escape" || !isAnyMenuOpen()) return;
-    // Escape backs out of the step the user just took: the flyout first, then
-    // the menu it hangs off.
-    if (flyoutAnchor !== null) {
-      flyoutAnchor = null;
-    } else if (openMenu !== null) {
-      closeMenus();
-    }
+    closeMenus();
     m.redraw();
   }
 
   function openMenuAt(next: OpenMenu): void {
     openMenu = next;
-    flyoutAnchor = null;
     menuError = null;
   }
 
@@ -648,15 +637,19 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           onclick: row.tabType === "files" ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
         }),
       ),
-      ...shortcutApps.map((app) =>
-        shortcutRow({
+      ...shortcutApps.map((app) => {
+        // An app renamed anywhere is renamed here too: the shortcut and the tab
+        // list are two views of one object, so they must not disagree about
+        // what it is called.
+        const label = displayNameForMember(memberRef("app", app.name), app.name);
+        return shortcutRow({
           key: `app:${app.name}`,
           iconMarkup: appIconMarkup(app.icon, ROW_GLYPH_SIZE, railIcon("app", ROW_GLYPH_SIZE)),
-          label: app.name,
-          tooltip: app.name,
+          label,
+          tooltip: label,
           onclick: () => pick(() => attrs.onOpenApp(app)),
-        }),
-      ),
+        });
+      }),
     ]);
   }
 
@@ -856,13 +849,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         role: "menuitem",
         ...(options.tooltip === null || options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip)),
         onclick: options.onclick,
-        // Moving onto any other item of the parent menu drops the flyout, which
-        // is what closes it once the pointer wanders off the "Remove" row.
-        onmouseenter:
-          options.onmouseenter ??
-          (() => {
-            flyoutAnchor = null;
-          }),
+        ...(options.onmouseenter === undefined ? {} : { onmouseenter: options.onmouseenter }),
       },
       [
         options.iconMarkup === null
@@ -965,71 +952,40 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const row = attrs.rows.find((candidate) => candidate.ref === menu.ref);
     if (row === undefined) return null;
     const direct = directItemsForRow(row, attrs);
+    // The removal verbs sit in the menu itself rather than behind a "Remove"
+    // submenu. There are at most two of them and they are the whole point of
+    // opening the menu, so a flyout only added a hover and a step between the
+    // user and the thing they came for -- and hid the difference between the
+    // two, which is the one thing worth reading before clicking.
     const removal = removalItemsForRow(row, isEverything, attrs);
-    return [
-      floatingCard({
-        anchor: menu.anchor,
-        placement: "right",
-        role: "menu",
-        width: null,
-        children: [
-          direct.map((item) =>
-            menuRow({
-              iconMarkup: icon("share", { size: 14 }),
-              label: item.label,
-              onclick: () => pick(item.run),
-            }),
-          ),
-          direct.length > 0 && removal.length > 0 ? m("div", { class: "my-1 border-t border-border" }) : null,
-          // A submenu holding a single verb is just a slower way to reach that
-          // verb, so the group only flies out once it has a choice to offer.
-          removal.length > 1
-            ? menuRow({
-                iconMarkup: icon("trash", { size: 14 }),
-                label: "Remove",
-                trailing: m(
-                  "span",
-                  { class: "flex shrink-0 items-center text-text-faint" },
-                  m.trust(icon("chevron-right", { size: 14 })),
-                ),
-                onclick: (event: MouseEvent) => {
-                  flyoutAnchor = anchorForEvent(event);
-                },
-                onmouseenter: (event: MouseEvent) => {
-                  flyoutAnchor = anchorForEvent(event);
-                },
-              })
-            : removal.length === 1
-              ? menuRow({
-                  iconMarkup: icon("trash", { size: 14 }),
-                  label: removal[0].label,
-                  isDestructive: removal[0].isDestructive,
-                  tooltip: removal[0].tooltip,
-                  onclick: () => pick(removal[0].run),
-                })
-              : null,
-        ],
-      }),
-      flyoutAnchor === null || removal.length < 2
-        ? null
-        : floatingCard({
-            anchor: flyoutAnchor,
-            placement: "right",
-            role: "menu",
-            width: null,
-            children: removal.map((item) =>
-              menuRow({
-                iconMarkup: null,
-                label: item.label,
-                isDestructive: item.isDestructive,
-                tooltip: item.tooltip,
-                onclick: () => pick(item.run),
-                // The flyout's own rows must not close the flyout they are in.
-                onmouseenter: () => {},
-              }),
-            ),
+    return floatingCard({
+      anchor: menu.anchor,
+      placement: "right",
+      role: "menu",
+      width: null,
+      children: [
+        direct.map((item) =>
+          menuRow({
+            iconMarkup: icon("share", { size: 14 }),
+            label: item.label,
+            onclick: () => pick(item.run),
           }),
-    ];
+        ),
+        direct.length > 0 && removal.length > 0 ? m("div", { class: "my-1 border-t border-border" }) : null,
+        removal.map((item) =>
+          menuRow({
+            // The safe verb keeps the minus the tab strip uses for closing, and
+            // the destructive one the "x" that ends an object, so the pair reads
+            // the same here as it does on a tab.
+            iconMarkup: icon(item.isDestructive ? "close" : "minus", { size: 14 }),
+            label: item.label,
+            isDestructive: item.isDestructive,
+            tooltip: item.tooltip,
+            onclick: () => pick(item.run),
+          }),
+        ),
+      ],
+    });
   }
 
   function allAppsMenu(attrs: SidebarAttrs, anchor: MenuAnchor, viewName: string, viewAppNames: string[]): m.Vnode {
@@ -1088,7 +1044,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         isOpen: row.isOpen,
       })),
       onRemoveContent: (ref: string) => attrs.onRemoveContentFromView(ref),
-      onRenameContent: (ref: string, title: string) => attrs.onRenameContentInView(ref, title),
+      onRenameContent: (ref: string, title: string) => attrs.onRenameMember(ref, title),
     });
   }
 

@@ -11,7 +11,7 @@ import {
   refreshProjects,
   removeMemberRefFromView,
   removeMemberRow,
-  renameMemberRefInView,
+  renameMemberRef,
   shareMemberRow,
   startProjectChat,
   switchToView,
@@ -83,7 +83,7 @@ export function App(): m.Component {
                 removeMemberRow(row);
               },
               onRemoveContentFromView: (ref: string) => removeMemberRefFromView(ref),
-              onRenameContentInView: (ref: string, title: string) => renameMemberRefInView(ref, title),
+              onRenameMember: (ref: string, title: string) => renameMemberRef(ref, title),
               onShareApp: (row: SidebarTabRow) => {
                 shareMemberRow(row);
               },
