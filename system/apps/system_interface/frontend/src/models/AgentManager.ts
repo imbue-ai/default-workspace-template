@@ -38,6 +38,12 @@ export interface AppEntry {
   // rows written before labels existed; ``labelForService`` falls back to the
   // name in that case.
   label: string;
+  // The app's own icon as SVG markup (a single ``<svg>`` element), registered
+  // by the app via ``forward_port.py --icon`` and validated there and again by
+  // the backend before it is sent here. Empty for apps that registered no
+  // icon, which is the common case: callers fall back to the generic app
+  // glyph.
+  icon?: string;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start
@@ -595,4 +601,47 @@ export async function allocateTerminalName(): Promise<string> {
     throw new Error("Terminal allocation returned no session_name");
   }
   return data.session_name;
+}
+
+/** A fresh agent name from the backend's name generator, which is what the
+ *  create modals pre-fill their input with. Never throws: a machine that
+ *  cannot reach the generator still gets a usable name, since a name is only
+ *  what the agent is called. */
+export async function fetchRandomAgentName(): Promise<string> {
+  try {
+    const response = await fetch(apiUrl("/api/random-name"));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = (await response.json()) as { name?: string };
+    if (!data.name) throw new Error("random-name returned no name");
+    return data.name;
+  } catch {
+    return `agent-${Date.now().toString(36)}`;
+  }
+}
+
+/**
+ * Start a chat agent, returning the id it will be known by.
+ *
+ * The create returns as soon as the agent has an id: the agent itself is still
+ * starting (it shows up as a proto agent until mngr registers it), which is
+ * what lets a caller open its chat tab immediately. ``projectId`` becomes the
+ * agent's ``project`` label -- the project the chat was started in, which mngr
+ * propagates to its children -- and is empty for a chat started outside any
+ * project. Throws with the server's detail on rejection.
+ */
+export async function createChatAgent(name: string, projectId: string): Promise<string> {
+  const response = await fetch(apiUrl("/api/agents/create-chat"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, project_id: projectId }),
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(data.detail ?? `HTTP ${response.status}`);
+  }
+  const created = (await response.json()) as { agent_id?: string };
+  if (!created.agent_id) {
+    throw new Error("Chat creation returned no agent id");
+  }
+  return created.agent_id;
 }

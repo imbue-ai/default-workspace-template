@@ -347,6 +347,24 @@ export function memberRef(kind: MemberKind, name: string): string {
   }
 }
 
+/**
+ * The service name a `service:<name>` ref addresses, or null for a ref that
+ * addresses no service.
+ *
+ * The partial inverse of `memberRef("app", name)`, kept beside it so the
+ * grammar stays written down in one place: the views that need to look an app
+ * up from a row (its icon, say) ask here rather than slicing the ref
+ * themselves. A fleet ref (`service:browser?session=...`) names the fleet's
+ * service and not an installed app, so it answers null -- the browser and the
+ * terminal are their own kinds everywhere else too.
+ */
+export function serviceNameFromRef(ref: string): string | null {
+  if (!ref.startsWith(SERVICE_REF_PREFIX)) return null;
+  const name = ref.substring(SERVICE_REF_PREFIX.length);
+  if (name === "" || name.includes("?")) return null;
+  return name;
+}
+
 /** One object as the machine reports it, before it becomes a row: the name its
  *  ref is built from (see memberRef) and what to call it in the UI. */
 export interface MachineObject {

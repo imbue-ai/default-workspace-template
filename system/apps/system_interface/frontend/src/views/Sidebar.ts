@@ -35,9 +35,11 @@ import {
   isEverythingView,
   memberRef,
   searchMembers,
+  serviceNameFromRef,
 } from "../models/Projects";
 import type { MatchRange, MemberKind, ProjectInfo } from "../models/Projects";
 import { AllAppsPicker, pickableApps } from "./AllAppsPicker";
+import { appIconMarkup, serviceIconMarkup } from "./appIcon";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
@@ -82,6 +84,12 @@ export interface SidebarAttrs {
   // The project registry changed under the rail (a create, a rename, a
   // delete). The workspace re-lists, so `projects` catches up.
   onProjectsChanged: () => void;
+  // A project was just created. The workspace mounts it and starts the one
+  // chat it is made with, in that order, so the user lands in a working chat
+  // rather than on the launcher an empty view would mount. Separate from
+  // `onSelectView` because those two have to be sequenced, which only the
+  // workspace can do.
+  onProjectCreated: (projectId: string) => void;
   // Create a new object of this kind in the active view. Never called with
   // "files" while no app backs it -- that shortcut renders disabled.
   onOpenTabType: (tabType: QuickAddTabType) => void;
@@ -183,6 +191,19 @@ const ICON_BY_MEMBER_KIND: Record<MemberKind, RailIconName> = {
   app: "app",
   url: "url",
 };
+
+// The rail draws its rows at 16px, shortcuts and tab list alike.
+const ROW_GLYPH_SIZE = 16;
+
+/** The glyph one tab-list row wears: an app's own icon when it registered a
+ *  usable one, and the kind's built-in glyph otherwise. Only apps have an icon
+ *  of their own -- a chat, a terminal, a browser session and a page are all
+ *  drawn by what they are. */
+function rowIconMarkup(row: SidebarTabRow): string {
+  const fallback = railIcon(ICON_BY_MEMBER_KIND[row.kind], ROW_GLYPH_SIZE);
+  if (row.kind !== "app") return fallback;
+  return serviceIconMarkup(serviceNameFromRef(row.ref), ROW_GLYPH_SIZE, fallback);
+}
 
 const SHORTCUT_ROWS: readonly { tabType: QuickAddTabType; label: string }[] = [
   { tabType: "chat", label: "Chat" },
@@ -507,10 +528,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       );
       closeMenus();
       attrs.onProjectsChanged();
-      // A project is made to be worked in, so creating switches -- and an empty
-      // one has no saved layout, which is what lands it on the New Tab launcher
-      // rather than on a pre-made blank chat.
-      attrs.onSelectView(created.project_id);
+      // A project is made to be worked in, so creating mounts it -- and every
+      // project is made with a chat of its own, which opens in place of the
+      // launcher an empty view would mount. Both are the workspace's, and it
+      // does them in that order, so this hands the id over rather than
+      // switching here.
+      attrs.onProjectCreated(created.project_id);
     } catch (error) {
       // Keep the switcher open with the reason on it: the retry is one click
       // away, and closing would hide why nothing happened.
@@ -613,7 +636,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       ...SHORTCUT_ROWS.map((row) =>
         shortcutRow({
           key: `tab-type:${row.tabType}`,
-          iconMarkup: railIcon(row.tabType, 16),
+          iconMarkup: railIcon(row.tabType, ROW_GLYPH_SIZE),
           label: row.label,
           tooltip: row.tabType === "files" ? FILE_VIEWER_TOOLTIP : row.label,
           onclick: row.tabType === "files" ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
@@ -622,7 +645,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       ...shortcutApps.map((app) =>
         shortcutRow({
           key: `app:${app.name}`,
-          iconMarkup: railIcon("app", 16),
+          iconMarkup: appIconMarkup(app.icon, ROW_GLYPH_SIZE, railIcon("app", ROW_GLYPH_SIZE)),
           label: app.name,
           tooltip: app.name,
           onclick: () => pick(() => attrs.onOpenApp(app)),
@@ -711,7 +734,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         },
       },
       [
-        m("span", { class: ICON_BOX_CLASS }, m.trust(railIcon(ICON_BY_MEMBER_KIND[row.kind], 16))),
+        m("span", { class: ICON_BOX_CLASS }, m.trust(rowIconMarkup(row))),
         m("span", { class: "min-w-0 flex-1 truncate text-[13px] whitespace-nowrap" }, matchedLabel(row.label, ranges)),
         hasMenu
           ? m(

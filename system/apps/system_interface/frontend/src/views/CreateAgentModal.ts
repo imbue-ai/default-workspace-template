@@ -5,6 +5,7 @@
 
 import m from "mithril";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
+import { fetchRandomAgentName } from "../models/AgentManager";
 
 interface CreateAgentModalAttrs {
   mode: "worktree" | "chat";
@@ -17,17 +18,11 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
   let loading = false;
   let error: string | null = null;
 
+  /** Pre-fill the input with a fresh name. The generator is shared with the
+   *  chat a new project is made with, so both surfaces name agents alike. */
   async function fetchRandomName(): Promise<void> {
-    try {
-      const response = await m.request<{ name: string }>({
-        method: "GET",
-        url: apiUrl("/api/random-name"),
-      });
-      name = response.name;
-      m.redraw();
-    } catch {
-      name = `agent-${Date.now().toString(36)}`;
-    }
+    name = await fetchRandomAgentName();
+    m.redraw();
   }
 
   async function submit(attrs: CreateAgentModalAttrs): Promise<void> {

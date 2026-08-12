@@ -166,6 +166,56 @@ url = "http://localhost:7681"
     assert apps[1].label == ""
 
 
+def test_read_apps_reads_the_registered_icon(agent_manager: AgentManager, tmp_path: Path) -> None:
+    icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\n"
+        'name = "web"\n'
+        'url = "http://localhost:8000"\n'
+        'label = "web-x7k9q2w1"\n'
+        f"icon = {json.dumps(icon)}\n"
+        "\n"
+        "[[apps]]\n"
+        'name = "terminal"\n'
+        'url = "http://localhost:7681"\n'
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].icon == icon
+    # An app that registered no icon reads back with an empty one.
+    assert apps[1].icon == ""
+
+
+@pytest.mark.parametrize(
+    "icon",
+    [
+        "<svg><script>alert(1)</script></svg>",
+        '<svg onload="alert(1)"></svg>',
+        "<svg><style>* { display: none }</style></svg>",
+        '<svg><a href="javascript:alert(1)"></a></svg>',
+        "<div>not an svg</div>",
+        "<svg" + " " * 20000 + "></svg>",
+    ],
+)
+def test_read_apps_drops_an_unsafe_icon(agent_manager: AgentManager, tmp_path: Path, icon: str) -> None:
+    """``forward_port.py`` never writes markup like this, but a hand-edited
+    registry must not be able to push it into the client's DOM."""
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\nname = \"web\"\nurl = \"http://localhost:8000\"\n" f"icon = {json.dumps(icon)}\n"
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    # The app itself still registers; only its icon is refused.
+    assert len(apps) == 1
+    assert apps[0].icon == ""
+
+
 def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_file = tmp_path / "nonexistent.toml"
     agent_manager._read_apps(toml_file)
@@ -222,7 +272,24 @@ def test_get_apps_serialized(agent_manager: AgentManager) -> None:
         ]
 
     serialized = agent_manager.get_apps_serialized()
-    assert serialized == [{"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1"}]
+    assert serialized == [
+        {"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1", "icon": ""}
+    ]
+
+
+def test_get_apps_serialized_carries_the_icon(agent_manager: AgentManager) -> None:
+    """The icon rides alongside name/url/label everywhere the app list is sent,
+    so a client can draw the app's own glyph without a second request."""
+    icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>'
+    with agent_manager._lock:
+        agent_manager._apps = [
+            AppEntry(name="web", url="http://localhost:8000", label="web-x7k9q2w1", icon=icon),
+        ]
+
+    serialized = agent_manager.get_apps_serialized()
+    assert serialized == [
+        {"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1", "icon": icon}
+    ]
 
 
 def test_resolve_agent_work_dir_from_own_env(agent_manager: AgentManager) -> None:

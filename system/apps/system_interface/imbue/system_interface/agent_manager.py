@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import re
 import shlex
 import threading
 import tomllib
@@ -72,6 +73,33 @@ _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 # label (set on its ``mngr create``). When such an agent is first discovered, we
 # auto-open its tab so the user lands on it without hunting.
 _ASSIST_AUTO_OPEN_LABEL = "assist"
+
+# An app's icon is SVG markup carried verbatim on its registry row and handed to
+# the browser, which inlines it. ``system/scripts/forward_port.py`` is the real
+# validator (it parses the markup and rejects anything that is not a single,
+# inert ``<svg>`` element); the checks below are a backstop for a hand-edited or
+# otherwise unvalidated ``apps.toml``, so a bad icon is dropped here instead of
+# reaching the DOM. They deliberately mirror, and are never looser than, that
+# validator. Keep the cap in step with its ``MAX_ICON_LENGTH``.
+_MAX_ICON_LENGTH = 16384
+_FORBIDDEN_ICON_SUBSTRINGS = ("<script", "<style", "<foreignobject", "javascript:", "<!", "<?")
+# An ``on*=`` attribute anywhere in a tag, e.g. ``<svg onload="...">``.
+_ICON_EVENT_HANDLER_PATTERN = re.compile(r"<[^>]*\son[a-z]+\s*=", re.IGNORECASE)
+
+
+def _accepted_icon(raw_icon: str) -> str:
+    """Return ``raw_icon`` when it is safe to inline as an app icon, else ''."""
+    icon = raw_icon.strip()
+    if not icon or len(icon) > _MAX_ICON_LENGTH:
+        return ""
+    if not icon.startswith("<svg") or not icon.endswith(">"):
+        return ""
+    lowered = icon.lower()
+    if any(forbidden in lowered for forbidden in _FORBIDDEN_ICON_SUBSTRINGS):
+        return ""
+    if _ICON_EVENT_HANDLER_PATTERN.search(icon) is not None:
+        return ""
+    return icon
 
 
 def _build_worktree_create_command(
@@ -556,7 +584,10 @@ class AgentManager:
     def get_apps_serialized(self) -> list[dict[str, str]]:
         """Return the primary agent's app list serialized for JSON."""
         with self._lock:
-            return [{"name": app.name, "url": app.url, "label": app.label} for app in self._apps]
+            return [
+                {"name": app.name, "url": app.url, "label": app.label, "icon": app.icon}
+                for app in self._apps
+            ]
 
     def get_service_url(self, service_name: str) -> str | None:
         """Return the local backend URL for a service, or None if it isn't registered."""
@@ -1343,8 +1374,9 @@ class AgentManager:
                     name = entry.get("name", "")
                     url = entry.get("url", "")
                     label = entry.get("label", "")
+                    icon = _accepted_icon(str(entry.get("icon", "")))
                     if name and url:
-                        apps.append(AppEntry(name=name, url=url, label=label))
+                        apps.append(AppEntry(name=name, url=url, label=label, icon=icon))
             except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError) as e:
                 _loguru_logger.opt(exception=e).error("Failed to parse {}", toml_path)
 

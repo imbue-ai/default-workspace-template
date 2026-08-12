@@ -11,6 +11,7 @@ import {
   refreshProjects,
   removeMemberRow,
   shareMemberRow,
+  startProjectChat,
   switchToView,
 } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
@@ -57,6 +58,15 @@ export function App(): m.Component {
               },
               onProjectsChanged: () => {
                 refreshProjects();
+              },
+              onProjectCreated: (projectId: string) => {
+                // Mount the new project, THEN start the one chat it is made
+                // with: the mount tears the dock down and rebuilds it, so a
+                // chat tab opened before it lands would be swept away with the
+                // outgoing layout. One chat per project, which is what the
+                // rail's Chat shortcut then goes to instead of starting
+                // another.
+                void switchToView(projectId).then(() => startProjectChat(projectId));
               },
               onOpenTabType: (tabType: QuickAddTabType) => {
                 openTabOfType(tabType);

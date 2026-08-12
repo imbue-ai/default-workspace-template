@@ -64,6 +64,7 @@ import { CreateBrowserModal } from "./CreateBrowserModal";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ShareModal } from "./ShareModal";
 import { pickableApps } from "./AllAppsPicker";
+import { serviceIconMarkup } from "./appIcon";
 import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
 import type { LaunchKind, LauncherRow } from "./NewTabLauncher";
 import { placeMenu } from "./Sidebar";
@@ -90,6 +91,8 @@ import {
   addTerminalSessionListener,
   allocateTerminalName,
   buildSessionTerminalUrl,
+  createChatAgent,
+  fetchRandomAgentName,
   fetchTerminalSessions,
   getAgentById,
   getAgents,
@@ -258,6 +261,14 @@ const DESTROY_TERMINAL_DETAILS =
   "The tmux session is killed and the terminal is removed from every project that shows it, not just this one.";
 const DESTROY_BROWSER_DETAILS =
   "The browser is retired from the fleet and removed from every project that shows it, not just this one.";
+// The app verb is the one that has to be careful about what it does NOT do.
+// Deregistering takes the app out of the port registry, so it leaves the app
+// list and every project at once — but nothing in this workspace supervises the
+// program behind the port, so that program is still running afterwards. Saying
+// "shut down" here would be a lie.
+const DEREGISTER_APP_DETAILS =
+  "The app disappears from every project that shows it and from the app list, not just from this project. " +
+  "The program it runs is not stopped — it keeps running until the agent that started it stops it.";
 
 // Destroy dialog state
 let showDestroyDialog = false;
@@ -278,6 +289,14 @@ let terminalDestroyPanelId: string | null = null;
 let showBrowserDestroyDialog = false;
 let browserDestroyName: string | null = null;
 let browserDestroyPanelId: string | null = null;
+
+// App-deregister dialog state. Separate for the fourth time, and for the
+// starkest reason: this one does not take anything down. It unregisters the app
+// (POST /api/apps/<name>/deregister, which drives system/scripts/forward_port.py
+// --remove) and unfiles it everywhere, and the process it was serving lives on.
+let showAppDeregisterDialog = false;
+let appDeregisterName: string | null = null;
+let appDeregisterPanelId: string | null = null;
 
 // Share modal state
 let showShareModal = false;
@@ -479,6 +498,9 @@ const TAB_KIND_PATHS = {
 
 type TabIconName = keyof typeof TAB_KIND_PATHS;
 
+// The size a tab's leading glyph is drawn at.
+const TAB_GLYPH_SIZE = 14;
+
 /** Full <svg> string for one of the tab strip's own glyphs. */
 function tabIcon(name: TabIconName, size: number): string {
   return (
@@ -500,6 +522,16 @@ function tabIconNameForPanel(params: PanelParams | undefined): TabIconName {
   if (params.serviceName === BROWSER_SERVICE_NAME) return "browser";
   if (params.serviceName) return "app";
   return "url";
+}
+
+/** The markup a tab's leading glyph is drawn from: a registered app's own icon
+ *  when it has one, and the kind's built-in glyph otherwise -- so a tab, its
+ *  sidebar row and its launcher row all wear the same picture. */
+function tabIconMarkupForPanel(params: PanelParams | undefined): string {
+  const name = tabIconNameForPanel(params);
+  const fallback = tabIcon(name, TAB_GLYPH_SIZE);
+  if (name !== "app") return fallback;
+  return serviceIconMarkup(params?.serviceName ?? null, TAB_GLYPH_SIZE, fallback);
 }
 
 // ---------- The tab ⋮ menu ----------
@@ -636,9 +668,12 @@ function openTabMenuAt(
  *
  * The destructive verb is whatever taking the object off the machine means for
  * its kind: destroying a chat's agent, killing a terminal's tmux session,
- * retiring a browser from the fleet. Apps and ad-hoc pages have none -- nothing
- * here stops a supervised app or deletes its package, and a page is only ever a
- * panel -- so offering one would be a menu item that cannot act.
+ * retiring a browser from the fleet, unregistering an app. The app one is
+ * deliberately weaker than the other three, because that is the truth -- the
+ * workspace owns the port registry and nothing else, so it can unregister an
+ * app but cannot stop the program serving it. An ad-hoc page has no verb at
+ * all: it is only ever a panel, so offering one would be a menu item that
+ * cannot act.
  */
 function tabMenuEntries(panelId: string): TabMenuEntry[] {
   const params = panelParams.get(panelId);
@@ -667,7 +702,7 @@ function tabMenuEntries(panelId: string): TabMenuEntry[] {
   if (entries.length > 0) entries.push(MENU_DIVIDER);
   entries.push({
     label: "Close tab",
-    iconName: "close",
+    iconName: "minus",
     run: () => {
       const panel = dockview?.panels.find((candidate) => candidate.id === panelId);
       panel?.api.close();
@@ -688,8 +723,8 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
     // take the machine down, so it is not offered.
     if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
     return {
-      label: "Destroy agent",
-      iconName: "trash",
+      label: "Shut down agent",
+      iconName: "close",
       isDestructive: true,
       run: () => {
         destroyTargetAgentId = chatAgentId;
@@ -705,8 +740,8 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
     // A terminal still allocating its tmux session name has no session to kill.
     if (!sessionName) return null;
     return {
-      label: "Destroy terminal",
-      iconName: "trash",
+      label: "Shut down terminal",
+      iconName: "close",
       isDestructive: true,
       run: () => {
         terminalDestroySessionName = sessionName;
@@ -722,8 +757,8 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
     const browserName = sessionParamFromUrl(params.url);
     if (browserName === null) return null;
     return {
-      label: "Close browser session",
-      iconName: "trash",
+      label: "Shut down browser",
+      iconName: "close",
       isDestructive: true,
       run: () => {
         browserDestroyName = browserName;
@@ -733,8 +768,30 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
       },
     };
   }
-  // An app, an ad-hoc page, or a subagent view: nothing to tear down beyond the
-  // panel, and the panel is what Close already handles.
+  const serviceName = params.serviceName;
+  // A registered app: a service panel that is not one of the two fleets. The
+  // browser and the terminal are registered services too and have their own
+  // verbs above, so what the ref's kind says decides here rather than the
+  // panel's shape -- a bare ``service:terminal`` pane must not offer to
+  // unregister the terminal service out from under every terminal tab.
+  // Naming the verb "unregister" rather than "shut down" is the whole point:
+  // the workspace can take an app out of the registry and out of every
+  // project, and it cannot stop the program answering on the port.
+  if (serviceName !== undefined && memberKindFromRef(memberRef("app", serviceName)) === "app") {
+    return {
+      label: "Unregister app",
+      iconName: "close",
+      isDestructive: true,
+      run: () => {
+        appDeregisterName = serviceName;
+        appDeregisterPanelId = panelId;
+        showAppDeregisterDialog = true;
+        m.redraw();
+      },
+    };
+  }
+  // An ad-hoc page or a subagent view: nothing to tear down beyond the panel,
+  // and the panel is what Close already handles.
   return null;
 }
 
@@ -746,7 +803,8 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
 const tabHandlesByPanelId = new Map<string, { element: HTMLElement; refreshTitleFade: () => void }>();
 
 /**
- * One tab: kind glyph, title, then the right-aligned ✕ and ⋮ that hover reveals.
+ * One tab: kind glyph, title, then the right-aligned minus and ⋮ that hover
+ * reveals.
  *
  * The two actions are hidden at rest and shown together (§5) -- a tab at the
  * 100px floor has room for its title or its buttons, not both, and the design
@@ -804,7 +862,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     element,
     init(parameters: TabPartInitParameters) {
       content.textContent = parameters.title ?? "";
-      kindIcon.innerHTML = tabIcon(tabIconNameForPanel(panelParams.get(options.id)), 14);
+      kindIcon.innerHTML = tabIconMarkupForPanel(panelParams.get(options.id));
       disposables.push(
         parameters.api.onDidTitleChange((event) => {
           content.textContent = event.title ?? "";
@@ -820,13 +878,16 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       }
 
       actions.appendChild(
-        createTabActionButton("Close tab", "close", disposables, () => {
+        // A minus, not an "x": this puts the tab away and leaves the object
+        // running and filed wherever it was filed. Ending it for good is the
+        // menu's job, and wears the "x".
+        createTabActionButton("Close tab", "minus", disposables, () => {
           parameters.api.close();
         }),
       );
 
       // A launcher tab is a question about this pane, not an object: there is
-      // nothing to refresh, share or destroy, so it carries only ✕ (§5).
+      // nothing to refresh, share or shut down, so it carries only the minus.
       if (!isLauncher) {
         const openMenu = (anchor: MenuAnchor, trigger: HTMLElement | null): void => {
           if (isMenuOpen) {
@@ -2317,13 +2378,14 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
 /**
  * Start a new object of ``tabType`` in ``targetGroup``.
  *
- * The multiplicity rules are the machine's (§7) and are not configurable here:
- * a chat always creates a new agent, a browser and a terminal always create new
- * instances, and a custom app focuses its single one. A chat and a browser open
- * their naming modal first -- neither the rail nor the launcher is a place to
- * type a name -- so the launcher that asked is only retired once the modal
- * reports back, which is why it is parked in ``newTabSourceLauncherPanelId``
- * rather than closed here.
+ * This is the create half, and it always creates: a chat starts a new agent, a
+ * browser and a terminal start new instances, and a custom app focuses its
+ * single one. That is what the launcher's "Open new" tiles ask for by name; the
+ * rail's shortcuts go through ``openTabOfType``, which looks for something to
+ * focus first. A chat and a browser open their naming modal here -- neither the
+ * rail nor the launcher is a place to type a name -- so the launcher that asked
+ * is only retired once the modal reports back, which is why it is parked in
+ * ``newTabSourceLauncherPanelId`` rather than closed here.
  */
 function openTabOfTypeInGroup(
   tabType: QuickAddTabType,
@@ -2364,10 +2426,117 @@ function openTabOfTypeInGroup(
   newTabSourceLauncherPanelId = null;
 }
 
-/** Open a new tab of ``tabType`` in the active pane. Exported for the sidebar's
- *  shortcut rows, which offer the machine's starting points as one-click
- *  rows. */
+/** The shortcuts that go to an object the active view already shows instead of
+ *  starting another one. See ``refForShortcutFocus``. */
+export type FocusableTabType = "chat" | "browser";
+
+/**
+ * Which object a Chat or Browser shortcut should go to, or null when the view
+ * shows none of that kind and the shortcut has to create one.
+ *
+ * ``memberRefs`` is the active view's tab list in the order it renders (a
+ * project's member list, or the machine for Everything), so "the first one the
+ * view lists" means the first one the user sees. ``preferredRef`` is the one
+ * the view names as *its* object of that kind (see ``preferredChatRefForView``)
+ * and is honored only while the view still lists it; without one, or once it is
+ * gone, the first listed wins. Backgrounded objects count -- they are listed
+ * and still running, and the caller opens one into the active pane.
+ */
+export function refForShortcutFocus(
+  memberRefs: readonly string[],
+  tabType: FocusableTabType,
+  preferredRef: string | null,
+): string | null {
+  const candidates = memberRefs.filter((ref) => memberKindFromRef(ref) === tabType);
+  if (candidates.length === 0) return null;
+  if (preferredRef !== null && candidates.includes(preferredRef)) return preferredRef;
+  return candidates[0];
+}
+
+/**
+ * The chat a view's Chat shortcut goes to before any other, or null when the
+ * view names none and listing order decides.
+ *
+ * A project has ONE chat of its own: the one started with it (see
+ * ``startProjectChat``), which carries the project's id in its agent's
+ * ``project`` label. That is what makes the shortcut a singleton -- it keeps
+ * going to the project's chat however many others the project is later given,
+ * and it never mints a second one.
+ *
+ * Everything is not a project and has no chat of its own, so it keeps naming
+ * the primary agent's chat, which is the closest the machine has to a home
+ * chat. ``originatingProjectByChatRef`` maps a chat ref to the project its
+ * agent was created in; a chat still starting up is not in it yet, which only
+ * costs a preference and never a wrong answer.
+ *
+ * An agent's children inherit its ``project`` label, so a project may list
+ * several chats claiming it. Listing order settles that, and the project's own
+ * chat is first: it was filed the moment the project was made, before anything
+ * else could be.
+ */
+export function preferredChatRefForView(
+  memberRefs: readonly string[],
+  viewId: string,
+  originatingProjectByChatRef: Readonly<Record<string, string>>,
+  primaryAgentId: string,
+): string | null {
+  if (isEverythingView(viewId)) return primaryAgentId === "" ? null : memberRef("chat", primaryAgentId);
+  const own = memberRefs.find(
+    (ref) => memberKindFromRef(ref) === "chat" && originatingProjectByChatRef[ref] === viewId,
+  );
+  return own ?? null;
+}
+
+/** Which project each known chat agent was started in, keyed by the chat's
+ *  member ref. The label rides the agent (mngr propagates it to its children),
+ *  so this follows the machine rather than any one project's member list. */
+function originatingProjectByChatRef(): Record<string, string> {
+  const byRef: Record<string, string> = {};
+  for (const agent of getAgents()) {
+    if (agent.project) byRef[memberRef("chat", agent.id)] = agent.project;
+  }
+  return byRef;
+}
+
+/** Go to the Chat or Browser the active view already shows, reporting whether
+ *  there was one. Focuses its tab when it has one and opens it into the active
+ *  pane when it is backgrounded -- ``openMemberRef`` is the same path the
+ *  sidebar rows take, so a member with no panel is opened rather than
+ *  ignored. */
+function focusExistingForShortcut(tabType: FocusableTabType): boolean {
+  const memberRefs = getSidebarRows().map((row) => row.ref);
+  // Only a chat has a per-view singleton to prefer. A browser has no notion of
+  // the view's *own* one, so the first the view lists wins.
+  const preferredRef =
+    tabType === "chat"
+      ? preferredChatRefForView(memberRefs, mountedViewId ?? "", originatingProjectByChatRef(), getPrimaryAgentId())
+      : null;
+  const ref = refForShortcutFocus(memberRefs, tabType, preferredRef);
+  if (ref === null) return false;
+  if (openMemberRef(ref, null) === null) return false;
+  m.redraw();
+  return true;
+}
+
+/**
+ * Open ``tabType`` in the active pane. Exported for the sidebar's shortcut rows,
+ * which offer the machine's starting points as one-click rows.
+ *
+ * Chat and Browser go to what the active view already shows and only create when
+ * it shows none. This deliberately REVERSES spec §7, which has Chat always
+ * create a new agent and Browser always create a new session: Preston asked for
+ * the rail's chat to be "a singleton to refer to the primary chat of each
+ * project", and for the browser to behave the same way. Do not "fix" it back --
+ * starting another one from scratch is what the launcher's "Open new" tiles are
+ * for. Terminals were NOT extended, because only chat and browser were named.
+ *
+ * A project therefore has exactly one chat of its own, started with the project
+ * itself (``startProjectChat``), and this shortcut goes to that chat rather
+ * than minting another. Everything is not a project and has no chat of its own,
+ * so its shortcut keeps creating one on the machine when it lists none.
+ */
 export function openTabOfType(tabType: QuickAddTabType): void {
+  if ((tabType === "chat" || tabType === "browser") && focusExistingForShortcut(tabType)) return;
   openTabOfTypeInGroup(tabType, null, null);
 }
 
@@ -2818,6 +2987,59 @@ export async function switchToView(viewId: string): Promise<void> {
   const saved = (await fetchProjectContent(viewId)) as SavedLayout | null;
   markServerContent(saved);
   applyLayoutContent(saved);
+  m.redraw();
+}
+
+/** The launcher a just-mounted empty view is showing, when it is the only thing
+ *  in the dock. That launcher is the pane asking what to put in it, so the
+ *  project's own chat answers it and replaces it; a dock the user has already
+ *  put something in is left alone. */
+function soleLauncherPanelId(): string | null {
+  if (!dockview || dockview.panels.length !== 1) return null;
+  const panelId = dockview.panels[0].id;
+  return panelParams.get(panelId)?.panelType === "launcher" ? panelId : null;
+}
+
+/**
+ * Start the chat a freshly-created project is made with, file it as a member,
+ * and open it into that project.
+ *
+ * Every project gets exactly one chat, made with it, so the user lands in a
+ * working chat instead of an empty launcher and the rail's Chat shortcut has
+ * something to go to (see ``openTabOfType``, which no longer creates one per
+ * click). The chat carries the project's id in its agent's ``project`` label,
+ * which is what ``preferredChatRefForView`` recognizes it by.
+ *
+ * The create is asynchronous and may fail, and the project is already created
+ * and usable by the time it does: the failure is reported rather than swallowed
+ * -- the rail's Chat shortcut is then the way to try again -- and nothing about
+ * the project is rolled back. The chat is filed before it is shown so a user
+ * who switched away while it was starting still finds it in the project;
+ * opening only happens if that project is still the mounted one, since opening
+ * it anywhere else would file it into the wrong view.
+ */
+export async function startProjectChat(projectId: string): Promise<void> {
+  const chatName = await fetchRandomAgentName();
+  let chatAgentId: string;
+  try {
+    chatAgentId = await createChatAgent(chatName, projectId);
+    await addMember(projectId, memberRef("chat", chatAgentId));
+    await refreshProjectsList();
+  } catch (error) {
+    alert(
+      `Project "${displayNameForProject(projectId)}" was created, but its chat could not be set up: ` +
+        `${(error as Error).message}. Use the rail's Chat shortcut to start one.`,
+    );
+    return;
+  }
+  if (mountedViewId === projectId) {
+    // The agent is still starting -- it is a proto agent until mngr registers
+    // it -- and its chat panel opens on that id right away, exactly as the
+    // create-chat modal's does.
+    const launcherPanelId = soleLauncherPanelId();
+    focusOrCreateChatPanel(chatAgentId, chatName, launcherPanelId === null ? null : groupForPanel(launcherPanelId));
+    retireLauncher(launcherPanelId);
+  }
   m.redraw();
 }
 
@@ -3722,6 +3944,35 @@ async function executeBrowserDestroy(name: string, panelId: string): Promise<voi
   m.redraw();
 }
 
+async function executeAppDeregister(name: string, panelId: string): Promise<void> {
+  // Unregister the app, then drop the tab. The endpoint runs
+  // system/scripts/forward_port.py --remove (so the app leaves data/.state/apps.toml
+  // and the app list) and unfiles ``service:<name>`` from every project. It does
+  // not stop anything: the program the agent started keeps serving its port, and
+  // re-registering brings the app straight back.
+  try {
+    const response = await fetch(apiUrl(`/api/apps/${encodeURIComponent(name)}/deregister`), {
+      method: "POST",
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const detail = (data as { detail?: string }).detail ?? "Unknown error";
+      alert(`Failed to unregister app: ${detail}`);
+      return;
+    }
+  } catch (e) {
+    alert(`Failed to unregister app: ${(e as Error).message}`);
+    return;
+  }
+
+  // The app has no page left to show once it is off the registry -- its origin
+  // no longer resolves -- so the live surface goes the way a destroyed object's
+  // does, and the panel leaves every project's saved layout with it.
+  await forgetDestroyedObject(memberRef("app", name), panelId);
+
+  m.redraw();
+}
+
 export const DockviewWorkspace: m.Component = {
   oncreate(vnode: m.VnodeDOM) {
     const wrapper = vnode.dom as HTMLElement;
@@ -3919,6 +4170,31 @@ export const DockviewWorkspace: m.Component = {
                 showBrowserDestroyDialog = false;
                 browserDestroyName = null;
                 browserDestroyPanelId = null;
+              },
+            })
+          : null,
+
+        showAppDeregisterDialog && appDeregisterName
+          ? m(DestroyConfirmDialog, {
+              agentName: appDeregisterName,
+              title: "Unregister app",
+              // Not "Are you sure you want to destroy ...? This cannot be
+              // undone", which the other three ask: neither half is true here.
+              question: ["Unregister ", m("strong", appDeregisterName), "?"],
+              details: DEREGISTER_APP_DETAILS,
+              confirmLabel: "Unregister",
+              onConfirm() {
+                showAppDeregisterDialog = false;
+                const name = appDeregisterName!;
+                const panelId = appDeregisterPanelId!;
+                appDeregisterName = null;
+                appDeregisterPanelId = null;
+                executeAppDeregister(name, panelId);
+              },
+              onCancel() {
+                showAppDeregisterDialog = false;
+                appDeregisterName = null;
+                appDeregisterPanelId = null;
               },
             })
           : null,
