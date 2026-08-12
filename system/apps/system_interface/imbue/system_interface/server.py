@@ -460,7 +460,15 @@ def _send_message_endpoint(agent_id: str) -> Response:
         else None
     )
 
-    success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
+    # Mark the agent send-in-flight so the shoulder-tap button greys for the (blocking) send's
+    # duration (contract Shoulder-tap: unavailable while ANY message is Sending). Cleared after,
+    # on every path, so the button never stays stuck greyed. The mark/clear each broadcast, so
+    # the frontend sees the flag flip false then true within this request.
+    agent_manager.mark_send_in_flight(agent_info.id)
+    try:
+        success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
+    finally:
+        agent_manager.clear_send_in_flight(agent_info.id)
 
     if not success:
         if watcher is not None and queued_token is not None:
@@ -904,13 +912,11 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
             logger.opt(exception=e).error("Failed to write pi interrupt sentinel for {}", agent_info.name)
             error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
             return _json_response(error.model_dump(), status_code=500)
-        if pi_flush_status == PiFlushTapStatus.SEND_IN_FLIGHT:
-            # An explicit, retryable failure: a message send held the lock past the bounded
-            # wait, so no sentinel was written (writing it unordered could race the send).
-            error = ErrorResponse(
-                detail=f"A message send to agent '{agent_info.name}' is in flight; try the shoulder tap again."
-            )
-            return _json_response(error.model_dump(), status_code=500)
+        # SEND_IN_FLIGHT (a send held the lock past the bounded wait, so no sentinel was written)
+        # is a benign 200 no-op, not a 500: the backend availability flag greys the button while a
+        # send is in flight, so a tap that still races one just does nothing and the user retaps --
+        # surfacing an error there is the button-then-error bug we removed. The queue is unchanged,
+        # so it stays tappable.
         return _json_response(ShoulderTapAtomicResponse(status=pi_flush_status.value).model_dump())
 
     if agent_info.harness == HarnessType.CLAUDE:

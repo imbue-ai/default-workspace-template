@@ -28,6 +28,7 @@ from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
 from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
+from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
@@ -103,9 +104,12 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
         watcher_class=CodexSessionWatcher,
-        # No tracker: codex's activity dot is driven directly by its live ledger off the
-        # app-server turn lifecycle (turn/started..turn/completed, contract A6), not inferred
-        # from the transcript. So tracker_class stays None (the default).
+        # The dot follows mngr's live RUNNING state (thread/status-derived), defaulting to THINKING and
+        # refined to a tool verb by the transcript -- the same lifecycle+transcript path as claude/pi.
+        # (The old design drove it from the ledger's turn/started..turn/completed events, but codex no
+        # longer emits those on the app-server, only thread/status/changed, so the dot got stuck. The
+        # ledger stays as the queue/message-lifecycle authority; it no longer drives the dot.)
+        tracker_class=CodexActivityTracker,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,

@@ -168,14 +168,16 @@ class TapVerdict(StrEnum):
 class ClaudeTapStatus(StrEnum):
     """The executor's outcome; the server maps it to an HTTP response.
 
-    The 200 no-ops are NOTHING_QUEUED (mirror already empty after refresh) and NO_OPEN_TURN
-    (no turn in flight, so no chord delivered); TAPPED is the 200 success (flushed, and on the
-    race its recovery message sent). The rest are errors the server surfaces: PERMISSIONS_WAITING
-    (409, claude is on a dialog the chord is inert in), BINDING_NOT_ACTIVE (500, the chord is not
-    live for this process yet), CHORD_SEND_FAILED / RECOVERY_SEND_FAILED (500, a delivery failed),
-    NOT_FLUSHED (500, the queue did not flush within the watch window), and SEND_IN_FLIGHT (500,
-    a message send held ``message.lock`` past the bounded wait -- an explicit, retryable refusal
-    mirroring codex/pi, rather than a NOTHING_QUEUED no-op that would miss the not-yet-parked send).
+    The 200 no-ops are NOTHING_QUEUED (mirror already empty after refresh), NO_OPEN_TURN
+    (no turn in flight, so no chord delivered), and SEND_IN_FLIGHT (a message send held
+    ``message.lock`` past the bounded wait, so nothing was flushed -- a benign no-op, not a
+    user-facing error: the button is greyed by the backend availability flag whenever a send
+    is in flight, so a tap that still races one just does nothing and the user can retap);
+    TAPPED is the 200 success (flushed, and on the race its recovery message sent). The rest
+    are errors the server surfaces: PERMISSIONS_WAITING (409, claude is on a dialog the chord
+    is inert in), BINDING_NOT_ACTIVE (500, the chord is not live for this process yet),
+    CHORD_SEND_FAILED / RECOVERY_SEND_FAILED (500, a delivery failed), and NOT_FLUSHED (500,
+    the queue did not flush within the watch window).
     """
 
     NOTHING_QUEUED = "nothing_queued"
@@ -189,9 +191,17 @@ class ClaudeTapStatus(StrEnum):
     TAPPED = "tapped"
 
 
-# The statuses that map to a 200 (a successful tap or an idempotent no-op).
+# The statuses that map to a 200 (a successful tap or an idempotent no-op). SEND_IN_FLIGHT is a
+# benign no-op, not an error: the backend availability flag greys the button while a send is in
+# flight, so a tap that still races one flushes nothing and the user simply retaps -- surfacing a
+# 500 there is the button-then-error bug we are removing.
 OK_TAP_STATUSES: frozenset[ClaudeTapStatus] = frozenset(
-    {ClaudeTapStatus.NOTHING_QUEUED, ClaudeTapStatus.NO_OPEN_TURN, ClaudeTapStatus.TAPPED}
+    {
+        ClaudeTapStatus.NOTHING_QUEUED,
+        ClaudeTapStatus.NO_OPEN_TURN,
+        ClaudeTapStatus.SEND_IN_FLIGHT,
+        ClaudeTapStatus.TAPPED,
+    }
 )
 
 

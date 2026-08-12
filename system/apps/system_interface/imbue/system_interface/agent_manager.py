@@ -339,6 +339,14 @@ class AgentManager:
     # backstop). Both are dropped when activity tracking stops.
     _queued_messages_by_agent: dict[str, tuple[QueuedMessageState, ...]]
     _queue_idle_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]]]]
+    # Agents with a synchronous send in flight right now (contract Shoulder-tap: a tap is
+    # unavailable while ANY message is Sending). The send endpoint marks the agent for the
+    # duration of its blocking ``note -> send -> commit`` and clears it after, so the derived
+    # ``shoulder_tap_available`` (see ``get_agents_serialized``) goes false for that window and
+    # the button greys -- the backend is the single source of the button's enabled state, with
+    # no frontend inference and no error path. codex sends bypass this (they route through the
+    # ledger before the shared send path), and their availability is a queue check anyway.
+    _send_in_flight_by_agent: set[str]
     # Per-codex-agent live app-server connection: the persistent client + ledger + background
     # reader thread that make the ledger the backend authority for that agent's five message
     # states (send/queue/deliver/return), its activity dot, and its model-bar mirror. Built lazily
@@ -407,6 +415,7 @@ class AgentManager:
         manager._activity_state_by_agent = {}
         manager._queued_messages_by_agent = {}
         manager._queue_idle_handler_by_agent = {}
+        manager._send_in_flight_by_agent = set()
         manager._codex_connection_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
@@ -612,6 +621,12 @@ class AgentManager:
                     "activity_state": a.activity_state,
                     "model_choice": a.model_choice.model_dump() if a.model_choice else None,
                     "queued_messages": [queued.model_dump() for queued in a.queued_messages],
+                    # Backend-computed shoulder-tap availability (contract Shoulder-tap): available
+                    # iff something is queued AND no send is in flight. Derived here from the two
+                    # authoritative pieces of manager state rather than stored on the item, so it
+                    # can never go stale against them. The frontend renders/greys the button from
+                    # this alone -- it computes nothing and there is no error path.
+                    "shoulder_tap_available": bool(a.queued_messages) and a.id not in self._send_in_flight_by_agent,
                 }
                 for a in self._agents.values()
             ]
@@ -1205,19 +1220,17 @@ class AgentManager:
             self._activity_tracked_agents.add(agent_id)
             agent_state = self._agents.get(agent_id)
             harness = agent_state.harness if agent_state is not None else DEFAULT_HARNESS
-            # codex drives activity + queue through its live ledger (below), not the
-            # transcript-derived tracker, so it gets NO tracker entry -- which is exactly what
-            # makes ``_recompute_activity_state`` / ``update_session_events`` / ``reset`` no-op
-            # for codex (they short-circuit on a missing tracker). Every other harness builds its
-            # tracker here, once, from the harness it was created with -- the single place a
-            # harness name selects the transcript-derived behavior.
-            needs_tracker = harness != HarnessType.CODEX and agent_id not in self._activity_tracker_by_agent
-            if needs_tracker:
+            # Every harness -- codex included -- builds its transcript-derived tracker here, once, from
+            # the harness it was created with. codex's dot follows mngr's live RUNNING state
+            # (thread/status-derived), refined to a tool verb by its tracker, exactly like claude/pi.
+            # Its ledger (built below) no longer drives the dot -- only the queue + message-lifecycle
+            # chips.
+            if agent_id not in self._activity_tracker_by_agent:
                 self._activity_tracker_by_agent[agent_id] = build_tracker(harness)
         if harness == HarnessType.CODEX:
             # Give the agent its one live app-server connection + ledger (idempotent; rebuilds a
-            # connection whose daemon generation died). The ledger's callbacks own codex's
-            # activity dot and queue chips from here on.
+            # connection whose daemon generation died). The ledger owns the queue chips + message
+            # lifecycle; the activity dot is the tracker's job now.
             self._ensure_codex_connection(agent_id)
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
@@ -1230,6 +1243,7 @@ class AgentManager:
             self._activity_state_by_agent.pop(agent_id, None)
             self._queued_messages_by_agent.pop(agent_id, None)
             self._queue_idle_handler_by_agent.pop(agent_id, None)
+            self._send_in_flight_by_agent.discard(agent_id)
         # Stop the reader + close the client outside the lock (join blocks on the reader thread).
         if connection is not None:
             connection.stop()
@@ -1260,7 +1274,9 @@ class AgentManager:
         connection = CodexLiveConnection.build(
             state_dir,
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
-            on_activity=lambda activity: self.set_codex_activity(agent_id, activity),
+            # The dot is tracker-driven now (mngr RUNNING + transcript), so the ledger's activity
+            # callback is inert -- kept only so the ledger's reducer signature is unchanged.
+            on_activity=lambda activity: None,
             model_state_path=get_model_state_path(HarnessType.CODEX, state_dir),
         )
         if connection is None:
@@ -1275,9 +1291,9 @@ class AgentManager:
         if stale is not None:
             stale.stop()
             return
-        # Seed the activity slot from the freshly-bound thread's live state (IDLE, or a turn still
-        # running after a UI reconnect) so the dot is correct before the first notification.
-        self.set_codex_activity(agent_id, connection.ledger.activity_state())
+        # The dot is derived by the tracker path from mngr's lifecycle + transcript; recompute now so a
+        # freshly (re)built connection's agent shows the right dot immediately.
+        self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def _reap_codex_connection(self, agent_id: str) -> None:
         """Drop and stop a codex agent's live connection (its daemon generation is gone)."""
@@ -1358,6 +1374,25 @@ class AgentManager:
         """
         with self._lock:
             self._queue_idle_handler_by_agent[agent_id] = handler
+
+    def mark_send_in_flight(self, agent_id: str) -> None:
+        """Flag ``agent_id`` as having a send in flight and broadcast, so the shoulder-tap
+        button greys for the send's duration (contract Shoulder-tap). Idempotent; only
+        broadcasts on an actual change. Paired with :meth:`clear_send_in_flight`."""
+        with self._lock:
+            if agent_id in self._send_in_flight_by_agent:
+                return
+            self._send_in_flight_by_agent.add(agent_id)
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def clear_send_in_flight(self, agent_id: str) -> None:
+        """Clear the send-in-flight flag for ``agent_id`` and broadcast (the send resolved, so
+        a non-empty queue is tappable again). Idempotent; only broadcasts on an actual change."""
+        with self._lock:
+            if agent_id not in self._send_in_flight_by_agent:
+                return
+            self._send_in_flight_by_agent.discard(agent_id)
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def update_queued_messages(self, agent_id: str, snapshot: list[dict[str, Any]]) -> None:
         """Cache and broadcast a fresh queued-message snapshot from the agent's watcher.
@@ -1513,29 +1548,31 @@ class AgentManager:
         with self._lock:
             tracker = self._activity_tracker_by_agent.get(agent_id)
             recompute_agent_state = self._agents.get(agent_id)
-        # codex has NO tracker -- its ledger drives the dot (contract A6, RUNNING until
-        # ``turn/completed``). The one thing the ledger cannot observe is its own daemon dying (no
-        # ``turn/completed`` ever arrives), so a positively-dead lifecycle here forces the dot IDLE
-        # and reaps the dead connection; otherwise the ledger stays in charge and this is a no-op.
-        if recompute_agent_state is not None and recompute_agent_state.harness == HarnessType.CODEX:
-            if is_lifecycle_dead(recompute_agent_state.state):
-                # The daemon generation is gone: reap the connection, drop any queue chips it left
-                # (the queue is EPHEMERAL -- it dies with the session, and an abrupt daemon kill
-                # emits no idle sweep to clear it), and settle the dot to IDLE.
-                self._reap_codex_connection(agent_id)
-                self._clear_codex_queue(agent_id)
-                self.set_codex_activity(agent_id, ActivityState.IDLE)
-            return
+        harness = recompute_agent_state.harness if recompute_agent_state is not None else None
+        # codex has no `active` marker and its ledger no longer drives the dot. The one thing the ledger
+        # cannot self-observe is its own daemon dying, so on a positively-dead lifecycle reap the
+        # connection and drop its EPHEMERAL queue (an abrupt kill emits no idle sweep). The tracker path
+        # below then settles the dot to IDLE via the dead override -- codex now flows through it.
+        if (
+            harness == HarnessType.CODEX
+            and recompute_agent_state is not None
+            and is_lifecycle_dead(recompute_agent_state.state)
+        ):
+            self._reap_codex_connection(agent_id)
+            self._clear_codex_queue(agent_id)
         if tracker is None:
             return
         # Re-read on every recompute so a restart that touches the marker is
         # reflected even when no new transcript events arrive -- the post-restart
         # observe snapshot drives the recompute.
         process_started_at = self._read_process_started_at(agent_id, tracker.marker_filename)
-        # The `active` marker flips promptly at turn start/end, whereas the observe-reported
-        # lifecycle state can miss a short turn entirely -- so read the marker directly for a
-        # timely "is a turn in flight" signal (stat outside the lock, like the one above).
-        is_active_marker_present = (self._get_agent_state_dir(agent_id) / ACTIVE_MARKER_FILENAME).exists()
+        # The `active` marker flips promptly at turn start/end, whereas the observe-reported lifecycle
+        # state can miss a short turn -- so read it for a timely "is a turn in flight" signal (stat
+        # outside the lock). codex has no such marker: its RUNNING lifecycle is thread/status-derived
+        # and authoritative, so it passes False and relies on the lifecycle state alone.
+        is_active_marker_present = harness != HarnessType.CODEX and (
+            self._get_agent_state_dir(agent_id) / ACTIVE_MARKER_FILENAME
+        ).exists()
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
@@ -1547,12 +1584,10 @@ class AgentManager:
                 process_started_at=process_started_at,
             )
             # A positively-dead lifecycle (STOPPED and friends -- never UNKNOWN, which is
-            # non-evidence) overrides whatever the transcript derives: the process's
-            # in-memory queue and in-flight turn died with it. Claude and pi already
-            # gate their derive on ``is_agent_running``; codex deliberately ignores the
-            # lifecycle there (its turn latch owns the RUNNING/WAITING flap, not the
-            # dead/alive axis), so without this override a dead codex agent keeps a
-            # phantom "Thinking" dot and the level-triggered sweep below never fires.
+            # non-evidence) overrides whatever the transcript derives: the process's in-memory queue
+            # and in-flight turn died with it. Every harness's derive already gates on
+            # ``is_agent_running`` (dead -> IDLE), so this is belt-and-suspenders -- it also fires the
+            # level-triggered stale-queue sweep below when a dead agent still holds queued chips.
             if is_lifecycle_dead(agent_state.state):
                 new_state = ActivityState.IDLE
             old_state = self._activity_state_by_agent.get(agent_id)

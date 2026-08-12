@@ -70,7 +70,6 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 from typing import Callable
-from uuid import uuid4
 
 from loguru import logger as _loguru_logger
 from watchdog.observers import Observer
@@ -83,7 +82,7 @@ from imbue.system_interface.harnesses.claude.session_parser import QueueSignal
 from imbue.system_interface.harnesses.claude.session_parser import QueueSignalKind
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.claude.session_parser import parse_queue_signals
-from imbue.system_interface.harnesses.sending_registry import SendingRegistry
+from imbue.system_interface.harnesses.sending_registry import SendingStateWatcherMixin
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
@@ -250,7 +249,7 @@ class SessionFileState:
         self.emitted_count: int = 0
 
 
-class ClaudeSessionWatcher(AgentSessionWatcher):
+class ClaudeSessionWatcher(SendingStateWatcherMixin, AgentSessionWatcher):
     """Watches all session files for a single mngr agent and emits parsed events."""
 
     @classmethod
@@ -350,7 +349,7 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         # accepted and is delivering but that have not yet committed or queued. Guarded by
         # ``_lock`` like the queue populator. The interrupt path reads it so a send caught
         # mid-flight (never committed) returns to the composer instead of being lost.
-        self._sending_registry = SendingRegistry.build()
+        self._init_sending_state()
 
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
@@ -1312,33 +1311,6 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
     def get_queued_block(self) -> str:
         with self._lock:
             return self._queue_tracker.concatenated_block()
-
-    def note_sent_message(self, content: str, timestamp: str, message_id: str = "") -> str | None:
-        """Record a message the send endpoint is about to deliver as *Sending* (contract A1).
-
-        Keyed by the sender's stable send-time id (or a minted one when the caller sent
-        none), so :meth:`commit_sent_message` / :meth:`retract_sent_message` resolve the
-        exact message even when two identical messages are in flight. Returns the token.
-        """
-        token = message_id or uuid4().hex
-        with self._lock:
-            self._sending_registry.record(token, content)
-        return token
-
-    def retract_sent_message(self, token: str) -> None:
-        """The send failed: drop its Sending record (the message is Returned, not Sending)."""
-        with self._lock:
-            self._sending_registry.resolve(token)
-
-    def commit_sent_message(self, token: str) -> None:
-        """The send resolved (committed or queued): drop its Sending record."""
-        with self._lock:
-            self._sending_registry.resolve(token)
-
-    def get_in_flight_block(self) -> str:
-        """The still-in-flight (Sending) messages as one concatenated block (''=none)."""
-        with self._lock:
-            return self._sending_registry.concatenated_block()
 
     def clear_queue(self) -> None:
         """Drop the queued set (a flush restart invalidated it) and push the empty snapshot."""

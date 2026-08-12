@@ -46,6 +46,24 @@ export function getOutgoingMessages(agentId: string): OutgoingMessage[] {
   return byAgent[agentId] ?? [];
 }
 
+/** Remove a specific set of bubbles by id. Used by the interrupt path: it snapshots
+ *  the agent's Sending bubble ids BEFORE the stop round-trip and clears exactly those
+ *  once the interrupt succeeds. Passing the pre-interrupt snapshot (not "all bubbles for
+ *  the agent") is deliberate -- a new message the user sends DURING the interrupt
+ *  round-trip must keep its bubble, since it is not part of the returned block. */
+export function clearOutgoing(agentId: string, ids: readonly string[]): void {
+  const list = byAgent[agentId];
+  if (list === undefined || ids.length === 0) {
+    return;
+  }
+  const toRemove = new Set(ids);
+  const next = list.filter((entry) => !toRemove.has(entry.id));
+  if (next.length !== list.length) {
+    byAgent[agentId] = next;
+    m.redraw();
+  }
+}
+
 /** Remove a specific bubble -- used by the send-failure path (the message did not
  *  send; its text is returned to the composer by the caller). */
 export function dropOutgoing(agentId: string, id: string): void {

@@ -10,23 +10,19 @@ const mocks = vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
   return {
     queued: [] as QueuedMessage[],
-    flushQueue: vi.fn(async () => {}),
-    shoulderTapAtomic: vi.fn(async () => ({ status: "tapped" })),
-    // Whether the current agent's harness supports the atomic shoulder tap (codex / pi / claude).
-    atomicFlag: false,
+    // The backend-reported shoulder-tap availability -- the ONLY thing that decides the
+    // button's enabled state (besides the local double-fire guard). Default true.
+    available: true,
+    shoulderTap: vi.fn(async () => ({ status: "tapped" })),
   };
 });
 
 vi.mock("../models/AgentManager", () => ({
   getQueuedMessagesForAgent: () => mocks.queued,
-  getAgentById: () => ({ harness: "test-harness" }),
-}));
-vi.mock("../models/HarnessCatalog", () => ({
-  getHarnessCatalog: () => ({ native_atomic_shoulder_tap_possible: mocks.atomicFlag }),
+  getShoulderTapAvailableForAgent: () => mocks.available,
 }));
 vi.mock("../models/Response", () => ({
-  flushQueue: mocks.flushQueue,
-  shoulderTapAtomic: mocks.shoulderTapAtomic,
+  shoulderTap: mocks.shoulderTap,
 }));
 vi.mock("../models/request-error", () => ({ describeRequestError: (e: unknown) => String(e) }));
 
@@ -74,9 +70,8 @@ function queuedMessage(queued_id: string, content: string): QueuedMessage {
 describe("renderQueuedMessages", () => {
   beforeEach(() => {
     mocks.queued = [];
-    mocks.atomicFlag = false;
-    mocks.flushQueue.mockClear();
-    mocks.shoulderTapAtomic.mockClear();
+    mocks.available = true;
+    mocks.shoulderTap.mockClear();
   });
 
   it("renders nothing when the queue is empty", () => {
@@ -112,32 +107,20 @@ describe("renderQueuedMessages", () => {
     );
   });
 
-  it("fires the restart-based flush intent when the harness lacks atomic shoulder tap", async () => {
-    // Distinct agent id per flush test: the in-flight guard is module-level and
-    // keyed by agent id, so reusing one could mask the next test's button state.
-    mocks.atomicFlag = false;
+  it("fires the one harness-agnostic shoulder-tap intent on click (no harness branch)", async () => {
     mocks.queued = [queuedMessage("q1", "hi")];
-    const button = findByClass(renderQueuedMessages("agent-restart"), "queued-action--flush");
+    const button = findByClass(renderQueuedMessages("agent-tap"), "queued-action--flush");
     await (button?.attrs?.onclick as () => Promise<void>)();
-    expect(mocks.flushQueue).toHaveBeenCalledWith("agent-restart");
-    expect(mocks.shoulderTapAtomic).not.toHaveBeenCalled();
+    expect(mocks.shoulderTap).toHaveBeenCalledWith("agent-tap");
   });
 
-  it("fires the atomic shoulder-tap intent when the harness supports it (codex)", async () => {
-    mocks.atomicFlag = true;
-    mocks.queued = [queuedMessage("q1", "hi")];
-    const button = findByClass(renderQueuedMessages("agent-atomic"), "queued-action--flush");
-    await (button?.attrs?.onclick as () => Promise<void>)();
-    expect(mocks.shoulderTapAtomic).toHaveBeenCalledWith("agent-atomic");
-    expect(mocks.flushQueue).not.toHaveBeenCalled();
-  });
-
-  it("renders the live backend snapshot during a flush -- no local freeze or reconstruction", async () => {
+  it("renders the live backend snapshot during a tap -- no local freeze or reconstruction", async () => {
     const agent = "agent-live-snapshot";
-    mocks.atomicFlag = false;
     mocks.queued = [queuedMessage("q1", "hi")];
-    let resolveFlush: () => void = () => {};
-    mocks.flushQueue.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFlush = resolve)));
+    let resolveTap: () => void = () => {};
+    mocks.shoulderTap.mockImplementationOnce(
+      () => new Promise<{ status: string }>((resolve) => (resolveTap = () => resolve({ status: "tapped" }))),
+    );
 
     const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
     const pending = (button?.attrs?.onclick as () => Promise<void>)();
@@ -148,27 +131,37 @@ describe("renderQueuedMessages", () => {
     mocks.queued = [];
     expect(renderQueuedMessages(agent)).toEqual([]);
 
-    resolveFlush();
+    resolveTap();
     await pending;
-    expect(mocks.flushQueue).toHaveBeenCalledWith(agent);
+    expect(mocks.shoulderTap).toHaveBeenCalledWith(agent);
   });
 
-  it("greys the shoulder-tap button only while this tap's own request is in flight", async () => {
-    const agent = "agent-inflight-tap";
-    mocks.atomicFlag = false;
+  it("greys the button when the backend reports the tap unavailable", () => {
+    // A non-empty queue still renders the group, but availability=false greys the button --
+    // the frontend computes nothing, it just obeys the backend flag.
     mocks.queued = [queuedMessage("q1", "hi")];
-    // Nothing in flight -> the button is live.
+    mocks.available = false;
+    expect(findByClass(renderQueuedMessages("agent-unavail"), "queued-action--flush")?.attrs?.disabled).toBe(true);
+  });
+
+  it("greys the button while this tap's own request is in flight, then re-enables it", async () => {
+    const agent = "agent-inflight-tap";
+    mocks.queued = [queuedMessage("q1", "hi")];
+    mocks.available = true;
+    // Available and nothing in flight -> the button is live.
     expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);
 
-    let resolveFlush: () => void = () => {};
-    mocks.flushQueue.mockImplementationOnce(() => new Promise<void>((resolve) => (resolveFlush = resolve)));
+    let resolveTap: () => void = () => {};
+    mocks.shoulderTap.mockImplementationOnce(
+      () => new Promise<{ status: string }>((resolve) => (resolveTap = () => resolve({ status: "tapped" }))),
+    );
     const button = findByClass(renderQueuedMessages(agent), "queued-action--flush");
     const pending = (button?.attrs?.onclick as () => Promise<void>)();
 
     // The tap is running -> the button greys so it cannot double-fire.
     expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(true);
 
-    resolveFlush();
+    resolveTap();
     await pending;
     // Settled -> the button is live again.
     expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);

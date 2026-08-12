@@ -130,11 +130,14 @@ class ShoulderTapAtomicResponse(FrozenModel):
     """Response from POST /api/agents/{id}/shoulder-tap-atomic.
 
     ``status`` is ``"tapped"`` when a control line targeting the live open turn was written
-    (the patched codex will merge the parked messages into that turn), or ``"no_open_turn"``
-    when no turn was running, so nothing was interrupted and no control line was written.
+    (the patched codex will merge the parked messages into that turn), ``"no_open_turn"``
+    when no turn was running, so nothing was interrupted and no control line was written, or
+    ``"send_in_flight"`` when a message send held the lock past the bounded wait so nothing was
+    written -- a benign no-op (200), never an error, since the availability flag greys the button
+    while a send is in flight.
     """
 
-    status: str = Field(description="'tapped' when the live turn was targeted, 'no_open_turn' when nothing was running")
+    status: str = Field(description="'tapped', 'no_open_turn', or 'send_in_flight' (all benign 200 outcomes)")
 
 
 class AgentRestartError(RuntimeError):

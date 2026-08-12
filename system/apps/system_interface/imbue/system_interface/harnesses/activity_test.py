@@ -4,17 +4,18 @@ import pytest
 
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
+from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
-from imbue.system_interface.harnesses.registry import HarnessHasNoTrackerError
 from imbue.system_interface.harnesses.registry import build_tracker
 from imbue.system_interface.harnesses.registry import get_harness_spec
 
-# The harnesses whose activity is inferred from a transcript tracker. Codex is excluded: its
-# dot is driven directly by the live ledger off the app-server turn lifecycle, so it has no
-# tracker (``tracker_class is None``) and ``build_tracker`` is never called for it.
+# Harnesses whose shared transcript-shape tests below assume claude's ``tool_use`` / ``tool_result``
+# event schema. Codex now has a tracker too, but its transcript nests tool calls inside
+# ``assistant_message`` (a different schema), so it is exercised by its own tests
+# (``harnesses/codex/activity_state_test.py``) rather than these shared ones.
 _TRACKER_HARNESSES = tuple(harness for harness in HarnessType if harness is not HarnessType.CODEX)
 
 
@@ -33,12 +34,13 @@ def test_build_tracker(harness: HarnessType, expected_type: type, expected_marke
     assert tracker.marker_filename == expected_marker
 
 
-def test_codex_has_no_tracker() -> None:
-    """Codex's activity is backend-driven (the live ledger), so it registers no tracker and
-    asking the registry to build one is a caller bug, not a silent default."""
-    assert get_harness_spec(HarnessType.CODEX).tracker_class is None
-    with pytest.raises(HarnessHasNoTrackerError):
-        build_tracker(HarnessType.CODEX)
+def test_codex_builds_a_lifecycle_activity_tracker() -> None:
+    """Codex now registers a transcript-derived tracker like claude/pi: its dot follows mngr's live
+    RUNNING state, refined to a tool verb by the transcript (the ledger stays for the queue only)."""
+    assert get_harness_spec(HarnessType.CODEX).tracker_class is CodexActivityTracker
+    tracker = build_tracker(HarnessType.CODEX)
+    assert isinstance(tracker, CodexActivityTracker)
+    assert tracker.marker_filename == "codex_process_started"
 
 
 @pytest.mark.parametrize("agent_type", ["wait", "main", "", None], ids=["wait", "main", "empty", "none"])

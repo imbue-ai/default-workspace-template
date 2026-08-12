@@ -79,11 +79,37 @@ def read_marker_rollout_path(marker_path: Path) -> Path | None:
     return Path(raw) if raw else None
 
 
+def newest_rollout_under(sessions_dir: Path) -> Path | None:
+    """The most-recently-modified ``rollout-*.jsonl`` under ``sessions_dir``, or None if none.
+
+    The marker file (``codex_transcript_path``) is written by codex's ``UserPromptSubmit`` hook,
+    which the app-server does NOT fire on a programmatic (web/CLI) ``turn/start`` -- only on a
+    turn typed into the ``--remote`` TUI. So a web-only codex agent never gets a marker and its
+    transcript would render empty. This is the marker-free fallback: with one thread per daemon
+    the live rollout is simply the newest rollout file (codex appends to it as the turn runs, so
+    it always carries the freshest mtime). A missing/empty sessions dir yields None.
+    """
+    try:
+        rollouts = list(sessions_dir.rglob("rollout-*.jsonl"))
+    except OSError:
+        return None
+    if not rollouts:
+        return None
+    return max(rollouts, key=lambda path: path.stat().st_mtime)
+
+
 def resolve_active_rollout_path(agent_state_dir: Path) -> Path | None:
-    """The live rollout for a codex agent, per its marker. Shared by the watcher and
-    the model resolver so the marker-read lives in one place (they keep separate read
-    cursors over the file itself, by design)."""
-    return read_marker_rollout_path(agent_state_dir / _MARKER_RELATIVE)
+    """The live rollout for a codex agent: the hook-written marker if present, else the newest
+    rollout on disk. Shared by the watcher and the model resolver so the resolution lives in one
+    place (they keep separate read cursors over the file itself, by design).
+
+    Preferring the marker keeps the deterministic path for TUI-driven turns (the hook records the
+    exact active rollout); falling back to the newest rollout covers web/CLI-only agents whose
+    ``UserPromptSubmit`` hook never fires (see :func:`newest_rollout_under`)."""
+    marker_path = read_marker_rollout_path(agent_state_dir / _MARKER_RELATIVE)
+    if marker_path is not None:
+        return marker_path
+    return newest_rollout_under(codex_sessions_dir(agent_state_dir))
 
 
 def codex_sessions_dir(agent_state_dir: Path) -> Path:
@@ -227,8 +253,15 @@ class CodexSessionWatcher(AgentSessionWatcher):
             self._on_events(self._agent_id, to_send)
 
     def _read_active_rollout(self) -> Path | None:
-        """The absolute path of the live rollout, per the marker; None until written."""
-        return read_marker_rollout_path(self._marker_path)
+        """The absolute path of the live rollout: the hook-written marker, else the newest rollout.
+
+        The marker is only written by codex's ``UserPromptSubmit`` hook, which never fires on a
+        programmatic (web/CLI) turn, so a web-only agent has no marker; the newest-rollout fallback
+        keeps its transcript live regardless (see :func:`newest_rollout_under`)."""
+        marker = read_marker_rollout_path(self._marker_path)
+        if marker is not None:
+            return marker
+        return newest_rollout_under(self._sessions_dir)
 
     def _consume_new_lines(self) -> list[dict[str, Any]]:
         """Read bytes appended to the live rollout since the last cursor, following

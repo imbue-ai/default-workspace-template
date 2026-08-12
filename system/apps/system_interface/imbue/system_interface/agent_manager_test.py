@@ -32,6 +32,9 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import poll_until
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
@@ -1433,16 +1436,25 @@ def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentMana
         assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
 
 
-def test_codex_agent_gets_no_activity_tracker(agent_manager: AgentManager, tmp_path: Path) -> None:
-    """A codex agent drives activity through its ledger, so it builds NO transcript tracker (and its
-    daemon-less connection attempt is a graceful no-op)."""
+def test_codex_agent_gets_a_transcript_turn_latch_tracker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """codex builds a transcript-derived tracker like claude/pi, but its dot is a latch on the
+    transcript's real-time turn markers -- NOT the (laggy/unreliable) mngr lifecycle. So a RUNNING
+    lifecycle with no open turn in the transcript reads IDLE, not THINKING. Its ledger stays for the
+    queue; the daemon-less connection attempt here is a graceful no-op."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="RUNNING")
     agent_manager._ensure_activity_tracking("agent-1")
     with agent_manager._lock:
         assert "agent-1" in agent_manager._activity_tracked_agents
-        assert "agent-1" not in agent_manager._activity_tracker_by_agent
+        assert isinstance(agent_manager._activity_tracker_by_agent.get("agent-1"), CodexActivityTracker)
+    # RUNNING lifecycle but no turn marker observed -> IDLE (the dot follows the transcript, not mngr).
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.IDLE
+    # A real-time turn_started marker lights it to THINKING.
+    agent_manager.update_session_events(
+        "agent-1", [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}]
+    )
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.THINKING
     # No daemon in the test, so no live ledger is available.
     assert agent_manager.get_codex_ledger("agent-1") is None
 
@@ -1497,6 +1509,38 @@ def test_update_queued_messages_caches_broadcasts_and_serializes(
         assert agent_manager.get_agents_serialized()[0]["queued_messages"] == snapshot
     finally:
         agent_manager.stop()
+
+
+def test_shoulder_tap_available_reflects_queue_and_send_in_flight(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The derived ``shoulder_tap_available`` is true iff something is queued AND no send is in
+    flight (contract Shoulder-tap), recomputed at each serialize from the two authoritative
+    pieces of manager state -- never stored, so it cannot go stale."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    def available() -> bool:
+        return bool(agent_manager.get_agents_serialized()[0]["shoulder_tap_available"])
+
+    # Empty queue -> unavailable (nothing to tap).
+    assert available() is False
+
+    # Something queued, no send in flight -> available.
+    agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+    assert available() is True
+
+    # A send in flight greys it, even with a non-empty queue.
+    agent_manager.mark_send_in_flight("agent-1")
+    assert available() is False
+
+    # Send resolved -> available again.
+    agent_manager.clear_send_in_flight("agent-1")
+    assert available() is True
+
+    agent_manager.stop()
 
 
 def test_update_queued_messages_no_op_when_not_tracked(agent_manager: AgentManager) -> None:
@@ -1702,18 +1746,16 @@ def test_queued_snapshot_arriving_mid_turn_is_kept(
 def test_unknown_lifecycle_codex_keeps_its_queued_snapshot(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """UNKNOWN is non-evidence (an unreachable provider, not a death): a codex agent mid-turn under
-    an UNKNOWN lifecycle keeps its ledger-reported THINKING dot and its queued snapshot -- the
-    dead-lifecycle clear only fires on a positively-dead state."""
+    """UNKNOWN is non-evidence (an unreachable provider, not a death): a codex agent's queued snapshot
+    survives it -- the queue clear only fires on a positively-dead state. The dot, now lifecycle-driven
+    like claude, cannot confirm a live turn under UNKNOWN (codex has no ``active`` marker), so it reads
+    IDLE, while the queue is left untouched."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="UNKNOWN")
     agent_manager._ensure_activity_tracking("agent-1")
 
     try:
-        # The ledger reports a live turn (RUNNING until turn/completed, A6).
-        agent_manager.set_codex_activity("agent-1", ActivityState.THINKING)
-
         listener = broadcaster.register()
         snapshot = [{"queued_id": "q1", "content": "still parked", "timestamp": "t"}]
         agent_manager.update_queued_messages("agent-1", snapshot)
@@ -1721,7 +1763,7 @@ def test_unknown_lifecycle_codex_keeps_its_queued_snapshot(
         latest = _last_agents_updated(_drain(listener))
         assert latest is not None
         assert latest["agents"][0]["queued_messages"] == snapshot
-        assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
+        assert latest["agents"][0]["activity_state"] == ActivityState.IDLE.value
         with agent_manager._lock:
             assert len(agent_manager._agents["agent-1"].queued_messages) == 1
     finally:
@@ -1731,15 +1773,19 @@ def test_unknown_lifecycle_codex_keeps_its_queued_snapshot(
 def test_running_mid_turn_codex_snapshot_passes_through_unchanged(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    """A RUNNING codex agent mid-turn keeps its queued snapshot: a non-dead lifecycle leaves the
-    ledger in charge, so no sweep fires and the broadcast carries the chips."""
+    """A codex agent mid-turn (an open turn in the transcript -> THINKING) keeps its queued snapshot:
+    a non-dead agent that is working never triggers the idle stale-queue sweep, so the broadcast
+    carries the chips."""
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="RUNNING")
     agent_manager._ensure_activity_tracking("agent-1")
 
     try:
-        agent_manager.set_codex_activity("agent-1", ActivityState.THINKING)
+        # Mid-turn = the transcript's latest marker is turn_started -> the dot latches to THINKING.
+        agent_manager.update_session_events(
+            "agent-1", [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}]
+        )
         listener = broadcaster.register()
         snapshot = [{"queued_id": "q1", "content": "queued mid-turn", "timestamp": "t"}]
         agent_manager.update_queued_messages("agent-1", snapshot)
