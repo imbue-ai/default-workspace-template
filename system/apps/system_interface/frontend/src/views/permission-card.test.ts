@@ -129,8 +129,11 @@ const WORKSPACE_OUTPUT = `{"request_id":"ws-1","rationale":"export a backup of t
 const ACCOUNTS_OUTPUT = `{"request_id":"acct-1","rationale":"check which account is signed in","request_type":"accounts","payload":{}}`;
 
 // The backend caps tool output (`_MAX_OUTPUT_LENGTH` in session_parser.py) and
-// appends this marker. Mirrored here so the truncation these tests feed the card
-// is the one a transcript parsed by an older backend actually carries.
+// appends this marker. Mirrored here because the recovery scan's real trigger
+// is a response past the backend's preservation ceiling
+// (`_MAX_PERMISSION_REQUEST_LENGTH`, 8000): such an event arrives with no
+// structured `permission_request` field and only this head-truncated body, so
+// these fixtures are exactly what the card sees then.
 const BACKEND_MAX_OUTPUT_LENGTH = 2000;
 
 function truncateAt(output: string, length: number): string {
@@ -293,6 +296,22 @@ describe("parsePermissionRequest", () => {
     // Guards the fixture: if it ever shrinks under the cap, the recovery tests
     // below would silently start exercising the strict parse instead.
     expect(createResponseOutput().length).toBeGreaterThan(BACKEND_MAX_OUTPUT_LENGTH);
+  });
+
+  it("recovers a response past the backend's preservation ceiling too", () => {
+    // The scan's real reason to exist: past _MAX_PERMISSION_REQUEST_LENGTH
+    // (8000) the backend deliberately refuses to preserve the object, so the
+    // event arrives with no structured field at all -- an agent's rationale has
+    // no length limit, and this is what such a request looks like. The id sits
+    // inside the head-truncated body, so the card can still name and open it.
+    const oversized = createResponseOutput({ rationale: "x".repeat(9000) });
+    expect(oversized.length).toBeGreaterThan(8000);
+
+    const details = parsePermissionRequest(
+      makeToolCall(PERMISSION_INPUT),
+      makeResult(truncateLikeBackend(CURL_METER + oversized), false),
+    );
+    expect(details?.requestId).toBe(TRUNCATED_REQUEST_ID);
   });
 
   it("recovers the id, rationale, type and payload from a backend-truncated response", () => {

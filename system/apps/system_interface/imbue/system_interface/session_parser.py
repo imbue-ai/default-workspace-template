@@ -65,6 +65,18 @@ _PERMISSION_REQUEST_ID_KEY = '"request_id"'
 # truncation and is not treated as a request at all.
 _MAX_PERMISSION_REQUEST_LENGTH = 8000
 
+# Cap on the candidate `{`s probed in one tool result. Failing probes are not
+# constant-time: each one constructs a JSONDecodeError whose line/column
+# bookkeeping rescans the document up to the error position, so output that is
+# mostly braces costs O(braces x length) -- measured at 35 ms for a wall of
+# 10_000 braces, 3.0 s for 100_000 (quadratic growth), versus 3 ms for the
+# same 100KB wall once capped at 1000 probes. Legitimate output has only a
+# handful of braces at or before the object's `request_id` key (curl's progress
+# meter has none; the pretty-printed object contributes its own opening brace
+# plus a few from any JSON a batched command printed earlier), so 1000 is two
+# to three orders of magnitude of headroom.
+_MAX_PERMISSION_REQUEST_PROBES = 1000
+
 # Stateless and reused across candidate offsets rather than rebuilt per probe.
 _JSON_DECODER = json.JSONDecoder()
 
@@ -259,13 +271,19 @@ def _find_permission_request(content: str) -> _PermissionRequest | None:
     `JSONDecoder.raw_decode`, which parses one JSON value and reports where it
     ended. Taking the end from the decoder -- instead of assuming the object runs
     to the end of stdout -- is what makes this robust to anything the command
-    printed after the response.
+    printed after the response. The number of candidates tried is capped at
+    `_MAX_PERMISSION_REQUEST_PROBES` so a pathological brace-heavy output cannot
+    stall parsing; past the cap the result is treated like any other output.
     """
     marker = content.find(_PERMISSION_REQUEST_ID_KEY)
     if marker < 0:
         return None
+    probes = 0
     start = content.find("{")
     while 0 <= start <= marker:
+        probes += 1
+        if probes > _MAX_PERMISSION_REQUEST_PROBES:
+            return None
         try:
             parsed, end = _JSON_DECODER.raw_decode(content, start)
         except json.JSONDecodeError:
@@ -273,6 +291,13 @@ def _find_permission_request(content: str) -> _PermissionRequest | None:
             # whether a JSON value begins at this `{` at all, and "no" is the
             # ordinary answer for a brace in prose or shell output.
             parsed, end = None, start
+        except RecursionError:
+            # The C scanner recurses per nesting level and raises this -- NOT a
+            # JSONDecodeError -- on absurdly deep input like `{"a": ` repeated.
+            # Letting it escape would crash the whole parse, and every later
+            # candidate inside the same nest would just recurse again, so give
+            # up on the result: no gateway echo nests thousands deep.
+            return None
         if isinstance(parsed, dict) and _is_permission_request(parsed):
             body = content[start:end]
             if len(body) > _MAX_PERMISSION_REQUEST_LENGTH:

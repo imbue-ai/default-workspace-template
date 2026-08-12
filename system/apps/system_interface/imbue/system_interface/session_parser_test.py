@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from imbue.system_interface.session_parser import _MAX_PERMISSION_REQUEST_PROBES
 from imbue.system_interface.session_parser import parse_session_lines
 
 
@@ -935,3 +936,41 @@ def test_oversized_permission_request_falls_back_to_truncation() -> None:
     assert "permission_request" not in events[0]
     assert events[0]["output"].endswith("...")
     assert len(events[0]["output"]) <= 2003
+
+
+def test_permission_request_probe_loop_is_capped() -> None:
+    """Candidate probing is bounded: each failed probe costs work proportional
+    to the output length (JSONDecodeError's line/column bookkeeping rescans the
+    document), so a wall of braces ahead of the marker is O(braces x length) --
+    measured at ~3 s for 100KB of braces before the cap existed. Past the probe
+    cap the result is treated as ordinary output -- head-truncated, no request
+    attached -- even though a well-formed request sits beyond the wall."""
+    output = "{" * (_MAX_PERMISSION_REQUEST_PROBES * 3) + _make_permission_request_output("hidden beyond the cap")
+    lines = [_make_tool_result_line("uuid-wall", "2026-01-01T00:00:08Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert "permission_request" not in events[0]
+    assert events[0]["output"].endswith("...")
+    assert len(events[0]["output"]) <= 2003
+
+
+def test_permission_request_within_probe_cap_still_parses() -> None:
+    """The cap is headroom, not a hair trigger: a request behind far more
+    braces than any legitimate output carries -- but still within the cap --
+    is found and preserved just the same."""
+    output = "{" * (_MAX_PERMISSION_REQUEST_PROBES - 10) + _make_permission_request_output(_LONG_RATIONALE)
+    lines = [_make_tool_result_line("uuid-under", "2026-01-01T00:00:09Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert events[0]["permission_request"]["request_id"] == _REQUEST_ID
+    assert events[0]["permission_request"]["rationale"] == _LONG_RATIONALE
+
+
+def test_deeply_nested_json_probe_does_not_crash_parsing() -> None:
+    """Probing absurdly deep nesting makes the C scanner raise RecursionError,
+    which is not a JSONDecodeError and previously escaped the probe loop and
+    crashed the whole parse. It is now swallowed and the result treated as
+    ordinary output."""
+    output = '{"a": ' * 100_000 + '"request_id"'
+    lines = [_make_tool_result_line("uuid-deep", "2026-01-01T00:00:10Z", "toolu_1", output)]
+    events = parse_session_lines(lines)
+    assert "permission_request" not in events[0]
+    assert events[0]["output"].endswith("...")
