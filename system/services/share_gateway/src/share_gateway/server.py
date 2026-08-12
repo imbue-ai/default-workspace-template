@@ -39,6 +39,14 @@ from share_gateway.session_cookie import verify_session_cookie_value
 
 _PENDING_LOGIN_TTL_SECONDS = 600.0
 
+# The identity headers the gateway stamps on a verified request for caddy to
+# copy to the backend. ``X-Share-Owner`` is always set (``true``/``false``);
+# ``X-Share-Email`` is set only for a non-owner (the owner's email is never
+# revealed per-request -- see the header contract in the share_gateway README).
+# caddy strips any inbound copy before forward_auth, so both are authoritative.
+_OWNER_HEADER = "X-Share-Owner"
+_EMAIL_HEADER = "X-Share-Email"
+
 # The workspace shell service name; used to report backend readiness in the
 # authenticated /_health detail.
 _SYSTEM_INTERFACE_SERVICE_NAME = "system_interface"
@@ -268,17 +276,20 @@ def build_gateway_app(
                 _log_denied("session email is not granted this service", host)
                 return _forbidden()
 
-        # Expose the owner flag so caddy can copy it to backends that gate on
-        # ownership (the owner-exec service). The header is authoritative
-        # because it is set by the gateway after verifying the signed session,
-        # and caddy strips any inbound copy before the forward_auth subrequest.
-        return Response(
-            status=200,
-            headers={
-                "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
-                "X-Share-Owner": "true" if identity.is_owner else "false",
-            },
-        )
+        # Expose the caller's identity so caddy can copy it to the backend: the
+        # owner flag always, and the requester's email only when they are not
+        # the owner. Both are authoritative because the gateway sets them after
+        # verifying the signed session, and caddy strips any inbound copy before
+        # the forward_auth subrequest. The owner's own email is deliberately
+        # never sent per-request; apps that need it read the injected
+        # owner-email file that exists only while the workspace is shared.
+        response_headers = {
+            "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
+            _OWNER_HEADER: "true" if identity.is_owner else "false",
+        }
+        if not identity.is_owner:
+            response_headers[_EMAIL_HEADER] = identity.email
+        return Response(status=200, headers=response_headers)
 
     @app.get("/_auth/callback")
     def callback() -> Response:
