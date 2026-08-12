@@ -16,11 +16,22 @@
 import {
   CLOSE_ACTIVE_TAB,
   OPEN_AI_KEYS_ACK,
-  PERMISSION_REQUEST_RESOLVED,
   createWorkspaceEndpoint,
   type ContractEndpoint,
   type ContractMessage,
 } from "@minds/embed-contract";
+import * as embedContract from "@minds/embed-contract";
+
+// PERMISSION_REQUEST_RESOLVED postdates the vendored embed_contract snapshot (it arrives with
+// the next mngr release sync; this repo deliberately does not edit system/vendor by hand). A
+// named import of a missing export fails the rollup build, so probe the namespace and fall
+// back to the literal. Until the sync lands the endpoint drops the (to it) unknown type before
+// any handler runs, so the resolution relay stays dormant and cards keep the transcript-driven
+// flip; the moment the sync lands the relay goes live with no code change here.
+export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved" =
+  "PERMISSION_REQUEST_RESOLVED" in embedContract
+    ? embedContract.PERMISSION_REQUEST_RESOLVED
+    : "minds:permission-request-resolved";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 

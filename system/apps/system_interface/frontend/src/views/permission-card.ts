@@ -12,9 +12,9 @@
  */
 
 import m from "mithril";
-import { OPEN_REQUEST_MODAL, PERMISSION_REQUEST_RESOLVED } from "@minds/embed-contract";
+import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
-import { sendToEmbedder, setEmbedderMessageHandler } from "../embed";
+import { PERMISSION_REQUEST_RESOLVED, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
