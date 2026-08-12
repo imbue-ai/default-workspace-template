@@ -698,7 +698,14 @@ The report says which classes merged. Apply each; a clean pull-in is still
   `system/scripts/build_workspace.sh` installs (`uv tool install -e
   system/vendor/mngr/libs/mngr --reinstall`; check with `uv tool list`). The
   vendored tree is the whole mngr monorepo, whose root `pyproject.toml` is not
-  installable, so the tool package is its `libs/mngr`. Any other `is_manifest` change
+  installable, so the tool package is its `libs/mngr`. **Re-register the tool's
+  plugins right after that reinstall** -- note them first with `mngr plugin list`,
+  then `mngr plugin add --path system/vendor/mngr/libs/mngr_claude --path
+  system/vendor/mngr/libs/mngr_wait` (plus any others the list showed) --
+  because a reinstall rebuilds the tool environment from the base package alone
+  and drops the plugin packages `build_workspace.sh` registered, leaving an
+  `mngr` that cannot parse its own plugin config and so cannot create agents.
+  Any other `is_manifest` change
   the report flags (a root-workspace `pyproject.toml` / `uv.lock`) likewise needs
   `uv sync --all-packages` so the new dependencies resolve.
 
