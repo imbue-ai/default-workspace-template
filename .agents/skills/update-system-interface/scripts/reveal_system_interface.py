@@ -509,16 +509,27 @@ def snapshot_bundle(repo_root: Path) -> Path | None:
     failed reveal could end with the served tree restored but nothing to serve.
 
     Returns ``None`` when there is no bundle yet, which is not an error: a
-    workspace that never built one has nothing to lose.
+    workspace that never built one has nothing to lose. A copy that cannot be
+    taken (no space, no permission) returns ``None`` for the same reason rather
+    than raising: this is a precaution, and refusing to reveal because the
+    precaution failed is worse than revealing the way this flow did before the
+    snapshot existed -- recovery falls back to rebuilding, as it used to.
     """
     bundle = repo_root / STATIC_DIR
     if not (bundle / "index.html").exists():
         return None
     # Deliberately outside the repo: a stray directory inside it would dirty the
     # tree and trip the next reveal's clean-tree precondition.
-    snapshot_root = Path(tempfile.mkdtemp(prefix="system-interface-bundle-"))
-    saved = snapshot_root / "static"
-    shutil.copytree(bundle, saved)
+    try:
+        snapshot_root = Path(tempfile.mkdtemp(prefix="system-interface-bundle-"))
+        saved = snapshot_root / "static"
+        shutil.copytree(bundle, saved)
+    except OSError as exc:
+        sys.stderr.write(
+            f"warning: could not copy the built bundle aside ({type(exc).__name__}: {exc}); "
+            "a failed reveal will have to rebuild it to recover.\n"
+        )
+        return None
     return saved
 
 
@@ -802,8 +813,11 @@ def _recover_running_state(
     the destructive step the snapshot exists to survive, and it would put the
     recovery back at the mercy of the build environment that just failed.
 
-    Unlike :func:`_apply_reveal`, nothing here raises -- this is the last line of
-    defense, so a failed step just means "not recovered" (exit 3)."""
+    Unlike :func:`_apply_reveal`, nothing escapes here -- this is the last line
+    of defense, so a failed step (a command that exits non-zero, or a filesystem
+    error putting the snapshot back) just means "not recovered" (exit 3). It must
+    never propagate: the rollback commit has already landed by this point, and
+    the exit code is all the caller has to go on."""
     try:
         # Only the backend's dependencies are refreshed here. ``npm ci`` is
         # deliberately skipped: it deletes node_modules before installing, and
@@ -848,7 +862,11 @@ def _recover_running_state(
                 _HEALTH_INTERVAL_SECONDS,
                 sleeper,
             )
-    except RevealFailed as exc:
+    except (RevealFailed, OSError) as exc:
+        # ``OSError`` covers putting the snapshot back: rmtree/copytree can fail
+        # on a full or read-only filesystem, and letting that escape would kill
+        # the process with a traceback and exit 1 -- the code that means "nothing
+        # was changed", after the rollback commit has already landed.
         sys.stderr.write(f"recovery step failed: {exc}\n")
         return False
     # "Recovered" has to mean the user can see their UI again, so hold the
