@@ -143,6 +143,31 @@ def test_a_command_that_cannot_start_is_reported_rather_than_escaping(tmp_path: 
     assert status.error is not None and "could not be started" in status.error
 
 
+# The escaping exception is the subject of this test, so pytest reporting it as
+# an unhandled thread exception is the setup working, not a problem to chase.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_build_thread_that_dies_is_reported_as_failed(tmp_path: Path) -> None:
+    # The rebuild handles the failures it knows about, but nothing else is
+    # watching that thread. An exception it does not anticipate would otherwise
+    # leave the phase stuck at "building" forever, and the placeholder polling a
+    # disabled button -- a dead end on the one surface meant to get the user out
+    # of one. RuntimeError specifically, since FrontendBuildError subclasses it
+    # and must not be what makes this pass.
+    runner = _RecordingRunner(raises=RuntimeError("something nobody anticipated"))
+    service = _build_service(tmp_path, runner, has_node_modules=True)
+
+    service.start_background_build()
+    thread = service._build_thread
+    assert thread is not None
+    thread.join(timeout=10.0)
+    assert not thread.is_alive()
+
+    status = service.current_status()
+    assert status.phase == FrontendBuildPhase.FAILED
+    assert not status.is_built
+    assert status.error is not None
+
+
 def test_rebuild_is_refused_without_frontend_sources(tmp_path: Path) -> None:
     service = FrontendBuildService(
         static_directory=tmp_path / "static",
