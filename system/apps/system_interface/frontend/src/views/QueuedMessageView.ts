@@ -4,57 +4,45 @@
  *
  * The frontend is dumb here -- it renders a full snapshot the backend pushes on
  * the agents WebSocket (``AgentState.queued_messages``) and holds no queued state
- * of its own. The only action on the group is [Shoulder tap] (flush): it fires an
- * intent (`POST /flush-queue`) and paints nothing locally -- the next backend queue
- * snapshot and the committed turn reflect the result. Whether the tap is available
- * is a backend decision; the frontend only greys the button while its own request is
- * in flight, so a click cannot double-fire.
+ * of its own. The only action on the group is [Shoulder tap]: it fires ONE
+ * harness-agnostic intent (`POST /shoulder-tap-atomic`, which the backend dispatches
+ * per harness) and paints nothing locally -- the next backend queue snapshot and the
+ * committed turn reflect the result. Whether the tap is AVAILABLE is entirely the
+ * backend's call, reported as ``shoulder_tap_available``; that flag alone greys the
+ * button, so it can never be pressed in a state the backend would refuse (no error
+ * path). The only thing the frontend adds is a local guard against double-firing its
+ * own in-flight request.
  * (Interrupt-to-composer lives on the composer's Stop button -- see MessageInput.)
  * There is no harness branch anywhere in here.
  */
 
 import m from "mithril";
-import { getAgentById, getQueuedMessagesForAgent } from "../models/AgentManager";
+import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../models/AgentManager";
 import type { QueuedMessage } from "../models/AgentManager";
-import { getHarnessCatalog } from "../models/HarnessCatalog";
-import { flushQueue, shoulderTapAtomic } from "../models/Response";
+import { shoulderTap } from "../models/Response";
 import { describeRequestError } from "../models/request-error";
 
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
 const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
 
-// Agents with the flush action in flight. While it runs the button is disabled so
-// it cannot double-fire; cleared when the request settles. The snapshot itself
-// stays the source of truth for what is shown.
+// Agents with the shoulder-tap request in flight. While it runs the button is disabled so
+// it cannot double-fire; cleared when the request settles. This is the ONLY thing the
+// frontend tracks here -- whether the tap is otherwise available is the backend's flag.
 const inFlightAgentIds = new Set<string>();
 
-/** True when this agent's harness can flush the queue atomically (codex / pi / claude), so
- *  the "Shoulder tap" merges into the live turn instead of restarting-and-resending. */
-function isAtomicShoulderTapAgent(agentId: string): boolean {
-  const catalog = getHarnessCatalog(getAgentById(agentId)?.harness);
-  return catalog?.native_atomic_shoulder_tap_possible === true;
-}
-
-async function flushQueuedMessages(agentId: string): Promise<void> {
-  // Never flush while the tap is already running. The button is greyed while it is,
+async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
+  // Never fire while our own tap is already running. The button is greyed while it is,
   // but ``disabled`` only takes effect on the next redraw, so a click can beat it --
   // this synchronous re-check at click time is the actual double-fire guard.
   if (inFlightAgentIds.has(agentId)) {
     return;
   }
-  const isAtomic = isAtomicShoulderTapAgent(agentId);
   inFlightAgentIds.add(agentId);
   m.redraw();
   try {
-    // The native harnesses (codex / pi / claude) flush into the live turn without a
-    // restart; the rest restart and resend. The flag comes from the agent's harness
-    // catalog. Either way the frontend paints nothing local: the next backend queue
-    // snapshot and the committed turn reflect the result.
-    if (isAtomic) {
-      await shoulderTapAtomic(agentId);
-    } else {
-      await flushQueue(agentId);
-    }
+    // One harness-agnostic call; the backend dispatches per harness. The frontend paints
+    // nothing local: the next backend queue snapshot and the committed turn reflect the result.
+    await shoulderTap(agentId);
   } catch (err) {
     const detail = describeRequestError(err);
     console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);
@@ -89,10 +77,12 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   if (queued.length === 0) {
     return [];
   }
-  // Grey the button only while this tap's own request is in flight, to prevent a
-  // double-fire. Whether the tap is otherwise available (e.g. a message is still
-  // Sending) is a backend decision -- the frontend does not compute it.
+  // The button's enabled state = the backend's availability flag, AND-ed with the local
+  // double-fire guard. The frontend computes nothing about availability itself: if the
+  // backend says a send is in flight (or the queue is empty), ``shoulder_tap_available`` is
+  // false and the button is greyed -- so it can never be pressed into a refusal/error.
   const isInFlight = inFlightAgentIds.has(agentId);
+  const isDisabled = isInFlight || !getShoulderTapAvailableForAgent(agentId);
 
   const header = m("div", { class: "queued-header", key: "queued-header" }, [
     m("span", { class: "queued-header-title" }, [
@@ -115,10 +105,10 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
       {
         type: "button",
         class: "queued-action queued-action--flush",
-        disabled: isInFlight,
+        disabled: isDisabled,
         "data-tooltip": SHOULDER_TAP_TOOLTIP,
         "aria-label": SHOULDER_TAP_TOOLTIP,
-        onclick: () => flushQueuedMessages(agentId),
+        onclick: () => shoulderTapQueuedMessages(agentId),
       },
       "Shoulder tap",
     ),

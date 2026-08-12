@@ -730,23 +730,14 @@ export async function interruptAgent(agentId: string): Promise<void> {
   });
 }
 
-/** Shoulder tap: restart the agent and resend the whole queue as one combined
- *  turn. Fire-and-forget -- the next WS snapshot (empty group) plus the new
- *  committed turn reflect the result; nothing is painted locally. */
-export async function flushQueue(agentId: string): Promise<void> {
-  await m.request({
-    method: "POST",
-    url: apiUrl("/api/agents/:agentId/flush-queue"),
-    params: { agentId },
-  });
-}
-
-/** Atomic shoulder tap (codex / pi / claude): flush the queued messages into the live turn
- *  without restarting the agent. Returns the backend status so the caller can release the
- *  flush freeze on a terminal no-op (``no_open_turn`` / ``nothing_queued``) that commits
- *  nothing -- otherwise the next WS snapshot / committed turn reflects the result and the
- *  freeze is arrival-released. */
-export async function shoulderTapAtomic(agentId: string): Promise<{ status: string }> {
+/** Shoulder tap: deliver the queued messages to the agent now. ONE harness-agnostic call --
+ *  the backend dispatches per harness (pi inbox sentinel, codex ledger gate, claude cancel
+ *  chord) behind this single endpoint, so the frontend never branches on harness. Fire-and-
+ *  forget: the next WS snapshot (empty group) plus the committed turn reflect the result and
+ *  nothing is painted locally. Whether the tap is available at all is the backend's
+ *  ``shoulder_tap_available`` flag, which greys the button -- so this is never called when the
+ *  backend would refuse it, and a benign no-op status is returned rather than an error. */
+export async function shoulderTap(agentId: string): Promise<{ status: string }> {
   return await m.request<{ status: string }>({
     method: "POST",
     url: apiUrl("/api/agents/:agentId/shoulder-tap-atomic"),

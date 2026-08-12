@@ -278,8 +278,9 @@ class PiFlushTapStatus(StrEnum):
 
     TAPPED: the flush sentinel was appended (the extension gates on a running turn itself, so
     an idle tap is a harmless no-op there). SEND_IN_FLIGHT: a message send held ``message.lock``
-    past the bounded wait, so nothing was written -- the caller reports an explicit, retryable
-    failure rather than racing the send.
+    past the bounded wait, so nothing was written -- surfaced as a benign 200 no-op, not an error
+    (the availability flag greys the button while a send is in flight, so a tap that still races
+    one just does nothing and the user retaps).
     """
 
     TAPPED = "tapped"
@@ -303,6 +304,18 @@ def flush_pi_queue_atomic(agent_state_dir: Path) -> PiFlushTapStatus:
             return PiFlushTapStatus.SEND_IN_FLIGHT
         append_pi_inbox_sentinel(agent_state_dir / PI_INBOX_NAME, PI_INTERRUPT_KEY)
     return PiFlushTapStatus.TAPPED
+
+
+def _combine_return_block(queued_block: str, in_flight_block: str) -> str:
+    """Concatenate the queued block and the in-flight (Sending) block, in send order.
+
+    Queued messages (parked first) lead; a message still mid-send follows. Either may be
+    empty; the result drops the empties so an empty queue or no in-flight send does not
+    inject a blank line. Matches the queued block's own newline join so the composer sees
+    one uniform block. (A tiny sibling of claude's identically-named helper; kept per-harness
+    rather than shared.)
+    """
+    return "\n".join(part for part in (queued_block, in_flight_block) if part)
 
 
 class PiInterruptToComposer(InterruptToComposer):
@@ -348,9 +361,19 @@ class PiInterruptToComposer(InterruptToComposer):
         with try_hold_message_lock(self._agent_state_dir) as held:
             if not held:
                 # A send is in flight past the bounded wait; take the hammer so the turn is
-                # definitely stopped and the in-flight message cannot survive to run.
-                return restart_drain(self._agent_info, watcher, restart_process, settle_activity)
-            # Held: no send is mid-flight, so any just-parked message is already in the mirror.
+                # definitely stopped and the in-flight message cannot survive to run. The SIGKILL
+                # aborts that send before it commits, so its text must ride the returned block
+                # rather than being lost (contract Interrupt/A4: return every not-Delivered
+                # message). The queued block leads (parked first), the still-in-flight send
+                # follows -- send order. This mirrors claude's not-held branch exactly.
+                queued_block = restart_drain(self._agent_info, watcher, restart_process, settle_activity)
+                return _combine_return_block(queued_block, watcher.get_in_flight_block())
+            # Held: no send is mid-flight, so any just-parked message is already in the mirror AND
+            # the Sending registry is empty (a resolved send cleared its own record) -- so we do
+            # NOT fold the in-flight block here. Folding it on the held branch would double-return
+            # a message caught in the post-lock-release/pre-commit window (it is in the queued
+            # block AND still in the registry) -- the exact double-count claude's held branch
+            # deliberately avoids.
             # Capture before writing the sentinel: the sentinel is what clears the queue (both
             # here and, durably, on the watcher's replay), so the block must be read first. pi's
             # ``get_queued_block`` calls ``_refresh`` itself, so the running turn's own initiating

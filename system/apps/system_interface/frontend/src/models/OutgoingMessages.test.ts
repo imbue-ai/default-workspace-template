@@ -4,7 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 // state machine, not rendering.
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 
-import { addOutgoing, dropOutgoing, getOutgoingMessages, noteBackendArrivals } from "./OutgoingMessages";
+import {
+  addOutgoing,
+  clearOutgoing,
+  dropOutgoing,
+  getOutgoingMessages,
+  noteBackendArrivals,
+} from "./OutgoingMessages";
 
 describe("OutgoingMessages", () => {
   it("adds a sending bubble and preserves send order", () => {
@@ -48,5 +54,26 @@ describe("OutgoingMessages", () => {
     const id = addOutgoing(agent, "hello");
     dropOutgoing(agent, id);
     expect(getOutgoingMessages(agent)).toHaveLength(0);
+  });
+
+  it("clears only the pre-interrupt snapshot, leaving a bubble sent during the round-trip", () => {
+    const agent = `a-${Math.random()}`;
+    const first = addOutgoing(agent, "first");
+    const second = addOutgoing(agent, "second");
+    // Snapshot taken before the interrupt round-trip; a NEW send lands during it.
+    const preInterrupt = [first, second];
+    const during = addOutgoing(agent, "during");
+    clearOutgoing(agent, preInterrupt);
+    // The two pre-interrupt bubbles are gone (Returned to the composer / Delivered);
+    // the message sent during the round-trip is untouched (not in the returned block).
+    expect(getOutgoingMessages(agent).map((o) => o.content)).toEqual(["during"]);
+    expect(getOutgoingMessages(agent).map((o) => o.id)).toEqual([during]);
+  });
+
+  it("clearOutgoing with no ids is a no-op", () => {
+    const agent = `a-${Math.random()}`;
+    addOutgoing(agent, "only");
+    clearOutgoing(agent, []);
+    expect(getOutgoingMessages(agent).map((o) => o.content)).toEqual(["only"]);
   });
 });

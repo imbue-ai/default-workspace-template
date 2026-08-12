@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from pathlib import Path
 from typing import Any
 from typing import Callable
@@ -46,6 +45,7 @@ from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.pi_coding.inbox import is_sentinel_object
 from imbue.system_interface.harnesses.pi_coding.queue_tracker import PiQueueTracker
 from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record
+from imbue.system_interface.harnesses.sending_registry import SendingStateWatcherMixin
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.session_watcher import QueueSnapshotCallback
@@ -68,13 +68,6 @@ _INBOX_RELATIVE = Path("pi_inbox")
 # boundary the activity path uses (``is_transcript_tail_stale``). Kept in sync with
 # _PROCESS_STARTED_MARKER_NAME in plugin.py / ``PiActivityTracker.marker_filename``.
 _PROCESS_STARTED_MARKER_RELATIVE = Path("pi_process_started")
-
-# The live queue snapshot is only pushed to the frontend once it has been STABLE for this
-# long, so a message sent to an idle agent -- which lands in the inbox and then drains into
-# a real turn within a second or so -- never flickers as "queued" first. A message that is
-# genuinely parked (behind a running turn) stays put past the window and surfaces normally,
-# just this much later. Explicit flush / idle-backstop transitions bypass the debounce.
-_QUEUE_DEBOUNCE_SECONDS: float = 2.0
 
 
 def read_marker_session_path(marker_path: Path) -> Path | None:
@@ -103,7 +96,7 @@ def _is_current_generation_drain(event_timestamp: str | None, process_started_at
     return event_at >= process_started_at
 
 
-class PiSessionWatcher(AgentSessionWatcher):
+class PiSessionWatcher(SendingStateWatcherMixin, AgentSessionWatcher):
     """Watches a pi agent's native session file (+ inbox) and emits parsed UI events."""
 
     # Instance attributes declared at class level so a `build()` classmethod (no
@@ -133,11 +126,6 @@ class PiSessionWatcher(AgentSessionWatcher):
     _inbox_line_count: int
     _queue_snapshot_callback: QueueSnapshotCallback | None
     _last_queue_snapshot: list[dict[str, str]]
-    # The debounce: the snapshot currently waiting out the stability window, and the
-    # monotonic time it first appeared. ``_now`` is the clock (injectable in tests).
-    _pending_queue_snapshot: list[dict[str, str]]
-    _pending_queue_since: float
-    _now: Callable[[], float]
     _path_watcher: PathWatcher | None
 
     @classmethod
@@ -171,11 +159,13 @@ class PiSessionWatcher(AgentSessionWatcher):
         self._inbox_line_count = 0
         self._queue_snapshot_callback = None
         self._last_queue_snapshot = []
-        self._pending_queue_snapshot = []
-        self._pending_queue_since = 0.0
-        self._now = time.monotonic
 
         self._path_watcher = None
+
+        # Backend *Sending* state (contract A1): the send endpoint records each in-flight pi
+        # message here so a concurrent interrupt can return one that never committed (parity
+        # with claude). Its own private lock, independent of the transcript ``_lock`` above.
+        self._init_sending_state()
         return self
 
     def start(self) -> None:
@@ -202,7 +192,16 @@ class PiSessionWatcher(AgentSessionWatcher):
         self._consume_new_lines()
 
     def _emit_unsent(self) -> None:
-        """Refresh, broadcast unsent events, then push the queue snapshot if it changed."""
+        """Refresh, then push the queue snapshot BEFORE broadcasting unsent events.
+
+        Order matters (contract A3b, depart-before-arrive): when a queued message drains into
+        a real turn (Queued->Delivered), the chip must be removed before the transcript turn is
+        shown, never after -- so the message is never a chip AND a turn at once. Pushing the
+        snapshot (chip removal) first, then the events (the turn), gives that ordering. (The two
+        ride different transports to the browser -- the agents WebSocket vs the per-agent event
+        stream -- so a rare transport reordering can still overlap them for a redraw; emitting
+        removal-first is the ordering we control, matching claude.)
+        """
         self._refresh()
         with self._lock:
             pending = self._superseded_pending
@@ -210,34 +209,20 @@ class PiSessionWatcher(AgentSessionWatcher):
             to_send = list(pending.values()) + self._events[self._emitted_count :]
             self._emitted_count = len(self._events)
             snapshot = self._queue_tracker.snapshot()
+        self._push_queue_snapshot(snapshot)
         if to_send:
             self._on_events(self._agent_id, to_send)
-        self._push_queue_snapshot_debounced(snapshot)
-
-    def _push_queue_snapshot_debounced(self, snapshot: list[dict[str, str]]) -> None:
-        """Push ``snapshot`` only once it has held stable for the debounce window.
-
-        Each cycle re-reads the snapshot; a change restarts the window. The push fires when
-        the current snapshot has been unchanged for ``_QUEUE_DEBOUNCE_SECONDS`` -- so a
-        message that lands in the inbox and drains into a real turn within the window (the
-        idle-agent case) is superseded before it is ever pushed. The 1s poll guarantees the
-        window is re-evaluated even with no further filesystem events.
-        """
-        now = self._now()
-        if snapshot != self._pending_queue_snapshot:
-            self._pending_queue_snapshot = snapshot
-            self._pending_queue_since = now
-        if now - self._pending_queue_since >= _QUEUE_DEBOUNCE_SECONDS:
-            self._push_queue_snapshot(snapshot)
 
     def _push_queue_snapshot(self, snapshot: list[dict[str, str]]) -> None:
         """Push ``snapshot`` to the sink iff it differs from the last one pushed.
 
-        Also syncs the debounce state so an explicit push (flush) settles the window rather
-        than fighting it.
+        No debounce: a queued chip surfaces as soon as the message is parked and clears as soon
+        as it drains, mirroring pi's real inbox state (contract A3: the UI queue IS the harness
+        queue). A message sent to an idle agent shows briefly as "Sending..." (the optimistic
+        bubble) and hands off to its committed turn, so the debounce that used to hide an
+        idle-agent chip flicker is no longer needed -- and it violated A2/A3b by delaying real
+        chips and letting "Sending..." linger past the real representation.
         """
-        self._pending_queue_snapshot = snapshot
-        self._pending_queue_since = self._now()
         if snapshot == self._last_queue_snapshot:
             return
         self._last_queue_snapshot = snapshot
@@ -486,9 +471,7 @@ class PiSessionWatcher(AgentSessionWatcher):
         with self._lock:
             self._queue_tracker.on_idle()
             snapshot = self._queue_tracker.snapshot()
-        # The backstop is an authoritative transition, so it settles the debounce window
-        # immediately rather than waiting it out (the manager broadcasts the returned value).
+        # Record it as the last-pushed snapshot so the subsequent poll does not re-push the
+        # same empty set (the manager broadcasts the returned value directly).
         self._last_queue_snapshot = snapshot
-        self._pending_queue_snapshot = snapshot
-        self._pending_queue_since = self._now()
         return snapshot

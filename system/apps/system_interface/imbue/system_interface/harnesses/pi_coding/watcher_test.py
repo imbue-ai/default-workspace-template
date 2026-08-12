@@ -265,48 +265,36 @@ def test_no_session_yet_reads_empty(tmp_path: Path) -> None:
     assert watcher.get_queued_messages() == []
 
 
-def _debounce_watcher(tmp_path: Path, clock: list[float]) -> tuple[PiSessionWatcher, list[list[str]]]:
+def _snapshot_watcher(tmp_path: Path) -> tuple[PiSessionWatcher, list[list[str]]]:
     session = tmp_path / "s.jsonl"
     _write_session(session, [])
     _point_marker(tmp_path, session)
     watcher = _build(tmp_path)
     pushes: list[list[str]] = []
     watcher.set_queue_snapshot_callback(lambda snapshot: pushes.append([entry["content"] for entry in snapshot]))
-    watcher._now = lambda: clock[0]
     return watcher, pushes
 
 
-def test_queue_snapshot_debounced_transient_is_never_pushed(tmp_path: Path) -> None:
-    # A message sent to an idle agent lands in the inbox then drains into a real turn within
-    # the debounce window; it must never be pushed as "queued".
-    clock = [100.0]
-    watcher, pushes = _debounce_watcher(tmp_path, clock)
+def test_queue_snapshot_parked_message_surfaces_immediately(tmp_path: Path) -> None:
+    # No debounce: a genuinely parked message (never drains) surfaces on the very first emit,
+    # not after a stability window (contract A3/A3b: the UI queue IS the harness queue).
+    watcher, pushes = _snapshot_watcher(tmp_path)
+    (tmp_path / "pi_inbox").write_text(json.dumps("parked") + "\n")
+    watcher._emit_unsent()
+    assert pushes == [["parked"]]
+
+
+def test_queue_snapshot_transient_shows_then_clears(tmp_path: Path) -> None:
+    # A message sent to an idle agent that lands in the inbox and then drains into a real turn
+    # in a LATER cycle surfaces as a chip and then clears -- faithful to pi's real inbox state.
+    # (When the enqueue and drain land in the SAME refresh they net out and no chip shows; this
+    # exercises the separate-cycle case.)
+    watcher, pushes = _snapshot_watcher(tmp_path)
     session = tmp_path / "s.jsonl"
     (tmp_path / "pi_inbox").write_text(json.dumps("quick") + "\n")
     watcher._emit_unsent()
-    # within the window: not surfaced
-    assert pushes == []
-    clock[0] = 101.0
-    watcher._emit_unsent()
-    assert pushes == []
-    # It drains before the window elapses.
+    assert pushes == [["quick"]]
+    # It drains on a later cycle -> the chip is removed (the queue empties).
     _append_session(session, [_message_record("u", _user("quick"))])
-    clock[0] = 101.5
     watcher._emit_unsent()
-    clock[0] = 104.0
-    watcher._emit_unsent()
-    # the transient queued entry was never shown
-    assert pushes == []
-
-
-def test_queue_snapshot_debounced_persistent_is_pushed(tmp_path: Path) -> None:
-    # A genuinely parked message (never drains) surfaces once it outlives the window.
-    clock = [200.0]
-    watcher, pushes = _debounce_watcher(tmp_path, clock)
-    (tmp_path / "pi_inbox").write_text(json.dumps("parked") + "\n")
-    watcher._emit_unsent()
-    # still within the window
-    assert pushes == []
-    clock[0] = 202.5
-    watcher._emit_unsent()
-    assert pushes == [["parked"]]
+    assert pushes == [["quick"], []]

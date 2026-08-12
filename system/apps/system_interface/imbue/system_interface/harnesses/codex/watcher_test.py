@@ -9,6 +9,7 @@ now does the same, without the thread ever running.
 """
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -74,6 +75,46 @@ def test_reads_serve_history_without_the_thread_having_run(tmp_path: Path) -> No
     assert watcher.get_total_event_count() == 2
     assert [event["content"] for event in watcher.get_tail_events(50)] == ["first", "second"]
     assert len(watcher.get_all_events()) == 2
+
+
+def _write_rollout_without_marker(
+    agent_state_dir: Path, lines: list[dict[str, Any]], name: str = "rollout-2026-08-03T00-00-00-web.jsonl"
+) -> Path:
+    """Write a rollout but NOT the marker -- a web/CLI-only agent whose UserPromptSubmit hook never fired."""
+    sessions_dir = agent_state_dir / _SESSIONS_RELATIVE / "2026" / "08" / "03"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    rollout = sessions_dir / name
+    rollout.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    return rollout
+
+
+def test_resolves_newest_rollout_when_no_marker(tmp_path: Path) -> None:
+    """A web-only codex agent never gets a UserPromptSubmit marker; the newest rollout is tailed anyway.
+
+    This is the transcript fix: the app-server does not fire the ``UserPromptSubmit`` hook (which
+    writes ``codex_transcript_path``) on a programmatic turn, so without the fallback the web chat
+    renders empty. With one thread per daemon the newest rollout IS the live conversation.
+    """
+    _write_rollout_without_marker(tmp_path, [_user_line("web-first", "2026-08-03T00:00:01Z")])
+    assert not (tmp_path / "codex_transcript_path").exists()
+    watcher, _ = _build_watcher(tmp_path)
+
+    assert watcher.get_total_event_count() == 1
+    assert [event["content"] for event in watcher.get_tail_events(50)] == ["web-first"]
+
+
+def test_marker_takes_precedence_over_newest_rollout(tmp_path: Path) -> None:
+    """When the marker IS present it wins -- the deterministic TUI path is preserved."""
+    marked = _write_rollout(tmp_path, [_user_line("marked", "2026-08-03T00:00:01Z")])
+    # A second, newer rollout with no bearing on the marker must NOT be picked while the marker points elsewhere.
+    other = _write_rollout_without_marker(
+        tmp_path, [_user_line("unmarked-newer", "2026-08-03T00:00:09Z")], name="rollout-2026-08-03T00-00-09-other.jsonl"
+    )
+    os.utime(other, (10**10, 10**10))  # force it newest by mtime
+    assert (tmp_path / "codex_transcript_path").read_text().strip() == str(marked)
+    watcher, _ = _build_watcher(tmp_path)
+
+    assert [event["content"] for event in watcher.get_tail_events(50)] == ["marked"]
 
 
 def test_a_read_does_not_stop_the_loop_broadcasting_those_events(tmp_path: Path) -> None:

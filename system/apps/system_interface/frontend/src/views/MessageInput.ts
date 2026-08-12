@@ -12,7 +12,7 @@ import {
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, sendMessage } from "../models/Response";
-import { addOutgoing, dropOutgoing } from "../models/OutgoingMessages";
+import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError } from "../models/request-error";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
@@ -239,12 +239,22 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         // Hide the stop button until the request settles so the user cannot fire
         // off multiple restarts in quick succession.
         isInterruptInFlight = true;
+        // Snapshot the Sending bubbles that exist BEFORE the interrupt round-trip. On
+        // success we clear exactly these: every one is now either Delivered (its turn
+        // already dropped its bubble via arrival) or Returned into the composer via the
+        // block below -- so any that remain are Returned with no arrival to clear them
+        // (the ghost). Clearing only the pre-interrupt set leaves a message the user
+        // sends DURING the round-trip untouched (it is not in the returned block).
+        const preInterruptBubbleIds = getOutgoingMessages(agentId).map((message) => message.id);
         m.redraw();
         try {
           // Interrupt the agent and pull any queued messages back into the composer,
           // unsent, for the user to edit and send. Empty block = nothing was queued
           // (a clean no-op).
           const { block } = await drainToComposer(agentId);
+          // Every not-Delivered message is now back in the composer (or was Delivered and
+          // dropped its own bubble); clear the pre-interrupt Sending bubbles so none ghost.
+          clearOutgoing(agentId, preInterruptBubbleIds);
           if (block) {
             // Merge instead of drop: prepend the handed-back block above any existing draft
             // (block, blank line, draft) rather than dropping it when the composer is

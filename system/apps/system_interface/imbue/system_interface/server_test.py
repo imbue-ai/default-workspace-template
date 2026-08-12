@@ -911,6 +911,7 @@ def _fake_queue_watcher(
     block: str,
     events: list[dict[str, Any]] | None = None,
     events_after_clear: list[dict[str, Any]] | None = None,
+    in_flight_block: str = "",
 ) -> SimpleNamespace:
     """A stand-in watcher exposing just the queue methods the endpoints call.
 
@@ -941,9 +942,14 @@ def _fake_queue_watcher(
         method_calls.append("get_queued_block")
         return block
 
+    def _get_in_flight_block() -> str:
+        method_calls.append("get_in_flight_block")
+        return in_flight_block
+
     return SimpleNamespace(
         get_all_events=_get_all_events,
         get_queued_block=_get_queued_block,
+        get_in_flight_block=_get_in_flight_block,
         clear_queue=_clear,
         clear_calls=clear_calls,
         method_calls=method_calls,
@@ -1158,11 +1164,15 @@ def test_shoulder_tap_atomic_claude_flushed_presses_chord_and_never_restarts(
     assert watcher.clear_calls == []
 
 
-def test_shoulder_tap_atomic_claude_fails_when_a_send_is_in_flight(client: FlaskClient, tmp_path: Path) -> None:
+def test_shoulder_tap_atomic_claude_no_ops_benignly_when_a_send_is_in_flight(
+    client: FlaskClient, tmp_path: Path
+) -> None:
     """claude's tap takes the refresh-first mirror read under the same ``message.lock`` a send
-    holds: with a send in flight past the bounded wait it reports an explicit, retryable failure
-    rather than reading an empty mirror and no-oping the not-yet-parked message away -- never
-    pressing the chord or clearing the mirror (the codex/pi discipline)."""
+    holds: with a send in flight past the bounded wait it flushes nothing -- never pressing the
+    chord or clearing the mirror (the codex/pi discipline). But that refusal is a benign 200
+    no-op, not a 500: the backend availability flag greys the button whenever a send is in flight,
+    so a tap that still races one simply does nothing and the user retaps -- surfacing an error
+    there is the button-then-error bug we removed."""
     state_dir, config_dir = _claude_tap_dirs(tmp_path)
     agent_id = "agent-00000000000000000000000000000042"
     agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
@@ -1179,9 +1189,9 @@ def test_shoulder_tap_atomic_claude_fails_when_a_send_is_in_flight(client: Flask
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
 
-    assert response.status_code == 500
-    assert "in flight" in response.get_json()["detail"]
-    # No chord delivered, no restart, no mirror clear: the tap refused cleanly.
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "send_in_flight"
+    # No chord delivered, no restart, no mirror clear: the tap refused cleanly, just without erroring.
     assert messenger.pressed == []
     mock_run.assert_not_called()
     assert watcher.clear_calls == []
@@ -1219,10 +1229,13 @@ def test_shoulder_tap_atomic_rejects_is_primary_agent(client: FlaskClient, tmp_p
     assert "is_primary" in response.get_json()["detail"]
 
 
-def test_shoulder_tap_atomic_pi_fails_when_a_send_is_in_flight(client: FlaskClient, tmp_path: Path) -> None:
+def test_shoulder_tap_atomic_pi_no_ops_benignly_when_a_send_is_in_flight(
+    client: FlaskClient, tmp_path: Path
+) -> None:
     """The pi flush writer takes the same ``message.lock`` a send holds: with a send in flight
-    past the bounded wait, no sentinel is written and the endpoint reports an explicit,
-    retryable failure (frontend button-greying alone used to guard this race)."""
+    past the bounded wait, no sentinel is written -- but that refusal is a benign 200 no-op, not
+    a 500. The backend availability flag greys the button whenever a send is in flight, so a tap
+    that still races one simply does nothing (the queue is unchanged) and the user retaps."""
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
     with (
         _hold_message_lock(tmp_path),
@@ -1231,8 +1244,9 @@ def test_shoulder_tap_atomic_pi_fails_when_a_send_is_in_flight(client: FlaskClie
     ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
-    assert response.status_code == 500
-    assert "in flight" in response.get_json()["detail"]
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "send_in_flight"
+    # No sentinel written -- the flush refused cleanly, just without erroring.
     assert not (tmp_path / "pi_inbox").exists()
 
 
@@ -1391,6 +1405,29 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
     assert fake_watcher.clear_calls == [True]
 
 
+def test_drain_to_composer_pi_native_retract_does_not_fold_in_flight_block(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """On the native (lock-HELD) retract path pi returns the queued block ALONE and does NOT fold
+    the in-flight block, even if the registry reports one. Holding the lock means any send has
+    already released it, so a just-parked message is in the queued block already; also folding the
+    in-flight block would double-return a message caught in the post-lock-release/pre-commit window
+    (in the queued block AND still in the registry). This mirrors claude's held branch."""
+    agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
+    fake_watcher = _fake_queue_watcher("queued only", in_flight_block="must NOT be folded here")
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
+        patch("imbue.system_interface.server.run_local_command_modern_version") as mock_run,
+    ):
+        response = client.post("/api/agents/agent-123/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json()["block"] == "queued only"
+    mock_run.assert_not_called()
+    assert fake_watcher.clear_calls == [True]
+
+
 def test_drain_to_composer_dispatches_per_harness(tmp_path: Path) -> None:
     """The stop button resolves the interrupt-to-composer implementation from the harness: pi to
     its own native override and claude to its native empty-queue chord override, each plugging in
@@ -1420,10 +1457,13 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
     client: FlaskClient, tmp_path: Path
 ) -> None:
     """A send holding ``message.lock`` blocks pi's native retract past the bounded wait, so the
-    stop falls back to the base restart hammer: it restarts, hands the block back, and writes NO
-    retract sentinel (which, unordered against the in-flight send, could strand that message)."""
+    stop falls back to the base restart hammer: it restarts and writes NO retract sentinel (which,
+    unordered against the in-flight send, could strand that message). The SIGKILL aborts the
+    in-flight send before it commits, so its text is FOLDED into the returned block (contract
+    Interrupt/A4: return every not-Delivered message) -- queued block first, then the still-in-
+    flight send -- rather than being lost."""
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
-    fake_watcher = _fake_queue_watcher("bring me back to edit")
+    fake_watcher = _fake_queue_watcher("bring me back to edit", in_flight_block="a message still sending")
     with (
         _hold_message_lock(tmp_path),
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
@@ -1437,7 +1477,9 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
     assert response.status_code == 200
-    assert response.get_json()["block"] == "bring me back to edit"
+    # The queued block leads, the still-in-flight send follows (send order) -- the in-flight
+    # message rides the block instead of dying silently with the SIGKILL.
+    assert response.get_json()["block"] == "bring me back to edit\na message still sending"
     # The hammer fell: a restart ran, and NO native sentinel was written.
     assert mock_run.call_args.kwargs["command"] == ["mngr", "start", "pi-agent", "--restart", "--no-resume"]
     assert not (tmp_path / "pi_inbox").exists()

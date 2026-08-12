@@ -39,6 +39,11 @@ export interface AgentState {
   // the frontend holds no queued state of its own. Absent/empty when nothing is
   // queued. Mirrors the backend ``QueuedMessageState`` (models.py) -- keep in step.
   queued_messages?: QueuedMessage[];
+  // Backend-computed shoulder-tap availability (contract Shoulder-tap): true iff something is
+  // queued AND no send is in flight. This ALONE drives the shoulder-tap button's enabled state
+  // -- the frontend computes nothing about availability and there is no error path. Absent =
+  // treat as unavailable (defensive; the button only renders when the queue is non-empty anyway).
+  shoulder_tap_available?: boolean;
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of
@@ -441,6 +446,13 @@ export function getAgentById(id: string): AgentState | undefined {
  *  queued state -- the frontend never invents or reconciles it. */
 export function getQueuedMessagesForAgent(agentId: string): QueuedMessage[] {
   return getAgentById(agentId)?.queued_messages ?? [];
+}
+
+/** Whether the shoulder-tap is available for this agent, per the backend (contract
+ *  Shoulder-tap). This ALONE drives the button's enabled state; the frontend computes
+ *  nothing. Absent -> unavailable. */
+export function getShoulderTapAvailableForAgent(agentId: string): boolean {
+  return getAgentById(agentId)?.shoulder_tap_available === true;
 }
 
 export function removeAgentLocally(agentId: string): void {

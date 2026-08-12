@@ -32,7 +32,6 @@ members = [
     "default-workspace-template",
     "env-converge",
     "eval-worker",
-    "geopolitical-dashboard",
     "github-sync",
     "host-backup",
     "mngr-cli-contract",
@@ -1008,7 +1007,6 @@ dependencies = [
     { name = "browser" },
     { name = "env-converge" },
     { name = "eval-worker" },
-    { name = "geopolitical-dashboard" },
     { name = "github-sync" },
     { name = "host-backup" },
     { name = "imbue-common" },
@@ -1043,7 +1041,6 @@ requires-dist = [
     { name = "browser", editable = "system/apps/browser" },
     { name = "env-converge", editable = "system/services/env_converge" },
     { name = "eval-worker", editable = "system/services/eval_worker" },
-    { name = "geopolitical-dashboard", editable = "system/apps/geopolitical_dashboard" },
     { name = "github-sync", editable = "system/libs/github_sync" },
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
@@ -1325,23 +1322,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/10/a1/ae4e3e5003468d6391d2c77b6fa1cd73bd5d13511d81c642d7b28ac90ed4/fsspec-2026.6.0.tar.gz", hash = "sha256:f5bac145310fe30e16e1471bd6840b2d990d609e872251d7e674241822abf01a", size = 313646, upload-time = "2026-06-16T01:57:28.105Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl", hash = "sha256:02e0b71817df9b2169dc30a16832045764def1191b43dcff5bb85bdee212d2a1", size = 203949, upload-time = "2026-06-16T01:57:26.358Z" },
-]
-
-[[package]]
-name = "geopolitical-dashboard"
-version = "0.1.0"
-source = { editable = "system/apps/geopolitical_dashboard" }
-dependencies = [
-    { name = "flask" },
-    { name = "flask-sock" },
-    { name = "werkzeug" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "flask", specifier = ">=3.0" },
-    { name = "flask-sock", specifier = ">=0.7" },
-    { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [[package]]
@@ -1960,10 +1940,14 @@ version = "0.1.4"
 source = { editable = "system/vendor/mngr/libs/mngr_codex" }
 dependencies = [
     { name = "imbue-mngr" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" }]
+requires-dist = [
+    { name = "imbue-mngr", editable = "system/vendor/mngr/libs/mngr" },
+    { name = "websockets", specifier = ">=13" },
+]
 
 [[package]]
 name = "imbue-mngr-pi-coding"

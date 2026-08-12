@@ -1,4 +1,5 @@
 from imbue.system_interface.harnesses.sending_registry import SendingRegistry
+from imbue.system_interface.harnesses.sending_registry import SendingStateWatcherMixin
 
 
 def test_empty_registry_has_no_block() -> None:
@@ -52,3 +53,42 @@ def test_clear_drops_everything() -> None:
     registry.record("t2", "second")
     registry.clear()
     assert registry.in_flight_texts() == []
+
+
+class _MixinHost(SendingStateWatcherMixin):
+    """A minimal watcher-shaped host: constructed via ``__new__``/``build`` like the real
+    watchers (no ``__init__``), calling the mixin's initializer from ``build``."""
+
+    @classmethod
+    def build(cls) -> "_MixinHost":
+        self = cls.__new__(cls)
+        self._init_sending_state()
+        return self
+
+
+def test_mixin_tracks_and_resolves_sending_state() -> None:
+    host = _MixinHost.build()
+    # note_sent_message records and returns a token; the block reflects send order.
+    t1 = host.note_sent_message("first", "ts")
+    host.note_sent_message("second", "ts", message_id="explicit-id")
+    assert t1 is not None
+    assert host.get_in_flight_block() == "first\nsecond"
+    # commit / retract each drop exactly the named message.
+    host.commit_sent_message(t1)
+    assert host.get_in_flight_block() == "second"
+    host.retract_sent_message("explicit-id")
+    assert host.get_in_flight_block() == ""
+
+
+def test_mixin_uses_the_supplied_message_id_as_the_token() -> None:
+    host = _MixinHost.build()
+    returned = host.note_sent_message("hi", "ts", message_id="stable-42")
+    assert returned == "stable-42"
+
+
+def test_mixin_has_its_own_lock_independent_of_any_subclass_lock() -> None:
+    # The mixin's lock is private to the Sending concern, not a shared ``_lock`` a
+    # subclass might also use for its transcript mirror.
+    host = _MixinHost.build()
+    assert not hasattr(host, "_lock")
+    assert host._sending_lock is not None
