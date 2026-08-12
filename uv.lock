@@ -35,6 +35,7 @@ members = [
     "host-backup",
     "mngr-cli-contract",
     "oom-priority",
+    "owner-exec",
     "share-gateway",
     "system-interface",
     "tk-command-parsing",
@@ -1012,6 +1013,7 @@ dependencies = [
     { name = "host-backup" },
     { name = "imbue-common" },
     { name = "litellm" },
+    { name = "owner-exec" },
     { name = "playwright" },
     { name = "share-gateway" },
     { name = "tk-command-parsing" },
@@ -1043,6 +1045,7 @@ requires-dist = [
     { name = "host-backup", editable = "system/services/host_backup" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "litellm", specifier = ">=1.88.1" },
+    { name = "owner-exec", editable = "system/services/owner_exec" },
     { name = "playwright", specifier = "==1.58.0" },
     { name = "share-gateway", editable = "system/services/share_gateway" },
     { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
@@ -2597,6 +2600,25 @@ source = { editable = "system/vendor/mngr/libs/overlay" }
 [package.metadata]
 requires-dist = [{ name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.13" }]
 provides-extras = ["dev"]
+
+[[package]]
+name = "owner-exec"
+version = "0.1.0"
+source = { editable = "system/services/owner_exec" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "flask" },
+    { name = "loguru" },
+    { name = "werkzeug" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=42.0.0" },
+    { name = "flask", specifier = ">=3.0.0" },
+    { name = "loguru", specifier = ">=0.7.0" },
+    { name = "werkzeug", specifier = ">=3.0.0" },
+]
 
 [[package]]
 name = "packaging"

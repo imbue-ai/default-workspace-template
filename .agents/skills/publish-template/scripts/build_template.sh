@@ -183,6 +183,10 @@ THUMBNAIL="template.svg"
 # §8's pre-push gate greps for any leftover, exactly as it does for the
 # placeholder thumbnail.
 REPO_URL_PLACEHOLDER="MINDS_TEMPLATE_REPO_URL"
+# Licensing is the user's call and is confirmed in the skill's §6, which runs
+# AFTER assembly -- so the landing page carries a placeholder here too, and the
+# lead substitutes it with the answer. validate_template.py fails on a leftover.
+LICENSE_PLACEHOLDER="MINDS_TEMPLATE_LICENSE"
 
 # --- 0. validate that BASE_REF is a real, bootable default workspace template tree ---------
 
@@ -653,7 +657,13 @@ waiting to be asked:
    greeting and do NOT offer a generic suggestions list.
 2. Immediately read \`${MANIFEST}\` at the repo root (reading the
    manifest in the first turn is required).
-3. In plain, non-technical language, present what the template is and
+3. Say what licence this template carries and what it lets them do. Read
+   \`LICENSE\` at the repo root: MIT means they can use, change, and ship it,
+   including commercially, as long as they keep the copyright line and the
+   licence text. If there is NO \`LICENSE\` file, say that plainly -- an
+   unlicensed repo grants no reuse rights by default, whatever its visibility,
+   so they should ask the author before building on it.
+4. In plain, non-technical language, present what the template is and
    what it needs from the user -- name the manifest's activation requirements
    (the connectors/permissions it runs on). Then ask whether they want to hook it
    up to their own accounts now (e.g. "Want me to connect this to your own
@@ -738,6 +748,10 @@ generic workspace template -- it is this specific project.
 works, what it needs to run, and what to adapt -- with the
 machine-readable half (recipe, requirements, and the environment it needs
 installed) in [\`${MANIFEST_TOML}\`](${MANIFEST_TOML}).
+
+## License
+
+${LICENSE_PLACEHOLDER}
 README_EOF
 
 # --- 8.6 remove the version history so it never ships in a template ------
