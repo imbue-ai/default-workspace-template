@@ -247,7 +247,8 @@ _FRONTEND_NOT_REPAIRABLE_HTML = """<!doctype html>
 <p>Frontend not built, and the frontend sources are not present in this
 installation, so it cannot be rebuilt from here.</p>
 <p>Run <code>npm ci &amp;&amp; npm run build</code> in the app's
-<code>frontend/</code> directory, then restart the system interface.</p>
+<code>frontend/</code> directory, then reload this page. The bundle is picked up
+as soon as it exists, so there is no need to restart the system interface.</p>
 </body>
 </html>
 """
