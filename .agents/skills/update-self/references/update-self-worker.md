@@ -427,11 +427,10 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     of the 4c review-gate rule applied, with its evidence**: either the
     clean-pull skip (`gates_required: false` from classify-merge, an impact
     analysis with no user-created code in it, and no in-branch edits of your
-    own) or the gate run's
-    artifacts (the autofix fix commits kept vs
+    own) or the gate run's own record (the autofix fix commits kept vs
     reverted -- or "gate ran clean, no fixes proposed" -- and the
     architecture-gate verdicts). A report claiming the gates ran must carry
-    these artifacts; a report skipping them must show the rule's conditions
+    that record; a report skipping them must show the rule's conditions
     held; a report with neither is incomplete and the lead will send it back.
     Also any validation **gap** (a coupled bump you couldn't fully exercise)
     called out honestly rather than implied as covered.

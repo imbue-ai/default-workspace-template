@@ -362,10 +362,10 @@ applied and the workspace is untouched.
 
 **Audit the report before composing anything.** The worker contract (the
 staged copy's `references/update-self-worker.md`, §4c and §6) makes the review
-gates rule-driven and the report artifact-bearing: it must either show the
+gates rule-driven and the report evidence-bearing: it must either show the
 clean-pull skip's conditions held (`gates_required: false`, no impacted
 user-created code, and no worker-authored in-branch edits such as 4a mirror
-edits) or carry the gate run's artifacts (fix commits
+edits) or carry the gate run's own evidence (fix commits
 kept/reverted, or a clean gate run, plus architecture-gate verdicts). Likewise
 a side-picked conflict must carry the discarded-side accounting, not a bare
 "superset" claim. A report missing any of this -- including one that openly
