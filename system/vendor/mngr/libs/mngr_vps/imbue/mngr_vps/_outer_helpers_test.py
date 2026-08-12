@@ -371,6 +371,42 @@ def test_build_image_on_outer_raises_on_build_failure() -> None:
         )
 
 
+def test_build_image_on_outer_failure_reports_both_stream_tails_and_exit_code() -> None:
+    # Each stream is tailed separately: a long buildkit progress tail on stderr must
+    # not push the stdout error text out of the reported window, and the exit code
+    # tells a real build failure apart from output that just stopped arriving.
+    noisy_stderr = "\n".join(f"#36 exporting layers {idx}" for idx in range(80))
+    outer = _outer(CommandResult(stdout="the real error is here", stderr=noisy_stderr, success=False, exit_code=17))
+    with pytest.raises(MngrError) as exc_info:
+        build_image_on_outer(
+            outer,
+            tag="bad-image",
+            build_context_path="/tmp/build",
+            docker_build_args=[],
+            timeout_seconds=60.0,
+            on_output=None,
+            builder=DockerBuilder.DOCKER,
+        )
+    message = str(exc_info.value)
+    assert "exit code 17" in message
+    assert "the real error is here" in message
+    assert "--- stderr tail ---" in message and "--- stdout tail ---" in message
+
+
+def test_build_image_on_outer_failure_reports_unknown_exit_code_when_absent() -> None:
+    outer = _outer(CommandResult(stdout="", stderr="boom", success=False))
+    with pytest.raises(MngrError, match="exit code unknown"):
+        build_image_on_outer(
+            outer,
+            tag="bad-image",
+            build_context_path="/tmp/build",
+            docker_build_args=[],
+            timeout_seconds=60.0,
+            on_output=None,
+            builder=DockerBuilder.DOCKER,
+        )
+
+
 def test_ensure_depot_token_available_raises_for_depot_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DEPOT_TOKEN", raising=False)
     with pytest.raises(MngrError, match="DEPOT_TOKEN"):
@@ -726,6 +762,7 @@ def _fresh_vps_script() -> list[tuple[str, CommandResult]]:
         ("test -f /var/lib/mngr-btrfs.img", _fail()),
         ("df --output=avail", _ok(f"{100 * (1024**3)}\n")),
         ("mountpoint -q", _fail()),
+        ("test -L /mngr-btrfs", _fail()),
         ("grep -qE", _fail()),
         (f"test -d /mngr-btrfs/{_TEST_HOST_HEX}", _fail()),
     ]
@@ -808,6 +845,7 @@ def test_prepare_btrfs_on_outer_raises_when_free_space_below_reserve() -> None:
             ("command -v mkfs.btrfs", _ok()),
             ("test -f /var/lib/mngr-btrfs.img", _fail()),
             ("mountpoint -q", _fail()),
+            ("test -L /mngr-btrfs", _fail()),
             ("df --output=avail", _ok(f"{15 * (1024**3)}\n")),
         ]
     )
@@ -830,6 +868,7 @@ def test_prepare_btrfs_on_outer_raises_when_free_space_equal_to_reserve() -> Non
             ("command -v mkfs.btrfs", _ok()),
             ("test -f /var/lib/mngr-btrfs.img", _fail()),
             ("mountpoint -q", _fail()),
+            ("test -L /mngr-btrfs", _fail()),
             ("df --output=avail", _ok(f"{20 * (1024**3)}\n")),
         ]
     )
@@ -898,6 +937,34 @@ def test_prepare_btrfs_on_outer_skips_loop_when_btrfs_already_mounted() -> None:
     assert "/etc/fstab" not in joined
     # ...but the per-host subvolume was created.
     assert f"btrfs subvolume create /mngr-btrfs/{_TEST_HOST_HEX}" in joined
+
+
+def test_prepare_btrfs_on_outer_raises_when_mount_path_is_unmounted_symlink() -> None:
+    """Slice VM whose data disk has not mounted yet: refuse, never build a loop file.
+
+    A symlink at the mount path is the pre-mounted (slice) layout; if nothing is
+    mounted at its target yet (e.g. the guest's lima provisioning has not
+    finished), falling through to the loop-file path would silently build a
+    loop image on the VM's root disk and mask the real volume from then on.
+    """
+    outer = _scripted(
+        [
+            ("mountpoint -q", _fail()),
+            ("test -L /mngr-btrfs", _ok()),
+        ]
+    )
+    with pytest.raises(VpsProvisioningError, match="symlink"):
+        prepare_btrfs_on_outer(
+            outer,
+            host_id=_TEST_HOST_ID,
+            btrfs_mount_path=_TEST_MOUNT_PATH,
+            loop_file_path=_TEST_LOOP_FILE,
+            outer_disk_reserved_gb=_TEST_RESERVED_GB,
+        )
+    # Nothing was mutated: only the two probes ran.
+    recorded = cast(_ScriptedOuter, outer).recorded
+    for cmd in recorded:
+        assert cmd.startswith(("mountpoint -q", "test -L")), f"unexpected command issued: {cmd!r}"
 
 
 # =========================================================================

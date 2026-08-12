@@ -56,6 +56,7 @@ from imbue.mngr_kanpan.data_source import CellRun
 from imbue.mngr_kanpan.data_source import FIELD_MUTED
 from imbue.mngr_kanpan.data_source import FieldValue
 from imbue.mngr_kanpan.data_source import KanpanDataSource
+from imbue.mngr_kanpan.data_source import KanpanFieldTypeError
 from imbue.mngr_kanpan.data_source import now_utc
 from imbue.mngr_kanpan.data_types import ActionBuiltinCommand
 from imbue.mngr_kanpan.data_types import ActionBuiltinRole
@@ -79,7 +80,7 @@ from imbue.mngr_kanpan.fetcher import fetch_board_snapshot
 from imbue.mngr_kanpan.fetcher import fetch_local_snapshot
 from imbue.mngr_kanpan.fetcher import load_field_cache
 from imbue.mngr_kanpan.fetcher import save_field_cache
-from imbue.mngr_kanpan.fetcher import toggle_agent_mute
+from imbue.mngr_kanpan.fetcher import set_agent_mute
 from imbue.mngr_kanpan.header_status import HeaderStatus
 from imbue.mngr_kanpan.header_status import compile_header_status
 from imbue.mngr_kanpan.header_status import render_header_status
@@ -1128,25 +1129,44 @@ def _finish_batch_execution(state: _KanpanState, results: list[_BatchItemResult]
         _show_transient_message(state, summary)
 
 
-def _apply_mute_to_entry(entry: AgentBoardEntry, is_muted: bool) -> AgentBoardEntry:
-    """Return an updated AgentBoardEntry with the mute state applied.
+_LOCALLY_WRITTEN_FIELDS: Final[tuple[str, ...]] = (FIELD_MUTED,)
 
-    Updates fields, cells, section, and is_muted so the board renders correctly.
+
+@pure
+def _read_muted(fields: Mapping[str, FieldValue]) -> bool:
+    """Whether `fields` marks the agent as muted."""
+    field = fields.get(FIELD_MUTED)
+    if field is None:
+        return False
+    if not isinstance(field, BoolField):
+        raise KanpanFieldTypeError(f"Expected BoolField for '{FIELD_MUTED}', got {type(field).__name__}")
+    return field.value
+
+
+@pure
+def _with_fields(entry: AgentBoardEntry, fields: dict[str, FieldValue]) -> AgentBoardEntry:
+    """Return an updated AgentBoardEntry carrying `fields`.
+
+    Rebuilds cells, section and is_muted from them, so everything the row derives from its
+    fields stays in step with them.
     """
-    updated_fields = {**entry.fields, FIELD_MUTED: BoolField(value=is_muted, created=now_utc())}
-    updated_cells = {key: field.display() for key, field in updated_fields.items()}
-    updated_section = compute_section(updated_fields)
     ref = entry.field_ref()
     return entry.model_copy_update(
-        to_update(ref.is_muted, is_muted),
-        to_update(ref.fields, updated_fields),
-        to_update(ref.cells, updated_cells),
-        to_update(ref.section, updated_section),
+        to_update(ref.is_muted, _read_muted(fields)),
+        to_update(ref.fields, fields),
+        to_update(ref.cells, {key: field.display() for key, field in fields.items()}),
+        to_update(ref.section, compute_section(fields)),
     )
 
 
+def _apply_mute_to_entry(entry: AgentBoardEntry, is_muted: bool) -> AgentBoardEntry:
+    """Return an updated AgentBoardEntry with the mute state applied, as of now."""
+    muted = BoolField(value=is_muted, created=now_utc())
+    return _with_fields(entry, {**entry.fields, FIELD_MUTED: muted})
+
+
 def _update_snapshot_mute(state: _KanpanState, agent_name: AgentName, is_muted: bool) -> None:
-    """Update the snapshot in-place by toggling mute state on the named agent."""
+    """Update the snapshot in-place by setting the mute state on the named agent."""
     if state.snapshot is None:
         return
     new_entries = tuple(
@@ -1169,17 +1189,16 @@ def _mute_focused_agent(state: _KanpanState) -> None:
     agent_name = entry.name
     new_muted = not entry.is_muted
 
-    # A periodic read in flight predates this keypress, so it would put the row back where it was.
-    _abandon_periodic_local_refresh(state)
-    # Optimistic UI update
+    # Optimistic UI update. Stamped now, so a fetch that read this agent before the keypress
+    # loses to it in `_prefer_later_read` however long it takes to land.
     _update_snapshot_mute(state, agent_name, new_muted)
     _refresh_display(state)
     action = "Muted" if new_muted else "Unmuted"
     _show_transient_message(state, f"  {action} {agent_name}")
 
     # Persist in background
-    def _do_mute() -> bool:
-        return toggle_agent_mute(state.mngr_ctx, agent_name)
+    def _do_mute() -> None:
+        set_agent_mute(state.mngr_ctx, agent_name, new_muted)
 
     future = state.executor.submit(_do_mute)
     if state.loop is not None:
@@ -1188,7 +1207,7 @@ def _mute_focused_agent(state: _KanpanState) -> None:
         )
 
 
-def _on_mute_persist_poll(loop: MainLoop, data: tuple[_KanpanState, Future[bool], AgentName, bool]) -> None:
+def _on_mute_persist_poll(loop: MainLoop, data: tuple[_KanpanState, Future[None], AgentName, bool]) -> None:
     """Poll for mute persist completion. Revert UI on failure."""
     state, future, agent_name, expected_muted = data
     if future.done():
@@ -1286,13 +1305,29 @@ def _run_transcript(agent_name: str) -> subprocess.CompletedProcess[str]:  # pra
     )
 
 
+@pure
+def _message_command(agent_name: str, message: str) -> list[str]:
+    """Build the ``mngr message`` argv for a peek reply.
+
+    ``--start`` brings up an offline host and (re)launches a ``STOPPED`` or ``DONE``
+    agent, so a reply lands on an agent that is not currently live instead of
+    failing with its state. Reviving a ``DONE`` agent tears down its lingering tmux
+    session, discarding that pane's content.
+    """
+    return ["mngr", "message", agent_name, "--start", "-m", message]
+
+
 def _run_message(agent_name: str, message: str) -> subprocess.CompletedProcess[str]:  # pragma: no cover
     """Send a message to the agent. Called from a background thread.
 
-    The timeout sits above ``mngr message``'s own ~90s submission-confirmation
-    wait so a delivered message is not cut off and misreported as a failure.
+    The timeout is a ceiling on how long one send may hold the single-worker reply
+    executor, not a bound on the path: it clears the ~135s a live agent's own waits
+    (TUI-ready, paste-visible, submission-confirmation) can take, but a cold start
+    can outrun it -- ``--start`` waits on the host coming up, and reviving a DONE
+    agent takes a host lock that has no timeout at all. A send cut off here is
+    reported as a failure whether or not the message landed.
     """
-    return subprocess.run(["mngr", "message", agent_name, "-m", message], capture_output=True, text=True, timeout=100)
+    return subprocess.run(_message_command(agent_name, message), capture_output=True, text=True, timeout=180)
 
 
 def _ensure_peek_executor(state: _KanpanState) -> ThreadPoolExecutor:
@@ -1774,9 +1809,10 @@ def _submit_peek_reply(state: _KanpanState) -> None:
     """Send the reply-input text to the peeked agent and echo it immediately; no-op when empty.
 
     ``mngr message`` blocks until durable evidence shows the agent accepted the reply,
-    up to ~90s -- so the send runs on the reply executor and is not awaited. The typed text is echoed into the body right away (as a
-    ``›`` line) and, once the agent accepts it and it shows up in the transcript, the
-    echo is dropped in favour of the real message.
+    up to ~90s, and longer still when the agent has to be started first -- so the send
+    runs on the reply executor and is not awaited. The typed text is echoed into the body
+    right away (as a ``›`` line) and, once the agent accepts it and it shows up in the
+    transcript, the echo is dropped in favour of the real message.
     """
     if state.peek_agent_name is None or state.peek_input is None:
         return
@@ -1801,12 +1837,13 @@ def _on_peek_reply_poll(
     loop: MainLoop,
     data: tuple[_KanpanState, Future[subprocess.CompletedProcess[str]], AgentName, str],
 ) -> None:
-    """Poll a sent reply; refresh the board on success, drop its optimistic echo on failure.
+    """Poll a sent reply; refresh the board either way, drop its optimistic echo on failure.
 
-    A delivered reply keeps its echo until the transcript refresh prunes it, and triggers a
-    local refresh because accepting the message puts a WAITING agent back to work, leaving the
-    row's STATE stale from that moment. A failed send would otherwise leave the echo up forever,
-    showing the message as delivered when it was not.
+    A delivered reply keeps its echo until the transcript refresh prunes it, and re-probes because
+    accepting the message puts a WAITING agent back to work. A failed one re-probes because it may
+    have moved the row too: a STOPPED or DONE agent is (re)launched before delivery is even
+    attempted, and the exit code does not say whether it got that far. A failed send would
+    otherwise leave the echo up forever, showing the message as delivered when it was not.
     """
     state, future, agent_name, reply_text = data
     if not future.done():
@@ -1837,6 +1874,7 @@ def _on_peek_reply_poll(
         # The panel has closed, so the restored footer is visible again and is the
         # right place for the failure notice.
         _show_transient_message(state, f"  Reply to {agent_name} failed: {detail}")
+    _request_local_refresh(loop, state)
 
 
 def _handle_peek_key(state: _KanpanState, key: str) -> bool | None:
@@ -2633,7 +2671,7 @@ def _poll_periodic_local_refresh(loop: MainLoop, state: _KanpanState) -> None:
         # list stays the full refresh's too: this read did run sources that fill one, but
         # taking its list would drop what a remote source reported, and only that refresh
         # runs those sources and can put it back.
-        merged = _carry_forward_fields(previous, fresh)
+        merged = _prefer_later_read(previous, _carry_forward_fields(previous, fresh), _LOCALLY_WRITTEN_FIELDS)
         state.snapshot = merged.model_copy_update(to_update(merged.field_ref().errors, previous.errors))
     _refresh_display(state)
     _prune_orphaned_marks(state)
@@ -2729,6 +2767,8 @@ def _finish_refresh(loop: MainLoop, state: _KanpanState) -> None:
         # For local-only refreshes, carry forward fields from previous snapshot
         if was_local_only and state.snapshot is not None:
             new_snapshot = _carry_forward_fields(state.snapshot, new_snapshot)
+        if state.snapshot is not None:
+            new_snapshot = _prefer_later_read(state.snapshot, new_snapshot, _LOCALLY_WRITTEN_FIELDS)
         state.snapshot = new_snapshot
     except Exception as e:
         failed = True
@@ -2784,15 +2824,7 @@ def _carry_forward_fields(old: BoardSnapshot, new: BoardSnapshot) -> BoardSnapsh
             # Merge: new fields override old, but keep old fields not produced by local sources
             merged_fields = dict(old_entry.fields)
             merged_fields.update(entry.fields)
-            merged_cells = {key: field.display() for key, field in merged_fields.items()}
-            section = compute_section(merged_fields)
-            ref = entry.field_ref()
-            updated = entry.model_copy_update(
-                to_update(ref.fields, merged_fields),
-                to_update(ref.cells, merged_cells),
-                to_update(ref.section, section),
-            )
-            updated_entries.append(updated)
+            updated_entries.append(_with_fields(entry, merged_fields))
         else:
             updated_entries.append(entry)
     return BoardSnapshot(
@@ -2800,6 +2832,32 @@ def _carry_forward_fields(old: BoardSnapshot, new: BoardSnapshot) -> BoardSnapsh
         errors=new.errors,
         fetch_time_seconds=new.fetch_time_seconds,
     )
+
+
+@pure
+def _prefer_later_read(old: BoardSnapshot, new: BoardSnapshot, field_keys: Sequence[str]) -> BoardSnapshot:
+    """Return `new` with `field_keys` taken from whichever snapshot read them later.
+
+    A fetch reads its values as of its start, so one still running when the board writes one
+    of these holds an answer from before that write and would otherwise undo it.
+    """
+    old_by_name = {entry.name: entry for entry in old.entries}
+    updated_entries: list[AgentBoardEntry] = []
+    for entry in new.entries:
+        old_entry = old_by_name.get(entry.name)
+        if old_entry is None:
+            updated_entries.append(entry)
+            continue
+        fields = dict(entry.fields)
+        is_changed = False
+        for key in field_keys:
+            old_field = old_entry.fields.get(key)
+            new_field = fields.get(key)
+            if old_field is not None and new_field is not None and old_field.created > new_field.created:
+                fields[key] = old_field
+                is_changed = True
+        updated_entries.append(_with_fields(entry, fields) if is_changed else entry)
+    return new.model_copy_update(to_update(new.field_ref().entries, tuple(updated_entries)))
 
 
 def _get_state_attr(entry: AgentBoardEntry) -> str:

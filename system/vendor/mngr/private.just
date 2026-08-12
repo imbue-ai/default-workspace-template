@@ -309,6 +309,10 @@ minds-css:
 # to the current mngr branch; override with a positional arg. Errors if a checkout
 # already exists or the branch is already on default_workspace_template. It is a full clone (survives
 # deletion of any other clone/cache) and needs no configuration.
+# The checkout is reviewed by the code-guardian stop hook alongside mngr: the recipe
+# writes a gitignored .reviewer/settings.local.json enabling the gates there, so
+# stopping merges main into it, pushes its branch to the default_workspace_template
+# remote, and blocks until a PR exists on it.
 # Set DEFAULT_WORKSPACE_TEMPLATE_DIR (gitignored apps/minds/.env or your shell) to a local default_workspace_template clone to
 # make the clone fast -- purely a speed hint, no lasting dependency is created.
 [group("minds install")]

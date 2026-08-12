@@ -79,4 +79,44 @@ mkdir -p "$repo_root/.external_worktrees"
 git clone ${ref_args[@]+"${ref_args[@]}"} "$url" "$dest"
 git -C "$dest" remote set-url origin "$DEFAULT_WORKSPACE_TEMPLATE_REMOTE"
 git -C "$dest" checkout -q -b "$branch" "$base"
+
+# Turn the code-guardian gates back on for this checkout. The committed
+# .reviewer/settings.json carries the *workspace* policy -- every gate off, no
+# auto-merge or push -- because that repo is also cloned into containers, where
+# a workspace is the user's own isolated unit. A checkout nested here is the
+# opposite case: active development of the template, which mngr's root
+# .reviewer/settings.json declares as a second reviewed repo, and which should
+# be gated exactly like mngr itself. settings.local.json is gitignored there
+# and wins per-key, so the workspace policy stays intact upstream, and a
+# container can never inherit these values (creation clones the branch, and
+# this file is never committed).
+#
+# system/vendor/mngr is exempted from the clean-tree gate: `just minds-start`
+# (and `sync-vendor-mngr-rsync` / `propagate-changes`) rsync the live mngr tree
+# into that tracked subtree, deliberately leaving thousands of uncommitted
+# files behind, and that machine-generated state is byte-identical to a
+# deliberate revendor -- no gate can tell them apart. Review of that content
+# is owned by the mngr repo (whatever legitimately lands there came from an
+# mngr PR with its own gates), and a DWT PR missing a revendor it depends on
+# fails its own CI. Everything else in the checkout keeps the clean-tree gate.
+mkdir -p "$dest/.reviewer"
+cat > "$dest/.reviewer/settings.local.json" <<'REVIEWER_SETTINGS'
+{
+    "stop_hook": {
+        "base_branch": "main",
+        "fetch_and_merge": true,
+        "uncommitted_exempt_paths": ["system/vendor/mngr"]
+    },
+    "autofix": {
+        "is_enabled": true
+    },
+    "verify_architecture": {
+        "is_enabled": true
+    },
+    "ci": {
+        "is_enabled": true
+    }
+}
+REVIEWER_SETTINGS
+
 echo "default_workspace_template checkout ready: $dest on $branch"
