@@ -383,9 +383,13 @@ via `mngr message`, consume this report into
 `data/.tasks/update-self/reports/consumed/`, re-arm the background poll) and
 audit the replacement, because `done` otherwise ends the poll and a report left
 at the report path would satisfy the next `await` instantly. Do not compose an approval message
-over the gap, and never repackage a worker-disclosed deviation as reassurance:
-if you proceed while any deviation stands, the approval message must state the
-deviation itself where the user will read it.
+over the gap, and never repackage a worker-disclosed deviation as reassurance.
+A deviation only *stands* when completing it is genuinely out of reach -- the
+worker is gone and the gap cannot be closed from here, or you told the user about
+it and they chose to go ahead anyway; not because the reasoning behind it
+persuaded you. In that case the approval message states the deviation itself,
+plainly, where the user will read it -- it is a caveat, never a footnote to a
+reassurance.
 
 The `done` report is *your* raw material, not the user's message. It is a
 comprehensive, technical digest for the lead -- changelog entries in range, the
