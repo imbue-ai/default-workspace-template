@@ -2115,8 +2115,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     # time can never notice. Without the route, asset requests fall through to
     # the catch-all below and come back as index.html with a text/html type,
     # which the browser refuses as a module script -- a blank screen instead of
-    # the recoverable placeholder. ``send_from_directory`` 404s on its own when
-    # a file really is missing.
+    # the recoverable placeholder. A file that really is missing gets the plain
+    # 404 ``_serve_asset`` answers with itself.
     application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
 
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
