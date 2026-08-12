@@ -1469,9 +1469,8 @@ body {
    card floating on it whose active tab is physically part of the card. The
    pieces that make that read as one shape:
 
-   - the canvas is inset 4px from the window frame, so the frame color shows as
-     a thin rim around it (`background-clip: content-box` does the inset without
-     a wrapper element);
+   - the canvas runs edge to edge, and its 4px padding is the gap the outermost
+     panes sit in rather than a rim of some other color;
    - each group insets itself 2px, which puts 4px of bare canvas between two
      adjacent panes -- that gap is the whole of a split separator;
    - the tab strip paints nothing, so it is canvas with labels on it. The active
