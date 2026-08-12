@@ -18,7 +18,7 @@ vi.mock("../models/AgentManager", () => ({
 }));
 
 import type { AppEntry } from "../models/AgentManager";
-import { AllAppsPicker, filterApps, groupApps, pickableApps } from "./AllAppsPicker";
+import { AllAppsPicker, filterApps, partitionAppsByPin, pickableApps } from "./AllAppsPicker";
 
 // Deliberately unsorted, and deliberately including the chrome UI plus the two
 // fleet services, all three of which the popover hides.
@@ -84,11 +84,20 @@ function inputsOf(tree: unknown): VnodeLike[] {
   );
 }
 
+/** The pin toggles: the only buttons this list draws. */
+function buttonsOf(tree: unknown): VnodeLike[] {
+  return flatten(tree).filter(
+    (n): n is VnodeLike => typeof n === "object" && n !== null && (n as VnodeLike).tag === "button",
+  );
+}
+
 type PickerView = ReturnType<typeof AllAppsPicker>["view"];
 
 interface RenderOptions {
-  viewAppNames?: string[];
-  shortcutAppNames?: string[];
+  // Undefined means the active view is a project called "Newsreader"; null
+  // poses Everything, which pins nothing.
+  projectName?: string | null;
+  pinnedAppNames?: string[];
   onOpenApp?: (app: AppEntry) => void;
   onTogglePin?: (app: AppEntry, wanted: boolean) => void;
 }
@@ -98,9 +107,8 @@ interface RenderOptions {
 function makeVnode(options: RenderOptions): Parameters<PickerView>[0] {
   return {
     attrs: {
-      viewName: "Newsreader",
-      viewAppNames: options.viewAppNames ?? [],
-      shortcutAppNames: options.shortcutAppNames ?? [],
+      projectName: options.projectName === undefined ? "Newsreader" : options.projectName,
+      pinnedAppNames: options.pinnedAppNames ?? [],
       onOpenApp: options.onOpenApp ?? (() => {}),
       onTogglePin: options.onTogglePin ?? (() => {}),
     },
@@ -140,28 +148,50 @@ describe("filterApps", () => {
   });
 });
 
-describe("groupApps", () => {
-  it("splits the view's apps from the rest of the machine", () => {
-    const grouped = groupApps(APPS, ["docs", "redis"], ["docs", "redis"]);
-    expect(grouped.inView.map((app) => app.name)).toEqual(["docs", "redis"]);
-    expect(grouped.onMachine.map((app) => app.name)).toContain("grafana");
-    expect(grouped.onMachine.map((app) => app.name)).not.toContain("docs");
+describe("partitionAppsByPin", () => {
+  it("splits the project's pinned apps from the rest of the machine", () => {
+    const split = partitionAppsByPin(APPS, ["docs", "redis"]);
+    expect(split.pinned.map((app) => app.name)).toEqual(["docs", "redis"]);
+    expect(split.unpinned.map((app) => app.name)).toContain("grafana");
+    expect(split.unpinned.map((app) => app.name)).not.toContain("docs");
   });
 
-  it("leads the view's group with the apps that are not shortcuts", () => {
-    // "docs" was unpinned, so it has nowhere else to be pinned back from.
-    const grouped = groupApps(APPS, ["zulip", "docs", "redis"], ["zulip", "redis"]);
-    expect(grouped.inView.map((app) => app.name)).toEqual(["docs", "zulip", "redis"]);
+  it("keeps the pinned group in member order rather than the machine's", () => {
+    const split = partitionAppsByPin(APPS, ["redis", "docs"]);
+    expect(split.pinned.map((app) => app.name)).toEqual(["redis", "docs"]);
+  });
+
+  it("drops a pinned name the machine no longer offers", () => {
+    // A member left behind by an app that has since been unregistered.
+    const split = partitionAppsByPin(APPS, ["docs", "gone"]);
+    expect(split.pinned.map((app) => app.name)).toEqual(["docs"]);
+  });
+
+  it("leaves every app unpinned when the view pins nothing", () => {
+    // Everything's case: the unfiltered view holds no members at all.
+    const split = partitionAppsByPin(APPS, []);
+    expect(split.pinned).toEqual([]);
+    expect(split.unpinned).toEqual([...APPS]);
   });
 });
 
 describe("AllAppsPicker", () => {
-  it("renders one row per app, headed by group", () => {
+  it("renders one row per app, under the two pin headings", () => {
     appState.apps = APPS;
-    const tree = render({ viewAppNames: ["docs"], shortcutAppNames: ["docs"] });
+    const tree = render({ pinnedAppNames: ["docs"] });
     expect(rowsOf(tree).length).toBe(7);
-    expect(texts(tree)).toContain("In Newsreader");
-    expect(texts(tree)).toContain("On this machine");
+    expect(texts(tree)).toContain("Pinned in Newsreader");
+    expect(texts(tree)).toContain("Unpinned");
+  });
+
+  it("renders one flat list with no toggles under Everything", () => {
+    // Everything pins nothing: every app on the machine is in its tab list
+    // already, so there is no membership here to add or remove.
+    appState.apps = APPS;
+    const tree = render({ projectName: null });
+    expect(rowsOf(tree).length).toBe(7);
+    expect(texts(tree)).not.toContain("Unpinned");
+    expect(buttonsOf(tree)).toEqual([]);
   });
 
   it("hands the clicked app to the open callback", () => {
@@ -190,9 +220,7 @@ describe("AllAppsPicker", () => {
         pinned.push([app.name, wanted]);
       },
     });
-    const pinButton = flatten(rowsOf(tree)[0].children).filter(
-      (n): n is VnodeLike => typeof n === "object" && n !== null && (n as VnodeLike).tag === "button",
-    )[0];
+    const pinButton = buttonsOf(rowsOf(tree)[0].children)[0];
     let stopped = false;
     (pinButton.attrs?.onclick as (e: unknown) => void)({
       stopPropagation: () => {
@@ -204,19 +232,16 @@ describe("AllAppsPicker", () => {
     expect(opened).toEqual([]);
   });
 
-  it("asks to unpin an app that is already a shortcut", () => {
+  it("asks to unpin an app the project already pins", () => {
     appState.apps = APPS;
     const pinned: [string, boolean][] = [];
     const tree = render({
-      viewAppNames: ["docs"],
-      shortcutAppNames: ["docs"],
+      pinnedAppNames: ["docs"],
       onTogglePin: (app, wanted) => {
         pinned.push([app.name, wanted]);
       },
     });
-    const pinButton = flatten(rowsOf(tree)[0].children).filter(
-      (n): n is VnodeLike => typeof n === "object" && n !== null && (n as VnodeLike).tag === "button",
-    )[0];
+    const pinButton = buttonsOf(rowsOf(tree)[0].children)[0];
     expect(pinButton.attrs?.["aria-label"]).toBe("Unpin docs");
     (pinButton.attrs?.onclick as (e: unknown) => void)({ stopPropagation: () => {} });
     expect(pinned).toEqual([["docs", false]]);

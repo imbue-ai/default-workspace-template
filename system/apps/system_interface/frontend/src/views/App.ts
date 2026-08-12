@@ -12,6 +12,7 @@ import {
   removeMemberRefFromView,
   removeMemberRow,
   renameMemberRef,
+  setAppPinnedInView,
   shareMemberRow,
   startProjectChat,
   switchToView,
@@ -75,6 +76,9 @@ export function App(): m.Component {
               },
               onOpenApp: (app: AppEntry) => {
                 openAppTab(app);
+              },
+              onSetAppPinned: (app: AppEntry, isPinned: boolean) => {
+                setAppPinnedInView(app, isPinned);
               },
               onOpenRow: (row: SidebarTabRow) => {
                 openMemberRow(row);

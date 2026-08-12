@@ -1,19 +1,25 @@
 /**
  * The rail's "All apps" popover: every app on the machine, in two groups.
  *
- * The active view's own apps come first and everything else on the machine
- * follows, de-duped, so the view you are in is never buried under the rest of
- * the machine. Deliberately UNFILTERED against what is already open or already
- * on the rail: membership is many-to-many, so an app another project shows is
- * an ordinary row here, and opening it from this list adds it to the view you
- * are looking at without taking it from anywhere.
+ * Pinning an app to a project IS its membership -- an app is pinned exactly
+ * when the project's member list holds its `service:<name>` ref, and there is
+ * no second pin state anywhere. So the two groups are "Pinned in <Project>"
+ * (this project's app members, in member order, which is the order the rail
+ * draws its shortcuts in) and "Unpinned" (every other app on the machine).
+ * Deliberately UNFILTERED against what is already open: membership is
+ * many-to-many, so an app another project shows is an ordinary unpinned row
+ * here, and pinning it adds it to the view you are looking at without taking it
+ * from anywhere.
  *
- * Clicking a row opens the app. Hovering one reveals a pin toggle that adds it
- * to (or takes it off) this view's shortcut list -- which is why the view's own
- * apps still appear here even when they are already shortcuts: unpinning one
- * has to leave it somewhere it can be pinned again. Pin state itself belongs to
- * the rail (see Sidebar's `shortcutAppNames` / `togglePins`); this component
- * only reports the toggle.
+ * Clicking a row opens the app. Hovering one reveals a pin toggle, whose two
+ * verbs are the only ones there are: pin to this project (add the member) and
+ * unpin from it (remove the member). Unpinning never stops the app -- it is the
+ * same act as removing any other object from a view. This component only
+ * reports the toggle; the rail files it server-side.
+ *
+ * Everything is the unfiltered view and pins nothing, since every app on the
+ * machine already shows there. Under it the popover is one flat list with no
+ * headings and no toggles: there is no membership to add or remove.
  *
  * The popover renders as a bare card and is placed by the rail, which owns the
  * one floating-menu placement (flip, clamp) every one of its menus uses. It
@@ -80,46 +86,53 @@ export function filterApps(apps: readonly AppEntry[], query: string): AppEntry[]
   return apps.filter((app) => app.name.toLowerCase().includes(needle));
 }
 
+/** The machine's apps, split by whether the active project pins them. */
+export interface AppPinPartition {
+  pinned: AppEntry[];
+  unpinned: AppEntry[];
+}
+
 /**
- * Split the machine's apps into the active view's and the rest, putting the
- * view's currently-unpinned apps at the top of its group.
+ * Split the machine's apps into the ones a project pins and the ones it does
+ * not.
  *
- * Unpinned defaults lead because they are the only apps with nowhere else to be
- * re-pinned from: everything else in this group is already a shortcut, and the
- * rest of the machine is one scroll away either way.
+ * `pinnedAppNames` is the project's app members, so the pinned group comes back
+ * in member order -- the order the rail draws its shortcuts in, which is what
+ * keeps the two lists reading as one thing. A name that addresses no app the
+ * machine offers (a member left behind by an app that has since been
+ * unregistered) simply drops out. Everything pins nothing and passes no names,
+ * so every app lands in `unpinned`.
  */
-export function groupApps(
-  apps: readonly AppEntry[],
-  viewAppNames: readonly string[],
-  shortcutAppNames: readonly string[],
-): { inView: AppEntry[]; onMachine: AppEntry[] } {
-  const shown = new Set(viewAppNames);
-  const shortcuts = new Set(shortcutAppNames);
-  const inView = apps.filter((app) => shown.has(app.name));
+export function partitionAppsByPin(apps: readonly AppEntry[], pinnedAppNames: readonly string[]): AppPinPartition {
+  const appsByName = new Map(apps.map((app) => [app.name, app]));
+  const pinnedNames = new Set(pinnedAppNames);
   return {
-    inView: [...inView.filter((app) => !shortcuts.has(app.name)), ...inView.filter((app) => shortcuts.has(app.name))],
-    onMachine: apps.filter((app) => !shown.has(app.name)),
+    pinned: pinnedAppNames.map((name) => appsByName.get(name)).filter((app): app is AppEntry => app !== undefined),
+    unpinned: apps.filter((app) => !pinnedNames.has(app.name)),
   };
 }
 
 export interface AllAppsPickerAttrs {
-  // The active view's display name, for the group heading.
-  viewName: string;
-  // Apps the active view shows, by service name.
-  viewAppNames: readonly string[];
-  // Apps currently on the rail's shortcut list, by service name.
-  shortcutAppNames: readonly string[];
+  // The active project's display name, for the pinned group's heading. Null
+  // under Everything, which pins nothing and gets one flat list instead.
+  projectName: string | null;
+  // The active project's app members, by service name, in member order. Empty
+  // under Everything.
+  pinnedAppNames: readonly string[];
   // Open this app in the active view. The rail closes the popover.
   onOpenApp: (app: AppEntry) => void;
-  // Put this app on the rail's shortcut list, or take it off. The popover
-  // stays open either way.
+  // Pin this app in the active project, or unpin it -- which is to add or
+  // remove its member. The popover stays open either way. Never called under
+  // Everything, whose rows carry no toggle.
   onTogglePin: (app: AppEntry, wanted: boolean) => void;
 }
 
 export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
   let filterText = "";
 
-  function appRow(app: AppEntry, isPinned: boolean, attrs: AllAppsPickerAttrs): m.Vnode {
+  /** One app. `isPinned` is null under Everything, which pins nothing: the row
+   *  still opens the app, it just carries no toggle. */
+  function appRow(app: AppEntry, isPinned: boolean | null, attrs: AllAppsPickerAttrs): m.Vnode {
     return m(
       "div",
       {
@@ -138,27 +151,31 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           m.trust(appIconMarkup(app.icon, ROW_GLYPH_SIZE, icon("external-link", { size: ROW_GLYPH_SIZE }))),
         ),
         m("span", { class: "min-w-0 flex-1 truncate" }, app.name),
-        m(
-          "button",
-          {
-            type: "button",
-            class:
-              "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
-              "hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
-              (isPinned ? "text-text-secondary opacity-100" : "text-text-faint opacity-0"),
-            "aria-pressed": isPinned ? "true" : "false",
-            "aria-label": isPinned ? `Unpin ${app.name}` : `Pin ${app.name}`,
-            ...hoverTooltipAttrs(
-              isPinned ? "Remove from this project's shortcuts" : "Pin to this project's shortcuts",
+        isPinned === null
+          ? null
+          : m(
+              "button",
+              {
+                type: "button",
+                class:
+                  "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
+                  "hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100 " +
+                  (isPinned ? "text-text-secondary opacity-100" : "text-text-faint opacity-0"),
+                "aria-pressed": isPinned ? "true" : "false",
+                "aria-label": isPinned ? `Unpin ${app.name}` : `Pin ${app.name}`,
+                ...hoverTooltipAttrs(
+                  isPinned
+                    ? "Unpins it here only. It keeps running, and stays in every other project showing it."
+                    : "Pin it to this project. It joins this project's tabs and its rail shortcuts.",
+                ),
+                onclick: (event: MouseEvent) => {
+                  // The row underneath opens the app; the pin toggle must not.
+                  event.stopPropagation();
+                  attrs.onTogglePin(app, !isPinned);
+                },
+              },
+              m.trust(pinIcon(isPinned)),
             ),
-            onclick: (event: MouseEvent) => {
-              // The row underneath opens the app; the pin toggle must not.
-              event.stopPropagation();
-              attrs.onTogglePin(app, !isPinned);
-            },
-          },
-          m.trust(pinIcon(isPinned)),
-        ),
       ],
     );
   }
@@ -176,8 +193,8 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
       const attrs = vnode.attrs;
       const apps = pickableApps();
       const visibleApps = filterApps(apps, filterText);
-      const groups = groupApps(visibleApps, attrs.viewAppNames, attrs.shortcutAppNames);
-      const shortcuts = new Set(attrs.shortcutAppNames);
+      const projectName = attrs.projectName;
+      const groups = partitionAppsByPin(visibleApps, attrs.pinnedAppNames);
 
       // Distinguish "this machine runs nothing" from "your query matched
       // nothing" -- the fix for each is different.
@@ -206,12 +223,18 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           : null,
         visibleApps.length === 0
           ? m("div", { class: "px-3 py-2 text-[13px] text-text-faint" }, emptyMessage)
-          : m("div", { class: "min-h-0 flex-1 overflow-y-auto" }, [
-              groups.inView.length === 0 ? null : groupHeading(`In ${attrs.viewName}`),
-              groups.inView.map((app) => appRow(app, shortcuts.has(app.name), attrs)),
-              groups.onMachine.length === 0 ? null : groupHeading("On this machine"),
-              groups.onMachine.map((app) => appRow(app, shortcuts.has(app.name), attrs)),
-            ]),
+          : m(
+              "div",
+              { class: "min-h-0 flex-1 overflow-y-auto" },
+              projectName === null
+                ? visibleApps.map((app) => appRow(app, null, attrs))
+                : [
+                    groups.pinned.length === 0 ? null : groupHeading(`Pinned in ${projectName}`),
+                    groups.pinned.map((app) => appRow(app, true, attrs)),
+                    groups.unpinned.length === 0 ? null : groupHeading("Unpinned"),
+                    groups.unpinned.map((app) => appRow(app, false, attrs)),
+                  ],
+            ),
       ]);
     },
   };

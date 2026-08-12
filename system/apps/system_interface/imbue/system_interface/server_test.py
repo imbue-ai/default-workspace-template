@@ -2474,6 +2474,50 @@ def test_delete_project_never_stops_an_agent_tmux_session(
     mock_run.assert_not_called()
 
 
+def test_delete_project_drops_the_names_of_what_it_stopped(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stopped member loses its name, so a reused ref inherits no dead one.
+
+    Deleting a project kills its terminals, and the allocator hands the lowest
+    free ``terminal-<N>`` straight back out -- so a name left behind would land
+    on the next terminal to answer to that ref. Only what actually stopped is
+    cleared: a member the delete left running keeps the name it is known by, and
+    every client is told about the ones that went.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
+    killed_session = FinishedProcess(
+        returncode=0,
+        stdout="",
+        stderr="",
+        command=("tmux", "kill-session", "-t", "=terminal-4"),
+        is_output_already_logged=False,
+    )
+    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
+    for ref in ("terminal:terminal-4", "chat:agent-9"):
+        assert client.post("/api/projects/scratch/members", json={"ref": ref}).status_code == 200
+    assert client.post("/api/member-titles", json={"ref": "terminal:terminal-4", "title": "Build"}).status_code == 200
+    assert client.post("/api/member-titles", json={"ref": "chat:agent-9", "title": "Planning"}).status_code == 200
+    # Registered last, so the queue holds the delete's broadcasts and nothing
+    # the setup above already announced.
+    client_queue = _register_fake_client(app, "client-1", "desktop")
+
+    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
+        response = client.post("/api/projects/scratch/delete")
+
+    assert response.status_code == 200
+    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
+    # The chat was only left project-less, not stopped, so it keeps its name.
+    assert client.get("/api/member-titles").get_json() == {"titles": {"chat:agent-9": "Planning"}}
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_title_changed",
+        "ref": "terminal:terminal-4",
+        "title": None,
+    }
+
+
 def test_add_member_files_a_ref_and_lists_it(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

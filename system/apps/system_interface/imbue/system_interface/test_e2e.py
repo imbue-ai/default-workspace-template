@@ -27,6 +27,7 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.models import AppEntry
 from imbue.system_interface.projects import DEFAULT_PROJECT_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_NAME
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
@@ -172,6 +173,7 @@ def _running_e2e_server(
     session_events: list[dict[str, Any]] | None = None,
     primary_agent_id: str = "",
     additional_agents: tuple[tuple[str, str], ...] = (),
+    apps: tuple[str, ...] = (),
 ) -> Generator[tuple[str, AgentInfo, Path], None, None]:
     """Run the web server with a mock primary agent (plus any ``additional_agents``), ready for Playwright + layout ops.
 
@@ -183,6 +185,14 @@ def _running_e2e_server(
     clears MNGR_AGENT_ID so the layout endpoints have no primary-agent dir
     (nothing persists; the UI auto-opens the fixture chat); a non-empty id
     persists named layouts under ``tmp_path/agents/<id>/workspace_layout``.
+
+    ``apps`` names the workspace services the machine offers. Each is seeded
+    onto the manager's registry, exactly as reading ``apps.toml`` would leave
+    it, so the rail's "All apps" list and its shortcuts have something real to
+    show; the manager is never started here, so nothing would otherwise read
+    that file. The service label is derived from the name, as
+    ``forward_port.py`` mints it, because every panel origin is built from the
+    label rather than the name.
 
     ``additional_agents`` is a tuple of ``(agent_id, agent_name)`` for extra
     agents that EXIST but whose chats are not auto-opened. They carry no
@@ -255,6 +265,10 @@ def _running_e2e_server(
                 )
         for info in agents:
             manager._ensure_activity_tracking(info.id)
+        manager._apps = [
+            AppEntry(name=name, url=f"http://127.0.0.1:9{index:03d}", label=f"{name}-e2elabel")
+            for index, name in enumerate(apps)
+        ]
 
         config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
         app = create_application(build_test_state(config=config, agent_manager=manager))
@@ -1772,3 +1786,158 @@ def test_settings_dialog_stages_removals_until_save(tmp_path: Path, page: Page) 
             poll_interval=0.1,
             error_message="Save never removed the member from the project",
         )
+
+
+_APP_PINNING_PORT = 18875
+
+# The one app the machine offers in the pinning test, and the member ref it is
+# filed under. The label is what ``_running_e2e_server`` mints for it, and it is
+# what the pane's origin -- and therefore its iframe src -- is built from.
+_PINNABLE_APP_NAME = "docs-viewer"
+_PINNABLE_APP_REF = f"service:{_PINNABLE_APP_NAME}"
+_PINNABLE_APP_LABEL = f"{_PINNABLE_APP_NAME}-e2elabel"
+
+# The "All apps" heading an app's row currently sits under, read by walking back
+# up the list to the nearest thing that is not a row. The grouping is what the
+# two headings MEAN, so asserting on the heading above the row is what proves an
+# app moved between them -- a heading's mere presence would not.
+_HEADING_ABOVE_APP_JS = """
+(appName) => {
+  const rows = Array.from(document.querySelectorAll('.project-rail-app'));
+  const row = rows.find((candidate) => candidate.textContent.trim() === appName);
+  if (row === undefined) return null;
+  for (let node = row.previousElementSibling; node !== null; node = node.previousElementSibling) {
+    if (!node.classList.contains('project-rail-app')) return node.textContent.trim();
+  }
+  return null;
+}
+"""
+
+
+def _open_all_apps(page: Page) -> None:
+    """Hover the rail open and click through to its "All apps" popover.
+
+    The row only exists on an expanded rail, and the rail expands on hover, so
+    this is the same two moves a user makes. The popover then holds the rail
+    open by itself while the pointer works down the list.
+    """
+    page.locator(".machine-sidebar").hover()
+    page.locator(".project-rail-all-apps").click()
+    expect(page.locator(".project-rail-app").first).to_be_visible(timeout=5000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_pinning_an_app_to_a_project_is_the_same_as_its_membership(tmp_path: Path, page: Page) -> None:
+    """Pinning an app IS filing it in the project, and unpinning is unfiling it.
+
+    There is one concept here, not two: an app is pinned exactly when the
+    project's member list holds its ``service:<name>`` ref. So "All apps" has
+    exactly two headings -- "Pinned in <Project>" and "Unpinned" -- and the round
+    trip through them has to move the app on the server, not in this browser:
+    pinning puts the ref in the registry on disk and grows a rail shortcut,
+    unpinning takes both away again.
+
+    The last assertion is the one the design turns on. Unpinning is removing an
+    object from a view and nothing more, so the app must still be RUNNING
+    afterwards: its live page stays mounted, stays the very element it was, and
+    never leaves the DOM -- which is checked by a stamp nothing serializes and by
+    a MutationObserver counting surfaces removed from the document.
+    """
+    primary_agent_id = "primary-services-agent"
+    app_frame_selector = f'iframe[src*="{_PINNABLE_APP_LABEL}"]'
+    with _running_e2e_server(
+        tmp_path,
+        _APP_PINNING_PORT,
+        primary_agent_id=primary_agent_id,
+        apps=(_PINNABLE_APP_NAME,),
+    ) as (base_url, _agent_info, _session_file):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        # The app's pane is a cross-origin iframe, as every service pane is;
+        # serving it here keeps the tab a real loaded document rather than an
+        # error page.
+        page.route(
+            f"**{_PINNABLE_APP_LABEL}**",
+            lambda route: route.fulfill(status=200, content_type="text/html", body=_FRAMED_PAGE_HTML),
+        )
+        page.goto(base_url)
+
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
+
+        # Nothing has pinned this app, so it starts under "Unpinned" -- there is
+        # no pinned group at all yet -- and the rail carries no shortcut for it.
+        _open_all_apps(page)
+        assert page.evaluate(_HEADING_ABOVE_APP_JS, _PINNABLE_APP_NAME) == "Unpinned"
+        expect(page.locator(f"text=Pinned in {DEFAULT_PROJECT_NAME}")).to_have_count(0)
+        expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(0)
+        assert _PINNABLE_APP_REF not in _project_members(layout_dir)
+
+        # Pin it. The row moves under the project's own heading, the rail grows
+        # a shortcut for it, and -- because pinning IS membership -- the ref
+        # lands in the project's member list on disk.
+        page.locator(f'button[aria-label="Pin {_PINNABLE_APP_NAME}"]').click()
+        page.wait_for_function(
+            f"() => ({_HEADING_ABOVE_APP_JS})({json.dumps(_PINNABLE_APP_NAME)}) === "
+            f"{json.dumps(f'Pinned in {DEFAULT_PROJECT_NAME}')}",
+            timeout=15000,
+        )
+        expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(1)
+        wait_for(
+            lambda: _PINNABLE_APP_REF in _project_members(layout_dir),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="pinning never filed the app as a member of the project",
+        )
+
+        # Open it from that shortcut, so there is a live page to lose. Stamp the
+        # element holding it: nothing serializes the property, so a surface that
+        # answers to it later is necessarily this same element.
+        page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME).click()
+        expect(page.locator(app_frame_selector)).to_have_count(1, timeout=_TRIGGER_TIMEOUT_MS)
+        page.evaluate(
+            f"""
+            () => {{
+              const iframe = document.querySelector({json.dumps(app_frame_selector)});
+              iframe.closest('.si-live-surface').__e2eSurfaceStamp = 'the-original-element';
+            }}
+            """
+        )
+
+        # Unpin it. It goes back under "Unpinned", the shortcut goes with it,
+        # and the ref leaves the project's member list.
+        _open_all_apps(page)
+        page.locator(f'button[aria-label="Unpin {_PINNABLE_APP_NAME}"]').click()
+        page.wait_for_function(
+            f'() => ({_HEADING_ABOVE_APP_JS})({json.dumps(_PINNABLE_APP_NAME)}) === "Unpinned"',
+            timeout=15000,
+        )
+        expect(page.locator(".project-rail-shortcut", has_text=_PINNABLE_APP_NAME)).to_have_count(0)
+        wait_for(
+            lambda: _PINNABLE_APP_REF not in _project_members(layout_dir),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="unpinning never removed the app from the project's member list",
+        )
+
+        # And the app is still running. Unpinning stops nothing: its page is the
+        # same element, still mounted, and no live surface ever left the DOM.
+        after_unpin = page.evaluate(
+            f"""
+            () => {{
+              const iframes = Array.from(document.querySelectorAll({json.dumps(app_frame_selector)}));
+              const iframe = iframes[0] ?? null;
+              return {{
+                frameCount: iframes.length,
+                stamped: iframe === null ? null : (iframe.closest('.si-live-surface').__e2eSurfaceStamp ?? null),
+                removals: window.__e2eRemovedSurfaces.length,
+              }};
+            }}
+            """
+        )
+        assert after_unpin["frameCount"] == 1, f"unpinning stopped the app or forked its page: {after_unpin}"
+        assert after_unpin["stamped"] == "the-original-element", f"unpinning re-created the app's page: {after_unpin}"
+        assert after_unpin["removals"] == 0, f"a live surface left the DOM when the app was unpinned: {after_unpin}"

@@ -96,6 +96,11 @@ export interface SidebarAttrs {
   onOpenTabType: (tabType: QuickAddTabType) => void;
   // Open this machine app in the active view, focusing its tab if it has one.
   onOpenApp: (app: AppEntry) => void;
+  // Pin this app in the active view, or unpin it. Pinning is membership, so
+  // this adds or removes the app's member ref and nothing else: unpinning never
+  // stops the app and touches no other project. Never called on Everything,
+  // which pins nothing.
+  onSetAppPinned: (app: AppEntry, isPinned: boolean) => void;
   // Focus this row's existing tab, or open the object into the active pane.
   onOpenRow: (row: SidebarTabRow) => void;
   // Stop showing this row in the active view. Never offered on Everything:
@@ -305,69 +310,28 @@ function anchorForPointer(event: MouseEvent): MenuAnchor {
 
 // ---------- Per-view app shortcuts ----------
 
-/** Which apps a view has pinned onto, or unpinned from, its shortcut list. */
-export interface ViewPins {
-  // Apps pinned here that the view does not itself show.
-  pinned: string[];
-  // Apps the view shows that the user took off the shortcut list.
-  unpinned: string[];
-}
-
-// Pin state is per view and per browser: it is a preference about this rail's
-// contents rather than a fact about the project, so it rides in localStorage
-// beside the client's other per-browser choices instead of in the registry.
-const PINS_STORAGE_KEY = "si-sidebar-app-pins";
-
-function readPins(): Record<string, ViewPins> {
-  try {
-    const stored = localStorage.getItem(PINS_STORAGE_KEY);
-    if (stored === null) return {};
-    return JSON.parse(stored) as Record<string, ViewPins>;
-  } catch {
-    // A value another version (or a hand edit) left unparseable is not worth
-    // failing the rail over: start from no pins and let the next write fix it.
-    return {};
-  }
-}
-
-function pinsForView(viewId: string): ViewPins {
-  const stored = readPins()[viewId];
-  return { pinned: stored?.pinned ?? [], unpinned: stored?.unpinned ?? [] };
-}
-
-function writePinsForView(viewId: string, pins: ViewPins): void {
-  const all = readPins();
-  all[viewId] = pins;
-  localStorage.setItem(PINS_STORAGE_KEY, JSON.stringify(all));
-}
-
 /**
- * The apps on a view's shortcut list: the ones it shows, minus what the user
- * unpinned, plus what the user pinned from elsewhere on the machine.
+ * The apps pinned in a view, by service name and in member order.
  *
- * The view's own apps are the defaults, which is why unpinning is recorded in
- * its own list rather than by rewriting a pinned one -- an app that joins the
- * project later should appear on the rail without anybody pinning it.
- */
-export function shortcutAppNames(viewAppNames: readonly string[], pins: ViewPins): string[] {
-  const unpinned = new Set(pins.unpinned);
-  const shown = new Set(viewAppNames);
-  return [...viewAppNames.filter((name) => !unpinned.has(name)), ...pins.pinned.filter((name) => !shown.has(name))];
-}
-
-/**
- * Pin or unpin one app for a view, given whether the view shows it anyway.
+ * Pinning an app to a project IS its membership: it is pinned exactly when the
+ * project's member list holds its `service:<name>` ref, so the shortcut list is
+ * simply the app rows of the view's tab list. There is no second pin state to
+ * reconcile, and nothing about pinning is per-browser.
  *
- * Pinning an app the view already shows just clears its unpin; unpinning one it
- * does not show just drops the explicit pin. Neither list keeps an entry that
- * would have no effect, so the stored preference cannot grow without bound.
+ * Everything pins nothing. It is the unfiltered view -- every app on the
+ * machine is already in its tab list -- so shortcutting them all would only
+ * duplicate that list down the rail.
  */
-export function togglePins(pins: ViewPins, appName: string, isShownByView: boolean, wanted: boolean): ViewPins {
-  const pinned = pins.pinned.filter((name) => name !== appName);
-  const unpinned = pins.unpinned.filter((name) => name !== appName);
-  if (wanted && !isShownByView) pinned.push(appName);
-  if (!wanted && isShownByView) unpinned.push(appName);
-  return { pinned, unpinned };
+export function pinnedAppNamesForView(rows: readonly SidebarTabRow[], isEverything: boolean): string[] {
+  if (isEverything) return [];
+  return rows.flatMap((row) => {
+    if (row.kind !== "app") return [];
+    // A fleet ref (`service:browser?session=...`) names no installed app and
+    // answers null, but its row is not of kind "app" either -- this is the ref
+    // grammar being asked rather than trusted.
+    const name = serviceNameFromRef(row.ref);
+    return name === null ? [] : [name];
+  });
 }
 
 // ---------- New projects ----------
@@ -461,7 +425,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   // Expansion is component state rather than a CSS `:hover` rule because
   // picking a row has to collapse the rail again -- otherwise the pointer is
   // left resting on an expanded rail covering the tab it just opened -- and
-  // because an open menu has to hold it open even once the pointer has left.
+  // because the "All apps" popover has to hold it open once the pointer has
+  // left the rail's own box for the list hanging off it.
   let expanded = false;
   let openMenu: OpenMenu | null = null;
   // The project whose settings modal is up, or null while it is closed.
@@ -494,6 +459,23 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       closeMenus();
       m.redraw();
     }
+  }
+
+  /**
+   * Close on the window losing focus, which is how a click into a PANEL is
+   * seen from here.
+   *
+   * Panels are cross-origin iframes, so a press inside one raises no event in
+   * this document at all -- the mousedown handler above never runs, and a menu
+   * left open would sit over the pane the user just clicked into. The window
+   * blurring is the only signal that reaches us, and it covers the rest of the
+   * same family (a click into the surrounding minds chrome, tabbing away, the
+   * window going to the background).
+   */
+  function handleWindowBlur(): void {
+    if (!isAnyMenuOpen()) return;
+    closeMenus();
+    m.redraw();
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -988,24 +970,25 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     });
   }
 
-  function allAppsMenu(attrs: SidebarAttrs, anchor: MenuAnchor, viewName: string, viewAppNames: string[]): m.Vnode {
+  function allAppsMenu(
+    attrs: SidebarAttrs,
+    anchor: MenuAnchor,
+    projectName: string | null,
+    pinnedAppNames: string[],
+  ): m.Vnode {
     return floatingCard({
       anchor,
       placement: "right",
       role: "dialog",
       width: null,
       children: m(AllAppsPicker, {
-        viewName,
-        viewAppNames,
-        shortcutAppNames: shortcutAppNames(viewAppNames, pinsForView(attrs.activeViewId)),
+        projectName,
+        pinnedAppNames,
         onOpenApp: (app: AppEntry) => pick(() => attrs.onOpenApp(app)),
         onTogglePin: (app: AppEntry, wanted: boolean) => {
           // Pinning is not picking: the popover stays open so several apps can
           // be pinned in one visit.
-          writePinsForView(
-            attrs.activeViewId,
-            togglePins(pinsForView(attrs.activeViewId), app.name, viewAppNames.includes(app.name), wanted),
-          );
+          attrs.onSetAppPinned(app, wanted);
         },
       }),
     });
@@ -1059,13 +1042,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       // Every handled WS event ends in an `m.redraw()`, so an `apps_updated`
       // push repaints the rail without a subscription of its own.
       const machineApps = pickableApps();
-      const shownRefs = new Set(attrs.rows.map((row) => row.ref));
-      // An app belongs to this view when the view shows its service ref, built
-      // through `memberRef` so the rail never spells the grammar out itself.
-      const viewAppNames = machineApps
-        .filter((app) => shownRefs.has(memberRef("app", app.name)))
-        .map((app) => app.name);
-      const shortcutApps = shortcutAppNames(viewAppNames, pinsForView(attrs.activeViewId))
+      // The view's pinned apps, which is to say its app members. A name the
+      // machine no longer offers -- a member of an app that has since been
+      // unregistered -- has no icon or URL to draw a shortcut from, so it drops
+      // out here and stays in the tab list, where it can still be removed.
+      const pinnedAppNames = pinnedAppNamesForView(attrs.rows, isEverything);
+      const shortcutApps = pinnedAppNames
         .map((name) => machineApps.find((app) => app.name === name))
         .filter((app): app is AppEntry => app !== undefined);
 
@@ -1083,19 +1065,28 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             rootElement = slot.dom as HTMLElement;
             document.addEventListener("mousedown", handleOutsideMousedown);
             document.addEventListener("keydown", handleKeydown);
+            window.addEventListener("blur", handleWindowBlur);
           },
           onremove: () => {
             rootElement = null;
             document.removeEventListener("mousedown", handleOutsideMousedown);
             document.removeEventListener("keydown", handleKeydown);
+            window.removeEventListener("blur", handleWindowBlur);
           },
           onmouseenter: () => {
             expanded = true;
           },
           onmouseleave: () => {
-            // A menu extends past the rail's own box, so the pointer moving
-            // onto one must not fold the rail up underneath it.
-            if (!isAnyMenuOpen()) expanded = false;
+            // The rail follows the pointer: leaving it folds it back up, and a
+            // menu that was open goes with it rather than being left hanging
+            // over the dock with nothing behind it.
+            //
+            // "All apps" is the one exception. It is a browse-and-pick list
+            // rather than a quick switch, so it holds the rail open while the
+            // pointer works down it -- and it extends past the rail's own box,
+            // which is exactly the case a plain mouseleave would get wrong.
+            if (openMenu?.kind === "allApps") return;
+            closeMenus();
           },
         },
         [
@@ -1121,7 +1112,9 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           ),
           openMenu?.kind === "switcher" ? switcherMenu(attrs, openMenu.anchor) : null,
           openMenu?.kind === "header" && project !== null ? headerMenu(project, openMenu.anchor) : null,
-          openMenu?.kind === "allApps" ? allAppsMenu(attrs, openMenu.anchor, viewName, viewAppNames) : null,
+          openMenu?.kind === "allApps"
+            ? allAppsMenu(attrs, openMenu.anchor, isEverything ? null : viewName, pinnedAppNames)
+            : null,
           openMenu?.kind === "row" ? rowMenu(attrs, openMenu, isEverything) : null,
           settingsModal(attrs),
         ],

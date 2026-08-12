@@ -1712,9 +1712,46 @@ export function openMemberRow(row: SidebarTabRow): void {
  * removal drove it.
  */
 export function removeMemberRow(row: SidebarTabRow): void {
-  void removeMemberRefFromView(row.ref).catch((e: Error) => {
+  removeMemberRefWithAlert(row.ref);
+}
+
+/** Stop showing one ref in the active view, shouting if the server refuses.
+ *  The click-and-forget half of ``removeMemberRefFromView``, shared by the
+ *  rail's row menu and its unpin toggle: unpinning an app IS removing it from
+ *  the view, so both take the same path. */
+function removeMemberRefWithAlert(ref: string): void {
+  void removeMemberRefFromView(ref).catch((e: Error) => {
     alert(`Failed to remove from project: ${e.message}`);
   });
+}
+
+/**
+ * Pin an app in the active view, or unpin it.
+ *
+ * Pinning an app to a project is the same fact as its membership -- it is
+ * pinned exactly when the project's member list holds its ``service:<name>``
+ * ref -- so there is nothing to this beyond adding or removing that member.
+ * Unpinning goes through the same path as any other "remove from project": the
+ * app keeps running, it stays in every other project showing it, and it stays
+ * in Everything. Everything itself pins nothing, so neither verb applies there.
+ */
+export function setAppPinnedInView(app: AppEntry, isPinned: boolean): void {
+  const ref = memberRef("app", app.name);
+  if (!isPinned) {
+    removeMemberRefWithAlert(ref);
+    return;
+  }
+  const viewId = mountedViewId;
+  if (viewId === null || isEverythingView(viewId)) return;
+  void (async () => {
+    try {
+      await addMember(viewId, ref);
+      await refreshProjectsList();
+    } catch (e) {
+      alert(`Failed to pin ${app.name}: ${(e as Error).message}`);
+    }
+    m.redraw();
+  })();
 }
 
 /**
