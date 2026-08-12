@@ -301,7 +301,8 @@ this file's frontmatter (already fetched into `upstream`).
 ## Reporting back
 Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
 `question` (mid-flight gate: a genuine, unresolvable conflict, or the §4c
-review-gate escape hatch), `done` / `stuck` (terminal). Substitutions: `<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
+review-gate escape hatch), `done` / `stuck` (terminal). Substitutions:
+`<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
 `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
@@ -382,14 +383,14 @@ worker to be completed: run the Step 4 gate cycle over it (say what is missing
 via `mngr message`, consume this report into
 `data/.tasks/update-self/reports/consumed/`, re-arm the background poll) and
 audit the replacement, because `done` otherwise ends the poll and a report left
-at the report path would satisfy the next `await` instantly. Do not compose an approval message
-over the gap, and never repackage a worker-disclosed deviation as reassurance.
-A deviation only *stands* when completing it is genuinely out of reach -- the
-worker is gone and the gap cannot be closed from here, or you told the user about
-it and they chose to go ahead anyway; not because the reasoning behind it
-persuaded you. In that case the approval message states the deviation itself,
-plainly, where the user will read it -- it is a caveat, never a footnote to a
-reassurance.
+at the report path would satisfy the next `await` instantly. Do not compose an
+approval message over the gap, and never repackage a worker-disclosed deviation
+as reassurance. A deviation only *stands* when completing it is genuinely out of
+reach -- the worker is gone and the gap cannot be closed from here, or you told
+the user about it and they chose to go ahead anyway; not because the reasoning
+behind it persuaded you. In that case the approval message states the deviation
+itself, plainly, where the user will read it -- it is a caveat, never a footnote
+to a reassurance.
 
 The `done` report is *your* raw material, not the user's message. It is a
 comprehensive, technical digest for the lead -- changelog entries in range, the
