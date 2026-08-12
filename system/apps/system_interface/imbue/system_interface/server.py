@@ -196,8 +196,22 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
     button.disabled = true;
     status.textContent = "Starting...";
     errorBox.hidden = true;
-    const response = await fetch(endpoint, { method: "POST" });
-    const state = await response.json();
+    let response;
+    let state;
+    try {
+      response = await fetch(endpoint, { method: "POST" });
+      state = await response.json();
+    } catch (e) {
+      // The request can fail outright -- this page is served when the tree was
+      // replaced under a running service, and the flow that does that restarts
+      // it. Leaving the button disabled here would strand the page on
+      // "Starting..." with no way forward, so hand the offer back and keep
+      // watching in case the rebuild did start before contact was lost.
+      button.disabled = false;
+      status.textContent = "Lost contact with the workspace; try again.";
+      window.setTimeout(poll, 4000);
+      return;
+    }
     if (!response.ok) {
       button.disabled = false;
       status.textContent = state.detail || "Could not start the rebuild.";
