@@ -39,6 +39,17 @@ def _service_keys_used_by_supervisord() -> list[str]:
     return keys
 
 
+def _programs_defined_by_supervisord() -> list[str]:
+    """Every program and event listener ``system/supervisord.conf`` defines."""
+    names = []
+    for line in _SUPERVISORD_CONF.read_text().splitlines():
+        stripped = line.strip()
+        for prefix in ("[program:", "[eventlistener:"):
+            if stripped.startswith(prefix) and stripped.endswith("]"):
+                names.append(stripped[len(prefix) : -1])
+    return names
+
+
 def _fake_command(tmp_path: Path) -> tuple[Path, Path]:
     """A fake service command that records its args and its own
     ``oom_score_adj`` (so we can observe both the exec forwarding and the tag
@@ -108,6 +119,35 @@ def test_every_service_key_in_supervisord_conf_has_a_band() -> None:
     assert not unbanded, (
         f"supervisord.conf passes service keys with no SERVICE_BANDS entry: {unbanded}. "
         "Add each to SERVICE_BANDS (or pass 'user' if it really is user-created)."
+    )
+
+
+def test_every_supervisord_program_has_an_explicit_band() -> None:
+    # The wrapper-key check above only sees programs that opted into the tagging
+    # prefix. A program that skips it is not untagged -- the backstop listener
+    # tags it from its *program name* instead, and an unrecognized name resolves
+    # to USER_SERVICE (200). For a user-created service that fail-expendable
+    # default is the point; for a built-in it is silently wrong, and here it is
+    # actively harmful, because the backstop *raises* the process to it. That is
+    # how `env-converge` -- the one-shot first-boot provisioner that must stay
+    # PROTECTED, since a shed mid-run leaves the rootfs half-provisioned with
+    # autorestart=false and nothing to finish it -- was being pushed to 200.
+    # Every program this config defines must therefore name its band outright.
+    programs = _programs_defined_by_supervisord()
+    assert programs, f"no program sections found in {_SUPERVISORD_CONF}"
+    implicit = sorted(
+        {
+            program
+            for program in programs
+            if program not in bands.SERVICE_BANDS
+            and program not in bands._NON_SERVICE_PROGRAM_BANDS
+        }
+    )
+    assert not implicit, (
+        f"supervisord.conf defines programs with no explicit band: {implicit}. "
+        "Each falls through to the USER_SERVICE fallback, which sits above every "
+        "built-in. Add each to SERVICE_BANDS (a service) or to "
+        "_NON_SERVICE_PROGRAM_BANDS (infrastructure or a one-shot)."
     )
 
 

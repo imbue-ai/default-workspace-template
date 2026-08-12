@@ -181,9 +181,9 @@ def chat_agent_oom_score_adj(
 # The services are ordered from least- to most-expendable by how much losing one
 # hurts: the two authority paths into the workspace (owner-exec, then the
 # terminal) come first, then the UI, then the sharing stack, then the
-# runtime-state sync (github-sync, opt-in) and the host backup, then the
-# app-watcher, and last the browser stack (its X display, then the
-# coordinator). ``user`` is the single band every *user-created* service shares;
+# runtime-state sync (github-sync, opt-in) and the host backup, then the job
+# scheduler and the app-watcher, and last the browser stack (its X display, then
+# the coordinator). ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
 #
@@ -221,6 +221,14 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # now-removed runtime-backup service used to hold.
     "github-sync": 40,
     "host-backup": 50,
+    # The cron daemon behind the workspace's scheduled jobs. A shed defers those
+    # jobs rather than losing them -- the every-minute checkers fire at the due
+    # hour when the container is up, or the first minute it is back up after a
+    # missed window -- so it sits below the services whose loss is felt at once.
+    # Unlike its neighbours it is not launched through the tagging wrapper (its
+    # command is the stock ``/usr/sbin/cron`` binary, not a workspace entry
+    # point), so this band reaches it via the backstop listener instead.
+    "cron": 55,
     "app-watcher": 60,
     # The shared X display Chromium renders into. Losing it breaks the browser
     # subsystem, so it is *less* expendable than the coordinator below -- whose
@@ -297,13 +305,17 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
 # Expected band per supervisord program whose *program name* is not a
 # SERVICE_BANDS key, for the backstop listener (system/services/oom_priority/bin/oom_tag_backstop.py).
 # The OOM machinery itself (earlyoom, the listener) must stay PROTECTED -- it is
-# what keeps every other band meaningful. deferred-install stays PROTECTED too:
-# shedding the one-shot first-boot installer mid-run would leave provisioning
-# half-done with no auto-restart to finish it.
+# what keeps every other band meaningful. The one-shot programs stay PROTECTED
+# too: both run with ``autorestart=false``, so shedding one mid-run leaves its
+# work half-done with nothing to finish it, and neither is holding the memory
+# that shedding it would free -- env-converge's cost is a half-provisioned
+# rootfs, and eval-worker's memory lives in the agent and browser processes it
+# spawns, which carry far higher bands and are shed long before it.
 _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     "earlyoom": PROTECTED,
     "oom-tag-backstop": PROTECTED,
-    "deferred-install": PROTECTED,
+    "env-converge": PROTECTED,
+    "eval-worker": PROTECTED,
 }
 
 
