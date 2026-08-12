@@ -179,9 +179,10 @@ def chat_agent_oom_score_adj(
 # steerable relative to the other services.
 #
 # The services are ordered from least- to most-expendable by how much losing one
-# hurts: the terminal (raw shell access) and the UI come first, then the sharing
-# stack, then the runtime-state sync (github-sync, opt-in) and the host backup,
-# then the app-watcher, and last the browser stack (its X display, then the
+# hurts: the two authority paths into the workspace (owner-exec, then the
+# terminal) come first, then the UI, then the sharing stack, then the
+# runtime-state sync (github-sync, opt-in) and the host backup, then the
+# app-watcher, and last the browser stack (its X display, then the
 # coordinator). ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
@@ -204,6 +205,13 @@ def chat_agent_oom_score_adj(
 # more expendable (browsers, agent subprocesses, agents, user services) is gone.
 USER_SERVICE: Final[int] = 200
 SERVICE_BANDS: Final[dict[str, int]] = {
+    # The owner-authenticated exec service: SSH-equivalent authority over the
+    # workspace (run a command, read/write a file, edit the sharing grants). A
+    # web-only workspace has no desktop and no SSH client, so this is the *only*
+    # way its owner can act on it -- including to repair anything else that
+    # broke -- and it is the single writer of the sharing grants for the desktop
+    # too. It is also a small HTTP server, so shedding it frees almost nothing.
+    "owner-exec": 5,
     "terminal": 10,
     "system_interface": 20,
     # The sharing stack (gateway + caddy + frpc children inherit its band): a

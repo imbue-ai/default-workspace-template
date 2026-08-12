@@ -44,6 +44,7 @@ def _aged(
 # User-created services (the "user" key) are excluded -- they are asserted
 # separately as sitting above every one of these.
 _BUILTIN_SERVICE_ORDER = (
+    "owner-exec",
     "terminal",
     "system_interface",
     "share-gateway",
