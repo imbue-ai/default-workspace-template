@@ -1659,20 +1659,27 @@ body {
 /* A transient fill under the pointer, the same affordance the rail's rows use.
    An inactive tab is otherwise unpainted. Spelled out down the whole chain
    because that is the shape dockview paints tab backgrounds with, and a shorter
-   selector would simply lose to it.
-
-   The fill is rounded on all four corners, unlike the tab's own card shape
-   (rounded top, square bottom). The square bottom belongs to the ACTIVE tab,
-   which continues into the pane below it; a hovered inactive tab continues
-   into nothing, and at the strip's edges its square bottom sat directly against
-   the pane's rounded corner, leaving a boxy notch between the two shapes. */
+   selector would simply lose to it. The fill wears the tab's own card shape --
+   rounded top, square bottom -- because it reaches down to the pane and reads
+   as a preview of the join the active tab has. */
 .dockview-theme-light
   .dv-groupview
   > .dv-tabs-and-actions-container
   .dv-tabs-container
   > .dv-tab.dv-inactive-tab:hover {
   background-color: rgba(0, 0, 0, 0.04);
-  border-radius: var(--si-pane-radius);
+}
+
+/* Complete that join at the strip's left edge. When the FIRST tab is hovered,
+   the pane corner under it squares off -- the same move the active first tab
+   makes -- so the fill's square bottom meets a square pane corner. Without
+   this, the fill ended in a straight line directly above the pane's rounded
+   corner, and the concave sliver of canvas between the two shapes read as a
+   boxy cutoff instead of the fill reaching the pane. */
+.dockview-theme-light
+  .dv-groupview:has(> .dv-tabs-and-actions-container .dv-tabs-container > .dv-tab:first-child.dv-inactive-tab:hover)
+  > .dv-content-container {
+  border-top-left-radius: 0;
 }
 
 /* dockview outlines a focused tab in the (now transparent) divider color, so
