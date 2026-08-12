@@ -1,5 +1,6 @@
 import m from "mithril";
 import { describe, expect, it, vi } from "vitest";
+import * as embedContract from "@minds/embed-contract";
 import { resetEmbedEndpointForTesting } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
@@ -769,7 +770,17 @@ describe("openPermissionRequest", () => {
   });
 });
 
-describe("shell permission resolutions", () => {
+// The instant card flip exists only once the vendored embed contract defines
+// PERMISSION_REQUEST_RESOLVED, which arrives with the next mngr release sync
+// (mngr-internal#224 adds it; this repo deliberately does not edit
+// system/vendor by hand). Until then the shell never sends the message and the
+// card falls back to the transcript-driven flip, so these tests skip -- and
+// un-skip themselves the moment the sync lands, since the probe reads the
+// vendored contract itself. A namespace import on purpose: a named import of a
+// missing export could fail at module link time and take the whole file down.
+const HAS_RESOLVED_MESSAGE = "PERMISSION_REQUEST_RESOLVED" in embedContract;
+
+describe.skipIf(!HAS_RESOLVED_MESSAGE)("shell permission resolutions", () => {
   it("rejects an off-shape payload without recording anything", () => {
     // Delivered through the real contract, so this covers the validation the
     // shell's messages actually pass through -- not a second copy of it.
