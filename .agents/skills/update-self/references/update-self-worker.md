@@ -347,7 +347,9 @@ record which branch applied (with its evidence) in your report:
   it -- manufacturing exactly the local divergence a future update would have
   to reconcile -- so on a clean pull the skip is the correct outcome, not a
   shortcut. Your report states that this branch fired and shows the evidence:
-  `gates_required: false` and the empty impact list.
+  `gates_required: false` and an impact analysis with no user-created code in
+  it (built-in impacts -- a service the lead must restart -- do not block the
+  skip).
 
 - **Otherwise run the real gates, at full scope**: follow the "Review gates"
   section of `.agents/shared/worker/references/harden-creation.md` (unattended
@@ -422,8 +424,9 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     built-in case and does not hot-apply the user case.
   - **Validation** -- suites/boots/Playwright run, all passing; **which branch
     of the 4c review-gate rule applied, with its evidence**: either the
-    clean-pull skip (`gates_required: false` from classify-merge, the empty
-    impact list, and no in-branch edits of your own) or the gate run's
+    clean-pull skip (`gates_required: false` from classify-merge, an impact
+    analysis with no user-created code in it, and no in-branch edits of your
+    own) or the gate run's
     artifacts (the autofix fix commits kept vs
     reverted -- or "gate ran clean, no fixes proposed" -- and the
     architecture-gate verdicts). A report claiming the gates ran must carry
