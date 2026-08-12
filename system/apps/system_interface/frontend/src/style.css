@@ -1671,6 +1671,66 @@ body {
   cursor: pointer;
 }
 
+/* ── Tab overflow: the "N more" dropdown at the strip's right edge ──
+   dockview builds this from theme variables this app sets to transparent (the
+   divider is the tab gap, the group background is the canvas), so untouched it
+   rendered as bare text floating over the pane. It is a menu, so it wears the
+   same chrome as every other floating card: primary surface, hairline border,
+   8px radius, the overlay shadow, and 32px rows with the shared hover fill. */
+.dockview-theme-light .dv-tabs-overflow-dropdown-default {
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dockview-theme-light .dv-tabs-overflow-dropdown-default:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.dockview-theme-light .dv-tabs-overflow-container {
+  min-width: 160px;
+  padding: 4px 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background-color: var(--color-surface);
+  box-shadow:
+    0 1px 1px 0 rgba(0, 0, 0, 0.08),
+    0 3px 12px 0 rgba(0, 0, 0, 0.08);
+}
+
+/* Rows. The strip's card shape does not belong here -- inside a menu a tab is
+   just a row -- so the radius, the fixed equal width and the per-row divider
+   all stand down, and the active tab is told apart by weight rather than by a
+   second surface. */
+.dockview-theme-light .dv-tabs-overflow-container .dv-tab {
+  width: auto;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 0;
+  background-color: transparent;
+  cursor: pointer;
+}
+
+.dockview-theme-light .dv-tabs-overflow-container .dv-tab:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.dockview-theme-light .dv-tabs-overflow-container .dv-tab.dv-active-tab .dv-default-tab-content {
+  font-weight: 600;
+}
+
+/* The inline minus and kebab belong to the strip, where the tab is a card with
+   room for controls; in the menu they would crowd every row. The row itself
+   focuses the tab, and the controls are there once it is. */
+.dockview-theme-light .dv-tabs-overflow-container .dv-custom-tab-actions {
+  display: none;
+}
+
 /* Bolding is confined to the title span. The tab's width is fixed by the
    equal-width rule, so the heavier face cannot reflow the strip -- at worst a
    long title fades a character earlier while hovered. */
