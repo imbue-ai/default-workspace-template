@@ -148,7 +148,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           { class: "flex shrink-0 items-center text-text-faint" },
           // An app that registered an icon wears it here too; one that did not
           // keeps the generic "opens somewhere" glyph this list has always used.
-          m.trust(appIconMarkup(app.icon, ROW_GLYPH_SIZE, icon("external-link", { size: ROW_GLYPH_SIZE }))),
+          m.trust(appIconMarkup(app.icon, ROW_GLYPH_SIZE, icon("external-link", { size: ROW_GLYPH_SIZE }), app.name)),
         ),
         m("span", { class: "min-w-0 flex-1 truncate" }, app.name),
         isPinned === null
