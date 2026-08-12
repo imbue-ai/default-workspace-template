@@ -781,7 +781,7 @@ def test_a_reveal_whose_asset_comes_back_as_html_is_rolled_back(repo: Path) -> N
 
 
 def test_a_frontend_that_was_already_broken_is_reported_not_rolled_back(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Rolling an unrelated backend change back would not fix a frontend that was
     # already broken when the reveal started -- it would just lose the change.
@@ -797,6 +797,12 @@ def test_a_frontend_that_was_already_broken_is_reported_not_rolled_back(
     code = _reveal(runner, http, _FakeSpawner(), repo_root)
 
     assert code == 0
+    # The caller reports the closing line to the user, so it must not sign off
+    # on a UI we have just established they cannot see -- the whole point of
+    # probing the frontend was that the backend's own health check cannot.
+    closing_line = capsys.readouterr().err.strip().splitlines()[-1]
+    assert "confirmed healthy" not in closing_line
+    assert "not serving a working frontend" in closing_line
 
 
 # --- preconditions ----------------------------------------------------------

@@ -302,7 +302,11 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 
 Interpret the exit code and report it to the user:
 
-- `0` -- revealed; the live UI is updated and healthy.
+- `0` -- revealed; the live UI is updated and healthy. One variant to read for:
+  if the workspace's frontend was *already* broken when the reveal started, the
+  change still lands and still exits `0`, but the final line names the breakage
+  instead of confirming health. Pass that finding on -- it is a separate
+  problem, not something rolling this change back would have fixed.
 - `2` -- the change was bad and was **automatically rolled back**; the live UI is
   healthy on the previous revision, but the requested change did **not** land.
   Report this and diagnose before retrying.

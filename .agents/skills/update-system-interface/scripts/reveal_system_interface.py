@@ -38,7 +38,9 @@ What it does, given the pre-merge revision (``--rollback-to``):
    it. This is scoped to a *regression* -- the same probe runs before the reveal
    too, and only a frontend that was serving beforehand has to be serving after.
    A workspace that arrived already broken gets the finding reported instead,
-   because rolling an unrelated change back would not fix it.
+   because rolling an unrelated change back would not fix it -- reported both as
+   a warning and in place of the closing "confirmed healthy" line, which must
+   never be the last word over a UI the user cannot see.
 8. On ANY failure, restore the served tree to the known-good revision (as a
    forward revert commit), put the snapshotted bundle back, and re-probe to
    *confirm* the UI is back. Restoring the snapshot needs neither ``npm`` nor a
@@ -673,9 +675,14 @@ def _apply_reveal(
     spawner: Spawner,
     sleeper: Callable[[float], None],
     is_frontend_expected: bool,
-) -> None:
+) -> str | None:
     """Refresh deps, build, restart, and reload as applicable. Raises
-    :class:`RevealFailed` the moment any step does not end healthy."""
+    :class:`RevealFailed` the moment any step does not end healthy.
+
+    Returns the frontend failure this reveal decided *not* to roll back for --
+    one the workspace arrived with -- so the caller can report it instead of
+    signing off on a UI it knows the user cannot see. ``None`` when the live UI
+    is serving."""
     _refresh_dependencies(changes, repo_root, runner)
     if changes.frontend:
         _run_checked(
@@ -734,6 +741,7 @@ def _apply_reveal(
     # keeps rendering from whatever it had already fetched, and a restart quick
     # enough not to look unreachable never triggers a reload from anywhere else.
     _refresh_workspace_view(repo_root, runner)
+    return frontend_failure
 
 
 def _restore_tree(
@@ -925,7 +933,7 @@ def reveal(
 
     try:
         try:
-            _apply_reveal(
+            unresolved_frontend_failure = _apply_reveal(
                 changes,
                 repo_root,
                 resolved_base,
@@ -970,6 +978,17 @@ def reveal(
     finally:
         _discard_snapshot(saved_bundle)
 
+    if unresolved_frontend_failure is not None:
+        # The change landed and there is nothing here to roll back, so this is
+        # still a 0 -- but the last line the caller reads must not sign off on a
+        # UI we just established the user cannot see.
+        sys.stderr.write(
+            "revealed: the change landed and the backend is healthy, but the live UI is still "
+            f"not serving a working frontend: {unresolved_frontend_failure}. That was already "
+            "true before this reveal, so it was not rolled back for it -- report it and "
+            "diagnose it separately.\n"
+        )
+        return 0
     sys.stderr.write(
         "revealed: the live system interface is updated and confirmed healthy.\n"
     )
