@@ -145,6 +145,7 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
   const button = document.getElementById("rebuild");
   const status = document.getElementById("status");
   const errorBox = document.getElementById("error");
+  let pendingPoll;
 
   function render(state) {
     // Reloading is driven by is_built, never by the phase. The phase records
@@ -163,7 +164,7 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
       button.disabled = true;
       status.textContent = (state.detail || "Working") + "...";
       errorBox.hidden = true;
-      window.setTimeout(poll, 2000);
+      schedulePoll(2000);
       return;
     }
     // Nothing running: never started, failed, or finished and then lost the
@@ -179,7 +180,16 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
     }
     errorBox.hidden = !state.error;
     errorBox.textContent = state.error || "";
-    window.setTimeout(poll, 10000);
+    schedulePoll(10000);
+  }
+
+  // One pending poll at a time, whichever path armed it. render() runs both as
+  // the tail of a poll and directly from the click handler, so scheduling
+  // without clearing would leave those two chains re-arming each other for as
+  // long as the page is open, and add another on every click.
+  function schedulePoll(delayMilliseconds) {
+    window.clearTimeout(pendingPoll);
+    pendingPoll = window.setTimeout(poll, delayMilliseconds);
   }
 
   async function poll() {
@@ -188,7 +198,7 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
       render(await response.json());
     } catch (e) {
       status.textContent = "Lost contact with the workspace while rebuilding; retrying...";
-      window.setTimeout(poll, 4000);
+      schedulePoll(4000);
     }
   }
 
@@ -209,7 +219,7 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
       // watching in case the rebuild did start before contact was lost.
       button.disabled = false;
       status.textContent = "Lost contact with the workspace; try again.";
-      window.setTimeout(poll, 4000);
+      schedulePoll(4000);
       return;
     }
     if (!response.ok) {
