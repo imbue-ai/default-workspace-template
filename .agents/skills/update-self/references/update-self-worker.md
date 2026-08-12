@@ -366,7 +366,11 @@ record which branch applied (with its evidence) in your report:
   keep fixes that touch the merged set or local code, and **revert fixes that
   would diverge a clean-pulled upstream file from the release** (note them as
   `submit-upstream-changes` candidates instead). The gate's job here is the
-  reconciliation and local breakage, not improving upstream's code.
+  reconciliation and local breakage, not improving upstream's code. "Clean-pulled"
+  here means *still* byte-identical to the release: a file you edited in-branch
+  yourself (a 4a mirror edit) is local code for this rule even though
+  `classify-merge` lists it as pulled-in -- those edits are a reason the gate is
+  running, so fixes to them are kept and judged on their merits.
 
 If you believe the gates should not run -- or should run at some other scope --
 in a situation this rule does not cover, that is a `question` gate for the lead
