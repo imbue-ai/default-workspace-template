@@ -60,6 +60,7 @@ class ShareMaterials:
         relay_token: str,
         connector_url: str,
         broker_url: str,
+        chrome_origin: str,
     ) -> None:
         self.workspace_domain = workspace_domain
         self.relay_host = relay_host
@@ -67,6 +68,11 @@ class ShareMaterials:
         self.relay_token = relay_token
         self.connector_url = connector_url
         self.broker_url = broker_url
+        # The hosted minds chrome origin (e.g. https://minds.imbue.com) allowed
+        # to embed this workspace in an iframe and probe /_health cross-origin.
+        # Empty when the share was created by an older client that did not set
+        # SHARE_CHROME_ORIGIN -- embedding + CORS then stay disabled.
+        self.chrome_origin = chrome_origin
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ShareMaterials):
@@ -90,6 +96,8 @@ def parse_share_materials(text: str) -> ShareMaterials | None:
         relay_token=values["SHARE_RELAY_TOKEN"],
         connector_url=values["SHARE_CONNECTOR_URL"].rstrip("/"),
         broker_url=values["SHARE_BROKER_URL"].rstrip("/"),
+        # Optional: absent for shares created before the hosted-chrome rollout.
+        chrome_origin=values.get("SHARE_CHROME_ORIGIN", "").rstrip("/"),
     )
 
 

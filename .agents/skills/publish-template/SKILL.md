@@ -706,10 +706,17 @@ mechanism. Present the proposal to the user ONCE, in plain language:
 
 - the **title** and **description**;
 - the **repo name** (defaults to `slug`);
-- the **visibility** (default: **private**) -- and, if they choose public,
-  say in the same breath that the template ships under the **MIT license**,
-  so the licensing consequence is in front of them at the moment they make the
-  choice rather than after;
+- the **visibility** (default: **private**);
+- the **license**. Propose **MIT** and say what it means in one sentence:
+  anyone who gets the repo may use, change, and ship it, including
+  commercially, as long as they keep the copyright line. Give the copyright
+  holder you intend to write (their name, or the GitHub account) and let them
+  correct it. This is a real question, not a notification -- publishing under a
+  license they did not choose is not yours to decide. If they decline, the repo
+  ships with no `LICENSE`, which means nobody may reuse it; say that, since it
+  makes the template unusable to an adopter, and record their choice either
+  way. A private repo needs this as much as a public one: anyone they later
+  share it with is in the same position;
 - **what it will install** -- the `[environment]` declarations from
   `template.toml`, in plain language ("adopting this also installs
   poppler-utils"), or that it needs nothing beyond the stock environment. An
@@ -802,12 +809,29 @@ title: "The \"Daily\" Digest: v2"
 hand-edit must match it, or the validator's front-matter/TOML comparison fails
 the publish.
 
+**Write the license they chose (cwd = `$WT`).** If they accepted MIT, copy the
+canonical text rather than typing one from memory -- a hand-written license is
+not a license:
+
+```bash
+sed -e "s/<YEAR>/$(date +%Y)/" -e "s/<COPYRIGHT HOLDER>/<holder they confirmed>/" \
+    /home/user/workspace/.agents/skills/publish-template/references/LICENSE-MIT.txt \
+    > "$WT/LICENSE"
+sed -i "s|MINDS_TEMPLATE_LICENSE|Released under the [MIT License](LICENSE).|" "$WT/README.md"
+```
+
+If they declined, write no `LICENSE` and substitute the placeholder with the
+truth instead: `No license -- all rights reserved. Ask the author before
+reusing this.` Either way the placeholder must go; `validate_template.py`
+fails on a leftover `MINDS_TEMPLATE_LICENSE`, which is what stops a repo
+shipping with its License section unfilled.
+
 **Commit before §8's push.** Write any confirmed title/description edits into
 `template.md`'s front-matter (any activation requirement the publisher
 flagged as missing or wrong into its "Requirements" section AND the matching
 `[requirements]` entry in `template.toml`, any thumbnail edits into the
-`.svg`, and any README rewrites into `README.md`), and COMMIT that change with
-cwd = `$WT` before proceeding to §7/§8.
+`.svg`, and any README rewrites into `README.md`), and COMMIT that change --
+together with `LICENSE` -- with cwd = `$WT` before proceeding to §7/§8.
 
 Never push first and fix up the manifest or thumbnail with a second
 commit-and-re-push. This commit -- like everything else in this skill after
