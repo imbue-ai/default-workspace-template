@@ -370,7 +370,11 @@ kept/reverted, or a clean gate run, plus architecture-gate verdicts). Likewise
 a side-picked conflict must carry the discarded-side accounting, not a bare
 "superset" claim. A report missing any of this -- including one that openly
 discloses skipping or narrowing a gate outside the rule -- goes back to the
-worker via `mngr message` to be completed. Do not compose an approval message
+worker to be completed: run the Step 4 gate cycle over it (say what is missing
+via `mngr message`, consume this report into
+`data/.tasks/update-self/reports/consumed/`, re-arm the background poll) and
+audit the replacement, because `done` otherwise ends the poll and a report left
+at the report path would satisfy the next `await` instantly. Do not compose an approval message
 over the gap, and never repackage a worker-disclosed deviation as reassurance:
 if you proceed while any deviation stands, the approval message must state the
 deviation itself where the user will read it.
