@@ -35,7 +35,28 @@ import {
 } from "dockview-core";
 import { ChatPanel } from "./ChatPanel";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
-import { IframePanel, IFRAME_PANEL_PANEL_ID_ATTR, reloadIframesForService } from "./IframePanel";
+import { IframePanel, IFRAME_PANEL_LIVE_KEY_ATTR, reloadIframesForService } from "./IframePanel";
+import {
+  BROWSER_SERVICE_NAME,
+  bindSlot,
+  destroyLiveSurface,
+  duplicateLiveKeyPanelIds,
+  ensureLiveSurface,
+  initializeLiveLayer,
+  liveKeyForPanel,
+  liveKeyForRef,
+  liveSurfaceParams,
+  reconcileLiveSurfaces,
+  rekeyLiveSurface,
+  scheduleReconcile,
+  sessionParamFromUrl,
+  setDragInProgress,
+  unbindSlot,
+  type LiveKey,
+  type LiveSurface,
+  type PanelParams,
+  type PanelType,
+} from "./liveSurfaces";
 import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
 import { CreateAgentModal } from "./CreateAgentModal";
@@ -129,11 +150,6 @@ const TERMINAL_PANEL_ID_PREFIX = "terminal-session-";
 const LAUNCHER_PANEL_ID_PREFIX = "new-tab-";
 const LAUNCHER_PANEL_TITLE = "New tab";
 
-// The per-workspace browser fleet's service name. Its panes are the one kind
-// addressed per session rather than per service, so several places have to tell
-// it apart from an ordinary app.
-const BROWSER_SERVICE_NAME = "browser";
-
 /** Split the body of a ``service:`` ref into its service name and an
  *  optional ``?query`` suffix. Plain ``service:web`` yields
  *  ``{name: "web", query: ""}``; ``service:browser?session=2`` yields
@@ -205,33 +221,6 @@ function rebuildAgentTerminalUrl(url: string): string | null {
   // The name-less variant is the ChatPanel fallback for an agent that isn't
   // in the local cache yet; rebuild it without a name too.
   return args.length >= 3 ? buildAgentTerminalUrl(args[2]) : `${getTerminalUrl()}?arg=_&arg=agent`;
-}
-
-type PanelType = "chat" | "iframe" | "subagent" | "launcher";
-
-interface PanelParams {
-  panelType: PanelType;
-  agentId: string;
-  chatAgentId?: string;
-  url?: string;
-  title?: string;
-  subagentSessionId?: string;
-  // Workspace service name this iframe is tied to (e.g. "web", "api").
-  // Set only for iframe tabs that proxy an actual workspace service; left
-  // undefined for ad-hoc URL tabs, terminals, and agent-owned iframes.
-  // Drives both the WS-driven `layout_op` (op="refresh") service-wide
-  // reload match and the presence of the per-tab Refresh button.
-  serviceName?: string;
-  // Set only on persistent-terminal iframe tabs. ``terminalSessionName`` is
-  // the named tmux session the tab attaches to (attach-or-create); its
-  // presence is what marks a panel as a terminal (drives the banner, the
-  // Destroy button, and layout-restore reattach). ``terminalId`` is a
-  // per-tab id passed into the ttyd URL so the backend can map this tab's
-  // tmux client back to us for live title tracking. ``terminalSessionId`` is
-  // the immutable ``#{session_id}`` used to reflect a rename onto the tab.
-  terminalSessionName?: string;
-  terminalId?: string;
-  terminalSessionId?: string;
 }
 
 // Modal state
@@ -348,64 +337,16 @@ const REMOTE_APPLY_SUPPRESS_MS = AUTOSAVE_DEBOUNCE_MS * 2 + 1000;
 // just-built view dominates while the chat stays legible.
 const OPEN_TAB_SPLIT_FRACTION = 0.6;
 
-function createMithrilRenderer(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  component: m.ComponentTypes<any, any>,
-  attrs: Record<string, unknown>,
-): IContentRenderer {
-  const element = document.createElement("div");
-  element.style.width = "100%";
-  element.style.height = "100%";
-  element.style.display = "flex";
-  element.style.flexDirection = "column";
-
-  // dockview keeps inactive tabs mounted (defaultRenderer: "always"), and
-  // mithril's m.redraw() is global, so a hidden panel's component keeps
-  // redrawing while its element is collapsed to zero size. Thread dockview's
-  // authoritative panel-visibility signal into the component (as the
-  // ``isVisible`` attr) so it can skip work that must not run while hidden --
-  // e.g. ChatPanel's scroll management, which would otherwise corrupt the
-  // retained scroll position against the zero-sized element. Defaults to true
-  // so a component mounted without a panel api behaves as before.
-  let panelVisible = true;
-  let visibilityDisposable: { dispose: () => void } | null = null;
-
-  return {
-    element,
-    init(parameters) {
-      panelVisible = parameters.api.isVisible;
-      visibilityDisposable = parameters.api.onDidVisibilityChange((event) => {
-        panelVisible = event.isVisible;
-        // Redraw so the component re-runs its lifecycle hooks with the new
-        // visibility -- in particular so ChatPanel restores its scroll position
-        // on the first redraw after the tab is shown again.
-        m.redraw();
-        // A tab switch changes which chat is visible; report so the OOM
-        // prioritizer re-scores (a visible chat is more protected).
-        reportChatTabActivity();
-      });
-      m.mount(element, { view: () => m(component, { ...attrs, isVisible: panelVisible }) });
-    },
-    dispose() {
-      if (visibilityDisposable !== null) {
-        visibilityDisposable.dispose();
-        visibilityDisposable = null;
-      }
-      m.mount(element, null);
-    },
-  };
-}
-
-/** Reload the single iframe rendered for ``panelId``.
+/** Reload the single iframe rendered for the live page ``key``.
  *
- *  Looks the element up by its panel-id attribute and triggers a same-origin
+ *  Looks the element up by its live-key attribute and triggers a same-origin
  *  ``contentWindow.location.reload()``. A cross-origin panel throws a
  *  SecurityError on that call, so the fallback re-assigns ``src`` to force the
  *  browser to refetch. Shared by the per-tab Refresh button and the
  *  agent-driven ``refresh`` op. */
-function reloadIframeForPanel(panelId: string): void {
+function reloadIframeForKey(key: LiveKey): void {
   const iframe = document.querySelector<HTMLIFrameElement>(
-    `iframe[${IFRAME_PANEL_PANEL_ID_ATTR}="${CSS.escape(panelId)}"]`,
+    `iframe[${IFRAME_PANEL_LIVE_KEY_ATTR}="${CSS.escape(key)}"]`,
   );
   if (!iframe) return;
   try {
@@ -424,7 +365,8 @@ function reloadIframeForPanel(panelId: string): void {
 /** Reload whatever a tab is showing, whichever kind of tab it is.
  *
  *  A service-backed iframe reloads service-wide (every pane on that service,
- *  which is what an app's own Refresh has always meant); any other iframe
+ *  which is what an app's own Refresh has always meant, and which now reaches
+ *  backgrounded panes too since their pages are still live); any other iframe
  *  reloads just itself; a chat refetches its transcript snapshot and
  *  reconnects its stream. A subagent view owns its own stream and exposes no
  *  refetch, so it is re-rendered. */
@@ -451,7 +393,8 @@ function refreshPanelContent(panelId: string): void {
     reloadIframesForService(params.serviceName);
     return;
   }
-  reloadIframeForPanel(panelId);
+  const key = liveKeyForPanel(panelId, params);
+  if (key !== null) reloadIframeForKey(key);
 }
 
 // ---------- Tabs ----------
@@ -776,7 +719,7 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
   if (params.serviceName === BROWSER_SERVICE_NAME) {
     // The browser's name lives in the pane's ``?session=<name>`` query, set on
     // both freshly-opened and layout-restored panes.
-    const browserName = browserSessionFromUrl(params.url);
+    const browserName = sessionParamFromUrl(params.url);
     if (browserName === null) return null;
     return {
       label: "Close browser session",
@@ -1208,18 +1151,22 @@ function openBrowserSessionTab(name: string, targetGroup?: DockviewGroupPanel | 
   return !alreadyOpen;
 }
 
-/** Close the (optimistic) pane for browser ``name`` if it is open. Used when a
- *  create POST fails after the pane was opened on modal-accept: the launch
- *  never registered the name, so the pane would otherwise sit on a stale
- *  "Browser starting…" / "browser closed" banner forever. Dedup keys panes on
- *  the resolved ``service:browser?session=<name>`` URL, so the lookup mirrors
- *  ``openBrowserSessionTab``'s ref. */
+/** Close the (optimistic) pane for browser ``name`` if it is open, and tear its
+ *  page down with it. Used when a create POST fails after the pane was opened
+ *  on modal-accept: the launch never registered the name, so the pane would
+ *  otherwise sit on a stale "Browser starting…" / "browser closed" banner
+ *  forever. Closing a tab normally leaves the page running -- but there is no
+ *  object here to keep running, so this is one of the destroy paths. Dedup keys
+ *  panes on the resolved ``service:browser?session=<name>`` URL, so the lookup
+ *  mirrors ``openBrowserSessionTab``'s ref. */
 function closeBrowserSessionTab(name: string): void {
   if (!dockview) return;
   const panelId = findIframePanelIdForServiceRef(`browser?session=${name}`);
-  if (panelId === null) return;
-  const panel = dockview.panels.find((p) => p.id === panelId);
-  if (panel) dockview.removePanel(panel);
+  if (panelId !== null) {
+    const panel = dockview.panels.find((p) => p.id === panelId);
+    if (panel) dockview.removePanel(panel);
+  }
+  destroyLiveSurface(`service:${BROWSER_SERVICE_NAME}?session=${name}`);
 }
 
 // ---------- The "+" and the New Tab launcher ----------
@@ -1888,6 +1835,25 @@ function isTerminalPanelParams(pp: PanelParams | undefined): boolean {
   return pp?.terminalSessionName !== undefined || pp?.terminalId !== undefined;
 }
 
+/**
+ * Change what a panel is showing.
+ *
+ * The params object is shared with the live page that renders it, so the
+ * mutation reaches the screen and the next autosave at once and nothing else
+ * has to be plumbed. What does need saying is identity: a terminal is filed
+ * under ``panel:<id>`` until its tmux session name is allocated, and moves
+ * again if the session is renamed, so a mutation that changes the object's name
+ * re-files its page under the new one -- without touching the page.
+ */
+function mutatePanelParams(panelId: string, mutate: (params: PanelParams) => void): void {
+  const params = panelParams.get(panelId);
+  if (params === undefined) return;
+  const previousKey = liveKeyForPanel(panelId, params);
+  mutate(params);
+  const nextKey = liveKeyForPanel(panelId, params);
+  if (previousKey !== null && nextKey !== null) rekeyLiveSurface(previousKey, nextKey);
+}
+
 /** A fresh id under ``prefix``, unique for as long as this workspace runs. */
 function mintId(prefix: string): string {
   const unique = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now());
@@ -2034,11 +2000,14 @@ function addPanelForRef(ref: string, requesterAgentId: string, addOptions: AddPa
     });
     void allocateTerminalName()
       .then((sessionName) => {
-        const stored = panelParams.get(panelId);
-        if (!stored) return;
-        stored.terminalSessionName = sessionName;
-        stored.title = sessionName;
-        stored.url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
+        if (!panelParams.has(panelId)) return;
+        // Also the point where the page stops being addressed by its panel and
+        // starts being addressed by the tmux session it attached to.
+        mutatePanelParams(panelId, (stored) => {
+          stored.terminalSessionName = sessionName;
+          stored.title = sessionName;
+          stored.url = buildSessionTerminalUrl(sessionName, terminalId, primaryWorkDir());
+        });
         dockview?.panels.find((p) => p.id === panelId)?.api.setTitle(sessionName);
         m.redraw();
         scheduleSave();
@@ -2444,19 +2413,6 @@ function memberRefBody(ref: string): string {
   return separator === -1 ? ref : ref.substring(separator + 1);
 }
 
-/** The fleet browser a URL addresses (its ``?session=<name>``), or null when
- *  the URL names none or cannot be parsed. Each fleet browser is a separately
- *  addressable pane, so this is what keeps two of them from collapsing onto one
- *  ``service:browser`` member. */
-function browserSessionFromUrl(url: string | undefined): string | null {
-  if (!url) return null;
-  try {
-    return new URL(url, location.origin).searchParams.get("session");
-  } catch {
-    return null;
-  }
-}
-
 /**
  * The member ref a panel is filed under, or null when it is not a member at all.
  *
@@ -2477,7 +2433,7 @@ async function memberRefForPanel(panelId: string): Promise<string | null> {
   }
   if (params.terminalSessionName) return memberRef("terminal", params.terminalSessionName);
   if (params.serviceName) {
-    const browserSession = params.serviceName === BROWSER_SERVICE_NAME ? browserSessionFromUrl(params.url) : null;
+    const browserSession = params.serviceName === BROWSER_SERVICE_NAME ? sessionParamFromUrl(params.url) : null;
     return browserSession === null ? memberRef("app", params.serviceName) : memberRef("browser", browserSession);
   }
   return memberRef("url", await shortHash(panelId));
@@ -2578,6 +2534,10 @@ function recordMembership(panelId: string): void {
  * drops it the next time it is saved.
  */
 async function forgetDestroyedObject(ref: string, panelId: string): Promise<void> {
+  // The one thing that ends a live page. Closing a tab, switching view or
+  // re-arranging all leave it running and merely stop showing it; there is
+  // nothing left to show once the object itself is off the machine.
+  destroyLiveSurface(liveKeyForRef(ref, panelId));
   if (dockview) {
     const panel = dockview.panels.find((p) => p.id === panelId);
     if (panel) dockview.removePanel(panel);
@@ -2679,7 +2639,12 @@ function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boolean =
   // fire a launcher into the middle of that.
   isApplyingLayout = true;
 
-  // Tear the outgoing layout down BEFORE seeding the incoming params.
+  // Tear the outgoing layout down BEFORE seeding the incoming params. Only the
+  // panels go: they are slots, and a slot's disposal merely stops a live page
+  // from being shown -- the page itself stays mounted and hidden until an
+  // incoming slot picks it up again, so an object both views hold never
+  // reloads and never forks.
+  //
   // ``fromJSON`` disposes the current panels before creating the new ones, and
   // ``onDidRemovePanel`` deletes each disposed panel's ``panelParams`` entry.
   // Panel ids are deterministic (``chat-<agent-id>``,
@@ -2708,7 +2673,19 @@ function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boolean =
     // the url is rebuilt from it on the current host, preserving any
     // ``?query`` (e.g. a browser pane's ``session=<name>``). This is what
     // keeps saved layouts portable across hosts and shares.
-    for (const [, params] of panelParams) {
+    //
+    // None of it may touch an object whose page is already live: every one of
+    // these rewrites changes an iframe's ``src``, which is a reload, and the
+    // whole point is that the page carries on. So a live page's own params
+    // replace the seeded hint outright -- that is also what makes the next
+    // autosave record what is really on screen rather than the stale hint.
+    for (const [panelId, params] of panelParams) {
+      const liveKey = liveKeyForPanel(panelId, params);
+      const liveParams = liveKey === null ? null : liveSurfaceParams(liveKey);
+      if (liveParams !== null) {
+        panelParams.set(panelId, liveParams);
+        continue;
+      }
       if (params.terminalSessionName) {
         params.terminalId = mintTerminalId();
         params.url = buildSessionTerminalUrl(params.terminalSessionName, params.terminalId, primaryWorkDir());
@@ -2746,6 +2723,16 @@ function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boolean =
         }
       }
     }
+
+    // An object is a singleton with one page, so an arrangement naming the same
+    // one twice would give two tabs a page to fight over. The first occurrence
+    // keeps it.
+    for (const duplicatePanelId of duplicateLiveKeyPanelIds(
+      dv.panels.map((panel) => ({ panelId: panel.id, key: liveKeyForPanel(panel.id, panelParams.get(panel.id)) })),
+    )) {
+      const panel = dv.panels.find((candidate) => candidate.id === duplicatePanelId);
+      if (panel) dv.removePanel(panel);
+    }
   }
 
   // Whether the mount left the dock with nothing in it: a view saved with no
@@ -2766,6 +2753,10 @@ function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boolean =
   // The restored panels arrived all at once rather than through the creation
   // paths, so their refs are derived (and filed) here instead.
   reconcileMembersWithPanels();
+  // Now rather than on the next frame: a page both views show has to land in
+  // its new pane in the same paint the new arrangement does, or it would be
+  // seen for a frame where the outgoing view had it.
+  reconcileLiveSurfaces();
   scheduleTabWidthRecompute();
 }
 
@@ -3261,10 +3252,9 @@ async function handleRename(args: Record<string, unknown>, requesterAgentId: str
   const panel = dockview.panels.find((p) => p.id === panelId);
   if (!panel) return;
   panel.api.setTitle(title);
-  const params = panelParams.get(panelId);
-  if (params) {
+  mutatePanelParams(panelId, (params) => {
     params.title = title;
-  }
+  });
 }
 
 async function handleMaximize(args: Record<string, unknown>, requesterAgentId: string): Promise<void> {
@@ -3293,9 +3283,10 @@ async function handleReplaceUrl(args: Record<string, unknown>, requesterAgentId:
   if (!ref || !url) return;
   const panelId = await resolveRefToPanelId(ref, requesterAgentId);
   if (panelId === null) return;
-  const params = panelParams.get(panelId);
-  if (!params || params.panelType !== "iframe") return;
-  params.url = resolveReplaceUrl(url);
+  if (panelParams.get(panelId)?.panelType !== "iframe") return;
+  mutatePanelParams(panelId, (params) => {
+    params.url = resolveReplaceUrl(url);
+  });
   m.redraw();
   scheduleSave();
 }
@@ -3311,77 +3302,113 @@ async function handleRefresh(args: Record<string, unknown>, requesterAgentId: st
   if (panelId === null) return;
   const params = panelParams.get(panelId);
   if (!params || params.panelType !== "iframe") return;
-  reloadIframeForPanel(panelId);
+  const key = liveKeyForPanel(panelId, params);
+  if (key !== null) reloadIframeForKey(key);
 }
 
-/** Build a dockview content renderer for an iframe panel that re-reads
- *  ``panelParams[panelId]`` on every mithril redraw. This keeps the
- *  iframe in sync with agent-driven mutations to ``url``/``title`` so
- *  ``replace-url`` doesn't need to remove-and-recreate the panel. */
-function createReactiveIframeRenderer(panelId: string): IContentRenderer {
-  const element = document.createElement("div");
-  element.style.width = "100%";
-  element.style.height = "100%";
-  element.style.display = "flex";
-  element.style.flexDirection = "column";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const iframePanelComponent: m.ComponentTypes<any, any> = IframePanel;
-  return {
-    element,
-    init() {
-      m.mount(element, {
-        view: () => {
-          const p = panelParams.get(panelId);
-          return m(iframePanelComponent, {
-            url: p?.url ?? "",
-            title: p?.title ?? "Tab",
-            serviceName: p?.serviceName,
-            panelId,
-          });
-        },
-      });
-    },
-    dispose() {
-      m.mount(element, null);
-    },
-  };
+// ---------- Live pages ----------
+
+/** Which component a live page is. Decided once, when the page is created: a
+ *  page does not change what it is, and re-deciding it on every redraw would
+ *  let a url rewrite swap a running terminal for a fresh one. */
+type LiveContentKind = "chat" | "subagent" | "terminal" | "agent-terminal" | "iframe";
+
+/** What ``params`` describes, or null when it describes nothing this build can
+ *  render -- a layout naming a panel kind that no longer exists. */
+function liveContentKind(params: PanelParams): LiveContentKind | null {
+  if (params.panelType === "chat") return "chat";
+  if (params.panelType === "subagent") return "subagent";
+  if (params.panelType !== "iframe") return null;
+  // Persistent-terminal tabs render the lifecycle banner above the iframe.
+  // Identified by the terminal params, which no other iframe sets.
+  if (isTerminalPanelParams(params)) return "terminal";
+  // Agent-terminal tabs start their agent before attaching its terminal
+  // session. They are identified by their URL shape: the terminal service URL
+  // plus the ttyd agent-dispatch key (`arg=agent`), which
+  // `buildAgentTerminalUrl` constructs and no other iframe URL uses.
+  const url = params.url ?? "";
+  if (url.startsWith(getTerminalUrl()) && url.includes("arg=agent")) return "agent-terminal";
+  return "iframe";
 }
 
-/** Like ``createReactiveIframeRenderer`` but stacks the terminal lifecycle
- *  banner above the iframe. Reads ``panelParams[panelId]`` live so the
- *  async-allocated (agent-driven) and layout-restore url rewrites re-render
- *  the iframe with the new src. */
-function createReactiveTerminalRenderer(panelId: string): IContentRenderer {
+/**
+ * Mount the page a surface holds. Runs once per object, ever.
+ *
+ * The mount outlives every pane that shows it, so nothing about the page is
+ * captured here: the url, the title and whether anything is looking at it are
+ * all read off the surface on each redraw. That is what lets an agent-driven
+ * ``replace-url`` or a terminal's late session allocation reach the iframe
+ * without the panel being recreated -- and what lets a chat learn it is on
+ * screen again after a project switch.
+ */
+function mountLiveContent(surface: LiveSurface, kind: LiveContentKind): void {
+  m.mount(surface.element, { view: () => renderLiveContent(surface, kind) });
+}
+
+function renderLiveContent(surface: LiveSurface, kind: LiveContentKind): m.Children {
+  const params = surface.params;
+  const url = params.url ?? "";
+  switch (kind) {
+    case "chat":
+      // dockview keeps hidden panels mounted and mithril's redraw is global, so
+      // a page nothing is showing keeps redrawing at whatever size it was left.
+      // ``isVisible`` is what lets the chat skip work that must not run then --
+      // its scroll management, which would otherwise corrupt the retained
+      // scroll position against a display:none element.
+      return m(ChatPanel, { agentId: params.chatAgentId ?? params.agentId, isVisible: surface.isVisible });
+    case "subagent":
+      return m(SubagentView, { agentId: params.agentId, subagentSessionId: params.subagentSessionId ?? "" });
+    case "terminal":
+      return [
+        m(TerminalBanner),
+        m(
+          "div",
+          { style: "flex: 1 1 auto; min-height: 0;" },
+          m(IframePanel, { url, title: params.title ?? "terminal", liveKey: surface.key }),
+        ),
+      ];
+    case "agent-terminal":
+      return m(AgentTerminalPanel, { agentId: params.agentId, url, title: params.title ?? "Tab" });
+    case "iframe":
+      return m(IframePanel, {
+        url,
+        title: params.title ?? "Tab",
+        serviceName: params.serviceName,
+        liveKey: surface.key,
+      });
+  }
+}
+
+/**
+ * A dockview panel, now that a panel is only a place: an empty div dockview
+ * creates, positions, hides and disposes at will, standing in for a live page
+ * that outlives it.
+ *
+ * ``init`` is where a view starts showing an object and ``dispose`` is where it
+ * stops -- neither creates or destroys anything, which is the whole point.
+ */
+function createLiveSlotRenderer(
+  panelId: string,
+  key: LiveKey,
+  params: PanelParams,
+  kind: LiveContentKind,
+): IContentRenderer {
   const element = document.createElement("div");
-  element.style.width = "100%";
-  element.style.height = "100%";
-  element.style.display = "flex";
-  element.style.flexDirection = "column";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const iframePanelComponent: m.ComponentTypes<any, any> = IframePanel;
+  element.className = "si-live-slot";
   return {
     element,
-    init() {
-      m.mount(element, {
-        view: () => {
-          const p = panelParams.get(panelId);
-          return [
-            m(TerminalBanner),
-            m(
-              "div",
-              { style: "flex: 1 1 auto; min-height: 0;" },
-              m(iframePanelComponent, {
-                url: p?.url ?? "",
-                title: p?.title ?? "terminal",
-                panelId,
-              }),
-            ),
-          ];
-        },
-      });
+    init(parameters) {
+      const surface = ensureLiveSurface(key, params, (created) => mountLiveContent(created, kind));
+      // What is on screen is what the next autosave has to record, so this
+      // view's bookkeeping entry becomes the very params object the page
+      // renders from -- and stays that object, so every later mutation reaches
+      // both at once. Done inside the apply's synchronous window, before any
+      // autosave could fire against the hint the restore seeded.
+      panelParams.set(panelId, surface.params);
+      bindSlot(surface, panelId, parameters.api);
     },
     dispose() {
-      m.mount(element, null);
+      unbindSlot(panelId);
     },
   };
 }
@@ -3409,6 +3436,9 @@ function initializeDockview(parentElement: HTMLElement): void {
     scheduleTabWidthRecompute();
   });
   window.addEventListener("resize", scheduleTabWidthRecompute);
+  // The dock's panes move with the window, and the live pages are positioned
+  // against the dock rather than laid out inside it, so they follow explicitly.
+  window.addEventListener("resize", scheduleReconcile);
 
   // dockview-core's Scrollbar only reads event.deltaY, so mice with a dedicated
   // horizontal scroll wheel (e.g. Logitech MX Master) emit deltaX events that
@@ -3446,59 +3476,24 @@ function initializeDockview(parentElement: HTMLElement): void {
         return createUnrecoverablePanelRenderer(options.id);
       }
 
-      switch (options.name) {
-        case "chat":
-          return createMithrilRenderer(ChatPanel, {
-            agentId: params.chatAgentId ?? params.agentId,
-          });
-
-        case "iframe": {
-          // Agent-terminal tabs route to AgentTerminalPanel, which starts the
-          // agent before attaching its terminal session. They are identified
-          // by their URL shape: the terminal service URL plus the ttyd
-          // agent-dispatch key (`arg=agent`), which `buildAgentTerminalUrl`
-          // constructs and no other iframe URL uses. Terminals are never the
-          // target of an agent-driven ``replace-url``, so they don't need the
-          // reactive renderer below.
-          const iframeUrl = params.url ?? "";
-          // Persistent-terminal tabs render the lifecycle banner above a
-          // reactive iframe (the url is filled in / rewritten after mount for
-          // the agent-driven and layout-restore paths). Identified by the
-          // terminal-panel params, which no other iframe sets.
-          const isSessionTerminal = isTerminalPanelParams(params);
-          if (isSessionTerminal) {
-            return createReactiveTerminalRenderer(options.id);
-          }
-          const isAgentTerminal = iframeUrl.startsWith(getTerminalUrl()) && iframeUrl.includes("arg=agent");
-          if (isAgentTerminal) {
-            return createMithrilRenderer(AgentTerminalPanel, {
-              agentId: params.agentId,
-              url: iframeUrl,
-              title: params.title ?? "Tab",
-            });
-          }
-          // Pull live values out of ``panelParams`` on every redraw so an
-          // agent-driven ``replace-url`` (which mutates the stored
-          // params) re-renders the iframe with the new src instead of
-          // staying frozen on the initial url captured at mount time.
-          return createReactiveIframeRenderer(options.id);
-        }
-
-        case "subagent":
-          return createMithrilRenderer(SubagentView, {
-            agentId: params.agentId,
-            subagentSessionId: params.subagentSessionId ?? "",
-          });
-
-        case "launcher":
-          return createLauncherRenderer(options.id);
-
-        default:
-          // An unknown component name: the layout references a panel kind this
-          // build does not have. Say so rather than rendering a chat for the
-          // wrong agent.
-          return createUnrecoverablePanelRenderer(options.id);
+      // A launcher is a question about a pane rather than an object on the
+      // machine, so it is the one panel that still owns what it shows: there is
+      // nothing about it worth keeping alive once the pane stops asking.
+      if (params.panelType === "launcher") {
+        return createLauncherRenderer(options.id);
       }
+      // Everything else is a place to show a live page. The page is filed under
+      // the object's identity, not the panel's, so the same object shown by
+      // another view -- or by another pane in this one -- resolves to the page
+      // that is already running rather than a second copy of it.
+      const kind = liveContentKind(params);
+      const key = liveKeyForPanel(options.id, params);
+      if (kind === null || key === null) {
+        // The layout references a panel kind this build does not have. Say so
+        // rather than rendering a chat for the wrong agent.
+        return createUnrecoverablePanelRenderer(options.id);
+      }
+      return createLiveSlotRenderer(options.id, key, params, kind);
     },
     createTabComponent(options) {
       return createCustomTab(options);
@@ -3511,6 +3506,33 @@ function initializeDockview(parentElement: HTMLElement): void {
   });
 
   dockview = dv;
+
+  // The live pages go in the same layer dockview positions its own panel
+  // overlays in, so they share its coordinate space and the shipped pane clip.
+  // That layer is stable across every ``clear()`` and ``fromJSON`` -- the
+  // gridview only ever swaps its root child -- which is what lets a page
+  // outlive the panels that show it.
+  initializeLiveLayer(dv.overlayRenderContainer.element, reportChatTabActivity);
+
+  // A surface sits over the (now empty) panel overlay that carries dockview's
+  // drop-target forwarding, so it steps out of the way for the length of a
+  // drag; otherwise the drop would land inside the framed page instead of on
+  // the pane behind it.
+  const endDrag = (): void => {
+    setDragInProgress(false);
+  };
+  dv.api.onWillDragPanel(() => {
+    setDragInProgress(true);
+  });
+  dv.api.onWillDragGroup(() => {
+    setDragInProgress(true);
+  });
+  dv.api.onDidDrop(endDrag);
+  document.addEventListener("dragend", endDrag, true);
+  document.addEventListener("drop", endDrag, true);
+  // Belt and braces: a drag that somehow ended without either event above must
+  // never leave the whole workspace unclickable.
+  document.addEventListener("pointerdown", endDrag, true);
 
   // The embedding minds chrome forwards its close-tab shortcut (Cmd/Ctrl+W
   // while this workspace is displayed) through the embed contract; close the
@@ -3525,13 +3547,26 @@ function initializeDockview(parentElement: HTMLElement): void {
     reportChatTabActivity();
     // ...and it changes how many tabs each strip is fitting.
     scheduleTabWidthRecompute();
+    // ...and where the live pages have to be drawn.
+    scheduleReconcile();
+  });
+  // A pure move fires no layout change of its own, so the pages follow the
+  // panel here as well. Maximizing hides every other pane without resizing
+  // them, so it needs saying too -- a page whose pane is gone must not be left
+  // floating over the maximized one.
+  dv.api.onDidMovePanel(() => {
+    scheduleReconcile();
+  });
+  dv.api.onDidMaximizedGroupChange(() => {
+    scheduleReconcile();
   });
 
   // Clean up the bookkeeping a disposed panel leaves behind. Closing a tab is
   // deliberately nothing more than that: the object it was showing keeps
-  // running, stays a member of every project holding it, and stays listed in
-  // the sidebar as backgrounded. What the close must not leave behind is an
-  // empty dock, so an emptied view falls back to the launcher.
+  // running -- its page included, still mounted and merely hidden -- stays a
+  // member of every project holding it, and stays listed in the sidebar as
+  // backgrounded. What the close must not leave behind is an empty dock, so an
+  // emptied view falls back to the launcher.
   dv.api.onDidRemovePanel((panel) => {
     panelParams.delete(panel.id);
     memberRefByPanelId.delete(panel.id);
@@ -3626,11 +3661,13 @@ function handleTerminalSessionUpdate(terminalId: string | null, sessionId: strin
     }
   }
   if (targetPanelId === null) return;
-  const params = panelParams.get(targetPanelId);
-  if (!params) return;
-  params.terminalSessionName = sessionName;
-  params.terminalSessionId = sessionId;
-  params.title = sessionName;
+  // A rename moves the terminal's identity, so the page is re-filed under the
+  // new session name here too (see ``mutatePanelParams``).
+  mutatePanelParams(targetPanelId, (params) => {
+    params.terminalSessionName = sessionName;
+    params.terminalSessionId = sessionId;
+    params.title = sessionName;
+  });
   dockview.panels.find((p) => p.id === targetPanelId)?.api.setTitle(sessionName);
   m.redraw();
   scheduleSave();
