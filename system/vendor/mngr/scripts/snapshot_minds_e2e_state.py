@@ -240,6 +240,11 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
 _STAGING_RSYNC_EXCLUDES: Final[tuple[str, ...]] = (
     ".venv",
     "node_modules",
+    # Host-built bundled binaries, re-provisioned in-image by ensure-binaries.js
+    # below. Excluding them keeps the largest single item out of the upload, and
+    # keeps a macOS host's arm64 binaries from landing in this Linux image, where
+    # ensure-binaries would see them as present and skip.
+    "/apps/minds/resources",
     "test-results",
     ".test_output",
     "__pycache__",

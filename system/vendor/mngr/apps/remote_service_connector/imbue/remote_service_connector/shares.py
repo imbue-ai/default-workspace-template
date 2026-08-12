@@ -32,8 +32,9 @@ from fastapi import HTTPException
 from fastapi import Request
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import field_validator
 
-import imbue.remote_service_connector.auth as auth_module
+import imbue.remote_service_connector.accounts_web as accounts_web_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.errors import InvalidShareCoordinateError
 from imbue.remote_service_connector.errors import MissingShareConfigError
@@ -297,7 +298,9 @@ def _extract_frps_subdomain(content: dict[str, Any]) -> str:
 
 
 # Columns every share SELECT returns, so row-to-dict projection stays in one place.
-_SHARE_COLUMNS = "host_id, user_id, region, workspace_domain, state, created_at, updated_at, last_tunnel_login_at"
+_SHARE_COLUMNS = (
+    "host_id, user_id, region, workspace_domain, state, created_at, updated_at, last_tunnel_login_at, entry_label"
+)
 _SHARE_COLUMN_NAMES = tuple(name.strip() for name in _SHARE_COLUMNS.split(","))
 
 
@@ -316,7 +319,7 @@ class ShareStore(Protocol):
     def get_share(self, host_id: str, user_label: str) -> dict[str, Any] | None: ...
     def list_shares(self, user_label: str) -> list[dict[str, Any]]: ...
     def activate_share_and_rotate_token(
-        self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str
+        self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str, entry_label: str | None
     ) -> None: ...
     def deactivate_share(self, host_id: str, user_label: str) -> None: ...
     def delete_relay_tokens(self, host_id: str, user_label: str) -> None: ...
@@ -368,7 +371,7 @@ class PostgresShareStore:
         return [_share_row_to_dict(row) for row in rows]
 
     def activate_share_and_rotate_token(
-        self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str
+        self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str, entry_label: str | None
     ) -> None:
         conn = db.get_pool_db_connection()
         try:
@@ -386,13 +389,23 @@ class PostgresShareStore:
                     )
                     row = cur.fetchone()
                     check_share_quota(int(row[0]) if row is not None else 0, max_active_shares)
+                    # A caller that could not learn the entry label (e.g. the
+                    # desktop's client-side flow) must not erase one a previous
+                    # bring-up recorded, hence the COALESCE.
                     cur.execute(
-                        "INSERT INTO shares (host_id, user_id, region, workspace_domain, state) "
-                        "VALUES (%s, %s, %s, %s, 'active') "
+                        "INSERT INTO shares (host_id, user_id, region, workspace_domain, state, entry_label) "
+                        "VALUES (%s, %s, %s, %s, 'active', %s) "
                         "ON CONFLICT (host_id, user_id) DO UPDATE SET "
                         "region = EXCLUDED.region, workspace_domain = EXCLUDED.workspace_domain, "
-                        "state = 'active', updated_at = NOW()",
-                        (coordinate.host_id, coordinate.user_label, coordinate.region, coordinate.workspace_domain),
+                        "state = 'active', updated_at = NOW(), "
+                        "entry_label = COALESCE(EXCLUDED.entry_label, shares.entry_label)",
+                        (
+                            coordinate.host_id,
+                            coordinate.user_label,
+                            coordinate.region,
+                            coordinate.workspace_domain,
+                            entry_label,
+                        ),
                     )
                     # The token swap rides the SAME transaction (and the same
                     # advisory lock): a separate transaction would let two
@@ -555,22 +568,18 @@ def get_share_store() -> ShareStore:
     return PostgresShareStore()
 
 
-def _require_share_user(request: Request) -> tuple[str, str]:
-    """Authenticate a share endpoint caller and return (full SuperTokens user id, verified email).
+def _require_share_user(request: Request) -> str:
+    """Authenticate a share endpoint caller and return the full SuperTokens user id.
 
     Share endpoints need the FULL user id (its hyphen-stripped form is a
-    hostname label), which ``authenticate_request`` discards. A verified email
-    is still required, exactly like every other user-authenticated endpoint.
+    hostname label), which ``authenticate_request`` discards. A Bearer header
+    wins (the desktop / CLI path); otherwise the hosted chrome's browser
+    session cookie is resolved (it reads share status for its health badges).
+    Owning/managing a share does not require a verified email -- only
+    *visiting* one does (the email is the visitor's authorization identity,
+    enforced by the accounts broker).
     """
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing Bearer credentials")
-    token = auth_header[7:]
-    user_id = auth_module.get_user_id_from_access_token(token)
-    email = auth_module.default_email_getter(user_id)
-    if email is None:
-        raise HTTPException(status_code=401, detail="Email not verified")
-    return user_id, email
+    return accounts_web_module.resolve_web_user_identity(request)[1]
 
 
 def _require_frps_plugin_secret(provided: str) -> None:
@@ -588,8 +597,47 @@ def _require_frps_plugin_secret(provided: str) -> None:
         raise HTTPException(status_code=401, detail="Invalid frps plugin secret")
 
 
+# A service origin label: the hostname component in front of the workspace
+# domain (e.g. ``system_interface-elm7wydc``). Underscores appear in real
+# service names, so they are allowed alongside DNS label characters.
+_ENTRY_LABEL_RE = re.compile(r"^[a-z0-9_][a-z0-9_-]{0,62}$")
+
+
+def normalize_entry_label(value: str) -> str | None:
+    """The normalized (stripped, lowercased) entry label, or None when it is not a single origin label.
+
+    The shape rule for every entry-label source: client-supplied share creates
+    and the connector's own apps.toml reads. The label is interpolated into
+    ``https://<label>.<workspace domain>/`` URLs by the hosted chrome, so
+    anything beyond one hostname label must be refused.
+    """
+    stripped = value.strip().lower()
+    if not _ENTRY_LABEL_RE.match(stripped):
+        return None
+    return stripped
+
+
 class CreateShareRequest(BaseModel):
     host_id: str = Field(description="The workspace's host coordinate (host-<32hex>) to share")
+    entry_label: str | None = Field(
+        default=None,
+        description=(
+            "The workspace's shell-service origin label (e.g. system_interface-<rand>). The bare "
+            "workspace domain is deliberately unrouted on the relay, so this is the routable origin "
+            "the hosted web chrome enters and health-probes the workspace at. Optional: omitting it "
+            "keeps any previously recorded value."
+        ),
+    )
+
+    @field_validator("entry_label")
+    @classmethod
+    def _validate_entry_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = normalize_entry_label(value)
+        if normalized is None:
+            raise InvalidShareCoordinateError(f"entry_label must be a single origin label, got {value!r}")
+        return normalized
 
 
 class FrpsAuthRequest(BaseModel):
@@ -609,7 +657,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
     workspace reuses the share row and rotates the token.
     """
     with handle_endpoint_errors():
-        user_id, _email = _require_share_user(request)
+        user_id = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
         datacenter = store.get_pool_host_datacenter(body.host_id)
@@ -622,7 +670,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
         )
         relay_token = generate_relay_token()
         store.activate_share_and_rotate_token(
-            coordinate, DEFAULT_MAX_SHARED_WORKSPACES_PER_USER, hash_relay_token(relay_token)
+            coordinate, DEFAULT_MAX_SHARED_WORKSPACES_PER_USER, hash_relay_token(relay_token), body.entry_label
         )
         return {
             "host_id": coordinate.host_id,
@@ -637,7 +685,7 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
 def list_shares(request: Request) -> dict[str, object]:
     """List all of the caller's share records (active and inactive)."""
     with handle_endpoint_errors():
-        user_id, _email = _require_share_user(request)
+        user_id = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         return {"shares": get_share_store().list_shares(user_label)}
 
@@ -651,7 +699,7 @@ def delete_share(request: Request, host_id: str) -> dict[str, object]:
     tunnel Login/reconnect.
     """
     with handle_endpoint_errors():
-        user_id, _email = _require_share_user(request)
+        user_id = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
         share = store.get_share(host_id, user_label)
@@ -666,7 +714,7 @@ def delete_share(request: Request, host_id: str) -> dict[str, object]:
 def get_share_status(request: Request, host_id: str) -> dict[str, object]:
     """Report one share's state for the sharing UI: domain, tunnel liveness signal, cert expiry."""
     with handle_endpoint_errors():
-        user_id, _email = _require_share_user(request)
+        user_id = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
         share = store.get_share(host_id, user_label)
@@ -682,6 +730,7 @@ def get_share_status(request: Request, host_id: str) -> dict[str, object]:
             "relay_endpoint": relay_endpoint,
             "last_tunnel_login_at": share["last_tunnel_login_at"],
             "cert_not_after": cert_not_after,
+            "entry_label": share.get("entry_label"),
         }
 
 

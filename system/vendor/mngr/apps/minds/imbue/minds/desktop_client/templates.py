@@ -12,8 +12,6 @@ so neither callers nor tests have to know the templates moved from raw
 Jinja2 macros + ``{% extends %}`` to JinjaX components.
 """
 
-import html
-import json
 import os
 import re
 from collections.abc import Collection
@@ -62,18 +60,8 @@ from imbue.minds.utils.sentry.frontend import frontend_sentry_browser_payload
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import InvalidName
-from imbue.mngr_forward.loading_page import LOADING_CARD_CSS
-from imbue.mngr_forward.loading_page import render_loading_card
 
 TEMPLATE_DIR: Final[Path] = Path(__file__).resolve().parent / "templates"
-
-# Service names that ship a brand mark in static/service_icons/<name>.svg,
-# resolved once at import so templates can fall back to a generic glyph for
-# services without one (the directory is packaged with the wheel alongside the
-# rest of static/).
-_SERVICE_ICON_NAMES: Final[frozenset[str]] = frozenset(
-    icon.stem for icon in (Path(__file__).resolve().parent / "static" / "service_icons").glob("*.svg")
-)
 
 # Shared Tailwind class strings for the three button components
 # (Button.jinja, ButtonLink.jinja, ButtonSubmit.jinja). Exposed as JinjaX
@@ -171,10 +159,6 @@ _ICONS_16: Final[Mapping[str, str]] = {
     "share": '<path d="M9.78225 1.44141C10.0122 1.35145 10.2738 1.4114 10.4414 1.59278L15.4405 7.00391C15.6532 7.23415 15.6527 7.58953 15.4395 7.81934L10.4405 13.208C10.2726 13.3889 10.011 13.4485 9.78127 13.3584C9.55172 13.2682 9.40041 13.0465 9.40041 12.7998V10.04C7.84575 10.1878 6.30604 10.8831 4.98537 11.7168C3.50242 12.653 2.35808 13.7236 1.87209 14.2412L1.87112 14.2402C1.75059 14.3697 1.59344 14.4597 1.41994 14.4951C1.2432 14.5312 1.05947 14.5098 0.895531 14.4346C0.731549 14.3593 0.595769 14.2337 0.507836 14.0762C0.419903 13.9186 0.384182 13.7367 0.406273 13.5576H0.40725C0.667763 11.3166 2.21196 9.13775 4.04592 7.54297C5.68193 6.12036 7.67022 5.05919 9.40041 4.85059V2C9.40041 1.75301 9.55223 1.53141 9.78225 1.44141ZM10.6006 5.41114C10.6006 5.74242 10.3323 6.01061 10.001 6.01075C8.5585 6.01075 6.56212 6.94567 4.83401 8.44825C3.45889 9.644 2.35133 11.1163 1.85354 12.5898C2.48514 12.023 3.34266 11.3348 4.34475 10.7022C5.92057 9.70737 7.91948 8.81055 10.001 8.81055C10.3321 8.81069 10.6004 9.07906 10.6006 9.41016V11.2705L14.1817 7.41016L10.6006 3.53321V5.41114Z"/>',
     "box": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></g>',
     "link": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></g>',
-    # Lucide-derived stroked glyph (same 2/3 scale trick as panels-top-left).
-    # Used by the Permissions icon-tab in the titlebar breadcrumb and the
-    # Permissions pane heading.
-    "key": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></g>',
     "copy": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></g>',
     "info": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></g>',
     "cloud": '<g transform="scale(0.66667)" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></g>',
@@ -286,7 +270,6 @@ def _build_catalog() -> Catalog:
             "ADD_ACCOUNT_OPTION_VALUE": ADD_ACCOUNT_OPTION_VALUE,
             "ICONS_16": _ICONS_16,
             "ICONS_12": _ICONS_12,
-            "SERVICE_ICON_NAMES": _SERVICE_ICON_NAMES,
             # Resolved per render so the page only boots the frontend Sentry SDK
             # when the user has enabled error reporting (returns None otherwise).
             # See _frontend_sentry_browser_payload, imbue/minds/utils/sentry/frontend.py,
@@ -306,8 +289,8 @@ def _build_catalog() -> Catalog:
 CATALOG: Final[Catalog] = _build_catalog()
 
 
-class InspirationMachineRow(FrozenModel):
-    """One pickable machine on the Create from Inspiration page's add flow."""
+class TemplateMachineRow(FrozenModel):
+    """One pickable machine on the Create from Template page's add flow."""
 
     agent_id: str = Field(description="The machine agent id (drives the recovery-restart detour)")
     host_id: str = Field(default="", description="The machine host id (drives the /goto/ href); '' when unknown")
@@ -370,7 +353,7 @@ def render_landing_page(
     agent_host_ids maps agent ID strings to the workspace's ``host-<hex>``
     coordinate. The plugin's ``/goto/`` route is host-keyed, so rows with an
     entry link via it; rows without one fall back to the agent id (nothing
-    better is known -- same degrade as the inspiration page's rows).
+    better is known -- same degrade as the template page's rows).
 
     agent_accents maps agent ID strings to ``#rrggbb`` workspace accent
     hexes (the stored color label, resolved by the caller). Agents without
@@ -653,7 +636,7 @@ def render_create_form(
     effective_url = git_url if git_url else default_workspace_git_url()
     # The env/operator branch default pairs with the default template repo, so
     # it only applies when the repository was NOT explicitly supplied. With an
-    # explicit repository (e.g. an inspiration deeplink's git_url) the branch
+    # explicit repository (e.g. a template deeplink's git_url) the branch
     # is kept exactly as given: blank means "the repo's latest version", which
     # is what submit resolves it to (``resolve_template_version``).
     if git_url:
@@ -739,31 +722,36 @@ def render_create_form(
 
 
 @pure
-def render_inspiration_create_page(
+def render_template_create_page(
     git_url: str,
     branch: str = "",
     accounts: Sequence[object] | None = None,
     default_account_id: str = "",
     color: str = DEFAULT_WORKSPACE_COLOR,
     mngr_forward_origin: str = "",
-    machine_rows: Sequence[InspirationMachineRow] = (),
+    machine_rows: Sequence[TemplateMachineRow] = (),
     region_options_by_launch_mode: Mapping[str, Sequence[str]] | None = None,
     region_selected_by_launch_mode: Mapping[str, str] | None = None,
     start: str = "",
 ) -> str:
-    """Render the Create from Inspiration page (GET /create/inspiration).
+    """Render the Create from Template page (GET /create/template).
 
-    The landing page for an Inspiration deeplink: a chooser between creating
-    a new machine from ``git_url`` and adding the Inspiration to an
-    existing machine. The add flow shows a copyable ``/use-inspiration
+    The landing page for a Template deeplink: a chooser between creating
+    a new machine from ``git_url`` and adding the Template to an
+    existing machine. The add flow shows a copyable `` /use-template
     <git-url>`` message (the skill accepts only a URL, so ``branch`` is
-    deliberately absent from it) plus ``machine_rows`` to open. The new
+    deliberately absent from it). The leading space is deliberate: a pasted
+    string starting with ``/`` can be read as a slash command by the chat input
+    rather than as text. It requires the target machine to be on a
+    post-rename workspace template; one still on an older template does not
+    recognise the command and has to be updated first. ``machine_rows`` is the
+    set of existing machines the add flow offers to paste it into. The new
     flow's settings step lets the user keep the preset defaults or reveal the
     compute / backup provider and region selects inline (the repo and branch
     stay fixed); the provider enums and region options come from the same
     source the create form uses.
     """
-    return _render_inspiration_stepper(
+    return _render_template_stepper(
         git_url=git_url,
         branch=branch,
         accounts=accounts,
@@ -779,14 +767,14 @@ def render_inspiration_create_page(
 
 
 @pure
-def _render_inspiration_stepper(
+def _render_template_stepper(
     git_url: str,
     branch: str,
     accounts: Sequence[object] | None,
     default_account_id: str,
     color: str,
     mngr_forward_origin: str,
-    machine_rows: Sequence[InspirationMachineRow],
+    machine_rows: Sequence[TemplateMachineRow],
     region_options_by_launch_mode: Mapping[str, Sequence[str]] | None,
     region_selected_by_launch_mode: Mapping[str, str] | None,
     is_modal: bool,
@@ -794,14 +782,14 @@ def _render_inspiration_stepper(
     current_machine_name: str = "",
     start: str = "",
 ) -> str:
-    """Render the Create from Inspiration stepper into one of its two shells.
+    """Render the Create from Template stepper into one of its two shells.
 
     ``is_modal`` picks the shell: the full page, or the shared overlay's card
     (the deeplink modal). The stepper itself is identical; only the add branch's
     last step differs, and only when a ``current_machine_id`` is supplied.
     """
     return CATALOG.render(
-        "pages.InspirationCreate",
+        "pages.TemplateCreate",
         git_url=git_url,
         branch=branch,
         accounts=accounts or [],
@@ -1035,38 +1023,55 @@ def render_request_error_page(title: str, message: str) -> str:
 
 @pure
 def render_inbox_page(
-    pending: Sequence[Mapping[str, str]],
+    cards: Sequence[Mapping[str, str]],
     selected_id: str = "",
     detail_html: str = "",
     is_empty: bool = False,
+    auto_open: bool = True,
+    keep_open: bool = False,
 ) -> str:
-    """Render the permission-request popup page served by ``GET /inbox``.
+    """Render the full inbox modal page served by ``GET /inbox``.
 
-    ``pending`` is the pending-request metadata (dicts with ``id``,
-    ``ws_name``, ``accent``), most-recent-first -- the queue the popup
-    advances through. ``selected_id`` is the request being shown;
-    ``detail_html`` its pre-rendered handler fragment (or the
-    unavailable fragment). ``is_empty`` renders the caught-up state.
-    The metadata is serialized here so the shell script can read it
-    from an ``application/json`` block without any inline templating.
+    ``cards`` is the initial left-list content (most-recent-first).
+    ``selected_id`` highlights one card; ``detail_html`` is the
+    pre-rendered right-pane fragment (handler detail, unavailable
+    fragment, or empty). ``is_empty`` is True when there are no
+    pending requests and the layout collapses to a centered message.
+    ``auto_open`` is the initial state of the "Auto-open on new
+    request" checkbox in the inbox header. ``keep_open`` is True only
+    when the user intentionally opened the whole inbox (via the
+    Requests button); when False, resolving a request via Approve/Deny
+    dismisses the whole window instead of advancing to the next
+    pending request.
     """
     return CATALOG.render(
         "pages.Inbox",
-        pending=pending,
+        cards=cards,
         selected_id=selected_id,
         detail_html=detail_html,
         is_empty=is_empty,
-        pending_json=json.dumps([dict(meta) for meta in pending]),
+        auto_open=auto_open,
+        keep_open=keep_open,
     )
 
 
 @pure
+def render_inbox_list_fragment(
+    cards: Sequence[Mapping[str, str]],
+    selected_id: str = "",
+) -> str:
+    """Render the inbox left-list fragment served by ``GET /inbox/list``."""
+    return CATALOG.render("InboxList", cards=cards, selected_id=selected_id)
+
+
+@pure
 def render_inbox_unavailable_fragment(message: str = "") -> str:
-    """Render the popup's "no longer available" fragment.
+    """Render the inbox right-pane "no longer available" fragment.
 
     Returned by ``GET /inbox/detail/<id>`` when the id is unknown or
-    already resolved; also innerHTML-swapped into the popup's pane by
-    the shell JS when an SSE event resolves the shown request.
+    already resolved; also innerHTML-swapped into the right pane by the
+    inbox shell JS when an SSE event resolves the currently-selected
+    item.
 
     ``message`` is an optional supporting sentence rendered under the
     fragment's heading. When empty (the default), only the heading is
@@ -1074,959 +1079,6 @@ def render_inbox_unavailable_fragment(message: str = "") -> str:
     duplicating the heading.
     """
     return CATALOG.render("InboxUnavailable", message=message)
-
-
-# CSS for the recovery page's restart controls, appended to the shared
-# ``LOADING_PAGE_CSS``. The card itself, spinner, heading and message all come
-# from the shared loading page, so the recovery page's loading state is
-# byte-identical to the mngr_forward proxy loader.
-_RECOVERY_STYLE: Final[str] = """\
-      .hidden { display: none; }
-
-      /* Keep the whole card within the viewport and lay it out as a vertical
-         stack: the header row and the restart button stay pinned at the top,
-         and only the troubleshooting block scrolls when its disclosures are
-         expanded. Without this the card grows past the viewport as dropdowns
-         open and -- because the body flex-centers it -- the heading and button
-         slide off the top, out of reach of the page scrollbar. This overrides
-         the shared ``.card`` from LOADING_PAGE_CSS (appended after it, so it
-         wins); the proxy loader never pulls in this style, so it is unaffected.
-         The 48px subtracted matches the body's 24px top+bottom padding. */
-      .card {
-        display: flex;
-        flex-direction: column;
-        max-height: calc(100vh - 48px);
-      }
-      .row { flex-shrink: 0; }
-
-      /* Primary action. The restart and retry buttons are the page's focal
-         point: full width, prominent, directly under the message. They are
-         mutually exclusive (only one shows at a time, per the rendered tier)
-         and share this styling. Most users only ever need this -- the
-         troubleshooting disclosures below are for the rare deep-debugging
-         case. */
-      #recovery-host-btn,
-      #recovery-retry-btn {
-        margin-top: 20px;
-        flex-shrink: 0;
-        width: 100%;
-        background: #18181b;
-        color: #fff;
-        border: 0;
-        border-radius: 8px;
-        padding: 12px 16px;
-        font-size: 0.9375rem;
-        font-weight: 600;
-        cursor: pointer;
-      }
-      #recovery-host-btn:hover,
-      #recovery-retry-btn:hover { background: #3f3f46; }
-      #recovery-host-btn.secondary { background: #6b7280; }
-      #recovery-host-btn.secondary:hover { background: #4b5563; }
-
-      /* The verbatim provider error (e.g. docker's "Docker Desktop is manually
-         paused..."), or the canned access-rejected reason for an UNAUTHENTICATED
-         host, shown under the generic auto-reconnect copy on the
-         provider-unavailable tier. Set as plain text by the JS, so
-         it carries whatever the provider returned -- a muted, left-bordered
-         block keeps it visually distinct from our own copy. ``overflow-wrap``
-         keeps a long unbroken token (e.g. the http+docker URL some messages
-         embed) from overflowing the card. */
-      .recovery-provider-reason {
-        margin: 12px 0 0;
-        padding: 8px 12px;
-        border-left: 3px solid #e4e4e7;
-        background: #fafafa;
-        border-radius: 4px;
-        color: #71717a;
-        font-size: 0.8125rem;
-        line-height: 1.4;
-        text-align: left;
-        overflow-wrap: anywhere;
-      }
-
-      /* Secondary, rarely-needed troubleshooting block: the error and
-         diagnostics disclosures, grouped below a muted label and a thin
-         divider. The whole block self-hides whenever neither disclosure is
-         currently shown (both carry ``.hidden``), so the divider and label
-         never appear over an empty section. */
-      .recovery-troubleshooting {
-        margin-top: 20px;
-        padding-top: 16px;
-        border-top: 1px solid #f4f4f5;
-        /* The block can shrink below its content height (min-height: 0 frees
-           it from the default flex min-content floor) and scrolls internally
-           once the card hits its viewport cap, so expanding many disclosures
-           never pushes the pinned header and button off-screen. */
-        min-height: 0;
-        overflow-y: auto;
-      }
-      .recovery-troubleshooting:not(:has(> details:not(.hidden))) { display: none; }
-      .recovery-troubleshooting-label {
-        font-size: 0.6875rem;
-        font-weight: 600;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: #a1a1aa;
-        margin: 0 0 6px;
-      }
-      .recovery-troubleshooting > details {
-        margin: 0 0 8px;
-        border: 1px solid #f4f4f5;
-        background: #fff;
-        border-radius: 8px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-        color: #52525b;
-      }
-      .recovery-troubleshooting > details:last-child { margin-bottom: 0; }
-      .recovery-troubleshooting > details > summary {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        cursor: pointer;
-        padding: 9px 12px;
-        font-weight: 500;
-        font-size: 0.8125rem;
-        color: #52525b;
-        list-style: none;
-      }
-      .recovery-troubleshooting > details > summary::-webkit-details-marker { display: none; }
-      .recovery-troubleshooting > details > summary::after {
-        content: "\\25BE";
-        color: #a1a1aa;
-        font-size: 0.75rem;
-        transition: transform 0.15s;
-      }
-      .recovery-troubleshooting > details[open] > summary::after { transform: rotate(180deg); }
-      .recovery-troubleshooting > details > summary:hover { color: #3f3f46; }
-      .recovery-troubleshooting > details[open] > summary { border-bottom: 1px solid #f4f4f5; }
-      .recovery-troubleshooting > details > :not(summary) { padding: 10px 12px; }
-
-      details pre {
-        margin: 0;
-        padding: 10px 12px;
-        max-height: 240px;
-        overflow-y: auto;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        font-size: 0.75rem;
-        line-height: 1.5;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        background: #fafafa;
-        color: #3f3f46;
-        border-radius: 6px;
-      }
-      .probe-row {
-        margin: 4px 0 0;
-        border: 1px solid #f4f4f5;
-        background: #fff;
-        border-radius: 6px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-      }
-      .probe-row summary {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 10px;
-        font-size: 0.8125rem;
-        font-weight: 500;
-        cursor: pointer;
-        color: #52525b;
-        list-style: none;
-      }
-      .probe-row summary::-webkit-details-marker { display: none; }
-      .probe-row summary::after {
-        content: "\\25BE";
-        color: #a1a1aa;
-        font-size: 0.75rem;
-        transition: transform 0.15s;
-      }
-      .probe-row[open] summary::after { transform: rotate(180deg); }
-      .probe-row .probe-question { flex: 1; }
-      .probe-glyph {
-        display: inline-block;
-        width: 1em;
-        text-align: center;
-        font-weight: 700;
-      }
-      .probe-glyph-yes { color: #047857; }
-      .probe-glyph-no { color: #b91c1c; }
-      .probe-glyph-unknown { color: #92400e; }
-      #copy-diagnostics-btn,
-      #copy-ssh-btn {
-        margin-top: 8px;
-        background: #fff;
-        color: #52525b;
-        border: 1px solid #d4d4d8;
-        border-radius: 6px;
-        font-size: 0.75rem;
-        font-weight: 500;
-        padding: 6px 12px;
-        cursor: pointer;
-      }
-      #copy-ssh-btn { margin-left: 8px; }
-      #copy-diagnostics-btn:hover,
-      #copy-ssh-btn:hover { background: #f4f4f5; }
-
-      /* A quiet "Report a problem" link under the primary action, shown only on
-         the terminal recovery states that offer a restart/retry (not the
-         transient "Loading machine" spinner, where there is nothing to report
-         yet). Kept de-emphasized (text-only) so it never competes with the
-         restart/retry button above it. */
-      #recovery-report-btn {
-        margin-top: 12px;
-        align-self: center;
-        background: none;
-        border: 0;
-        color: #71717a;
-        font-size: 0.8125rem;
-        text-decoration: underline;
-        cursor: pointer;
-      }
-      #recovery-report-btn:hover { color: #3f3f46; }
-"""
-
-# The recovery page's behavior. It drives the shared loading card (toggling
-# the spinner, heading and message) plus the recovery-only restart button and
-# error <details>. While a restart is in flight it polls the recovery route in
-# the background (so it does not steal focus from any overlaid view) and only
-# reloads once the state actually changes: _handle_recovery_page re-renders from
-# the live tracker state on every GET and exposes it via the X-Recovery-Status
-# header, which scheduleRefresh reads to decide "keep waiting" vs. "reload".
-_RECOVERY_SCRIPT: Final[str] = """\
-      (function () {
-        // Scope to the swappable page body: the persistent titlebar's switcher
-        // name ALSO carries data-agent-id (chrome.js stamps it), and on a
-        // swapped-in recovery page it precedes this card in document order --
-        // an unscoped query would bind to it and lose return_to/initial-status.
-        var pageRoot = document.getElementById('local-page-root') || document;
-        var root = pageRoot.querySelector('[data-agent-id]');
-        if (!root) return;
-        var agentId = root.dataset.agentId;
-        var returnTo = root.dataset.returnTo || '';
-        var initialStatus = root.dataset.initialStatus || 'stuck';
-
-        var titleEl = document.getElementById('loading-title');
-        var messageEl = document.getElementById('loading-message');
-        var spinnerEl = document.getElementById('loading-spinner');
-        var errorEl = document.getElementById('recovery-error');  // null unless restart_failed
-        var hostBtn = document.getElementById('recovery-host-btn');
-        // Shown (in place of the restart button) on the provider-unavailable and
-        // workspace-unreachable states, where a restart cannot help; re-runs the
-        // host-health probe so the user can re-check reachability on demand.
-        var retryBtn = document.getElementById('recovery-retry-btn');
-        // The "Report a problem" link. Hidden on the transient loading spinner;
-        // shown only on the terminal states that offer a restart or retry.
-        var reportBtn = document.getElementById('recovery-report-btn');
-        // Holds the verbatim provider error on the backend-unreachable state;
-        // hidden (and emptied) on every other state. Populated by
-        // renderBackendUnreachable from the response's ``unreachable_reason``.
-        var providerReasonEl = document.getElementById('recovery-provider-reason');
-        var debugDetailsEl = document.getElementById('recovery-debug-details');
-        var debugContentEl = document.getElementById('recovery-debug-content');
-        var copyBtn = document.getElementById('copy-diagnostics-btn');
-        // Present only for SSH-reachable hosts (every real workspace). Carries
-        // the prebuilt connection command in its data attribute; absent (and so
-        // null here) when the resolver has no SSH info for the agent.
-        var copySshBtn = document.getElementById('copy-ssh-btn');
-
-        var latestHealth = null;
-
-        // Set when the chrome shell swaps this page out in place (recovery is a
-        // swappable page; there is no document teardown). Every poll loop and
-        // navigation below checks it so a departed recovery page can neither
-        // keep polling nor navigate the shell out from under the current page.
-        var pageTornDown = false;
-        window.addEventListener('minds:page-teardown', function () { pageTornDown = true; }, { once: true });
-
-        // The background convergence/healthy polls below run on this cadence.
-        // 1000ms matches the mngr_forward proxy loader's poll interval, keeping
-        // the two loading pages a user may see during recovery in lockstep, and
-        // is a whole multiple of the spinner's 1s rotation period (see
-        // LOADING_PAGE_CSS' ``spin`` keyframe) so the one eventual state-change
-        // reload lands at the animation's cycle boundary rather than mid-spin.
-        var REFRESH_INTERVAL_MS = 1000;
-
-        function show(el, visible) {
-          if (el) el.classList.toggle('hidden', !visible);
-        }
-
-        function escapeHtml(s) {
-          if (s === null || s === undefined) return '';
-          return String(s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-        }
-
-        function answerGlyph(answer) {
-          if (answer === 'yes') return '<span class="probe-glyph probe-glyph-yes" aria-label="yes">&#x2713;</span>';
-          if (answer === 'no') return '<span class="probe-glyph probe-glyph-no" aria-label="no">&#x2717;</span>';
-          return '<span class="probe-glyph probe-glyph-unknown" aria-label="unknown">?</span>';
-        }
-
-        function renderDebugMenu(data) {
-          if (!debugContentEl || !debugDetailsEl) return;
-          if (!data || !Array.isArray(data.probes) || data.probes.length === 0) {
-            debugContentEl.innerHTML = '';
-            show(debugDetailsEl, false);
-            return;
-          }
-          // Each probe is one row: glyph + question, with an expander
-          // revealing the command that produced the answer and its raw output.
-          var rows = data.probes.map(function (probe) {
-            var glyph = answerGlyph(probe.answer);
-            var body = '$ ' + probe.command + '\\n\\n' + probe.output;
-            return '<details class="probe-row probe-row-' + escapeHtml(probe.answer || 'unknown') + '">'
-              + '<summary>' + glyph + '<span class="probe-question">'
-              + escapeHtml(probe.question) + '</span></summary>'
-              + '<pre>' + escapeHtml(body) + '</pre>'
-              + '</details>';
-          });
-          debugContentEl.innerHTML = rows.join('');
-          show(debugDetailsEl, true);
-        }
-
-        function copyDiagnostics() {
-          if (!latestHealth) return;
-          try {
-            var text = JSON.stringify(latestHealth, null, 2);
-            if (navigator.clipboard) navigator.clipboard.writeText(text);
-          } catch (e) {
-            /* ignore */
-          }
-        }
-
-        // The poll URL omits intent=restart so that, once the restart is
-        // dispatched, a healthy tracker state 302s the user back to the workspace.
-        function pollUrl() {
-          var u = '/agents/' + encodeURIComponent(agentId) + '/recovery';
-          if (returnTo) u += '?return_to=' + encodeURIComponent(returnTo);
-          return u;
-        }
-        // Convergence poll while a restart is in flight (the RESTARTING state).
-        // A full-page reload here would tear down any overlay modal layered
-        // over this page -- e.g. the bug-report modal opened from "Report a
-        // problem" -- on every tick, making its inputs impossible to type
-        // into. So poll in the background instead: a HEALTHY tracker 302s
-        // back to the workspace (an opaque redirect, which we follow), and
-        // any non-restarting status (e.g. restart_failed) means we reload to
-        // render that state. While the status stays 'restarting' we leave the
-        // page -- and any focused overlay -- untouched and just poll again.
-        // Go back to the now-recovered workspace. Inside the chrome shell
-        // this recovery screen renders as a trusted local page, so hand
-        // return_to (an agent URL) to the shell bridge, which loads it into
-        // the sandboxed workspace iframe. On a standalone page load (no
-        // bridge) follow the server's healthy 302 as before.
-        function goToWorkspace() {
-          if (pageTornDown) return;
-          if (window.minds && window.minds.navigateContent && returnTo) {
-            window.minds.navigateContent(returnTo);
-          } else {
-            window.location.assign(pollUrl());
-          }
-        }
-        // Re-render the recovery route's current state. In the desktop shell
-        // this routes through the bridge so the shell swaps the page in place
-        // (no full load, no titlebar rebuild); a plain browser reloads.
-        function rerenderState() {
-          if (pageTornDown) return;
-          if (window.minds && window.minds.navigateContent) {
-            window.minds.navigateContent(pollUrl());
-          } else {
-            window.location.assign(pollUrl());
-          }
-        }
-        function scheduleRefresh() {
-          setTimeout(function () {
-            if (pageTornDown) return;
-            fetch(pollUrl(), { credentials: 'same-origin', redirect: 'manual', cache: 'no-store' }).then(function (resp) {
-              if (pageTornDown) return;
-              if (resp.type === 'opaqueredirect' || (resp.status >= 300 && resp.status < 400)) {
-                goToWorkspace();
-                return;
-              }
-              if ((resp.headers.get('X-Recovery-Status') || '') === 'restarting') {
-                maybeUpgradeToOfflineCopy(resp);
-                scheduleRefresh();
-                return;
-              }
-              rerenderState();
-            }, function () {
-              scheduleRefresh();
-            });
-          }, REFRESH_INTERVAL_MS);
-        }
-        // Background convergence poll for the restart_failed state. Like
-        // scheduleRefresh it polls in the background rather than reloading, but
-        // it only ever navigates on a healthy redirect: while the workspace is
-        // still down the server returns the recovery HTML (200), which we
-        // discard so the displayed failure reason + diagnostics stay put and the
-        // heavy host-health probe is not re-run. Once the background probe loop flips
-        // the tracker to HEALTHY the server starts 302ing to return_to, which
-        // surfaces as an opaque-redirect response; we then follow it to send
-        // the user back to the now-recovered workspace.
-        function scheduleHealthyPoll() {
-          setTimeout(function () {
-            if (pageTornDown) return;
-            fetch(pollUrl(), { credentials: 'same-origin', redirect: 'manual' }).then(function (resp) {
-              if (pageTornDown) return;
-              if (resp.type === 'opaqueredirect' || (resp.status >= 300 && resp.status < 400)) {
-                goToWorkspace();
-                return;
-              }
-              scheduleHealthyPoll();
-            }, function () {
-              scheduleHealthyPoll();
-            });
-          }, REFRESH_INTERVAL_MS);
-        }
-        // The cheap liveness poll, idempotently armed. scheduleHealthyPoll re-hits
-        // the recovery route on a ~1s cadence; the route 302s to return_to the
-        // instant the background probe loop flips the tracker HEALTHY, so this sends
-        // the user home the moment the workspace answers -- regardless of which
-        // verdict (if any) is on screen. Every terminal state arms this, and the
-        // stuck entry arms it before the slow in-container probe even runs, so a
-        // healthy or self-recovering workspace is never stranded. A no-op when
-        // there is no return_to to go home to.
-        var healthyPollArmed = false;
-        function armHealthyPoll() {
-          if (healthyPollArmed || !returnTo || pageTornDown) return;
-          healthyPollArmed = true;
-          scheduleHealthyPoll();
-        }
-        // While INDETERMINATE (no trustworthy evidence to classify), or after a
-        // probe request was dropped entirely (see runProbe), re-run the heavy probe
-        // on a slow cadence so we still converge to a real verdict if the workspace
-        // is genuinely wedged but host-reachable. Slow on purpose: each heavy probe
-        // can take tens of seconds, and the cheap liveness poll above already does
-        // the fast recovery work -- this is only the slow convergence path.
-        // Re-render via applyHealth (not renderLoading) so the "Reconnecting" state
-        // stays put while the background probe is in flight.
-        var INDETERMINATE_REPROBE_MS = 8000;
-        // Only one reprobe timer may be pending at a time: the waiting states that
-        // arm this (indeterminate, backend-unreachable, and the unresponsive
-        // verdicts) re-arm it from applyHealth
-        // on every cycle, and the backend-unreachable state also offers a Retry
-        // button whose immediate probe lands in the same applyHealth -- without
-        // the guard each retry would spawn a parallel self-perpetuating chain of
-        // heavy probes.
-        var reprobePending = false;
-        // Set once a restart POST goes out (the unconditional entry dispatch or a
-        // manual click); never reset within this page instance. From then on
-        // scheduleRefresh and the cheap healthy-poll own convergence (both end
-        // in a navigation that reloads this script), so any reprobe chain a
-        // prior verdict left armed -- a pending timer or an in-flight
-        // heavy probe -- must go quiet: its stale result would overwrite the
-        // restarting render seconds after the dispatch.
-        var restartDispatched = false;
-        function scheduleIndeterminateReprobe() {
-          if (reprobePending || restartDispatched) return;
-          reprobePending = true;
-          setTimeout(function () {
-            reprobePending = false;
-            if (restartDispatched || pageTornDown) return;
-            fetchHealth().then(function (data) { applyHealth(data); }, function () {
-              scheduleIndeterminateReprobe();
-            });
-          }, INDETERMINATE_REPROBE_MS);
-        }
-
-
-        function renderLoading() {
-          titleEl.textContent = 'Loading machine';
-          messageEl.textContent = '';
-          show(spinnerEl, true);
-          show(errorEl, false);
-          show(hostBtn, false);
-          show(retryBtn, false);
-          show(reportBtn, false);
-          // A stale diagnostic from the previous tick would be misleading
-          // while we're in flight to a fresh check; hide it and drop the
-          // cached payload so renderDebugMenu starts blank next time.
-          show(debugDetailsEl, false);
-          if (debugContentEl) debugContentEl.innerHTML = '';
-          // Drop any prior provider error so it never lingers into the next state.
-          if (providerReasonEl) { providerReasonEl.textContent = ''; show(providerReasonEl, false); }
-          latestHealth = null;
-        }
-        // A restart the user asked for is in flight (the manual "Restart
-        // workspace" click). Names the action so the wait reads as a
-        // deliberate recovery, not a hang. The entry dispatch does NOT use
-        // this copy: it fires without knowing whether the start will do
-        // anything, so it stays on the neutral "Loading machine" spinner
-        // (or the offline copy, when the host is known offline) rather than
-        // claiming a restart. scheduleRefresh (armed by the caller) sends the
-        // user home the moment the tracker flips HEALTHY, so this state needs
-        // no separate homeward poll.
-        function renderRestarting() {
-          titleEl.textContent = 'Restarting your machine';
-          messageEl.textContent =
-            'We\\'ll return you to your machine automatically as soon as it is back.';
-          show(spinnerEl, true);
-          show(errorEl, false);
-          show(hostBtn, false);
-          show(retryBtn, false);
-          show(reportBtn, false);
-          show(debugDetailsEl, false);
-          if (debugContentEl) debugContentEl.innerHTML = '';
-          if (providerReasonEl) { providerReasonEl.textContent = ''; show(providerReasonEl, false); }
-          latestHealth = null;
-        }
-        // The offline flavor of the restarting state: the workspace's host is
-        // observed stopped, so the wait is a cold boot -- name that, so the
-        // (possibly long) boot reads as recovery rather than a fresh open that
-        // is taking too long. Purely display: which copy shows never affects
-        // what is dispatched. Shown when the render-time hint (data-host-offline,
-        // the resolver's current reading) says offline, and upgraded to
-        // mid-restart by maybeUpgradeToOfflineCopy when the hint was stale.
-        function renderRestartingOffline() {
-          offlineCopyShown = true;
-          titleEl.textContent = 'Bringing your machine back online';
-          messageEl.textContent =
-            'This machine was offline. We\\'re starting it back up and will '
-            + 'return you to it automatically.';
-          show(spinnerEl, true);
-          show(errorEl, false);
-          show(hostBtn, false);
-          show(retryBtn, false);
-          show(reportBtn, false);
-          show(debugDetailsEl, false);
-          if (debugContentEl) debugContentEl.innerHTML = '';
-          if (providerReasonEl) { providerReasonEl.textContent = ''; show(providerReasonEl, false); }
-          latestHealth = null;
-        }
-        // One-way display upgrade while the start-only entry dispatch is in
-        // flight. At a cold launch the render-time offline hint can read a
-        // stale RUNNING (the replayed discovery backlog), but discovery lands
-        // the real STOPPED observation a few seconds later; the convergence
-        // poll carries it back via the X-Workspace-Offline header, and the
-        // neutral pending copy upgrades to the offline copy. Display-only
-        // and one-way (never downgrades), and only for the start-only entry
-        // dispatch -- a manual stop+start's transient STOPPED mid-bounce should
-        // not rewrite the page as an offline revival.
-        var offlineCopyShown = false;
-        var startOnlyDispatched = false;
-        function maybeUpgradeToOfflineCopy(resp) {
-          if (!startOnlyDispatched || offlineCopyShown) return;
-          if ((resp.headers.get('X-Workspace-Offline') || '') !== '1') return;
-          renderRestartingOffline();
-        }
-        // The shared "Machine unresponsive" state -- shown after a restart
-        // failure and for the host_unresponsive tier (container observed
-        // running but unreachable: bouncing it would interrupt user agents, so
-        // we want explicit consent before doing so).
-        function renderUnresponsive() {
-          titleEl.textContent = 'Machine unresponsive';
-          messageEl.textContent =
-            'This machine needs a restart to recover. In-progress work in all agents will be '
-            + 'interrupted. If the problem persists, contact support.';
-          show(spinnerEl, false);
-          show(errorEl, true);
-          hostBtn.textContent = 'Restart machine';
-          hostBtn.classList.remove('secondary');
-          show(hostBtn, true);
-          // Reset the backend-unreachable state's elements: the page can move
-          // between verdicts (a transient provider error resolves into this
-          // one), and a leftover Retry button or provider-error paragraph from
-          // the previous render would mislead.
-          show(retryBtn, false);
-          if (providerReasonEl) { providerReasonEl.textContent = ''; show(providerReasonEl, false); }
-          show(reportBtn, true);
-          // Keep watching for self-recovery: the workspace may come back on its own
-          // (a slow cold boot, a healed network) while this consent page is shown,
-          // and the cheap liveness poll returns the user home the moment it does.
-          armHealthyPoll();
-        }
-        // INDETERMINATE: we lack trustworthy evidence to classify -- the
-        // in-container probe timed out (observed nothing), discovery has not
-        // re-observed the host since the outage began (so its host state may be
-        // stale), or the snapshot carries no observation of the container (host
-        // state UNKNOWN, transitional, or absent).
-        // Render neither a verdict nor a restart button, just a live
-        // "reconnecting" spinner. The cheap liveness poll (armed here) returns the
-        // user home the instant the workspace answers; a slow heavy re-probe
-        // converges to a real tier if it is genuinely down and a fresh snapshot
-        // later lands. A live GET / 200 short-circuits to HEALTHY upstream, so we
-        // only reach here without direct positive evidence.
-        function renderReconnecting() {
-          titleEl.textContent = 'Reconnecting to your machine';
-          messageEl.textContent =
-            'This is taking longer than usual. We\\'ll reconnect you automatically as soon '
-            + 'as your machine responds.';
-          show(spinnerEl, true);
-          show(errorEl, false);
-          show(hostBtn, false);
-          show(retryBtn, false);
-          show(reportBtn, true);
-          if (providerReasonEl) { providerReasonEl.textContent = ''; show(providerReasonEl, false); }
-          armHealthyPoll();
-        }
-        function renderDispatchError() {
-          titleEl.textContent = 'Machine unresponsive';
-          messageEl.textContent = 'Could not start the restart. Check your connection and try again.';
-          show(spinnerEl, false);
-          show(errorEl, false);
-          hostBtn.textContent = 'Restart machine';
-          hostBtn.classList.remove('secondary');
-          show(hostBtn, true);
-          // Same residual-state reset as renderUnresponsive: this state can
-          // follow a backend-unreachable render via its Retry button.
-          show(retryBtn, false);
-          if (providerReasonEl) { providerReasonEl.textContent = ''; show(providerReasonEl, false); }
-          show(reportBtn, true);
-          armHealthyPoll();
-        }
-        // The provider/backend hosting this workspace is unreachable or rejected
-        // us (connector down, docker daemon stopped or paused, expired login,
-        // ...). A restart routes through that same backend, so it can't help --
-        // offer only a Retry. The background healthy-poll (armed by applyHealth)
-        // auto-returns the user to the workspace the moment it recovers and the
-        // tracker flips HEALTHY. The copy is deliberately provider-agnostic (no
-        // "check your internet" -- a local docker daemon is independent of the
-        // network); the actual cause comes from the provider itself via
-        // ``unreachable_reason``, surfaced verbatim below so we never have to
-        // hand-author a message per provider.
-        function renderBackendUnreachable(data) {
-          var label = (data && data.provider_label) || 'the machine backend';
-          var reason = (data && data.unreachable_reason) || '';
-          titleEl.textContent = "Can't connect to " + label;
-          messageEl.textContent =
-            'This page will reconnect you automatically the moment your machine '
-            + 'is reachable again.';
-          if (providerReasonEl) {
-            providerReasonEl.textContent = reason;
-            show(providerReasonEl, Boolean(reason));
-          }
-          show(spinnerEl, false);
-          show(errorEl, false);
-          show(hostBtn, false);
-          show(retryBtn, true);
-          show(reportBtn, true);
-          // No diagnostics here: when the backend itself is unreachable the
-          // in-container probes are moot -- the cause is the provider's own
-          // error, shown verbatim above -- so suppress the Diagnostics disclosure.
-          show(debugDetailsEl, false);
-          // Return the user to the workspace automatically once the backend
-          // recovers and the tracker flips HEALTHY (a resumed daemon, a restored
-          // login, a healed network all recover identically).
-          armHealthyPoll();
-        }
-
-        // ``renderPending`` is the spinner state shown while the dispatch is in
-        // flight; defaults to ``renderRestarting`` (the manual click, where the
-        // restart is known). The entry dispatch passes the offline copy when
-        // the render-time hint reads the host as offline, else the neutral
-        // ``renderLoading`` -- it cannot know whether its start will do
-        // anything.
-        function postRestart(body, renderPending) {
-          restartDispatched = true;
-          startOnlyDispatched = Boolean(body && body.start_only);
-          (renderPending || renderRestarting)();
-          // The endpoint returns a 202 operation handle once the tracker is
-          // RESTARTING; any other status means the dispatch did not start, so
-          // surface an error instead of refreshing into a re-probe loop. The
-          // page keeps its own health-poll loop (scheduleRefresh re-reads the
-          // tracker via the recovery page), so the operation handle is unused
-          // here -- a clean 202 is enough to start polling.
-          fetch('/api/v1/workspaces/' + encodeURIComponent(agentId) + '/restart', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          }).then(function (resp) {
-            if (resp.ok) { scheduleRefresh(); } else { renderDispatchError(); }
-          }, renderDispatchError);
-        }
-
-        function fetchHealth() {
-          return fetch('/api/v1/workspaces/' + encodeURIComponent(agentId) + '/health', {
-            credentials: 'same-origin',
-          }).then(function (resp) { return resp.json(); });
-        }
-
-        // Render the tier in a host-health payload. Display-only: the recovery
-        // flow's restart is dispatched unconditionally on page entry (see the
-        // entry branching at the bottom), never off a classified tier -- the
-        // start-only dispatch is safe regardless of what we believe about the
-        // host, so no verdict is trusted with that decision. This runs only on
-        // the restart_failed entry's probe and the reprobe/Retry chains it arms.
-        function applyHealth(data) {
-          // The page was swapped away (surface routing tears it down without a
-          // full navigation), so a late probe result must not render into it.
-          if (pageTornDown) return;
-          // A restart is in flight (or its dispatch just failed): this result
-          // raced the dispatch, so it is stale -- the restarting render and
-          // scheduleRefresh own the page now, and rendering a verdict here
-          // would overwrite them.
-          if (restartDispatched) return;
-          latestHealth = data || null;
-          renderDebugMenu(latestHealth);
-          var tier = data && data.dispatch_tier;
-          // Backend unreachable: no restart can help while the backend is
-          // unreachable or rejecting us. renderBackendUnreachable arms the
-          // healthy-poll so the page auto-returns once the backend recovers,
-          // and the slow re-probe keeps the verdict live: a transient provider
-          // error (e.g. one failed discovery cycle during app startup) is
-          // cleared by the provider's next clean snapshot, and the re-probe
-          // then re-classifies so the flow continues instead of dead-ending.
-          if (tier === 'backend_unreachable') {
-            renderBackendUnreachable(data);
-            scheduleIndeterminateReprobe();
-            return;
-          }
-          // The in-container probe shows the interface is actually answering
-          // (HTTP 200), so there is nothing left to recover. Reload the recovery
-          // route; once the background tracker also confirms HEALTHY it 302s the
-          // user back to the workspace. If the tracker is still catching up the
-          // route re-renders here, we re-probe, see HEALTHY again, and converge.
-          if (tier === 'healthy') {
-            renderLoading();
-            scheduleRefresh();
-            return;
-          }
-          // No trustworthy evidence to classify (probe timed out, discovery has
-          // not re-observed the host since the outage, or the snapshot carries no
-          // observation of the container). Show a live "reconnecting" state and
-          // keep checking rather than rendering a verdict off non-evidence. The
-          // cheap liveness poll (armed by renderReconnecting) does the fast
-          // recovery; the slow re-probe converges to a real tier.
-          if (tier === 'indeterminate') {
-            renderReconnecting();
-            scheduleIndeterminateReprobe();
-            return;
-          }
-          // Any concrete verdict (host_offline, host_unresponsive, or anything
-          // else): render the failure state with the manual restart button and
-          // the diagnostics list. Not a dead-end: renderUnresponsive keeps the
-          // healthy-poll running so a self-recovery still returns the user
-          // home, and the slow re-probe keeps the verdict and diagnostics live.
-          renderUnresponsive();
-          scheduleIndeterminateReprobe();
-        }
-
-        // Fetch the host-health probe and render the diagnostic alongside the
-        // existing failure-reason error block (the restart_failed entry and the
-        // Retry button), so the user sees both. Display-only; never dispatches.
-        function runProbe() {
-          renderLoading();
-          fetchHealth().then(function (data) {
-            applyHealth(data);
-          }, function () {
-            // The probe request itself failed -- most often the machine slept and
-            // Chromium aborted the in-flight fetch (a dropped request is absence of
-            // evidence, not proof the workspace is down). Treat it exactly like an
-            // INDETERMINATE verdict: render the live "reconnecting" state and retry
-            // the probe on the slow cadence, while the cheap liveness poll armed by
-            // renderReconnecting returns the user home the instant the workspace
-            // answers. This is the post-sleep strand fix: a dropped request no
-            // longer dead-ends on a static unresponsive verdict.
-            renderReconnecting();
-            scheduleIndeterminateReprobe();
-          });
-        }
-
-        hostBtn.addEventListener('click', function () {
-          postRestart({ scope: 'host' });
-        });
-        if (retryBtn) {
-          retryBtn.addEventListener('click', function () {
-            // Re-check reachability immediately: refresh the probe and
-            // re-render the state (display-only, like every probe path).
-            runProbe();
-          });
-        }
-        if (copyBtn) {
-          copyBtn.addEventListener('click', copyDiagnostics);
-        }
-        if (reportBtn) {
-          reportBtn.addEventListener('click', function () {
-            // Open the get-help / report-a-bug modal, scoped to this workspace.
-            // The recovery page renders inside the chrome shell, so it calls
-            // the window.minds bridge directly (opens the overlay-layer help
-            // modal). On a standalone page load (no bridge) navigate to the
-            // full-page /help fallback.
-            if (window.minds && window.minds.openHelp) {
-              window.minds.openHelp(agentId);
-            } else {
-              window.location.href = '/help';
-            }
-          });
-        }
-        if (copySshBtn) {
-          copySshBtn.addEventListener('click', function () {
-            var cmd = copySshBtn.getAttribute('data-ssh-command') || '';
-            try {
-              if (navigator.clipboard) navigator.clipboard.writeText(cmd);
-            } catch (e) {
-              /* ignore */
-            }
-          });
-        }
-
-        // The render-time offline hint: the resolver's current host-state
-        // reading, passed for display only (it may be stale at a cold launch;
-        // maybeUpgradeToOfflineCopy corrects the copy when discovery lands).
-        var hostOffline = root.dataset.hostOffline === '1';
-        // The flavor of an in-flight restart, from the tracker: start-only (the
-        // page's own entry dispatch, a possible no-op) vs a full manual bounce
-        // (the right-click "Restart machine" click, which POSTs the restart and
-        // then navigates here fresh). Display-only.
-        var restartStartOnly = root.dataset.restartStartOnly === '1';
-        if (initialStatus === 'restarting') {
-          // A restart is in flight (a reload lands here for the entry dispatch
-          // and the manual bounce alike). The offline hint wins -- a cold boot
-          // reads as "Bringing your machine back online". Otherwise the flavor
-          // decides: a full manual bounce is a deliberate, known restart, so name
-          // it "Restarting your machine"; a start-only entry dispatch may be a
-          // no-op, so it stays on the neutral "Loading machine" spinner.
-          (hostOffline
-            ? renderRestartingOffline
-            : (restartStartOnly ? renderLoading : renderRestarting))();
-          scheduleRefresh();
-        } else if (initialStatus === 'restart_failed') {
-          // Show the failure reason AND the diagnostic together: run the
-          // (display-only) probe so the renderUnresponsive path also has the
-          // diagnostics populated. renderUnresponsive arms the healthy-poll, so a
-          // failed restart is not terminal -- if the background probe loop recovers
-          // the workspace on its own (e.g. a cold boot that finished just after the
-          // restart worker's bounded wait elapsed) the user is returned home.
-          runProbe();
-        } else if (initialStatus === 'healthy') {
-          // Degenerate: rendered HEALTHY with no return_to to 302 to. Offer a
-          // manual restart rather than auto-dispatching one on a healthy page.
-          renderUnresponsive();
-        } else {
-          // Fresh entry (the STUCK redirect or a failed content load): dispatch
-          // the start-only restart immediately and unconditionally, with no
-          // knowledge of the host's state. This is safe regardless of that
-          // state -- ``mngr start`` checks ground truth at commit time, no-ops
-          // on a live host, and never bounces running agents -- so a stopped
-          // workspace cold-boots on first entry with no discovery-freshness
-          // crawl, and a workspace that merely blipped makes it a no-op. The
-          // liveness poll is armed first so a workspace that answers while the
-          // dispatch settles still goes straight home; if the start cannot
-          // bring the interface back, the worker lands on restart_failed and
-          // the reload renders the manual-consent page with diagnostics (the
-          // stop+start bounce is never dispatched without a click). The
-          // pending copy claims only what is known: the offline copy when the
-          // host reads offline (a real cold boot is coming), else the neutral
-          // "Loading machine" spinner -- the dispatch may well be a no-op,
-          // and "Restarting your machine" would overclaim (the header
-          // upgrade switches to the offline copy if a STOPPED observation
-          // lands mid-dispatch).
-          armHealthyPoll();
-          postRestart(
-            { scope: 'host', start_only: true },
-            hostOffline ? renderRestartingOffline : renderLoading
-          );
-        }
-      })();
-"""
-
-
-@pure
-def render_recovery_page(
-    agent_id: AgentId,
-    return_to: str,
-    initial_status: str,
-    initial_error: str,
-    ssh_command: str | None = None,
-    initial_offline: bool = False,
-    restart_is_start_only: bool = False,
-) -> str:
-    """Render the workspace-recovery page shown when the system interface is unresponsive.
-
-    Built on the shared ``render_loading_page`` so the recovery page's loading
-    state is identical to the mngr_forward proxy loader. ``initial_status`` is
-    one of ``"stuck"``/``"restarting"``/``"restart_failed"``/``"healthy"`` and
-    governs the page's initial UI state. ``initial_error`` is the failure
-    reason shown (collapsed) when ``initial_status`` is ``"restart_failed"``.
-    ``return_to`` is the URL the page navigates back to once the workspace is
-    healthy again. ``initial_offline`` is the display-only hint that the host
-    currently reads as offline (STOPPED/CRASHED), which selects the "Bringing
-    your machine back online" copy for the restarting state; it never
-    affects what is dispatched.
-
-    ``restart_is_start_only`` is the display-only flavor of an in-flight restart
-    when ``initial_status`` is ``"restarting"``: True for the recovery page's own
-    start-only entry dispatch (a possible no-op -> the neutral "Loading machine"
-    spinner), False for a full manual bounce reloaded here (the right-click
-    "Restart machine" click POSTs the restart and then navigates to this page
-    fresh -> the known "Restarting your machine" copy). Ignored unless the host
-    reads offline (the offline copy wins) and unless the status is restarting.
-
-    ``ssh_command`` is the copy-pasteable SSH command for the agent's host. When
-    provided, a "Copy SSH command" button sits beside "Copy diagnostics" in the
-    Diagnostics menu; when ``None`` (no SSH info -- e.g. the brief window before
-    discovery surfaces it) the button is omitted entirely rather than rendered
-    inert.
-    """
-    error_block = ""
-    if initial_error:
-        error_block = (
-            '        <details id="recovery-error" class="hidden">\n'
-            "          <summary>Error details</summary>\n"
-            f"          <pre>{html.escape(initial_error)}</pre>\n"
-            "        </details>\n"
-        )
-    # Debug details are populated dynamically by the recovery JS once it gets
-    # a host-health response. The block is in the DOM from the start (hidden)
-    # so the JS can fill it in place without re-templating.
-    ssh_button = ""
-    if ssh_command is not None:
-        ssh_button = (
-            '<button type="button" id="copy-ssh-btn" '
-            f'data-ssh-command="{html.escape(ssh_command, quote=True)}">Copy SSH command</button>'
-        )
-    debug_block = (
-        '        <details id="recovery-debug-details" class="hidden">\n'
-        "          <summary>Diagnostics</summary>\n"
-        '          <div id="recovery-debug-content"></div>\n'
-        '          <div class="debug-section">'
-        '<button type="button" id="copy-diagnostics-btn">Copy diagnostics</button>'
-        f"{ssh_button}"
-        "</div>\n"
-        "        </details>\n"
-    )
-    # The restart button is the page's primary action, so it comes first --
-    # directly under the message. The error and diagnostics disclosures are
-    # grouped together below it in the de-emphasized troubleshooting block;
-    # ``_RECOVERY_STYLE`` self-hides that block (divider + label included)
-    # whenever neither disclosure is currently visible.
-    card_extra = (
-        '      <p id="recovery-provider-reason" class="recovery-provider-reason hidden"></p>\n'
-        '      <button id="recovery-host-btn" class="hidden">Restart machine</button>\n'
-        '      <button id="recovery-retry-btn" class="hidden">Retry</button>\n'
-        '      <button type="button" id="recovery-report-btn" class="hidden">Report a problem</button>\n'
-        '      <div class="recovery-troubleshooting">\n'
-        '        <p class="recovery-troubleshooting-label">Troubleshooting</p>\n'
-        + error_block
-        + debug_block
-        + "      </div>\n"
-    )
-    card_attrs = (
-        f' data-agent-id="{html.escape(str(agent_id))}"'
-        f' data-return-to="{html.escape(return_to)}"'
-        f' data-initial-status="{html.escape(initial_status)}"'
-        f' data-host-offline="{"1" if initial_offline else "0"}"'
-        f' data-restart-start-only="{"1" if restart_is_start_only else "0"}"'
-    )
-    # The card is embedded under the ChromeShell titlebar (pages.Recovery) so a
-    # stuck workspace never strands the user without the Minds home button --
-    # rather than rendered as the standalone loader page. Only the card-level
-    # CSS is pulled in (the page centering is Tailwind in the template), and the
-    # card's viewport allowance additionally clears the fixed 38px bar (the
-    # shared _RECOVERY_STYLE subtracts only the standalone page's padding).
-    style_html = LOADING_CARD_CSS + _RECOVERY_STYLE + "      .card { max-height: calc(100dvh - 86px); }\n"
-    return CATALOG.render(
-        "pages.Recovery",
-        card_html=render_loading_card(card_attrs=card_attrs, card_extra=card_extra),
-        style_html=style_html,
-        script_html=_RECOVERY_SCRIPT,
-    )
 
 
 @pure
@@ -2169,7 +1221,7 @@ def warm_template_caches() -> None:
         render_chrome_page,
         render_sidebar_page,
         lambda: render_help_page(workspace_agent_id=""),
-        lambda: render_inbox_page(pending=()),
+        lambda: render_inbox_page(cards=()),
     ):
         try:
             render()
@@ -2248,12 +1300,16 @@ def render_workspace_settings(
 # per-app target.
 _WHOLE_MACHINE_SERVICE: Final[str] = "system_interface"
 
-# Registered services that are the workspace's own interfaces rather than apps
-# someone would share on their own, so the Share machine list leaves them out
-# (see _split_share_targets). Singular and plural are both listed because the
-# name is whatever the in-workspace process registered, not a fixed vocabulary.
+# Registered services that are the workspace's own interfaces (or internal
+# infrastructure) rather than apps someone would share on their own, so the
+# Share machine list leaves them out (see _split_share_targets). Singular and
+# plural are both listed because the name is whatever the in-workspace process
+# registered, not a fixed vocabulary. ``owner-exec`` is the internal
+# SSH-equivalent exec channel (the web client drives the workspace through it);
+# it is authorized by request-signing against ``authorized_keys``, never by a
+# share grant, so it must never appear as a per-app share target.
 _NON_APP_SHARE_SERVICES: Final[frozenset[str]] = frozenset(
-    {"chat", "chats", "terminal", "terminals", "browser", "browsers"}
+    {"chat", "chats", "terminal", "terminals", "browser", "browsers", "owner-exec"}
 )
 
 # A service can only be a per-app share target if its name can be a hostname
@@ -2332,19 +1388,12 @@ def render_workspace_options_page(
     is_stale: bool = False,
     has_account: bool = False,
     selected_group: str = "general",
-    permissions_view: object | None = None,
-    waiting_requests: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """Render the browser-mode workspace options page (``GET /workspace/<agent_id>/options``).
 
-    The full-page twin of the docked panel: the same Permissions / Share
-    machine / Machine Settings panes without the overlay chrome, since outside
-    Electron the titlebar's icon-tabs navigate instead of opening an overlay.
-
-    ``permissions_view`` is the Permissions pane's
-    :class:`~imbue.minds.desktop_client.latchkey.permission_toggles.WorkspacePermissionsView`,
-    or ``None`` when the latchkey gateway is unavailable (the pane then renders
-    its unavailable notice).
+    The full-page twin of the docked panel: the same Share machine / Machine
+    Settings panes without the overlay chrome, since outside Electron the
+    titlebar's icon-tabs navigate instead of opening an overlay.
     """
     app_services, whole_service = _split_share_targets(servers)
     return CATALOG.render(
@@ -2366,8 +1415,6 @@ def render_workspace_options_page(
         is_stale=is_stale,
         palette=WORKSPACE_PALETTE,
         selected_group=selected_group,
-        permissions_view=permissions_view,
-        waiting_requests=waiting_requests,
     )
 
 
@@ -2391,8 +1438,6 @@ def render_workspace_options_modal_page(
     is_stale: bool = False,
     has_account: bool = False,
     selected_group: str = "general",
-    permissions_view: object | None = None,
-    waiting_requests: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """Render the workspace options panel (``GET /workspace/<agent_id>/options/modal``).
 
@@ -2401,9 +1446,6 @@ def render_workspace_options_modal_page(
     the overlay layer. Supplying it docks the panel under that strip and
     draws the tab strip in its place; omitting it -- there is no such strip
     outside a workspace -- centers the panel and drops the tabs.
-
-    ``permissions_view`` feeds the Permissions pane; ``None`` renders its
-    unavailable notice (see :func:`render_workspace_options_page`).
     """
     app_services, whole_service = _split_share_targets(servers)
     return CATALOG.render(
@@ -2428,8 +1470,6 @@ def render_workspace_options_modal_page(
         is_stale=is_stale,
         palette=WORKSPACE_PALETTE,
         selected_group=selected_group,
-        permissions_view=permissions_view,
-        waiting_requests=waiting_requests,
     )
 
 
@@ -2642,7 +1682,7 @@ def render_account_plan_modal_page(acct_user_id: str, account_email: str) -> str
 
 
 @pure
-def render_inspiration_modal_page(
+def render_template_modal_page(
     git_url: str,
     branch: str = "",
     current_machine_id: str = "",
@@ -2651,20 +1691,20 @@ def render_inspiration_modal_page(
     default_account_id: str = "",
     color: str = DEFAULT_WORKSPACE_COLOR,
     mngr_forward_origin: str = "",
-    machine_rows: Sequence[InspirationMachineRow] = (),
+    machine_rows: Sequence[TemplateMachineRow] = (),
     region_options_by_launch_mode: Mapping[str, Sequence[str]] | None = None,
     region_selected_by_launch_mode: Mapping[str, str] | None = None,
 ) -> str:
-    """Render the Create from Inspiration stepper as a modal (``GET /create/inspiration/modal``).
+    """Render the Create from Template stepper as a modal (``GET /create/template/modal``).
 
     The deeplink entry point when the app is already inside a workspace. It is
-    the SAME stepper the full page renders (``render_inspiration_create_page``),
+    the SAME stepper the full page renders (``render_template_create_page``),
     hosted in the shared overlay's card instead of the page shell, so the create
     flow behaves identically. The one difference: the add branch targets the
     workspace the user is already in, so its last step drops the picker and just
     says to paste the copied message into that chat, then dismisses itself.
     """
-    return _render_inspiration_stepper(
+    return _render_template_stepper(
         git_url=git_url,
         branch=branch,
         accounts=accounts,

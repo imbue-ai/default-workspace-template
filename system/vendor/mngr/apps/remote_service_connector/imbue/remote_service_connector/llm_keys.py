@@ -1,6 +1,7 @@
 """LiteLLM virtual-key management endpoints (/keys/*)."""
 
 import logging
+import re
 
 from fastapi import APIRouter
 from fastapi import HTTPException
@@ -8,10 +9,10 @@ from fastapi import Request
 from pydantic import BaseModel
 from pydantic import Field
 
-import imbue.remote_service_connector.auth as auth_module
+import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.litellm_client as litellm_client
-from imbue.remote_service_connector.auth import authenticate_request
+import imbue.remote_service_connector.sync as sync_module
 from imbue.remote_service_connector.errors import QuotaExceededError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -67,20 +68,9 @@ def create_litellm_key(request: Request, body: CreateKeyRequest) -> dict[str, ob
     budgets remain entirely caller-controlled.
     """
     with handle_endpoint_errors():
-        user = authenticate_request(request)
-        entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
-        if entitlements.monthly_llm_spend_usd <= 0:
-            raise QuotaExceededError(
-                entitlement="monthly_llm_spend_usd",
-                limit=entitlements.monthly_llm_spend_usd,
-                current=0,
-                message=(
-                    "This account's plan has no LLM spend budget, so imbue-cloud inference keys cannot be "
-                    "created. Select 'subscription' (or your own API key) as the AI provider instead."
-                ),
-            )
-        token = request.headers.get("authorization", "")[7:]
-        user_id = auth_module.get_user_id_from_access_token(token)
+        user, user_id = accounts_web_module.resolve_web_user_identity(request)
+        entitlements = entitlements_module.resolve_entitlements_for_user(user_id, user)
+        _require_llm_spend_budget(entitlements)
         litellm_client.upsert_litellm_user_budget(user_id, entitlements.monthly_llm_spend_usd)
 
         litellm_body: dict[str, object] = {"user_id": user_id}
@@ -106,9 +96,7 @@ def create_litellm_key(request: Request, body: CreateKeyRequest) -> dict[str, ob
 def list_litellm_keys(request: Request) -> list[dict[str, object]]:
     """List all LiteLLM virtual keys owned by the authenticated user."""
     with handle_endpoint_errors():
-        authenticate_request(request)
-        token = request.headers.get("authorization", "")[7:]
-        user_id = auth_module.get_user_id_from_access_token(token)
+        user_id = accounts_web_module.resolve_web_user_identity(request)[1]
 
         # Without ``return_full_object=true`` LiteLLM returns the keys as a
         # bare list of token-id strings (and the ``KeyInfo`` mapping below
@@ -147,9 +135,7 @@ def list_litellm_keys(request: Request) -> list[dict[str, object]]:
 def get_litellm_key_info(request: Request, key_id: str) -> dict[str, object]:
     """Get info (including spend and budget) for a specific LiteLLM key."""
     with handle_endpoint_errors():
-        authenticate_request(request)
-        token = request.headers.get("authorization", "")[7:]
-        user_id = auth_module.get_user_id_from_access_token(token)
+        user_id = accounts_web_module.resolve_web_user_identity(request)[1]
 
         resp = litellm_client.litellm_request("GET", "/key/info", params={"key": key_id})
         data = resp.json()
@@ -173,9 +159,7 @@ def get_litellm_key_info(request: Request, key_id: str) -> dict[str, object]:
 def update_litellm_key_budget(request: Request, key_id: str, body: UpdateBudgetRequest) -> dict[str, object]:
     """Update the budget for a LiteLLM key owned by the authenticated user."""
     with handle_endpoint_errors():
-        authenticate_request(request)
-        token = request.headers.get("authorization", "")[7:]
-        user_id = auth_module.get_user_id_from_access_token(token)
+        user_id = accounts_web_module.resolve_web_user_identity(request)[1]
 
         # Verify ownership
         info_resp = litellm_client.litellm_request("GET", "/key/info", params={"key": key_id})
@@ -198,9 +182,7 @@ def update_litellm_key_budget(request: Request, key_id: str, body: UpdateBudgetR
 def delete_litellm_key(request: Request, key_id: str) -> dict[str, object]:
     """Delete a LiteLLM key owned by the authenticated user."""
     with handle_endpoint_errors():
-        authenticate_request(request)
-        token = request.headers.get("authorization", "")[7:]
-        user_id = auth_module.get_user_id_from_access_token(token)
+        user_id = accounts_web_module.resolve_web_user_identity(request)[1]
 
         # Verify ownership
         info_resp = litellm_client.litellm_request("GET", "/key/info", params={"key": key_id})
@@ -212,3 +194,95 @@ def delete_litellm_key(request: Request, key_id: str) -> dict[str, object]:
         litellm_client.litellm_request("POST", "/key/delete", json_body={"keys": [key_id]})
 
         return DeleteKeyResponse(status="deleted").model_dump()
+
+
+# Budget defaults for workspace-minted keys, matching the desktop mint page
+# (apps/minds .../ai_keys.py): a rolling daily budget, not a lifetime cap.
+_WORKSPACE_MINT_MAX_BUDGET_USD = 100.0
+_WORKSPACE_MINT_BUDGET_DURATION = "1d"
+
+# Workspace-record host ids look like ``host-<32 hex>`` (mirrors the sync
+# module's validation shape; kept permissive on length for older ids).
+_WORKSPACE_HOST_ID_RE = re.compile(r"^host-[0-9a-f]{8,64}$")
+
+
+class WorkspaceMintRequest(BaseModel):
+    host_id: str = Field(description="The workspace's mngr host id (a `host-<hex>` sync-record key)")
+
+
+def _require_llm_spend_budget(entitlements: entitlements_module.AccountEntitlements) -> None:
+    """Refuse key minting outright for plans with a zero monthly LLM budget."""
+    monthly_budget = entitlements.monthly_llm_spend_usd
+    if monthly_budget <= 0:
+        raise QuotaExceededError(
+            entitlement="monthly_llm_spend_usd",
+            limit=monthly_budget,
+            current=0,
+            message=(
+                "This account's plan has no LLM spend budget, so imbue-cloud inference keys cannot be "
+                "created. Select 'subscription' (or your own API key) as the AI provider instead."
+            ),
+        )
+
+
+@router.post("/keys/workspace-mint")
+def mint_workspace_key(request: Request, body: WorkspaceMintRequest) -> dict[str, object]:
+    """Mint (or rotate) the LiteLLM key for one of the caller's workspaces.
+
+    The hosted web chrome's twin of the desktop mint page: the key's alias and
+    metadata carry the workspace host id, fixed server-side, so keys are
+    attributable without any editable input. Ownership is record existence --
+    the caller must have an ACTIVE sync record for the host id. The alias is
+    deterministic and LiteLLM enforces unique aliases, so an existing key with
+    this alias is deleted and re-minted in place ("get me working credentials
+    now" semantics: previously issued credentials for this workspace stop
+    working).
+    """
+    with handle_endpoint_errors():
+        user, user_id = accounts_web_module.resolve_web_user_identity(request)
+        host_id = body.host_id.strip().lower()
+        if not _WORKSPACE_HOST_ID_RE.match(host_id):
+            raise HTTPException(status_code=400, detail="Invalid workspace host id")
+        entitlements = entitlements_module.resolve_entitlements_for_user(user_id, user)
+        _require_llm_spend_budget(entitlements)
+
+        # Ownership: the caller's replica must hold an ACTIVE record for this
+        # workspace (association IS record existence, same rule as the desktop).
+        records = sync_module.get_sync_store().list_records(user_id)
+        if not any(record["host_id"] == host_id and record["state"] == "active" for record in records):
+            raise HTTPException(status_code=403, detail="No active workspace record for this host id")
+
+        litellm_client.upsert_litellm_user_budget(user_id, entitlements.monthly_llm_spend_usd)
+
+        # Rotate-on-exists: delete any key already carrying this workspace's
+        # deterministic alias before minting the fresh one.
+        alias = f"workspace-{host_id}"
+        list_resp = litellm_client.litellm_request(
+            "GET", "/key/list", params={"user_id": user_id, "return_full_object": "true"}
+        )
+        listed = list_resp.json()
+        keys_raw = listed if isinstance(listed, list) else listed.get("keys", [])
+        stale_tokens = [
+            str(entry.get("token"))
+            for entry in keys_raw
+            if isinstance(entry, dict) and entry.get("key_alias") == alias and entry.get("token")
+        ]
+        if stale_tokens:
+            litellm_client.litellm_request("POST", "/key/delete", json_body={"keys": stale_tokens})
+
+        resp = litellm_client.litellm_request(
+            "POST",
+            "/key/generate",
+            json_body={
+                "user_id": user_id,
+                "key_alias": alias,
+                "max_budget": _WORKSPACE_MINT_MAX_BUDGET_USD,
+                "budget_duration": _WORKSPACE_MINT_BUDGET_DURATION,
+                "metadata": {"workspace_host_id": host_id, "source": "web-chrome-mint"},
+            },
+        )
+        data = resp.json()
+        return CreateKeyResponse(
+            key=data["key"],
+            base_url=litellm_client.litellm_base_url_for_agents(),
+        ).model_dump()

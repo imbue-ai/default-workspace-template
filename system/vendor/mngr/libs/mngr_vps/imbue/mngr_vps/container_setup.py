@@ -134,6 +134,10 @@ def ensure_depot_token_available(builder: DockerBuilder) -> None:
 # attempts can resume rather than re-uploading completed bytes.
 _RSYNC_PARTIAL_DIR_REMOTE: Final[str] = "/tmp/mngr-rsync-partial"
 
+# How many trailing lines of EACH stream a failed docker build reports (the two
+# streams are tailed separately so one stream's noise cannot hide the other's error).
+_BUILD_FAILURE_TAIL_LINE_COUNT: Final[int] = 50
+
 # Backoff between attempts (entry N is the wait *before* attempt N+1). There is
 # one entry per retry gap; the total attempt count is derived from its length so
 # the two can never drift (the loop indexes this tuple on every non-last attempt).
@@ -305,6 +309,15 @@ def is_path_mounted_on_outer(outer: OuterHostInterface, path: Path) -> bool:
     """Return True iff ``path`` is currently a mountpoint on the outer."""
     result = outer.execute_idempotent_command(
         f"mountpoint -q {shlex.quote(str(path))}",
+        timeout_seconds=10.0,
+    )
+    return result.success
+
+
+def is_path_symlink_on_outer(outer: OuterHostInterface, path: Path) -> bool:
+    """Return True iff ``path`` is a symlink on the outer."""
+    result = outer.execute_idempotent_command(
+        f"test -L {shlex.quote(str(path))}",
         timeout_seconds=10.0,
     )
     return result.success
@@ -634,9 +647,27 @@ def prepare_btrfs_on_outer(
     suitable for use as the ``device=`` value of a bind-options docker volume.
 
     Raises ``VpsProvisioningError`` if free space on ``/`` (after subtracting
-    ``outer_disk_reserved_gb``) is not positive, or if any setup step fails.
+    ``outer_disk_reserved_gb``) is not positive, if the mount path is a symlink
+    with nothing mounted at its target yet (the pre-mounted slice layout before
+    the VM's data-disk provisioning finishes), or if any setup step fails.
     """
     subvolume_path = btrfs_mount_path / host_id.get_uuid().hex
+
+    # Guard the slice case: a symlink at the mount path is the signature of a
+    # pre-mounted data disk (the VM's lima ``additionalDisk``, mounted elsewhere
+    # and symlinked here by guest provisioning). If nothing is mounted at its
+    # target yet, the pre-mounted branch below would not match and we would
+    # silently fall through to building a loop file on the VM's root disk -- a
+    # wrong-but-working state that masks the real volume (and its content) from
+    # then on. Refuse loudly instead; the caller retries once the VM's data-disk
+    # provisioning finishes.
+    is_mounted = is_path_mounted_on_outer(outer, btrfs_mount_path)
+    if not is_mounted and is_path_symlink_on_outer(outer, btrfs_mount_path):
+        raise VpsProvisioningError(
+            f"The btrfs mount path {btrfs_mount_path} is a symlink (pre-mounted data-disk layout) but "
+            f"nothing is mounted at its target yet; refusing to fall back to a loop file on the root "
+            f"disk. Wait for the VM's data-disk provisioning to finish and retry."
+        )
 
     # Pre-mounted-btrfs case (slices): the btrfs filesystem is already mounted at
     # ``btrfs_mount_path`` -- it's the VM's lima ``additionalDisk``, not a loop
@@ -644,7 +675,7 @@ def prepare_btrfs_on_outer(
     # "mount present AND our loop file absent" so a normal loop-backed VPS re-run
     # (loop file present) still takes the full path below. Just ensure btrfs-progs
     # and the per-host subvolume, then return.
-    if is_path_mounted_on_outer(outer, btrfs_mount_path) and not check_file_exists_on_outer(outer, loop_file_path):
+    if is_mounted and not check_file_exists_on_outer(outer, loop_file_path):
         with log_span("Using pre-mounted btrfs at {} (no loop image)", btrfs_mount_path):
             if not is_btrfs_progs_installed_on_outer(outer):
                 install_btrfs_progs_on_outer(outer)
@@ -1141,8 +1172,19 @@ def build_image_on_outer(
         timeout_seconds=timeout_seconds,
     )
     if not result.success:
-        tail = "\n".join((result.stdout + "\n" + result.stderr).splitlines()[-50:])
-        raise MngrError(f"Remote docker build failed: {tail}")
+        # Tail each stream separately: concatenating stdout+stderr and tailing the
+        # combination lets one stream's noise (e.g. buildkit progress on stderr)
+        # push the other stream's error text out of the window entirely. The exit
+        # code distinguishes "the build script really failed" from output that just
+        # stopped arriving.
+        stderr_tail = "\n".join(result.stderr.splitlines()[-_BUILD_FAILURE_TAIL_LINE_COUNT:])
+        stdout_tail = "\n".join(result.stdout.splitlines()[-_BUILD_FAILURE_TAIL_LINE_COUNT:])
+        exit_code_note = f"exit code {result.exit_code}" if result.exit_code is not None else "exit code unknown"
+        raise MngrError(
+            f"Remote docker build failed ({exit_code_note}).\n"
+            f"--- stderr tail ---\n{stderr_tail}\n"
+            f"--- stdout tail ---\n{stdout_tail}"
+        )
     return tag
 
 
@@ -1215,6 +1257,37 @@ def _clone_build_context_for_self_contained_git(local_context: Path, git_depth: 
     return clone_target
 
 
+def _raise_if_cwd_deleted_for_relative_context(docker_build_args: tuple[str, ...]) -> None:
+    """Fail legibly when a relative build context has no working directory to resolve against.
+
+    A relative context -- every ``[create_templates.*]`` block passes ``"."`` --
+    resolves against THIS process's cwd, so a deleted cwd makes the build
+    unsalvageable, and unrecognisably so. ``Path(".").exists()`` still returns
+    True (the process holds an open fd on the unlinked directory), so ``"."``
+    survives the is-it-a-path filter in the caller and then dies inside
+    ``Path.resolve()``'s ``os.getcwd()`` with a bare ``FileNotFoundError`` raised
+    from posixpath, naming nothing the operator can act on.
+
+    Resolving cwd-independently instead of raising would be strictly worse: the
+    context would filter out as nonexistent, ``context_args`` would come back
+    empty, and we would upload an *empty* build context and fail minutes later on
+    a missing Dockerfile, with nothing pointing at the real cause.
+
+    Scoped to relative contexts on purpose: an absolute context needs no cwd and
+    builds fine without one, so it must not be blocked here.
+    """
+    if not any(not arg.startswith("-") and not os.path.isabs(arg) for arg in docker_build_args):
+        return
+    try:
+        os.getcwd()
+    except FileNotFoundError as e:
+        raise MngrError(
+            "Cannot resolve a relative Docker build context: this process's working directory no longer "
+            "exists (it was deleted while create was running). The build context is resolved relative to "
+            "it, so the build cannot proceed."
+        ) from e
+
+
 def build_image_on_outer_from_build_args(
     outer: OuterHostInterface,
     cg: ConcurrencyGroup,
@@ -1242,6 +1315,8 @@ def build_image_on_outer_from_build_args(
     build_tag = f"mngr-build-{host_id}"
     remote_build_dir = f"/tmp/mngr-build-{host_id.get_uuid().hex}"
 
+    _raise_if_cwd_deleted_for_relative_context(docker_build_args)
+
     # Separate the build context path from other docker build args.
     # Docker build expects the last positional arg to be the context path.
     # We scan for args that look like local paths (not starting with --)
@@ -1259,18 +1334,11 @@ def build_image_on_outer_from_build_args(
     # _clone_build_context_for_self_contained_git for why.
     local_clone_dir: Path | None = None
     if context_args:
-        # Path.resolve() calls os.getcwd() even for an already-absolute path (via
-        # os.path.abspath), so it raises FileNotFoundError when THIS process's working
-        # directory has been deleted -- which happens in the create flow when a
-        # temporary build/clone dir is cleaned up while it is still the CWD (the deleted
-        # dir is unrelated to the build context). The context path was already verified
-        # to exist above, so normalize an absolute one WITHOUT touching the (possibly
-        # gone) CWD; only a relative path still needs a CWD to resolve against.
-        raw_context = context_args[-1]
-        if os.path.isabs(raw_context):
-            local_context = Path(os.path.normpath(raw_context))
-        else:
-            local_context = Path(raw_context).resolve()
+        # A live cwd is guaranteed by the check at the top of this function, so
+        # resolve() is safe here. Note it must stay resolve() rather than
+        # normpath(): normpath collapses ".." lexically, which walks through a
+        # symlink to the wrong directory.
+        local_context = Path(context_args[-1]).resolve()
         clone_target = _clone_build_context_for_self_contained_git(local_context, git_depth)
         if clone_target is not None:
             # clone_target is <tempdir>/repo; remove the whole tempdir on exit.

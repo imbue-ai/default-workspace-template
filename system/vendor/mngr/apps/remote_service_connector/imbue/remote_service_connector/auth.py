@@ -18,30 +18,54 @@ from supertokens_python.recipe.session.syncio import get_session_without_request
 from supertokens_python.syncio import get_user
 
 from imbue.remote_service_connector import db
+from imbue.remote_service_connector.errors import EmailNotVerifiedError
 
 logger = logging.getLogger(__name__)
 
 
 class UserAuth(BaseModel):
     user_id_prefix: str
-    # Verified email associated with the SuperTokens user, looked up at auth
-    # time so that paid-feature endpoints (host pool, LiteLLM keys) can gate
-    # access against the ``paid_emails`` / ``paid_domains`` tables. ``None``
-    # when the SuperTokens user record has no email or when the lookup
-    # failed -- in that case the paid-feature gate denies access.
+    # Email associated with the SuperTokens user, looked up live at auth time.
+    # A verified login-method email is preferred; when the user has none, this
+    # falls back to their (unverified) primary email so display and
+    # account-keyed operations still work. ``None`` only when the SuperTokens
+    # user record has no email at all or the lookup failed.
     email: str | None = None
+    # Whether ``email`` belongs to a *verified* login method. Endpoints where
+    # the email is an authorization identity (share visits, ally eligibility)
+    # must check this via ``require_verified_email``; everything else accepts
+    # unverified accounts.
+    is_email_verified: bool = False
+
+    @property
+    def verified_email(self) -> str | None:
+        """The email only when it is verified -- the value safe to authorize by."""
+        return self.email if self.is_email_verified else None
 
 
 def authenticate_request(request: Request) -> UserAuth:
     """Authenticate a request via its SuperTokens JWT Bearer token.
 
     Raises ``HTTPException(401)`` when the Bearer credentials are missing or
-    the token is not a valid SuperTokens session for a verified-email user.
+    the token is not a valid SuperTokens session. Email verification is NOT
+    required here -- endpoints that authorize by email ownership must
+    additionally call :func:`require_verified_email`.
     """
     auth_header = request.headers.get("authorization", "")
     if not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer credentials")
     return _authenticate_supertokens(auth_header[7:])
+
+
+def require_verified_email(user: UserAuth) -> None:
+    """Refuse the request unless the caller's email is verified.
+
+    Applied only where the email is an authorization identity (satisfying a
+    share grant, ally-plan eligibility). Raises the structured
+    ``email_not_verified`` 403 so clients can prompt verification contextually.
+    """
+    if not user.is_email_verified:
+        raise EmailNotVerifiedError(user.email)
 
 
 _USER_ID_PREFIX_LENGTH = 16
@@ -56,31 +80,64 @@ def derive_user_id_prefix(user_id: str) -> str:
     return user_id.replace("-", "")[:_USER_ID_PREFIX_LENGTH]
 
 
-def default_email_getter(
+def resolve_account_email(
     user_id: str,
-    user_getter: Callable[[str], Any] = get_user,
-) -> str | None:
-    """Return the first **verified** email registered for the given SuperTokens user_id.
+    # Resolved at call time (not bound as a default) so tests that patch the
+    # module-level ``get_user`` take effect.
+    user_getter: Callable[[str], Any] | None = None,
+) -> tuple[str | None, bool]:
+    """Return ``(email, is_verified)`` for the given SuperTokens user_id.
 
     A SuperTokens user may have several login methods (email/password, OAuth
-    providers) with independent ``verified`` flags. Only login methods whose
-    ``verified`` flag is True are considered, since the paid-feature gate
-    authorizes by domain ownership and that requires the email to actually
-    have been verified. Returns the first matching email, or ``None`` if the
-    user has no verified email.
+    providers) with independent ``verified`` flags. A verified login-method
+    email is preferred; when none is verified, the first email is returned
+    with ``is_verified=False`` so callers can still display/key the account.
+    ``(None, False)`` means the user has no email at all (or does not exist).
 
     Only the SuperTokens SDK's typed errors (``SuperTokensSessionError``,
-    ``SuperTokensGeneralError``) are caught and turned into ``None`` (with a
-    warning log); any other exception (e.g. transport-level network errors
-    that escape the SDK) is allowed to propagate, so that truly unexpected
-    failures surface loudly rather than silently denying paid-feature access.
+    ``SuperTokensGeneralError``) are caught and turned into ``(None, False)``
+    (with a warning log); any other exception (e.g. transport-level network
+    errors that escape the SDK) is allowed to propagate, so that truly
+    unexpected failures surface loudly rather than silently denying access.
 
     ``user_getter`` is exposed for tests so they can drive each branch
     (``None`` user, missing emails, SDK exception) without monkeypatching the
     SuperTokens SDK; production callers should rely on the default.
     """
+    resolved_getter = user_getter if user_getter is not None else get_user
     try:
-        user = user_getter(user_id)
+        user = resolved_getter(user_id)
+    except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
+        logger.warning("Failed to fetch SuperTokens user %s: %s", user_id[:8], exc)
+        return None, False
+    if user is None:
+        return None, False
+    fallback_email: str | None = None
+    for login_method in user.login_methods:
+        if login_method.email and login_method.verified:
+            return login_method.email, True
+        if login_method.email and fallback_email is None:
+            fallback_email = login_method.email
+    return fallback_email, False
+
+
+def get_backfill_email(
+    user_id: str,
+    # Resolved at call time (not bound as a default) so tests that patch the
+    # module-level ``get_user`` take effect.
+    user_getter: Callable[[str], Any] | None = None,
+) -> str | None:
+    """Return the email to feed an entitlements-row backfill for ``user_id``.
+
+    The backfill's paid-list check may only consume verified emails, but a
+    user who merely lacks verification must still get a (explorer) row -- so
+    an existing-but-unverified user maps to ``""`` (create the row, skip the
+    paid check) while a missing/unresolvable user maps to ``None`` (do not
+    create anything).
+    """
+    resolved_getter = user_getter if user_getter is not None else get_user
+    try:
+        user = resolved_getter(user_id)
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
         logger.warning("Failed to fetch SuperTokens user %s: %s", user_id[:8], exc)
         return None
@@ -89,15 +146,15 @@ def default_email_getter(
     for login_method in user.login_methods:
         if login_method.email and login_method.verified:
             return login_method.email
-    return None
+    return ""
 
 
 def _authenticate_supertokens(
     token: str,
     session_getter: Callable[..., Any] = get_session_without_request_response,
-    email_getter: Callable[[str], str | None] = default_email_getter,
+    email_resolver: Callable[[str], tuple[str | None, bool]] = resolve_account_email,
 ) -> UserAuth:
-    """Validate a SuperTokens JWT access token. Returns UserAuth carrying the derived user-id prefix and verified email."""
+    """Validate a SuperTokens JWT access token. Returns UserAuth carrying the derived user-id prefix and email."""
     connection_uri = os.environ.get("SUPERTOKENS_CONNECTION_URI")
     if not connection_uri:
         raise HTTPException(status_code=401, detail="SuperTokens not configured")
@@ -105,11 +162,10 @@ def _authenticate_supertokens(
     try:
         # Pass ``override_global_claim_validators=lambda *_: []`` so the
         # session getter does NOT auto-reject based on the token's
-        # email-verification claim. We determine verification ourselves from a
-        # live core lookup below (see the ``email_getter`` call), and raise a
-        # clear "Email not verified" only when the email is genuinely
-        # unverified (the SDK's default rejection surfaces as a generic
-        # ``SuperTokensSessionError`` → "Invalid token", which is misleading).
+        # email-verification claim: verification is non-blocking here, and the
+        # endpoints that do require it check the live core state via
+        # ``require_verified_email`` instead of the claim baked into the token
+        # at login time.
         session = session_getter(
             access_token=token,
             anti_csrf_check=False,
@@ -124,20 +180,17 @@ def _authenticate_supertokens(
     user_id = session.get_user_id()
     user_id_prefix = derive_user_id_prefix(user_id)
 
-    # Resolve the verified email live from the core rather than trusting the
-    # token's cached email-verification claim. That claim is baked into the
-    # access token at login and cannot reflect a verification that happened
-    # afterwards -- e.g. a user who was just added to the paid list (and thus
-    # auto-verified) would keep getting rejected until their token refreshed.
-    # ``email_getter`` returns an email only for a *verified* login method, so a
-    # ``None`` result means "no verified email" and we reject. The core lookup
-    # already ran here on every authenticated request, so gating on it instead
-    # of on the token claim adds no extra round trip on the success path.
-    email = email_getter(user_id)
+    # Resolve the email (and its verification state) live from the core rather
+    # than trusting the token's cached email-verification claim -- the claim is
+    # baked in at login and cannot reflect a verification that happened
+    # afterwards. An account with no email at all is rejected: every login
+    # method we enable carries one, so its absence means a broken account
+    # record rather than a legitimate caller.
+    email, is_email_verified = email_resolver(user_id)
     if email is None:
-        raise HTTPException(status_code=401, detail="Email not verified")
+        raise HTTPException(status_code=401, detail="Account has no email address")
 
-    return UserAuth(user_id_prefix=user_id_prefix, email=email)
+    return UserAuth(user_id_prefix=user_id_prefix, email=email, is_email_verified=is_email_verified)
 
 
 def get_user_id_from_bearer_header(request: Request) -> str:
@@ -165,7 +218,8 @@ def get_user_id_from_access_token(token: str) -> str:
     ``/auth/session/revoke`` legitimately need to work for unverified
     users (signing out a session you never finished verifying should
     still succeed). The endpoints that DO want email-verified callers
-    only go through :func:`_authenticate_supertokens` instead.
+    authenticate via :func:`authenticate_request` and then call
+    :func:`require_verified_email` on the result.
     """
     if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
         raise HTTPException(status_code=401, detail="SuperTokens not configured")

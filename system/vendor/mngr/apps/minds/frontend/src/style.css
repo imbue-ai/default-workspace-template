@@ -311,41 +311,28 @@
 }
 
 /*
- * Always reserve space for the scrollbar gutter so that toggling page
- * height (e.g. expanding the permission dialog's "Adjust" editor) does
- * not make a classic scrollbar appear/disappear and shift the centered
- * layout sideways. No-op for macOS-style overlay scrollbars.
- */
-html {
-  scrollbar-gutter: stable;
-}
-/*
- * Opt-out for the edge-to-edge chrome / overlay surfaces (the chrome
- * titlebar page, the overlay host, and the modal pages hosted in it).
- * These paint fixed full-viewport layers and never scroll at the
- * document level, but with classic (always-visible) scrollbars the
- * reserved gutter shrinks the initial containing block by 15px, so
- * nothing paints the window's right edge: tooltips get clipped
- * mid-label, modal dim backdrops stop short of the edge (twice over for
- * a modal iframe inside the overlay host -- a 30px un-dimmed strip),
- * and the titlebar's right-aligned buttons shift inward. The class must
- * sit on the html element because the gutter belongs to the viewport
- * scroller: overlay-view pages get it from the OverlaySurface wrapper,
- * and the chrome page passes it via Base's ``html_class``.
- */
-html.no-scrollbar-gutter {
-  scrollbar-gutter: auto;
-}
-/*
  * Both shell modes lock the document to the viewport: the agent surface fills
  * it with the fixed workspace iframe, and local pages scroll inside
- * #local-page-scroll -- a container pinned below the fixed 38px titlebar (see
- * ChromeShell.jinja). So the DOCUMENT never scrolls on any minds page, the
- * titlebar never shares an edge with a scrollbar, and its buttons never shift
- * with gutter differences between pages. A universal default (a page that
- * genuinely needs document scroll can override on its own html/body); kept
- * here with the rest of the app's CSS rather than in a template <style> so all
- * scoping and order live in one place.
+ * #local-page-scroll -- a container pinned below the fixed 38px titlebar. So
+ * the DOCUMENT never scrolls on any minds page, the titlebar never shares an
+ * edge with a scrollbar, and its buttons never shift with gutter differences
+ * between pages. A universal default (a page that genuinely needs document
+ * scroll can override on its own html/body); kept here with the rest of the
+ * app's CSS rather than in a template <style> so all scoping and order live in
+ * one place.
+ *
+ * Which is also why the html element reserves NO scrollbar gutter. The gutter
+ * belongs to the viewport scroller, and with classic (always-visible)
+ * scrollbars a reserved one shrinks the initial containing block by 15px, so
+ * nothing can paint the window's right edge: everything anchored to it -- the
+ * inset workspace card and its notice band, #local-page-scroll's right inset,
+ * the titlebar's right-aligned buttons, tooltips, modal backdrops -- lands
+ * 15px short, which reads as a right margin four times the left one. The
+ * pre-SPA renderer reserved it globally for the scrolling document pages and
+ * had the chrome page opt back out (``html_class="no-scrollbar-gutter"``,
+ * still live in app.css for the pages served into the workspace iframe); the
+ * SPA is only ever the chrome page, so here there is nothing to opt out of.
+ * Its scroll containers set ``scrollbar-gutter: stable`` on themselves.
  */
 html,
 body {
@@ -388,6 +375,37 @@ body {
 body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
   inset: 38px 4px 4px 4px;
   border-radius: 12px;
+}
+
+/*
+ * The workspace content surface -- the sandboxed iframe and the white mirror
+ * behind it -- kept here beside #local-page-scroll so the shell's geometry
+ * lives in one place.
+ *
+ * --notice-band-height is 0 until the shell's failure band is up, at which
+ * point the surface shrinks by exactly the band's measured height. The band
+ * layers over the app, never over the machine: whatever the user was looking
+ * at stays on screen and stays readable.
+ */
+:root {
+  --notice-band-height: 0px;
+}
+.workspace-surface {
+  position: fixed;
+  left: 4px;
+  width: calc(100% - 8px);
+  top: calc(38px + var(--notice-band-height));
+  height: calc(100% - 42px - var(--notice-band-height));
+  border-radius: 12px;
+}
+/*
+ * With the band up, it carries this card's top corners (it is inset and
+ * rounded to the same 4px / 12px), so the surface meets it square: one card,
+ * one accent border around it, no seam where the two edges disagree.
+ */
+body:has(#notice-band) .workspace-surface {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .accent-spine::before {
@@ -451,18 +469,18 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 
 /*
- * Create-from-Inspiration numbered stepper (CreateInspirationPage). The active
+ * Create-from-Template numbered stepper (CreateTemplatePage). The active
  * step's circle is a solid inverse bubble with a contrasting number; a completed
  * step is a faint fill with a muted number -- both opaque so the connector line
  * stays hidden behind them. Completed steps link down to the next with a solid
  * 1px line; the current (last visible) step gets a short dotted "more to come"
- * stub instead, unless it is the final step. Ported from InspirationCreate.jinja.
+ * stub instead, unless it is the final step. Ported from TemplateCreate.jinja.
  */
-.inspiration-step-circle[data-state="active"] {
+.template-step-circle[data-state="active"] {
   background-color: var(--c-surface-inverse);
   color: var(--c-text-inverse-primary);
 }
-.inspiration-step-circle[data-state="done"] {
+.template-step-circle[data-state="done"] {
   background-color: color-mix(in srgb, var(--c-text-primary) 10%, var(--c-surface-primary));
   color: var(--c-text-secondary);
 }
@@ -481,7 +499,7 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 
 /*
- * The copyable "/use-inspiration <repo>" box on the add branch: a slight lift
+ * The copyable "/use-template <repo>" box on the add branch: a slight lift
  * with a stronger border + soft shadow on hover. The border/background
  * transitions also carry the green "Copied" confirmation (set via inline style,
  * which overrides the hover border while the green is showing). The whole box
@@ -706,12 +724,12 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 
 /*
  * ---------------------------------------------------------------------------
- * Creating-page onboarding walkthrough (Creating.jinja + onboarding.js).
+ * Creating-page onboarding walkthrough (views/pages/creating/).
  *
  * The walkthrough is nine steps and plays by itself. #onboarding carries
- * data-step (1..9); onboarding.js swaps which #graphic block is visible per
- * step and toggles the step text panels. The CSS here styles the browser
- * demo, the app cloud, the step dots and the ready/entering states.
+ * data-step (1..9) and renders one scene per step, keyed so each replays from
+ * the start on revisit. The CSS here styles the browser demo, the app cloud,
+ * the step dots and the ready/entering states.
  * ---------------------------------------------------------------------------
  */
 
@@ -784,45 +802,20 @@ body:has(#minds-titlebar.titlebar-surface) #local-page-scroll {
 }
 
 /*
- * Details open. The logs panel wants most of a fifth of the window, which
- * the walkthrough at full size has no room to give: opening it pushed the
- * page into a scroll. Whoever opens the logs came to read them, so the
- * walkthrough gives up its breathing room and the illustration shrinks to
- * make that space, rather than the page growing a scrollbar. creating.js
- * puts is-details-open on #creating alongside revealing the logs.
+ * The page fits the window rather than scrolling it. #creating is a column
+ * exactly as tall as the scroll card, the progress strip at the top takes its
+ * natural height (the logs panel, when open, being most of it), and the
+ * walkthrough takes what is left -- so the one thing that has to give is the
+ * illustration. Each scene is laid out at fixed pixel sizes, so it scales as a
+ * whole rather than reflowing into a shape it was not drawn for:
+ * OnboardingWalkthrough measures the box and publishes the fraction of the
+ * 340px design height it came out at as --gfx-scale. Whoever opens the logs
+ * came to read them, and this is how they get that room.
  */
-/* py-2 and gap-3, off the same scale the utilities compute from. */
-#creating.is-details-open .onboarding {
-  padding-top: calc(var(--spacing) * 2);
-  padding-bottom: calc(var(--spacing) * 2);
-  gap: calc(var(--spacing) * 3);
-}
-/* Each scene is laid out at fixed pixel sizes, so it scales as a whole
- * rather than reflowing into a shape it was not drawn for. The box height
- * is what a 340px scene comes to at this scale. */
-#creating.is-details-open #graphic {
-  height: 210px;
-}
-#creating.is-details-open .gfx {
-  transform: scale(0.62);
-}
-#graphic {
-  transition: height 200ms ease;
-}
+/* Applied with no transition, so the picture is never momentarily bigger than
+ * the box it has to fit in (which is what a scrollbar is made of). */
 .gfx {
-  transition: transform 200ms ease;
-}
-.onboarding {
-  transition:
-    gap 200ms ease,
-    padding 200ms ease;
-}
-@media (prefers-reduced-motion: reduce) {
-  #graphic,
-  .gfx,
-  .onboarding {
-    transition: none;
-  }
+  transform: scale(var(--gfx-scale, 1));
 }
 
 /*

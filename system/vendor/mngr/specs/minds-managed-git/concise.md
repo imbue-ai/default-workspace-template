@@ -27,9 +27,9 @@
 
 ## Expected behavior
 
-- `pnpm build` (and ToDesktop's `beforeInstall` hook re-running `scripts/download-binaries.js` on the build server) downloads the manifest-pinned dugite-native tarball for the build platform, verifies its SHA256, and extracts it to `resources/git/`. Hash mismatch or a platform absent from the manifest aborts the build. `xcrun`, CLT, and `which git` are no longer consulted.
+- `pnpm build` downloads the manifest-pinned dugite-native tarball for the build platform, verifies its SHA256, and extracts it to `resources/git/`. Hash mismatch or a platform absent from the manifest aborts the build. `xcrun`, CLT, and `which git` are no longer consulted.
 - The packaged app's backend subprocess tree resolves `git` to `resources/git/bin/git` (unchanged path, `apps/minds/electron/paths.js:30`) and receives the full git environment contract. The user's own shells and tools are untouched.
-- Dev mode (`pnpm start`) uses the identical payload: the `prestart` `ensure-binaries.js` hook already requires `resources/git/bin/git` and triggers the same downloader.
+- Dev mode (`pnpm start`) uses the identical payload: the `prestart` `ensure-binaries.js` hook provisions `resources/git/bin/git` through the same downloader, into the shared binary cache.
 - `git --version` inside the app reports exactly the manifest's `gitVersion` (2.53.0 at pin time), on every platform, on every build, regardless of which machine built it. The backend logs the bundled git version once at startup for supportability.
 - Linux is continuously proven in CI: an acceptance test (running on Linux via offload) downloads, verifies, extracts, and exercises the linux-x64 payload -- including an HTTPS clone through `git-remote-https` -- even though a packaged Linux app is not shipping yet. When the ToDesktop `linux` target is eventually enabled, git is a solved problem, not a stub.
 - Once a week, CI finds the newest dugite-native release that has cleared the 14-day cooldown and compares its upstream git version against the pin. If that git version is newer, it opens (or updates) a single tracking issue; if the pin is current or ahead on git version (including when only a newer dugite `-<build>` of the same git exists), the workflow closes any open issue. A release still inside the cooldown window is ignored until it ages out.
@@ -62,7 +62,7 @@ Single source of truth for the pinned git payload, consumed by `download-binarie
 ### `apps/minds/scripts/download-binaries.js`
 
 - Rewrite `downloadGit`'s darwin and linux branches into one manifest-driven path: map `(platform, arch)` to a manifest target key, download, `verifyChecksum` against the manifest hash, extract into `resources/git/` preserving the payload layout (`bin/`, `libexec/`, `share/`, `etc/`, and `ssl/` on Linux), and assert `resources/git/bin/git` exists. Delete `copyGitCoreDereferencingSymlinks` and the `xcrun`/`which git` logic. **Note:** the tarball is rooted flat (`bin/` etc. at archive root) -- extract *without* `--strip-components=1`, unlike the uv/lima archives.
-- `downloadGit` writes the pinned tag to `resources/git/.dugite-tag`, and `ensure-binaries.js` treats a missing or mismatched marker as a missing binary. Without this, dev machines carrying the old CLT-copied payload would pass the existence check and never upgrade.
+- The pinned tag is a path segment of the payload's cache entry, so `ensure-binaries.js` re-provisions whenever `resources/git` does not resolve to the entry for the current tag. Dev machines carrying an older payload upgrade on the next `pnpm start`.
 - The Windows branch keeps pinned MinGit unchanged for now (working, verified, and untestable here since no Windows target is wired up); the `win32-x64` manifest entry documents the intended future unification. `downloadGit` does not consume it yet.
 - A requested target with no manifest entry is a hard error (same spirit as the existing "No pinned SHA256" error).
 - git's hashes move out of `EXPECTED_SHA256` into the manifest; uv/restic/desync/MinGit stay where they are. Consolidating all binaries into manifests is left to the build-process overhaul.

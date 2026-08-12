@@ -18,7 +18,7 @@ from imbue.minds.desktop_client.templates import ADD_ACCOUNT_OPTION_VALUE
 from imbue.minds.desktop_client.templates import CATALOG
 from imbue.minds.desktop_client.templates import DEFAULT_EXPECTED_CREATE_ATTEMPT_DURATION_SECONDS
 from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
-from imbue.minds.desktop_client.templates import InspirationMachineRow
+from imbue.minds.desktop_client.templates import TemplateMachineRow
 from imbue.minds.desktop_client.templates import expected_create_attempt_duration_seconds
 from imbue.minds.desktop_client.templates import make_unique_host_name
 from imbue.minds.desktop_client.templates import render_account_plan_modal_page
@@ -34,13 +34,12 @@ from imbue.minds.desktop_client.templates import render_destroyed_workspaces_row
 from imbue.minds.desktop_client.templates import render_dev_styleguide_page
 from imbue.minds.desktop_client.templates import render_help_page
 from imbue.minds.desktop_client.templates import render_inbox_page
-from imbue.minds.desktop_client.templates import render_inspiration_create_page
-from imbue.minds.desktop_client.templates import render_inspiration_modal_page
 from imbue.minds.desktop_client.templates import render_landing_page
 from imbue.minds.desktop_client.templates import render_login_page
 from imbue.minds.desktop_client.templates import render_login_redirect_page
-from imbue.minds.desktop_client.templates import render_recovery_page
 from imbue.minds.desktop_client.templates import render_sidebar_page
+from imbue.minds.desktop_client.templates import render_template_create_page
+from imbue.minds.desktop_client.templates import render_template_modal_page
 from imbue.minds.desktop_client.templates import render_workspace_backup_history
 from imbue.minds.desktop_client.templates import render_workspace_options_modal_page
 from imbue.minds.desktop_client.templates import render_workspace_options_page
@@ -378,17 +377,17 @@ def test_render_create_form_branch_default_pairs_with_default_repo() -> None:
 
 
 def test_render_create_form_explicit_repo_keeps_branch_blank() -> None:
-    # An explicitly-supplied repository (e.g. an inspiration deeplink's
+    # An explicitly-supplied repository (e.g. a template deeplink's
     # git_url) must NOT inherit the default template's branch: the pinned
     # minds tag is meaningless on another repo, and a blank branch means
     # "the repo's latest version" at submit time (resolve_template_version).
-    html = render_create_form(git_url="https://github.com/acme/inspiration")
-    assert "https://github.com/acme/inspiration" in html
+    html = render_create_form(git_url="https://github.com/acme/template")
+    assert "https://github.com/acme/template" in html
     assert FALLBACK_BRANCH not in html
 
 
 def test_render_create_form_explicit_repo_keeps_explicit_branch() -> None:
-    html = render_create_form(git_url="https://github.com/acme/inspiration", branch="feature-x")
+    html = render_create_form(git_url="https://github.com/acme/template", branch="feature-x")
     assert 'value="feature-x"' in html
 
 
@@ -440,12 +439,12 @@ def test_render_create_form_opens_signin_modal_via_overlay_bridge() -> None:
     # desktop client's shared overlay layer (so it covers the title bar), not an
     # in-page dialog. The create page therefore no longer embeds the auth form
     # or loads auth.js itself; being a trusted local page on the chrome surface,
-    # it asks the Electron main process to open the /auth/signin-modal page via
-    # the window.minds shell bridge (falling back to navigating there directly in
-    # the browser).
+    # it asks the Electron main process to open the sign-in modal via the
+    # window.minds shell bridge (falling back to the /auth/login redirect into
+    # the SPA's web-login flow in the browser).
     html = render_create_form(accounts=[])
     assert "window.minds.openSigninModal()" in html
-    assert "/auth/signin-modal" in html
+    assert "/auth/login" in html
     # The auth form + its script now live in the overlay page, not here.
     assert 'id="signin-modal"' not in html
     assert 'id="signin-form"' not in html
@@ -906,48 +905,48 @@ def test_render_create_form_ignores_workspace_env_vars_without_opt_in_on_dev_tie
     assert "mngr/some-feature" not in html
 
 
-_INSPIRATION_URL = "https://github.com/acme/inspiration"
+_TEMPLATE_URL = "https://github.com/acme/template"
 
 
-def _render_inspiration(**kwargs: Any) -> str:
-    return render_inspiration_create_page(git_url=_INSPIRATION_URL, **kwargs)
+def _render_template(**kwargs: Any) -> str:
+    return render_template_create_page(git_url=_TEMPLATE_URL, **kwargs)
 
 
-def _render_inspiration_modal(**kwargs: Any) -> str:
-    return render_inspiration_modal_page(git_url=_INSPIRATION_URL, **kwargs)
+def _render_template_modal(**kwargs: Any) -> str:
+    return render_template_modal_page(git_url=_TEMPLATE_URL, **kwargs)
 
 
-def test_render_inspiration_modal_hosts_the_add_flow_in_place() -> None:
+def test_render_template_modal_hosts_the_add_flow_in_place() -> None:
     # The modal is the same stepper the page renders, in the overlay's card, so
     # the add flow is clicked through in place rather than handing off.
-    html = _render_inspiration_modal()
-    assert "You've opened an Inspiration" in html
-    assert _INSPIRATION_URL in html
+    html = _render_template_modal()
+    assert "You've opened a Template" in html
+    assert _TEMPLATE_URL in html
     # Modal shell: backdrop + dismiss affordance, and the modal-mode flag.
-    assert 'id="inspiration-modal-backdrop"' in html
-    assert "dismissInspirationModal()" in html
+    assert 'id="template-modal-backdrop"' in html
+    assert "dismissTemplateModal()" in html
     assert "var IS_MODAL = true" in html
-    assert 'id="inspiration-step-1"' in html
-    assert 'id="inspiration-step-add-2"' in html
+    assert 'id="template-step-1"' in html
+    assert 'id="template-step-add-2"' in html
 
 
-def test_render_inspiration_modal_create_hands_off_to_the_full_page() -> None:
+def test_render_template_modal_create_hands_off_to_the_full_page() -> None:
     # Creating a new machine is too big a job for a popup: from the modal it
     # opens the full page, already past the chooser (?start=create).
-    html = _render_inspiration_modal(current_machine_id="agent-abc")
+    html = _render_template_modal(current_machine_id="agent-abc")
     assert "function openCreateOnFullPage()" in html
     assert "params.set('start', 'create')" in html
-    assert "leaveTo('/create/inspiration?' + params.toString())" in html
+    assert "leaveTo('/create/template?' + params.toString())" in html
     assert "if (IS_MODAL) openCreateOnFullPage();" in html
     # The page itself still advances in place rather than navigating.
-    page = _render_inspiration()
+    page = _render_template()
     assert "else chooseBranch('create');" in page
 
 
-def test_render_inspiration_modal_in_workspace_ends_at_paste_into_chat() -> None:
+def test_render_template_modal_in_workspace_ends_at_paste_into_chat() -> None:
     # Adding to the workspace the user is already in: the add branch's last step
     # drops the picker and just says to paste the copied message into that chat.
-    html = _render_inspiration_modal(
+    html = _render_template_modal(
         current_machine_id="agent-abc",
         current_machine_name="My Machine",
         mngr_forward_origin="https://localhost:8421",
@@ -964,52 +963,54 @@ def test_render_inspiration_modal_in_workspace_ends_at_paste_into_chat() -> None
     assert "Select a machine" not in html
     # The modal waits for an explicit Done -- it must not vanish on its own
     # before the user has read the paste instruction.
-    assert re.search(r"<button[^>]*dismissInspirationModal\(\)[^>]*>Done</button>", html)
+    assert re.search(r"<button[^>]*dismissTemplateModal\(\)[^>]*>Done</button>", html)
     assert "setTimeout(closeModalIfAny" not in html
 
 
-def test_render_inspiration_modal_navigations_use_the_shell_bridge() -> None:
+def test_render_template_modal_navigations_use_the_shell_bridge() -> None:
     # Inside the overlay iframe a plain window.location would load the target
     # INSIDE the modal (a window in a window), so navigation goes through the
     # bridge and dismisses the modal.
-    html = _render_inspiration_modal(current_machine_id="agent-abc")
+    html = _render_template_modal(current_machine_id="agent-abc")
     assert "function leaveTo(url)" in html
     assert "window.minds.navigateContent(url)" in html
     assert "leaveTo('/creating/' + res.data.operation_id)" in html
 
 
-def test_render_inspiration_page_honors_start_param_to_skip_chooser() -> None:
+def test_render_template_page_honors_start_param_to_skip_chooser() -> None:
     # The modal hands off with ?start=create so the page skips its step-1
     # chooser. The value is rendered in server-side rather than read from
     # window.location: the hub swaps pages in place and runs the new page's
     # script BEFORE updating the address, so the query string would be stale.
-    html = _render_inspiration(start="create")
+    html = _render_template(start="create")
     assert 'var START_BRANCH = "create"' in html
     assert "if (START_BRANCH === 'create') chooseBranch('create');" in html
     assert "else if (START_BRANCH === 'add') chooseBranch('add');" in html
     # Without it the page opens on the chooser as usual.
-    assert 'var START_BRANCH = ""' in _render_inspiration()
+    assert 'var START_BRANCH = ""' in _render_template()
 
 
-def test_render_inspiration_page_shows_chooser_options() -> None:
-    html = _render_inspiration()
-    assert "You've opened an Inspiration" in html
+def test_render_template_page_shows_chooser_options() -> None:
+    html = _render_template()
+    assert "You've opened a Template" in html
     assert "Create a new machine" in html
     assert "Add to an existing machine" in html
-    assert _INSPIRATION_URL in html
-    # The eyebrow "INSPIRATION" label above the heading is gone.
-    assert ">Inspiration</p>" not in html
+    assert _TEMPLATE_URL in html
+    # The eyebrow "TEMPLATE" label above the heading is gone.
+    assert ">Template</p>" not in html
     # Full-width (block) buttons press with a gentler scale than the base 0.98.
     assert "active:!scale-[0.99]" in html
 
 
-def test_render_inspiration_page_add_flow_has_copyable_skill_message() -> None:
+def test_render_template_page_add_flow_has_copyable_skill_message() -> None:
     # The skill accepts only a git URL, so the message must exclude the branch
     # even when the deeplink carried one.
-    html = _render_inspiration(branch="v1.2.3")
-    assert f"/use-inspiration {_INSPIRATION_URL}" in html
-    assert f"/use-inspiration {_INSPIRATION_URL} v1.2.3" not in html
-    assert 'id="inspiration-copy-btn"' in html
+    html = _render_template(branch="v1.2.3")
+    # Leading space on purpose -- a pasted "/..." can be taken as a slash
+    # command by the chat input rather than as message text.
+    assert f" /use-template {_TEMPLATE_URL}" in html
+    assert f"/use-template {_TEMPLATE_URL} v1.2.3" not in html
+    assert 'id="template-copy-btn"' in html
     # The whole box is clickable, not just the button.
     assert "copyBox.addEventListener('click', doCopy)" in html
     # The box has a hover animation (a .copy-box hover rule + the class on it).
@@ -1018,26 +1019,26 @@ def test_render_inspiration_page_add_flow_has_copyable_skill_message() -> None:
     # The read-only value shows a pointer cursor (the whole box copies on click).
     assert ".copy-box input" in html
     # The Copy button is borderless (ghost variant), not the bordered secondary.
-    copy_btn = re.search(r'<button[^>]*\bid="inspiration-copy-btn"[^>]*>', html)
+    copy_btn = re.search(r'<button[^>]*\bid="template-copy-btn"[^>]*>', html)
     assert copy_btn is not None
     assert "border-transparent" in copy_btn.group(0)
     assert "border-default" not in copy_btn.group(0)
 
 
-def test_render_inspiration_page_confirm_step_labels_account() -> None:
+def test_render_template_page_confirm_step_labels_account() -> None:
     # The account picker on the confirm step sits under an "Account" label laid
     # out like the "Creating from" block above it (uppercase label, value below).
-    html = _render_inspiration()
+    html = _render_template()
     assert ">Account</p>" in html
     assert ">Creating from</p>" in html
 
 
-def test_render_inspiration_page_step_circle_current_black_previous_gray() -> None:
+def test_render_template_page_step_circle_current_black_previous_gray() -> None:
     # The current step is a solid black bubble with a white number; previous
     # (completed) steps are a light-gray bubble with a dark-gray number, driven
     # by data-state. The bubble carries no border, and the title text follows:
     # black on the current step, gray on previous ones.
-    html = _render_inspiration()
+    html = _render_template()
     assert "circle.setAttribute('data-state'" in html
     # Current step: black bubble (inverse surface) + white number.
     assert '[data-step-circle][data-state="active"]' in html
@@ -1058,11 +1059,11 @@ def test_render_inspiration_page_step_circle_current_black_previous_gray() -> No
     assert 'class="text-success shrink-0"' in html
 
 
-def test_render_inspiration_page_connector_solid_with_dotted_more_stub() -> None:
+def test_render_template_page_connector_solid_with_dotted_more_stub() -> None:
     # Regular links between steps are SOLID; the current (last visible) step
     # instead gets a short 3-dot "more to come" stub -- but only when it isn't
     # the final step (activeStep < 3), so the last number reads as the end.
-    html = _render_inspiration()
+    html = _render_template()
     assert 'data-step-connector class="absolute hidden"' in html
     assert "c.classList.add('top-4', 'bottom-0', 'step-connector-line')" in html
     # The solid line's color matches the completed circle fill exactly.
@@ -1073,12 +1074,12 @@ def test_render_inspiration_page_connector_solid_with_dotted_more_stub() -> None
     assert "radial-gradient(circle, var(--c-border-strong)" in html
 
 
-def test_render_inspiration_page_lists_workspaces_with_liveness_gating() -> None:
+def test_render_template_page_lists_workspaces_with_liveness_gating() -> None:
     rows = [
-        InspirationMachineRow(agent_id="agent-aa", name="alpha", accent="#112233", liveness="RUNNING"),
-        InspirationMachineRow(agent_id="agent-bb", name="beta", accent="#445566", liveness="STOPPED"),
+        TemplateMachineRow(agent_id="agent-aa", name="alpha", accent="#112233", liveness="RUNNING"),
+        TemplateMachineRow(agent_id="agent-bb", name="beta", accent="#445566", liveness="STOPPED"),
     ]
-    html = _render_inspiration(mngr_forward_origin="https://localhost:8421", machine_rows=rows)
+    html = _render_template(mngr_forward_origin="https://localhost:8421", machine_rows=rows)
     assert 'data-agent-id="agent-aa"' in html
     assert 'data-liveness="STOPPED"' in html
     assert 'data-default-href="https://localhost:8421/goto/agent-aa/"' in html
@@ -1089,40 +1090,40 @@ def test_render_inspiration_page_lists_workspaces_with_liveness_gating() -> None
     assert "M5.57617 3.57617" in html
 
 
-def test_render_inspiration_page_empty_workspace_list_links_to_new_flow() -> None:
-    html = _render_inspiration(machine_rows=[])
+def test_render_template_page_empty_workspace_list_links_to_new_flow() -> None:
+    html = _render_template(machine_rows=[])
     assert "You don't have any machines yet." in html
-    assert 'id="inspiration-empty-to-new"' in html
+    assert 'id="template-empty-to-new"' in html
 
 
-def test_render_inspiration_page_new_flow_requires_trust_checkbox() -> None:
-    html = _render_inspiration()
-    assert 'id="inspiration-trust"' in html
-    assert "I trust this Inspiration" in html
+def test_render_template_page_new_flow_requires_trust_checkbox() -> None:
+    html = _render_template()
+    assert 'id="template-trust"' in html
+    assert "I trust this Template" in html
     assert "not been approved or verified by Imbue" in html
     # The submit handler gates on the checkbox before any POST.
     assert "trustCheckbox.checked" in html
 
 
-def test_render_inspiration_page_create_button_gated_on_trust() -> None:
+def test_render_template_page_create_button_gated_on_trust() -> None:
     # Create starts disabled/grayed and the acknowledgment starts red; both
     # flip when the box is checked (syncTrustGate).
-    html = _render_inspiration()
-    assert re.search(r'id="inspiration-submit"[^>]*\sdisabled', html) or re.search(
-        r'\sdisabled[^>]*id="inspiration-submit"', html
+    html = _render_template()
+    assert re.search(r'id="template-submit"[^>]*\sdisabled', html) or re.search(
+        r'\sdisabled[^>]*id="template-submit"', html
     )
-    assert re.search(r'id="inspiration-trust-title"[^>]*text-important', html)
+    assert re.search(r'id="template-trust-title"[^>]*text-important', html)
     assert "submitBtn.disabled = !ok" in html
 
 
-def test_render_inspiration_page_is_three_steps_with_advanced_on_confirm() -> None:
+def test_render_template_page_is_three_steps_with_advanced_on_confirm() -> None:
     # Advanced settings are NOT their own step: the create flow is 3 steps
     # (choose -> where -> confirm), and an "Advanced settings" dashed divider on
     # the confirm step reveals the selects in place.
-    html = _render_inspiration(branch="v1.2.3")
-    assert 'id="inspiration-step-create-3"' in html
-    assert 'id="inspiration-step-create-4"' not in html
-    assert 'id="inspiration-toggle-advanced"' in html
+    html = _render_template(branch="v1.2.3")
+    assert 'id="template-step-create-3"' in html
+    assert 'id="template-step-create-4"' not in html
+    assert 'id="template-toggle-advanced"' in html
     assert "Advanced settings" in html
     # The toggle starts as a plain left label: the flanking dashed rules are
     # hidden until it opens, when JS reveals them (a la the create advanced <hr>).
@@ -1141,70 +1142,70 @@ def test_render_inspiration_page_is_three_steps_with_advanced_on_confirm() -> No
     assert "reverseAdvancedDivider()" in html
     assert "collapseAdvancedPanel(" in html
     # The toggle shows a pointer cursor (it's a native button, which wouldn't).
-    assert re.search(r'id="inspiration-toggle-advanced"[^>]*cursor-pointer', html)
+    assert re.search(r'id="template-toggle-advanced"[^>]*cursor-pointer', html)
     # The removed settings-choice step's controls are gone.
-    assert 'id="inspiration-use-defaults"' not in html
-    assert 'id="inspiration-configure-more"' not in html
+    assert 'id="template-use-defaults"' not in html
+    assert 'id="template-configure-more"' not in html
 
 
-def test_render_inspiration_page_advanced_panel_has_provider_and_region_selects() -> None:
+def test_render_template_page_advanced_panel_has_provider_and_region_selects() -> None:
     # The "Advanced settings" dropdown box reveals compute / backup provider and
     # region selects in place (no navigation away). Submit reads them. (AI
     # provider was removed from create, so it's absent here too.)
-    html = _render_inspiration(
+    html = _render_template(
         region_options_by_launch_mode={"IMBUE_CLOUD": ["us-west", "eu"]},
         region_selected_by_launch_mode={"IMBUE_CLOUD": "us-west"},
     )
     for select_id in (
-        "inspiration-launch-mode",
-        "inspiration-backup-provider",
-        "inspiration-region",
+        "template-launch-mode",
+        "template-backup-provider",
+        "template-region",
     ):
         assert f'id="{select_id}"' in html, select_id
-    assert 'id="inspiration-ai-provider"' not in html
+    assert 'id="template-ai-provider"' not in html
     assert "launch_mode: launchSelect.value" in html
     assert "region: regionSelect.disabled" in html
     # No navigation off this page -- the settings stay in the flow.
     assert "window.location = '/create?'" not in html
 
 
-def test_render_inspiration_page_submit_labeled_create_from_inspiration() -> None:
-    html = _render_inspiration()
-    assert "Create from Inspiration" in html
-    assert 'id="inspiration-submit"' in html
+def test_render_template_page_submit_labeled_create_from_template() -> None:
+    html = _render_template()
+    assert "Create from Template" in html
+    assert 'id="template-submit"' in html
 
 
-def test_render_inspiration_page_repo_shown_as_plain_text() -> None:
+def test_render_template_page_repo_shown_as_plain_text() -> None:
     # The repo is display-only and deliberately not rendered as an input-looking
     # box: it appears as plain paragraph text, and the POSTed value rides in a
     # hidden input. There is no editable git_url form field.
-    html = _render_inspiration()
+    html = _render_template()
     assert 'name="git_url"' not in html
-    assert 'id="inspiration-git-url"' in html
-    assert f">{_INSPIRATION_URL}</p>" in html
+    assert 'id="template-git-url"' in html
+    assert f">{_TEMPLATE_URL}</p>" in html
 
 
-def test_render_inspiration_page_downstream_steps_start_hidden() -> None:
+def test_render_template_page_downstream_steps_start_hidden() -> None:
     # Progressive disclosure: only step 1 is visible on load; every downstream
     # step wrapper starts hidden and is revealed by the timeline's JS. The
     # ``hidden`` toggle must not sit on a ``flex`` element (flex would win), so
     # it lives on the plain step wrapper.
-    html = _render_inspiration()
-    assert re.search(r'id="inspiration-step-1" class="inspiration-step"', html)
+    html = _render_template()
+    assert re.search(r'id="template-step-1" class="template-step"', html)
     for step_id in (
-        "inspiration-step-create-2",
-        "inspiration-step-create-3",
-        "inspiration-step-add-2",
-        "inspiration-step-add-3",
+        "template-step-create-2",
+        "template-step-create-3",
+        "template-step-add-2",
+        "template-step-add-3",
     ):
-        assert re.search(rf'id="{step_id}" class="inspiration-step hidden"', html), step_id
+        assert re.search(rf'id="{step_id}" class="template-step hidden"', html), step_id
 
 
-def test_render_inspiration_page_gates_each_step_on_the_previous() -> None:
+def test_render_template_page_gates_each_step_on_the_previous() -> None:
     # The stepper shows one step's body at a time: picking a pathway advances
     # to step 2, and copying the message / choosing a preset advances to step
     # 3. render() hides every non-active step's body.
-    html = _render_inspiration()
+    html = _render_template()
     assert "function render()" in html
     assert "isMessageCopied = true" in html
     assert "activeStep = 3" in html
@@ -1215,48 +1216,48 @@ def test_render_inspiration_page_gates_each_step_on_the_previous() -> None:
     assert "'Create a new machine'" in html
 
 
-def test_render_inspiration_page_has_animations_and_copy_feedback() -> None:
+def test_render_template_page_has_animations_and_copy_feedback() -> None:
     # Each newly-shown step/answer plays one self-contained opacity+slide
     # reveal to a fixed position (no competing reflow); completed circles pop;
     # the Copy box turns green (theme success variable) before advancing.
-    html = _render_inspiration()
+    html = _render_template()
     assert "animateReveal" in html
     assert "animatePop" in html
     assert "var(--c-success)" in html
     assert "'Copied'" in html
 
 
-def test_render_inspiration_page_number_and_title_go_back() -> None:
+def test_render_template_page_number_and_title_go_back() -> None:
     # Both the step number and its title are click-to-change affordances.
-    html = _render_inspiration()
+    html = _render_template()
     assert "function wireGoBack" in html
     assert "[data-step-circle]" in html
     assert "[data-step-title]" in html
 
 
-def test_render_inspiration_page_skill_message_has_stable_id() -> None:
+def test_render_template_page_skill_message_has_stable_id() -> None:
     # The copy handler reads the message by id, so the CopyField must carry it.
-    html = _render_inspiration()
-    assert 'id="inspiration-skill-message"' in html
+    html = _render_template()
+    assert 'id="template-skill-message"' in html
 
 
-def test_render_inspiration_page_carries_branch_hidden_input() -> None:
-    html = _render_inspiration(branch="v1.2.3")
-    assert 'id="inspiration-branch" value="v1.2.3"' in html
-    blank = _render_inspiration()
-    assert 'id="inspiration-branch" value=""' in blank
+def test_render_template_page_carries_branch_hidden_input() -> None:
+    html = _render_template(branch="v1.2.3")
+    assert 'id="template-branch" value="v1.2.3"' in html
+    blank = _render_template()
+    assert 'id="template-branch" value=""' in blank
 
 
-def test_render_inspiration_page_opens_signin_modal_via_overlay_bridge() -> None:
-    html = _render_inspiration(accounts=[])
+def test_render_template_page_opens_signin_modal_via_overlay_bridge() -> None:
+    html = _render_template(accounts=[])
     assert "window.minds.openSigninModal()" in html
-    assert "/auth/signin-modal" in html
+    assert "/auth/login" in html
 
 
-def test_render_inspiration_page_presets_match_create_form() -> None:
+def test_render_template_page_presets_match_create_form() -> None:
     # Same two presets and the same provider values as the create form's
     # PRESETS map, so both pages create identically-configured workspaces.
-    html = _render_inspiration()
+    html = _render_template()
     assert 'data-preset="remote"' in html
     assert 'data-preset="local"' in html
     for value in ("IMBUE_CLOUD", "LIMA", "CONFIGURE_LATER"):
@@ -1602,515 +1603,6 @@ def test_render_sidebar_page_menu_width_is_280px() -> None:
     assert "w-[244px]" not in html
 
 
-def test_render_recovery_page_includes_agent_id_and_return_to() -> None:
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="http://agent.localhost:8421/",
-        initial_status="stuck",
-        initial_error="",
-    )
-    assert str(_AGENT_A) in html
-    assert "http://agent.localhost:8421/" in html
-    # The versioned workspace surface the page's JS drives.
-    assert "/api/v1/workspaces/" in html
-    # The only restart the recovery page dispatches (a ``scope`` body on the
-    # versioned restart route) plus the health probe it calls on load.
-    assert "/restart" in html
-    assert "scope: 'host'" in html
-    assert "/health" in html
-    assert 'data-initial-status="stuck"' in html
-
-
-def test_render_recovery_page_restarting_status() -> None:
-    html = render_recovery_page(
-        agent_id=_AGENT_B,
-        return_to="",
-        initial_status="restarting",
-        initial_error="",
-    )
-    assert 'data-initial-status="restarting"' in html
-
-
-def test_render_recovery_page_restarting_copy_reflects_restart_flavor() -> None:
-    """The RESTARTING branch names a full manual bounce but stays neutral for a start-only dispatch.
-
-    A reload during an in-flight restart lands in the RESTARTING branch. A full
-    manual bounce (the right-click "Restart machine", which POSTs the restart
-    and then navigates here fresh) is a known restart, so the page reads
-    "Restarting your machine"; the page's own start-only entry dispatch may be
-    a no-op, so it stays on the neutral "Loading machine" spinner. The offline
-    hint wins over both. Regression: the branch previously rendered the neutral
-    spinner for every non-offline restart, so a deliberate right-click restart
-    showed only "Loading machine".
-    """
-    full_html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="restarting",
-        initial_error="",
-        restart_is_start_only=False,
-    )
-    start_only_html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="restarting",
-        initial_error="",
-        restart_is_start_only=True,
-    )
-    # The flavor rides to the client as a data attribute the branch reads.
-    assert 'data-restart-start-only="0"' in full_html
-    assert 'data-restart-start-only="1"' in start_only_html
-    # The RESTARTING branch selects the copy off the flavor, with the offline
-    # hint taking precedence over both.
-    entry = full_html[full_html.rfind("if (initialStatus === 'restarting')") :]
-    restarting_branch = entry[: entry.find("else if")]
-    assert "restartStartOnly ? renderLoading : renderRestarting" in restarting_branch
-    assert "hostOffline" in restarting_branch
-
-
-def test_render_recovery_page_carries_restart_failed_error() -> None:
-    html = render_recovery_page(
-        agent_id=_AGENT_B,
-        return_to="",
-        initial_status="restart_failed",
-        initial_error="Start step of host restart failed: exited 1",
-    )
-    assert 'data-initial-status="restart_failed"' in html
-    assert "Start step of host restart failed: exited 1" in html
-
-
-def test_render_recovery_page_includes_diagnostics_dom_hooks() -> None:
-    """The recovery page must expose the DOM hooks the JS uses to render the
-    debug-menu details block and the Copy diagnostics button. The hooks are
-    present on every render -- the JS populates them when the host-health
-    endpoint response arrives.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    assert 'id="recovery-debug-details"' in html
-    assert 'id="recovery-debug-content"' in html
-    assert 'id="copy-diagnostics-btn"' in html
-
-
-def test_render_recovery_page_renders_copy_ssh_button_with_command() -> None:
-    """When given an ssh_command, the page renders a Copy SSH command button
-    that carries the exact command in its data attribute, beside Copy diagnostics.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-        ssh_command="ssh -i /home/user/.mngr/key -p 60022 root@127.0.0.1",
-    )
-    assert 'id="copy-ssh-btn"' in html
-    assert 'data-ssh-command="ssh -i /home/user/.mngr/key -p 60022 root@127.0.0.1"' in html
-    # The button must sit inside the diagnostics menu, alongside Copy diagnostics.
-    diag_pos = html.index('id="copy-diagnostics-btn"')
-    ssh_pos = html.index('id="copy-ssh-btn"')
-    details_pos = html.index('id="recovery-debug-details"')
-    assert details_pos < diag_pos < ssh_pos
-    # The click handler copies the data attribute to the clipboard.
-    assert "data-ssh-command" in html
-    assert "navigator.clipboard" in html
-
-
-def test_render_recovery_page_omits_copy_ssh_button_without_command() -> None:
-    """With no ssh_command (the default), the Copy SSH command button is absent
-    -- we never render an inert button that would copy nothing.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    assert 'id="copy-ssh-btn"' not in html
-    assert "Copy SSH command" not in html
-    # Copy diagnostics is unaffected.
-    assert 'id="copy-diagnostics-btn"' in html
-
-
-def test_render_recovery_page_script_branches_on_dispatch_tier() -> None:
-    """The recovery page reads ``dispatch_tier`` directly off the host-health response.
-
-    Each restart tier the server may report must have a corresponding
-    code branch in the page's JS.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    assert "dispatch_tier" in html
-    for tier in (
-        "'healthy'",
-        "'backend_unreachable'",
-        "'indeterminate'",
-    ):
-        assert tier in html, f"recovery page JS missing branch for {tier}"
-    # The interface_unresponsive tier (and its surgical in-place restart) is
-    # gone: the server never emits it. The concrete verdicts (host_offline,
-    # host_unresponsive, unknown tiers) share the catch-all consent-page
-    # branch -- tiers are display-only, so no per-verdict dispatch exists.
-    assert "interface_unresponsive" not in html
-    assert "scope: 'services'" not in html
-    # The shared landing places for each branch.
-    assert "renderUnresponsive" in html
-    assert "renderBackendUnreachable" in html
-    assert "renderReconnecting" in html
-
-
-def test_render_recovery_page_fresh_entry_dispatches_start_only_unconditionally() -> None:
-    """A fresh (stuck) entry dispatches the start-only restart immediately, with no probe gate.
-
-    The dispatch decision no longer consults any host-state knowledge: the
-    start-only restart is safe regardless of the host's state (``mngr start``
-    checks ground truth at commit time and no-ops on a live host), so the entry
-    fires it unconditionally and the classifier tiers stay display-only. The
-    in-flight copy claims only what is known (the offline copy off the hint,
-    else the neutral loading spinner -- never "Restarting your machine"),
-    and applyHealth -- the display path -- must contain no dispatch at all.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    # The fresh entry (the trailing else of the initialStatus dispatcher) POSTs
-    # the start-only restart directly.
-    entry = html[html.rfind("if (initialStatus === 'restarting')") :]
-    assert "postRestart(" in entry
-    assert "{ scope: 'host', start_only: true }" in entry
-    # No probe-gated dispatch remains: applyHealth renders, never restarts.
-    apply_start = html.find("function applyHealth(")
-    apply_block = html[apply_start : html.find("function ", apply_start + 1)]
-    assert "postRestart" not in apply_block
-    # postRestart renders a pending state while the dispatch is in flight;
-    # the default (renderRestarting) is reserved for the manual click, where
-    # the restart is known.
-    post_start = html.find("function postRestart(")
-    post_block = html[post_start : html.find("function ", post_start + 1)]
-    assert "(renderPending || renderRestarting)()" in post_block
-    # The entry dispatch claims only what it knows: the offline copy when the
-    # host reads offline, else the neutral loading spinner -- never
-    # "Restarting your workspace", since the start may be a no-op.
-    assert "hostOffline ? renderRestartingOffline : renderLoading" in entry
-    # A page load that lands on the RESTARTING tracker state picks its copy from
-    # the restart's flavor: a start-only dispatch stays on the neutral loading
-    # spinner, a full manual bounce names the restart. The offline hint wins over
-    # both (a cold boot reads as the offline revival copy).
-    restarting_entry = entry[: entry.find("else if")]
-    assert "restartStartOnly ? renderLoading : renderRestarting" in restarting_entry
-    assert "hostOffline" in restarting_entry
-
-
-def test_render_recovery_page_offline_copy_is_display_only() -> None:
-    """The offline restarting copy is selected by the render hint and upgraded by the poll header.
-
-    The entry dispatch picks ``renderRestartingOffline`` ("Bringing your
-    workspace back online") when the render-time ``data-host-offline`` hint
-    reads 1. When the hint was stale (a cold launch still replaying a
-    pre-stop RUNNING), the convergence poll's ``X-Workspace-Offline`` header
-    upgrades the copy one-way once discovery lands the STOPPED observation --
-    and only for the start-only entry dispatch, so a manual bounce's transient
-    STOPPED never rewrites the page as an offline revival. Display-only:
-    ``applyHealth`` stays dispatch-free regardless of the hint.
-    """
-    offline_html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-        initial_offline=True,
-    )
-    assert 'data-host-offline="1"' in offline_html
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    assert 'data-host-offline="0"' in html
-    # The offline render names the offline condition.
-    offline_start = html.find("function renderRestartingOffline")
-    offline_block = html[offline_start : html.find("function ", offline_start + 1)]
-    assert "was offline" in offline_block
-    # The entry dispatch picks the render off the hint...
-    entry = html[html.rfind("if (initialStatus === 'restarting')") :]
-    assert "hostOffline ? renderRestartingOffline : renderLoading" in entry
-    # ...and the convergence poll upgrades it off the per-tick header, gated on
-    # the dispatch having been the start-only one.
-    refresh_start = html.find("function scheduleRefresh")
-    refresh_block = html[refresh_start : html.find("function scheduleHealthyPoll")]
-    assert "maybeUpgradeToOfflineCopy(resp)" in refresh_block
-    upgrade_start = html.find("function maybeUpgradeToOfflineCopy")
-    upgrade_block = html[upgrade_start : html.find("function ", upgrade_start + 1)]
-    assert "X-Workspace-Offline" in upgrade_block
-    assert "startOnlyDispatched" in upgrade_block
-
-
-def test_render_recovery_page_indeterminate_renders_reconnecting_not_a_verdict() -> None:
-    """The INDETERMINATE tier keeps checking instead of rendering a verdict.
-
-    When the probe timed out or the snapshot is stale, the page must not show a
-    restart verdict off non-evidence -- it renders the live "reconnecting"
-    state and re-probes slowly. The branch must come before the catch-all
-    verdict branch so an indeterminate result keeps checking rather than
-    rendering the "Machine unresponsive" verdict.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    apply_start = html.find("function applyHealth(")
-    apply_block = html[apply_start : html.find("function ", apply_start + 1)]
-    assert "'indeterminate'" in apply_block
-    assert "renderReconnecting()" in apply_block
-    assert "scheduleIndeterminateReprobe()" in apply_block
-    assert apply_block.find("'indeterminate'") < apply_block.rfind("renderUnresponsive()")
-    # renderReconnecting shows a spinner and no restart button, and arms the poll.
-    recon_start = html.find("function renderReconnecting")
-    recon_block = html[recon_start : html.find("function ", recon_start + 1)]
-    assert "show(hostBtn, false)" in recon_block
-    assert "armHealthyPoll()" in recon_block
-
-
-def test_render_recovery_page_dropped_probe_request_reconnects_not_a_verdict() -> None:
-    """A probe request that fails outright must reconnect-and-retry, not dead-end.
-
-    This is the post-macOS-sleep strand: Chromium aborts the in-flight health
-    fetch when the machine suspends, so ``fetchHealth`` rejects. The old handler
-    rendered the terminal "Machine unresponsive" verdict and never re-probed,
-    stranding the user even after the machine came back. The rejection handler
-    must instead render the live "reconnecting" state and schedule a retry, so
-    the cheap liveness poll returns the user home and the slow re-probe
-    converges to a real tier.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="https://example.test/workspace",
-        initial_status="stuck",
-        initial_error="",
-    )
-    # runProbe contains an inline ``function (data)`` callback, so slice to the
-    # next top-level statement (the hostBtn click handler) rather than the next
-    # ``function `` token.
-    probe_start = html.find("function runProbe(")
-    probe_block = html[probe_start : html.find("hostBtn.addEventListener", probe_start)]
-    # The success path still applies the health payload...
-    assert "applyHealth(data)" in probe_block
-    # ...and the rejection path reconnects + retries instead of a static verdict.
-    assert "renderReconnecting()" in probe_block
-    assert "scheduleIndeterminateReprobe()" in probe_block
-    assert "renderUnresponsive()" not in probe_block
-
-
-def test_render_recovery_page_every_wait_state_arms_the_homeward_poll() -> None:
-    """No recovery state is a dead end: each waiting state arms the cheap liveness poll.
-
-    This is the fix for the post-macOS-sleep "Machine unresponsive" strand: a
-    machine that comes back on its own must return the user home without any
-    action. Every terminal/waiting render arms the poll, and the stuck entry
-    arms it before dispatching the start-only restart, so a machine that
-    answers while the dispatch settles still goes straight home.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    for fn in ("renderUnresponsive", "renderDispatchError", "renderReconnecting", "renderBackendUnreachable"):
-        start = html.find("function " + fn)
-        block = html[start : html.find("function ", start + 1)]
-        assert "armHealthyPoll()" in block, f"{fn} must arm the homeward poll so it is not a dead end"
-    # The stuck entry arms the poll before dispatching the start-only restart.
-    entry = html[html.rfind("if (initialStatus === 'restarting')") :]
-    assert 0 < entry.find("armHealthyPoll();") < entry.rfind("postRestart(")
-
-
-def test_render_recovery_page_backend_unreachable_offers_retry_not_restart() -> None:
-    """The backend-unreachable state must surface a Retry affordance and a background
-    healthy-poll (auto-return on recovery), and must NOT auto-dispatch or offer a host
-    restart (a restart routes through the unreachable backend, so it cannot help).
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    assert 'id="recovery-retry-btn"' in html
-    # The backend render shows the Retry and the "Can't connect to" copy; it
-    # must not fall through to a restart dispatch.
-    provider_start = html.find("function renderBackendUnreachable")
-    assert provider_start >= 0
-    provider_end = html.find("function ", provider_start + 1)
-    provider_block = html[provider_start:provider_end]
-    assert "Can't connect to" in provider_block
-    assert "show(retryBtn, true)" in provider_block
-    assert "postRestart" not in provider_block
-    # The copy must be provider-agnostic: a local docker daemon is independent of
-    # the network, so the old "check your internet connection" line is wrong here
-    # and must not return.
-    assert "internet connection" not in provider_block.lower()
-    # Instead of a hand-authored per-provider message, the verbatim provider
-    # error rides along on the response (``unreachable_reason``) and is surfaced.
-    assert "unreachable_reason" in provider_block
-    assert "providerReasonEl.textContent = reason" in provider_block
-    # Diagnostics are suppressed on this tier (the cause is the external backend,
-    # shown verbatim, not anything the in-container probes inspect).
-    assert "show(debugDetailsEl, false)" in provider_block
-    # The render arms the cheap liveness poll so the page auto-returns the user
-    # once the backend recovers and the tracker flips HEALTHY.
-    assert "armHealthyPoll()" in provider_block
-    # The display path contains no dispatch at all (tiers are display-only).
-    apply_start = html.find("function applyHealth(")
-    apply_block = html[apply_start : html.find("function ", apply_start + 1)]
-    assert "postRestart" not in apply_block
-    # The verdict must stay live: a transient provider error (one failed
-    # discovery cycle, e.g. during app startup) is cleared by the provider's
-    # next clean snapshot, so the branch schedules the slow re-probe to
-    # re-classify and continue the flow instead of dead-ending on the page.
-    unreachable_branch = apply_block[apply_block.find("'backend_unreachable'") : apply_block.find("'healthy'")]
-    assert "scheduleIndeterminateReprobe()" in unreachable_branch
-    # Only one reprobe timer may be pending at once: the Retry button's
-    # immediate probe re-enters applyHealth, which would otherwise spawn a
-    # parallel self-perpetuating probe chain per click.
-    reprobe_start = html.find("function scheduleIndeterminateReprobe")
-    reprobe_block = html[reprobe_start : html.find("function ", reprobe_start + 1)]
-    assert "if (reprobePending || restartDispatched) return" in reprobe_block
-
-
-def test_render_recovery_page_unresponsive_verdict_stays_live_and_resets_state() -> None:
-    """The unresponsive verdict is not a dead-end, and verdict renders reset each other's elements.
-
-    The catch-all verdict branch (host_offline / host_unresponsive / unknown
-    tiers) must keep re-probing so the failure page's verdict and diagnostics
-    stay live as evidence changes. And because the page can move between
-    verdicts (backend_unreachable -> host_unresponsive), renderUnresponsive and
-    renderDispatchError must hide the Retry button and clear the provider-error
-    paragraph that renderBackendUnreachable showed -- otherwise the page shows
-    Retry AND Restart together with a stale provider error.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    apply_start = html.find("function applyHealth(")
-    apply_block = html[apply_start : html.find("function ", apply_start + 1)]
-    # The catch-all verdict branch (after the indeterminate branch) renders the
-    # consent page and schedules the slow re-probe.
-    fallthrough = apply_block[apply_block.rfind("renderUnresponsive()") :]
-    assert "scheduleIndeterminateReprobe()" in fallthrough
-    for fn in ("renderUnresponsive", "renderDispatchError"):
-        start = html.find("function " + fn)
-        block = html[start : html.find("function ", start + 1)]
-        assert "show(retryBtn, false)" in block, f"{fn} must hide the backend-unreachable Retry button"
-        assert "providerReasonEl.textContent = ''" in block, f"{fn} must clear the provider error text"
-
-
-def test_render_recovery_page_restart_dispatch_silences_reprobe_chain() -> None:
-    """A dispatched restart must silence the reprobe chain the verdict left armed.
-
-    The unresponsive verdict shows the Restart button while its slow re-probe
-    chain stays perpetually armed (a pending timer, or a heavy probe already in
-    flight), so a manual restart always races a stale probe result. Without a
-    guard that result overwrites the "Restarting your machine" render (and
-    can re-POST a restart) seconds after the click, for the whole restart
-    duration. postRestart flips restartDispatched; applyHealth drops results
-    that arrive after it, and scheduleIndeterminateReprobe stops arming (and
-    firing) timers.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    post_start = html.find("function postRestart(")
-    post_block = html[post_start : html.find("function ", post_start + 1)]
-    assert "restartDispatched = true" in post_block
-    apply_start = html.find("function applyHealth(")
-    apply_block = html[apply_start : html.find("function ", apply_start + 1)]
-    assert "if (restartDispatched) return" in apply_block
-    reprobe_start = html.find("function scheduleIndeterminateReprobe")
-    reprobe_block = html[reprobe_start : html.find("function ", reprobe_start + 1)]
-    assert "if (reprobePending || restartDispatched) return" in reprobe_block
-
-
-def test_render_recovery_page_loading_hides_diagnostic_dropdown() -> None:
-    """renderLoading must hide the diagnostic dropdown so a stale prior diagnostic
-    does not linger on the page while a fresh check is in flight (issue: user
-    clicked Restart machine and the previous probe's diagnostic stayed open).
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="stuck",
-        initial_error="",
-    )
-    # renderLoading clears the cached payload and hides the debug details.
-    loading_block_start = html.find("function renderLoading")
-    assert loading_block_start >= 0
-    loading_block_end = html.find("function ", loading_block_start + 1)
-    loading_block = html[loading_block_start:loading_block_end]
-    assert "show(debugDetailsEl, false)" in loading_block
-    assert "latestHealth = null" in loading_block
-
-
-def test_render_recovery_page_restart_failed_also_runs_probe() -> None:
-    """The restart_failed entry must run the diagnostic probe so the page
-    shows both the error details and the diagnostics (in separate elements),
-    not just the error.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="restart_failed",
-        initial_error="Stop step of host restart failed: exited 1",
-    )
-    # The restart_failed branch in the dispatcher calls runProbe() so the
-    # diagnostics are populated (the probe path is display-only, so this can
-    # never dispatch another restart).
-    assert "restart_failed" in html
-    assert "runProbe()" in html
-    # The error-details DOM hook is rendered alongside the diagnostic.
-    assert 'id="recovery-error"' in html
-    assert 'id="recovery-debug-details"' in html
-
-
-def test_render_recovery_page_promotes_button_above_troubleshooting() -> None:
-    """The restart button is the page's primary action, so it must appear
-    before the de-emphasized troubleshooting block -- not sandwiched between
-    the error and diagnostics disclosures as in the previous layout. Both
-    disclosures live inside that troubleshooting block.
-    """
-    html = render_recovery_page(
-        agent_id=_AGENT_A,
-        return_to="",
-        initial_status="restart_failed",
-        initial_error="boom",
-    )
-    button_pos = html.index('id="recovery-host-btn"')
-    block_pos = html.index('class="recovery-troubleshooting"')
-    error_pos = html.index('id="recovery-error"')
-    debug_pos = html.index('id="recovery-debug-details"')
-    # Button first, then the troubleshooting block, then both disclosures.
-    assert button_pos < block_pos < error_pos < debug_pos
-
-
 def test_render_dev_styleguide_page_surfaces_tokens_and_component_widgets() -> None:
     """The styleguide must surface the live ``:root`` tokens and render
     each catalog widget through its real JinjaX component (so the catalog
@@ -2332,7 +1824,7 @@ _EXPECTED_PALETTE: Final[dict[str, str]] = {
     "energy": "#cecd0c",
     "strength": "#cfc7b3",
     "comfort": "#f5d6a0",
-    "inspiration": "#e9ecd9",
+    "template": "#e9ecd9",
     "clarity": "#fcefd4",
 }
 
@@ -2782,28 +2274,6 @@ def test_form_label_inline_drops_block_and_mb() -> None:
     assert "type-label" in html
 
 
-def test_oauth_button_renders_google_label_and_brand_icon_with_hook_class() -> None:
-    html = CATALOG.render("auth.OauthButton", provider="google")
-    # The .oauth-btn hook is load-bearing -- static/auth.js queries for
-    # it to enable/disable all OAuth buttons as a group.
-    assert "oauth-btn" in html
-    # Label text + data-oauth provider attr.
-    assert "Continue with Google" in html
-    assert 'data-oauth="google"' in html
-    # Brand glyph from auth.OauthIcon is composed inline. The path
-    # fragment is one of the four <path d="..."> values unique to
-    # Google's blue triangle.
-    assert "M22.56 12.25" in html
-
-
-def test_oauth_button_github_uses_github_label_and_glyph() -> None:
-    html = CATALOG.render("auth.OauthButton", provider="github")
-    assert "Continue with GitHub" in html
-    assert 'data-oauth="github"' in html
-    # Path fragment that opens GitHub's mark glyph.
-    assert "M12 0C5.37 0 0 5.37" in html
-
-
 def test_page_narrow_container_default_padding_and_max_width() -> None:
     html = CATALOG.render("PageNarrowContainer", title="x", _content="<p>body</p>")
     # The narrow column itself is width/padding only: p-8 + max-w-[420px] +
@@ -2932,26 +2402,6 @@ def test_spinner_default_tone_omits_accent_class() -> None:
 def test_spinner_accent_tone_adds_accent_class() -> None:
     html = CATALOG.render("Spinner", size="sm", tone="accent")
     assert "spinner-accent" in html
-
-
-def test_oauth_icon_google_includes_google_svg_path() -> None:
-    html = CATALOG.render("auth.OauthIcon", provider="google")
-    # One of the four <path d="..."> values unique to the Google glyph
-    # (the blue triangle); shows the right SVG was selected.
-    assert "M22.56 12.25" in html
-
-
-def test_oauth_icon_github_includes_github_svg_path() -> None:
-    html = CATALOG.render("auth.OauthIcon", provider="github")
-    # The opening of GitHub's mark path.
-    assert "M12 0C5.37 0 0 5.37" in html
-
-
-def test_oauth_icon_unknown_provider_renders_nothing_visible() -> None:
-    # Defensive: the icon component has no fallback path, so an unexpected
-    # provider just produces empty output (no exception).
-    html = CATALOG.render("auth.OauthIcon", provider="not-a-provider").strip()
-    assert html == ""
 
 
 def test_text_input_default_radius_is_md() -> None:
@@ -3762,12 +3212,15 @@ def test_workspace_share_targets_exclude_the_workspaces_own_interfaces() -> None
     # "web", which is an ordinary user service and gets no special-casing.
     html = _options_modal(
         tab="share",
-        servers=("terminal", "browser", "chat", "web", "newsreader", "system_interface"),
+        servers=("terminal", "browser", "chat", "owner-exec", "web", "newsreader", "system_interface"),
     )
     assert 'data-share-target="newsreader"' in html
     assert 'data-share-target="web"' in html
     assert 'data-share-target="system_interface"' in html
-    for excluded in ("terminal", "browser", "chat"):
+    # owner-exec is the internal SSH-equivalent exec channel (authorized by
+    # request signatures, never a share grant), so it must never be offered as
+    # a per-app share target alongside the workspace's own interfaces.
+    for excluded in ("terminal", "browser", "chat", "owner-exec"):
         assert f'data-share-target="{excluded}"' not in html
 
 
