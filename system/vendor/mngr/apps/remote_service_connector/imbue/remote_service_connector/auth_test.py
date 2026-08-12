@@ -10,10 +10,13 @@ from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import _authenticate_supertokens
 from imbue.remote_service_connector.auth import clear_paid_status_cache
-from imbue.remote_service_connector.auth import default_email_getter
+from imbue.remote_service_connector.auth import get_backfill_email
 from imbue.remote_service_connector.auth import is_email_paid
 from imbue.remote_service_connector.auth import is_email_paid_in_db
 from imbue.remote_service_connector.auth import require_ally_eligible
+from imbue.remote_service_connector.auth import require_verified_email
+from imbue.remote_service_connector.auth import resolve_account_email
+from imbue.remote_service_connector.errors import EmailNotVerifiedError
 from imbue.remote_service_connector.testing import _ADMIN_KEY_TEST_VALUE
 from imbue.remote_service_connector.testing import _FakeLoginMethod
 from imbue.remote_service_connector.testing import _admin_key_headers
@@ -46,21 +49,43 @@ def test_authenticate_supertokens_returns_user_auth_with_user_id_prefix(
     result = _authenticate_supertokens(
         "valid-token",
         session_getter=lambda **kwargs: _FakeSession(user_id, email_verified=True),
-        email_getter=lambda _user_id: "alice@example.com",
+        email_resolver=lambda _user_id: ("alice@example.com", True),
     )
     assert isinstance(result, UserAuth)
     assert result.user_id_prefix == "a1b2c3d4e5f67890"
     assert result.email == "alice@example.com"
+    assert result.is_email_verified is True
+    assert result.verified_email == "alice@example.com"
 
 
-def test_authenticate_supertokens_raises_401_when_no_verified_email(
+def test_authenticate_supertokens_accepts_unverified_email(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When the live lookup finds no verified email, auth is rejected with 401.
+    """An unverified email authenticates -- verification is non-blocking.
 
-    ``email_getter`` (``default_email_getter`` in production) returns None both
-    when the user has no email and when their only emails are unverified; either
-    way the caller has proven no verified identity, so the guard denies access.
+    The account carries ``is_email_verified=False`` so the endpoints that DO
+    authorize by email ownership can refuse it via ``require_verified_email``.
+    """
+    user_id = "a1b2c3d4-e5f6-7890-abcd-1234567890ab"
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
+    result = _authenticate_supertokens(
+        "valid-token",
+        session_getter=lambda **kwargs: _FakeSession(user_id, email_verified=False),
+        email_resolver=lambda _user_id: ("alice@example.com", False),
+    )
+    assert isinstance(result, UserAuth)
+    assert result.email == "alice@example.com"
+    assert result.is_email_verified is False
+    assert result.verified_email is None
+
+
+def test_authenticate_supertokens_raises_401_when_account_has_no_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the live lookup finds no email at all, auth is rejected with 401.
+
+    Every enabled login method carries an email, so a missing email means a
+    broken account record (or a deleted user), not a legitimate caller.
     """
     user_id = "a1b2c3d4-e5f6-7890-abcd-1234567890ab"
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
@@ -68,32 +93,43 @@ def test_authenticate_supertokens_raises_401_when_no_verified_email(
         _authenticate_supertokens(
             "valid-token",
             session_getter=lambda **kwargs: _FakeSession(user_id, email_verified=True),
-            email_getter=lambda _user_id: None,
+            email_resolver=lambda _user_id: (None, False),
         )
     assert exc_info.value.status_code == 401
-    assert "verified" in exc_info.value.detail
+    assert "no email" in exc_info.value.detail
 
 
 def test_authenticate_supertokens_ignores_stale_unverified_token_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A token minted while unverified still authenticates once the core reports the email verified.
+    """A token minted while unverified reports verified once the core says so.
 
     The access token carries a cached ``email_verified=False`` claim, but the
-    live ``email_getter`` lookup returns a verified email (e.g. the user was
-    just added to the paid list and auto-verified). The guard must trust the
-    live result, not the stale token claim, so the request succeeds without the
-    user having to refresh their token first.
+    live ``email_resolver`` lookup reports the email verified (the user clicked
+    the link after signing in). The guard must trust the live result, not the
+    stale token claim.
     """
     user_id = "a1b2c3d4-e5f6-7890-abcd-1234567890ab"
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
     result = _authenticate_supertokens(
         "stale-token",
         session_getter=lambda **kwargs: _FakeSession(user_id, email_verified=False),
-        email_getter=lambda _user_id: "alice@example.com",
+        email_resolver=lambda _user_id: ("alice@example.com", True),
     )
     assert isinstance(result, UserAuth)
     assert result.email == "alice@example.com"
+    assert result.is_email_verified is True
+
+
+def test_require_verified_email_passes_for_verified_account() -> None:
+    require_verified_email(UserAuth(user_id_prefix="a" * 16, email="alice@example.com", is_email_verified=True))
+
+
+def test_require_verified_email_raises_structured_error_for_unverified_account() -> None:
+    user = UserAuth(user_id_prefix="a" * 16, email="alice@example.com", is_email_verified=False)
+    with pytest.raises(EmailNotVerifiedError) as exc_info:
+        require_verified_email(user)
+    assert exc_info.value.email == "alice@example.com"
 
 
 def test_authenticate_supertokens_raises_401_when_connection_uri_not_set() -> None:
@@ -102,7 +138,7 @@ def test_authenticate_supertokens_raises_401_when_connection_uri_not_set() -> No
         _authenticate_supertokens(
             "any-token",
             session_getter=lambda **kwargs: _FakeSession("ignored"),
-            email_getter=lambda _user_id: None,
+            email_resolver=lambda _user_id: (None, False),
         )
     assert exc_info.value.status_code == 401
     assert "not configured" in exc_info.value.detail
@@ -158,66 +194,46 @@ class _FakeStUser:
         self.login_methods = login_methods
 
 
-def test_default_email_getter_returns_first_verified_non_empty_email() -> None:
-    """The first login method with both a non-empty email and ``verified=True`` is returned."""
-    user = _FakeStUser([_FakeLoginMethod(None), _FakeLoginMethod(""), _FakeLoginMethod("alice@example.com")])
-    assert default_email_getter("user-123", user_getter=lambda _user_id: user) == "alice@example.com"
-
-
-def test_default_email_getter_skips_unverified_emails() -> None:
-    """Unverified login methods are skipped; the first *verified* email is returned.
-
-    A user with both an unverified third-party login (``evil@gmail.com``) and a verified
-    emailpassword login (``alice@imbue.com``) must surface ``alice@imbue.com``, since the
-    paid-feature gate authorizes by domain ownership and only verified emails prove that.
-    """
+def test_resolve_account_email_prefers_verified_over_earlier_unverified() -> None:
+    """A verified login method wins even when an unverified email comes first."""
     user = _FakeStUser(
         [
-            _FakeLoginMethod("evil@gmail.com", verified=False),
+            _FakeLoginMethod("unverified@gmail.com", verified=False),
             _FakeLoginMethod("alice@imbue.com", verified=True),
         ]
     )
-    assert default_email_getter("user-123", user_getter=lambda _user_id: user) == "alice@imbue.com"
+    assert resolve_account_email("user-123", user_getter=lambda _user_id: user) == ("alice@imbue.com", True)
 
 
-def test_default_email_getter_returns_none_when_only_unverified_emails() -> None:
-    """When every login method is unverified, returns None even if emails are present."""
+def test_resolve_account_email_falls_back_to_unverified_email() -> None:
+    """With no verified login method, the first email is returned with is_verified=False."""
     user = _FakeStUser(
         [
-            _FakeLoginMethod("evil@gmail.com", verified=False),
-            _FakeLoginMethod("other@gmail.com", verified=False),
+            _FakeLoginMethod(None),
+            _FakeLoginMethod("alice@gmail.com", verified=False),
         ]
     )
-    assert default_email_getter("user-123", user_getter=lambda _user_id: user) is None
+    assert resolve_account_email("user-123", user_getter=lambda _user_id: user) == ("alice@gmail.com", False)
 
 
-def test_default_email_getter_returns_none_when_no_login_method_has_email() -> None:
-    """When no login method has a non-empty email, returns None."""
-    user = _FakeStUser([_FakeLoginMethod(None), _FakeLoginMethod("")])
-    assert default_email_getter("user-123", user_getter=lambda _user_id: user) is None
+def test_resolve_account_email_returns_none_for_missing_user() -> None:
+    assert resolve_account_email("user-123", user_getter=lambda _user_id: None) == (None, False)
 
 
-def test_default_email_getter_returns_none_when_user_is_none() -> None:
-    """When the SDK reports no user for the id, returns None."""
-    assert default_email_getter("user-123", user_getter=lambda _user_id: None) is None
+def test_get_backfill_email_returns_verified_email() -> None:
+    user = _FakeStUser([_FakeLoginMethod("alice@imbue.com", verified=True)])
+    assert get_backfill_email("user-123", user_getter=lambda _user_id: user) == "alice@imbue.com"
 
 
-def test_default_email_getter_returns_none_on_general_error() -> None:
-    """When the SDK raises a GeneralError (e.g. transient core problem), it is swallowed and None is returned."""
-
-    def _raise(_user_id: str) -> None:
-        raise SuperTokensGeneralError("transient core problem")
-
-    assert default_email_getter("user-123", user_getter=_raise) is None
+def test_get_backfill_email_returns_empty_string_for_unverified_user() -> None:
+    """An existing-but-unverified user maps to "" so a plain explorer row is created (no paid check)."""
+    user = _FakeStUser([_FakeLoginMethod("alice@imbue.com", verified=False)])
+    assert get_backfill_email("user-123", user_getter=lambda _user_id: user) == ""
 
 
-def test_default_email_getter_returns_none_on_session_error() -> None:
-    """When the SDK raises a SessionError, it is swallowed and None is returned."""
-
-    def _raise(_user_id: str) -> None:
-        raise SuperTokensSessionError("bad session")
-
-    assert default_email_getter("user-123", user_getter=_raise) is None
+def test_get_backfill_email_returns_none_for_missing_user() -> None:
+    """A user that cannot be resolved maps to None so no row is ever created for them."""
+    assert get_backfill_email("user-123", user_getter=lambda _user_id: None) is None
 
 
 def _paid_lookup_backend(

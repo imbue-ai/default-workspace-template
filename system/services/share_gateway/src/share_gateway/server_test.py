@@ -38,6 +38,7 @@ _SHELL_HOST = f"system_interface-shell111.{_DOMAIN}"
 _WEB_HOST = f"web-web111111.{_DOMAIN}"
 _TERMINAL_HOST = f"terminal-term1111.{_DOMAIN}"
 _AUTH_ORIGIN = f"https://{_AUTH_LABEL}.{_DOMAIN}"
+_CHROME_ORIGIN = "https://minds.imbue.com"
 
 _GRANTS = """
 [workspace]
@@ -58,7 +59,7 @@ class _GatewayHarness:
         self.pending_logins = pending_logins
 
 
-def _make_harness(tmp_path: Path, grants_text: str = _GRANTS) -> _GatewayHarness:
+def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str = _CHROME_ORIGIN) -> _GatewayHarness:
     grants_path = tmp_path / "share_grants.toml"
     grants_path.write_text(grants_text)
     materials = ShareMaterials(
@@ -68,6 +69,7 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS) -> _GatewayHarness
         relay_token="tok",
         connector_url="https://connector.example.com",
         broker_url=_BROKER_URL,
+        chrome_origin=chrome_origin,
     )
     pending_logins = PendingLoginRegistry()
     app = build_gateway_app(
@@ -86,8 +88,8 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS) -> _GatewayHarness
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
 
 
-def _session_cookie_for(email: str) -> str:
-    return mint_session_cookie_value(_SIGNING_SECRET, email, _DOMAIN)
+def _session_cookie_for(email: str, is_owner: bool = False) -> str:
+    return mint_session_cookie_value(_SIGNING_SECRET, email, _DOMAIN, is_owner=is_owner)
 
 
 def _install_session(client: FlaskClient, email: str, extra_cookies: dict[str, str] | None = None) -> None:
@@ -119,11 +121,18 @@ def _verify_headers(
     return headers
 
 
-def _mint_handoff(nonce: str, email: str = "bob@example.com", audience: str = _DOMAIN, jti: str = "jti-1") -> str:
+def _mint_handoff(
+    nonce: str,
+    email: str = "bob@example.com",
+    audience: str = _DOMAIN,
+    jti: str = "jti-1",
+    is_owner: bool = False,
+) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": "user-1",
         "email": email,
+        "owner": is_owner,
         "aud": audience,
         "jti": jti,
         "nonce": nonce,
@@ -261,6 +270,9 @@ def test_callback_sets_domain_cookie_and_redirects_to_next(tmp_path: Path) -> No
     assert f"Domain={_DOMAIN}" in set_cookie
     assert "HttpOnly" in set_cookie
     assert "Secure" in set_cookie
+    # Cross-site iframe embedding requires these three attributes together.
+    assert "SameSite=None" in set_cookie
+    assert "Partitioned" in set_cookie
 
     cookie_value = set_cookie.split(f"{SESSION_COOKIE_NAME}=", 1)[1].split(";", 1)[0]
     harness.client.set_cookie(SESSION_COOKIE_NAME, cookie_value)
@@ -320,6 +332,87 @@ def test_loading_and_healthz_endpoints(tmp_path: Path) -> None:
     assert "refresh" in loading.get_data(as_text=True)
 
 
+def test_verify_exposes_owner_header_for_downstream_gating(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("bob@example.com", is_owner=True))
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers())
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Share-Owner"] == "true"
+
+
+def test_callback_owner_is_admitted_without_a_grant(tmp_path: Path) -> None:
+    # The owner never appears in the grants file, but the broker vouches for
+    # ownership by user id, so an owner handoff is admitted regardless.
+    harness = _make_harness(tmp_path, grants_text="[workspace]\nemails = []\nemail_domains = []\n")
+    nonce = harness.pending_logins.mint()
+    token = _mint_handoff(nonce, email="owner@example.com", is_owner=True)
+
+    resp = harness.client.get(f"/_auth/callback?token={token}&state={nonce}&next=https://{_SHELL_HOST}/")
+
+    assert resp.status_code == 302
+    set_cookie = resp.headers["Set-Cookie"]
+    assert "Partitioned" in set_cookie
+    cookie_value = set_cookie.split(f"{SESSION_COOKIE_NAME}=", 1)[1].split(";", 1)[0]
+    harness.client.set_cookie(SESSION_COOKIE_NAME, cookie_value)
+    verified = harness.client.get("/_auth/verify", headers=_verify_headers())
+    assert verified.status_code == 200
+    assert verified.headers["X-Share-Owner"] == "true"
+
+
+def test_non_owner_without_grant_is_still_rejected_at_callback(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path, grants_text="[workspace]\nemails = []\nemail_domains = []\n")
+    nonce = harness.pending_logins.mint()
+    token = _mint_handoff(nonce, email="stranger@example.com", is_owner=False)
+
+    resp = harness.client.get(f"/_auth/callback?token={token}&state={nonce}")
+
+    assert resp.status_code == 403
+
+
+def test_health_unauthenticated_is_bare_liveness_with_cors(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get("/_health", headers={"Origin": _CHROME_ORIGIN})
+
+    assert resp.status_code == 204
+    assert resp.headers["Access-Control-Allow-Origin"] == _CHROME_ORIGIN
+    assert resp.headers["Access-Control-Allow-Credentials"] == "true"
+
+
+def test_health_authenticated_reports_backend_detail(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("bob@example.com", is_owner=True))
+
+    resp = harness.client.get("/_health", headers={"Origin": _CHROME_ORIGIN})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["gateway"] == "ok"
+    assert body["backend"] == "ok"
+    assert body["owner"] is True
+
+
+def test_health_cors_only_echoes_the_configured_chrome_origin(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get("/_health", headers={"Origin": "https://evil.example.com"})
+
+    assert resp.status_code == 204
+    assert "Access-Control-Allow-Origin" not in resp.headers
+
+
+def test_health_preflight_is_answered(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.options("/_health", headers={"Origin": _CHROME_ORIGIN})
+
+    assert resp.status_code == 204
+    assert resp.headers["Access-Control-Allow-Origin"] == _CHROME_ORIGIN
+    assert "GET" in resp.headers["Access-Control-Allow-Methods"]
+
+
 def test_expired_session_cookie_is_rejected(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     now = datetime.now(timezone.utc)
@@ -332,5 +425,77 @@ def test_expired_session_cookie_is_rejected(tmp_path: Path) -> None:
     harness.client.set_cookie(SESSION_COOKIE_NAME, expired)
 
     resp = harness.client.get("/_auth/verify", headers=_verify_headers(accept="application/json"))
+
+    assert resp.status_code == 401
+
+
+def test_health_owner_detail_includes_the_service_label_map(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True))
+
+    resp = harness.client.get("/_health", headers={"Origin": _CHROME_ORIGIN})
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["owner"] is True
+    assert body["services"] == {name: label for label, name in _LABELS.items()}
+
+
+def test_health_visitor_detail_omits_the_service_label_map(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    resp = harness.client.get("/_health")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["owner"] is False
+    assert "services" not in body
+
+
+def test_post_with_the_chrome_origin_is_allowed(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True))
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, method="POST", origin=_CHROME_ORIGIN),
+    )
+
+    assert resp.status_code == 200
+
+
+def test_post_with_the_chrome_origin_is_rejected_when_no_chrome_is_configured(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path, chrome_origin="")
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("owner@example.com", is_owner=True))
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, method="POST", origin=_CHROME_ORIGIN),
+    )
+
+    assert resp.status_code == 403
+
+
+def test_chrome_preflight_passes_verify_without_a_session(tmp_path: Path) -> None:
+    # Preflights never carry credentials, so the forward_auth must let the
+    # chrome's OPTIONS through for the service to answer with CORS headers.
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, method="OPTIONS", origin=_CHROME_ORIGIN, accept="*/*"),
+    )
+
+    assert resp.status_code == 200
+
+
+def test_foreign_preflight_still_requires_a_session(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get(
+        "/_auth/verify",
+        headers=_verify_headers(host=_WEB_HOST, method="OPTIONS", origin="https://evil.example.com", accept="*/*"),
+    )
 
     assert resp.status_code == 401
