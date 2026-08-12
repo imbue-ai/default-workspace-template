@@ -520,11 +520,18 @@ def snapshot_bundle(repo_root: Path) -> Path | None:
         return None
     # Deliberately outside the repo: a stray directory inside it would dirty the
     # tree and trip the next reveal's clean-tree precondition.
+    snapshot_root: Path | None = None
     try:
         snapshot_root = Path(tempfile.mkdtemp(prefix="system-interface-bundle-"))
         saved = snapshot_root / "static"
         shutil.copytree(bundle, saved)
     except OSError as exc:
+        # A half-written copy has to go with it. The documented reasons to land
+        # here are a full or read-only disk, so leaving megabytes of partial
+        # bundle behind on every attempt would make the next one likelier to
+        # fail for the same reason.
+        if snapshot_root is not None:
+            shutil.rmtree(snapshot_root, ignore_errors=True)
         sys.stderr.write(
             f"warning: could not copy the built bundle aside ({type(exc).__name__}: {exc}); "
             "a failed reveal will have to rebuild it to recover.\n"
