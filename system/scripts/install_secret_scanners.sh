@@ -131,7 +131,10 @@ _fetch_verify_install() {
     local tmpdir tarball actual_sha rc=0
     tmpdir="$(mktemp -d)"
     tarball="$tmpdir/$tool.tar.gz"
-    if ! curl -fsSL --retry 3 -o "$tarball" "$url"; then
+    # Retry flags mirror setup_system.sh's CURL_RETRY: --retry-all-errors extends
+    # the retry set to a mid-transfer connection drop (curl exit 56), not just the
+    # transient 5xx/timeout defaults. The sha256 check below still gates any retry.
+    if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$tarball" "$url"; then
         _log "$tool: download failed: $url"
         rm -rf "$tmpdir"
         return 1
