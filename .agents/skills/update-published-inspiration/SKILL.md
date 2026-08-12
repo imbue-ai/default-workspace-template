@@ -446,7 +446,9 @@ from `$WT`).
 
   where `<n+1>` is **computed**, never typed: one greater than the highest `v<k>`
   already listed under this slug's heading. Pad the note to width 35 so the sha
-  lines up; compute the sha as `git rev-parse --short=7 "$SOURCE_SHA"`.
+  lines up, keeping at least two spaces before the sha (`<NOTE>` is free text --
+  one of 35+ chars pushes its sha right rather than landing flush against it);
+  compute the sha as `git rev-parse --short=7 "$SOURCE_SHA"`.
   **Idempotence, scoped to this slug:** if a line already under this slug's
   heading carries this exact note AND this exact 7-char sha, it is already
   recorded -- change nothing and skip the commit.
