@@ -723,21 +723,6 @@ def _seed_live_layout(
     return layout_dir
 
 
-def _service_panel_layout(service_name: str) -> str:
-    """A persisted layout whose single panel is an iframe on ``service_name``."""
-    return json.dumps(
-        {
-            "panelParams": {
-                "iframe-1": {"panelType": "iframe", "serviceName": service_name},
-            }
-        }
-    )
-
-
-@pytest.mark.parametrize(
-    "service_name",
-    [reveal_mod.PREVIEW_SERVICE_NAME, reveal_mod.PREVIEW_INNER_SERVICE_NAME, "browser"],
-)
 def test_preview_refuses_a_work_dir_without_a_frontend_build(tmp_path: Path) -> None:
     # A worker that reported done without building its frontend leaves no bundle;
     # the preview must fail loudly (non-zero, no boot) rather than serve the
