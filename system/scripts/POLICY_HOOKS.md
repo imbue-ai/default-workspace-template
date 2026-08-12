@@ -24,12 +24,16 @@ codex reuses those scripts verbatim, pi re-expresses them in TypeScript.
 | 4 | Nudge when doing substantive work with no in-progress step | PreToolUse | workflow | live | live | live |
 | 5 | Block a `tk start`/`close` that is chained or redirected | PreToolUse | workflow | live | live | live |
 | 6 | Carry over still-open steps into the next turn | UserPromptSubmit | workflow | live | live | live |
-| 7 | Log a stop that leaves steps open | Stop | workflow | live | live | live |
+| 7 | Surface steps the previous turn left open | Stop (pi: at turn-start, via #6) | workflow | live | live | live |
 | 8 | Session-start setup (`uv sync`, tk-on-path, plugin update, shed notice) | SessionStart | setup | live | n/a | n/a |
 | 9 | Force the agent back to the repo root before it stops | Stop | workflow | live | n/a | n/a |
 
 Hooks 1–3 (safety) and 4–7 (tk workflow discipline) are the cross-harness set. Hooks 8–9 are
-claude-only by construction — see the last section.
+claude-only by construction — see the last section. Note the **Stop** event: claude runs two Stop
+hooks (#7 open-items, #9 cwd); on pi neither *reaches the agent* on stop — #9 does not apply, and
+#7's agent-visible reminder is delivered at the **start of the next turn** (#6) because pi's stop
+event (`agent_settled`) can only write to stderr. pi still registers an `agent_settled` handler
+for #7, but it is a stderr-only log (clobbered in the TUI), not a channel to the agent.
 
 ## How each harness attaches
 
@@ -155,8 +159,13 @@ listing them so the agent reconciles before acting.
   or `{`, and this reminder starts with `[Open task reminder...]`, so plain text is rejected as
   a hook failure (verified live). `--codex` makes the script emit the reminder as
   `hookSpecificOutput.additionalContext` JSON instead, which codex adds to context cleanly.
-- **pi**: `on("before_agent_start")` — if `tk steps` reports open steps, return
-  `{systemPrompt: event.systemPrompt + "\n\n" + reminder}` (the guaranteed-visible channel).
+- **pi**: `on("before_agent_start")` — if `tk steps` reports steps the previous turn left open,
+  return `{systemPrompt: base + reminder}` to **append the reminder to this turn's system prompt**,
+  the guaranteed model-visible channel (`BeforeAgentStartEventResult` accepts either `message` or
+  `systemPrompt`; we use `systemPrompt`, and pi resets the override each turn). This is also where pi does the
+  "steps left open" surfacing that claude runs as a Stop hook (#7): pi has no usable stop-time
+  channel to the agent, so both the carryover and the leftover-open reminder are delivered here,
+  at the start of the next turn.
 
 ### 7. Nudge on stop with open steps — `claude_open_tickets_stop_nudge.sh`
 A non-blocking, log-only note (exit 0 always) when the agent stops with steps still open.
@@ -169,9 +178,23 @@ Real follow-up is handled by hook 6 on the next turn.
   which under `set -euo pipefail` made the script exit non-zero — and on codex an exit 2 on
   Stop is a *continuation* request that re-engages the agent. The script now guards that count
   with `|| true`, honoring its "exits 0 always" contract on every harness.
-- **pi**: `on("agent_settled")` — the true "run fully settled" signal; stderr only.
+- **pi**: **not done as a stop hook.** pi's stop-time event (`agent_settled`) is a pure
+  notification whose return value is ignored (registered as `ExtensionHandler<AgentSettledEvent>`
+  with no result type), so a handler can only write to stderr — and in pi's full-screen TUI,
+  running in a tmux pane, that stderr is clobbered and never reaches the agent or the chat. So on
+  pi the "steps left open" reminder is surfaced at the **start of the next turn** via
+  `before_agent_start` (see #6), the same channel the carryover uses — not on stop. pi does
+  register an `agent_settled` handler here, but only as a stderr log; it is not the agent-visible
+  reminder (that rides #6).
 
-## Category C — claude-only, not ported (by construction)
+## Category C — the Stop event, and claude-only hooks (by construction)
+
+Claude fires **two** hooks on the **Stop** event: the open-items nudge (#7, above) and the
+return-to-repo-root cwd check (#9, below). On **pi**, neither runs as a Stop hook — #9 does not
+apply (pi has no persistent cwd), and #7 is folded into the **turn-start** check (#6), because
+pi's stop event cannot reach the agent. **codex** runs #7 as a real Stop hook, but not #9 (same
+cwd reasoning). So of claude's two Stop hooks, only #7's *purpose* is cross-harness, and pi
+delivers it at turn start rather than on stop.
 
 ### 8. Session-start setup — SessionStart
 `uv sync --all-packages`, `ensure_tk_on_path.sh`, `claude_update_plugin.sh` (a Claude-Code

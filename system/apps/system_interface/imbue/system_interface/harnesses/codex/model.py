@@ -136,13 +136,43 @@ def _bind_root_thread(client: _RootThreadClient, agent_state_dir: Path) -> None:
     raise CodexAppServerError("no unambiguous codex root thread to bind for a model switch")
 
 
+def _subscribe_root_thread(client: _RootThreadClient, agent_state_dir: Path) -> None:
+    """Resume the agent's root thread so this connection JOINS the app-server event stream.
+
+    The live-connection analogue of :func:`_bind_root_thread`, and the linchpin of the codex
+    message lifecycle. Where the switch path binds an already-loaded thread LOCALLY
+    (``bind_thread``, no RPC), the persistent ledger connection MUST load the root thread via
+    ``thread/resume`` -- the only load the app-server treats as a subscription. A bound connection
+    is never subscribed, so it hears only ``thread/status/changed`` and never the thread's
+    ``turn/*`` / ``item/*`` notifications (delivery and reconcile); resuming is what makes those
+    events flow. The resume is safe and additive (verified live against codex 0.147): it replays no
+    history (``initialTurnsPage`` is null -- history is pulled via ``thread/read``, not pushed) and
+    never perturbs or steals the stream from the concurrent ``--remote`` TUI.
+
+    Prefers the persisted root id; with none, adopts the single loaded thread. Unlike the bind
+    path there is no "already loaded -> skip the RPC" shortcut: even a loaded thread is resumed,
+    because only the resume subscribes. Raises if no unambiguous root thread is resolvable.
+    """
+    persisted_thread_id = _read_persisted_root_thread_id(agent_state_dir)
+    if persisted_thread_id is not None:
+        client.thread_resume(persisted_thread_id)
+        return
+    loaded_thread_ids = client.thread_loaded_list()
+    if len(loaded_thread_ids) == 1:
+        client.thread_resume(loaded_thread_ids[0])
+        return
+    raise CodexAppServerError("no unambiguous codex root thread to subscribe for the live connection")
+
+
 def open_bound_codex_client(agent_state_dir: Path) -> CodexAppServerClient:
     """Open a short-lived, handshaken, root-thread-bound client to the agent's daemon socket.
 
     The switch analogue of the plugin's per-send connection: connect the daemon's unix socket,
     ``initialize``, and bind the root thread. The caller ``close()``s it. Raises
     :class:`CodexAppServerError` (or a transport ``OSError``) when the daemon is unreachable or no
-    root thread can be bound.
+    root thread can be bound. This is the MODEL-SWITCH opener: it only needs a bound thread for a
+    settings write and deliberately does NOT subscribe to the event firehose -- the live connection
+    uses :func:`open_subscribed_codex_client` instead.
     """
     socket_path = get_codex_app_server_socket_path(get_codex_home(agent_state_dir))
     transport = connect_app_server_transport(socket_path)
@@ -150,6 +180,29 @@ def open_bound_codex_client(agent_state_dir: Path) -> CodexAppServerClient:
     try:
         client.initialize(_SWITCH_CLIENT_NAME, _SWITCH_CLIENT_VERSION)
         _bind_root_thread(client, agent_state_dir)
+    except (CodexAppServerError, OSError):
+        client.close()
+        raise
+    return client
+
+
+def open_subscribed_codex_client(agent_state_dir: Path) -> CodexAppServerClient:
+    """Open a handshaken client whose root thread is RESUMED, so it is subscribed to the event stream.
+
+    The live-connection opener (:class:`~imbue.system_interface.harnesses.codex.live_connection.CodexLiveConnection`).
+    Same connect + ``initialize`` as :func:`open_bound_codex_client`, but it loads the root thread
+    via ``thread/resume`` (:func:`_subscribe_root_thread`) instead of ``bind_thread``, so the ledger
+    reading this connection actually hears the thread's ``turn/*`` / ``item/*`` notifications
+    (``item/completed`` = delivery, ``turn/completed`` = reconcile) rather than only
+    ``thread/status/changed``. The caller ``close()``s it. Raises :class:`CodexAppServerError` (or a
+    transport ``OSError``) when the daemon is unreachable or no root thread can be resolved.
+    """
+    socket_path = get_codex_app_server_socket_path(get_codex_home(agent_state_dir))
+    transport = connect_app_server_transport(socket_path)
+    client = CodexAppServerClient(transport=transport)
+    try:
+        client.initialize(_SWITCH_CLIENT_NAME, _SWITCH_CLIENT_VERSION)
+        _subscribe_root_thread(client, agent_state_dir)
     except (CodexAppServerError, OSError):
         client.close()
         raise

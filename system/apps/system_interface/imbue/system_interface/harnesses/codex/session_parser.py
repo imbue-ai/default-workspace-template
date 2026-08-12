@@ -50,6 +50,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
+from datetime import timezone
 from typing import Any
 
 from loguru import logger as _loguru_logger
@@ -174,19 +176,60 @@ def _assistant_event(timestamp: str, event_id: str, *, text: str, tool_calls: li
     }
 
 
-def _stable_user_event_id(timestamp: str, content: str) -> str:
-    """A content-derived, position-independent event id for a user bubble.
+def iso_timestamp_to_epoch_ms(timestamp: str) -> int | None:
+    """Parse an ISO-8601 rollout timestamp into integer epoch-milliseconds, or ``None``.
 
-    An ``event_msg`` ``user_message`` carries no codex id, so we synthesise one from
-    its ``timestamp`` + text. Unlike the physical line index, this is stable across a
-    re-read of the *same* message from a rotated/materialised rollout (codex compresses
-    finished rollouts to ``.zst`` then re-expands them, which can repoint the marker and
-    force the watcher to re-read from byte 0 -- a line-index id would change and the
-    bubble would duplicate). Two genuinely distinct sends never collide: identical text
-    at the same millisecond timestamp is not something a human can produce.
-    """
-    digest = hashlib.sha1(f"{timestamp}\x00{content}".encode("utf-8", "replace")).hexdigest()[:16]
-    return f"codex-user-{digest}"
+    The rollout's user-bubble timestamp (e.g. ``2026-08-12T09:20:13.296Z``) equals the
+    app-server ``userMessage`` item's ``completedAtMs`` to the millisecond (verified live),
+    so normalising both channels to epoch-ms lets the file reader and the live ledger derive
+    the SAME anonymous user-turn id for an untagged (no ``client_id``) message. A naive/empty
+    timestamp yields ``None`` (the id then omits the ms component)."""
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
+
+
+def codex_user_turn_event_id(client_id: str | None, epoch_ms: int | None, content: str) -> str:
+    """The web-UI event id for a user turn -- the shared join key across the two channels.
+
+    A user message is the one thing that is both a live edge (owned by the subscribed ledger)
+    and a committed transcript turn (owned by the rollout file reader), so both must derive the
+    SAME id or the message double-shows when the live copy meets the file copy on backfill (A3b).
+
+    Primary key: codex's echoed ``client_id``. It is the ONLY identity present in BOTH the
+    app-server ``userMessage`` item (``clientId``) and the rollout ``event_msg`` user bubble
+    (``client_id``); the app-server ``item.id`` is deliberately not written to the rollout, so
+    it cannot join the two (verified live against codex 0.147). An untagged foreign turn carries
+    no ``client_id``, so the id falls back to the commit epoch-ms plus a content hash -- stable
+    across a re-read of the same rollout (codex re-materialises compressed rollouts), and equal
+    across the two channels because the rollout timestamp equals the item's ``completedAtMs``."""
+    if client_id:
+        return f"codex-user-cid-{client_id}"
+    digest = hashlib.sha1(content.encode("utf-8", "replace")).hexdigest()[:16]
+    if epoch_ms is not None:
+        return f"codex-user-anon-{epoch_ms}-{digest}"
+    return f"codex-user-anon-{digest}"
+
+
+def build_user_turn_event(timestamp: str, content: str, event_id: str) -> dict[str, Any]:
+    """The web-UI ``user_message`` event dict -- the single shape both channels emit.
+
+    The rollout file reader builds it on hydration; the live ledger builds an identical one at
+    commit. Keeping one builder guarantees the two are byte-identical apart from the (matching)
+    ``event_id``, so the frontend renders and dedups them as one message."""
+    return {
+        "timestamp": timestamp,
+        "type": "user_message",
+        "event_id": event_id,
+        "source": SOURCE,
+        "role": "user",
+        "content": content,
+        "message_uuid": event_id,
+    }
 
 
 def _item_content_text(content: Any) -> str | None:
@@ -231,28 +274,20 @@ def _marker_turn_id(payload: dict[str, Any]) -> str | None:
     return turn_id if isinstance(turn_id, str) and turn_id else None
 
 
-def _user_message_events(timestamp: str, text: str | None) -> list[dict[str, Any]]:
+def _user_message_events(timestamp: str, text: str | None, client_id: str | None = None) -> list[dict[str, Any]]:
     """The single user-bubble event for a human prompt, or ``[]`` when there is no text.
 
     Both the old ``event_msg`` ``user_message`` and the new ``item_completed``
-    ``UserMessage`` forms route here, sharing one content-derived event id (see
-    :func:`_stable_user_event_id`) so a rollout that somehow carried both dedups to one
-    bubble.
+    ``UserMessage`` forms route here, sharing one event id (see
+    :func:`codex_user_turn_event_id`) so a rollout that somehow carried both dedups to one
+    bubble -- and so the SAME message emitted live by the subscribed ledger dedups against this
+    committed copy. The id keys on the echoed ``client_id`` when present (the cross-channel join
+    key), else on the commit epoch-ms + content.
     """
     if not text:
         return []
-    event_id = _stable_user_event_id(timestamp, text)
-    return [
-        {
-            "timestamp": timestamp,
-            "type": "user_message",
-            "event_id": event_id,
-            "source": SOURCE,
-            "role": "user",
-            "content": text,
-            "message_uuid": event_id,
-        }
-    ]
+    event_id = codex_user_turn_event_id(client_id, iso_timestamp_to_epoch_ms(timestamp), text)
+    return [build_user_turn_event(timestamp, text, event_id)]
 
 
 # --- Queue ledger (the codex analogue of Claude's queue-operation records) ---
@@ -294,11 +329,21 @@ def parse_lines(
         # this codex version left unchanged, so nothing else here needs to move.)
         if payload_type == "user_message":
             text = payload.get("message")
-            return _user_message_events(timestamp, text if isinstance(text, str) else None)
+            client_id = payload.get("client_id")
+            return _user_message_events(
+                timestamp,
+                text if isinstance(text, str) else None,
+                client_id if isinstance(client_id, str) else None,
+            )
         if payload_type == "item_completed":
             item = payload.get("item")
             if isinstance(item, dict) and item.get("type") == "UserMessage":
-                return _user_message_events(timestamp, _item_content_text(item.get("content")))
+                client_id = item.get("clientId")
+                return _user_message_events(
+                    timestamp,
+                    _item_content_text(item.get("content")),
+                    client_id if isinstance(client_id, str) else None,
+                )
             # Other item_completed items (AgentMessage, CommandExecution, Reasoning)
             # are display duplicates of the response_item lines we already parse; skip.
             return []

@@ -374,6 +374,12 @@ class AgentManager:
     # revived process is ready (and its pid is registered before that), and the
     # frontend posts activity only after the send returns.
     _oom_prioritizer: ChatOomPrioritizer
+    # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
+    # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
+    # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
+    # UI. Set once at composition (``set_transcript_broadcaster``) because the manager is built
+    # before the event-queue fan-out exists; ``None`` (tests) makes ledger user-turns a no-op.
+    _transcript_broadcaster: Callable[[str, list[dict[str, Any]]], None] | None
 
     @classmethod
     def build(
@@ -420,6 +426,7 @@ class AgentManager:
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
         manager._auto_opened_assist_ids = set()
+        manager._transcript_broadcaster = None
         # Built last: its ``list_chat_agent_ids`` callback reads ``_agents`` /
         # ``_lock``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
@@ -622,14 +629,29 @@ class AgentManager:
                     "model_choice": a.model_choice.model_dump() if a.model_choice else None,
                     "queued_messages": [queued.model_dump() for queued in a.queued_messages],
                     # Backend-computed shoulder-tap availability (contract Shoulder-tap): available
-                    # iff something is queued AND no send is in flight. Derived here from the two
-                    # authoritative pieces of manager state rather than stored on the item, so it
-                    # can never go stale against them. The frontend renders/greys the button from
-                    # this alone -- it computes nothing and there is no error path.
-                    "shoulder_tap_available": bool(a.queued_messages) and a.id not in self._send_in_flight_by_agent,
+                    # iff something is queued AND no send is in flight. Derived here from the
+                    # authoritative live state rather than stored on the item, so it can never go
+                    # stale against it. The frontend renders/greys the button from this alone -- it
+                    # computes nothing and there is no error path.
+                    "shoulder_tap_available": self._shoulder_tap_available(a),
                 }
                 for a in self._agents.values()
             ]
+
+    def _shoulder_tap_available(self, agent_state: AgentStateItem) -> bool:
+        """Whether the shoulder-tap button is offered for ``agent_state`` (contract Shoulder-tap).
+
+        codex reads its live ledger directly -- ``is_tap_available`` = queue non-empty AND nothing
+        Sending, which also GREYS the button through the interrupt+resend of a tap (the re-sent chips
+        are Sending, so the ledger reports the tap unavailable while they land). Every other harness
+        uses the shared rule off manager state: queued AND no send in flight. Caller holds ``_lock``.
+        """
+        if agent_state.harness == HarnessType.CODEX:
+            connection = self._codex_connection_by_agent.get(agent_state.id)
+            if connection is None or not connection.is_alive:
+                return False
+            return connection.ledger.is_tap_available()
+        return bool(agent_state.queued_messages) and agent_state.id not in self._send_in_flight_by_agent
 
     def get_proto_agents(self) -> list[dict[str, Any]]:
         """Return list of proto-agents (agents being created)."""
@@ -1277,6 +1299,7 @@ class AgentManager:
             # The dot is tracker-driven now (mngr RUNNING + transcript), so the ledger's activity
             # callback is inert -- kept only so the ledger's reducer signature is unchanged.
             on_activity=lambda activity: None,
+            on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),
             model_state_path=get_model_state_path(HarnessType.CODEX, state_dir),
         )
         if connection is None:
@@ -1320,6 +1343,25 @@ class AgentManager:
                 to_update(agent_state.field_ref().queued_messages, ())
             )
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def set_transcript_broadcaster(self, broadcaster: Callable[[str, list[dict[str, Any]]], None]) -> None:
+        """Wire the transcript-event fan-out (the composition root calls this once).
+
+        The manager is built before the event-queue fan-out exists, so the codex ledger's live
+        user-turn broadcast (Fix 1) is injected here rather than at ``build``. A codex agent's
+        ledger emits each committed user-turn through :meth:`_broadcast_codex_user_turn`, which
+        routes to this."""
+        self._transcript_broadcaster = broadcaster
+
+    def _broadcast_codex_user_turn(self, agent_id: str, event: dict[str, Any]) -> None:
+        """Broadcast one ledger-owned committed user-turn to the agent's transcript stream.
+
+        Fired from the ledger (its reader thread, or a send/interrupt request thread) after it has
+        removed the message's chip -- the A3b ordered handoff. A no-op when no broadcaster is wired
+        (tests) so the ledger stays independently testable."""
+        if self._transcript_broadcaster is None:
+            return
+        self._transcript_broadcaster(agent_id, [event])
 
     def get_codex_ledger(self, agent_id: str) -> CodexMessageLedger | None:
         """The live message ledger for a codex ``agent_id``, or ``None`` if none is up.

@@ -135,9 +135,17 @@ class ShoulderTapAtomicResponse(FrozenModel):
     ``"send_in_flight"`` when a message send held the lock past the bounded wait so nothing was
     written -- a benign no-op (200), never an error, since the availability flag greys the button
     while a send is in flight.
+
+    ``block`` is normally empty. It is non-empty ONLY when a native tap's combined resend failed to
+    submit: the parked text is handed back to the composer through this response (in send order),
+    the same drain-to-composer hand-off Stop uses, so it is never swallowed (contract A1a).
     """
 
     status: str = Field(description="'tapped', 'no_open_turn', or 'send_in_flight' (all benign 200 outcomes)")
+    block: str = Field(
+        default="",
+        description="Returned text handed back to the composer when a native tap's resend failed; '' otherwise",
+    )
 
 
 class AgentRestartError(RuntimeError):
@@ -184,6 +192,15 @@ class QueuedMessageState(FrozenModel):
     queued_id: str = Field(description="Stable id the populator minted; keys the rendered bubble")
     content: str = Field(description="Verbatim text the user queued")
     timestamp: str = Field(description="Enqueue timestamp (ISO string from the harness ledger)")
+    is_sending: bool = Field(
+        default=False,
+        description=(
+            "True while this chip is a message the backend is actively re-sending (a codex "
+            "shoulder-tap's interrupt+resend, Fix 3): it stays continuously visible but is rendered "
+            "'Sending...' rather than as a plain queued chip, so it never blinks out (contract A1a). "
+            "False for an ordinary parked queue chip."
+        ),
+    )
 
 
 class AgentStateItem(FrozenModel):

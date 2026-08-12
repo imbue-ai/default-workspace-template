@@ -8,11 +8,17 @@ exactly one long-lived, thread-bound
 :class:`~imbue.mngr_codex.app_server_client.CodexAppServerClient` feeding it. This class owns that
 connection for one agent:
 
-* it opens + handshakes + binds the agent's root thread (reusing the switch path's
-  :func:`~imbue.system_interface.harnesses.codex.model.open_bound_codex_client`) and seeds the
-  client's ``active_turn_id`` from the live ``thread/status`` so the very first send parks vs
-  starts correctly;
-* it builds the ledger over that client with the manager's queue/activity/model callbacks;
+* it opens + handshakes + RESUMES the agent's root thread
+  (:func:`~imbue.system_interface.harnesses.codex.model.open_subscribed_codex_client`) -- the
+  ``thread/resume`` is what SUBSCRIBES the connection to the thread's ``turn/*`` / ``item/*``
+  notifications, so the ledger hears delivery (``item/completed``) and reconcile
+  (``turn/completed``); a ``bind_thread`` (the switch path) is local-only and would leave the
+  ledger deaf to everything but ``thread/status/changed``. It then seeds the client's
+  ``active_turn_id`` from the live ``thread/status`` (one ``thread/read``) so the very first send
+  parks vs starts correctly and a mid-turn reconnect starts from the in-progress turn;
+* it builds the ledger over that client with the manager's queue/activity/user-turn/model
+  callbacks (``on_user_turn`` broadcasts each committed user-turn to the transcript stream -- the
+  ledger owns live user-turns, the rollout file reader suppresses them, Fix 1);
 * it runs a background reader thread that pumps ``poll_notifications`` into the ledger.
 
 The send / interrupt / shoulder-tap endpoints reach the ledger synchronously (through the agent
@@ -30,6 +36,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -38,7 +45,7 @@ from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import TransportClosedError
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
-from imbue.system_interface.harnesses.codex.model import open_bound_codex_client
+from imbue.system_interface.harnesses.codex.model import open_subscribed_codex_client
 
 # How long the background reader blocks on one ``poll_notifications`` drain before looping. It
 # holds the client's frame lock for that span when the stream is idle, so a live send waits at
@@ -66,17 +73,19 @@ class CodexLiveConnection:
         cls,
         agent_state_dir: Path,
         *,
-        on_queue_snapshot: Callable[[list[dict[str, str]]], None],
+        on_queue_snapshot: Callable[[list[dict[str, Any]]], None],
         on_activity: Callable[[ActivityState], None],
+        on_user_turn: Callable[[dict[str, Any]], None],
         model_state_path: Path,
-        open_client: Callable[[Path], CodexAppServerClient] = open_bound_codex_client,
+        open_client: Callable[[Path], CodexAppServerClient] = open_subscribed_codex_client,
     ) -> "CodexLiveConnection | None":
         """Open the connection and start pumping, or ``None`` if the daemon is not reachable yet.
 
         A ``None`` return is the normal not-ready case (the socket is absent or the daemon is
         still starting): the caller logs at debug and retries on the next observe tick. Only a
-        reachable daemon yields a live connection. ``open_client`` is the connect+handshake+bind
-        step (a test seam; production connects to the agent's daemon socket).
+        reachable daemon yields a live connection. ``open_client`` is the
+        connect+handshake+resume step -- the resume is what subscribes this connection to the event
+        stream (a test seam; production connects to the agent's daemon socket).
         """
         try:
             client = open_client(agent_state_dir)
@@ -95,6 +104,7 @@ class CodexLiveConnection:
             client,
             on_queue_snapshot=on_queue_snapshot,
             on_activity=on_activity,
+            on_user_turn=on_user_turn,
             model_state_path=model_state_path,
         )
         self = cls.__new__(cls)

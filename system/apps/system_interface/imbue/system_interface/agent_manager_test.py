@@ -1494,7 +1494,9 @@ def test_update_queued_messages_caches_broadcasts_and_serializes(
 
     listener = broadcaster.register()
     try:
-        snapshot = [{"queued_id": "q1", "content": "hello", "timestamp": "2026-08-07T00:00:01.000Z"}]
+        snapshot = [
+            {"queued_id": "q1", "content": "hello", "timestamp": "2026-08-07T00:00:01.000Z", "is_sending": False}
+        ]
         agent_manager.update_queued_messages("agent-1", snapshot)
 
         with agent_manager._lock:
@@ -1726,7 +1728,7 @@ def test_queued_snapshot_arriving_mid_turn_is_kept(
     agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
     listener = broadcaster.register()
     try:
-        snapshot = [{"queued_id": "q1", "content": "parked", "timestamp": "t"}]
+        snapshot = [{"queued_id": "q1", "content": "parked", "timestamp": "t", "is_sending": False}]
         agent_manager.update_queued_messages("agent-1", snapshot)
 
         with agent_manager._lock:
@@ -1757,7 +1759,7 @@ def test_unknown_lifecycle_codex_keeps_its_queued_snapshot(
 
     try:
         listener = broadcaster.register()
-        snapshot = [{"queued_id": "q1", "content": "still parked", "timestamp": "t"}]
+        snapshot = [{"queued_id": "q1", "content": "still parked", "timestamp": "t", "is_sending": False}]
         agent_manager.update_queued_messages("agent-1", snapshot)
 
         latest = _last_agents_updated(_drain(listener))
@@ -1787,7 +1789,7 @@ def test_running_mid_turn_codex_snapshot_passes_through_unchanged(
             "agent-1", [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}]
         )
         listener = broadcaster.register()
-        snapshot = [{"queued_id": "q1", "content": "queued mid-turn", "timestamp": "t"}]
+        snapshot = [{"queued_id": "q1", "content": "queued mid-turn", "timestamp": "t", "is_sending": False}]
         agent_manager.update_queued_messages("agent-1", snapshot)
 
         latest = _last_agents_updated(_drain(listener))
@@ -1842,7 +1844,9 @@ def test_provider_snapshot_preserves_queued_messages_for_tracked_agent(
         agents = latest["agents"]
         assert isinstance(agents, list)
         assert agents[0]["id"] == str_id
-        assert agents[0]["queued_messages"] == [{"queued_id": "q1", "content": "hi", "timestamp": "t"}]
+        assert agents[0]["queued_messages"] == [
+            {"queued_id": "q1", "content": "hi", "timestamp": "t", "is_sending": False}
+        ]
     finally:
         agent_manager.stop()
 

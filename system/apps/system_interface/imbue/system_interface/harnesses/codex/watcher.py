@@ -69,6 +69,17 @@ _MARKER_RELATIVE = Path("codex_transcript_path")
 _SESSIONS_RELATIVE = Path("plugin") / "codex" / "home" / "sessions"
 
 
+def _is_live_suppressed(event: dict[str, Any]) -> bool:
+    """Whether a parsed event is suppressed from the LIVE broadcast (kept in the store).
+
+    Only ``user_message`` events: the subscribed ledger owns the live user-turn and emits it in the
+    A3b ordered handoff (chip out, then turn), so the file reader must not broadcast a competing
+    copy. Everything else (agent output, tool calls, turn markers) the file reader still owns live.
+    The event stays in ``self._events``, so the read paths (page-load hydration, backfill) serve it.
+    """
+    return event.get("type") == "user_message"
+
+
 def read_marker_rollout_path(marker_path: Path) -> Path | None:
     """The absolute rollout path recorded in a codex marker file, or None when the
     marker is absent/empty (the agent has not taken a turn yet)."""
@@ -238,6 +249,13 @@ class CodexSessionWatcher(AgentSessionWatcher):
 
         Keyed off ``_emitted_count`` rather than off what this read happened to parse,
         so events a *reader* pulled in are still delivered exactly once.
+
+        LIVE user-turns are SUPPRESSED here (Fix 1): the subscribed ledger owns the live user-turn
+        (it removes the queued chip, then emits the turn -- the A3b ordered handoff), so the file
+        reader must not emit a competing, unordered copy. The user-turns stay in ``self._events``,
+        so they are still served by the read paths -- which is exactly the hydration a page load /
+        reload rebuilds the whole committed transcript from. ``_emitted_count`` still advances past
+        them, so they are counted-as-sent and never leak into a later live broadcast.
         """
         self._refresh()
         with self._lock:
@@ -247,7 +265,11 @@ class CodexSessionWatcher(AgentSessionWatcher):
             # event_id, not position).
             pending = self._superseded_pending
             self._superseded_pending = {}
-            to_send = list(pending.values()) + self._events[self._emitted_count :]
+            to_send = [
+                event
+                for event in (list(pending.values()) + self._events[self._emitted_count :])
+                if not _is_live_suppressed(event)
+            ]
             self._emitted_count = len(self._events)
         if to_send:
             self._on_events(self._agent_id, to_send)

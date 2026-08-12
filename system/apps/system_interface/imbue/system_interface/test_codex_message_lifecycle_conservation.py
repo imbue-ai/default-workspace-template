@@ -292,18 +292,15 @@ class _CodexWorld:
             self._commit_observed(entry.client_id)
 
     def stop(self) -> None:
-        """The REAL interrupt: one ``turn/interrupt`` + reconcile; non-committed owned entries Return.
-
-        Reconcile is authoritative against the committed thread (``thread/read``): a steer/opening the
-        daemon committed stays Delivered (delivery = COMMIT, A4), everything else live Returns in send
-        order. The block the ledger hands back must equal the Returned text, ordered.
+        """The REAL interrupt (async, Fix 4): fire-and-forget ``turn/interrupt`` + an OPTIMISTIC settle
+        from the current live state. Every still-live entry Returns in send order (an already-observed
+        commit is Delivered, not live, and stays); no blocking thread/read. The block the ledger hands
+        back must equal the fresh Returned text, ordered.
         """
         had_turn = not self.is_idle
         for cid, state in list(self._expected.items()):
             if state in _LIVE_STATES:
-                self._expected[cid] = (
-                    MessageState.DELIVERED if cid in self._daemon_committed else MessageState.RETURNED
-                )
+                self._expected[cid] = MessageState.RETURNED
         block = self.ledger.interrupt()
         self._current_turn_id = None
         expected_block = self._take_expected_returned_block()
@@ -442,30 +439,40 @@ def _assert_a3b_chip_removal_emitted(world: _CodexWorld) -> None:
 
 
 def _run_interrupt_during_partial_flush(world: _CodexWorld) -> None:
-    """A stop mid-flush: the committed prefix (observed AND daemon-committed-but-unobserved) stays
-    Delivered; only the genuinely non-committed tail Returns (contract interrupt-during-flush)."""
+    """A stop mid-flush (async, Fix 4). The block is computed from the CURRENT live state (no blocking
+    thread/read), so a steer committed on the daemon but whose ``item/completed`` is still in flight is
+    optimistically Returned alongside the never-committed tail -- then its LATE ``item/completed``
+    CORRECTS it to Delivered (delivery = COMMIT, A4; prefer the committed truth), so the accepted-then-
+    committed micro-race is never double-counted. The already-observed commit stays Delivered."""
     assert not world.is_idle, "the partial-flush corner needs an open turn"
     m_observed = world.user_send(deliver=False)
     m_unobserved = world.user_send(deliver=False)
     m_tail = world.user_send(deliver=False)
     assert [world.ledger.state_of(c) for c in (m_observed, m_unobserved, m_tail)] == [MessageState.QUEUED] * 3
 
-    # One steer commits and is observed; a second lands on the daemon but its item/completed is still
-    # in flight when the stop fires.
+    # One steer commits and is observed (Delivered before the stop); a second lands on the daemon but
+    # its item/completed is still in flight when the stop fires.
     world._commit_observed(m_observed)
     world._daemon_commit_unobserved(m_unobserved)
 
-    # Expected: the two committed steers Delivered (m_unobserved settles via the thread/read guard),
-    # the tail Returns.
+    # The stop returns from CURRENT live state: m_observed stays Delivered; m_unobserved (commit not yet
+    # observed) and the never-committed tail both Return optimistically, in send order.
     world._expected[m_observed] = MessageState.DELIVERED
-    world._expected[m_unobserved] = MessageState.DELIVERED
+    world._expected[m_unobserved] = MessageState.RETURNED
     world._expected[m_tail] = MessageState.RETURNED
     block = world.ledger.interrupt()
     world._current_turn_id = None
-    # The tail is this stop's only NEW return; the interrupt block is this stop's fresh Returned set.
     assert block == world._take_expected_returned_block(), f"partial-flush return block mismatch: {block!r}\n{world.note()}"
     assert world.text_by_cid[m_tail] in block.split("\n"), "the non-committed tail must be in the return block"
+    assert world.text_by_cid[m_unobserved] in block.split("\n"), "the unobserved commit returns optimistically"
     assert world.ledger.state_of(m_observed) == MessageState.DELIVERED
+    assert world.ledger.state_of(m_unobserved) == MessageState.RETURNED
+    assert world.ledger.state_of(m_tail) == MessageState.RETURNED
+
+    # m_unobserved's item/completed lands late: definitive proof of commit corrects it to Delivered,
+    # rather than leaving it wrongly Returned. The tail (never committed) stays Returned.
+    world._push_item_completed(m_unobserved)
+    world._expected[m_unobserved] = MessageState.DELIVERED
     assert world.ledger.state_of(m_unobserved) == MessageState.DELIVERED
     assert world.ledger.state_of(m_tail) == MessageState.RETURNED
 
