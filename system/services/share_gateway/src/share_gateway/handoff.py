@@ -24,6 +24,19 @@ class HandoffVerificationError(ValueError):
     """Raised when a handoff token fails any verification step."""
 
 
+class HandoffResult:
+    """A verified handoff token's identity: the visitor's email and whether they own the workspace."""
+
+    def __init__(self, email: str, is_owner: bool) -> None:
+        self.email = email
+        self.is_owner = is_owner
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, HandoffResult):
+            return NotImplemented
+        return self.email == other.email and self.is_owner == other.is_owner
+
+
 class JwksCache:
     """Fetches and caches the broker's JWKS, refreshing once when a kid is unknown."""
 
@@ -88,8 +101,8 @@ def verify_handoff_token(
     workspace_domain: str,
     jwks_cache: JwksCache,
     jti_registry: SingleUseJtiRegistry,
-) -> str:
-    """Verify a handoff token end to end and return the visitor's email."""
+) -> HandoffResult:
+    """Verify a handoff token end to end and return the visitor's identity."""
     try:
         header = jwt.get_unverified_header(token)
     except jwt.PyJWTError as exc:
@@ -117,4 +130,4 @@ def verify_handoff_token(
     email = claims.get("email")
     if not isinstance(email, str) or not email:
         raise HandoffVerificationError("handoff token has no email")
-    return email
+    return HandoffResult(email=email, is_owner=bool(claims.get("owner", False)))

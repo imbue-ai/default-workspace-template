@@ -130,8 +130,13 @@ def test_add_paid_email_then_ally_plan_selectable(monkeypatch: pytest.MonkeyPatc
     assert allowed.json()["plan_name"] == "ally"
 
 
-def test_add_paid_email_verifies_existing_unverified_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Adding an email to the paid list verifies a pre-existing (unverified) account for it."""
+def test_add_paid_email_never_marks_the_account_verified(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adding an email to the paid list must NOT verify a pre-existing account for it.
+
+    Verification is proof of mailbox ownership; paid-listing an email says
+    nothing about who owns the account that claimed it. (The old auto-verify
+    existed only to un-block paid users from the then-global verified gate.)
+    """
     client, _pool_backend = _make_paid_crud_test_client(monkeypatch)
     st_backend = make_fake_supertokens_backend()
     st_backend.install_on_app_module(app_mod, monkeypatch)
@@ -142,11 +147,11 @@ def test_add_paid_email_verifies_existing_unverified_account(monkeypatch: pytest
     resp = client.post("/paid/emails/add", json={"value": "waiting@example.com"}, headers=_admin_key_headers())
 
     assert resp.status_code == 200
-    assert st_backend.accounts_by_email["waiting@example.com"].is_verified is True
+    assert st_backend.accounts_by_email["waiting@example.com"].is_verified is False
 
 
-def test_add_paid_email_with_no_existing_account_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Adding a paid email with no matching account still succeeds; there is nothing to verify."""
+def test_add_paid_email_with_no_existing_account_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adding a paid email with no matching account succeeds (a plain list write)."""
     client, _pool_backend = _make_paid_crud_test_client(monkeypatch)
     st_backend = make_fake_supertokens_backend()
     st_backend.install_on_app_module(app_mod, monkeypatch)

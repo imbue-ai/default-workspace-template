@@ -5,11 +5,11 @@ import logging
 from fastapi import APIRouter
 from fastapi import Request
 
+import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.r2.stores as stores_module
 import imbue.remote_service_connector.r2.sweep as sweep_module
-from imbue.remote_service_connector.auth import authenticate_request
 from imbue.remote_service_connector.errors import CleanupGrantBudgetExhaustedError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.buckets import CleanupGrantResponse
@@ -41,8 +41,8 @@ def create_storage_cleanup_grant(request: Request) -> dict[str, object]:
     """
     with handle_endpoint_errors():
         ops = cloudflare_module.get_cloudflare_ctx().ops
-        user = authenticate_request(request)
-        entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
+        user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
+        entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         key_store = stores_module.get_key_store()
         grant_store = stores_module.get_grant_store()
         counters = {"keys_downgraded": 0, "keys_restored": 0, "key_update_failures": 0}
@@ -93,8 +93,8 @@ def recheck_storage_enforcement(request: Request) -> dict[str, object]:
     """
     with handle_endpoint_errors():
         ops = cloudflare_module.get_cloudflare_ctx().ops
-        user = authenticate_request(request)
-        entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
+        user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
+        entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         key_store = stores_module.get_key_store()
         grant_store = stores_module.get_grant_store()
         counters = {"keys_downgraded": 0, "keys_restored": 0, "key_update_failures": 0}

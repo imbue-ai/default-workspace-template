@@ -113,6 +113,14 @@ describe("CreateFormModel", () => {
     expect(model.submitBody().runtime).toBe("RUNSC");
   });
 
+  it("sends the web-access toggle, off by default", () => {
+    const model = new CreateFormModel();
+    model.applyDefaults(buildDefaults());
+    expect(model.submitBody().enable_web_access).toBe(false);
+    model.enableWebAccess = true;
+    expect(model.submitBody().enable_web_access).toBe(true);
+  });
+
   it("seeds the repository and branch from the server defaults", () => {
     const model = new CreateFormModel();
     model.applyDefaults(buildDefaults());
@@ -122,9 +130,9 @@ describe("CreateFormModel", () => {
 
   it("keeps a deep-linked repository and its blank latest-version branch over the defaults", () => {
     const model = new CreateFormModel();
-    model.gitUrl = "https://example.com/inspiration.git";
+    model.gitUrl = "https://example.com/template.git";
     model.applyDefaults(buildDefaults());
-    expect(model.gitUrl).toBe("https://example.com/inspiration.git");
+    expect(model.gitUrl).toBe("https://example.com/template.git");
     // Blank means "the repo's latest version" for an explicit repository, so
     // the default branch must not be paired with it.
     expect(model.branch).toBe("");
