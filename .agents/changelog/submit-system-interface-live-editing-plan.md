@@ -24,9 +24,9 @@ preview tab.
   created agent** (`read_worker_branch`, via `mngr ls --format json`) rather than
   assumed to be `mngr/<name>` -- with a spec that renames or reuses a branch, the
   old assumption named a branch the worker never committed to. It reads mngr's
-  `branch` field, not `initial_branch`: the latter is only set for a branch mngr
-  *created*, and is None for the checked-out-existing-branch case these callers
-  use. The read happens right after launch, before the await, so a worker whose
+  `initial_branch` field, which now reports the branch the work_dir was placed on
+  whether mngr created it or checked out one that already existed -- including the
+  checked-out-existing-branch case these callers use. The read happens right after launch, before the await, so a worker whose
   branch mngr cannot report fails immediately instead of after a whole run; and
   it raises rather than guessing, since a wrong answer sends the caller to merge
   a ref that does not exist -- destroying the just-created worker first, so a

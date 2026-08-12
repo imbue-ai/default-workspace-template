@@ -169,15 +169,15 @@ def test_no_branch_omits_the_flag(tmp_path: Path) -> None:
 
 def _mngr_ls_result(branch: object, name: str = "demo-worker") -> _StubResult:
     """A canned ``mngr ls --format json`` payload naming the agent's branch."""
-    return _StubResult(stdout=json.dumps({"agents": [{"name": name, "branch": branch}]}))
+    return _StubResult(stdout=json.dumps({"agents": [{"name": name, "initial_branch": branch}]}))
 
 
 def test_read_worker_branch_reports_what_mngr_says() -> None:
     """The branch is read off the created agent, not derived from the spec.
 
     This is the value ``launch-sync`` publishes for callers to merge from, and the
-    ``--branch <existing>`` form its callers actually use is precisely the case
-    ``initial_branch`` leaves unset -- so it must come from mngr's ``branch``.
+    ``--branch <existing>`` form its callers actually use is precisely the case a
+    branch derived from the spec used to get wrong.
     """
     runner = _RecordingRunner()
     runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/update-my-slug"))
@@ -195,7 +195,7 @@ def test_read_worker_branch_reports_what_mngr_says() -> None:
         # Listed, but no such agent.
         _StubResult(stdout='{"agents": []}'),
         # Listed, but mngr knows no branch for it (no git work_dir).
-        _StubResult(stdout='{"agents": [{"name": "demo-worker", "branch": null}]}'),
+        _StubResult(stdout='{"agents": [{"name": "demo-worker", "initial_branch": null}]}'),
         # Output that is not the expected shape at all.
         _StubResult(stdout="not json"),
     ],

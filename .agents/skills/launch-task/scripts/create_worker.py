@@ -132,12 +132,9 @@ def read_worker_branch(name: str, runner: Runner) -> str:
     Observed, not predicted. This used to re-derive the branch by parsing the
     ``--branch`` spec the same way mngr's own (private) ``_parse_branch_flag``
     does, which duplicated logic we do not own and would have drifted silently.
-    mngr now reports it directly as the agent's ``branch`` field, so we read that.
-
-    Note ``branch`` rather than ``initial_branch``: the latter is only set for a
-    branch mngr *created*, and is deliberately None when an existing branch was
-    checked out -- exactly the ``--branch <existing>`` case this script's callers
-    use. ``branch`` is populated either way.
+    mngr now reports it directly as the agent's ``initial_branch`` field, which is
+    populated whether mngr created the branch or checked out one that already
+    existed -- including the ``--branch <existing>`` case this script's callers use.
 
     ``launch-sync`` publishes this as the ref its callers merge from, so a wrong
     answer sends them at a branch the worker never committed to. Raising is
@@ -166,7 +163,7 @@ def read_worker_branch(name: str, runner: Runner) -> str:
         raise WorkerBranchUnknownError(f"could not parse `mngr ls` output for {name!r}: {e}") from e
     if not agents:
         raise WorkerBranchUnknownError(f"mngr reports no agent named {name!r}")
-    branch = agents[0].get("branch")
+    branch = agents[0].get("initial_branch")
     if not branch:
         raise WorkerBranchUnknownError(
             f"mngr reports no branch for agent {name!r}; it may not have a git work_dir"
