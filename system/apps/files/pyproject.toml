@@ -1,0 +1,24 @@
+[project]
+name = "files"
+version = "0.1.0"
+description = "Visual macOS-style file browser for viewing and downloading workspace files"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0",
+    "flask-sock>=0.7",
+    "werkzeug>=3.0",
+    "pygments>=2.17",
+    "markdown>=3.6",
+    "nh3>=0.2",
+]
+
+[project.scripts]
+files = "files.runner:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/files"]

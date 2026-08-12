@@ -17,6 +17,7 @@ dependencies = [
     "litellm>=1.88.1",
     "browser",
     "eval-worker",
+    "files",
     # Every service supervisord runs via `uv run <name>` MUST be a root
     # dependency: a root-closure-scoped `uv sync` (e.g. the backup restore
     # flow's) prunes workspace members that are not in the root closure, which
@@ -83,6 +84,7 @@ mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 browser = { workspace = true }
+files = { workspace = true }
 imbue-common = { path = "system/vendor/mngr/libs/imbue_common", editable = true }
 imbue-mngr = { path = "system/vendor/mngr/libs/mngr", editable = true }
 imbue-mngr-claude = { path = "system/vendor/mngr/libs/mngr_claude", editable = true }

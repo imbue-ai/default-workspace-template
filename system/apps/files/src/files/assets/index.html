@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Files</title>
+<link rel="stylesheet" href="/api/pygments.css" />
+<style>
+  :root {
+    --chrome: rgba(246,246,248,0.82);
+    --chrome-solid: #f6f6f8;
+    --sidebar: rgba(236,236,240,0.72);
+    --content: #ffffff;
+    --hairline: rgba(0,0,0,0.10);
+    --hairline-soft: rgba(0,0,0,0.06);
+    --text: #1d1d1f;
+    --text-dim: #86868b;
+    --accent: #0a7cff;
+    --accent-soft: rgba(10,124,255,0.14);
+    /* editor */
+    --ed-bg: #ffffff;
+    --ed-panel: #f3f3f3;
+    --ed-tabbar: #ececed;
+    --ed-tab: #f3f3f3;
+    --ed-tab-active: #ffffff;
+    --ed-border: rgba(0,0,0,0.10);
+    --ed-tree-hover: rgba(0,0,0,0.05);
+    --wallpaper: radial-gradient(120% 90% at 18% 8%, #8ec5ff 0%, rgba(142,197,255,0) 52%), radial-gradient(130% 100% at 88% 22%, #c9a7ff 0%, rgba(201,167,255,0) 46%), radial-gradient(140% 120% at 60% 108%, #ff9ec4 0%, rgba(255,158,196,0) 50%), linear-gradient(155deg, #4a6cf0 0%, #6a4fd0 45%, #8a3ec0 100%);
+    --shadow-win: 0 22px 70px rgba(0,0,0,0.34), 0 2px 8px rgba(0,0,0,0.18);
+    --radius-win: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  }
+  body.dark {
+    --chrome: rgba(48,48,50,0.86);
+    --chrome-solid: #303032;
+    --sidebar: rgba(40,40,43,0.80);
+    --content: #1f1f22;
+    --hairline: rgba(255,255,255,0.11);
+    --hairline-soft: rgba(255,255,255,0.06);
+    --text: #e7e7ea;
+    --text-dim: #9aa0a6;
+    --accent: #4aa3ff;
+    --accent-soft: rgba(74,163,255,0.20);
+    --ed-bg: #1e1e1e;
+    --ed-panel: #252526;
+    --ed-tabbar: #252526;
+    --ed-tab: #2d2d2e;
+    --ed-tab-active: #1e1e1e;
+    --ed-border: rgba(255,255,255,0.09);
+    --ed-tree-hover: rgba(255,255,255,0.06);
+    --wallpaper: radial-gradient(120% 90% at 20% 10%, #2a2f3a 0%, rgba(42,47,58,0) 55%), linear-gradient(155deg, #16181d 0%, #1d2128 55%, #131519 100%);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { color: var(--text); -webkit-font-smoothing: antialiased; overflow: hidden; background: var(--wallpaper); }
+
+  .menubar { position: fixed; top: 0; left: 0; right: 0; height: 28px; display: flex; align-items: center; gap: 14px; padding: 0 12px; background: rgba(255,255,255,0.28); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); color: #fff; font-size: 13px; font-weight: 500; text-shadow: 0 1px 1px rgba(0,0,0,0.25); z-index: 50; }
+  body.dark .menubar { background: rgba(0,0,0,0.34); }
+  .menubar .logo { height: 16px; width: auto; display: block; }
+  .menubar .spacer { flex: 1; }
+  .pill { display: flex; gap: 2px; background: rgba(255,255,255,0.22); border-radius: 7px; padding: 2px; }
+  .pill button { border: none; background: transparent; color: #fff; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 5px; cursor: pointer; opacity: 0.85; display: inline-flex; align-items: center; gap: 5px; }
+  .pill button.active { background: rgba(255,255,255,0.92); color: #1d1d1f; opacity: 1; }
+  .pill button svg { width: 14px; height: 14px; }
+  .icon-toggle { border: none; background: rgba(255,255,255,0.22); color: #fff; border-radius: 6px; width: 28px; height: 24px; cursor: pointer; display: grid; place-items: center; }
+  .icon-toggle svg { width: 15px; height: 15px; }
+  .changes-btn { display: none; border: none; background: rgba(255,255,255,0.22); color: #fff; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer; align-items: center; gap: 6px; }
+  body.code-mode .changes-btn { display: inline-flex; }
+  .changes-count { background: #ff5f57; color: #fff; border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 600; }
+  .searchwrap { display: flex; align-items: center; gap: 6px; position: relative; }
+  .searchicon { width: 13px; height: 13px; position: absolute; left: 8px; color: var(--text-dim); pointer-events: none; }
+  .searchbox { height: 22px; width: 180px; border: none; border-radius: 6px; padding: 0 8px 0 26px; font: inherit; font-size: 12px; background: rgba(255,255,255,0.92); color: #1d1d1f; }
+  .searchbox::placeholder { color: #8a8f98; }
+  .searchbox:focus { outline: 2px solid rgba(255,255,255,0.6); }
+  .searchtype { height: 22px; border: none; border-radius: 6px; font: inherit; font-size: 12px; background: rgba(255,255,255,0.92); color: #1d1d1f; padding: 0 4px; cursor: pointer; }
+
+  .results { display: none; position: absolute; inset: 0; overflow-y: auto; padding: 6px 0; }
+  .results.show { display: block; }
+  .results .rrow { display: flex; align-items: center; gap: 10px; padding: 7px 18px; cursor: pointer; }
+  .results .rrow:hover { background: var(--hairline-soft); }
+  .results .rrow .ficon, .results .rrow .icon { width: 20px; height: 20px; flex: none; }
+  .results .rmeta { min-width: 0; }
+  .results .rname { font-size: 13.5px; line-height: 1.2; }
+  .results .rpath { font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .results .rnote { padding: 10px 18px; color: var(--text-dim); font-size: 12.5px; }
+
+  /* ---- Finder view ---- */
+  .finder-view { position: absolute; inset: 28px 0 0 0; display: block; }
+  body.mode-editor .finder-view { display: none; }
+  .desktop { position: absolute; inset: 0; padding: 26px 30px; }
+  .desktop-grid { display: flex; flex-wrap: wrap; gap: 14px 20px; justify-content: flex-end; align-content: flex-start; max-width: 520px; margin-left: auto; }
+  .desktop-icon { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px; border-radius: 8px; cursor: pointer; text-align: center; user-select: none; transition: background 0.12s; }
+  .desktop-icon:hover { background: rgba(255,255,255,0.16); }
+  .desktop-icon .label { color: #fff; font-size: 12.5px; font-weight: 500; text-shadow: 0 1px 2px rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 4px; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .desktop-hint { position: absolute; left: 30px; bottom: 30px; color: rgba(255,255,255,0.92); font-size: 13px; text-shadow: 0 1px 3px rgba(0,0,0,0.4); max-width: 360px; line-height: 1.5; }
+  .desktop-hint b { font-weight: 600; }
+
+  .icon { width: 60px; height: 60px; flex: none; filter: drop-shadow(0 3px 5px rgba(0,0,0,0.18)); }
+  .icon.sm { width: 40px; height: 40px; }
+
+  .window { position: absolute; top: 56px; left: 90px; width: min(940px, calc(100vw - 120px)); height: min(600px, calc(100vh - 150px)); background: var(--content); border-radius: var(--radius-win); box-shadow: var(--shadow-win); display: none; flex-direction: column; overflow: hidden; border: 0.5px solid var(--hairline); }
+  .window.open { display: flex; }
+  .titlebar { height: 52px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 14px; background: var(--chrome); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); border-bottom: 0.5px solid var(--hairline); }
+  .traffic { display: flex; gap: 8px; align-items: center; }
+  .light { width: 12px; height: 12px; border-radius: 50%; }
+  .light.red { background: #ff5f57; } .light.yellow { background: #febc2e; } .light.green { background: #28c840; }
+  .nav { display: flex; gap: 2px; margin-left: 6px; }
+  .navbtn { width: 28px; height: 26px; border-radius: 6px; border: none; background: transparent; color: var(--text-dim); cursor: pointer; display: grid; place-items: center; }
+  .navbtn:hover { background: var(--hairline-soft); color: var(--text); }
+  .navbtn[disabled] { opacity: 0.3; cursor: default; }
+  .crumbs { display: flex; align-items: center; gap: 5px; font-size: 15px; font-weight: 600; margin-left: 6px; overflow: hidden; }
+  .crumbs .sep { color: var(--text-dim); font-weight: 400; }
+  .crumbs .parent { color: var(--text-dim); font-weight: 500; cursor: pointer; white-space: nowrap; }
+  .crumbs .parent:hover { color: var(--accent); }
+  .crumbs .current { white-space: nowrap; }
+  .titlebar .spacer { flex: 1; }
+  .segmented { display: flex; background: var(--hairline-soft); border-radius: 7px; padding: 2px; }
+  .segmented button { border: none; background: transparent; padding: 4px 8px; border-radius: 5px; cursor: pointer; color: var(--text-dim); display: grid; place-items: center; }
+  .segmented button.active { background: var(--content); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.14); }
+  .toolbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 7px; border: 0.5px solid var(--hairline); background: var(--content); font-size: 13px; font-weight: 500; color: var(--text); cursor: pointer; }
+  .toolbtn:hover { background: var(--hairline-soft); }
+  .toolbtn svg { width: 15px; height: 15px; }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+  .sidebar { width: 200px; flex: none; padding: 12px 10px; background: var(--sidebar); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); border-right: 0.5px solid var(--hairline); overflow-y: auto; }
+  .side-head { font-size: 11px; font-weight: 600; color: var(--text-dim); padding: 6px 8px 4px; }
+  .side-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 13.5px; font-weight: 500; color: var(--text); }
+  .side-item:hover { background: var(--hairline-soft); }
+  .side-item.active { background: var(--accent); color: #fff; }
+  .side-item.active svg { color: #fff; }
+  .side-item svg { width: 17px; height: 17px; color: var(--accent); flex: none; }
+
+  .listing { flex: 1; overflow-y: auto; padding: 16px 18px; background: var(--content); position: relative; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, 110px); gap: 8px 6px; align-content: start; }
+  .item { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px 8px; border-radius: 8px; cursor: pointer; user-select: none; text-align: center; position: relative; }
+  .item:hover { background: var(--hairline-soft); } .item.selected { background: var(--accent-soft); }
+  .item .name { font-size: 12.5px; line-height: 1.25; max-width: 102px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .item .meta { font-size: 11px; color: var(--text-dim); }
+  .gitbadge { position: absolute; top: 6px; right: 14px; width: 16px; height: 16px; border-radius: 50%; color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; }
+  .git-M { background: #d9822b; } .git-A { background: #2f9e44; } .git-D { background: #e03131; } .gitbadge.untracked { background: #2f9e44; }
+
+  .list { display: none; width: 100%; border-collapse: collapse; font-size: 13px; }
+  .list.active { display: table; } .grid.hidden { display: none; }
+
+  /* Column (Miller) view: each nested level is its own scrolling column. */
+  .columns { display: none; position: absolute; inset: 0; overflow-x: auto; overflow-y: hidden; }
+  .columns.show { display: flex; }
+  .col { width: 240px; flex: none; height: 100%; overflow-y: auto; border-right: 1px solid var(--hairline); padding: 6px; }
+  .col-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 13.5px; white-space: nowrap; user-select: none; }
+  .col-row:hover { background: var(--hairline-soft); }
+  .col-row.selected { background: var(--accent); color: #fff; }
+  .col-row .ficon { width: 16px; height: 16px; flex: none; }
+  .col-row .cname { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .col-row .colchev { color: var(--text-dim); font-size: 15px; line-height: 1; }
+  .col-row.selected .colchev, .col-row.selected .colgit { color: #fff; }
+  .col-row .colgit { font-size: 11px; font-weight: 700; }
+  .colgit.M { color: #d9822b; } .colgit.A, .colgit.untracked { color: #2f9e44; } .colgit.D { color: #e03131; }
+  .col-empty { color: var(--text-dim); font-size: 12.5px; padding: 10px; }
+  .list th { text-align: left; font-weight: 500; color: var(--text-dim); font-size: 12px; padding: 4px 10px; border-bottom: 0.5px solid var(--hairline); position: sticky; top: 0; background: var(--content); }
+  .list td { padding: 6px 10px; border-bottom: 0.5px solid var(--hairline-soft); }
+  .list tr { cursor: pointer; } .list tbody tr:hover td { background: var(--hairline-soft); }
+  .list .name-cell { display: flex; align-items: center; gap: 9px; }
+  .list .name-cell svg, .list .name-cell .icon { width: 20px; height: 20px; }
+  .list .col-size, .list .col-date, .list .col-git { color: var(--text-dim); white-space: nowrap; }
+
+  .empty, .loading { color: var(--text-dim); font-size: 14px; padding: 40px; text-align: center; width: 100%; }
+  .statusbar { height: 26px; flex: none; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text-dim); background: var(--chrome); border-top: 0.5px solid var(--hairline); }
+
+  /* ---- Editor (VS Code) view ---- */
+  .editor { position: absolute; inset: 28px 0 0 0; display: none; background: var(--ed-bg); color: var(--text); }
+  body.mode-editor .editor { display: flex; }
+  .ex-sidebar { width: 260px; flex: none; background: var(--ed-panel); border-right: 1px solid var(--ed-border); overflow: auto; display: flex; flex-direction: column; }
+  .ex-explorer-head { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); padding: 10px 14px 6px; }
+  .ex-tree { flex: 1; overflow: auto; padding-bottom: 20px; }
+  .tree-row { display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 0; font-size: 13px; cursor: pointer; white-space: nowrap; user-select: none; color: var(--text); }
+  .tree-row:hover { background: var(--ed-tree-hover); }
+  .tree-row .chev { width: 16px; flex: none; display: inline-flex; justify-content: center; color: var(--text-dim); transition: transform 0.12s; }
+  .tree-row.expanded .chev { transform: rotate(90deg); }
+  .tree-row .ficon { width: 16px; height: 16px; flex: none; }
+  .tree-row .tname { overflow: hidden; text-overflow: ellipsis; }
+  .tree-row .tgit { margin-left: auto; padding-left: 8px; font-size: 11px; font-weight: 700; }
+  .tgit.M { color: #d9822b; } .tgit.A, .tgit.untracked { color: #2f9e44; } .tgit.D { color: #e03131; }
+  .tree-children { display: none; }
+  .tree-children.open { display: block; }
+
+  .ex-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--ed-bg); }
+  .ex-tabs { height: 36px; flex: none; display: flex; align-items: stretch; background: var(--ed-tabbar); border-bottom: 1px solid var(--ed-border); overflow-x: auto; }
+  .ex-tab { display: flex; align-items: center; gap: 7px; padding: 0 10px 0 12px; font-size: 12.5px; background: var(--ed-tab); border-right: 1px solid var(--ed-border); cursor: pointer; color: var(--text-dim); white-space: nowrap; max-width: 220px; }
+  .ex-tab.active { background: var(--ed-tab-active); color: var(--text); }
+  .ex-tab .ficon { width: 14px; height: 14px; flex: none; }
+  .ex-tab .tabname { overflow: hidden; text-overflow: ellipsis; }
+  .ex-tab .close { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; color: var(--text-dim); flex: none; }
+  .ex-tab .close:hover { background: var(--hairline); color: var(--text); }
+  .ex-toolbar { height: 34px; flex: none; display: none; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--ed-border); background: var(--ed-panel); font-size: 12.5px; color: var(--text-dim); }
+  .ex-toolbar.show { display: flex; }
+  .ex-toolbar .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .ex-toolbar .seg-mini { margin-left: auto; }
+  .ex-content { flex: 1; overflow: auto; background: var(--ed-bg); }
+  .ex-empty { height: 100%; display: grid; place-items: center; color: var(--text-dim); text-align: center; padding: 40px; }
+  .ex-empty .big { font-size: 15px; margin-bottom: 6px; }
+
+  /* ---- shared content rendering ---- */
+  .cbody { background: var(--ed-bg); }
+  .cbody img { max-width: 100%; border-radius: 8px; display: block; margin: 22px auto; box-shadow: 0 6px 20px rgba(0,0,0,0.16); }
+  .cbody iframe { width: 100%; height: calc(100vh - 130px); border: none; background: #fff; }
+  .cbody audio, .cbody video { width: 100%; }
+  .cbody .pad { padding: 22px; }
+  .cbody video { max-height: 70vh; background: #000; }
+  .cbody .md { padding: 24px 30px; line-height: 1.6; max-width: 900px; }
+  .cbody .md h1 { font-size: 24px; margin: 0 0 12px; } .cbody .md h2 { font-size: 18px; margin: 20px 0 8px; }
+  .cbody .md pre { background: var(--ed-panel); padding: 12px; border-radius: 8px; overflow: auto; }
+  .cbody .md code { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 13px; }
+  .cbody .md table { border-collapse: collapse; } .cbody .md td, .cbody .md th { border: 1px solid var(--hairline); padding: 4px 8px; }
+  .highlight { margin: 0; font-size: 12.5px; }
+  .highlight pre { margin: 0; padding: 14px 0; }
+  .highlight .linenos { color: #b0b0b8; padding-right: 12px; -webkit-user-select: none; user-select: none; }
+  body.dark .highlight .linenos { color: #5c6370; }
+  .highlight table { border-collapse: collapse; width: 100%; }
+  .highlight td { vertical-align: top; }
+  .noprev { text-align: center; color: var(--text-dim); padding: 46px; }
+  .noprev .icon { margin: 0 auto 14px; }
+
+  .diff { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.5; }
+  .diff .dl { display: block; padding: 0 14px; white-space: pre-wrap; word-break: break-word; }
+  .diff .dl.add { background: #e6ffed; color: #22863a; } body.dark .diff .dl.add { background: rgba(46,160,67,0.18); color: #7ee787; }
+  .diff .dl.del { background: #ffeef0; color: #b31d28; } body.dark .diff .dl.del { background: rgba(248,81,73,0.16); color: #ffa198; }
+  .diff .dl.hunk { background: #f1f8ff; color: #0a58ca; } body.dark .diff .dl.hunk { background: rgba(56,139,253,0.15); color: #79c0ff; }
+  .diff .dl.meta { color: #6a737d; }
+  .diff-empty { padding: 40px; text-align: center; color: var(--text-dim); }
+
+  .seg-mini { display: none; background: var(--hairline-soft); border-radius: 7px; padding: 2px; }
+  .seg-mini.show { display: inline-flex; }
+  .seg-mini button { border: none; background: transparent; padding: 4px 10px; border-radius: 5px; cursor: pointer; color: var(--text-dim); font: inherit; font-size: 12px; }
+  .seg-mini button.active { background: var(--content); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.14); }
+
+  /* ---- preview modal (finder) ---- */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.42); display: none; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+  .overlay.open { display: flex; }
+  .preview { width: min(880px, 92vw); max-height: 88vh; background: var(--chrome-solid); border-radius: 12px; box-shadow: var(--shadow-win); overflow: hidden; display: flex; flex-direction: column; }
+  .preview-bar { height: 46px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 0.5px solid var(--hairline); background: var(--chrome); }
+  .preview-bar .title { font-size: 14px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview-body { overflow: auto; background: var(--ed-bg); flex: 1; }
+  .iconbtn { border: none; background: transparent; cursor: pointer; color: var(--text-dim); padding: 4px; border-radius: 6px; display: grid; place-items: center; }
+  .iconbtn:hover { background: var(--hairline-soft); color: var(--text); }
+
+  .toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%) translateY(20px); background: rgba(30,30,32,0.92); color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 13px; opacity: 0; pointer-events: none; transition: all 0.22s; z-index: 200; box-shadow: 0 8px 30px rgba(0,0,0,0.3); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="folderG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5aa9ff"/><stop offset="1" stop-color="#2f7cf6"/></linearGradient>
+  <linearGradient id="folderTab" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7bbcff"/><stop offset="1" stop-color="#4b95f8"/></linearGradient>
+</defs></svg>
+
+<div class="menubar">
+  <img class="logo" src="/logo.png" alt="imbue" />
+  <span style="font-weight:700">Files</span>
+  <div class="pill" id="rootSwitch"></div>
+  <div class="pill" id="modeSwitch">
+    <button id="modeFinder" class="active" title="Finder view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg> Finder</button>
+    <button id="modeEditor" title="Viewer (read-only code &amp; files)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3"/><path d="M13 7l5 5-5 5"/></svg> Viewer</button>
+  </div>
+  <button class="changes-btn" id="changesBtn">Changes <span class="changes-count" id="changesCount">0</span></button>
+  <span class="spacer"></span>
+  <div class="searchwrap">
+    <svg class="searchicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input id="searchBox" class="searchbox" type="search" placeholder="Search names" autocomplete="off" spellcheck="false" />
+    <select id="searchType" class="searchtype" title="Filter by type">
+      <option value="all">All types</option>
+      <option value="folder">Folders</option>
+      <option value="img">Images</option>
+      <option value="pdf">PDFs</option>
+      <option value="code">Code</option>
+      <option value="md">Markdown</option>
+      <option value="txt">Text</option>
+      <option value="csv">CSV</option>
+      <option value="audio">Audio</option>
+      <option value="video">Video</option>
+      <option value="zip">Archives</option>
+      <option value="file">Other files</option>
+    </select>
+  </div>
+  <button class="icon-toggle" id="themeToggle" title="Toggle dark mode"></button>
+  <span class="clock" id="clock"></span>
+</div>
+
+<!-- Finder view -->
+<div class="finder-view">
+  <div class="desktop" id="desktop">
+    <div class="desktop-hint" id="desktopHint"></div>
+    <div class="desktop-grid" id="desktopGrid"></div>
+  </div>
+  <div class="window" id="window">
+    <div class="titlebar">
+      <div class="traffic"><span class="light red" id="closeWin"></span><span class="light yellow"></span><span class="light green"></span></div>
+      <div class="nav">
+        <button class="navbtn" id="backBtn" title="Back"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <button class="navbtn" id="fwdBtn" title="Forward" disabled><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></button>
+      </div>
+      <div class="crumbs" id="crumbs"></div>
+      <div class="spacer"></div>
+      <div class="segmented">
+        <button id="viewGrid" class="active" title="Icons"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
+        <button id="viewList" title="List"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+        <button id="viewColumns" title="Columns"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1"/><rect x="11" y="4" width="6" height="16" rx="1"/><path d="M19 4h2v16h-2"/></svg></button>
+      </div>
+      <button class="toolbtn" id="dlFolderBtn" title="Download this folder as a zip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg> Download folder</button>
+    </div>
+    <div class="body">
+      <div class="sidebar" id="sidebar"></div>
+      <div class="listing" id="listing">
+        <div class="grid" id="grid"></div>
+        <table class="list" id="listTable"><thead><tr><th>Name</th><th class="col-size">Size</th><th class="col-date">Modified</th><th class="col-git" id="gitCol" style="display:none">Git</th></tr></thead><tbody id="listBody"></tbody></table>
+        <div class="columns" id="columns"></div>
+        <div class="results" id="searchResults"></div>
+      </div>
+    </div>
+    <div class="statusbar" id="status"></div>
+  </div>
+</div>
+
+<!-- Editor view -->
+<div class="editor" id="editor">
+  <div class="ex-sidebar">
+    <div class="ex-explorer-head" id="exHead">Explorer</div>
+    <div class="ex-tree" id="exTree"></div>
+  </div>
+  <div class="ex-main">
+    <div class="ex-tabs" id="exTabs"></div>
+    <div class="ex-toolbar" id="exToolbar">
+      <span class="path" id="exPath"></span>
+      <div class="seg-mini" id="exModeSeg"><button id="exModeFile" class="active">File</button><button id="exModeDiff">Diff</button></div>
+      <button class="toolbtn" id="exDownload" style="height:24px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg> Download</button>
+    </div>
+    <div class="ex-content" id="exContent"><div class="ex-empty"><div><div class="big">No file open</div><div>Pick a file from the tree on the left.</div></div></div></div>
+  </div>
+</div>
+
+<!-- preview modal -->
+<div class="overlay" id="overlay">
+  <div class="preview">
+    <div class="preview-bar">
+      <span class="title" id="pvTitle">Preview</span>
+      <div class="seg-mini" id="pvModeSeg"><button id="pvModeFile" class="active">File</button><button id="pvModeDiff">Diff</button></div>
+      <button class="toolbtn" id="pvDownload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg> Download</button>
+      <button class="iconbtn" id="pvClose" title="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="preview-body cbody" id="pvBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function folderIcon(cls){ return `<svg class="icon ${cls||''}" viewBox="0 0 64 52" fill="none"><path d="M4 12c0-3 2-5 5-5h14l5 5h27c3 0 5 2 5 5v27c0 3-2 5-5 5H9c-3 0-5-2-5-5V12z" fill="url(#folderTab)"/><path d="M4 18c0-3 2-5 5-5h46c3 0 5 2 5 5v26c0 3-2 5-5 5H9c-3 0-5-2-5-5V18z" fill="url(#folderG)"/></svg>`; }
+function fileIcon(kind, cls){
+  const badges = { md:['#3b82f6','MD'], txt:['#6b7280','TXT'], pdf:['#e5484d','PDF'], code:['#8b5cf6','{ }'], csv:['#16a34a','CSV'], zip:['#a16207','ZIP'], img:['#0ea5e9','IMG'], audio:['#db2777','AUD'], video:['#f59e0b','VID'], file:['#94a3b8','FILE'] };
+  const [color, tag] = badges[kind] || badges.file;
+  return `<svg class="icon ${cls||''}" viewBox="0 0 52 64" fill="none"><path d="M8 4h24l14 14v40c0 2-2 4-4 4H8c-2 0-4-2-4-4V8c0-2 2-4 4-4z" fill="#fff" stroke="#d7d7dc" stroke-width="1.5"/><path d="M32 4l14 14H36c-2 0-4-2-4-4V4z" fill="#eef0f3"/><rect x="4" y="40" width="44" height="16" rx="3" fill="${color}"/><text x="26" y="52" font-size="10" font-weight="700" fill="#fff" text-anchor="middle" font-family="-apple-system,sans-serif">${tag}</text></svg>`;
+}
+function smallFileSvg(kind){
+  const color = { md:'#3b82f6', txt:'#8a8f98', pdf:'#e5484d', code:'#8b5cf6', csv:'#16a34a', zip:'#a16207', img:'#0ea5e9', audio:'#db2777', video:'#f59e0b', file:'#8a8f98' }[kind] || '#8a8f98';
+  return `<svg class="ficon" viewBox="0 0 24 24" fill="none"><path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="none" stroke="${color}" stroke-width="1.6"/><path d="M14 2v4h4" stroke="${color}" stroke-width="1.6"/></svg>`;
+}
+function smallFolderSvg(){ return `<svg class="ficon" viewBox="0 0 24 24" fill="none"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="#dcb67a" stroke="none"/></svg>`; }
+function iconFor(e, cls){ return e.type === 'folder' ? folderIcon(cls) : fileIcon(e.kind, cls); }
+function fmtSize(n){ if (n==null) return ''; if (n<1024) return n+' B'; if (n<1048576) return (n/1024).toFixed(0)+' KB'; if (n<1073741824) return (n/1048576).toFixed(1)+' MB'; return (n/1073741824).toFixed(1)+' GB'; }
+function fmtDate(ts){ if(!ts) return ''; const d=new Date(ts*1000); return d.toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}); }
+function gitLabel(code){ if(!code) return ''; const c=code.trim(); if(c==='??') return '?'; return c[0]!==' '?c[0]:c[1]; }
+function gitClass(code){ if(!code) return ''; const c=code.trim(); if(c==='??') return 'untracked'; return 'git-'+(c[0]!==' '?c[0]:c[1]); }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+let ROOTS = [];
+let currentRoot = 'files';
+let appMode = 'finder';          // finder | editor
+let navStack = [{root:'files', path:''}];
+let navIndex = 0;
+let previewFile = null;
+let finderViewMode = 'grid';   // grid | list | columns
+let topLevelCache = {};   // root key -> top-level listing (for the sidebar)
+let searchActive = false;
+let searchTimer = null;
+
+async function getJSON(url){ const r = await fetch(url); if(!r.ok){ let m='Error'; try{ m=(await r.json()).error||m; }catch(e){} throw new Error(m); } return r.json(); }
+function isCode(){ return currentRoot === 'code'; }
+
+// ---- theme ----
+function applyTheme(dark){
+  document.body.classList.toggle('dark', dark);
+  localStorage.setItem('files-theme', dark?'dark':'light');
+  $('themeToggle').innerHTML = dark
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+}
+
+// ---- root switch ----
+async function loadRoots(){
+  ROOTS = await getJSON('/api/roots');
+  const sw = $('rootSwitch'); sw.innerHTML='';
+  ROOTS.forEach(r => {
+    const b = document.createElement('button');
+    b.textContent = r.advanced ? 'Code' : 'My Files';
+    b.title = r.label;
+    b.className = r.key===currentRoot?'active':'';
+    b.onclick = () => switchRoot(r.key);
+    sw.appendChild(b);
+  });
+}
+function switchRoot(key){
+  if (key===currentRoot) return;
+  currentRoot = key;
+  document.body.classList.toggle('code-mode', key==='code');
+  [...$('rootSwitch').children].forEach((b,i)=> b.className = ROOTS[i].key===key?'active':'');
+  $('gitCol').style.display = isCode()?'':'none';
+  navStack = [{root:key, path:''}]; navIndex = 0;
+  $('window').classList.remove('open');
+  buildDesktop();
+  if (isCode()) refreshChangesCount();
+  // editor: reset tree + tabs to new root. Clear exTreeLoaded so that
+  // re-entering the editor rebuilds the tree even when the root changed
+  // while we were in Finder view.
+  exTabs = []; exActive = null; exTreeLoaded = false;
+  if (appMode==='editor'){ buildTree(); renderTabs(); renderEditorContent(); }
+  if (searchActive) runSearch();   // re-run the active search against the new root
+}
+
+// ---- app mode ----
+function setMode(mode){
+  appMode = mode;
+  document.body.classList.toggle('mode-editor', mode==='editor');
+  $('modeFinder').classList.toggle('active', mode==='finder');
+  $('modeEditor').classList.toggle('active', mode==='editor');
+  localStorage.setItem('files-mode', mode);
+  if (mode==='editor'){ if(!exTreeLoaded) buildTree(); }
+}
+
+// ============ FINDER VIEW ============
+async function buildDesktop(){
+  const g = $('desktopGrid'); g.innerHTML='';
+  $('desktopHint').innerHTML = isCode()
+    ? '<b>Workspace code.</b> Browse project files under version control. Open a changed file to see its git diff. Read-only.'
+    : '<b>Your files.</b> Double-click a folder to open it. Everything here is yours &mdash; view or download, nothing else.';
+  try {
+    const data = await getJSON(`/api/list?root=${currentRoot}&path=`);
+    data.entries.filter(e=>e.type==='folder').slice(0,12).forEach(e=>{
+      const el = document.createElement('div'); el.className='desktop-icon';
+      el.innerHTML = `${folderIcon()}<div class="label">${esc(e.name)}</div>`;
+      el.ondblclick = () => openWindow(e.path);
+      g.appendChild(el);
+    });
+  } catch(e){ toast(e.message); }
+}
+function openWindow(path){ $('window').classList.add('open'); navStack=[{root:currentRoot, path:path||''}]; navIndex=0; render(); }
+
+async function render(){
+  const {root, path} = navStack[navIndex];
+  $('grid').innerHTML = '<div class="loading">Loading…</div>'; $('listBody').innerHTML='';
+  let data;
+  try { data = await getJSON(`/api/list?root=${root}&path=${encodeURIComponent(path)}`); }
+  catch(e){ $('grid').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  const crumbs = $('crumbs'); crumbs.innerHTML='';
+  data.crumbs.forEach((c,i)=>{
+    const last = i===data.crumbs.length-1;
+    const s = document.createElement('span'); s.textContent=c.name; s.className=last?'current':'parent';
+    if(!last) s.onclick=()=>navTo(c.path);
+    crumbs.appendChild(s);
+    if(!last){ const sep=document.createElement('span'); sep.className='sep'; sep.textContent='›'; crumbs.appendChild(sep); }
+  });
+  const sb=$('sidebar'); sb.innerHTML='<div class="side-head">Favorites</div>';
+  try {
+    // The sidebar shows the root's top-level folders, which don't change as
+    // you navigate deeper -- fetch once per root and reuse.
+    let top = topLevelCache[root];
+    if (!top){ top = await getJSON(`/api/list?root=${root}&path=`); topLevelCache[root] = top; }
+    top.entries.filter(e=>e.type==='folder').forEach(f=>{
+      const el=document.createElement('div'); el.className='side-item'+(f.path===path?' active':'');
+      el.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><span>${esc(f.name)}</span>`;
+      el.onclick=()=>navTo(f.path); sb.appendChild(el);
+    });
+  } catch(e){}
+  const grid=$('grid'), listBody=$('listBody'); grid.innerHTML=''; listBody.innerHTML='';
+  if(data.entries.length===0){ grid.innerHTML='<div class="empty">This folder is empty.</div>'; }
+  data.entries.forEach(e=>{
+    const gl = isCode()? gitLabel(e.git) : '';
+    const badge = gl? `<span class="gitbadge ${gitClass(e.git)}">${gl}</span>` : '';
+    const el=document.createElement('div'); el.className='item';
+    el.innerHTML = `${badge}${iconFor(e)}<div class="name">${esc(e.name)}</div><div class="meta">${e.type==='folder'?'':fmtSize(e.size)}</div>`;
+    el.onclick=()=>{ document.querySelectorAll('.item').forEach(x=>x.classList.remove('selected')); el.classList.add('selected'); };
+    el.ondblclick=()=>openEntry(e);
+    grid.appendChild(el);
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td><div class="name-cell">${iconFor(e,'sm')}<span>${esc(e.name)}</span></div></td><td class="col-size">${e.type==='folder'?'--':fmtSize(e.size)}</td><td class="col-date">${e.type==='folder'?'':fmtDate(e.mtime)}</td>${isCode()?`<td class="col-git">${gl}</td>`:''}`;
+    tr.ondblclick=()=>openEntry(e); listBody.appendChild(tr);
+  });
+  $('status').textContent = data.entries.length===0?'Empty':(data.entries.length+' item'+(data.entries.length>1?'s':''));
+  $('backBtn').disabled = navIndex===0; $('fwdBtn').disabled = navIndex===navStack.length-1;
+  if (finderViewMode==='columns') renderColumns(path);
+}
+
+// ---- Column (Miller) view: nested folders, each level its own column ----
+function applyViewVisibility(mode){
+  $('viewGrid').classList.toggle('active', mode==='grid');
+  $('viewList').classList.toggle('active', mode==='list');
+  $('viewColumns').classList.toggle('active', mode==='columns');
+  $('searchResults').classList.remove('show');   // search results never coexist with a folder view
+  $('grid').classList.toggle('hidden', mode!=='grid');
+  $('listTable').classList.toggle('active', mode==='list');
+  $('columns').classList.toggle('show', mode==='columns');
+}
+function setFinderView(mode){
+  finderViewMode = mode;
+  applyViewVisibility(mode);
+  if (searchActive){
+    // Toggling a view is a browsing action: leave search and show the folder.
+    searchActive = false;
+    $('searchBox').value = '';
+    render();   // repopulates the current folder + breadcrumb (also draws columns)
+  } else if (mode==='columns'){
+    renderColumns(navStack[navIndex].path);
+  }
+}
+function colIcon(en){ return en.type==='folder' ? smallFolderSvg() : smallFileSvg(en.kind); }
+async function buildColumn(path){
+  const col = document.createElement('div'); col.className='col'; col.dataset.path=path;
+  col.innerHTML='<div class="col-empty">Loading…</div>';
+  try {
+    const data = await getJSON(`/api/list?root=${currentRoot}&path=${encodeURIComponent(path)}`);
+    col.innerHTML='';
+    if(!data.entries.length){ col.innerHTML='<div class="col-empty">Empty</div>'; return col; }
+    data.entries.forEach(en=>{
+      const gl = isCode()? gitLabel(en.git):'';
+      const right = en.type==='folder' ? '<span class="colchev">›</span>'
+        : (gl?`<span class="colgit ${gitClass(en.git).replace('git-','')}">${gl}</span>`:'');
+      const row=document.createElement('div'); row.className='col-row';
+      row.innerHTML = `${colIcon(en)}<span class="cname">${esc(en.name)}</span>${right}`;
+      row.onclick=()=>onColumnClick(col, row, en);
+      col.appendChild(row);
+    });
+  } catch(e){ col.innerHTML=`<div class="col-empty">${esc(e.message)}</div>`; }
+  return col;
+}
+function onColumnClick(col, row, en){
+  [...col.children].forEach(r=>r.classList.remove('selected'));
+  row.classList.add('selected');
+  const cont=$('columns');
+  while(cont.lastChild && cont.lastChild!==col) cont.removeChild(cont.lastChild);
+  if(en.type==='folder'){
+    buildColumn(en.path).then(c=>{ cont.appendChild(c); cont.scrollLeft = cont.scrollWidth; });
+  } else {
+    openModal({root:currentRoot, path:en.path, name:en.name, kind:en.kind, git:en.git}, 'file');
+  }
+}
+async function renderColumns(basePath){
+  const cont=$('columns'); cont.innerHTML='';
+  cont.appendChild(await buildColumn(basePath||''));
+}
+
+// ---- Name search (with type filter) ----
+function showResultsPane(on){
+  $('searchResults').classList.toggle('show', on);
+  if(on){ $('grid').classList.add('hidden'); $('listTable').classList.remove('active'); $('columns').classList.remove('show'); }
+}
+async function runSearch(){
+  const q = $('searchBox').value.trim();
+  const type = $('searchType').value;
+  if(!q){ exitSearch(); return; }
+  searchActive = true;
+  if(appMode!=='finder') setMode('finder');
+  $('window').classList.add('open');
+  $('crumbs').innerHTML = `<span class="current">Search: ${esc(q)}</span>`;
+  showResultsPane(true);
+  const box=$('searchResults'); box.innerHTML='<div class="rnote">Searching…</div>';
+  try{
+    const data = await getJSON(`/api/search?root=${currentRoot}&q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`);
+    if(!searchActive) return;   // user cleared while the request was in flight
+    renderSearchResults(data, q);
+  }catch(e){ box.innerHTML=`<div class="rnote">${esc(e.message)}</div>`; }
+}
+function renderSearchResults(data, q){
+  const box=$('searchResults'); box.innerHTML='';
+  if(!data.results.length){ box.innerHTML=`<div class="rnote">No matches for &ldquo;${esc(q)}&rdquo;.</div>`; $('status').textContent='0 results'; return; }
+  const rootLabel = currentRoot==='code' ? 'Workspace Code' : 'My Files';
+  data.results.forEach(r=>{
+    const parent = r.path.includes('/') ? rootLabel+' / '+r.path.slice(0, r.path.lastIndexOf('/')) : rootLabel;
+    const row=document.createElement('div'); row.className='rrow';
+    row.innerHTML = `${r.type==='folder'?folderIcon('sm'):fileIcon(r.kind,'sm')}<div class="rmeta"><div class="rname">${esc(r.name)}</div><div class="rpath">${esc(parent)}</div></div>`;
+    row.onclick=()=>{ if(r.type==='folder'){ clearSearch(); navTo(r.path); } else { openModal({root:currentRoot, path:r.path, name:r.name, kind:r.kind, git:null}, 'file'); } };
+    box.appendChild(row);
+  });
+  $('status').textContent = data.results.length + ' result' + (data.results.length>1?'s':'');
+  if(data.truncated){ const n=document.createElement('div'); n.className='rnote'; n.textContent='Showing the first '+data.results.length+' matches — narrow the search or pick a type.'; box.appendChild(n); }
+}
+function clearSearch(){ $('searchBox').value=''; exitSearch(); }
+function exitSearch(){
+  const was = searchActive;
+  searchActive = false;
+  showResultsPane(false);
+  if(was){ setFinderView(finderViewMode); render(); }
+}
+function openEntry(e){ if(e.type==='folder') navTo(e.path); else openPreview(e); }
+function navTo(path){ navStack=navStack.slice(0,navIndex+1); navStack.push({root:currentRoot, path}); navIndex++; render(); }
+
+// modal preview -- single entry point used by both file preview and diffs
+function openModal(file, mode){
+  previewFile = file;
+  $('pvTitle').textContent = file.name;
+  $('pvModeSeg').classList.toggle('show', !!(file.root==='code' && file.git));
+  $('pvModeFile').classList.toggle('active', mode!=='diff');
+  $('pvModeDiff').classList.toggle('active', mode==='diff');
+  $('overlay').classList.add('open');
+  renderInto($('pvBody'), file, mode);
+}
+function openPreview(e){ openModal({root: currentRoot, path: e.path, name: e.name, kind: e.kind, git: e.git}, 'file'); }
+function closePreview(){ $('overlay').classList.remove('open'); previewFile=null; }
+
+// ============ SHARED CONTENT RENDERER ============
+async function renderInto(container, file, mode){
+  container.innerHTML='<div class="loading">Loading…</div>';
+  if (mode==='diff'){ return renderDiffInto(container, file); }
+  const rawUrl = `/api/raw?root=${file.root}&path=${encodeURIComponent(file.path)}`;
+  if (file.kind==='img'){ container.innerHTML=`<img src="${rawUrl}" alt="${esc(file.name)}">`; return; }
+  if (file.kind==='pdf'){ container.innerHTML=`<iframe src="${rawUrl}"></iframe>`; return; }
+  if (file.kind==='audio'){ container.innerHTML=`<div class="pad"><audio controls src="${rawUrl}"></audio></div>`; return; }
+  if (file.kind==='video'){ container.innerHTML=`<div class="pad"><video controls src="${rawUrl}"></video></div>`; return; }
+  try {
+    const data = await getJSON(`/api/content?root=${file.root}&path=${encodeURIComponent(file.path)}`);
+    if (!data.renderable){
+      const reason = data.reason==='too_large' ? 'This file is too large to preview ('+fmtSize(data.size)+').' : 'No preview available for this file type.';
+      container.innerHTML = `<div class="noprev">${fileIcon(file.kind)}<div>${reason}</div><div style="margin-top:6px;font-size:13px">Use Download to save it.</div></div>`; return;
+    }
+    if (data.kind==='md'){ container.innerHTML=`<div class="md">${data.html}</div>`; return; }
+    container.innerHTML = data.html;
+  } catch(err){ container.innerHTML = `<div class="noprev">${esc(err.message)}</div>`; }
+}
+async function renderDiffInto(container, file){
+  container.innerHTML='<div class="loading">Loading diff…</div>';
+  try {
+    const data = await getJSON(`/api/diff?path=${encodeURIComponent(file.path)}`);
+    if (data.untracked){ container.innerHTML='<div class="diff-empty">New file &mdash; not yet tracked by git, so there is no diff to show.</div>'; return; }
+    if (!data.diff || !data.diff.trim()){ container.innerHTML='<div class="diff-empty">No changes against the last commit.</div>'; return; }
+    const lines = data.diff.split('\n').map(l=>{
+      let cls=''; if (l.startsWith('+')&&!l.startsWith('+++')) cls='add';
+      else if (l.startsWith('-')&&!l.startsWith('---')) cls='del';
+      else if (l.startsWith('@@')) cls='hunk';
+      else if (l.startsWith('diff ')||l.startsWith('index ')||l.startsWith('+++')||l.startsWith('---')) cls='meta';
+      return `<span class="dl ${cls}">${esc(l)||' '}</span>`;
+    }).join('');
+    container.innerHTML = `<div class="diff">${lines}</div>`;
+  } catch(err){ container.innerHTML = `<div class="diff-empty">${esc(err.message)}</div>`; }
+}
+
+// ============ EDITOR VIEW ============
+let exTabs = [];         // [{root,path,name,kind,git,mode}]
+let exActive = null;     // key = root+':'+path
+let exExpanded = new Set();
+let exTreeLoaded = false;
+function tabKey(f){ return f.root+':'+f.path; }
+
+async function buildTree(){
+  exTreeLoaded = true;
+  const tree = $('exTree'); tree.innerHTML='<div class="loading">Loading…</div>';
+  $('exHead').textContent = isCode() ? 'Workspace Code' : 'My Files';
+  try {
+    const data = await getJSON(`/api/list?root=${currentRoot}&path=`);
+    tree.innerHTML='';
+    tree.appendChild(renderTreeLevel(data.entries, 0));
+  } catch(e){ tree.innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
+}
+function renderTreeLevel(entries, depth){
+  const frag = document.createDocumentFragment();
+  entries.forEach(e=>{
+    const row = document.createElement('div');
+    row.className = 'tree-row';
+    row.style.paddingLeft = (8 + depth*14) + 'px';
+    const gl = isCode()? gitLabel(e.git):'';
+    if (e.type==='folder'){
+      row.innerHTML = `<span class="chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>${smallFolderSvg()}<span class="tname">${esc(e.name)}</span>`;
+      const childBox = document.createElement('div'); childBox.className='tree-children';
+      row.onclick = async () => {
+        if (childBox.classList.contains('open')){ childBox.classList.remove('open'); row.classList.remove('expanded'); return; }
+        row.classList.add('expanded'); childBox.classList.add('open');
+        if (!childBox.dataset.loaded){
+          childBox.innerHTML='<div class="loading" style="padding:8px 14px;text-align:left">…</div>';
+          try { const d = await getJSON(`/api/list?root=${currentRoot}&path=${encodeURIComponent(e.path)}`); childBox.innerHTML=''; childBox.appendChild(renderTreeLevel(d.entries, depth+1)); childBox.dataset.loaded='1'; }
+          catch(err){ childBox.innerHTML=`<div class="empty" style="padding:8px 14px">${esc(err.message)}</div>`; }
+        }
+      };
+      const wrap = document.createElement('div'); wrap.appendChild(row); wrap.appendChild(childBox); frag.appendChild(wrap);
+    } else {
+      row.innerHTML = `<span class="chev"></span>${smallFileSvg(e.kind)}<span class="tname">${esc(e.name)}</span>${gl?`<span class="tgit ${gitClass(e.git).replace('git-','')}">${gl}</span>`:''}`;
+      row.onclick = () => openTab(e);
+      frag.appendChild(row);
+    }
+  });
+  return frag;
+}
+
+function openTab(e){
+  const f = {root: currentRoot, path: e.path, name: e.name, kind: e.kind, git: e.git, mode: 'file'};
+  const key = tabKey(f);
+  if (!exTabs.find(t=>tabKey(t)===key)) exTabs.push(f);
+  exActive = key;
+  renderTabs(); renderEditorContent();
+}
+function renderTabs(){
+  const bar = $('exTabs'); bar.innerHTML='';
+  exTabs.forEach(t=>{
+    const key = tabKey(t);
+    const tab = document.createElement('div'); tab.className='ex-tab'+(key===exActive?' active':'');
+    tab.innerHTML = `${smallFileSvg(t.kind)}<span class="tabname">${esc(t.name)}</span><span class="close" title="Close">×</span>`;
+    tab.onclick=(ev)=>{ if(ev.target.classList.contains('close')){ closeTab(key); return; } exActive=key; renderTabs(); renderEditorContent(); };
+    bar.appendChild(tab);
+  });
+}
+function closeTab(key){
+  const idx = exTabs.findIndex(t=>tabKey(t)===key);
+  if (idx<0) return;
+  exTabs.splice(idx,1);
+  if (exActive===key){ const next = exTabs[idx] || exTabs[idx-1]; exActive = next?tabKey(next):null; }
+  renderTabs(); renderEditorContent();
+}
+function activeTab(){ return exTabs.find(t=>tabKey(t)===exActive); }
+async function renderEditorContent(){
+  const t = activeTab();
+  const content = $('exContent');
+  if (!t){ $('exToolbar').classList.remove('show'); content.innerHTML='<div class="ex-empty"><div><div class="big">No file open</div><div>Pick a file from the tree on the left.</div></div></div>'; return; }
+  $('exToolbar').classList.add('show');
+  $('exPath').textContent = (t.root==='code'?'':'My Files / ') + t.path;
+  const hasDiff = t.root==='code' && t.git;
+  $('exModeSeg').classList.toggle('show', !!hasDiff);
+  $('exModeFile').classList.toggle('active', t.mode!=='diff');
+  $('exModeDiff').classList.toggle('active', t.mode==='diff');
+  content.className='ex-content cbody';
+  renderInto(content, t, t.mode);
+}
+
+// ============ CHANGES (finder) ============
+async function refreshChangesCount(){ try { const d = await getJSON('/api/changes'); $('changesCount').textContent = d.changes.length; } catch(e){} }
+async function openChanges(){
+  if (appMode!=='finder') setMode('finder');
+  searchActive = false; $('searchBox').value = '';   // leave any active search
+  $('window').classList.add('open');
+  $('crumbs').innerHTML = '<span class="current">Changes</span>';
+  $('sidebar').innerHTML = '<div class="side-head">Git</div>';
+  const grid=$('grid'); grid.classList.remove('hidden'); $('listTable').classList.remove('active'); $('columns').classList.remove('show'); $('searchResults').classList.remove('show');
+  grid.innerHTML='<div class="loading">Loading…</div>'; $('listBody').innerHTML='';
+  try {
+    const d = await getJSON('/api/changes'); grid.innerHTML='';
+    if (d.changes.length===0){ grid.innerHTML='<div class="empty">No uncommitted changes.</div>'; }
+    d.changes.forEach(c=>{
+      const clean=c.path.replace(/\/+$/,''); const isDir=c.path.endsWith('/');
+      const name=clean.split('/').pop(); const dir=clean.split('/').slice(0,-1).join('/');
+      const gl=gitLabel(c.status); const icon=isDir?folderIcon():fileIcon('code');
+      const el=document.createElement('div'); el.className='item';
+      el.innerHTML=`<span class="gitbadge ${gitClass(c.status)}">${gl}</span>${icon}<div class="name">${esc(name)}</div><div class="meta">${esc(dir)}</div>`;
+      el.ondblclick=()=>{ if(isDir){ navTo(clean); return; } openModal({root:'code', path:c.path, name, kind:'code', git:c.status}, 'diff'); };
+      grid.appendChild(el);
+    });
+    $('status').textContent = d.changes.length+' changed';
+  } catch(e){ grid.innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
+}
+
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2000); }
+
+// ---- wiring ----
+$('closeWin').onclick=()=>$('window').classList.remove('open');
+$('backBtn').onclick=()=>{ if(navIndex>0){navIndex--; render();} };
+$('fwdBtn').onclick=()=>{ if(navIndex<navStack.length-1){navIndex++; render();} };
+$('viewGrid').onclick=()=>setFinderView('grid');
+$('viewList').onclick=()=>setFinderView('list');
+$('viewColumns').onclick=()=>setFinderView('columns');
+$('searchBox').addEventListener('input', ()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(runSearch, 200); });
+$('searchBox').addEventListener('search', runSearch);   // fires on Enter and on the clear (x)
+$('searchType').addEventListener('change', ()=>{ if($('searchBox').value.trim()) runSearch(); });
+$('dlFolderBtn').onclick=()=>{ const {root,path}=navStack[navIndex]; window.location=`/api/download-folder?root=${root}&path=${encodeURIComponent(path)}`; };
+$('pvDownload').onclick=()=>{ if(previewFile) window.location=`/api/download?root=${previewFile.root}&path=${encodeURIComponent(previewFile.path)}`; };
+$('pvClose').onclick=closePreview;
+$('pvModeFile').onclick=()=>{ if(previewFile) openModal(previewFile, 'file'); };
+$('pvModeDiff').onclick=()=>{ if(previewFile) openModal(previewFile, 'diff'); };
+$('overlay').onclick=(e)=>{ if(e.target===$('overlay')) closePreview(); };
+$('changesBtn').onclick=openChanges;
+$('modeFinder').onclick=()=>setMode('finder');
+$('modeEditor').onclick=()=>setMode('editor');
+$('themeToggle').onclick=()=>applyTheme(!document.body.classList.contains('dark'));
+$('exModeFile').onclick=()=>{ const t=activeTab(); if(t){ t.mode='file'; renderEditorContent(); } };
+$('exModeDiff').onclick=()=>{ const t=activeTab(); if(t){ t.mode='diff'; renderEditorContent(); } };
+$('exDownload').onclick=()=>{ const t=activeTab(); if(t) window.location=`/api/download?root=${t.root}&path=${encodeURIComponent(t.path)}`; };
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closePreview(); });
+function tick(){ $('clock').textContent = new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})+'  '+new Date().toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'}); }
+tick(); setInterval(tick, 30000);
+
+(async function init(){
+  applyTheme(localStorage.getItem('files-theme')==='dark');
+  await loadRoots();
+  await buildDesktop();
+  setMode(localStorage.getItem('files-mode')==='editor' ? 'editor' : 'finder');
+})();
+</script>
+</body>
+</html>
