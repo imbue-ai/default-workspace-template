@@ -42,6 +42,13 @@ export interface PanelParams {
   chatAgentId?: string;
   url?: string;
   title?: string;
+  // The name the user (or an agent's ``layout.py rename``) gave this tab, as
+  // opposed to the one derived from what the tab shows. Set only by a rename,
+  // and always alongside ``title``, which is what the strip draws. Kept apart
+  // from it so a *chosen* name can win where a derived one would not: the
+  // sidebar prefers it over the object's own name, and a tmux session rename
+  // leaves it alone rather than taking it back off the tab.
+  customTitle?: string;
   subagentSessionId?: string;
   // Workspace service name this iframe is tied to (e.g. "web", "api").
   // Set only for iframe tabs that proxy an actual workspace service; left

@@ -1408,3 +1408,190 @@ def test_one_object_is_one_element_in_every_view_showing_it(tmp_path: Path, page
         assert back_in_project["removals"] == 0, (
             f"a live surface left the DOM during the round trip: {back_in_project}"
         )
+
+
+_TAB_RENAME_PORT = 18872
+
+# Comfortably past the workspace's 1500ms autosave debounce, so a test can wait
+# for the writes an action already triggered to land before provoking the next.
+AUTOSAVE_SETTLE_MS = 3000
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_double_click_renames_a_tab_and_the_name_survives_a_reload(tmp_path: Path, page: Page) -> None:
+    """Double-clicking a tab's title renames it, and the name is kept.
+
+    The gesture is only half of it. A name that lasted as long as the page would
+    not be a rename at all, so the commit has to write the title into the view's
+    saved layout and schedule the autosave that persists it -- which is what
+    makes the reload here a real assertion rather than a formality. It also
+    pins the name to the *object*: the pane behind the renamed tab still shows
+    the agent's transcript afterwards, so the tab was renamed rather than
+    replaced.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _TAB_RENAME_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        # The fixture chat auto-opens into the starter project wearing the name
+        # derived from its agent, which is the name the rename replaces.
+        tab_title = page.locator(".dv-default-tab-content", has_text="test-agent").first
+        expect(tab_title).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        project_file = layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json"
+        wait_for(
+            lambda: project_file.exists(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message=f"autosave never materialized {DEFAULT_PROJECT_ID}.json",
+        )
+
+        # Let the opening flurry of autosaves settle first. Without this the
+        # rename would ride out on a save that was already pending, and the
+        # persistence check below would pass whether or not committing a name
+        # schedules one of its own.
+        page.wait_for_timeout(AUTOSAVE_SETTLE_MS)
+        before_rename = project_file.read_text()
+        assert "Design notes" not in before_rename
+
+        # The title becomes a field seeded with the name it has now, so typing
+        # over a name is one gesture rather than a select-all first.
+        tab_title.dblclick()
+        editor = page.locator(".dv-custom-tab-title-input:visible")
+        expect(editor).to_be_visible(timeout=5000)
+        expect(editor).to_have_value("test-agent")
+
+        editor.fill("Design notes")
+        editor.press("Enter")
+
+        # Enter commits: the field goes away and the strip draws the new name.
+        expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=5000)
+        expect(page.locator(".dv-custom-tab-title-input:visible")).to_have_count(0)
+
+        # The commit schedules the autosave, which writes the name into this
+        # view's layout. Without that the reload below would find the old one.
+        wait_for(
+            lambda: "Design notes" in project_file.read_text(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the rename never reached the project's saved layout",
+        )
+
+        page.reload()
+        expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=15000)
+        # Still the chat that was renamed, not a tab that merely kept a string.
+        expect(page.locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
+        # And the derived name is gone rather than restored onto a second tab.
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
+
+
+_SETTINGS_STAGING_PORT = 18873
+
+_FIXTURE_CHAT_REF = "chat:agent-test-123"
+
+
+def _open_project_settings(page: Page) -> None:
+    """Open the active project's settings modal from the rail header's context menu."""
+    page.locator(".project-rail-header").click(button="right")
+    page.locator(".project-rail-menu [role='menuitem']", has_text="Project settings").click()
+    expect(page.locator(".custom-url-dialog-title", has_text="Project settings")).to_be_visible(timeout=5000)
+
+
+def _project_members(layout_dir: Path) -> list[str]:
+    """The starter project's member refs, straight out of the registry on disk."""
+    registry = json.loads((layout_dir / "projects_meta.json").read_text())
+    members = registry["project_by_id"][DEFAULT_PROJECT_ID]["members"]
+    assert isinstance(members, list)
+    return members
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_settings_dialog_stages_removals_until_save(tmp_path: Path, page: Page) -> None:
+    """The settings dialog's removals obey its Save button, not the click.
+
+    Marking a row used to remove it there and then, which made it the one
+    control in a dialog full of Save/Cancel fields that ignored both: a user who
+    marked a row, thought better of it and pressed Cancel would find the object
+    already gone from the project. So a marked row is now staged -- struck
+    through, counted in the header, and applied only by Save.
+
+    Both halves are asserted against the registry on disk rather than against
+    the dialog, because that is what "was it actually removed" means: Cancel
+    must leave the member list exactly as it was, and Save must take the ref out
+    of it.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _SETTINGS_STAGING_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+        wait_for(
+            lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").exists(),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message=f"autosave never materialized {DEFAULT_PROJECT_ID}.json",
+        )
+        wait_for(
+            lambda: _FIXTURE_CHAT_REF in _project_members(layout_dir),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the fixture chat was never filed as a member of the starter project",
+        )
+
+        # Mark the chat for removal, then back out with Cancel.
+        _open_project_settings(page)
+        chat_row = page.locator(".project-contents-row", has_text="test-agent")
+        expect(chat_row).to_have_count(1)
+        chat_row.locator("button", has_text="Remove").click()
+        # Staged, not applied: the row says how to undo it and the header says
+        # what Save would do.
+        expect(chat_row.locator("button", has_text="Undo")).to_be_visible()
+        expect(page.locator(".custom-url-dialog", has_text="1 to remove on save")).to_be_visible()
+        page.locator(".custom-url-dialog-cancel").click()
+        expect(page.locator(".custom-url-dialog")).to_have_count(0)
+
+        # Nothing happened. The tab is still docked, and -- after long enough for
+        # a removal request to have landed if one had been sent -- the registry
+        # still lists the member.
+        page.wait_for_timeout(1000)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible()
+        assert _FIXTURE_CHAT_REF in _project_members(layout_dir), "Cancel removed the member anyway"
+
+        # Cancel threw the marks away with the rest of the form, so reopening
+        # offers the row unstaged rather than remembering what was marked.
+        _open_project_settings(page)
+        chat_row = page.locator(".project-contents-row", has_text="test-agent")
+        expect(chat_row.locator("button", has_text="Remove")).to_have_count(1)
+        expect(page.locator(".custom-url-dialog", has_text="to remove on save")).to_have_count(0)
+
+        # Mark it again and commit this time.
+        chat_row.locator("button", has_text="Remove").click()
+        page.locator(".custom-url-dialog-open").click()
+        expect(page.locator(".custom-url-dialog")).to_have_count(0)
+
+        # Now it really went: the tab is undocked and the ref is out of the
+        # project's member list.
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
+        wait_for(
+            lambda: _FIXTURE_CHAT_REF not in _project_members(layout_dir),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="Save never removed the member from the project",
+        )
