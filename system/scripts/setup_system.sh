@@ -42,6 +42,13 @@ fi
 : "${LATCHKEY_VERSION:=3.4.1}"
 : "${RESTIC_VERSION:=0.18.1}"
 
+# Every download below runs with these retry flags: a single transient failure
+# (e.g. a GitHub releases 503) otherwise aborts the whole image build /
+# provision under `set -e`. --retry-all-errors also covers connection resets
+# and refused connections, which plain --retry does not; the URLs are all
+# pinned, so a genuine 404 only costs the bounded retry delay before failing.
+CURL_RETRY_FLAGS="--retry 5 --retry-all-errors --retry-delay 5"
+
 # Install a downloaded binary atomically: fetch to a temp file beside the target,
 # then rename(2) it into place. A plain `curl -o <dest>` truncates <dest> in
 # place, which fails with ETXTBSY when <dest> is a currently-running executable --
@@ -56,7 +63,7 @@ install_downloaded_binary() {
     _url="$1"
     _dest="$2"
     _tmp="$(mktemp "${_dest}.XXXXXX")"
-    curl -fsSL "$_url" -o "$_tmp"
+    curl -fsSL $CURL_RETRY_FLAGS "$_url" -o "$_tmp"
     chmod 0755 "$_tmp"
     mv -f "$_tmp" "$_dest"
 }
@@ -119,7 +126,7 @@ case "${restic_arch}" in
     aarch64) restic_goarch="arm64"; restic_sha256="87f53fddde38764095e9c058a3b31834052c37e5826d2acf34e18923c006bd45" ;;
     *) echo "Unsupported architecture for restic: ${restic_arch}" >&2; exit 1 ;;
 esac
-curl -fsSL "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${restic_goarch}.bz2" -o /tmp/restic.bz2
+curl -fsSL $CURL_RETRY_FLAGS "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${restic_goarch}.bz2" -o /tmp/restic.bz2
 echo "${restic_sha256}  /tmp/restic.bz2" | sha256sum -c -
 bunzip2 -c /tmp/restic.bz2 > /usr/local/bin/restic
 chmod +x /usr/local/bin/restic
@@ -138,7 +145,7 @@ case "${gh_arch}" in
     aarch64) gh_goarch="arm64"; gh_sha256="06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909" ;;
     *) echo "Unsupported architecture for gh: ${gh_arch}" >&2; exit 1 ;;
 esac
-curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_goarch}.tar.gz" -o /tmp/gh.tar.gz
+curl -fsSL $CURL_RETRY_FLAGS "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_goarch}.tar.gz" -o /tmp/gh.tar.gz
 echo "${gh_sha256}  /tmp/gh.tar.gz" | sha256sum -c -
 tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${gh_goarch}/bin/gh"
 mv -f "/tmp/gh_${GH_VERSION}_linux_${gh_goarch}/bin/gh" /usr/local/bin/gh
@@ -155,7 +162,7 @@ case "${caddy_arch}" in
     aarch64) caddy_goarch="arm64"; caddy_sha256="52d42ae12b3462097e9868da6dfed3c9648ae12edd3b3638102312af84cb6904" ;;
     *) echo "Unsupported architecture for caddy: ${caddy_arch}" >&2; exit 1 ;;
 esac
-curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${caddy_goarch}.tar.gz" -o /tmp/caddy.tar.gz
+curl -fsSL $CURL_RETRY_FLAGS "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${caddy_goarch}.tar.gz" -o /tmp/caddy.tar.gz
 echo "${caddy_sha256}  /tmp/caddy.tar.gz" | sha256sum -c -
 tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
 mv -f /tmp/caddy /usr/local/bin/caddy
@@ -168,7 +175,7 @@ case "${frp_arch}" in
     aarch64) frp_goarch="arm64"; frp_sha256="3990f396a9a490ee7f0e5f355287750ed41520064ed999eab443b5e9a78d773d" ;;
     *) echo "Unsupported architecture for frp: ${frp_arch}" >&2; exit 1 ;;
 esac
-curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${frp_goarch}.tar.gz" -o /tmp/frp.tar.gz
+curl -fsSL $CURL_RETRY_FLAGS "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${frp_goarch}.tar.gz" -o /tmp/frp.tar.gz
 echo "${frp_sha256}  /tmp/frp.tar.gz" | sha256sum -c -
 tar -xzf /tmp/frp.tar.gz -C /tmp "frp_${FRP_VERSION}_linux_${frp_goarch}/frpc"
 mv -f "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}/frpc" /usr/local/bin/frpc
@@ -176,7 +183,7 @@ chmod 0755 /usr/local/bin/frpc
 rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}"
 
 # uv (pinned). Installs to /root/.local/bin.
-curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
+curl -LsSf $CURL_RETRY_FLAGS "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
 export PATH="/root/.local/bin:$PATH"
 
 # Ensure a uv-managed Python that satisfies the workspace lockfile (>=3.12).
@@ -204,7 +211,7 @@ if ! grep -q '/home/user/.mngr/env' /root/.bashrc 2>/dev/null; then
 fi
 
 # Claude Code CLI (pinned; the provisioning-time version check expects this exact version).
-curl -fsSL https://claude.ai/install.sh > /tmp/install_claude.sh
+curl -fsSL $CURL_RETRY_FLAGS https://claude.ai/install.sh > /tmp/install_claude.sh
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
 # Fail the build/provision right here on a pin mismatch. mngr's own runtime
