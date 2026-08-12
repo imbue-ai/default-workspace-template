@@ -83,19 +83,8 @@ placeholder and an unserved `/assets` path are both HTTP 200s to `/api/agents`,
 so the probe confirms the app shell is the real app and that its module script
 comes back as JavaScript.
 
-## When the bundle is missing
-
-`static/` is gitignored build output, produced at workspace creation
-(`system/scripts/build_workspace.sh`) and by the reveal above. Nothing rebuilds
-it at service start, so a code refresh that replaces the tree can leave the
-backend with nothing to serve. In that state `/` serves a placeholder page that
-offers to rebuild the bundle in place -- `POST /api/frontend-build` starts the
-rebuild on a background thread and `GET /api/frontend-build` reports its
-progress, which is what the page polls before reloading itself. Every app-shell
-response carries an `X-Frontend-Built` header so the placeholder is
-distinguishable from the real app without pattern-matching its markup.
-
-That reload is delegated to `system/scripts/refresh_workspace_view.py`, the shared
+The reveal's reload of every open view is delegated to
+`system/scripts/refresh_workspace_view.py`, the shared
 helper every flow that restarts the services agent uses. It fires two channels,
 because neither reaches every viewer: a `reload_system_interface` op, and the Minds
 app's own refresh endpoint (which lands even when the page's WebSocket never came
@@ -109,6 +98,18 @@ assets. That reaches every attached browser, including anyone the workspace was
 shared with over a Cloudflare tunnel. This is distinct from
 `system/scripts/layout.py refresh`, which only reloads a single inner
 iframe/panel for arranging the workspace.
+
+## When the bundle is missing
+
+`static/` is gitignored build output, produced at workspace creation
+(`system/scripts/build_workspace.sh`) and by the reveal above. Nothing rebuilds
+it at service start, so a code refresh that replaces the tree can leave the
+backend with nothing to serve. In that state `/` serves a placeholder page that
+offers to rebuild the bundle in place -- `POST /api/frontend-build` starts the
+rebuild on a background thread and `GET /api/frontend-build` reports its
+progress, which is what the page polls before reloading itself. Every app-shell
+response carries an `X-Frontend-Built` header so the placeholder is
+distinguishable from the real app without pattern-matching its markup.
 
 ## Named layouts
 
