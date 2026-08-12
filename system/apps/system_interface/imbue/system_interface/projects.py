@@ -188,12 +188,15 @@ def _validated_glyph(glyph: int) -> int:
 
 
 @pure
-def _validated_ref(ref: str) -> str:
+def validated_member_ref(ref: str) -> str:
     """Whitespace-trim a member ref, rejecting one that is empty.
 
     Refs are opaque here beyond being non-blank: the grammar belongs to the
     frontend and ``layout_ops``, and a store that second-guessed it would
-    reject perfectly good members every time a new panel kind appears.
+    reject perfectly good members every time a new panel kind appears. Public
+    because a ref is the machine's own name for an object rather than a
+    projects detail -- ``member_titles`` files names under the same keys and
+    borrows this rather than restating what a ref may be.
     """
     trimmed = ref.strip()
     if not trimmed:
@@ -513,7 +516,7 @@ def projects_showing(layout_dir: Path, ref: str) -> list[str]:
     An empty list is a real answer, not a miss: an object filed in no project
     still exists and still shows up in Everything.
     """
-    member_ref = _validated_ref(ref)
+    member_ref = validated_member_ref(ref)
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         return [
@@ -530,7 +533,7 @@ def add_member(layout_dir: Path, project_id: str, ref: str) -> None:
     a machine runs can sit in every project that cares about it.
     Raises ProjectNotFoundError for an unknown id.
     """
-    member_ref = _validated_ref(ref)
+    member_ref = validated_member_ref(ref)
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         entry = meta["project_by_id"].get(project_id)
@@ -552,7 +555,7 @@ def remove_member(layout_dir: Path, project_id: str, ref: str) -> None:
     the project does not hold is a no-op; an unknown project id raises
     ProjectNotFoundError.
     """
-    member_ref = _validated_ref(ref)
+    member_ref = validated_member_ref(ref)
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         entry = meta["project_by_id"].get(project_id)

@@ -42,12 +42,13 @@ export interface PanelParams {
   chatAgentId?: string;
   url?: string;
   title?: string;
-  // The name the user (or an agent's ``layout.py rename``) gave this tab, as
-  // opposed to the one derived from what the tab shows. Set only by a rename,
-  // and always alongside ``title``, which is what the strip draws. Kept apart
-  // from it so a *chosen* name can win where a derived one would not: the
-  // sidebar prefers it over the object's own name, and a tmux session rename
-  // leaves it alone rather than taking it back off the tab.
+  // LEGACY, read-only. The name a rename used to write onto the panel, back
+  // when a name was kept with the tab showing an object and therefore in one
+  // view's saved layout. Names are filed by ref now (see models/MemberTitles),
+  // so nothing writes this any more -- but a layout saved before the change is
+  // still carrying one, and losing a name on upgrade would be worse than
+  // reading a field nobody sets. It is the last fallback behind the store, so a
+  // rename since the upgrade always wins over it.
   customTitle?: string;
   subagentSessionId?: string;
   // Workspace service name this iframe is tied to (e.g. "web", "api").

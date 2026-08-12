@@ -1,16 +1,17 @@
 /**
- * The two decisions behind renaming a tab, kept apart from the two places that
- * offer it: the double-click editor on the tab itself, and the same gesture on
- * a row of the project settings dialog's "In this project" list.
+ * The two decisions behind renaming an object, kept apart from the two places
+ * that offer it: the double-click editor on the tab itself, and the same
+ * gesture on a row of the project settings dialog's "In this project" list.
  *
  * Both go through the same rename in the end, so they have to agree on what a
- * typed title becomes and on which objects can carry one at all. Neither answer
+ * typed title becomes and on which rows can be renamed at all. Neither answer
  * needs a DOM, a panel or a project, which is why they live here.
  */
 
 /** Longest title kept. Far more than the 220px tab ceiling can show -- the
  *  strip fades the overflow rather than ellipsizing it -- but short enough that
- *  a pasted paragraph does not end up in the view's saved layout. */
+ *  a pasted paragraph does not end up in the machine's title store. Matches the
+ *  backend's ``MAX_MEMBER_TITLE_LENGTH``, which rejects anything longer. */
 export const MAX_TAB_TITLE_LENGTH = 120;
 
 /**
@@ -33,14 +34,20 @@ export function normalizeTabTitle(raw: string): string | null {
 /**
  * Why this object cannot be renamed right now, or null when it can.
  *
- * A title belongs to the panel showing the object and is saved with that panel
- * in the view's layout, so a backgrounded member -- still running, just not
- * docked -- has nowhere to keep one. Rather than take a name and quietly drop
- * it, the affordance is refused, and this sentence is the tooltip that says so.
+ * A name is filed by REF and belongs to the object rather than to the panel
+ * showing it (see models/MemberTitles), so *being open is no longer a
+ * condition*: a backgrounded member -- still running, just not docked -- is
+ * renameable like any other, because the name has somewhere to live either way.
+ * Nothing a view lists is refused on what it is.
+ *
+ * What is left is the settings dialog's own staging. A row already marked for
+ * removal is struck through and on its way out of that list, so it is not
+ * offered a name in the same visit; the removal is undone with one click, and
+ * the rename is there again. This sentence is the tooltip that says so.
  */
-export function tabRenameBlockedReason(row: { isOpen: boolean }): string | null {
-  if (!row.isOpen) {
-    return "Open this to rename it. A name is kept with the tab showing it, so there is nowhere to put one while it is closed.";
+export function tabRenameBlockedReason(row: { isStagedForRemoval: boolean }): string | null {
+  if (row.isStagedForRemoval) {
+    return "This is being removed from the project on save. Undo the removal to rename it.";
   }
   return null;
 }

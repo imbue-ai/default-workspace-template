@@ -29,6 +29,7 @@ from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.layout_ops import LayoutMutex
+from imbue.system_interface.member_titles import MAX_MEMBER_TITLE_LENGTH
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
@@ -2623,6 +2624,138 @@ def test_delete_project_panel_also_unfiles_the_member(
     panel_only = client.post("/api/projects/panels/terminal-panel-1/delete")
     assert panel_only.status_code == 200
     assert panel_only.get_json() == {"project_ids": []}
+
+
+def test_set_member_title_names_the_object_machine_wide(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A name is filed under the ref, so every view showing it reads the same one."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    response = client.post("/api/member-titles", json={"ref": "service:docs-viewer", "title": "  Docs  "})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ref": "service:docs-viewer", "title": "Docs"}
+    assert client.get("/api/member-titles").get_json() == {"titles": {"service:docs-viewer": "Docs"}}
+
+
+def test_set_member_title_overwrites_and_clears(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Renaming again replaces the name; an empty one puts the object back to its own."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/member-titles", json={"ref": "terminal:terminal-1", "title": "Build"}).status_code == 200
+
+    overwritten = client.post("/api/member-titles", json={"ref": "terminal:terminal-1", "title": "Deploy"})
+    assert overwritten.get_json() == {"ref": "terminal:terminal-1", "title": "Deploy"}
+
+    cleared = client.post("/api/member-titles", json={"ref": "terminal:terminal-1", "title": "   "})
+    assert cleared.status_code == 200
+    assert cleared.get_json() == {"ref": "terminal:terminal-1", "title": None}
+    assert client.get("/api/member-titles").get_json() == {"titles": {}}
+
+
+def test_member_titles_do_not_need_the_object_to_be_filed_anywhere(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown ref is named without complaint, and an unnamed one is simply absent.
+
+    Nothing checks a ref against the machine or against a project: naming an
+    object filed in no project is ordinary (Everything is where those show up),
+    and a backgrounded member has no panel to hang a name on, which is exactly
+    what keying by ref is for.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    response = client.post("/api/member-titles", json={"ref": "chat:agent-nowhere", "title": "Scratch"})
+
+    assert response.status_code == 200
+    assert client.get("/api/member-titles").get_json()["titles"] == {"chat:agent-nowhere": "Scratch"}
+    # Clearing a name nothing ever had is a no-op rather than a 404.
+    assert client.post("/api/member-titles", json={"ref": "chat:agent-elsewhere", "title": ""}).status_code == 200
+
+
+def test_set_member_title_rejects_bad_bodies_and_over_long_names(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank ref, a non-string title, and a name past the cap are all 400s."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    assert client.post("/api/member-titles", json={"ref": " ", "title": "Docs"}).status_code == 400
+    assert client.post("/api/member-titles", json={"title": "Docs"}).status_code == 400
+    assert client.post("/api/member-titles", json={"ref": "service:web"}).status_code == 400
+    assert client.post("/api/member-titles", json={"ref": "service:web", "title": 7}).status_code == 400
+
+    too_long = client.post(
+        "/api/member-titles",
+        json={"ref": "service:web", "title": "n" * (MAX_MEMBER_TITLE_LENGTH + 1)},
+    )
+    assert too_long.status_code == 400
+    assert str(MAX_MEMBER_TITLE_LENGTH) in too_long.get_json()["detail"]
+    assert client.get("/api/member-titles").get_json() == {"titles": {}}
+
+
+def test_delete_project_panel_drops_the_objects_title(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Destroying an object drops its name, so a reused ref inherits no dead one.
+
+    Terminal names are handed out again once a session is gone, so a name left
+    behind would land on whatever answers to that ref next.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-4"}).status_code == 200
+    assert client.post("/api/member-titles", json={"ref": "terminal:terminal-4", "title": "Build"}).status_code == 200
+    assert client.post("/api/member-titles", json={"ref": "chat:agent-7", "title": "Planning"}).status_code == 200
+
+    response = client.post("/api/projects/panels/terminal-panel-4/delete", json={"ref": "terminal:terminal-4"})
+
+    assert response.status_code == 200
+    # Only the destroyed object's name goes; nothing else on the machine moves.
+    assert client.get("/api/member-titles").get_json() == {"titles": {"chat:agent-7": "Planning"}}
+
+
+def test_member_title_changes_broadcast_to_every_client(app: Flask) -> None:
+    """Naming, renaming and destroying each announce the object's current name.
+
+    A title belongs to the object, so a client that never opened the project
+    holding it -- or that lists it backgrounded, with no panel at all -- still
+    has to repaint; hence a plain broadcast rather than a layout-targeted one.
+    """
+    client = app.test_client()
+    client_queue = _register_fake_client(app, "client-1", "desktop")
+
+    assert client.post("/api/member-titles", json={"ref": "terminal:terminal-4", "title": "Build"}).status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_title_changed",
+        "ref": "terminal:terminal-4",
+        "title": "Build",
+    }
+
+    assert client.post("/api/member-titles", json={"ref": "terminal:terminal-4", "title": ""}).status_code == 200
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_title_changed",
+        "ref": "terminal:terminal-4",
+        "title": None,
+    }
+
+    assert client.post("/api/member-titles", json={"ref": "terminal:terminal-4", "title": "Build"}).status_code == 200
+    assert _next_broadcast_message(client_queue)["title"] == "Build"
+
+    assert (
+        client.post("/api/projects/panels/terminal-panel-4/delete", json={"ref": "terminal:terminal-4"}).status_code
+        == 200
+    )
+    assert _next_broadcast_message(client_queue) == {
+        "type": "member_title_changed",
+        "ref": "terminal:terminal-4",
+        "title": None,
+    }
 
 
 def _app_with_registered_app(name: str) -> Flask:
