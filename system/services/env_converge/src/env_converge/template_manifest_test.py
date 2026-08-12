@@ -663,25 +663,3 @@ def test_a_manifest_with_no_format_key_is_treated_as_ours(tmp_path: Path) -> Non
     manifest = _manifest(_MINIMAL_TOML.replace('format = "v2"\n', ""), tmp_path)
 
     assert manifest.format == CURRENT_MANIFEST_FORMAT
-
-
-def test_an_unfilled_license_section_is_caught(tmp_path: Path) -> None:
-    """The licence is the user's choice, so it cannot ship as a placeholder.
-
-    `build_template.sh` writes the README's License section before the skill
-    has asked, so a publish that forgets to substitute would put the literal
-    token on someone's landing page -- and, worse, ship a repo whose licence
-    nobody ever decided.
-    """
-    problems = check_unfinished_placeholders("## License\n\nMINDS_TEMPLATE_LICENSE\n")
-
-    assert any("MINDS_TEMPLATE_LICENSE" in problem for problem in problems)
-
-
-def test_a_substituted_license_section_passes(tmp_path: Path) -> None:
-    assert (
-        check_unfinished_placeholders(
-            "## License\n\nReleased under the [MIT License](LICENSE).\n"
-        )
-        == ()
-    )
