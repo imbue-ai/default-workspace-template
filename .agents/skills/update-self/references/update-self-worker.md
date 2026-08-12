@@ -341,8 +341,9 @@ record which branch applied (with its evidence) in your report:
   dependent **and** you authored no in-branch edits of your own -- a 4a mirror
   edit, or any other commit you added on top of the merge, is merge work even
   though `classify-merge` (which diffs `HEAD^1` against the base) cannot see
-  it, and puts you on the run branch below. Every changed file then arrives exactly as upstream shipped and
-  tested it, and there is nothing local for a review to protect. Running
+  it, and puts you on the run branch below. Every changed file then arrives
+  exactly as upstream shipped and tested it, and there is nothing local for a
+  review to protect. Running
   `/autofix` here would review *upstream's* code and could apply local fixes to
   it -- manufacturing exactly the local divergence a future update would have
   to reconcile -- so on a clean pull the skip is the correct outcome, not a
