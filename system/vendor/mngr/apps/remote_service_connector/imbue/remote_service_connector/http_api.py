@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from imbue.remote_service_connector.errors import AcmeIssuanceError
 from imbue.remote_service_connector.errors import CleanupGrantBudgetExhaustedError
 from imbue.remote_service_connector.errors import CloudflareApiError
+from imbue.remote_service_connector.errors import EmailNotVerifiedError
 from imbue.remote_service_connector.errors import InvalidCsrError
 from imbue.remote_service_connector.errors import InvalidPaidListEntryError
 from imbue.remote_service_connector.errors import InvalidR2BucketNameError
@@ -57,6 +58,15 @@ def raise_as_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, R2BucketActiveWorkspaceError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, EmailNotVerifiedError):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "email_not_verified",
+                "email": exc.email,
+                "message": str(exc),
+            },
+        ) from exc
     if isinstance(exc, QuotaExceededError):
         raise HTTPException(
             status_code=403,

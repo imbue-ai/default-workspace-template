@@ -1,3 +1,6 @@
+import stat
+import subprocess
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -489,3 +492,78 @@ def test_build_slice_teardown_commands_quotes_unsafe_names() -> None:
     assert ";" not in commands[0].replace("'a b; rm -rf /'", "")
     assert commands[0] == "limactl delete --force 'a b; rm -rf /'"
     assert commands[1] == "limactl disk delete --force 'd$x'"
+
+
+def _run_container_file_write_command(target: Path, content: str, is_seed_only: bool) -> None:
+    """Execute the built write command locally through ``sh``, failing loudly on a non-zero exit."""
+    command = hosts_mod.build_container_file_write_command(str(target), content, is_seed_only=is_seed_only)
+    result = subprocess.run(["sh", "-c", command], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_build_container_file_write_command_writes_shell_hostile_content_with_0600_mode(tmp_path: Path) -> None:
+    """Verify the built command creates the file byte-for-byte -- including content full of
+    shell metacharacters (quotes, dollars, backticks, newlines) -- with 0600 permissions,
+    creating parent directories as needed, and that a second non-seed write replaces the
+    content (share.env must be rewritten on every enable to rotate the relay token). The
+    test would fail if quoting or the base64 transport mangled the bytes, or if a plain
+    write skipped an existing file."""
+    target = tmp_path / "sub dir" / "share.env"
+    content = "export SHARE_RELAY_TOKEN='a b'\n$HOME `whoami` \\ end\n"
+    _run_container_file_write_command(target, content, is_seed_only=False)
+    assert target.read_text() == content
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    _run_container_file_write_command(target, "rotated\n", is_seed_only=False)
+    assert target.read_text() == "rotated\n"
+
+
+def test_build_container_file_write_command_seed_only_creates_when_absent_and_skips_when_present(
+    tmp_path: Path,
+) -> None:
+    """Verify seed-if-absent semantics: the first seed write creates the file, but once the
+    file exists a later seed write leaves it byte-for-byte untouched (and still exits 0).
+    This is what keeps re-enabling sharing from clobbering a grants document the user has
+    edited since the first seed. The test would fail if the existence guard were dropped,
+    inverted, or mis-quoted so the write ran anyway."""
+    target = tmp_path / "share_grants.toml"
+    seed = "[workspace]\nemails = []\nemail_domains = []\n"
+    _run_container_file_write_command(target, seed, is_seed_only=True)
+    assert target.read_text() == seed
+
+    edited = '[workspace]\nemails = ["friend@example.com"]\nemail_domains = []\n'
+    target.write_text(edited)
+    _run_container_file_write_command(target, seed, is_seed_only=True)
+    assert target.read_text() == edited
+
+
+def test_parse_entry_label_from_apps_toml_returns_the_shell_services_label() -> None:
+    apps_toml = (
+        '[[apps]]\nname = "owner-exec"\nlabel = "owner-exec-abc123"\n\n'
+        '[[apps]]\nname = "system_interface"\nlabel = "system_interface-elm7wydc"\n'
+    )
+    assert hosts_mod._parse_entry_label_from_apps_toml(apps_toml) == "system_interface-elm7wydc"
+
+
+def test_parse_entry_label_from_apps_toml_returns_none_when_the_shell_service_is_absent() -> None:
+    # A workspace whose services have not registered yet (or registered other
+    # services only) yields no entry label; the share still comes up.
+    assert hosts_mod._parse_entry_label_from_apps_toml("") is None
+    assert hosts_mod._parse_entry_label_from_apps_toml('[[apps]]\nname = "owner-exec"\nlabel = "x1"\n') is None
+
+
+def test_parse_entry_label_from_apps_toml_returns_none_for_malformed_toml() -> None:
+    assert hosts_mod._parse_entry_label_from_apps_toml("this is not toml [") is None
+
+
+def test_parse_entry_label_from_apps_toml_refuses_a_label_that_is_not_a_single_origin_label() -> None:
+    # apps.toml is writable from inside the workspace and the label is
+    # interpolated into https://<label>.<domain>/ URLs by the chrome, so it
+    # gets the same shape rule POST /shares enforces on client-supplied labels.
+    hostile = '[[apps]]\nname = "system_interface"\nlabel = "evil.example.com/#"\n'
+    assert hosts_mod._parse_entry_label_from_apps_toml(hostile) is None
+
+
+def test_parse_entry_label_from_apps_toml_normalizes_the_label() -> None:
+    apps_toml = '[[apps]]\nname = "system_interface"\nlabel = " System_Interface-ABC "\n'
+    assert hosts_mod._parse_entry_label_from_apps_toml(apps_toml) == "system_interface-abc"

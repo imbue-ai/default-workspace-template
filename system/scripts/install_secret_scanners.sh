@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pinned installer for the two secret-scanner binaries the
-# publish-inspiration skill's scan gate (scan_secrets.sh) hard-requires:
+# publish-template skill's scan gate (scan_secrets.sh) hard-requires:
 #
 #   - betterleaks (MIT)        -- gitleaks' successor, by the gitleaks author
 #   - kingfisher  (Apache-2.0) -- MongoDB's scanner; the scan gate always

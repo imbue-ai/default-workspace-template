@@ -17,12 +17,18 @@
 import m from "mithril";
 import type { ShellState } from "./shell-state";
 import { isAppOverlayPath, isWorkspaceOverlayPath, overlayBehindWorkspaceId } from "./classify";
+import { noticeBandFor } from "./notice-band";
+import { NoticeBand } from "./NoticeBand";
 import { OverlayBackdrop } from "./OverlayBackdrop";
 import { SidebarMenu } from "./SidebarMenu";
 import { Titlebar } from "./Titlebar";
 import { WorkspaceFrame } from "./WorkspaceFrame";
+import { LocalPageNotice } from "./LocalPageNotice";
+import { RecoveryModal } from "../recovery/RecoveryModal";
+import { WebLoginModal } from "../components/WebLoginModal";
 import { DialogCloseButton } from "../components/Modal";
 import { Icon16 } from "../components/Icon";
+import { electronBridge } from "../../electron-bridge";
 
 interface AppOverlayAttrs {
   shell: ShellState;
@@ -155,17 +161,17 @@ export function Shell(): m.Component<ShellAttrs> {
 
       const routeSearch = shell.currentRouteSearch();
       const isAppOverlay = isAppOverlayPath(routePath);
-      // The New machine inspiration stepper floats as a modal only when it is
+      // The New machine template stepper floats as a modal only when it is
       // over a machine (?workspace=); opened with none it redirects to the full
       // create form, so it is not an overlay then.
-      const isInspirationRoute = routePath === "/create/inspiration";
+      const isTemplateRoute = routePath === "/create/template";
       // The workspace surface kept mounted underneath: the agent surface itself,
-      // or the workspace a Get help / inbox / inspiration modal was opened over.
+      // or the workspace a Get help / inbox / template modal was opened over.
       // Rendering it at a stable vtree position keeps its iframe from reloading
       // across open/close.
       const behindWorkspaceId =
-        isAppOverlay || isInspirationRoute ? overlayBehindWorkspaceId(routePath, routeSearch) : null;
-      const isInspirationModal = isInspirationRoute && behindWorkspaceId !== null;
+        isAppOverlay || isTemplateRoute ? overlayBehindWorkspaceId(routePath, routeSearch) : null;
+      const isTemplateModal = isTemplateRoute && behindWorkspaceId !== null;
       const surfaceWorkspaceId = workspaceParam ?? behindWorkspaceId;
       const localScrollClass =
         "bg-surface-primary overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]";
@@ -176,9 +182,13 @@ export function Shell(): m.Component<ShellAttrs> {
           : m(
               "div#local-page-scroll",
               { class: localScrollClass },
+              // LocalPageNotice sits here rather than in each page: the
+              // takeover it replaced covered every window, so leaving pages to
+              // opt in would silently drop the condition on the ones that
+              // forget. Pages that want it inline place their own.
               // An app modal over Home keeps Home painted behind its backdrop;
               // otherwise the routed page is the surface itself.
-              isAppOverlay ? homeContent : content,
+              [m(LocalPageNotice), isAppOverlay ? homeContent : content],
             );
 
       let overlay: m.Children = null;
@@ -190,15 +200,68 @@ export function Shell(): m.Component<ShellAttrs> {
         overlay = m(InboxOverlay, { shell }, content);
       } else if (isAppOverlay) {
         overlay = m(AppOverlay, { shell, cardClass: appOverlayCardClass(routePath) }, content);
-      } else if (isInspirationModal) {
-        // The New machine inspiration stepper over a live machine: a centered
+      } else if (isTemplateModal) {
+        // The New machine template stepper over a live machine: a centered
         // card, dismissed back to that machine (closeAppOverlay handles it).
         overlay = m(AppOverlay, { shell, cardClass: "w-[600px] min-h-0" }, content);
       }
 
+      // The band speaks for whichever machine is painted, so it is keyed to the
+      // surface rather than the route: the workspace route's own frame, and
+      // equally the machine an app-level modal was opened over, which stays
+      // mounted behind the backdrop. A hub page with no machine behind it
+      // reports these conditions in its own flow instead.
+      //
+      // Not gated on capture mode, unlike the reconnecting indicator above:
+      // that one reads live channel liveness, which no capture has, while
+      // these read health the fixture bootstrap sets deterministically. The
+      // harness is how these surfaces get looked at.
+      const agentScoped =
+        surfaceWorkspaceId === null ? null : shell.stores.workspaces.toAgentScopedId(surfaceWorkspaceId);
+      const health = agentScoped === null ? "healthy" : shell.stores.health.statusFor(agentScoped);
+      const band = noticeBandFor(
+        health,
+        shell.stores.health.discoveryHealth,
+        surfaceWorkspaceId !== null,
+        electronBridge.isDesktop,
+      );
+      // The card is a modal of its own, so it is raised only where it can sit
+      // on top: the machine's own route. It out-z-indexes the docked options
+      // overlay there, but an app-level modal shares its z and is emitted after
+      // it, so a card raised behind one would be dimmed and unclickable -- and
+      // its capture-phase Escape listener would still take the key, spending
+      // the episode's one dismissal on a card the user never saw. A machine
+      // behind an app modal keeps its band and gets its card back on the way
+      // out.
+      const isRecoveryOpen =
+        workspaceParam !== null && agentScoped !== null && shell.isRecoveryModalOpenFor(agentScoped);
+
       return m("div", { style: "display: contents" }, [
         m(Titlebar, { shell, routePath }),
         m(SidebarMenu, { shell }),
+        band !== null
+          ? m(NoticeBand, {
+              shell,
+              payload: band,
+              onAction: () => {
+                if (band.action?.kind === "restart-app") {
+                  electronBridge.restartApp();
+                } else if (agentScoped !== null) {
+                  shell.openRecoveryModal(agentScoped);
+                }
+              },
+            })
+          : null,
+        isRecoveryOpen && workspaceParam !== null && agentScoped !== null
+          ? m(RecoveryModal, {
+              workspaceAnyId: workspaceParam,
+              isSidebarAbove: shell.isSidebarOpen,
+              onClose: () => shell.closeRecoveryModal(),
+            })
+          : null,
+        // The browser sign-in waiting modal: any page (welcome, accounts,
+        // create) can trigger it through the shared webLogin model.
+        m(WebLoginModal),
         isReconnecting
           ? m(
               "div",

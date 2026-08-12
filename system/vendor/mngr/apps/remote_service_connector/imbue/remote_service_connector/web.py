@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from imbue.modal_app_kit.deploy import DEPLOY_ID_ENV_VAR
 from imbue.remote_service_connector.accounts import router as accounts_router
+from imbue.remote_service_connector.accounts_web import router as accounts_web_router
 from imbue.remote_service_connector.auth_proxy import router as auth_proxy_router
 from imbue.remote_service_connector.hosts import router as hosts_router
 from imbue.remote_service_connector.llm_keys import router as llm_keys_router
@@ -25,6 +26,7 @@ from imbue.remote_service_connector.sync import router as sync_router
 
 web_app = FastAPI()
 web_app.include_router(auth_proxy_router)
+web_app.include_router(accounts_web_router)
 web_app.include_router(sync_router)
 web_app.include_router(hosts_router)
 web_app.include_router(r2_buckets_router)

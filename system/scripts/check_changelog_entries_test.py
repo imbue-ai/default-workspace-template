@@ -42,7 +42,11 @@ def _init_repo(tmp_path: Path) -> Path:
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
     # Two real projects (pyproject.toml present) plus the dev bucket layout.
-    for rel in ("system/libs/alpha/pyproject.toml", "system/apps/beta/pyproject.toml", "system/services/gamma/pyproject.toml"):
+    for rel in (
+        "system/libs/alpha/pyproject.toml",
+        "system/apps/beta/pyproject.toml",
+        "system/services/gamma/pyproject.toml",
+    ):
         p = repo / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("[project]\nname='x'\n")
@@ -134,3 +138,57 @@ def test_resolve_diff_base_refuses_head_collision(tmp_path: Path) -> None:
     # Still on main, so main resolves to HEAD; no other base ref exists.
     with pytest.raises(RuntimeError):
         gate.resolve_diff_base(repo)
+
+
+def test_resolve_diff_base_refuses_an_unresolvable_named_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A named base that does not resolve must raise, never fall back to main.
+
+    On a stacked PR the real base is several commits above main, so falling
+    back diffs the whole stack and demands entries the PR does not owe. It
+    presented as flakiness -- the same files green on one run and red on the
+    next -- because the answer was confidently wrong rather than absent.
+    """
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("changed\n")
+    _git(repo, "commit", "-qam", "move HEAD off the base")
+    monkeypatch.setenv("GITHUB_BASE_REF", "preston/no-such-branch")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        gate.resolve_diff_base(repo)
+
+    assert "preston/no-such-branch" in str(excinfo.value)
+    assert "main" in str(excinfo.value)
+
+
+def test_resolve_diff_base_uses_a_named_base_that_does_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "stacked-base")
+    (repo / "README.md").write_text("changed\n")
+    _git(repo, "commit", "-qam", "move HEAD off the base")
+    monkeypatch.setenv("GITHUB_BASE_REF", "stacked-base")
+
+    assert gate.resolve_diff_base(repo) == "stacked-base"
+
+
+def test_changelog_base_ref_overrides_the_reserved_github_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workflow cannot fix GITHUB_BASE_REF, so it must be overridable.
+
+    GitHub reserves the `GITHUB_` prefix: a job-level `env: GITHUB_BASE_REF:`
+    is echoed in the log and then ignored, leaving the runner's value in place.
+    On a stacked PR that value was `main` instead of the parent branch, so the
+    only way to pass the payload's answer through is a name GitHub does not own.
+    """
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "stacked-base")
+    (repo / "README.md").write_text("changed\n")
+    _git(repo, "commit", "-qam", "move HEAD off the base")
+    monkeypatch.setenv("GITHUB_BASE_REF", "main")
+    monkeypatch.setenv("CHANGELOG_BASE_REF", "stacked-base")
+
+    assert gate.resolve_diff_base(repo) == "stacked-base"
