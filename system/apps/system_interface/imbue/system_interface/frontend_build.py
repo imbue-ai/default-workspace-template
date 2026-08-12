@@ -173,6 +173,12 @@ class FrontendBuildService(MutableModel):
         elapsed = time.monotonic() - started_at
         if elapsed > slow_threshold:
             logger.warning("Rebuilt the interface slowly: {} took {:.0f}s", " ".join(command), elapsed)
+        # Checked before the exit status, which does not carry this: the runner
+        # stops an overrunning command with a signal, so a timeout otherwise
+        # reads to the user as "exit -15" -- and if the command happened to
+        # finish while it was being stopped, as a success.
+        if result.is_timed_out:
+            raise FrontendBuildError(f"`{' '.join(command)}` did not finish within {timeout:.0f}s and was stopped.")
         if result.returncode != 0:
             raise FrontendBuildError(_describe_command_failure(command, result))
 

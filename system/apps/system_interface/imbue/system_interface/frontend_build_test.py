@@ -22,13 +22,16 @@ _BUILD_ARGV = ["npm", "run", "build"]
 _INSTALL_ARGV = ["npm", "ci"]
 
 
-def _finished(returncode: int = 0, stdout: str = "", stderr: str = "") -> FinishedProcess:
+def _finished(
+    returncode: int = 0, stdout: str = "", stderr: str = "", is_timed_out: bool = False
+) -> FinishedProcess:
     """A real command result, so the fakes match what the runner actually returns."""
     return FinishedProcess(
         returncode=returncode,
         stdout=stdout,
         stderr=stderr,
         command=("npm",),
+        is_timed_out=is_timed_out,
         is_output_already_logged=False,
     )
 
@@ -128,6 +131,22 @@ def test_build_that_writes_no_bundle_is_reported_as_failed(tmp_path: Path) -> No
     status = service.current_status()
     assert status.phase == FrontendBuildPhase.FAILED
     assert status.error is not None and "wrote no bundle" in status.error
+
+
+def test_a_build_stopped_by_its_timeout_is_reported_as_a_timeout(tmp_path: Path) -> None:
+    # The runner stops an overrunning command with a signal and reports it on
+    # is_timed_out, not through the exit status -- which can even be 0 if the
+    # command finished while it was being stopped. Judging on the exit status
+    # alone would call that a successful rebuild, and in the ordinary case would
+    # tell the user "exit -15" instead of naming the timeout.
+    runner = _RecordingRunner(result=_finished(returncode=0, is_timed_out=True), bundle_to_write=tmp_path / "static")
+    service = _build_service(tmp_path, runner, has_node_modules=True)
+
+    service._run_build_in_background()
+
+    status = service.current_status()
+    assert status.phase == FrontendBuildPhase.FAILED
+    assert status.error is not None and "did not finish within" in status.error
 
 
 def test_a_command_that_cannot_start_is_reported_rather_than_escaping(tmp_path: Path) -> None:
