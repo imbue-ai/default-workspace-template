@@ -996,7 +996,12 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   return {
     element,
     init(parameters: TabPartInitParameters) {
-      content.textContent = parameters.title ?? "";
+      // The api's title, not ``parameters.title``: init parameters are the
+      // panel's CREATION-time snapshot, and dockview builds a fresh renderer
+      // for every overflow-dropdown row long after ``syncTabTitlesFromStore``
+      // has renamed the panel -- seeding from the snapshot would put the raw
+      // ``terminal-N`` or agent id back on the row.
+      content.textContent = parameters.api.title ?? parameters.title ?? "";
       kindIcon.innerHTML = tabIconMarkupForPanel(panelParams.get(options.id));
       disposables.push(
         parameters.api.onDidTitleChange((event) => {
