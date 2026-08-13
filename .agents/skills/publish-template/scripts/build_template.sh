@@ -460,7 +460,8 @@ ${included_paths_block}
 with prose that makes the list above self-explanatory: for each included path,
 say what it is (an app or lib with code, a skill, data) and what role it plays.
 Then describe how the pieces wire together at runtime: which supervisord
-programs (in system/supervisord.conf) run them, which ports they listen on and how
+programs (each in its own system/supervisord.conf.d/<name>.conf) run them,
+which ports they listen on and how
 those are registered in forward_port.py (if applicable), and any scripts or
 services that connect them. -->
 
