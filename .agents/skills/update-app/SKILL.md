@@ -6,7 +6,7 @@ description: "Use immediately whenever the user asks you to update, change, fix,
 # Changing an existing app or service
 
 Both apps and background services run as a `[program:<name>]` under
-supervisord (see `system/supervisord.conf`). They differ only in whether
+supervisord (one program per file under `system/supervisord.conf.d/`). They differ only in whether
 there's a tab to refresh:
 
 - **App** -- the user opens it as a tab rendering at the service's own

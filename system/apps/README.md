@@ -19,7 +19,7 @@ Python packages in this folder are picked up automatically by the workspace's
 root `pyproject.toml` dependency the scaffolder adds.
 
 An app usually runs as a supervised service (a `[program:*]` entry in
-`system/supervisord.conf`) and registers its port via
+`system/supervisord.conf.d/<name>.conf`) and registers its port via
 `system/scripts/forward_port.py`. An app that needs a continuously running
 background component keeps that service's code in its own folder here, named
 `<app>-<role>` in supervisord; standalone background services live in

@@ -32,7 +32,7 @@ curl -sf http://127.0.0.1:<port>/ -o /dev/null -w "%{http_code}\n"
 ```
 
 `<port>` is the port in the service's `forward_port.py --url` (see
-`system/supervisord.conf` or `data/.state/apps.toml`). Expected: `200`.
+`system/supervisord.conf.d/<name>.conf` or `data/.state/apps.toml`). Expected: `200`.
 
 Common failures:
 

@@ -26,4 +26,4 @@ needing to open them.
 Each is a uv workspace member (the `system/services/*` glob) with its own
 README. A background service that exists solely to support one app does NOT
 go here -- it lives in that app's folder under `system/apps/` and is named
-`<app>-<role>` in `system/supervisord.conf`.
+`<app>-<role>`, declared in its own `system/supervisord.conf.d/<name>.conf`.
