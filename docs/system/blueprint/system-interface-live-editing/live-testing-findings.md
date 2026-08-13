@@ -90,8 +90,9 @@ probing over loopback from outside the browser.
 ## Found during manual scripting exercise
 
 Container `minds-dev-gabriel-sysedit`, redeployed to DWT
-`submit/system-interface-live-editing-plan` + mngr `gabriel/denim-pigeon` and
-committed as `544b7b62` for a clean baseline. Live SI on port 8000 (`OBSERVE`),
+`submit/system-interface-live-editing-plan` + mngr `gabriel/denim-pigeon`, then
+committed for a clean baseline (`544b7b62` in the container's own workspace
+clone -- it resolves in neither repo here). Live SI on port 8000 (`OBSERVE`),
 preview on 51277 / wrapper 52325 (`FOLLOW`).
 
 ### 4. A FOLLOW instance freezes permanently if the live SI restarts under it
