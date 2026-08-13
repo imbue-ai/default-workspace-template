@@ -1,7 +1,7 @@
 # terminal
 
 The terminal tab: a web terminal served by [ttyd](https://github.com/tsl0922/ttyd),
-supervised as the `terminal` program in `system/supervisord.conf`.
+supervised as the `terminal` program, declared in `system/supervisord.conf.d/terminal.conf`.
 
 `run_ttyd.sh` registers the fixed port (7681) via
 `system/scripts/forward_port.py`, writes the discovery event, installs the

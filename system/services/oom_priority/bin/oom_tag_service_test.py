@@ -10,6 +10,7 @@ that the band is actually applied and survives the exec.
 from __future__ import annotations
 
 import configparser
+import glob
 import os
 import subprocess
 import sys
@@ -28,16 +29,31 @@ _USER_SERVICE_KEY = "user"
 
 
 def _command_by_supervisord_program() -> dict[str, str]:
-    """Each program / event listener ``system/supervisord.conf`` defines, and its command.
+    """Every program / event listener the workspace defines, and its command.
 
     supervisord's config is an ini file, so ``configparser`` reads it directly:
     that skips the file's prose comments (which mention the wrapper by name
     without invoking it) and folds continuation lines, both of which a
     line-by-line scan has to special-case. Interpolation is off because
     supervisord's own ``%(ENV_x)s`` syntax is not configparser's.
+
+    Programs live one per file under ``supervisord.conf.d/``, so the main config
+    alone declares only ``system_interface``. ``configparser`` does not follow
+    supervisord's ``[include]`` directive -- that is a supervisord feature, not
+    a configparser one -- so the globs are expanded here. Reading only the main
+    config would leave the band checks below asserting over a single program
+    while appearing to pass, which is exactly the silent gap they exist to
+    close.
     """
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(_SUPERVISORD_CONF)
+    conf_dir = _SUPERVISORD_CONF.parent
+    for pattern in (parser.get("include", "files", fallback="") or "").split():
+        # supervisord joins each pattern to the directory of the config
+        # declaring it, and expands %(here)s to that same directory;
+        # interpolation=None leaves that token verbatim, so substitute it.
+        expanded = str(conf_dir / pattern.replace("%(here)s", str(conf_dir)))
+        parser.read(sorted(glob.glob(expanded)))
     return {
         section.partition(":")[2]: parser[section].get("command", "")
         for section in parser.sections()

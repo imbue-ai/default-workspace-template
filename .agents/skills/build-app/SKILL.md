@@ -161,8 +161,9 @@ What gets generated:
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
 
-What gets updated -- nothing shared, which is what lets two agents scaffold two
-apps at once:
+What gets updated -- no shared file is authored, which is what lets two agents
+scaffold two apps at once (`uv.lock` is the exception: `uv sync` regenerates it,
+but it is derived, so it stays out of a creation's footprint):
 
 - Root `pyproject.toml` -- untouched. The `system/apps/*` member glob picks the
   package up and `uv sync --all-packages` installs it, so a scaffolded app
