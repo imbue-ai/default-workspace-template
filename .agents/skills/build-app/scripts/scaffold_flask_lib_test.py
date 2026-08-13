@@ -129,3 +129,20 @@ def test_name_already_declared_by_a_dropin_is_refused(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "supervisord.conf.d/browser.conf" in result.stderr
+
+
+def test_name_held_by_an_event_listener_is_refused(tmp_path: Path) -> None:
+    """supervisord holds programs and event listeners in one process-group namespace.
+
+    A duplicate there does not just shadow the other declaration -- it breaks the
+    config for every program at the next reread.
+    """
+    root = _make_workspace(tmp_path, {})
+    (root / "system/supervisord.conf.d/oom-tag-backstop.conf").write_text(
+        "[eventlistener:oom-tag-backstop]\ncommand=python3 backstop.py\n"
+    )
+
+    result = _scaffold(root, "oom-tag-backstop")
+
+    assert result.returncode != 0
+    assert "[eventlistener:oom-tag-backstop]" in result.stderr
