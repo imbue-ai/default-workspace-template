@@ -231,9 +231,9 @@ would (not just "the process is up"):
 
 **Verify before the user can see it, not after.** This step belongs in the
 window where you are the only one looking -- before the tab exists, or against a
-throwaway instance of your own (below). An open tab closes that window before
-you get to step 3: the service you would be driving is the one already in front
-of them, and refreshing it changes what they can see, not whose it is. Once a
+throwaway instance of your own (below). An open tab closes the first of those
+before you get to step 3: the service you would be driving is the one already in
+front of them, and refreshing it changes what they can see, not whose it is. Once a
 surface is in front of the user, poking at it yourself is both redundant and
 wrong: they are the verifier for anything they can perceive, and driving a
 service they are watching means your test actions land in their view and, for
@@ -243,9 +243,9 @@ its Step 4.
 
 So if the change is already surfaced when you finish it, the honest sequence is
 apply -> restart -> refresh -> *tell them what changed*, and the checking you do
-is the cheap kind that cannot touch their view: a `curl`, a health probe, an
-exit code, a log line. Save the thorough pass for the turn-end harden worker,
-which runs against its own instance.
+against the live service is the cheap kind that cannot touch their view: a
+`curl`, a health probe, an exit code, a log line. Save the thorough pass for the
+turn-end harden worker, which runs against its own instance.
 
 ### Protect the user's data while you verify
 
