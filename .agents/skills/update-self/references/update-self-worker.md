@@ -334,7 +334,7 @@ Whether the gates run is decided by a rule, not by your judgment. Apply it and
 record which branch applied (with its evidence) in your report:
 
 - **Skip the gates only on a pure clean pull**: Step 4's `classify-merge`
-  reports `gates_required` false (an empty merged set -- no conflicts, no file
+  reports `has_merge_work` false (an empty merged set -- no conflicts, no file
   changed on both sides, no lockfile you regenerated) **and** your 4a impact
   analysis found no user-created code (apps, skills, local scripts) depending
   on anything the update changed and no global-dep bump with a user-created
@@ -348,7 +348,7 @@ record which branch applied (with its evidence) in your report:
   it -- manufacturing exactly the local divergence a future update would have
   to reconcile -- so on a clean pull the skip is the correct outcome, not a
   shortcut. Your report states that this branch fired and shows the evidence for
-  all three conditions: `gates_required: false`, an impact analysis with no
+  all three conditions: `has_merge_work: false`, an impact analysis with no
   user-created code in it (built-in impacts -- a service the lead must restart --
   do not block the skip), and no in-branch edits of your own.
 
@@ -436,7 +436,7 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     built-in case and does not hot-apply the user case.
   - **Validation** -- suites/boots/Playwright run, all passing; **which branch
     of the 4c review-gate rule applied, with its evidence**: either the
-    clean-pull skip (`gates_required: false` from classify-merge, an impact
+    clean-pull skip (`has_merge_work: false` from classify-merge, an impact
     analysis with no user-created code in it, and no in-branch edits of your
     own) or the gate run's own record (the autofix fix commits kept vs
     reverted -- or "gate ran clean, no fixes proposed" -- and the
