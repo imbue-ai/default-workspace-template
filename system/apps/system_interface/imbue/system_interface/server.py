@@ -532,10 +532,11 @@ def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) 
 
     Codex has no static catalog, so its valid model/effort/fast set is per-agent -- the ONE reconciled
     set (:meth:`AgentManager.get_codex_model_options`) that the picker offered and the chip matches
-    against, seeded on connect and refreshed by each picker-open (D2). Empty until first populated -- a
-    switch then fails validation, which is correct: nothing to switch to until a connect or a
-    picker-open has read the account's ``model/list``. Every other harness validates against its static
-    catalog options.
+    against, seeded on connect and refreshed by each picker-open (D2), falling back to the persisted
+    sidecar while that in-memory set is empty (post-restart). Empty (no set and no sidecar) only until
+    first populated -- a switch then fails validation, which is correct: nothing to switch to until a
+    connect, a picker-open, or a persisted sidecar supplies the account's ``model/list``. Every other
+    harness validates against its static catalog options.
     """
     if agent_info.harness == HarnessType.CODEX:
         options = agent_manager.get_codex_model_options(agent_info.id)
@@ -619,7 +620,10 @@ def _get_model_options_endpoint(agent_id: str) -> Response:
         # Reconcile (D2): this fresh per-open fetch becomes the ONE per-agent set the chip-match and
         # the switch-validation also read, so immediately after this open all three agree. A failed
         # fetch (empty) is NOT stored -- it must not clobber the last-known set (seeded on connect or
-        # from an earlier open) that the chip is still matching against.
+        # from an earlier open) that the chip is still matching against. The RAW list behind these
+        # mapped options is also written through to the codex sidecar inside the resolver's
+        # ``list_offered_options`` (where the raw ``model/list`` is still in hand), so the chip
+        # resolves offline after a restart.
         if dynamic_options:
             get_state().agent_manager.store_codex_model_options(agent_id, dynamic_options)
         return _json_response(ModelOptionsResponse(options=dynamic_options).model_dump())

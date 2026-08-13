@@ -359,6 +359,19 @@ class PiCodingAgentConfig(AgentTypeConfig):
         default=True,
         description="Share settings.json and resource dirs from ~/.pi/agent/ into the per-agent config dir.",
     )
+    share_home_npm_dir: bool = Field(
+        default=False,
+        description="Symlink the per-agent pi npm dir to the shared ~/.pi/agent/npm instead of copying it "
+        "(local hosts only). The default copy gives every agent a UNIQUE npm path, which is a cache miss for "
+        "pi's jiti transpile cache (keyed by absolute path) -- so a fresh agent re-transpiles all extension "
+        "TypeScript from scratch (~16-24s for a couple of extensions). Sharing the one stable path lets that "
+        "cache hit across agents, cutting extension-heavy startup from ~30s to ~10s. SAFE ONLY when every "
+        "package pinned in settings.json is already installed in ~/.pi/agent/npm (e.g. baked into the image): "
+        "if pi has to install a missing package it writes into node_modules, and a shared dir would race "
+        "across concurrent agent startups and mutate the user's home npm. The copy default exists precisely to "
+        "avoid that race, so leave this off unless the extension set is fully pre-seeded. Ignored on remote "
+        "hosts, which have no shared home npm.",
+    )
     sync_auth: bool = Field(
         default=True,
         description="Share ~/.pi/agent/auth.json into the per-agent config dir.",
@@ -792,9 +805,11 @@ class PiCodingAgent(
                 if source.exists():
                     symlink_on_host(host, source, config_dir / dir_name)
 
-            self._seed_npm_dir_from_home(host, home_pi, config_dir)
+            self._seed_npm_dir_from_home(host, config, home_pi, config_dir)
 
-    def _seed_npm_dir_from_home(self, host: OnlineHostInterface, home_pi: Path, config_dir: Path) -> None:
+    def _seed_npm_dir_from_home(
+        self, host: OnlineHostInterface, config: PiCodingAgentConfig, home_pi: Path, config_dir: Path
+    ) -> None:
         """Copy the home npm extension install into the per-agent npm dir.
 
         pi re-resolves the synced ``settings.json`` package list on every startup
@@ -805,9 +820,22 @@ class PiCodingAgent(
         ``node_modules`` would race across concurrent agent startups. Packages
         added to settings.json since the home install was made are still picked
         up by pi's own startup resolve (it installs only the delta).
+
+        ``share_home_npm_dir`` overrides this to a SYMLINK. The copy avoids the
+        install race, but it also gives each agent a unique npm path, and pi
+        loads its extensions as TypeScript through jiti, whose transpile cache is
+        keyed by absolute path -- so a fresh per-agent copy is a permanent cache
+        miss and every new agent re-transpiles the whole extension set (~16-24s).
+        Symlinking to the one shared home path makes that cache hit across agents.
+        It is only safe when the pinned packages are already present in the home
+        npm dir (so pi installs nothing and never writes into the shared tree);
+        the config field's description spells out that contract.
         """
         npm_source = home_pi / _NPM_DIR_NAME
         if not npm_source.exists():
+            return
+        if config.share_home_npm_dir:
+            symlink_on_host(host, npm_source, config_dir / _NPM_DIR_NAME)
             return
         with log_span("Seeding per-agent pi npm dir from {}", npm_source):
             host.copy_directory(host, npm_source, config_dir / _NPM_DIR_NAME)

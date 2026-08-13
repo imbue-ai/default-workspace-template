@@ -157,6 +157,7 @@ def test_pi_coding_agent_config_has_correct_defaults() -> None:
     assert config.cli_args == ()
     assert config.parent_type is None
     assert config.sync_home_settings is True
+    assert config.share_home_npm_dir is False
     assert config.sync_auth is True
     assert config.check_installation is True
     assert config.resume_session is True
@@ -386,6 +387,33 @@ def test_setup_local_config_dir_seeds_npm_as_copy(tmp_path: Path, pi_agent: PiCo
 
     seeded = config_dir / "npm"
     assert not seeded.is_symlink()
+    assert (seeded / "node_modules" / "pi-subagents" / "package.json").read_text() == '{"name": "pi-subagents"}'
+
+
+def test_setup_local_config_dir_shares_npm_as_symlink_when_enabled(
+    tmp_path: Path, pi_agent: PiCodingAgent, local_host: Host
+) -> None:
+    """With share_home_npm_dir, the per-agent npm dir is a symlink to the shared home npm.
+
+    The stable shared path is what lets pi's jiti transpile cache (keyed by absolute
+    path) hit across agents; a per-agent copy sits at a unique path and misses.
+    """
+    home = _setup_home_pi(tmp_path)
+    npm_package_dir = home / ".pi" / "agent" / "npm" / "node_modules" / "pi-subagents"
+    npm_package_dir.mkdir(parents=True)
+    (npm_package_dir / "package.json").write_text('{"name": "pi-subagents"}')
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+
+    pi_agent._setup_local_config_dir(
+        local_host, PiCodingAgentConfig(sync_home_settings=True, share_home_npm_dir=True), config_dir, home
+    )
+
+    seeded = config_dir / "npm"
+    assert seeded.is_symlink()
+    assert Path(os.readlink(seeded)) == home / ".pi" / "agent" / "npm"
+    # The symlink resolves to the real shared package, so pi reads the seeded extension.
     assert (seeded / "node_modules" / "pi-subagents" / "package.json").read_text() == '{"name": "pi-subagents"}'
 
 

@@ -7,7 +7,7 @@ resolves its entire config/auth/session/hook tree from ``CODEX_HOME``:
 
     <CODEX_HOME>/
       config.toml        # model, approval, sandbox, trust, notices (mngr-owned)
-      hooks.json         # the lifecycle-marker hooks (mngr-owned)
+      hooks.json         # policy guards + the session-pointer recorder (mngr-owned)
       auth.json          # credentials -- a symlink to the user's shared ~/.codex/auth.json
       .personality_migration  # NUX skip marker (mngr-owned, empty)
       sessions/YYYY/MM/DD/rollout-*-<uuid>.jsonl   # codex-owned transcripts
@@ -23,17 +23,12 @@ This module holds the pure, host-agnostic pieces of that scheme:
   (applied last, so it wins). Pinning ``cli_auth_credentials_store = "file"`` is
   load-bearing: the keyring/auto backends hash ``CODEX_HOME`` into the secret
   key, which would make the shared-auth symlink unusable.
-* ``build_codex_hooks_config`` -- the lifecycle ``active``-marker hooks written
-  to ``<CODEX_HOME>/hooks.json``. Because codex subagents run *asynchronously*
-  (the root's ``Stop`` fires while subagents are still running, with no
-  ``fullyIdle`` signal and no ordering guarantee on the later ``SubagentStop``
-  hooks), the marker is recomputed under a lock from a root-turn flag plus one
-  file per in-flight subagent, so it stays present until the root turn **and**
-  every subagent are done: ``UserPromptSubmit`` -> ``set_active_marker.sh`` (set
-  the root-turn flag, record the root session id + transcript path), ``Stop`` ->
-  ``clear_active_marker.sh`` (clear the root-turn flag for the recorded root
-  session, then recompute), ``SubagentStart`` -> ``subagent_started.sh`` and
-  ``SubagentStop`` -> ``subagent_stopped.sh`` (register/deregister the subagent).
+* ``build_codex_hooks_config`` -- the policy guards plus a single non-lifecycle
+  hook written to ``<CODEX_HOME>/hooks.json``. Lifecycle/activity are NOT tracked
+  by hooks: RUNNING vs WAITING is read live from the daemon's ``thread/status``.
+  The one mngr hook, ``UserPromptSubmit`` -> ``record_session_pointers.sh``,
+  records the rollout session id + transcript path (the non-lifecycle pointers the
+  adopt/preserve and raw-transcript machinery need).
 * ``merge_project_trust`` -- the additive, idempotent ``[projects."<path>"]
   trust_level = "trusted"`` write used both to persist durable trust in the
   user's global ``config.toml`` and to seed the per-agent one.
@@ -48,8 +43,8 @@ plugin (see ``CodexAgent._ensure_source_repo_trusted``).
 
 from __future__ import annotations
 
+import hashlib
 import json
-import os
 import re
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -59,7 +54,6 @@ from typing import Final
 
 import tomlkit
 
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import UserInputError
 from imbue.mngr.interfaces.host import OnlineHostInterface
@@ -78,16 +72,21 @@ CODEX_HOME_RELATIVE_PATH: tuple[str, ...] = ("plugin", "codex", "home")
 # of the auth symlink and config, so targeting it specifically excludes those.
 SESSIONS_RELATIVE_PATH: str = Path(*CODEX_HOME_RELATIVE_PATH, "sessions").as_posix()
 
-# The queued-input sidecar the patched codex binary appends to the instant a message
-# is queued (submitted while a turn is running), as a POSIX rel-path under the agent
-# state dir. It is the only per-submission evidence a *queued* message leaves -- the
-# ``active`` marker does not advance until the message actually opens a turn, which for
-# a queued message is not until the running turn ends.
-QUEUED_INPUT_RELATIVE_PATH: str = Path(*CODEX_HOME_RELATIVE_PATH, "queued_input.jsonl").as_posix()
-
 _CONFIG_FILENAME: str = "config.toml"
 _AUTH_FILENAME: str = "auth.json"
 _HOOKS_FILENAME: str = "hooks.json"
+
+# The unix socket the per-agent ``codex app-server`` daemon listens on (``codex
+# app-server --listen unix://<sock>``). It CANNOT live under ``CODEX_HOME``: a unix-domain
+# socket path must fit in ``sockaddr_un.sun_path`` (``SUN_LEN``, ~108 bytes on Linux / ~104 on
+# macOS), and the agent state dir can nest deep enough to blow that (e.g. a pytest tmp dir), which
+# makes codex fail to bind with ``path must be shorter than SUN_LEN``. So it lives at a short,
+# stable ``/tmp`` path keyed by a hash of ``CODEX_HOME`` -- ``/tmp`` (never ``$TMPDIR``, which is
+# long on macOS) keeps it short, the hash keeps it unique per agent and identical for every client
+# (daemon, ``--remote`` TUI, mngr's WebSocket client, Minds). A stale socket from a prior run is
+# ``rm -f``'d before the daemon binds.
+_APP_SERVER_SOCKET_DIR: str = "/tmp"
+_APP_SERVER_SOCKET_PREFIX: str = "mngr-codex-"
 
 # Where output styles are authored, relative to the work_dir. Harness-neutral by design:
 # claude reads the same files through its own ``.claude/output-styles`` (a symlink to this),
@@ -121,6 +120,18 @@ def get_codex_hooks_path(codex_home: Path) -> Path:
     return codex_home / _HOOKS_FILENAME
 
 
+def get_codex_app_server_socket_path(codex_home: Path) -> Path:
+    """Return the ``codex app-server`` unix-socket path for the agent whose home is ``codex_home``.
+
+    A short, stable ``/tmp/mngr-codex-<hash>.sock`` (NOT a path under ``codex_home``): a unix socket
+    path must fit in ``SUN_LEN`` (~108 bytes), which a deeply-nested agent state dir can exceed. The
+    hash of the absolute ``codex_home`` makes it unique per agent yet identical for every client
+    that resolves it from the same home. ~38 chars total, safely under the limit on Linux and macOS.
+    """
+    home_hash = hashlib.sha1(str(codex_home).encode("utf-8")).hexdigest()[:16]
+    return Path(_APP_SERVER_SOCKET_DIR) / f"{_APP_SERVER_SOCKET_PREFIX}{home_hash}.sock"
+
+
 def get_shared_output_styles_dir(work_dir: Path) -> Path:
     """Return the repo's output-style directory -- where styles are authored."""
     return work_dir / SHARED_OUTPUT_STYLES_DIR
@@ -147,14 +158,8 @@ def get_codex_version_cache_path(codex_home: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Lifecycle-marker tracking files and hook script names
+# Per-agent state-file names and hook/command script names
 # ---------------------------------------------------------------------------
-
-# Marker file (in ``$MNGR_AGENT_STATE_DIR``) whose presence ``BaseAgent``'s
-# ``get_lifecycle_state`` reads as RUNNING; its absence means WAITING. Name kept
-# in sync with the literal ``"active"`` that core checks and that the hook
-# scripts touch/remove.
-ACTIVE_MARKER_FILENAME: str = "active"
 
 # Marker file (in ``$MNGR_AGENT_STATE_DIR``) touched on every launch/resume by
 # ``assemble_command``. Its mtime is the boundary the system_interface activity
@@ -164,70 +169,36 @@ ACTIVE_MARKER_FILENAME: str = "active"
 # that stale tail as live work. Mirrors mngr_claude's ``claude_process_started``.
 PROCESS_STARTED_MARKER_FILENAME: str = "codex_process_started"
 
-# Marker file (in ``$MNGR_AGENT_STATE_DIR``) present while codex is blocked on a
-# tool-approval dialog. The ``PermissionRequest`` hook touches it; ``PostToolUse``
-# (the tool ran after approval) and the root ``Stop`` (a stranded dialog at turn
-# end) remove it. ``CodexAgent.get_lifecycle_state`` promotes RUNNING -> WAITING
-# while it is present, and ``_waiting_reason`` reports ``PERMISSIONS``. Unlike the
-# ``active`` marker it is a plain touch/remove flag, not part of the lock-guarded
-# recompute: it tracks a single blocking dialog, not concurrent activity. This name
-# is also hardcoded as a literal in ``codex_marker_state.sh``; keep the two in sync.
-PERMISSIONS_WAITING_FILENAME: str = "permissions_waiting"
-
 # Per-agent file (in ``$MNGR_AGENT_STATE_DIR``) recording the *root* codex
-# session id for the current conversation -- the session that opened a turn while
-# the marker was absent. ``clear_active_marker.sh`` acts on a ``Stop`` only when
-# its ``session_id`` matches this, so a nested/recursive ``codex`` process
-# sharing this ``CODEX_HOME`` cannot flip the root agent to WAITING.
-# ``assemble_command`` also reads it to resume the conversation via
-# ``codex resume <id>``. The shell scripts reference this same literal.
+# rollout session id for the current conversation. ``record_session_pointers.sh``
+# writes it on each turn; the adopt/preserve machinery reads it (preserved on
+# destroy, resolved against the rollout store when a later agent resumes this
+# conversation). The hook script references this same literal.
 ROOT_SESSION_FILENAME: str = "codex_root_session"
 
-# Per-agent flag file (in ``$MNGR_AGENT_STATE_DIR``) present while the *root*
-# turn's model loop is running. ``set_active_marker.sh`` touches it on a fresh
-# root turn; ``clear_active_marker.sh`` removes it on the root's ``Stop``. It is
-# one of the two inputs to the marker invariant (the marker exists iff this flag
-# is present or a subagent is in flight).
-ROOT_ACTIVE_FILENAME: str = "codex_root_active"
-
-# Per-agent directory (in ``$MNGR_AGENT_STATE_DIR``) holding one empty file per
-# in-flight subagent, named by the subagent's ``agent_id``. ``subagent_started.sh``
-# creates a file when a subagent starts; ``subagent_stopped.sh`` removes it when
-# the subagent stops. A non-empty directory is the second input to the marker
-# invariant -- it keeps the marker present (RUNNING) while async subagents run on
-# after the root turn's ``Stop``.
-SUBAGENTS_DIRNAME: str = "codex_subagents"
-
-# Per-agent lock directory (in ``$MNGR_AGENT_STATE_DIR``) used as an mkdir-based
-# mutex so the four hooks serialize their read-modify-recompute of the marker
-# state. The shared helper acquires/releases it and steals it if a crashed hook
-# left it stale.
-MARKER_LOCK_DIRNAME: str = "codex_marker.lock"
+# Per-agent file (in ``$MNGR_AGENT_STATE_DIR``) recording the *root* app-server
+# thread id mngr drives for this agent's conversation. ``send_message`` writes it
+# when it first starts (or first discovers) the thread, and reads it back to pin the
+# root thread among the daemon's loaded threads (which can also include sub-agent
+# threads) and to reload the conversation via ``thread/resume`` after a daemon
+# restart. Distinct from ``codex_root_session`` (the rollout session id used by the
+# adopt/preserve machinery).
+APP_SERVER_THREAD_FILENAME: str = "codex_app_server_thread"
 
 # Per-agent file (in ``$MNGR_AGENT_STATE_DIR``) recording the absolute path of
 # the root session's rollout JSONL (codex hands it to hooks as
-# ``transcript_path``). ``stream_transcript.sh`` tails the file named here. The
-# capture script hardcodes this same literal.
+# ``transcript_path``). ``stream_transcript.sh`` tails the file named here;
+# ``record_session_pointers.sh`` writes it. Both hardcode this same literal.
 TRANSCRIPT_PATH_FILENAME: str = "codex_transcript_path"
-
-# tmux wait-for channel prefix that the ``UserPromptSubmit`` hook signals once a
-# turn is submitted (and *after* the ``active`` marker is set). The full channel is
-# ``<prefix><tmux session>``. Current mngr never listens on this channel -- it
-# confirms sends by polling the ``active`` marker (see CodexAgent's
-# submission-evidence probes); the signal is kept ONLY so older mngr senders
-# messaging a newly created agent still confirm, and is scheduled for removal.
-# ``set_active_marker.sh`` hardcodes this same literal (a test keeps them in sync).
-SUBMIT_WAIT_CHANNEL_PREFIX: str = "mngr-submit-"
 
 # Scripts provisioned into ``$MNGR_AGENT_STATE_DIR/commands/``; names kept in
 # sync with the resource files under ``resources/``.
-SET_ACTIVE_MARKER_SCRIPT_NAME: str = "set_active_marker.sh"
-CLEAR_ACTIVE_MARKER_SCRIPT_NAME: str = "clear_active_marker.sh"
-SUBAGENT_STARTED_SCRIPT_NAME: str = "subagent_started.sh"
-SUBAGENT_STOPPED_SCRIPT_NAME: str = "subagent_stopped.sh"
-# Shared POSIX-sh helper sourced by the four lifecycle hooks. Defines the marker
-# state paths, the mkdir-based lock, and the recompute that enforces the invariant.
-MARKER_STATE_LIB_SCRIPT_NAME: str = "codex_marker_state.sh"
+#
+# UserPromptSubmit hook that records the rollout session id + transcript path (the
+# non-lifecycle pointers the adopt/preserve and raw-transcript machinery need). It
+# does NO lifecycle-marker work: RUNNING vs WAITING is read from the daemon's live
+# ``thread/status``, not from any on-disk marker.
+RECORD_SESSION_POINTERS_SCRIPT_NAME: str = "record_session_pointers.sh"
 BACKGROUND_TASKS_SCRIPT_NAME: str = "codex_background_tasks.sh"
 RAW_TRANSCRIPT_SCRIPT_NAME: str = "stream_transcript.sh"
 COMMON_TRANSCRIPT_SCRIPT_NAME: str = "common_transcript.sh"
@@ -566,24 +537,13 @@ def _parse_semver_tuple(version: str) -> tuple[int, ...] | None:
 # hooks.json
 # ---------------------------------------------------------------------------
 
-# Commands codex runs for each lifecycle event (``type: "command"`` handlers
-# receive the event JSON on stdin). ``$MNGR_AGENT_STATE_DIR`` expands in codex's
-# shell at hook-execution time. The scripts live in the agent's commands/ dir
-# (provisioned by the plugin).
-_SET_ACTIVE_COMMAND: str = f'bash "$MNGR_AGENT_STATE_DIR/commands/{SET_ACTIVE_MARKER_SCRIPT_NAME}"'
-_CLEAR_ACTIVE_COMMAND: str = f'bash "$MNGR_AGENT_STATE_DIR/commands/{CLEAR_ACTIVE_MARKER_SCRIPT_NAME}"'
-_SUBAGENT_STARTED_COMMAND: str = f'bash "$MNGR_AGENT_STATE_DIR/commands/{SUBAGENT_STARTED_SCRIPT_NAME}"'
-_SUBAGENT_STOPPED_COMMAND: str = f'bash "$MNGR_AGENT_STATE_DIR/commands/{SUBAGENT_STOPPED_SCRIPT_NAME}"'
-
-# The permission-waiting marker is a plain touch/remove flag (no shared lock /
-# recompute), so its two hooks are inline one-liners rather than provisioned
-# scripts. ``PermissionRequest`` fires (and blocks the agent) while an approval
-# dialog is open; ``PostToolUse`` fires once the approved tool has run. (Codex has
-# no ``PostToolUseFailure`` event -- verified against codex 0.139.0 -- so unlike
-# claude there is no third clear hook; the root ``Stop`` clears any stranded
-# marker as a safety net, in ``clear_active_marker.sh``.)
-_SET_PERMISSIONS_WAITING_COMMAND: str = f'touch "$MNGR_AGENT_STATE_DIR/{PERMISSIONS_WAITING_FILENAME}"'
-_CLEAR_PERMISSIONS_WAITING_COMMAND: str = f'rm -f "$MNGR_AGENT_STATE_DIR/{PERMISSIONS_WAITING_FILENAME}"'
+# Command codex runs for each hook event (``type: "command"`` handlers receive the
+# event JSON on stdin). ``$MNGR_AGENT_STATE_DIR`` expands in codex's shell at
+# hook-execution time. The script lives in the agent's commands/ dir (provisioned
+# by the plugin). This is the only mngr-provisioned hook; it records the rollout
+# session id + transcript path and does NO lifecycle-state work (the daemon's
+# ``thread/status`` is the sole RUNNING-vs-WAITING source).
+_RECORD_SESSION_POINTERS_COMMAND: str = f'bash "$MNGR_AGENT_STATE_DIR/commands/{RECORD_SESSION_POINTERS_SCRIPT_NAME}"'
 
 # Policy guards. Codex speaks claude's hook protocol -- same events, the same stdin payload
 # (``tool_name``/``tool_input.command``, claude-shaped even under code mode), the same block
@@ -625,49 +585,25 @@ _OPEN_TICKETS_STOP_NUDGE_COMMAND: str = f'bash "{_POLICY_SCRIPTS_DIR}/claude_ope
 def build_codex_hooks_config() -> dict[str, Any]:
     """Build the per-agent ``hooks.json`` body for the codex agent.
 
-    Alongside the lifecycle-marker handlers below, this wires the dwt policy guards
-    from ``$MNGR_AGENT_WORK_DIR/system/scripts`` -- the same scripts claude runs: the
-    three shell-command safety guards (two blockers + the ``--codex`` rewriter) and the
-    four tk workflow-discipline guards (the ``tk``-standalone block and require-steps
-    reminder on ``PreToolUse``, the open-steps carryover on ``UserPromptSubmit``, and the
-    open-steps nudge on ``Stop``). See ``system/scripts/POLICY_HOOKS.md`` for the full
-    hook-by-hook mapping.
+    Lifecycle/activity are NOT tracked by hooks: RUNNING vs WAITING is read live
+    from the daemon's ``thread/status`` (a turn in flight -> RUNNING; parked on an
+    approval/input -> WAITING), so there is no ``active`` / ``permissions_waiting``
+    marker and no subagent-tracking recompute. The one mngr-provisioned hook records
+    the rollout session id + transcript path, which the adopt/preserve and
+    raw-transcript machinery need; it does no lifecycle-state work.
 
-    Four handlers maintain the ``active`` lifecycle marker. Because codex
-    subagents run *asynchronously* -- the root's ``Stop`` fires while subagents
-    are still running, and their ``SubagentStop`` hooks arrive later with no
-    ordering guarantee and no ``fullyIdle`` signal -- the marker is recomputed
-    under a lock from two pieces of tracked state (a root-turn flag and one file
-    per in-flight subagent) so it stays present until the root turn **and** every
-    subagent are done. ``SubagentStart``/``SubagentStop`` are hooked so that the
-    in-flight subagents can be tracked.
+    Alongside that recorder, this wires the dwt policy guards from
+    ``$MNGR_AGENT_WORK_DIR/system/scripts`` -- the same scripts claude runs: the
+    three shell-command safety guards (two blockers + the ``--codex`` rewriter) and
+    the four tk workflow-discipline guards (the ``tk``-standalone block and
+    require-steps reminder on ``PreToolUse``, the open-steps carryover on
+    ``UserPromptSubmit``, and the open-steps nudge on ``Stop``). See
+    ``system/scripts/POLICY_HOOKS.md`` for the full hook-by-hook mapping.
 
-    * ``UserPromptSubmit`` -> ``set_active_marker.sh``: set the root-turn flag (so
-      ``BaseAgent.get_lifecycle_state`` reports RUNNING) and, at a fresh root
-      turn, record the root ``session_id`` and ``transcript_path`` and clear any
-      stranded ``permissions_waiting`` marker (a second safety net alongside the
-      root ``Stop``, so a new turn never inherits a prior dialog's state). After
-      the marker is set it signals the ``mngr-submit-<session>`` tmux wait-for
-      channel (``SUBMIT_WAIT_CHANNEL_PREFIX``) -- kept only for older mngr
-      senders; current mngr confirms sends by polling the marker itself.
-    * ``Stop`` -> ``clear_active_marker.sh``: clear the root-turn flag when the
-      *root* agent's loop ends, then recompute (in-flight subagents keep the
-      marker). The clear is guarded on the recorded root ``session_id`` so a
-      nested/recursive ``codex`` process sharing this ``CODEX_HOME`` cannot flip
-      the agent to WAITING. It also clears any stranded ``permissions_waiting``
-      marker as a safety net.
-    * ``SubagentStart`` -> ``subagent_started.sh``: register the subagent's
-      ``agent_id`` so the marker stays present while it runs.
-    * ``SubagentStop`` -> ``subagent_stopped.sh``: deregister the ``agent_id`` and
-      recompute; the marker clears once the root turn is also done.
-
-    Two further handlers maintain the ``permissions_waiting`` marker (a plain
-    touch/remove flag, independent of the ``active`` recompute) so listings can
-    report *why* a codex agent is waiting (verified live against codex 0.139.0):
-
-    * ``PermissionRequest`` -> touch ``permissions_waiting``: codex fires this and
-      blocks while a tool-approval dialog is open.
-    * ``PostToolUse`` -> remove ``permissions_waiting``: the approved tool has run.
+    * ``UserPromptSubmit`` -> ``record_session_pointers.sh`` (record the rollout
+      session id + transcript path), then the open-steps carryover reminder (its
+      plain stdout is added to the model's context by codex).
+    * ``Stop`` -> the open-steps nudge (stderr-only + exit 0).
 
     The file is mngr-owned and rewritten from scratch each provision, so no
     merge-with-existing logic is needed. Codex requires command hooks to be
@@ -691,31 +627,25 @@ def build_codex_hooks_config() -> dict[str, Any]:
                     ]
                 }
             ],
-            # UserPromptSubmit: set the active marker (lifecycle), then the open-steps carryover
-            # reminder (its plain stdout is added to the model's context by codex).
+            # UserPromptSubmit: record the session/transcript pointers (no lifecycle work),
+            # then the open-steps carryover reminder (its plain stdout is added to context).
             "UserPromptSubmit": [
                 {
                     "hooks": [
-                        {"type": "command", "command": _SET_ACTIVE_COMMAND},
+                        {"type": "command", "command": _RECORD_SESSION_POINTERS_COMMAND},
                         {"type": "command", "command": _OPEN_TICKETS_REMINDER_COMMAND},
                     ]
                 }
             ],
-            # Stop: clear the active marker (lifecycle), then the open-steps nudge. The nudge is
-            # stderr-only + exit 0 (a clean no-op on codex's Stop, which -- unlike claude -- treats
-            # exit 2 / decision:block as a continuation, not a held stop).
+            # Stop: the open-steps nudge (stderr-only + exit 0, a clean no-op on codex's Stop,
+            # which -- unlike claude -- treats exit 2 / decision:block as a continuation).
             "Stop": [
                 {
                     "hooks": [
-                        {"type": "command", "command": _CLEAR_ACTIVE_COMMAND},
                         {"type": "command", "command": _OPEN_TICKETS_STOP_NUDGE_COMMAND},
                     ]
                 }
             ],
-            "SubagentStart": [{"hooks": [{"type": "command", "command": _SUBAGENT_STARTED_COMMAND}]}],
-            "SubagentStop": [{"hooks": [{"type": "command", "command": _SUBAGENT_STOPPED_COMMAND}]}],
-            "PermissionRequest": [{"hooks": [{"type": "command", "command": _SET_PERMISSIONS_WAITING_COMMAND}]}],
-            "PostToolUse": [{"hooks": [{"type": "command", "command": _CLEAR_PERMISSIONS_WAITING_COMMAND}]}],
         }
     }
 
@@ -724,54 +654,6 @@ def build_codex_hooks_config() -> dict[str, Any]:
 def serialize_codex_hooks(hooks_config: Mapping[str, Any]) -> str:
     """Serialize a ``hooks.json`` body as two-space-indented JSON."""
     return json.dumps(dict(hooks_config), indent=2)
-
-
-# Shell snippet that marks the agent idle out-of-band, reusing the SAME provisioned
-# ``codex_marker_state.sh`` helpers the four lifecycle hooks run, so the lock protocol and
-# the marker-recompute invariant (``active`` exists iff the root-turn flag is present or a
-# subagent is in flight) stay defined in exactly one place. It clears the root-turn flag,
-# recomputes the ``active`` marker (in-flight subagents keep it), clears any stranded
-# ``permissions_waiting`` (the same safety net clear_active_marker.sh applies at a root
-# Stop), and appends one activity event so ``mngr observe`` promptly re-probes the agent.
-# The event-append fragment is kept byte-identical to mngr_claude's
-# ``_CLEAR_ACTIVE_MARKERS_AND_EMIT_ACTIVITY_EVENT`` so the two harnesses emit one format.
-_MARK_CODEX_AGENT_IDLE_SNIPPET: Final[str] = (
-    f'. "$MNGR_AGENT_STATE_DIR/commands/{MARKER_STATE_LIB_SCRIPT_NAME}" || exit 1\n'
-    "codex_marker_lock\n"
-    'rm -f "$CODEX_ROOT_ACTIVE_FILE"\n'
-    "codex_marker_recompute\n"
-    'rm -f "$CODEX_PERMISSIONS_WAITING_FILE"\n'
-    "codex_marker_unlock\n"
-    """mkdir -p $MNGR_HOST_DIR/events/mngr/activity && echo '{"source": "mngr/activity", "type": "activity", "event_id": "'"evt-$(head -c 16 /dev/urandom | xxd -p)"'", "timestamp": "'"$(date -u +"%Y-%m-%dT%H:%M:%S.000000000Z")"'"}' >> $MNGR_HOST_DIR/events/mngr/activity/events.jsonl"""
-)
-
-
-def mark_codex_agent_idle(agent_state_dir: Path, host_dir: Path) -> None:
-    """Mark a codex agent idle out-of-band: clear the root-turn flag, recompute the ``active``
-    marker, clear ``permissions_waiting``, and emit one activity event.
-
-    The programmatic sibling of the four lifecycle hooks' own marker maintenance (and of
-    mngr_claude's ``mark_claude_agent_idle``): it runs the provisioned
-    ``codex_marker_state.sh`` helpers with ``MNGR_AGENT_STATE_DIR`` / ``MNGR_HOST_DIR``
-    bound to the passed paths, so the lock protocol and the recompute invariant have a
-    single source of truth rather than a Python re-expression that could drift from the
-    shell one. The recompute keeps ``active`` present while subagents are in flight.
-
-    The caller is the system-interface stop button after a native retract interrupt: codex
-    fires NO Stop hook when a turn is aborted via the ``retract_turn_id`` control line, so
-    the ``codex_root_active`` flag ``UserPromptSubmit`` created is stranded and the agent
-    keeps reporting RUNNING. This clears it, and the emitted event pokes ``mngr observe``
-    to re-probe. Idempotent -- ``rm -f`` no-ops on already-absent markers. Raises
-    ``ProcessError`` if the snippet cannot run (e.g. the marker-state helper is not
-    provisioned in the agent's ``commands/`` dir).
-    """
-    env = {**os.environ, "MNGR_AGENT_STATE_DIR": str(agent_state_dir), "MNGR_HOST_DIR": str(host_dir)}
-    run_local_command_modern_version(
-        ["bash", "-c", _MARK_CODEX_AGENT_IDLE_SNIPPET],
-        is_checked=True,
-        env=env,
-        name="mark_codex_agent_idle",
-    )
 
 
 # ---------------------------------------------------------------------------

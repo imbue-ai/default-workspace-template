@@ -31,8 +31,13 @@ from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import poll_until
+from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
+from imbue.system_interface.harnesses.codex.model import codex_models_to_options
+from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
+from imbue.system_interface.harnesses.codex.model import write_codex_model_options
+from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.agent_manager import AgentManager
@@ -1988,3 +1993,77 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     msg = json.loads(raw)
     assert msg["type"] == "agents_updated"
     assert {a["id"] for a in msg["agents"]} == {str(second.id)}
+
+
+# =============================================================================
+# Offline codex model-chip resolution from the persisted raw model-list sidecar
+# =============================================================================
+
+
+def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> CodexModel:
+    """A ``model/list`` entry for the sidecar tests (id == model)."""
+    return CodexModel.model_validate(
+        {
+            "id": model,
+            "model": model,
+            "displayName": model.upper(),
+            "supportedReasoningEfforts": [{"reasoningEffort": effort}],
+            "serviceTiers": [{"id": "priority"}] if priority else [],
+        }
+    )
+
+
+def test_codex_model_options_is_none_without_a_cache_or_a_sidecar(agent_manager: AgentManager) -> None:
+    # No in-memory set and no sidecar on disk -> None (the chip goes logo-only, not a spurious empty set).
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    assert agent_manager.get_codex_model_options("agent-1") is None
+
+
+def test_codex_model_options_falls_back_to_the_sidecar_when_the_cache_is_empty(
+    agent_manager: AgentManager,
+) -> None:
+    # Post-restart: the in-memory set is empty, so the option set is mapped from the persisted raw
+    # sidecar -- the whole point of the fix (the chip resolves before the daemon reconnects).
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    models = (_codex_model_entry("gpt-5.6-terra", "high", priority=True),)
+    write_codex_model_options(get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-1")), models)
+    options = agent_manager.get_codex_model_options("agent-1")
+    assert options is not None
+    assert [opt.id for opt in options] == ["gpt-5.6-terra"]
+
+
+def test_codex_model_options_in_memory_cache_wins_over_the_sidecar(agent_manager: AgentManager) -> None:
+    # Precedence: a live in-memory set always supersedes the on-disk fallback, so a reconnect's fresh
+    # list is authoritative even when a (stale) sidecar exists.
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    stale = (_codex_model_entry("gpt-old", "high"),)
+    write_codex_model_options(get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-1")), stale)
+    live = codex_models_to_options((_codex_model_entry("gpt-5.6-terra", "high"),))
+    agent_manager.store_codex_model_options("agent-1", live)
+    options = agent_manager.get_codex_model_options("agent-1")
+    assert options is not None
+    assert [opt.id for opt in options] == ["gpt-5.6-terra"]
+
+
+def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(agent_manager: AgentManager) -> None:
+    # The end-to-end offline path: a valid persisted selection plus the raw sidecar (and no live
+    # daemon / empty in-memory set) resolves the chip to the real model -- not the "unrecognized
+    # model" shrug (matched is None).
+    agent_id = "agent-1"
+    _seed_agent(agent_manager, agent_id, harness=HarnessType.CODEX)
+    state_dir = agent_manager._get_agent_state_dir(agent_id)
+    state_path = get_model_state_path(HarnessType.CODEX, state_dir)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"model": "gpt-5.6-terra", "effort": "high", "fast": False}))
+    write_codex_model_options(
+        get_codex_model_options_path(state_dir), (_codex_model_entry("gpt-5.6-terra", "high", priority=True),)
+    )
+
+    # Without the sidecar the identity would match nothing (the pre-fix shrug); with it, the chip resolves.
+    assert agent_manager.get_codex_model_options(agent_id) is not None
+    agent_manager._recompute_model_choice(agent_id, broadcast_on_change=False)
+    choice = agent_manager._agents[agent_id].model_choice
+    assert choice is not None
+    assert choice.identity.model_id == "gpt-5.6-terra"
+    assert choice.matched is not None
+    assert choice.matched.id == "gpt-5.6-terra"

@@ -3,7 +3,7 @@
 #
 # codex writes one rollout JSONL per session under
 # $CODEX_HOME/sessions/YYYY/MM/DD/rollout-*-<uuid>.jsonl and hands the active
-# rollout's absolute path to every hook as `transcript_path`. set_active_marker.sh
+# rollout's absolute path to every hook as `transcript_path`. record_session_pointers.sh
 # records that path (at each turn boundary) in
 # $MNGR_AGENT_STATE_DIR/codex_transcript_path. This streamer reads that one path
 # and tails it, appending every new line verbatim (no reschematising) to
@@ -38,7 +38,7 @@
 set -euo pipefail
 
 AGENT_DATA_DIR="${MNGR_AGENT_STATE_DIR:?MNGR_AGENT_STATE_DIR must be set}"
-# Path file written by set_active_marker.sh; kept in sync with
+# Path file written by record_session_pointers.sh; kept in sync with
 # TRANSCRIPT_PATH_FILENAME in codex_config.py.
 TRANSCRIPT_PATH_FILE="$AGENT_DATA_DIR/codex_transcript_path"
 OUTPUT_FILE="$AGENT_DATA_DIR/logs/codex_transcript/events.jsonl"

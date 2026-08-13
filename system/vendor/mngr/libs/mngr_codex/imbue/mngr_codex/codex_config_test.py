@@ -12,11 +12,7 @@ from imbue.mngr.errors import UserInputError
 from imbue.mngr.primitives import HostName
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
-from imbue.mngr_codex.codex_config import CLEAR_ACTIVE_MARKER_SCRIPT_NAME
-from imbue.mngr_codex.codex_config import PERMISSIONS_WAITING_FILENAME
-from imbue.mngr_codex.codex_config import SET_ACTIVE_MARKER_SCRIPT_NAME
-from imbue.mngr_codex.codex_config import SUBAGENT_STARTED_SCRIPT_NAME
-from imbue.mngr_codex.codex_config import SUBAGENT_STOPPED_SCRIPT_NAME
+from imbue.mngr_codex.codex_config import RECORD_SESSION_POINTERS_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import build_codex_config
 from imbue.mngr_codex.codex_config import build_codex_hooks_config
 from imbue.mngr_codex.codex_config import extract_latest_codex_version
@@ -28,14 +24,12 @@ from imbue.mngr_codex.codex_config import get_codex_personality_migration_path
 from imbue.mngr_codex.codex_config import get_codex_version_cache_path
 from imbue.mngr_codex.codex_config import is_codex_update_available
 from imbue.mngr_codex.codex_config import is_project_trusted
-from imbue.mngr_codex.codex_config import mark_codex_agent_idle
 from imbue.mngr_codex.codex_config import merge_project_trust
 from imbue.mngr_codex.codex_config import parse_codex_cli_version
 from imbue.mngr_codex.codex_config import read_codex_config
 from imbue.mngr_codex.codex_config import rewrite_rollout_record_cwd
 from imbue.mngr_codex.codex_config import serialize_codex_config
 from imbue.mngr_codex.codex_config import serialize_codex_hooks
-from imbue.mngr_codex.resources.testing import provision_commands_dir
 
 # =============================================================================
 # Path helpers
@@ -268,28 +262,16 @@ def test_is_project_trusted() -> None:
 # =============================================================================
 
 
-def test_build_codex_hooks_config_maps_lifecycle_events_to_the_marker_scripts() -> None:
+def test_build_codex_hooks_config_wires_policy_guards_and_the_session_pointer_recorder() -> None:
     hooks = build_codex_hooks_config()
     user_prompt = hooks["hooks"]["UserPromptSubmit"]
     stop = hooks["hooks"]["Stop"]
-    subagent_start = hooks["hooks"]["SubagentStart"]
-    subagent_stop = hooks["hooks"]["SubagentStop"]
-    permission_request = hooks["hooks"]["PermissionRequest"]
-    post_tool_use = hooks["hooks"]["PostToolUse"]
     pre_tool_use = hooks["hooks"]["PreToolUse"]
-    # Subagents run asynchronously, so SubagentStart/Stop ARE hooked now: they
-    # track in-flight subagents to keep the marker RUNNING after the root Stop.
-    # PermissionRequest/PostToolUse maintain the permissions_waiting marker.
-    # PreToolUse runs the dwt policy guards (block + rewrite).
-    assert set(hooks["hooks"]) == {
-        "PreToolUse",
-        "UserPromptSubmit",
-        "Stop",
-        "SubagentStart",
-        "SubagentStop",
-        "PermissionRequest",
-        "PostToolUse",
-    }
+    # Only three events are hooked: the PreToolUse policy guards, the UserPromptSubmit
+    # session-pointer recorder + carryover reminder, and the Stop nudge. No lifecycle-marker
+    # events -- RUNNING/WAITING is read from the daemon's thread/status, not any marker -- so
+    # SubagentStart/SubagentStop/PermissionRequest/PostToolUse are gone.
+    assert set(hooks["hooks"]) == {"PreToolUse", "UserPromptSubmit", "Stop"}
     # PreToolUse runs the dwt policy scripts from the work dir, in order: the two blockers,
     # the tk-standalone block, the require-steps soft reminder, then the rewriter last. The
     # rewriter carries ``--codex``, which makes it emit ``permissionDecision: "allow"`` alongside
@@ -302,24 +284,16 @@ def test_build_codex_hooks_config_maps_lifecycle_events_to_the_marker_scripts() 
         'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_require_steps_pretool.sh"',
         'python3 "$MNGR_AGENT_WORK_DIR/system/scripts/claude_rewrite_bash_command.py" --codex',
     ]
-    # UserPromptSubmit: the active marker, then the open-steps carryover reminder.
+    # UserPromptSubmit: the session-pointer recorder, then the open-steps carryover reminder.
     user_prompt_commands = [h["command"] for h in user_prompt[0]["hooks"]]
-    assert SET_ACTIVE_MARKER_SCRIPT_NAME in user_prompt_commands[0]
+    assert RECORD_SESSION_POINTERS_SCRIPT_NAME in user_prompt_commands[0]
     assert (
         user_prompt_commands[1] == 'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_open_tickets_reminder.sh" --codex'
     )
     assert user_prompt[0]["hooks"][0]["type"] == "command"
-    # Stop: clear the active marker, then the open-steps nudge (stderr-only, exit 0).
+    # Stop: only the open-steps nudge (stderr-only, exit 0) -- no marker clearing.
     stop_commands = [h["command"] for h in stop[0]["hooks"]]
-    assert CLEAR_ACTIVE_MARKER_SCRIPT_NAME in stop_commands[0]
-    assert stop_commands[1] == 'bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_open_tickets_stop_nudge.sh"'
-    assert SUBAGENT_STARTED_SCRIPT_NAME in subagent_start[0]["hooks"][0]["command"]
-    assert SUBAGENT_STOPPED_SCRIPT_NAME in subagent_stop[0]["hooks"][0]["command"]
-    # The permission marker is a plain inline touch/remove, not a provisioned script.
-    assert (
-        permission_request[0]["hooks"][0]["command"] == f'touch "$MNGR_AGENT_STATE_DIR/{PERMISSIONS_WAITING_FILENAME}"'
-    )
-    assert post_tool_use[0]["hooks"][0]["command"] == f'rm -f "$MNGR_AGENT_STATE_DIR/{PERMISSIONS_WAITING_FILENAME}"'
+    assert stop_commands == ['bash "$MNGR_AGENT_WORK_DIR/system/scripts/claude_open_tickets_stop_nudge.sh"']
 
 
 def test_serialize_codex_hooks_round_trips_to_json() -> None:
@@ -404,73 +378,3 @@ def test_rewrite_rollout_record_cwd_leaves_non_cwd_records_untouched() -> None:
     # A cwd-bearing type whose payload happens to lack a cwd is also untouched.
     no_cwd = {"type": "turn_context", "payload": {"model": "gpt-5.5"}}
     assert rewrite_rollout_record_cwd(no_cwd, _NEW_CWD) == no_cwd
-
-
-# =============================================================================
-# mark_codex_agent_idle (out-of-band idle marking for the native stop retract)
-# =============================================================================
-
-
-def _idle_marking_dirs(tmp_path: Path) -> tuple[Path, Path]:
-    """A provisioned agent state dir (with the shared marker-state helper) plus a host dir."""
-    state_dir = tmp_path / "agent"
-    state_dir.mkdir()
-    provision_commands_dir(state_dir, ())
-    host_dir = tmp_path / "host"
-    host_dir.mkdir()
-    return state_dir, host_dir
-
-
-def test_mark_codex_agent_idle_clears_markers_and_emits_activity_event(tmp_path: Path) -> None:
-    """mark_codex_agent_idle clears the root-turn flag, recomputes the marker away, clears a
-    stranded permissions_waiting, and appends one format-conformant activity event.
-
-    It runs the same shell helpers the four lifecycle hooks run, and the emitted line must
-    match the hooks' activity-event format (the one mngr_claude's idle-marking emits)."""
-    state_dir, host_dir = _idle_marking_dirs(tmp_path)
-    (state_dir / "codex_root_active").write_text("")
-    (state_dir / "active").write_text("")
-    (state_dir / PERMISSIONS_WAITING_FILENAME).write_text("")
-
-    mark_codex_agent_idle(state_dir, host_dir)
-
-    # The root-turn flag and both markers are cleared, so the agent stops reporting RUNNING.
-    assert not (state_dir / "codex_root_active").exists()
-    assert not (state_dir / "active").exists()
-    assert not (state_dir / PERMISSIONS_WAITING_FILENAME).exists()
-    # Exactly one activity event was appended, in the hooks' own format.
-    events_file = host_dir / "events" / "mngr" / "activity" / "events.jsonl"
-    lines = events_file.read_text().splitlines()
-    assert len(lines) == 1
-    event = json.loads(lines[0])
-    assert event["source"] == "mngr/activity"
-    assert event["type"] == "activity"
-    assert event["event_id"].startswith("evt-")
-    assert event["timestamp"].endswith("Z")
-
-
-def test_mark_codex_agent_idle_keeps_marker_while_a_subagent_is_in_flight(tmp_path: Path) -> None:
-    """The recompute honors the marker invariant: with a subagent still registered, clearing
-    the root-turn flag must NOT clear ``active`` (the async-subagent case)."""
-    state_dir, host_dir = _idle_marking_dirs(tmp_path)
-    (state_dir / "codex_root_active").write_text("")
-    (state_dir / "active").write_text("")
-    subagents_dir = state_dir / "codex_subagents"
-    subagents_dir.mkdir()
-    (subagents_dir / "11111111-1111-1111-1111-111111111111").write_text("")
-
-    mark_codex_agent_idle(state_dir, host_dir)
-
-    assert not (state_dir / "codex_root_active").exists()
-    assert (state_dir / "active").exists(), "an in-flight subagent must keep the marker"
-
-
-def test_mark_codex_agent_idle_is_idempotent_on_absent_markers(tmp_path: Path) -> None:
-    """Absent markers are a no-op (``rm -f``); the activity event is still emitted."""
-    state_dir, host_dir = _idle_marking_dirs(tmp_path)
-
-    mark_codex_agent_idle(state_dir, host_dir)
-
-    assert not (state_dir / "active").exists()
-    events_file = host_dir / "events" / "mngr" / "activity" / "events.jsonl"
-    assert len(events_file.read_text().splitlines()) == 1

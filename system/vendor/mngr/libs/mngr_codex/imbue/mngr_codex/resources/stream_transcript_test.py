@@ -3,7 +3,7 @@
 Exercises the streamer's core behaviors by running it with --single-pass in a
 controlled filesystem layout. The streamer reads the single active rollout path
 from ``$MNGR_AGENT_STATE_DIR/codex_transcript_path`` (the file
-set_active_marker.sh records), tails that rollout JSONL, and appends every new
+record_session_pointers.sh records), tails that rollout JSONL, and appends every new
 line verbatim to ``$MNGR_AGENT_STATE_DIR/logs/codex_transcript/events.jsonl``.
 
 Each test stages:
