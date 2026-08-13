@@ -73,7 +73,8 @@ Run these in order before `git merge`:
    ```
 
    `<CREATION_PATHS>` is the creation's whole footprint, not just the files
-   the worker touched: for an app, `system/apps/<package>/ system/supervisord.conf`
+   the worker touched: for an app,
+   `system/apps/<package>/ system/supervisord.conf.d/<name>.conf`
    (a standalone service likewise, under `system/services/<package>/`);
    for a skill, `.agents/skills/<name>/`; for a shared script or reference,
    its path; for the system interface, `system/apps/system_interface/` (that
@@ -82,10 +83,33 @@ Run these in order before `git merge`:
    means the base moved under the worker: the pass is stale -- do not merge;
    supersede it (below).
 
+   Every path in a creation's footprint belongs to that creation alone -- its
+   supervisord program lives in its own drop-in rather than in the shared
+   config, and the root `pyproject.toml` needs no per-creation entry. So a
+   second creation being built in the same tree cannot make this pass look
+   stale, and cannot make the merge conflict.
+
+   `uv.lock` is deliberately NOT in the footprint. It is derived, every
+   creation's scaffold regenerates it, and `.gitattributes` marks it
+   `merge=binary` so any divergence is a hard conflict -- including it would
+   make two concurrent creations collide on a generated file and force one of
+   them into a full re-harden. See step 3.
+
 3. **Never hand-resolve a conflicted hardened branch.** If the merge itself
    conflicts, `git merge --abort` and treat the pass as stale. Resolving the
    conflict by hand would reintroduce exactly the unverified state the pass
    exists to prevent.
+
+   One carve-out: a conflict confined to a **generated lockfile** (`uv.lock`,
+   `package-lock.json`). Those are derived, not authored, and every creation's
+   scaffold regenerates them, so two concurrent creations conflict there as a
+   matter of course -- treating that as a stale pass would serialize exactly
+   the work this layout exists to parallelize. Regenerate the lock from the
+   merged manifest instead (`uv lock`, or `npm install --package-lock-only`)
+   and continue the merge. This is the same rule `.gitattributes` states and
+   `update-self`'s worker already follows; it is not hand-resolving, because
+   nothing is being chosen by hand. If anything *outside* the lockfiles also
+   conflicts, the carve-out does not apply -- abort and supersede.
 
 ## Superseding a stale pass (coalescing)
 

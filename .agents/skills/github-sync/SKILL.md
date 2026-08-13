@@ -145,9 +145,11 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
    for b in $(git for-each-ref --format='%(refname:short)' refs/heads/ | grep -v -x -e "$(git branch --show-current)"); do git push origin "$b"; done
    ```
 
-9. **Add the service** by appending this block to `system/supervisord.conf`, then
+9. **Add the service** by writing this block to its own
+    `system/supervisord.conf.d/github-sync.conf`, then
     `supervisorctl reread && supervisorctl update` (see the update-app
-    skill):
+    skill). Its own file, not an append to the shared config, so enabling sync
+    never collides with an app being scaffolded at the same time:
 
     ```ini
     # Opt-in GitHub sync (added by the github-sync skill): keeps the gateway
@@ -171,8 +173,9 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
     stderr_logfile_backups=3
     ```
 
-10. **Commit the enablement** (`system/supervisord.conf`; the config file is
-    gitignored under `data/system/`). The now-active hook pushes the commit.
+10. **Commit the enablement** (`system/supervisord.conf.d/github-sync.conf`; the
+    config file is gitignored under `data/system/`). The now-active hook pushes
+    the commit.
 
 11. **Report**: the repo URL, that every commit now auto-pushes, that
     workspace data under `data/` stays out of GitHub (the restic host backup
@@ -204,8 +207,9 @@ via a restic backup restore, not via GitHub.
 Confirm with the user first, and ask separately whether to keep the remote
 repo (recommend keeping it -- it costs nothing and preserves history).
 
-1. `supervisorctl stop github-sync`, remove the `[program:github-sync]` block
-   from `system/supervisord.conf`, then `supervisorctl reread && supervisorctl update`.
+1. `supervisorctl stop github-sync`, delete
+   `system/supervisord.conf.d/github-sync.conf`, then
+   `supervisorctl reread && supervisorctl update`.
 2. `uv run github-sync unwire-git` (removes the gateway git config and the
    hooks path -- auto-push stops).
 3. Delete `data/system/github_sync.toml`.

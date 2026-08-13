@@ -1008,6 +1008,16 @@ def _read_file_command(path: str) -> str:
     )
 
 
+def _list_remote_supervisord_dropins(target: SshTarget, dropin_dir: str) -> list[str]:
+    """The source's supervisord drop-in paths, or [] when it has no such directory."""
+    quoted = _shell_quote(dropin_dir)
+    listing = run_remote(
+        target,
+        f"if [ -d {quoted} ]; then ls -1 {quoted}/*.conf 2>/dev/null || true; fi",
+    )
+    return sorted(line.strip() for line in listing.splitlines() if line.strip())
+
+
 def _read_remote_files(target: SshTarget, paths: Sequence[str]) -> dict[str, str]:
     """Read many remote files in as few round trips as possible, keyed by path.
 
@@ -1314,6 +1324,13 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
             "runtime/applications.toml",
         )
     ]
+    # The source's programs live one per file under supervisord.conf.d/, so the
+    # fixed list above would find only system_interface. Enumerate the drop-ins
+    # first (one extra round trip) and read them in the same batched pass; a
+    # source predating the split simply has no such directory and lists nothing.
+    remote_paths.extend(
+        _list_remote_supervisord_dropins(target, f"{repo_root}/system/supervisord.conf.d")
+    )
     remote_files = _read_remote_files(target, remote_paths)
     source_ports: list[AppPort] = []
     for path, text in sorted(remote_files.items()):
@@ -1340,13 +1357,23 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
 def _local_ports() -> list[AppPort]:
     """The app ports already taken in this workspace, from its own config and registry."""
     ports: list[AppPort] = []
-    supervisord = Path("system/supervisord.conf")
-    if supervisord.is_file():
-        ports.extend(parse_supervisord_ports(supervisord.read_text(encoding="utf-8")))
+    # Every program but system_interface lives in its own supervisord.conf.d
+    # drop-in, so scanning only the main config would see one port and report
+    # every real app as free -- collisions would surface as two programs bound
+    # to the same port after the migration, not here.
+    for conf in _local_supervisord_configs():
+        ports.extend(parse_supervisord_ports(conf.read_text(encoding="utf-8")))
     registry = Path("data/.state/apps.toml")
     if registry.is_file():
         ports.extend(parse_apps_registry(registry.read_text(encoding="utf-8")))
     return ports
+
+
+def _local_supervisord_configs() -> list[Path]:
+    """This workspace's supervisord config files: the main one plus every drop-in."""
+    main = Path("system/supervisord.conf")
+    configs = [main] if main.is_file() else []
+    return configs + sorted(Path("system/supervisord.conf.d").glob("*.conf"))
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> int:

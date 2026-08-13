@@ -96,11 +96,13 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   hyphens, and it must not start with `host-` or `agent-` (those
   prefixes are reserved for workspace hostname coordinates). Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
-  already used in `system/supervisord.conf` (`system_interface`,
-  `browser`, etc. are reserved by the scaffolder).
+  already used by an existing program (`system_interface`, `browser`, etc.
+  are reserved by the scaffolder, which also refuses a name any
+  `system/supervisord.conf.d/*.conf` already declares).
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
+  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`, and
+  `data/.state/apps.toml`; if you're choosing
   manually, avoid `8000` (system_interface) and `8081` (the browser
   service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
@@ -159,22 +161,27 @@ What gets generated:
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
 
-What gets updated:
+What gets updated -- nothing shared, which is what lets two agents scaffold two
+apps at once:
 
-- Root `pyproject.toml` -- adds `<service-name>` to
-  `[project].dependencies` and `<service-name> = { workspace = true }` to
-  `[tool.uv.sources]` (the `system/apps/*` member glob picks the package up
-  without a members edit).
-- `system/supervisord.conf` -- appends a program block:
+- Root `pyproject.toml` -- untouched. The `system/apps/*` member glob picks the
+  package up and `uv sync --all-packages` installs it, so a scaffolded app
+  needs no root entry at all.
+- `system/supervisord.conf.d/<name>.conf` -- writes the app's own program block:
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:<port> --name <name> && uv run --all-packages <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
   ```
+
+  `uv run --all-packages`, not a bare `uv run`: with no root `pyproject.toml`
+  entry, a root-closure-scoped `uv sync` prunes the member and deletes its
+  console script, and `--all-packages` reinstates it on the restart that
+  follows.
 
   The Flask app serves at `/` and needs no prefix env var: your app
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
@@ -421,7 +428,7 @@ calling the work done.
 ## Escape hatch: wrap an existing server
 
 For pre-existing third-party tools, do not scaffold a lib. Add a
-`[program:<name>]` block to `system/supervisord.conf` that runs
+`[program:<name>]` block as its own `system/supervisord.conf.d/<name>.conf` that runs
 `forward_port.py` and then your existing start command. supervisord runs
 commands directly (no shell), so wrap any command that chains with `&&`
 in `bash -c "..."`, and prefix the whole thing with
@@ -467,8 +474,8 @@ Two valid shapes:
   autorestart=true
   ```
 
-After editing `system/supervisord.conf`, run `supervisorctl reread &&
-supervisorctl update` to start the new program.
+After writing `system/supervisord.conf.d/<name>.conf`, run `supervisorctl
+reread && supervisorctl update` to start the new program.
 
 The `forward_port.py` call MUST come first in the command -- the port
 must be registered before the app starts listening, otherwise the

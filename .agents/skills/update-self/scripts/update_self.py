@@ -519,7 +519,8 @@ def classify_path(path: str) -> PathClass:
 
     - ``system_interface`` -- ``system/apps/system_interface/**``; revealed via
       ``reveal_system_interface.py`` (which owns its own manifest refresh).
-    - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``; applied by
+    - ``service`` -- ``system/supervisord.conf``, the per-program drop-ins under
+      ``system/supervisord.conf.d/**``, and ``system/libs/bootstrap/**``; applied by
       restarting the services agent (``mngr start --restart system-services``,
       then ``system/scripts/refresh_workspace_view.py`` to rebuild the user's
       view, which the restart alone leaves showing the previous build).
@@ -563,7 +564,11 @@ def classify_path(path: str) -> PathClass:
         return PathClass(CLASS_PROVISIONER, project, is_manifest)
     if path.startswith("system/apps/system_interface/"):
         return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
-    if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
+    if (
+        path == "system/supervisord.conf"
+        or path.startswith("system/supervisord.conf.d/")
+        or path.startswith("system/libs/bootstrap/")
+    ):
         return PathClass(CLASS_SERVICE, project, is_manifest)
     if path.startswith("system/vendor/mngr/"):
         return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest)
