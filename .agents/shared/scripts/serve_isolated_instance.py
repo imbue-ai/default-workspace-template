@@ -96,6 +96,13 @@ WRAPPER_LOG_FILENAME = "wrapper.log"
 # ``reveal_system_interface.py`` does) so the dependency is always resolved.
 FORWARD_PORT_CMD = ("uv", "run", "python3", "system/scripts/forward_port.py")
 
+# How to spell this script in a message an agent will copy: repo-root-relative,
+# like every other command it prints. The follow-up commands it names
+# (``refresh`` / ``down``) are sub-commands of *this* script, and the flows that
+# reach them arrive through an adapter (e.g. ``reveal_system_interface.py
+# preview``), so a bare verb would not be runnable.
+_SELF_HINT = ".agents/shared/scripts/serve_isolated_instance.py"
+
 # The wrapper server ships beside this script and is stdlib-only, so it runs under
 # the same bare ``python3`` that runs this script -- no venv resolution.
 WRAPPER_SCRIPT = "preview_wrapper_server.py"
@@ -534,14 +541,15 @@ def up(
             f"{preview_service_name}` (serving {cwd} "
             f"on port {inner_port}, wrapped on port {wrapper_port}). Opening it "
             "puts it on the user's screen. Run "
-            f"'refresh --name {name}' to pick up a later edit on this same port, "
-            f"and 'down --name {name}' to tear it down.\n"
+            f"`python3 {_SELF_HINT} refresh --name {name}` to pick up a later "
+            f"edit on this same port, and `python3 {_SELF_HINT} down --name "
+            f"{name}` to tear it down.\n"
         )
     else:
         sys.stdout.write(f"{inner_url}\n")
         sys.stderr.write(
             f"instance up: reach it at {inner_url} (serving {cwd}). Run "
-            f"'down --name {name}' to tear it down.\n"
+            f"`python3 {_SELF_HINT} down --name {name}` to tear it down.\n"
         )
     return 0
 
