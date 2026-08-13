@@ -49,9 +49,11 @@ def _dropin(name: str, port: int | None) -> str:
     return f"[program:{name}]\n{command}\ndirectory=/home/user/workspace\n"
 
 
-def _make_workspace(root: Path, dropins: dict[str, int | None]) -> Path:
+def _make_workspace(
+    root: Path, dropins: dict[str, int | None], main_conf: str = _MAIN_CONF
+) -> Path:
     (root / "system/supervisord.conf.d").mkdir(parents=True)
-    (root / "system/supervisord.conf").write_text(_MAIN_CONF)
+    (root / "system/supervisord.conf").write_text(main_conf)
     (root / "pyproject.toml").write_text(_ROOT_PYPROJECT)
     for name, port in dropins.items():
         (root / f"system/supervisord.conf.d/{name}.conf").write_text(_dropin(name, port))
@@ -109,6 +111,45 @@ def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None
     assert result.returncode == 0, result.stderr
 
     assert "http://localhost:8082" in (root / "system/supervisord.conf.d/news.conf").read_text()
+
+
+def test_a_dropin_the_include_glob_would_not_read_is_refused(tmp_path: Path) -> None:
+    """Which directory holds the drop-ins is the config's to declare, not the scaffolder's.
+
+    A workspace whose ``[include]`` points somewhere else would otherwise get a
+    drop-in supervisord never reads: the app simply never starts, and nothing
+    fails. Refusing is the only outcome the agent can act on.
+    """
+    root = _make_workspace(
+        tmp_path,
+        {},
+        main_conf=_MAIN_CONF.replace("files = supervisord.conf.d/*.conf", "files = programs.d/*.conf"),
+    )
+
+    result = _scaffold(root, "news")
+
+    assert result.returncode != 0
+    assert "no [include] glob" in result.stderr
+    assert not (root / "system/supervisord.conf.d/news.conf").exists()
+
+
+def test_a_port_held_by_a_non_default_include_directory_is_still_seen(tmp_path: Path) -> None:
+    """The port pre-flight follows the declared globs, so a renamed directory is still scanned."""
+    root = _make_workspace(
+        tmp_path,
+        {},
+        main_conf=_MAIN_CONF.replace(
+            "files = supervisord.conf.d/*.conf",
+            "files = %(here)s/programs.d/*.conf supervisord.conf.d/*.conf",
+        ),
+    )
+    (root / "system/programs.d").mkdir()
+    (root / "system/programs.d/dashboard.conf").write_text(_dropin("dashboard", 8080))
+
+    result = _scaffold(root, "news")
+    assert result.returncode == 0, result.stderr
+
+    assert "http://localhost:8081" in (root / "system/supervisord.conf.d/news.conf").read_text()
 
 
 def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:

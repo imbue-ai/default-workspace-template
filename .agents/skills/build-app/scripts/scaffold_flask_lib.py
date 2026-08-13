@@ -34,6 +34,10 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 """
 
 import argparse
+import configparser
+import fnmatch
+import glob
+import os
 import re
 import subprocess
 import sys
@@ -105,26 +109,64 @@ def _validate_name(name: str) -> None:
         sys.exit(f"error: --name {name!r} is reserved")
 
 
-def _supervisord_conf_dir(supervisord_conf: Path) -> Path:
-    """The per-program drop-in directory beside ``supervisord_conf``.
+def _supervisord_include_globs(supervisord_conf: Path) -> list[str]:
+    """The glob patterns the config's ``[include] files`` declares, as supervisord resolves them.
 
-    Mirrors the ``[include] files = supervisord.conf.d/*.conf`` glob in the main
-    config, whose pattern supervisord joins to that file's own directory.
+    supervisord joins each whitespace-separated pattern to the directory of the
+    config declaring it and expands ``%(here)s`` to that same directory.
+    ``configparser`` does not follow ``[include]`` -- that is a supervisord
+    feature, not a configparser one -- so the patterns are expanded here, and
+    ``interpolation=None`` leaves ``%(here)s`` verbatim for that substitution.
+
+    The patterns are read rather than assumed: which directory holds the
+    per-program drop-ins is per-workspace configuration, so a workspace that
+    declares a different one must still be scanned and written correctly.
     """
-    return supervisord_conf.parent / f"{supervisord_conf.name}.d"
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.read(supervisord_conf)
+    conf_dir = str(supervisord_conf.parent)
+    return [
+        os.path.join(conf_dir, pattern.replace("%(here)s", conf_dir))
+        for pattern in (parser.get("include", "files", fallback="") or "").split()
+    ]
 
 
 def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
-    """The main config plus every per-program drop-in, in supervisord's read order."""
-    main = [supervisord_conf] if supervisord_conf.exists() else []
-    return main + sorted(_supervisord_conf_dir(supervisord_conf).glob("*.conf"))
+    """The main config plus every file its ``[include]`` globs match, in supervisord's read order."""
+    files = [supervisord_conf] if supervisord_conf.exists() else []
+    for pattern in _supervisord_include_globs(supervisord_conf):
+        files.extend(Path(path) for path in sorted(glob.glob(pattern)))
+    return files
+
+
+def _supervisord_program_path(supervisord_conf: Path, name: str) -> Path:
+    """The drop-in ``name``'s program belongs in: ``<supervisord.conf>.d/<name>.conf``.
+
+    One program per file, named after it, is what the teardown in
+    ``references/cleanup.md`` deletes and what
+    ``system/test_supervisord_layout.py`` pins.
+
+    Exits when the config's own ``[include]`` globs would not match that path.
+    supervisord reads only what those globs match, so a drop-in outside them is
+    dead config: the program never starts, and nothing fails -- which is worse
+    than refusing to write it.
+    """
+    path = supervisord_conf.parent / f"{supervisord_conf.name}.d" / f"{name}.conf"
+    patterns = _supervisord_include_globs(supervisord_conf)
+    if not any(fnmatch.fnmatch(str(path), pattern) for pattern in patterns):
+        sys.exit(
+            f"error: no [include] glob in {supervisord_conf} matches {path} "
+            f"(globs: {patterns or 'none declared'}), so supervisord would never "
+            "read the program written there"
+        )
+    return path
 
 
 def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     # Every app registers its localhost backend via a forward_port.py call in
     # its [program:*] command, so scanning the config text for
     # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
-    # Scans the main config AND every drop-in under supervisord.conf.d/, which
+    # Scans the main config AND every drop-in its [include] globs match, which
     # is where all but system_interface now live -- missing the drop-ins would
     # hand a new app a port another program already holds.
     ports: set[int] = set()
@@ -433,7 +475,7 @@ def _write_supervisord_program(repo_root: Path, name: str, port: int) -> Path:
                     f"error: {existing.relative_to(repo_root)} already has a "
                     f"{section} section"
                 )
-    path = _supervisord_conf_dir(conf) / f"{name}.conf"
+    path = _supervisord_program_path(conf, name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port))
     return path
