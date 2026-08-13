@@ -9,6 +9,7 @@ import { electronBridge } from "./electron-bridge";
 import { bootFromBootstrap, createEmptyStores } from "./models/boot";
 import { setPendingHelpLaunch } from "./models/help";
 import { attachInboxRequestsStore } from "./models/inbox";
+import { consumeWebLoginParams, webLogin } from "./models/webLogin";
 import { mountRouter, navigateExternalUrl } from "./router";
 import { ShellState } from "./views/shell/shell-state";
 import { installTooltips } from "./views/shell/tooltips";
@@ -52,7 +53,7 @@ function main(): void {
     stores: bootContext.stores,
     expectedSchemaVersion: bootContext.schemaVersion,
     // Main keeps minimal window bookkeeping fed by this verbatim relay
-    // (workspaces/health/workspace_stopped/open_help/discovery_health).
+    // (workspaces/health/workspace_stopped/open_help).
     relayShellEvent: (message) => electronBridge.sendShellEvent(message),
     onWorkspaceStopped: (message) => {
       // Main closes other windows showing this workspace (via the relay
@@ -70,6 +71,12 @@ function main(): void {
       // main process, so each tab handles it locally.
       if (electronBridge.isDesktop) return;
       openHelpFromShellAsk(shell, message.workspace_agent_id, message.description);
+    },
+    onWorkspaceRefresh: (message) => {
+      // An in-workspace agent says the interface this view is running is stale.
+      // Every window acts on its own frame -- no main process involvement,
+      // unlike the pre-SPA content-view reload.
+      shell.reloadWorkspaceFrame(message.agent_id);
     },
   });
   shell.channel = channel;
@@ -113,16 +120,35 @@ function main(): void {
     );
     m.redraw();
   });
-  // Esc forwarded by Electron main (needed when focus sits inside the
-  // cross-origin workspace iframe, whose key events never reach this document,
-  // so the overlays' in-document Escape listener never fires): dismiss the
-  // switcher popover first, else the workspace options overlay, else an
-  // app-level modal (Get help / Settings / Accounts) floating over the frame.
+  // Esc forwarded by Electron main. Main forwards EVERY Escape, so a single
+  // keypress arrives here and (when focus is in this document) as the normal
+  // in-document keydown as well.
+  //
+  // The switcher popover is closed first, unconditionally: it has no
+  // in-document Escape listener, so this forward is its only closer.
+  //
+  // The overlay chain runs only when focus sits inside a cross-origin iframe
+  // (the workspace frame, or a service iframe in a panel), whose key events
+  // never reach this document -- the case the forward exists for. Everywhere
+  // else the keypress already reached the in-document listeners, which take
+  // the topmost surface themselves: the recovery card's capture-phase listener
+  // beats the overlays' bubble ones and stops in-document propagation.
+  // Running the chain here too would spend one Escape on two surfaces -- the
+  // card's listener closes the card, and this delivery (which no
+  // stopPropagation can reach) would then find no card and close the options
+  // overlay beneath it.
+  //
+  // The card comes before the two route-based overlays because it is not one
+  // -- it can be raised over the workspace options overlay, which it sits
+  // above. It is never raised over an app-level modal, so the chain never has
+  // to choose between the two.
   electronBridge.onEscapePressed(() => {
     if (shell.isSidebarOpen) {
       shell.closeSidebar();
-    } else if (!shell.closeWorkspaceOverlay()) {
-      shell.closeAppOverlay();
+    } else if (document.activeElement instanceof HTMLIFrameElement) {
+      if (!shell.closeOpenRecoveryModal() && !shell.closeWorkspaceOverlay()) {
+        shell.closeAppOverlay();
+      }
     }
     m.redraw();
   });
@@ -134,6 +160,21 @@ function main(): void {
   // buttons, etc.); one document-level install survives mithril's re-renders.
   installTooltips();
   channel.start();
+
+  // ``?web-login=1`` asks this window to start the browser sign-in as soon
+  // as it loads: the backend's legacy /auth page URLs redirect here, and the
+  // Electron shell navigates here on auth_required events. The optional
+  // message explains why the sign-in is being asked for.
+  const bootParams = new URLSearchParams(window.location.search);
+  const webLoginMessage = consumeWebLoginParams(bootParams);
+  if (webLoginMessage !== null) {
+    // The boot params are one-shot: the Electron shell reloads every window
+    // on auth_success (keeping the URL), so they must be consumed here or the
+    // post-sign-in reload would immediately restart the flow.
+    const query = bootParams.toString();
+    history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
+    void webLogin.start(webLoginMessage);
+  }
 }
 
 main();

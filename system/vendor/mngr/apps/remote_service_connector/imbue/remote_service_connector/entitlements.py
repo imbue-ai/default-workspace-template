@@ -16,14 +16,12 @@ from typing import NoReturn
 from typing import Protocol
 
 from fastapi import HTTPException
-from fastapi import Request
 from pydantic import BaseModel
 from pydantic import Field
 from supertokens_python.exceptions import GeneralError as SuperTokensGeneralError
 from supertokens_python.recipe.session.exceptions import SuperTokensSessionError
 from supertokens_python.syncio import get_user
 
-import imbue.remote_service_connector.auth as auth_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import is_email_paid
@@ -281,11 +279,20 @@ def ensure_account_entitlements(
     return AccountEntitlements(**stored)
 
 
-def resolve_entitlements_for_user(request: Request, user: UserAuth) -> AccountEntitlements:
-    """Resolve (lazily creating) the entitlements row for a user-authenticated request."""
-    token = request.headers.get("authorization", "")[7:]
-    user_id = auth_module.get_user_id_from_access_token(token)
-    return ensure_account_entitlements(user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.email or "")
+def resolve_entitlements_for_user(user_id: str, user: UserAuth) -> AccountEntitlements:
+    """Resolve (lazily creating) the entitlements row for a user-authenticated request.
+
+    ``user_id`` is the caller's full SuperTokens user id, as resolved by the
+    endpoint's own authentication (Bearer token or browser session). This
+    deliberately does not re-derive the id from an Authorization header --
+    doing so made every quota-checked endpoint 401 for the hosted chrome's
+    cookie sessions. The lazy creation's paid-list check may only consume a
+    verified email (ally is authorized by domain ownership), so an unverified
+    account is backfilled as a plain explorer row.
+    """
+    return ensure_account_entitlements(
+        user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
+    )
 
 
 def raise_quota_exceeded(entitlement: str, limit: float, current: float, noun: str) -> NoReturn:

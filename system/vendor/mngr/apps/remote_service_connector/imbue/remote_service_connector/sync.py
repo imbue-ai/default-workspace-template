@@ -24,11 +24,10 @@ from fastapi import Request
 from pydantic import BaseModel
 from pydantic import Field
 
-import imbue.remote_service_connector.auth as auth_module
+import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
-from imbue.remote_service_connector.auth import authenticate_request
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -169,6 +168,11 @@ class SyncStore(Protocol):
     def scrub_secrets(self, user_id: str) -> int: ...
     def get_bundle(self, user_id: str) -> dict[str, Any] | None: ...
     def put_bundle(self, user_id: str, bundle: dict[str, Any]) -> None: ...
+
+    def put_bundle_if_absent(self, user_id: str, bundle: dict[str, Any]) -> bool:
+        """Store the bundle only when none exists yet; False when one already does (atomic)."""
+        ...
+
     def delete_bundle(self, user_id: str) -> None: ...
     def list_destroyed_records_before(self, cutoff: datetime) -> list[dict[str, Any]]:
         """List destroyed records whose destroyed_at is before ``cutoff`` (the reaper's candidates)."""
@@ -380,6 +384,31 @@ class PostgresSyncStore:
         finally:
             conn.close()
 
+    def put_bundle_if_absent(self, user_id: str, bundle: dict[str, Any]) -> bool:
+        # ON CONFLICT DO NOTHING makes the existence check and the insert one
+        # atomic statement, so two racing first-time setups cannot both win.
+        conn = db.get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO account_key_bundles (user_id, kdf_salt, kdf_time_cost, kdf_memory_kib, "
+                        "kdf_parallelism, wrapped_dek, key_epoch) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (user_id) DO NOTHING",
+                        (
+                            user_id,
+                            psycopg2.Binary(bundle["kdf_salt"]),
+                            bundle["kdf_time_cost"],
+                            bundle["kdf_memory_kib"],
+                            bundle["kdf_parallelism"],
+                            psycopg2.Binary(bundle["wrapped_dek"]),
+                            bundle["key_epoch"],
+                        ),
+                    )
+                    return cur.rowcount == 1
+        finally:
+            conn.close()
+
     def delete_bundle(self, user_id: str) -> None:
         conn = db.get_pool_db_connection()
         try:
@@ -495,8 +524,7 @@ def _decode_size_capped_base64(field_name: str, encoded: str, max_bytes: int) ->
 
 def _sync_caller(request: Request) -> tuple[UserAuth, str]:
     """Authenticate a sync endpoint call; returns (user auth, full user_id)."""
-    user = authenticate_request(request)
-    return user, auth_module.get_user_id_from_access_token(request.headers.get("authorization", "")[7:])
+    return accounts_web_module.resolve_web_user_identity(request)
 
 
 def _sync_caller_user_id(request: Request) -> str:
@@ -531,8 +559,10 @@ def put_workspace_record_endpoint(request: Request, host_id: str, body: Workspac
             existing_row = next((r for r in existing_records if r["host_id"] == host_id), None)
             is_new_active = existing_row is None or existing_row["state"] != WorkspaceRecordState.ACTIVE.value
             if is_new_active:
+                # Verified-only email: the backfill's paid-list check is
+                # authorized by domain ownership.
                 entitlements = entitlements_module.ensure_account_entitlements(
-                    user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.email or ""
+                    user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
                 )
                 active_count = sum(1 for r in existing_records if r["state"] == WorkspaceRecordState.ACTIVE.value)
                 if active_count >= entitlements.max_active_synced_workspaces:
@@ -592,8 +622,16 @@ def get_key_bundle_endpoint(request: Request) -> dict[str, object]:
 
 
 @router.put("/sync/bundle")
-def put_key_bundle_endpoint(request: Request, body: AccountKeyBundleModel) -> dict[str, str]:
-    """Store (replace) the caller's password-wrapped key bundle."""
+def put_key_bundle_endpoint(
+    request: Request,
+    body: AccountKeyBundleModel,
+    # First-time setup passes if_absent=true so two clients racing to mint the
+    # account's first DEK cannot silently clobber each other: exactly one
+    # wins; the loser gets a 409 and unlocks with the winner's password
+    # instead of holding a DEK the stored bundle can never recover.
+    if_absent: bool = False,
+) -> dict[str, str]:
+    """Store the caller's password-wrapped key bundle (replace, or create-only with ``if_absent``)."""
     with handle_endpoint_errors():
         user_id = _sync_caller_user_id(request)
         bundle = body.model_dump()
@@ -601,7 +639,17 @@ def put_key_bundle_endpoint(request: Request, body: AccountKeyBundleModel) -> di
         bundle["wrapped_dek"] = _decode_size_capped_base64(
             "wrapped_dek", body.wrapped_dek, _MAX_KEY_BUNDLE_FIELD_BYTES
         )
-        get_sync_store().put_bundle(user_id, bundle)
+        if if_absent:
+            if not get_sync_store().put_bundle_if_absent(user_id, bundle):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "bundle_exists",
+                        "message": "A key bundle is already stored for this account.",
+                    },
+                )
+        else:
+            get_sync_store().put_bundle(user_id, bundle)
         return {"status": "ok"}
 
 

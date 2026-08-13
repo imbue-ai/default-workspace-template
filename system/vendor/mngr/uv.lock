@@ -57,6 +57,7 @@ members = [
     "modal-app-kit",
     "modal-litellm",
     "modal-proxy",
+    "oauth-redirector",
     "overlay",
     "remote-service-connector",
     "resource-guards",
@@ -3959,6 +3960,31 @@ sdist = { url = "https://files.pythonhosted.org/packages/24/bf/d1bda4f6168e0b2e9
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/b2/d0896bdcdc8d28a7fc5717c305f1a861c26e18c05047949fb371034d98bd/nodeenv-1.10.0-py2.py3-none-any.whl", hash = "sha256:5bb13e3eed2923615535339b3c620e76779af4cb4c6a90deccc9e36b274d3827", size = 23438, upload-time = "2025-12-20T14:08:52.782Z" },
 ]
+
+[[package]]
+name = "oauth-redirector"
+version = "0.1.0"
+source = { editable = "apps/oauth_redirector" }
+dependencies = [
+    { name = "fastapi", extra = ["standard"] },
+    { name = "modal" },
+    { name = "modal-app-kit" },
+]
+
+[package.dev-dependencies]
+image = [
+    { name = "fastapi", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
+    { name = "modal", specifier = ">=1.4.3" },
+    { name = "modal-app-kit", editable = "libs/modal_app_kit" },
+]
+
+[package.metadata.requires-dev]
+image = [{ name = "fastapi", extras = ["standard"], specifier = "==0.139.2" }]
 
 [[package]]
 name = "oauthlib"

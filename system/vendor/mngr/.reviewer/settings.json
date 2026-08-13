@@ -1,6 +1,9 @@
 {
     "stop_hook": {
-        "enabled_when": "test -n \"${MNGR_AGENT_STATE_DIR:-}\" || test -n \"${SCULPTOR_API_PORT:-}\""
+        "enabled_when": "test -n \"${MNGR_AGENT_STATE_DIR:-}\" || test -n \"${SCULPTOR_API_PORT:-}\"",
+        "additional_git_directories": [
+            ".external_worktrees/default-workspace-template"
+        ]
     },
     "autofix": {
         "is_enabled": true,
