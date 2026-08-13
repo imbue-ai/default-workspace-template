@@ -132,6 +132,11 @@ git worktree add -q "$WT" HEAD
       sys.exit(0)  # supervisor lib unavailable -- skip the check
   o = ServerOptions(); o.configfile = "system/supervisord.conf"
   o.realize(args=[]); o.process_config(do_usage=False)
+  # Every program lives in a supervisord.conf.d drop-in, so a config that
+  # realizes cleanly but yields nothing means the [include] matched no files.
+  # That parses as a valid config and runs no services at all.
+  if not o.configroot.supervisord.process_group_configs:
+      sys.exit("system/supervisord.conf realized zero programs -- the [include] glob matched no drop-ins")
   PYEOF
   )
   ```

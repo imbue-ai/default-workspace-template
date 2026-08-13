@@ -325,7 +325,11 @@ the bundle is pushed to the worker. The task body directs the worker to:
 8. **Boot smoke-check** the result -- validate `system/supervisord.conf` via the
    supervisor lib (`ServerOptions().realize()` / `process_config()`), NEVER
    `supervisord -t` (which launches the daemon), the same method
-   `build_template.sh` step 9 uses. If it fails, report `stuck`. Then run
+   `build_template.sh` step 9 uses. Like step 9, a clean parse is not enough:
+   `configroot.supervisord.process_group_configs` must be non-empty, since every
+   program lives in a `supervisord.conf.d` drop-in and an `[include]` glob that
+   matches nothing yields a valid config with no services. If it fails, report
+   `stuck`. Then run
    `.agents/skills/publish-template/scripts/validate_template.py` (per
    that skill's §3 step 6), which must exit 0: it catches a markdown/TOML
    disagreement introduced by the version bump and re-resolves every declared
