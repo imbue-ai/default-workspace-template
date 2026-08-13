@@ -439,3 +439,8 @@ def test_route_get_account_reports_plan_entitlements_and_usage(monkeypatch: pyte
     assert body["usage"]["llm_spend_usd_this_period"] == 12.5
     assert body["usage"]["llm_budget_resets_at"] == "2026-08-01T00:00:00Z"
     assert sorted(body["available_plans"]) == ["ally", "explorer"]
+    # CLEANUP: drop with the deprecated tunnel compat fields (see accounts.py).
+    # v0.3.11 clients require these tunnel-era fields with no defaults.
+    assert body["entitlements"]["max_tunnels"] == 0
+    assert body["entitlements"]["max_services_per_tunnel"] == 0
+    assert body["usage"]["tunnels"] == 0

@@ -48,7 +48,6 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.region_preference import start_geo_detection
 from imbue.minds.desktop_client.state import DesktopClientState
-from imbue.minds.desktop_client.templates import warm_template_caches
 from imbue.minds.desktop_client.ws_gateway import create_websocket_aware_wsgi_server
 from imbue.minds.utils.mngr_caller import get_default_mngr_caller
 from imbue.minds.utils.sentry.core import flush_sentry_on_shutdown
@@ -105,15 +104,6 @@ def desktop_client_runtime(state: DesktopClientState, is_externally_managed_clie
     # form can default each provider's region to the user's nearest datacenter.
     if state.root_concurrency_group is not None:
         start_geo_detection(state.root_concurrency_group, state.geo_location_cache)
-        # Pay the lazy JinjaX template compiles up front so the first open of the
-        # workspace switcher / inbox / help modal is as fast as every later one
-        # (the first render otherwise showed up as a ~2s stall).
-        state.root_concurrency_group.start_new_thread(
-            target=warm_template_caches,
-            name="template-cache-warmup",
-            # Warmup failures must not poison the root group; the target swallows its own.
-            is_checked=False,
-        )
         # Start the /ui channel publisher strand so connected SPA windows
         # receive edge-driven state updates for the process lifetime.
         if state.ui_publisher is not None:
@@ -159,6 +149,10 @@ def _shutdown_desktop_client(state: DesktopClientState, is_externally_managed_cl
     # mid-pass call race its teardown and crash the loop's thread.
     if state.sync_scheduler is not None:
         state.sync_scheduler.stop()
+    # Same ordering constraint as the sync scheduler: the key-migration loop
+    # runs ``mngr`` through the shared caller, so it must be stopped first.
+    if state.ssh_key_migration_scheduler is not None:
+        state.ssh_key_migration_scheduler.stop()
     # Terminate the idle pre-warmed mngr process so it doesn't wait out the
     # full shutdown timeout blocked reading its socket for the next request.
     get_default_mngr_caller().stop()

@@ -175,6 +175,15 @@ https://*.{workspace_domain}:{https_port} {{
     }}
 
     handle {{
+        # The gateway's identity headers are trustworthy only because a client
+        # can never smuggle its own copy past the auth step: strip any inbound
+        # X-Share-Owner / X-Share-Email before anything downstream sees the
+        # request, then let copy_headers below inject the values the verified
+        # /_auth/verify response carries. request_header runs ahead of
+        # forward_auth in caddy's directive order, so the strip always precedes
+        # the injection.
+        request_header -X-Share-Owner
+        request_header -X-Share-Email
         forward_auth {gateway_backend} {{
             uri /_auth/verify
             # forward_auth copies the original request's headers into the auth
@@ -187,7 +196,12 @@ https://*.{workspace_domain}:{https_port} {{
             # and forward on their own.
             header_up X-Forwarded-Upgrade {{header.Upgrade}}
             header_up -Upgrade
-            copy_headers X-Share-Filtered-Cookie>Cookie
+            # Inject the gateway's verified identity onto the onward request: the
+            # filtered cookie, the owner flag (always), and the requester email
+            # (present only for a non-owner; for the owner the response carries
+            # none, so copy_headers adds nothing and the stripped header stays
+            # absent).
+            copy_headers X-Share-Filtered-Cookie>Cookie X-Share-Owner X-Share-Email
         }}
 
 {"".join(service_blocks)}\
