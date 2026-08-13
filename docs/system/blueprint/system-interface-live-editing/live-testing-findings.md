@@ -195,7 +195,7 @@ Two separate problems:
 This is documented behavior, not an accident -- the docstring says "False only
 once a failure has been recorded. A follower that was never started, or was
 deliberately stopped, still reports True". `AgentManager` is safe because it sets
-`self._follower = None` in `stop()` and `_render_follow_status` handles the None
+`self._follower = None` in `stop()` and `_build_follow_status` handles the None
 case.
 
 The concern is the name, on a newly-public mngr API. `is_alive()` collides
