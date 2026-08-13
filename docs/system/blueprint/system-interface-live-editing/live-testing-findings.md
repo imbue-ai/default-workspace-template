@@ -333,7 +333,9 @@ Two details worth keeping:
 
 - `--branch` did its job. `mngr ls` reported the worker's `initial_branch` as
   `mngr/update-charcounter`, and its commits landed on top of the lead's, not on
-  a fresh branch from HEAD.
+  a fresh branch from HEAD. That is the second end-to-end run of
+  `create_worker.py launch --branch`: in the sysedit transcript launch exited 0
+  on the current code and the worker's commit landed on top of the lead's three.
 - The worker exercised judgment rather than just adding tests: it wrote an e2e
   regression test, then replaced it (*"test: cover char counter at the unit level
   instead of a slow e2e"*) and confirmed the unit test fails without the counter.
@@ -468,10 +470,6 @@ Not chased down; noted as a thing to confirm.
   its own is untested here, though: it catches `ObserveLockProbeError`, prints a
   notice, and answers "not running", so an unprobeable lock sends `mngr notify`
   down the start-our-own-observer branch.
-
-- **`create_worker.py launch --branch` end to end.** Not re-run here; it is
-  already covered by the sysedit transcript, where launch exited 0 on the current
-  code and the worker's commit landed on top of the lead's three.
 
 - **Follower re-seed on truncation / file replacement.** The re-seed path is
   implemented but was not provoked; the observer-restart case (finding 4) is a
