@@ -11,7 +11,7 @@ an encrypted restic repo on cheaper object storage.
 ## Behavior
 
 - Single long-running tick loop run as the `host-backup` supervisord program
-  (defined in `system/supervisord.conf`, started by supervisord after `bootstrap`).
+  (defined in `system/supervisord.conf.d/host-backup.conf`, started by supervisord after `bootstrap`).
   Restart policy: `autorestart=true`.
 - The repository is created (and keyed) by the minds app, not by
   host_backup: minds runs `restic init` from outside the workspace -- the
@@ -177,7 +177,7 @@ never flagged even when the app is newer. For that mechanism to stay sound,
 the following are stable contracts that must NOT be changed by edits to this
 library alone:
 
-- the `[program:host-backup]` block in `system/supervisord.conf`,
+- the `[program:host-backup]` block in `system/supervisord.conf.d/host-backup.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
 - the `uv run host-backup` / `uv run host-backup-now` entry points.
 

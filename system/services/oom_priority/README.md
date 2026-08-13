@@ -51,7 +51,7 @@ without inspecting the process tree:
 | Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
-its `command` in `system/supervisord.conf` runs `system/services/oom_priority/bin/oom_tag_service.py <key> <the
+its `command` in `system/supervisord.conf.d/<name>.conf` runs `system/services/oom_priority/bin/oom_tag_service.py <key> <the
 real command>`, which sets its own `oom_score_adj` from `SERVICE_BANDS` and then
 `exec`s the command in place (the band survives `execve` and is inherited by
 every child). Built-in services pass their own name; a **user-created** service
@@ -75,7 +75,8 @@ are never demoted. Because this path *raises*, a built-in missing from either
 band map is not merely left alone but actively pushed to `USER_SERVICE`, above
 every other built-in -- so
 `oom_tag_service_test.test_every_built_in_supervisord_program_has_an_explicit_band`
-requires every program in `supervisord.conf` to name its band outright, unless
+requires every program declared under `supervisord.conf.d/` (and in
+`supervisord.conf` itself) to name its band outright, unless
 it declares itself user-created by passing the `user` key (for those the
 fallback is the intended band, and the two mechanisms agree on it). The
 prefix remains the primary mechanism because it tags at spawn:

@@ -10,12 +10,19 @@ is available for WebSockets), writes a `[program:<name>]` block to its own
 `system/supervisord.conf.d/<name>.conf`, and runs `uv sync --all-packages` to
 materialize the workspace.
 
-Nothing shared is edited: the root pyproject.toml needs no entry (the
+No shared file is *authored*: the root pyproject.toml needs no entry (the
 `system/apps/*` workspace member glob already picks the package up, and
 `uv sync --all-packages` installs every member), and the supervisord program
 lives in its own file rather than being appended to a config shared with every
 other creation. That is what lets two agents scaffold two apps concurrently
-without touching the same file.
+without editing the same file.
+
+The one shared file still written is `uv.lock`, which `uv sync --all-packages`
+regenerates to add the new member. It is derived rather than authored, so
+harden-contention.md keeps it out of a creation's footprint and regenerates it
+on merge instead of treating the conflict as a stale pass -- but it does still
+show up as a dirty file in the tree, so it is not accurate to say a scaffold
+touches nothing shared.
 
 Usage:
     uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \\

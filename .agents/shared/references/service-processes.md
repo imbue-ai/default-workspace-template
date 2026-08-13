@@ -19,7 +19,7 @@ does **not** watch the config file -- you apply changes with
 
 ```ini
 [program:my-service]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run my-service
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run --all-packages my-service
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -41,7 +41,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo && uv run foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo && uv run --all-packages foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
@@ -142,8 +142,9 @@ Or read the log files directly under `/var/log/supervisor/`.
   not `localhost`, not starting with `host-` or `agent-`) because it becomes
   the leading label of the service's origin hostname.
 - supervisord only manages the programs declared under
-  `system/supervisord.conf.d/`; it does not touch the main agent window or
-  other tmux windows.
+  `system/supervisord.conf.d/` (plus `system_interface`, which stays in
+  `system/supervisord.conf` -- see the note there); it does not touch the main
+  agent window or other tmux windows.
 - If you need a one-off command, just run it directly rather than adding a
   program.
 - For standing up a new app (Flask lib or wrapping a third-party

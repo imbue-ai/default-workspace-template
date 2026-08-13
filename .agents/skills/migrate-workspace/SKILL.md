@@ -328,7 +328,7 @@ workspace's own random password) and `cloudflare_tunnel.env` (a tunnel minted pe
 resources. Use `rsync` over the SSH session with an `--exclude` for each.
 
 **Creations.** Each app lands under `system/apps/<package>/`, is added to the root
-`pyproject.toml`, gets a `[program:<name>]` block in `system/supervisord.conf`
+`pyproject.toml`, gets a `[program:<name>]` block in `system/supervisord.conf.d/<name>.conf`
 that runs `system/scripts/forward_port.py` before its own start command, and
 re-registers its port that way -- never by copying the old registry file, which is
 runtime state. Then `uv sync --all-packages` and

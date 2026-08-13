@@ -141,7 +141,7 @@ work, and you must do it for every changed `system/scripts/**`, `system/libs/**`
 set like this:
 
 1. **Enumerate the consumer universe** up front, independent of the diff: every
-   `system/supervisord.conf` program (and everything its `command` invokes, directly or
+   `system/supervisord.conf.d/` program (and everything its `command` invokes, directly or
    through a wrapper), every app or service under `system/services/` and `system/apps/`, every workspace-added skill
    under `.agents/skills/` (e.g. a crystallized `fetch-process-show` pipeline
    whose scripts a daemon or scheduled job runs), and any cron/scheduled
