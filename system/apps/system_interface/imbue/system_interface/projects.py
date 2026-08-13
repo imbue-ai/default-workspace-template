@@ -648,11 +648,39 @@ def strip_panel_from_content(content: dict[str, Any], panel_id: str) -> dict[str
     return pruned_content
 
 
-def _strip_panel_file_unlocked(layout_dir: Path, project_id: str, panel_id: str) -> bool:
-    """Rewrite one project's content without ``panel_id``, reporting whether it held it.
+@pure
+def _panel_ids_resolving_to_ref(content: dict[str, Any], ref: str) -> list[str]:
+    """Every saved panel id whose params resolve to ``ref``.
 
-    A project reduced to no panels at all has its content file removed so it
-    reopens on the launcher rather than restoring an empty grid.
+    A panel id is not a stable identity for every kind: a browser or app pane's
+    id is minted per open (``iframe-<owner>-<timestamp>``), so the same object
+    can sit under a different id in each view's file. The params always resolve
+    to the object's one ref, so a destroy that knows the ref finds them all.
+    """
+    dockview = content.get("dockview")
+    panels = dockview.get("panels") if isinstance(dockview, dict) else None
+    if not isinstance(panels, dict):
+        return []
+    panel_params = content.get("panelParams")
+    params_by_panel_id = panel_params if isinstance(panel_params, dict) else {}
+    matching_ids: list[str] = []
+    for panel_id in panels:
+        params = params_by_panel_id.get(panel_id)
+        if _panel_member_ref(panel_id, params if isinstance(params, dict) else {}) == ref:
+            matching_ids.append(panel_id)
+    return matching_ids
+
+
+def _strip_panel_file_unlocked(layout_dir: Path, project_id: str, panel_id: str | None, ref: str | None) -> bool:
+    """Rewrite one project's content without the destroyed object's panels.
+
+    Panels are matched two ways: by ``panel_id`` (the deterministic id a chat
+    or a named terminal is always filed under, or the destroying client's live
+    id), and by ``ref`` against each saved panel's params -- which is what
+    catches a browser or app pane saved under a per-open minted id this caller
+    never saw. Reports whether the file held any of them. A project reduced to
+    no panels at all has its content file removed so it reopens on the launcher
+    rather than restoring an empty grid.
     """
     content_path = project_content_path(layout_dir, project_id)
     if not content_path.exists():
@@ -662,9 +690,22 @@ def _strip_panel_file_unlocked(layout_dir: Path, project_id: str, panel_id: str)
     except (json.JSONDecodeError, OSError) as e:
         _loguru_logger.opt(exception=e).warning("Skipped unreadable project content at {}", content_path)
         return False
-    if not isinstance(content, dict) or not content_contains_panel(content, panel_id):
+    if not isinstance(content, dict):
         return False
-    stripped = strip_panel_from_content(content, panel_id)
+    target_panel_ids: list[str] = []
+    if panel_id is not None and content_contains_panel(content, panel_id):
+        target_panel_ids.append(panel_id)
+    if ref is not None:
+        for matched_id in _panel_ids_resolving_to_ref(content, ref):
+            if matched_id not in target_panel_ids:
+                target_panel_ids.append(matched_id)
+    if not target_panel_ids:
+        return False
+    stripped: dict[str, Any] | None = content
+    for target_panel_id in target_panel_ids:
+        stripped = strip_panel_from_content(stripped, target_panel_id)
+        if stripped is None:
+            break
     if stripped is None:
         content_path.unlink(missing_ok=True)
     else:
@@ -672,7 +713,7 @@ def _strip_panel_file_unlocked(layout_dir: Path, project_id: str, panel_id: str)
     return True
 
 
-def remove_panel_from_all_projects(layout_dir: Path, panel_id: str, ref: str | None = None) -> list[str]:
+def remove_panel_from_all_projects(layout_dir: Path, panel_id: str | None, ref: str | None = None) -> list[str]:
     """Drop a destroyed object from every project, returning the ids that changed.
 
     Destroy is the one cross-project operation: the underlying agent, terminal,
@@ -681,8 +722,17 @@ def remove_panel_from_all_projects(layout_dir: Path, panel_id: str, ref: str | N
     otherwise restore a tab whose identity can no longer be resolved, and as a
     member, which would otherwise keep listing it as backgrounded forever.
     ``ref`` is the member the panel stood for; a caller that knows only the
-    panel passes None and drops the panel alone. Projects holding neither are
-    left untouched.
+    panel passes None and drops the panel alone, while a caller that knows only
+    the ref (a browser or app pane's id is minted per open, so there is no
+    deterministic id to name) passes None for ``panel_id`` and the sweep finds
+    the panels by resolving each saved panel's params to its ref. Projects
+    holding neither are left untouched.
+
+    Everything is swept too: it has no registry entry and no member list, but
+    it keeps a saved arrangement like any project, and a destroyed object left
+    in that file would restore as a dead tab the next time Everything is
+    opened. When its content held the panel, ``EVERYTHING_VIEW_ID`` is among
+    the returned ids.
     """
     changed_project_ids: list[str] = []
     with _projects_lock:
@@ -694,9 +744,14 @@ def remove_panel_from_all_projects(layout_dir: Path, panel_id: str, ref: str | N
             if is_member_dropped:
                 entry["members"] = [member for member in members if member != ref]
                 is_meta_dirty = True
-            is_panel_dropped = _strip_panel_file_unlocked(layout_dir, project_id, panel_id)
+            is_panel_dropped = _strip_panel_file_unlocked(layout_dir, project_id, panel_id, ref)
             if is_member_dropped or is_panel_dropped:
                 changed_project_ids.append(project_id)
+        # The registry loop above never reaches Everything -- it is a view, not
+        # a project -- so its content file is swept explicitly. Only the panel
+        # strip applies: Everything has no member list to drop ``ref`` from.
+        if _strip_panel_file_unlocked(layout_dir, EVERYTHING_VIEW_ID, panel_id, ref):
+            changed_project_ids.append(EVERYTHING_VIEW_ID)
         if is_meta_dirty:
             _write_meta_unlocked(layout_dir, meta)
     return changed_project_ids

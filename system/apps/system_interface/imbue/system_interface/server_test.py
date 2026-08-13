@@ -2518,6 +2518,60 @@ def test_delete_project_drops_the_names_of_what_it_stopped(
     }
 
 
+def test_delete_project_sweeps_stopped_members_out_of_every_view(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A member the delete stopped also leaves every other view, Everything included.
+
+    The deleted project's own file goes with the delete, but the stopped
+    terminal's panel also sits in Everything's saved arrangement -- and its ref
+    may still be filed in another project. Left anywhere, the panel would
+    restore as a dead tab that silently respawns a fresh tmux session under the
+    reused name. The sweep is announced so clients still showing the tab drop
+    it live instead of autosaving it back.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
+    killed_session = FinishedProcess(
+        returncode=0,
+        stdout="",
+        stderr="",
+        command=("tmux", "kill-session", "-t", "=terminal-4"),
+        is_output_already_logged=False,
+    )
+    assert client.post("/api/projects", json={"name": "Scratch", "color": "#3B82F6", "glyph": 3}).status_code == 200
+    assert client.post("/api/projects/scratch/members", json={"ref": "terminal:terminal-4"}).status_code == 200
+    # The same terminal is filed in the surviving project too, and docked in
+    # Everything's saved arrangement.
+    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-4"}).status_code == 200
+    layout_data = {
+        "dockview": {
+            "panels": {"terminal-session-terminal-4": {"id": "terminal-session-terminal-4"}, "chat-1": {"id": "chat-1"}}
+        },
+        "panelParams": {"terminal-session-terminal-4": {"terminalSessionName": "terminal-4"}},
+    }
+    assert client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+    client_queue = _register_fake_client(app, "client-1", "desktop")
+
+    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
+        response = client.post("/api/projects/scratch/delete")
+
+    assert response.status_code == 200
+    assert response.get_json()["stopped"] == ["terminal:terminal-4"]
+    remaining_everything = client.get("/api/projects/everything").get_json()["layout"]
+    assert set(remaining_everything["dockview"]["panels"]) == {"chat-1"}
+    assert client.get("/api/projects").get_json()["projects"][0]["members"] == []
+    assert _next_broadcast_message(client_queue) == {
+        "type": "project_panel_removed",
+        "panel_id": "terminal-session-terminal-4",
+        "ref": "terminal:terminal-4",
+        "project_ids": ["project-1", "everything"],
+    }
+    assert _next_broadcast_message(client_queue) == {"type": "project_members_changed", "project_ids": ["project-1"]}
+    assert _next_broadcast_message(client_queue)["type"] == "project_deleted"
+
+
 def test_add_member_files_a_ref_and_lists_it(
     client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2668,6 +2722,72 @@ def test_delete_project_panel_also_unfiles_the_member(
     panel_only = client.post("/api/projects/panels/terminal-panel-1/delete")
     assert panel_only.status_code == 200
     assert panel_only.get_json() == {"project_ids": []}
+
+
+def test_shut_down_terminal_sweeps_every_store_including_everything(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tab menu's "Shut down terminal", end to end at the HTTP layer.
+
+    The frontend makes two calls: ``POST /api/terminals/<name>/destroy`` (kills
+    the tmux session) and then ``POST /api/projects/panels/<panel_id>/delete``
+    with the member ref. Afterwards nothing on the machine may still know the
+    terminal: not the project's member list or saved content, not Everything's
+    saved content (which has no registry entry, but keeps an arrangement like
+    any project -- a dead panel left there would restore as a tab that silently
+    respawns a fresh session under the old id), and not the machine-wide title
+    and recency stores (the allocator reuses ``terminal-<N>``, so either left
+    behind would land on the next terminal to answer to that ref).
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    monkeypatch.setenv("MNGR_PREFIX", "mngr-")
+    terminal_panel = {"id": "terminal-session-terminal-1", "title": "Terminal 1"}
+    layout_data = {
+        "dockview": {"panels": {"terminal-session-terminal-1": terminal_panel, "chat-1": {"id": "chat-1"}}},
+        "panelParams": {"terminal-session-terminal-1": {"terminalSessionName": "terminal-1"}},
+    }
+    assert client.post("/api/projects/project-1/members", json={"ref": "terminal:terminal-1"}).status_code == 200
+    assert client.post("/api/projects/project-1", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+    assert client.post("/api/projects/everything", json={"layout": layout_data, "client_id": "c1"}).status_code == 200
+    assert (
+        client.post("/api/member-titles", json={"ref": "terminal:terminal-1", "title": "Terminal 1"}).status_code
+        == 200
+    )
+    assert client.post("/api/member-last-used", json={"ref": "terminal:terminal-1"}).status_code == 200
+    killed_session = FinishedProcess(
+        returncode=0,
+        stdout="",
+        stderr="",
+        command=("tmux", "kill-session", "-t", "=terminal-1"),
+        is_output_already_logged=False,
+    )
+
+    with patch("imbue.system_interface.server.run_local_command_modern_version", return_value=killed_session):
+        destroy_response = client.post("/api/terminals/terminal-1/destroy")
+    delete_response = client.post(
+        "/api/projects/panels/terminal-session-terminal-1/delete", json={"ref": "terminal:terminal-1"}
+    )
+
+    assert destroy_response.status_code == 200
+    assert delete_response.status_code == 200
+    assert sorted(delete_response.get_json()["project_ids"]) == ["everything", "project-1"]
+    # Everything's own file no longer holds the panel (checked on disk: the
+    # sweep must reach the stored JSON, not just what the API re-serves).
+    everything_path = tmp_path / "agents" / "agent-123" / "workspace_layout" / "projects" / "everything.json"
+    everything_on_disk = json.loads(everything_path.read_text())
+    assert set(everything_on_disk["dockview"]["panels"]) == {"chat-1"}
+    assert "terminal-session-terminal-1" not in everything_on_disk.get("panelParams", {})
+    remaining_everything = client.get("/api/projects/everything").get_json()["layout"]
+    assert set(remaining_everything["dockview"]["panels"]) == {"chat-1"}
+    # The project's membership and saved content no longer hold it either.
+    project = client.get("/api/projects").get_json()["projects"][0]
+    assert project["members"] == []
+    remaining_project = client.get("/api/projects/project-1").get_json()["layout"]
+    assert set(remaining_project["dockview"]["panels"]) == {"chat-1"}
+    # The machine-wide stores dropped the ref.
+    assert client.get("/api/member-titles").get_json() == {"titles": {}}
+    assert client.get("/api/member-last-used").get_json() == {"last_used": {}}
 
 
 def test_set_member_title_names_the_object_machine_wide(

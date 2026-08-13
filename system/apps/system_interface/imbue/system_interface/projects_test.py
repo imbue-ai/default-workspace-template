@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.projects import DEFAULT_PROJECT_COLOR
+from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_ID
 from imbue.system_interface.projects import DEFAULT_PROJECT_NAME
 from imbue.system_interface.projects import LastProjectDeletionError
@@ -484,6 +485,104 @@ def test_remove_panel_from_all_projects_is_a_noop_when_absent(tmp_path: Path) ->
     assert content is not None
     assert set(content["dockview"]["panels"]) == {"chat-a"}
     assert list_members(tmp_path, DEFAULT_PROJECT_ID) == ["chat:agent-a"]
+
+
+def test_remove_panel_from_all_projects_also_strips_everything(tmp_path: Path) -> None:
+    # Everything has no registry entry, so the project loop never reaches it --
+    # but it keeps a saved arrangement like any project, and a destroyed
+    # object left there would restore as a dead tab.
+    create_project(tmp_path, "Coding", "#16A34A", 1)
+    write_project_content(tmp_path, "coding", _content_with_panels("terminal-1", "chat-a"))
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, _content_with_panels("terminal-1", "chat-a"))
+
+    changed = remove_panel_from_all_projects(tmp_path, "terminal-1")
+
+    assert sorted(changed) == ["coding", EVERYTHING_VIEW_ID]
+    coding_content = read_project_content(tmp_path, "coding")
+    assert coding_content is not None
+    assert set(coding_content["dockview"]["panels"]) == {"chat-a"}
+    everything_content = read_project_content(tmp_path, EVERYTHING_VIEW_ID)
+    assert everything_content is not None
+    assert set(everything_content["dockview"]["panels"]) == {"chat-a"}
+
+
+def test_remove_last_panel_deletes_everything_content_file(tmp_path: Path) -> None:
+    # Emptied out entirely, Everything falls back to the fresh-workspace state
+    # exactly as a project does: the file goes rather than storing an empty grid.
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, _content_with_panels("terminal-1"))
+
+    changed = remove_panel_from_all_projects(tmp_path, "terminal-1", "terminal:terminal-1")
+
+    assert changed == [EVERYTHING_VIEW_ID]
+    assert not project_content_path(tmp_path, EVERYTHING_VIEW_ID).exists()
+
+
+def test_remove_panel_with_no_everything_content_skips_it(tmp_path: Path) -> None:
+    # A machine whose Everything view has never been saved has no file to
+    # strip: no crash, and "everything" is not reported as changed.
+    write_project_content(tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("chat-a", "chat-b"))
+
+    changed = remove_panel_from_all_projects(tmp_path, "chat-a")
+
+    assert changed == [DEFAULT_PROJECT_ID]
+
+
+def test_remove_panel_by_ref_strips_minted_id_panels_everywhere(tmp_path: Path) -> None:
+    # A browser (or app) pane's panel id is minted per open, so the same
+    # object sits under a different id in each view's file and the destroyer's
+    # own panel id matches none of them. The ref each saved panel's params
+    # resolve to is the object's one stable name, and is what finds them all
+    # -- Everything's copy included.
+    ref = "service:browser?session=chrome-1"
+    create_project(tmp_path, "Coding", "#16A34A", 1)
+    add_member(tmp_path, "coding", ref)
+    coding_content = _content_with_panels("iframe-browser-1755000000001", "chat-a")
+    coding_content["panelParams"]["iframe-browser-1755000000001"] = {
+        "serviceName": "browser",
+        "url": "http://browser.workspace.test/?session=chrome-1",
+    }
+    write_project_content(tmp_path, "coding", coding_content)
+    everything_content = _content_with_panels("iframe-browser-1755000000002", "chat-a")
+    everything_content["panelParams"]["iframe-browser-1755000000002"] = {
+        "serviceName": "browser",
+        "url": "http://browser.workspace.test/?session=chrome-1",
+    }
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, everything_content)
+
+    changed = remove_panel_from_all_projects(tmp_path, None, ref)
+
+    assert sorted(changed) == ["coding", EVERYTHING_VIEW_ID]
+    assert list_members(tmp_path, "coding") == []
+    coding_after = read_project_content(tmp_path, "coding")
+    assert coding_after is not None
+    assert set(coding_after["dockview"]["panels"]) == {"chat-a"}
+    everything_after = read_project_content(tmp_path, EVERYTHING_VIEW_ID)
+    assert everything_after is not None
+    assert set(everything_after["dockview"]["panels"]) == {"chat-a"}
+
+
+def test_remove_panel_matches_both_the_given_id_and_the_ref(tmp_path: Path) -> None:
+    # One view saved the terminal under its deterministic id, another under a
+    # minted ``iframe-terminal-<ts>`` id (the pre-allocation path): the given
+    # panel id catches the first and the ref-resolution catches the second,
+    # without double-stripping a panel that matches both.
+    ref = "terminal:terminal-1"
+    write_project_content(
+        tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("terminal-session-terminal-1", "chat-a")
+    )
+    everything_content = _content_with_panels("iframe-terminal-1755000000003", "chat-a")
+    everything_content["panelParams"]["iframe-terminal-1755000000003"] = {"terminalSessionName": "terminal-1"}
+    write_project_content(tmp_path, EVERYTHING_VIEW_ID, everything_content)
+
+    changed = remove_panel_from_all_projects(tmp_path, "terminal-session-terminal-1", ref)
+
+    assert sorted(changed) == [EVERYTHING_VIEW_ID, DEFAULT_PROJECT_ID]
+    default_after = read_project_content(tmp_path, DEFAULT_PROJECT_ID)
+    assert default_after is not None
+    assert set(default_after["dockview"]["panels"]) == {"chat-a"}
+    everything_after = read_project_content(tmp_path, EVERYTHING_VIEW_ID)
+    assert everything_after is not None
+    assert set(everything_after["dockview"]["panels"]) == {"chat-a"}
 
 
 def test_member_refs_from_content_covers_every_panel_kind() -> None:
