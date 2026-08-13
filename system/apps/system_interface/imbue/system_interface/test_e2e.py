@@ -2358,3 +2358,106 @@ def test_launcher_kind_filter_hides_a_kind_and_reset_restores_it(tmp_path: Path,
         section.locator("button", has_text="Reset filters").click()
         expect(chat_row).to_have_count(1)
         expect(app_row).to_have_count(1)
+
+
+_TAB_OVERFLOW_PORT = 18880
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_path: Path, page: Page) -> None:
+    """Tabs folded into the "N more" dropdown list as bare rows; the strip stays whole.
+
+    When the strip runs out of room, dockview tucks the hidden tabs behind an
+    "N more" control whose dropdown builds a FRESH instance of the custom tab
+    renderer per row. A row's whole job is to focus its tab, so it carries the
+    kind icon and the title and none of the strip's machinery: no minus, no
+    kebab, and nothing waiting behind a hover either -- close and shut-down
+    belong on the strip, where the tab is wide enough to hit the right one.
+
+    The other half is the regression this pins. While the dropdown is open,
+    two live renderer instances exist for one panel -- the strip's and the
+    row's -- and only the strip's may own the panel's entry in the handle
+    registry that menu-Rename (and the title fade) reach through. A row that
+    claimed the entry, or deleted it on dispose when the dropdown closed,
+    would leave Rename a silent no-op or pointed at a detached row. So after
+    the dropdown has opened and closed, the strip tab's Rename must still
+    open the strip's own editor.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _TAB_OVERFLOW_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        # Narrow enough that a handful of tabs overflow the strip: every tab
+        # keeps at least 140px plus the strip's reserved space, so five or six
+        # tabs exhaust a 900px window and the cap below has real headroom.
+        page.set_viewport_size({"width": 900, "height": 700})
+        page.goto(base_url)
+
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+
+        # Fill the strip from the launcher's Terminal tile, exactly as the
+        # user would; each create auto-names "Terminal N". No tmux session
+        # comes into being here -- session creation is lazy (on ttyd attach)
+        # and no terminal service runs in this harness, exactly as in the
+        # auto-filed-name test above. Stop as soon as dockview folds the
+        # excess behind its "N more" control.
+        overflow_control = page.locator(".dv-tabs-overflow-dropdown-default")
+        for index in range(1, 9):
+            page.locator(".dockview-add-tab-button").first.click()
+            expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+            page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
+            expect(page.locator(".dv-default-tab-content", has_text=f"Terminal {index}").first).to_be_visible(
+                timeout=10000
+            )
+            if overflow_control.is_visible():
+                break
+        else:
+            # The fold is observer-driven, so give it a beat before giving up.
+            wait_for(
+                lambda: overflow_control.is_visible(),
+                timeout=5.0,
+                poll_interval=0.1,
+                error_message="the strip never overflowed: a chat plus 8 terminals all fit at 900px wide",
+            )
+
+        # Open the dropdown: the hidden tabs are listed ...
+        overflow_control.click()
+        container = page.locator(".dv-tabs-overflow-container")
+        expect(container).to_be_visible(timeout=5000)
+        rows = container.locator(".dv-default-tab-content")
+        expect(rows.first).to_be_visible(timeout=5000)
+
+        # ... as bare rows: no controls revealed, and none hidden either. The
+        # hover matters because that is the gesture the strip reveals its
+        # minus and kebab on; the dropdown must have nothing to reveal.
+        expect(container.locator(".dv-custom-tab-actions")).to_have_count(0)
+        expect(container.locator(".dv-custom-tab-action")).to_have_count(0)
+        rows.first.hover()
+        expect(container.locator(".dv-custom-tab-actions")).to_have_count(0)
+        expect(container.locator(".dv-custom-tab-action")).to_have_count(0)
+
+        # A row's one job: clicking it closes the popover and puts its tab in
+        # front on the strip.
+        clicked_title = rows.first.inner_text()
+        rows.first.click()
+        expect(page.locator(".dv-tabs-overflow-container")).to_have_count(0, timeout=5000)
+        expect(page.locator(".dv-tab.dv-active-tab .dv-default-tab-content")).to_have_text(
+            clicked_title, timeout=5000
+        )
+
+        # The regression: the dropdown built (and, on close, disposed) a
+        # second renderer instance for that panel, and the strip tab's handle
+        # must have survived it. Menu-Rename reaches the tab through the
+        # handle registry, so it still opens the STRIP's editor, seeded with
+        # the tab's name; Escape leaves everything as it was.
+        strip_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text=clicked_title)).first
+        strip_tab.hover()
+        strip_tab.locator(".dv-custom-tab-action").last.click()
+        page.locator("[role='menuitem']", has_text="Rename").click()
+        editor = page.locator(".dv-custom-tab-title-input:visible")
+        expect(editor).to_have_count(1, timeout=5000)
+        expect(editor).to_have_value(clicked_title)
+        editor.press("Escape")
+        expect(page.locator(".dv-custom-tab-title-input:visible")).to_have_count(0)
