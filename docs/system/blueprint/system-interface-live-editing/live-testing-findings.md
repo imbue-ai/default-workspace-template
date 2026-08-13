@@ -264,7 +264,8 @@ pass does not redo them.
   `sysedit` (field is None) -> `WorkerBranchUnknownError: mngr reports no branch
   for agent 'sysedit'; it may not have a git work_dir`; a nonexistent name ->
   `WorkerBranchUnknownError: mngr reports no agent named ...`. The raise is what
-  triggers `launch`'s destroy-the-worker path.
+  triggers `launch-sync`'s destroy-the-worker path (its sole caller; plain
+  `launch` never reads the branch).
 
 - **`initial_branch` matches its documented contract.** Observed on a real host:
   `system-services` reports `mngr/sysedit` while its work_dir has since moved to
