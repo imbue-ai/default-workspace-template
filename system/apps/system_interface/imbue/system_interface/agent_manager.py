@@ -293,9 +293,10 @@ def _refuse_to_set_oom_score_adj(pid: int, adj: int) -> bool:
     pre-flight) is a read-only second view of a workspace that another instance
     owns. Chat ``oom_score_adj`` is not shared state it may contribute to: the
     two instances would fight over the same ``/proc`` entries, and this one would
-    lose anyway, since the frontend activity reports that supply the open/visible
-    bonuses go to the authoritative instance -- so its writes would be both
-    contending *and* worse.
+    lose anyway. The open/visible bonuses come from frontend activity reports, and
+    this instance sees only its *own* -- the preview's tab set, which is not the
+    workspace's, or for the headless reveal pre-flight nothing at all, which reads
+    as every chat closed. So its writes would be both contending *and* worse.
 
     Withholding the capability rather than gating the call sites is deliberate:
     ``reapply`` is reached from the sweep, from ``record_activity``, and from

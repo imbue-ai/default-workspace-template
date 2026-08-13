@@ -1217,7 +1217,6 @@ def test_follow_mode_is_built_without_the_power_to_write_oom_scores(
     # False for a pid that does not exist, so asserting on the result would pass
     # just as well against an instance that tried to write and merely missed.
     assert follower._oom_prioritizer._set_adj is _refuse_to_set_oom_score_adj
-    assert _refuse_to_set_oom_score_adj(4242, 300) is False
 
     authoritative = AgentManager.build(broadcaster, events_mode=AgentEventsMode.OBSERVE)
     assert authoritative._oom_prioritizer._set_adj is bands.set_oom_score_adj
