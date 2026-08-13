@@ -32,4 +32,5 @@ supervisorctl reread >/dev/null
 supervisorctl update >/dev/null
 supervisorctl restart system_interface
 
-# TODO: Invoke #349's reload endpoint, until then use window.top.location.reload()
+# The restart leaves every open view stale; this reloads them.
+python3 "$(dirname "$0")/refresh_workspace_view.py"
