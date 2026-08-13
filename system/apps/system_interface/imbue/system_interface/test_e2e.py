@@ -10,6 +10,7 @@ import contextlib
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -1746,6 +1747,190 @@ def test_renaming_an_object_in_one_view_names_it_in_the_other(tmp_path: Path, pa
         )
         expect(page.locator(".dv-default-tab-content", has_text="Design notes").first).to_be_visible(timeout=15000)
         expect(page.locator(".dv-default-tab-content", has_text="test-agent")).to_have_count(0)
+
+
+_TERMINAL_DESTROY_PORT = 18879
+
+
+def _terminal_session_names(base_url: str) -> set[str]:
+    """The live user-terminal session names, as the server's terminals API reports them."""
+    with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5.0) as response:
+        payload = json.loads(response.read())
+    return {terminal["session_name"] for terminal in payload["terminals"]}
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Path, page: Page) -> None:
+    """Shutting down a terminal leaves nothing of it for Everything to restore.
+
+    The reported shape of this: destroy a terminal from its tab menu while
+    Everything's saved layout still holds its panel, then open Everything -- and
+    a dead terminal tab comes back, whose attach-or-create quietly respawns a
+    fresh tmux session under the old ``terminal-N`` id, wearing no name. Destroy
+    is the one cross-project operation, so the sweep has to reach Everything's
+    saved arrangement even though Everything is a view rather than a project,
+    with no registry entry for the project loop to find.
+
+    The tmux session is created here by hand, standing in for the ttyd attach
+    that creates it lazily in a real workspace (no terminal service runs in this
+    harness). That is what lets the fleet list the terminal for Everything's
+    machine table to offer, and what gives the shutdown a real session to kill.
+
+    The destroy's whole blast radius is asserted rather than one fact of it:
+    the tab leaves the mounted project, the session leaves tmux, the name
+    leaves the machine's title store, the panel leaves Everything's saved
+    content -- and, the regression, mounting Everything afterwards draws no
+    terminal tab and respawns no session.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _TERMINAL_DESTROY_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        everything_file = layout_dir / "projects" / f"{EVERYTHING_VIEW_ID}.json"
+        # The default tmux socket is shared with whatever else runs on this
+        # machine, so "nothing respawned" is judged at the end against what was
+        # already live rather than against emptiness.
+        preexisting_sessions = _terminal_session_names(base_url)
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(base_url)
+
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+        page.wait_for_function(
+            f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+        )
+
+        # Create the terminal from the launcher's tile, exactly as the user did.
+        page.locator(".dockview-add-tab-button").first.click()
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+        page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
+        expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=10000)
+
+        # The machine-allocated session name, read back from the ref the
+        # auto-filed "Terminal 1" was keyed under -- never hardcoded, because
+        # the allocator hands out the lowest ``terminal-N`` the socket is not
+        # already using.
+        wait_for(
+            lambda: any(ref.startswith("terminal:") for ref in _member_titles(layout_dir)),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the terminal's auto-filed name never reached the title store",
+        )
+        terminal_ref = next(ref for ref in _member_titles(layout_dir) if ref.startswith("terminal:"))
+        session_name = terminal_ref.removeprefix("terminal:")
+
+        # Session creation is lazy (on ttyd attach) and no terminal service
+        # runs in this harness, so stand in for the attach. Without a live
+        # session the fleet would not list the terminal for Everything's
+        # machine table to offer, and the shutdown would have nothing to kill.
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", session_name, "-c", str(tmp_path)],
+            check=True,
+            capture_output=True,
+            timeout=10.0,
+        )
+        try:
+            wait_for(
+                lambda: session_name in _terminal_session_names(base_url),
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message=f"the terminals API never listed {session_name}",
+            )
+
+            # File the terminal into Everything the way a user would: mount it,
+            # open the terminal from the machine-wide table its launcher shows,
+            # and let the autosave write it into Everything's saved layout.
+            _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+            page.wait_for_function(
+                f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+            )
+            expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+            page.locator(".new-tab-launcher-row:visible", has_text="Terminal 1").first.click()
+            expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=15000)
+            wait_for(
+                lambda: everything_file.exists() and session_name in everything_file.read_text(),
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="autosave never filed the terminal into everything.json",
+            )
+
+            # Back in the starter project, shut the terminal down exactly as
+            # the user did: hover its tab, open the options menu behind the
+            # kebab, pick the destructive verb, and confirm.
+            _switch_view_via_rail(page, DEFAULT_PROJECT_NAME)
+            page.wait_for_function(
+                f"localStorage.getItem('si-active-project-id') === '{DEFAULT_PROJECT_ID}'", timeout=10000
+            )
+            _collapse_rail(page)
+            terminal_tab = page.locator(
+                ".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Terminal 1")
+            ).first
+            expect(terminal_tab).to_be_visible(timeout=15000)
+            terminal_tab.hover()
+            terminal_tab.locator(".dv-custom-tab-action").last.click()
+            page.locator("[role='menuitem']", has_text="Shut down terminal").click()
+            page.locator(".destroy-dialog-btn-destroy").click()
+
+            # The whole blast radius. The tab leaves the mounted project ...
+            expect(page.locator(".dv-default-tab-content", has_text="Terminal 1")).to_have_count(0, timeout=10000)
+            # ... the session leaves tmux ...
+            wait_for(
+                lambda: session_name not in _terminal_session_names(base_url),
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message=f"the destroy left tmux session {session_name} running",
+            )
+            # ... the name leaves the machine's title store ...
+            wait_for(
+                lambda: terminal_ref not in _member_titles(layout_dir),
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the destroy left the terminal's name in the title store",
+            )
+            # ... and the panel leaves Everything's saved content. The terminal
+            # was all Everything held, so the strip may delete the file outright
+            # rather than keep a layout with no panels; both count as gone.
+            wait_for(
+                lambda: not everything_file.exists() or session_name not in everything_file.read_text(),
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message="the destroy left the terminal's panel in everything.json",
+            )
+
+            # The regression: mounting Everything now draws its launcher (there
+            # is nothing left to restore), not a terminal tab -- neither under
+            # the auto-filed name nor under the raw session id a dead tab used
+            # to come back wearing.
+            _switch_view_via_rail(page, EVERYTHING_VIEW_NAME)
+            page.wait_for_function(
+                f"localStorage.getItem('si-active-project-id') === '{EVERYTHING_VIEW_ID}'", timeout=10000
+            )
+            expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=15000)
+            expect(page.locator(".dv-default-tab-content", has_text="Terminal 1")).to_have_count(0)
+            expect(page.locator(".dv-default-tab-content", has_text="terminal-")).to_have_count(0)
+
+            # And after the time an attach-or-create would have needed, the
+            # mount still spawned nothing: no terminal session is live now that
+            # was not already live before this test created anything.
+            page.wait_for_timeout(AUTOSAVE_SETTLE_MS)
+            expect(page.locator(".dv-default-tab-content", has_text="Terminal 1")).to_have_count(0)
+            respawned = {
+                name
+                for name in _terminal_session_names(base_url)
+                if name.startswith("terminal-") and name not in preexisting_sessions
+            }
+            assert respawned == set(), f"a destroyed terminal's session came back: {respawned}"
+        finally:
+            # Belt-and-braces teardown for the failure paths above; on the
+            # passing path the shutdown already killed the session.
+            subprocess.run(
+                ["tmux", "kill-session", "-t", f"={session_name}"],
+                check=False,
+                capture_output=True,
+                timeout=10.0,
+            )
 
 
 _SETTINGS_STAGING_PORT = 18873
