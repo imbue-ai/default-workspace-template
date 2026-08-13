@@ -2,4 +2,6 @@
 
 This was the one program the conf.d split left behind, and only for an external reason: the minds desktop client's recovery probe read `system/supervisord.conf` directly with `configparser`, which does not follow supervisord's `[include]`, so moving the block would have silently degraded the probe's port-listening and curl checks to "could not determine inner port". imbue-ai/mngr-internal#171 makes that probe follow the config's own `[include]` globs, which removes the constraint.
 
+The cross-repo constraint is now a check rather than a note: `system/test_supervisord_layout.py` asserts that a program-free main config implies a vendored recovery probe that follows the `[include]` globs. It stays red until imbue-ai/mngr-internal#171 lands and `system/vendor/mngr` is re-synced -- which is the point, since a `minds-v<N>` template tag must not carry this layout ahead of the mngr commit tagged `minds-v<N>`.
+
 Verified the move is a no-op on the realized config: read both layouts through supervisord's own `ServerOptions.read_config` and diffed the resulting process configs -- identical 13 programs, identical order, identical commands and options, no include warnings. Start order is unaffected, since supervisord orders by `(priority, name)` and every program uses the default priority.
