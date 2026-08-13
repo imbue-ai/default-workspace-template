@@ -838,22 +838,61 @@ def test_a_blip_on_the_pre_probe_does_not_disarm_the_regression_check(repo: Path
     assert unanswered_calls  # the blip really did happen
 
 
-def test_the_pre_probe_retries_a_non_answer_but_not_a_verdict() -> None:
+def test_a_blip_after_the_build_does_not_roll_back_a_reveal_that_landed(repo: Path) -> None:
+    # The mirror of the case above, and the more expensive way to be wrong. On a
+    # frontend-only reveal nothing else probes the live service -- the health
+    # poll runs only when the backend was restarted -- so this one request is
+    # the entire verdict. Unretried, a blip reverts a change that landed fine
+    # and reports the reveal as failed.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+    unanswered_calls = []
+
+    def responder(url: str) -> reveal_mod.FetchedPage | None:
+        has_built = any(c[:3] == ["npm", "run", "build"] for c in runner.calls)
+        if has_built and not unanswered_calls:
+            unanswered_calls.append(url)
+            return None
+        return _built_app_page(url)
+
+    http = _FakeHttp(_all_healthy, page_responder=responder)
+
+    code = _reveal(runner, http, _FakeSpawner(), repo)
+
+    assert code == 0
+    assert unanswered_calls  # the blip really did happen
+    assert not runner.ran("git", "commit")  # nothing was reverted
+
+
+def test_the_frontend_probe_retries_a_non_answer_but_not_a_verdict() -> None:
     # The two halves of the same rule. A non-answer says nothing about the
     # frontend, so it is worth asking again; a verdict -- here the placeholder,
     # arriving as a perfectly healthy 200 -- is the service telling us the
-    # frontend is already broken, and asking again only spends the budget to
-    # reach the same answer.
+    # frontend is broken, and asking again only spends the budget to reach the
+    # same answer.
     answers = [None, None, _built_app_page("/")]
     http = _FakeHttp(_all_healthy, page_responder=lambda url: answers.pop(0) if answers else _built_app_page(url))
 
-    assert reveal_mod._was_frontend_serving(http, _LIVE_BASE, lambda _seconds: None)
+    assert reveal_mod.describe_frontend_failure(http, _LIVE_BASE, lambda _seconds: None) is None
     assert not answers  # it kept asking until it got an answer
 
     verdict_http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
 
-    assert not reveal_mod._was_frontend_serving(verdict_http, _LIVE_BASE, lambda _seconds: None)
+    assert reveal_mod.describe_frontend_failure(verdict_http, _LIVE_BASE, lambda _seconds: None) is not None
     assert len(verdict_http.page_urls) == 1
+
+
+def test_a_service_that_never_answers_spends_the_budget_and_still_reports_a_failure() -> None:
+    # Exhausting the retries has to leave a usable answer behind: the callers
+    # after the reveal turn it into the rollback message, and a UI that will not
+    # answer is one the user cannot see either.
+    silent_http = _FakeHttp(_all_healthy, page_responder=lambda _url: None)
+
+    failure = reveal_mod.describe_frontend_failure(silent_http, _LIVE_BASE, lambda _seconds: None)
+
+    assert failure is not None
+    assert len(silent_http.page_urls) == reveal_mod._FRONTEND_PROBE_ATTEMPTS
 
 
 # --- preconditions ----------------------------------------------------------
