@@ -69,6 +69,19 @@ def read_registered_apps(apps_toml_path: Path) -> list[RegisteredApp]:
     return parse_registered_apps(text)
 
 
+def build_frame_ancestors_policy(workspace_domain: str, chrome_origin: str) -> str:
+    """The ``frame-ancestors`` CSP source list for a shared workspace's responses.
+
+    Always allows the workspace's own origin family (``*.<domain>``) so its
+    services can embed one another; adds the hosted-chrome origin only when the
+    share carries one, so a share created by an older client stays deny-external.
+    """
+    sources = ["'self'", f"https://*.{workspace_domain}"]
+    if chrome_origin:
+        sources.append(chrome_origin)
+    return " ".join(sources)
+
+
 def render_caddyfile(
     workspace_domain: str,
     apps: list[RegisteredApp],
@@ -77,9 +90,11 @@ def render_caddyfile(
     tls_key_path: Path,
     https_port: int,
     gateway_port: int,
+    chrome_origin: str,
 ) -> str:
     """Render the full Caddyfile for one shared workspace."""
     gateway_backend = f"127.0.0.1:{gateway_port}"
+    frame_ancestors = build_frame_ancestors_policy(workspace_domain, chrome_origin)
 
     # One matcher per registered service, keyed on its unguessable label host.
     # The matcher id is derived from the (unique) service name; the Host it
@@ -130,6 +145,19 @@ https://*.{workspace_domain}:{https_port} {{
     # Labels are semi-secret (they gate the relay), so never leak one to
     # another site via the Referer of an outbound navigation.
     header Referrer-Policy same-origin
+
+    # Who may embed this workspace in an iframe: its own origin family plus the
+    # hosted minds chrome (when the share carries one). This is what makes the
+    # chrome's cross-origin iframe render at all; a service's own CSP still
+    # applies (multiple CSP headers compose by intersection).
+    header Content-Security-Policy "frame-ancestors {frame_ancestors}"
+
+    # Health probe, reachable at EVERY workspace origin (not just the auth
+    # label) and never auth-gated, so the chrome can probe a workspace it has
+    # any origin for. The gateway applies CORS for the chrome origin itself.
+    handle /_health {{
+        reverse_proxy {gateway_backend}
+    }}
 
     # The dedicated auth label is the ONE origin exposing the public /_auth/*
     # surface (the login callback that creates the session). Confining it here

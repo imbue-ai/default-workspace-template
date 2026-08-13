@@ -323,12 +323,13 @@ def close_ws(ws: simple_websocket.Client) -> None:
     """Close a WebSocket client, tolerating an already-closed connection.
 
     A handler that finishes (e.g. the proto-agent-logs not-found path) closes
-    the socket server-side first, so the client-side close races the client's
-    background thread processing that server close. Depending on how far that
-    thread has gotten, ``ws.close()`` raises either ``ConnectionClosed`` (the
-    close was fully processed and ``connected`` is already False) or ``OSError``
-    (EBADF: the thread tore down the socket fd between ``close()``'s
-    ``connected`` check and its send of the close frame).
+    the socket server-side first, so the client-side close would otherwise raise.
+    Which exception it raises depends on how far the teardown has got: having
+    observed the close leaves ``connected`` false and raises ``ConnectionClosed``,
+    but losing the race to the descriptor teardown means writing the close frame
+    to a closed socket, which surfaces as ``OSError: [Errno 9] Bad file
+    descriptor``. Both mean the same thing here, and neither is the test's
+    subject -- the socket is being discarded either way.
     """
     try:
         ws.close()

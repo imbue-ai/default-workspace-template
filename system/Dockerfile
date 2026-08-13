@@ -35,7 +35,7 @@ ENV PI_WEB_ACCESS_VERSION=${PI_WEB_ACCESS_VERSION}
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
 # toolchain AND invokes install_secret_scanners.sh to bake the publish-
-# inspiration scan gate's secret-scanner binaries (betterleaks + kingfisher),
+# template scan gate's secret-scanner binaries (betterleaks + kingfisher),
 # so both docker-built images and Lima VMs get the scanners from the same
 # common script. Copied with its sibling _provision_guard.sh (which
 # setup_system.sh sources via `dirname "$0"`) and install_secret_scanners.sh

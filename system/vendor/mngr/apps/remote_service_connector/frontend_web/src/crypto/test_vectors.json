@@ -1,0 +1,30 @@
+{
+  "kdf": {
+    "password": "correct horse battery staple",
+    "salt_b64": "AAECAwQFBgcICQoLDA0ODw==",
+    "time_cost": 3,
+    "memory_kib": 65536,
+    "parallelism": 4,
+    "kek_b64": "hTsnKkTbFCHAKWJmmlXrCZTzyrOF7RxMeSU+7hm6tJ4="
+  },
+  "bundle": {
+    "dek_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "wrapped_dek_b64": "fZ1dkf1mq+FdWc/NLloXTjmtJ1MMiTgl9hhP4PwM21os6vjAat8yI4zXAEvTnYOSi5HbBsCGCuwHYvYO"
+  },
+  "secrets": {
+    "plaintext": "{\"restic_env\":\"export RESTIC_REPOSITORY=s3:endpoint/bucket\\n\",\"ssh_private_key\":\"-----BEGIN OPENSSH PRIVATE KEY-----\\nfake\\n-----END OPENSSH PRIVATE KEY-----\\n\",\"ssh_known_hosts\":null}",
+    "blob_b64": "XyenF9Ep69+C3NtoGxdQx7k+zDoy6sLbBcVtJonEbpInUOM2knLTbR7A7MQx2ltkiUUZ51dET03ZgJrOyVLBElZbia0H8DHXHU2zlUpFbTavnvY5lyZYAFjR+40A+FwGrTjKLxXA1w3bvWflROSOHGZtAQPlcV890xkFB755POHuUHE+53PHH5pMjlW+nerKfPZ9vMst4vwxY/7UF0VRGUMwIDhpGrYi4i8eJGAQmL2AM8WwHU/IgBgqMBPJ878akYURah94i84u6KJNdRoN86N+UEs="
+  },
+  "exec_envelope": {
+    "method": "POST",
+    "path": "/run",
+    "body": "{\"command\":[\"printf\",\"hello\"]}",
+    "audience": "host-abc123.ownerlabel.us1.example.com",
+    "timestamp": "1723150000",
+    "nonce": "nonce-vector-1",
+    "seed_b64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+    "public_key_openssh": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICmsuuFBvMrwsi4alNNNC8c2HlJtC/4SyJeUvJMilm3X",
+    "signing_string": "v1\nPOST\n/run\ne1d232d7d2c50d7beb0a3f3f35295f6ecffc148be0a1af94e0cde77c4ef27aba\nhost-abc123.ownerlabel.us1.example.com\n1723150000\nnonce-vector-1",
+    "signature_b64": "zox8KG2UL608GjNjIFCURIFHrj+rDAACLiqcmd3jVQmmIMUWXjmvuHMx8+VaWzAuOTQlmNfd87RXN2HkWTVZAA=="
+  }
+}

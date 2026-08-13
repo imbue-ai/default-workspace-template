@@ -5,9 +5,12 @@ from browser.videopipe import target_capture_fps
 
 
 def test_drop_free_interval_climbs_by_increment() -> None:
-    # A drop-free interval ramps the capture rate gently toward the ceiling.
-    assert target_capture_fps(30.0, dropped_in_interval=0, delivered_fps=30.0, consecutive_drop_intervals=0) == pytest.approx(
-        30.0 + videopipe._RATE_INCREASE_FPS
+    # A drop-free interval ramps the capture rate gently toward the ceiling. Start from the
+    # floor (always below the cap, whatever BROWSER_VIDEO_FPS_CAP is) so this tests the climb
+    # step, not the ceiling clamp (that's the next test).
+    start = videopipe._RATE_MIN_FPS
+    assert target_capture_fps(start, dropped_in_interval=0, delivered_fps=start, consecutive_drop_intervals=0) == pytest.approx(
+        start + videopipe._RATE_INCREASE_FPS
     )
 
 

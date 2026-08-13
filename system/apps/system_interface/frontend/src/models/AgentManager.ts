@@ -200,6 +200,14 @@ let agents: AgentState[] = [];
 // The JSON of the last agents_updated payload, to skip redundant identical pushes.
 let lastAgentsSerialized = "";
 let apps: AppEntry[] = [];
+// Whether an ``apps_updated`` carrying at least one registered service has
+// arrived. Until it has, ``labelForService`` cannot resolve a name to its
+// unguessable origin label -- which is fine locally (the bare name routes
+// through the forwarder) but produces an unroutable ``<name>.<domain>`` origin
+// on a share (only ``<label>.<domain>`` is claimed on the relay), yielding a
+// 403. Callers that build share-critical origins wait via ``whenAppsLoaded``.
+let appsLoaded = false;
+let appsLoadedWaiters: (() => void)[] = [];
 let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
@@ -322,6 +330,14 @@ function handleEvent(event: WsEvent): void {
 
     case "apps_updated":
       apps = event.apps;
+      // The first non-empty app list means service labels are now resolvable;
+      // release anyone waiting on ``whenAppsLoaded``.
+      if (!appsLoaded && apps.length > 0) {
+        appsLoaded = true;
+        const waiters = appsLoadedWaiters;
+        appsLoadedWaiters = [];
+        for (const wake of waiters) wake();
+      }
       break;
 
     case "proto_agent_created":
@@ -476,7 +492,45 @@ export function getApps(): AppEntry[] {
  *  works. */
 export function labelForService(name: string): string {
   const app = apps.find((a) => a.name === name);
-  return app?.label || name;
+  if (app?.label) return app.label;
+  // No label for this name. Two cases: (1) the app list has not loaded yet --
+  // a race the share-critical callers avoid by awaiting ``whenAppsLoaded``, so
+  // warn loudly if it happens anyway; (2) the app list is loaded but this name
+  // is genuinely unregistered (the shell itself, or a legacy row). Either way
+  // the only fallback is the bare name, which routes locally but not on a
+  // share -- so this is a last resort, not a silent default.
+  if (!appsLoaded) {
+    console.warn(
+      `[si] labelForService("${name}") fell back to the bare name because the app list has not loaded yet; ` +
+        "the resulting origin will not route on a shared workspace. Await whenAppsLoaded() before deriving share origins.",
+    );
+  }
+  return name;
+}
+
+/** Whether the workspace's app list (service origin labels) has loaded. */
+export function areAppsLoaded(): boolean {
+  return appsLoaded;
+}
+
+/** Resolve once the app list has loaded so ``labelForService`` can return real
+ *  origin labels, or after ``timeoutMs`` as a fallback so a workspace that
+ *  never reports any app still proceeds (degrading to bare-name origins, which
+ *  route locally). Share-critical URL construction (layout restore) awaits this
+ *  so a restored terminal/service tab never mounts an unroutable bare-name
+ *  origin on a share. */
+export function whenAppsLoaded(timeoutMs = 5000): Promise<void> {
+  if (appsLoaded) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const wake = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    appsLoadedWaiters.push(wake);
+    setTimeout(wake, timeoutMs);
+  });
 }
 
 export function getProtoAgents(): ProtoAgent[] {

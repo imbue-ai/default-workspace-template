@@ -2,11 +2,17 @@
     "stop_hook": {
         "enabled_when": "false",
         "fetch_and_merge": false,
-        "base_branch": "claude-codex-pi-dwt"
+        "base_branch": "claude-codex-pi-dwt",
+        "additional_git_directories": [
+            ".external_worktrees/mngr"
+        ]
     },
     "autofix": {
         "is_enabled": false,
         "append_to_prompt": ""
+    },
+    "verify_architecture": {
+        "is_enabled": false
     },
     "verify_conversation": {
         "is_enabled": false,
