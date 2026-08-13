@@ -594,7 +594,7 @@ loudly, and misleading when it dies quietly or hangs.
 
 - **`reveal` exit 3 (rollback itself fails).** Not provoked.
 
-- **`reveal`'s dependency path on a *quiet* host.** Findings 13's two runs both
+- **`reveal`'s dependency path on a *quiet* host.** Finding 13's two runs both
   ran on a container that was already swapping. Whether the 30s post-restart
   budget is adequate on an idle host, and therefore whether this is a tuning
   problem or a structural one, is not established.
