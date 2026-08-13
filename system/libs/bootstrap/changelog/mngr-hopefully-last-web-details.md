@@ -1,0 +1,1 @@
+The bootstrap now converges the workspace venv (`uv sync --all-packages`) at boot, before it starts supervisord, so background services that depend on newly-vendored workspace packages (in particular the `owner-exec` service) start cleanly on first boot rather than failing with a spawn error.
