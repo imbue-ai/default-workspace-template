@@ -25,9 +25,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
 _DROPIN_DIR = _REPO_ROOT / "system" / "supervisord.conf.d"
 
-# system_interface stays in the main config until the minds recovery probe's
-# include-aware read has shipped in a release; see the note in supervisord.conf.
-_MAIN_CONFIG_PROGRAMS = frozenset({"system_interface"})
+# supervisord.conf declares no programs of its own: every one lives in a
+# drop-in. Kept as a named empty set so a future carve-out has an obvious home
+# and the assertions below stay readable.
+_MAIN_CONFIG_PROGRAMS: frozenset[str] = frozenset()
 
 _SECTION_RE = re.compile(r"^\[(?:program|eventlistener):([^\]]+)\]", re.MULTILINE)
 
@@ -70,10 +71,11 @@ def test_include_glob_matches_every_dropin_file() -> None:
 def test_every_program_is_discoverable_through_the_include_glob() -> None:
     """Reading the main config plus its globs finds every declared program.
 
-    This is the read every consumer performs. If it ever returns just
-    ``system_interface``, a consumer is silently asserting over one program out
-    of thirteen -- which is exactly how the OOM band checks degraded when the
-    drop-ins were introduced.
+    This is the read every consumer performs. If the glob expansion is wrong it
+    returns whatever the main config declares on its own -- now nothing -- so a
+    consumer silently asserts over an empty set. That is how the OOM band checks
+    degraded when the drop-ins were introduced, when the main config still held
+    ``system_interface`` and made the emptiness look like one real program.
     """
     parser = _parse_main_config()
     discovered = {
@@ -90,8 +92,8 @@ def test_every_program_is_discoverable_through_the_include_glob() -> None:
         f"match the drop-in files plus the main config's own programs ({sorted(expected)})"
     )
     assert len(discovered) > len(_MAIN_CONFIG_PROGRAMS), (
-        "only the main config's own programs were discovered -- the [include] "
-        "expansion is not finding the drop-ins"
+        "no more than the main config's own programs were discovered -- the "
+        "[include] expansion is not finding the drop-ins"
     )
 
 

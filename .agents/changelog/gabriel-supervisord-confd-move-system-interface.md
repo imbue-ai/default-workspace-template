@@ -1,0 +1,1 @@
+`service-processes.md` no longer carves `system_interface` out of "supervisord only manages the programs declared under `system/supervisord.conf.d/`". That program now lives in a drop-in like every other, so the rule holds without an exception: every supervisord program in this workspace is declared in exactly one file under `system/supervisord.conf.d/`, named after it.

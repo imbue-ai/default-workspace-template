@@ -1,0 +1,5 @@
+`system_interface` moves into `system/supervisord.conf.d/system_interface.conf` alongside every other program, so `system/supervisord.conf` now declares no programs at all -- it is purely the supervisord daemon's own configuration plus the `[include]` of the drop-ins.
+
+This was the one program the conf.d split left behind, and only for an external reason: the minds desktop client's recovery probe read `system/supervisord.conf` directly with `configparser`, which does not follow supervisord's `[include]`, so moving the block would have silently degraded the probe's port-listening and curl checks to "could not determine inner port". imbue-ai/mngr-internal#171 makes that probe follow the config's own `[include]` globs, which removes the constraint.
+
+Verified the move is a no-op on the realized config: read both layouts through supervisord's own `ServerOptions.read_config` and diffed the resulting process configs -- identical 13 programs, identical order, identical commands and options, no include warnings. Start order is unaffected, since supervisord orders by `(priority, name)` and every program uses the default priority.

@@ -3,7 +3,7 @@
 service band, then exec the service command.
 
 Used as a command prefix in a program's ``system/supervisord.conf.d/<name>.conf``
-(``system_interface``, still in ``system/supervisord.conf`` itself, likewise) -- e.g.
+(``system_interface`` likewise) -- e.g.
 ``command=python3 system/services/oom_priority/bin/oom_tag_service.py system_interface bash -c "..."`` --
 so a service lands in its priority band before it (and everything it spawns)
 exists. It sets its *own* ``oom_score_adj`` (the value survives ``execve`` and is
