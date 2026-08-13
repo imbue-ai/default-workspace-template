@@ -530,13 +530,15 @@ def _get_harnesses_endpoint() -> Response:
     One response covers every harness (each catalog dumped verbatim: options,
     switch mode, picker mode, powered-by label, shoulder-tap capability); the
     frontend keys in by an agent's harness.
-    The non-claude harnesses are included only when their feature flag is on, matching
-    the rest of the UI.
+
+    Every harness is always included, deliberately: ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``
+    gates only the "New <harness> agent" launchers in the new-tab menu, not harness support
+    itself. A codex or pi agent that exists some other way (``mngr create``, one made before
+    the flag was turned off) still needs its catalog for the model bar to resolve, so
+    filtering here would strand that agent's chip on an unrecognized model.
     """
     catalogs: dict[str, Any] = {}
     for harness in HARNESS_SPECS:
-        if harness != HarnessType.CLAUDE and not _are_other_harnesses_enabled():
-            continue
         # A parsed catalog (pi) reads data files; a bad/absent one must be
         # skipped, not 500 the endpoint for every other harness.
         try:

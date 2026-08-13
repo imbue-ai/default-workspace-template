@@ -622,23 +622,23 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     assert claude["powered_by_label"] == "Claude Code"
 
 
-def test_get_harnesses_excludes_alt_harnesses_without_the_flag(
+def test_get_harnesses_includes_every_harness_regardless_of_the_flag(
     client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Only claude appears without the alt-harness flag, like the rest of its UI."""
+    """The catalogs are never gated: the flag hides launchers, not harness support.
+
+    A codex or pi agent can exist without the launchers ever being shown (``mngr
+    create``, or a host that turned the flag off after the agent was made), and its
+    model bar resolves against this catalog -- so gating it here would strand that
+    agent's chip on an unrecognized model.
+    """
     monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
-    data = client.get("/api/harnesses").get_json()
-    assert set(data) == {"claude"}
+    without_flag = client.get("/api/harnesses").get_json()
+    assert "claude" in without_flag
+    assert "codex" in without_flag
 
-
-def test_get_harnesses_includes_alt_harnesses_with_the_flag(
-    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Every alt harness appears once the flag is on."""
     monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
-    data = client.get("/api/harnesses").get_json()
-    assert "claude" in data
-    assert "codex" in data
+    assert client.get("/api/harnesses").get_json() == without_flag
 
 
 def test_powered_by_returns_the_harness_product_name(client: FlaskClient, tmp_path: Path) -> None:
