@@ -124,16 +124,13 @@ def test_a_program_free_main_config_implies_an_include_aware_vendored_probe() ->
     if _programs_declared_in(_parse_main_config()):
         return
 
-    vendored_mngr = _REPO_ROOT / "system/vendor/mngr"
-    if not vendored_mngr.is_dir():
-        return
-
-    # A missing probe is a failure, not a pass: the path lives in another repo's
-    # tree, so an upstream rename would otherwise retire this gate silently --
-    # leaving a program-free main config unguarded, which is the one outcome it
-    # exists to prevent.
+    # A missing probe -- or a missing vendored subtree around it -- is a failure,
+    # not a pass: the path lives in another repo's tree, so an upstream rename
+    # would otherwise retire this gate silently, leaving a program-free main
+    # config unguarded, which is the one outcome it exists to prevent.
     vendored_probe = (
-        vendored_mngr / "apps/minds/imbue/minds/desktop_client/recovery_probe_script.txt"
+        _REPO_ROOT
+        / "system/vendor/mngr/apps/minds/imbue/minds/desktop_client/recovery_probe_script.txt"
     )
     assert vendored_probe.is_file(), (
         f"{vendored_probe.relative_to(_REPO_ROOT)} is not in the vendored mngr subtree, "
