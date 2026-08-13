@@ -274,9 +274,10 @@ pass does not redo them.
   `system-services` reports `mngr/sysedit` while its work_dir has since moved to
   `main`, and chat agents created through the UI report None. Both are exactly
   what `list.md` promises ("Recorded at create time and not re-read... None for
-  transfer modes that involve no git"). Prose nit only: the branch changelog's
-  opening line says the field "reports the branch an agent's work_dir is actually
-  on", which is looser than the field's own (correct) doc.
+  transfer modes that involve no git"). Prose nit only, and against mngr rather
+  than this repo: the opening sentence of that field's paragraph in mngr's
+  `gabriel/denim-pigeon` changelog says it "reports the branch an agent's
+  work_dir is actually on", which is looser than the field's own (correct) doc.
 
 - **`reveal`, all three outcomes.**
   - *Dirty tree -> exit 1*, nothing changed: "working tree has uncommitted
