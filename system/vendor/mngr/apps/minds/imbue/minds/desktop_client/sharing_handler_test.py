@@ -3,20 +3,29 @@ from pathlib import Path
 import httpx
 import pytest
 
+from imbue.minds.config.data_types import ClientEnvConfig
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
+from imbue.minds.desktop_client.conftest import FAKE_CONNECTOR_URL
 from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
 from imbue.minds.desktop_client.conftest import make_session_store_for_test
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.share_materials_injection import render_grants_toml
 from imbue.minds.desktop_client.sharing_handler import SharingError
+from imbue.minds.desktop_client.sharing_handler import _enable_sharing_with_cli
 from imbue.minds.desktop_client.sharing_handler import _parse_grants_toml
 from imbue.minds.desktop_client.sharing_handler import describe_connector_failure
 from imbue.minds.desktop_client.sharing_handler import probe_share_readiness
 from imbue.minds.desktop_client.sharing_handler import resolve_agent_for_host
+from imbue.minds.utils.mngr_caller import MngrCallResult
+from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.shares.example"
+
+
+def _client_env_config() -> ClientEnvConfig:
+    return ClientEnvConfig(connector_url=FAKE_CONNECTOR_URL, litellm_proxy_url=FAKE_CONNECTOR_URL)
 
 
 def test_probe_share_readiness_true_on_any_http_response() -> None:
@@ -128,3 +137,66 @@ def test_resolve_agent_for_host_raises_when_neither_discovery_nor_records_know_t
 
     with pytest.raises(SharingError, match="No workspace is known"):
         resolve_agent_for_host(undiscovered, str(HostId.generate()), store)
+
+
+def test_enable_sharing_delegates_cloud_rows_to_the_connector_primitive() -> None:
+    # An unshared imbue_cloud row's full provisioning goes through the
+    # connector's server-side enable-sharing (pool-key materials injection),
+    # then the user's actual grants document replaces the owner-only seed.
+    cli = make_fake_imbue_cloud_cli()
+    agent_id = AgentId("agent-" + "c" * 32)
+    host_id = "host-" + "d" * 32
+    grants = {"emails": ["owner@example.com", "friend@example.com"], "email_domains": []}
+
+    document = _enable_sharing_with_cli(
+        host_id, agent_id, grants, {}, cli, "owner@example.com", _client_env_config(), is_cloud_row=True
+    )
+
+    assert cli.web_access_calls == [("owner@example.com", host_id)]
+    # Two execs through the injection channel: the share-gateway capability
+    # probe, then the grants write.
+    caller = cli.mngr_caller
+    assert isinstance(caller, RecordingMngrCaller)
+    exec_calls = [call for call in caller.calls if call and call[0] == "exec"]
+    assert len(exec_calls) == 2
+    assert document["enabled"] is True
+    assert document["grants"]["workspace"] == grants
+
+
+@pytest.mark.parametrize("is_cloud_row", [True, False])
+def test_enable_sharing_refuses_a_pre_share_gateway_workspace(is_cloud_row: bool) -> None:
+    # A workspace created from a template older than the share gateway has
+    # nothing watching share.env: the enable is refused up front with the
+    # update-self pointer instead of provisioning a share that can never come
+    # up. The probe is the first exec, so a failing exec refuses immediately.
+    cli = make_fake_imbue_cloud_cli()
+    caller = cli.mngr_caller
+    assert isinstance(caller, RecordingMngrCaller)
+    caller.result = MngrCallResult(returncode=1, stderr="test -d failed")
+    agent_id = AgentId("agent-" + "c" * 32)
+    host_id = "host-" + "d" * 32
+    grants = {"emails": ["owner@example.com"], "email_domains": []}
+
+    with pytest.raises(SharingError, match="update itself"):
+        _enable_sharing_with_cli(
+            host_id, agent_id, grants, {}, cli, "owner@example.com", _client_env_config(), is_cloud_row=is_cloud_row
+        )
+
+    # Nothing was provisioned: no connector call, no injection past the probe.
+    assert cli.web_access_calls == []
+    assert [call for call in caller.calls if call and call[0] == "exec"] == [
+        ["exec", str(agent_id), "test -d system/services/share_gateway", "--no-start"]
+    ]
+
+
+def test_enable_sharing_cloud_row_surfaces_a_connector_refusal() -> None:
+    cli = make_fake_imbue_cloud_cli()
+    cli.web_access_error_to_raise = ImbueCloudCliError("quota exceeded")
+    agent_id = AgentId("agent-" + "c" * 32)
+    host_id = "host-" + "d" * 32
+    grants = {"emails": ["owner@example.com"], "email_domains": []}
+
+    with pytest.raises(SharingError):
+        _enable_sharing_with_cli(
+            host_id, agent_id, grants, {}, cli, "owner@example.com", _client_env_config(), is_cloud_row=True
+        )

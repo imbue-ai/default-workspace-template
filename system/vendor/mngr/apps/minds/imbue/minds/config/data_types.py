@@ -330,6 +330,52 @@ class PlanQuotasConfig(FrozenModel):
         }
 
 
+class WebWorkspacesConfig(FrozenModel):
+    """The ``[web_workspaces]`` block of a ``deploy.toml`` -- the tier's pinned web-create template.
+
+    Read by ``minds env deploy`` and pushed into the connector's per-deploy
+    Modal Secret as ``MINDS_WEB_TEMPLATE_*`` / ``MINDS_WEB_SHAPE_*`` env vars.
+    The connector's ``POST /hosts/claim`` (browser-driven workspace creation)
+    leases only pool hosts whose baked attributes match this pin exactly.
+    Tiers without the block have web workspace creation disabled; a tier with
+    the block but no explicit pins gets the defaults (the app's pinned release
+    tag ``FALLBACK_BRANCH`` and the canonical default-workspace-template repo
+    key), so the web pin advances with the release automatically -- the same
+    tag the pool is re-baked from. ``MINDS_WEB_TEMPLATE_REPO`` /
+    ``MINDS_WEB_TEMPLATE_REF`` env vars override at deploy time (dev
+    iteration on a branch), winning over both the deploy.toml pin and the
+    default.
+    """
+
+    template_repo: NonEmptyStr | None = Field(
+        default=None,
+        description=(
+            "Canonical repo key the pool bake stamps into row attributes "
+            "(``host/org/repo``, e.g. ``github.com/imbue-ai/default-workspace-template``). "
+            "Unset resolves to the canonical default-workspace-template key."
+        ),
+    )
+    template_ref: NonEmptyStr | None = Field(
+        default=None,
+        description=(
+            "The pinned template branch or tag web creates lease (must match the pool bake). "
+            "Unset resolves to the app's pinned release tag (``FALLBACK_BRANCH``)."
+        ),
+    )
+    cpus: NonNegativeInt | None = Field(
+        default=None,
+        description="Blessed vCPU count for web creates; unset leaves the lease unconstrained on cpus.",
+    )
+    memory_gb: NonNegativeInt | None = Field(
+        default=None,
+        description="Blessed memory (GB) for web creates; unset leaves the lease unconstrained on memory.",
+    )
+    gpu_count: NonNegativeInt | None = Field(
+        default=None,
+        description="Blessed GPU count for web creates; unset leaves the lease unconstrained on GPUs.",
+    )
+
+
 class DeployEnvConfig(FrozenModel):
     """Per-tier deploy-time config read by deploy scripts and `minds env create`.
 
@@ -395,6 +441,13 @@ class DeployEnvConfig(FrozenModel):
             "Plan definitions (plan name -> quota entitlements) written -- overwriting -- into the "
             "connector's plans table after migrations on every deploy. Git is the source of truth "
             "for plan defaults; per-user entitlement rows are managed via the admin API instead."
+        ),
+    )
+    web_workspaces: WebWorkspacesConfig | None = Field(
+        default=None,
+        description=(
+            "Pinned template + blessed compute shape for browser-driven workspace creation "
+            "(the connector's POST /hosts/claim). None (the default) disables web creates on the tier."
         ),
     )
 

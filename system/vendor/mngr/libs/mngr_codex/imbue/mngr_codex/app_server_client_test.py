@@ -438,7 +438,8 @@ def test_poll_notifications_drains_buffered_frames_without_blocking_per_frame() 
     interrupt/steer past the "immediate" bar (contract A5)."""
     transport = _TimeoutRecordingTransport()
     client = _handshaken_client(transport)
-    transport.receive_timeouts.clear()  # drop the handshake's own reads
+    # drop the handshake's own reads
+    transport.receive_timeouts.clear()
     for i in range(3):
         transport.push({"jsonrpc": "2.0", "method": "turn/started", "params": {"turn": {"id": f"t{i}"}}})
 

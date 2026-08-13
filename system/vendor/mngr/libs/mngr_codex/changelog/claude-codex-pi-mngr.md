@@ -51,3 +51,9 @@ the open-steps carryover reminder to `UserPromptSubmit` (with a `--codex` flag s
 `additionalContext` JSON -- codex rejects UserPromptSubmit stdout that starts with `[`), and the
 open-steps stop nudge to `Stop`. All are the same dwt scripts claude runs, from the work dir. Verified
 live against codex-cli 0.146.0. See `system/scripts/POLICY_HOOKS.md`.
+
+Deleted the retired marker-lifecycle files that the app-server rewrite had already
+orphaned: `set_active_marker.sh`, `clear_active_marker.sh`, `codex_marker_state.sh`,
+`subagent_started.sh`, `subagent_stopped.sh` and their four test files. They tested
+helpers (`run_codex_hook`, `install_common_transcript_flush_stub`,
+`SUBMIT_WAIT_CHANNEL_PREFIX`) that no longer exist, so they failed at collection.

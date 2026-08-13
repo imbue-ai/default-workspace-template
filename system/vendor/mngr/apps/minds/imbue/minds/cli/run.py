@@ -21,6 +21,7 @@ the gateway itself into each agent's container.
 
 import os
 import secrets
+import tempfile
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds.bootstrap import MindsRoot
 from imbue.minds.bootstrap import minds_data_dir_for
+from imbue.minds.bootstrap import resolve_effective_mngr_host_dir
 from imbue.minds.bootstrap import resolve_minds_root_name
 from imbue.minds.build_info import resolve_git_sha
 from imbue.minds.build_info import resolve_release_id
@@ -45,6 +47,7 @@ from imbue.minds.config.data_types import MNGR_BINARY
 from imbue.minds.config.data_types import WorkspacePaths
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.desktop_client.agent_creator import AgentCreator
+from imbue.minds.desktop_client.agent_creator import sweep_orphaned_scratch_clones
 from imbue.minds.desktop_client.api_key_store import generate_api_key
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.app import start_discovery_health_watchdog_loop
@@ -85,6 +88,7 @@ from imbue.minds.desktop_client.request_events import load_response_events
 from imbue.minds.desktop_client.server import desktop_client_runtime
 from imbue.minds.desktop_client.server import serve_desktop_client
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
+from imbue.minds.desktop_client.ssh_key_migration import SshKeyMigrationScheduler
 from imbue.minds.desktop_client.startup_reconcile import PendingCreateAttemptDiscoverySweep
 from imbue.minds.desktop_client.startup_reconcile import StartupHostReconciler
 from imbue.minds.desktop_client.state import get_state
@@ -92,9 +96,9 @@ from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forwar
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.system_interface_health import should_enroll_suspect_for_backend_failure
-from imbue.minds.desktop_client.templates import DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
-from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
-from imbue.minds.desktop_client.templates import is_local_workspace_defaults_opt_in
+from imbue.minds.desktop_client.workspace_defaults import DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
+from imbue.minds.desktop_client.workspace_defaults import FALLBACK_BRANCH
+from imbue.minds.desktop_client.workspace_defaults import is_local_workspace_defaults_opt_in
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.minds.desktop_client.workspace_record_store import read_device_label
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
@@ -229,8 +233,7 @@ def run(
     anonymous_user_id = resolve_anonymous_user_id(data_directory)
     # Resolved up front (and reused below for the state container + the ``mngr forward``
     # consumer): the Sentry attachment sweep needs the discovery events dir under it.
-    mngr_host_dir_str = os.environ.get("MNGR_HOST_DIR")
-    mngr_host_dir = Path(mngr_host_dir_str).expanduser() if mngr_host_dir_str else (Path.home() / ".mngr")
+    mngr_host_dir = resolve_effective_mngr_host_dir()
     # Built before Sentry setup so the attachment sweep knows the latchkey plugin
     # data dir (the detached ``mngr latchkey forward`` daemon's logs live there).
     latchkey = _build_latchkey(data_directory=data_directory)
@@ -438,6 +441,18 @@ def run(
         backup_reaper=backup_reaper,
     )
     sync_scheduler.start(root_concurrency_group)
+    # One-off RSA -> Ed25519 client-key migration for per-host-keyed (cloud)
+    # workspaces created before the Ed25519 keygen switch: the workspace
+    # owner-exec channel only accepts Ed25519 signatures, so an RSA-keyed
+    # workspace cannot be driven from the hosted web chrome until its key is
+    # rotated. Runs against RUNNING hosts only, once per host (marker-gated).
+    ssh_key_migration_scheduler = SshKeyMigrationScheduler(
+        resolver=backend_resolver,
+        mngr_caller=mngr_caller,
+        mngr_host_dir=mngr_host_dir,
+        marker_dir=data_directory / "ssh_key_migrations",
+    )
+    ssh_key_migration_scheduler.start(root_concurrency_group)
     response_events = load_response_events(data_directory)
     request_inbox = RequestInbox()
     for resp in response_events:
@@ -489,9 +504,12 @@ def run(
     # otherwise early failures would dispatch against an empty list).
     system_interface_health_tracker = SystemInterfaceHealthTracker()
 
-    # The plugin reports every non-2xx response; minds decides which ones count.
-    # Only connection-level failures and infrastructure 5xx enroll a suspect --
-    # application errors (and UNRESOLVED, a routeless warm-up) are left alone.
+    # The plugin reports every backend failure it observes; minds decides which
+    # ones count. Only envelopes carrying no status code, or an infrastructure
+    # 5xx, enroll a suspect -- application errors (and UNRESOLVED, a routeless
+    # warm-up) are left alone. STALLED enrolls despite not reporting a failed
+    # request at all: a wedged backend and a slow one look identical until the
+    # probe adjudicates.
     consumer.add_on_system_interface_backend_failure_callback(
         lambda agent_id, reason, status_code: system_interface_health_tracker.record_failure(agent_id)
         if should_enroll_suspect_for_backend_failure(reason, status_code)
@@ -613,6 +631,17 @@ def run(
         is_checked=False,
     )
 
+    # Each create attempt clones its source into a private temp dir and removes
+    # it in a ``finally`` -- which a force-quit or crash skips, since the create
+    # worker is a daemon thread. Reclaim the day-old leftovers. Backgrounded
+    # because rmtree of a ~240MB clone is not instant, and is_checked=False so a
+    # failed sweep never tears down the app over disk hygiene.
+    root_concurrency_group.start_new_thread(
+        target=lambda: sweep_orphaned_scratch_clones(Path(tempfile.gettempdir())),
+        name="startup-scratch-clone-sweep",
+        is_checked=False,
+    )
+
     # Every newly-discovered agent on a minds-managed host gets
     # its id appended to the host's ``latchkey_permissions.json``
     # allowed-agent list.
@@ -670,6 +699,7 @@ def run(
         latchkey_forward_supervisor=latchkey_forward_supervisor,
         discovery_health_watchdog=discovery_health_watchdog,
         sync_scheduler=sync_scheduler,
+        ssh_key_migration_scheduler=ssh_key_migration_scheduler,
     )
 
     # Background loop driving the discovery-pipeline watchdog: polls snapshot

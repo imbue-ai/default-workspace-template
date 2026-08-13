@@ -16,7 +16,8 @@ Interact with an agent without leaving the board:
 - **Peek** (`Space`): open a live bordered panel below the board showing the focused agent's recent user/assistant conversation (via `mngr transcript --role user --role assistant`), refreshed every couple of seconds, with the board still visible above. Tool calls and framework-injected turns do not appear, so the peek reads like the human conversation. Each message's `[timestamp] role:` header is trimmed to a dim role cue. It shows the newest lines, so a long final message renders its end (the agent's conclusion, or the question it is waiting on) under a `⋯` marker, rather than mirroring the agent's scrolled-up screen. The panel says `(no messages yet)` when there is no readable message.
   - `Esc` closes the panel. To peek a different agent, close it, move the board selection, and press `Space` again.
 - **Reply**: type into the panel's `›` input and press `Enter` to send the message to that agent (equivalent to `mngr message`); an empty reply does nothing. Your reply is echoed into the panel immediately as a `›` line, so you see it without waiting: `mngr message` blocks until durable evidence shows the agent accepted the reply, up to ~90s, so the send runs in the background and is not awaited. Being busy is not what makes an agent slow to accept: a claude agent's evidence is the reply appearing in its transcript, which Claude Code writes as it queues it, so a reply to an agent mid-turn confirms in seconds rather than when the turn ends. An agent type whose evidence is a turn marker rather than transcript content (codex, antigravity) does hold its confirmation until the queued prompt opens a turn. Once the agent accepts the reply and it appears in the transcript, the echo is replaced by the real message. Several replies typed in a row are delivered in the order you sent them.
-  - A reply only reaches a live agent: the send does not start agents, so replying to a `STOPPED` or `DONE` one fails with its state instead of reviving it. A delivered reply puts a `WAITING` agent back to work, so the board re-probes local state once the send returns and the row's `STATE` catches up on its own.
+  - Replying to an agent that is not live starts it (the send passes `mngr message --start`): an offline host is brought up and a `STOPPED` or `DONE` agent is (re)launched, so the reply lands rather than failing with the agent's state. Reviving a `DONE` agent tears down its lingering tmux session, discarding that pane's content -- attach instead if you want to read it first. The reply takes correspondingly longer to confirm, since the agent has to come up before it can accept anything, and a start slow enough to outrun the send's own three-minute ceiling is reported as a failure whether or not the reply eventually lands.
+  - A reply leaves the row's `STATE` stale -- a `WAITING` agent goes back to work, a `STOPPED` one is now running -- so the board re-probes local state once the send returns and the row catches up on its own. A failed send re-probes too, since it may have moved the row as well: the (re)launch happens before delivery is attempted, and the failure does not say whether it got that far.
   - The input supports readline-style editing: word movement (`Option`/`Ctrl`+`←`/`→`), word delete (`Option`+`Delete`, `Ctrl-W`), start/end (`Ctrl-A`/`Ctrl-E`), and kill to start/end (`Ctrl-U`/`Ctrl-K`).
 - **Selections**: a text reply cannot move a selection cursor, and selection menus (e.g. `/login`) are not part of the transcript, so they do not appear in the peek; attach (`Enter`) to make the choice in the real session.
 
@@ -243,22 +244,22 @@ Add to your mngr settings file (e.g. `.mngr/settings.toml`):
 ```toml
 [plugins.kanpan.commands.c]
 name = "connect"
-command = "mngr connect $MNGR_AGENT_NAME"
+command = "mngr connect $MNGR_AGENT_ID"
 
 [plugins.kanpan.commands.l]
 name = "event"
-command = "mngr event $MNGR_AGENT_NAME"
+command = "mngr event $MNGR_AGENT_ID"
 refresh_afterwards = true
 ```
 
-Each entry defines a keybinding (the table key, e.g. `c`) that appears in the status bar and runs with the `MNGR_AGENT_NAME` environment variable set to the focused agent's name. Custom commands override builtins when they share the same key. Set `enabled = false` to disable a builtin.
+Each entry defines a keybinding (the table key, e.g. `c`) that appears in the status bar. The command runs with two environment variables set for the focused agent: `MNGR_AGENT_ID` (its globally unique ID) and `MNGR_AGENT_NAME` (its name). Prefer `$MNGR_AGENT_ID` for any command that targets the agent: a name is unique only within a host, so `$MNGR_AGENT_NAME` is ambiguous once two hosts hold same-named agents, whereas the ID always resolves to exactly one agent. Custom commands override builtins when they share the same key. Set `enabled = false` to disable a builtin.
 
 By default, custom commands run immediately on the focused agent. Set `markable = true` to make a command use dired-style batch marking instead: pressing the key marks agents, then `x` executes all marks at once. If any operation fails (including a builtin delete), the marks for the failed agents are kept so you can retry, and the failures are listed at the bottom of the board (alongside fetch errors) until the next execution.
 
 ```toml
 [plugins.kanpan.commands.s]
 name = "stop"
-command = "mngr stop $MNGR_AGENT_NAME"
+command = "mngr stop $MNGR_AGENT_ID"
 markable = true
 refresh_afterwards = true
 ```
@@ -280,7 +281,7 @@ Set `prompt` to ask for a value before the command runs. Pressing the key floats
 [plugins.kanpan.commands.R]
 name = "rename"
 prompt = "new name: "
-command = 'mngr rename "$MNGR_AGENT_NAME" "$MNGR_INPUT"'
+command = 'mngr rename "$MNGR_AGENT_ID" "$MNGR_INPUT"'
 refresh_afterwards = true
 ```
 
@@ -299,7 +300,7 @@ Combine `prompt` with `markable` to answer once for a whole batch: press the key
 [plugins.kanpan.commands.M]
 name = "message"
 prompt = "message: "
-command = 'mngr message "$MNGR_AGENT_NAME" -m "$MNGR_INPUT"'
+command = 'mngr message "$MNGR_AGENT_ID" -m "$MNGR_INPUT"'
 markable = "light cyan"
 ```
 
@@ -317,7 +318,7 @@ A prompted command that writes an agent label, plus a label-backed column that d
 [plugins.kanpan.commands.w]
 name = "note"
 prompt = "note: "
-command = 'mngr label "$MNGR_AGENT_NAME" -l "note=$MNGR_INPUT"'
+command = 'mngr label "$MNGR_AGENT_ID" -l "note=$MNGR_INPUT"'
 refresh_afterwards = true
 
 [plugins.kanpan.columns.note]
@@ -333,7 +334,7 @@ For a *status* -- a small fixed vocabulary you want colored -- a prompt is the w
 ```toml
 [plugins.kanpan.commands.B]
 name = "blocked"
-command = 'mngr label "$MNGR_AGENT_NAME" -l "status=blocked"'
+command = 'mngr label "$MNGR_AGENT_ID" -l "status=blocked"'
 refresh_afterwards = true
 
 [plugins.kanpan.columns.status]
@@ -378,7 +379,7 @@ The PR column displays clickable hyperlinks (OSC 8) in terminals that support th
 Kanpan uses two refresh strategies:
 
 - **Full refresh** (manual 'r' key, periodic 10-minute timer): runs all data sources. Only one can be in flight at a time -- pressing 'r' while a refresh is running is ignored.
-- **Local refresh** (after push, delete, custom commands, attach, and a delivered peek reply, plus on a timer if you set one): runs every local data source -- `repo_paths`, `git_info`, and any label-backed column -- and carries the rest (PR, CI, shell columns) forward from the previous snapshot. Label-backed columns being local is why `refresh_afterwards` on a command that writes a label repaints that label's column.
+- **Local refresh** (after push, delete, custom commands, attach, and a peek reply whether or not it was delivered, plus on a timer if you set one): runs every local data source -- `repo_paths`, `git_info`, and any label-backed column -- and carries the rest (PR, CI, shell columns) forward from the previous snapshot. Label-backed columns being local is why `refresh_afterwards` on a command that writes a label repaints that label's column.
 
 An action's refresh is held, not dropped, when one is already running: the fetch in flight was started before the action, so it cannot show what the action changed, and a second one runs as soon as it lands. So the board always catches up with an action you took, whatever the refresh timing happened to be. A held outcome message waits for that second refresh too, keeping the message and the rows it describes together. A periodic full refresh that lands mid-fetch is skipped for that interval and resumes on the next one.
 

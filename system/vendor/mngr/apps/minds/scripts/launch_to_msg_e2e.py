@@ -88,9 +88,11 @@ from loguru import logger
 # `--remote-debugging-port=<N>` so its Chromium DevTools endpoint is reachable,
 # then `chromium.connect_over_cdp()`. Same API for pages, locators, etc.
 from playwright.sync_api import BrowserContext
+from playwright.sync_api import ConsoleMessage
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Frame
 from playwright.sync_api import Page
+from playwright.sync_api import WebError
 from playwright.sync_api import sync_playwright
 from pydantic import BaseModel
 from pydantic import ConfigDict
@@ -674,8 +676,9 @@ def _wait_cdp(port: int, timeout: float = 60.0) -> str:
 def dismiss_consent_if_present(page: Page, *, timeout: float = 8_000) -> bool:
     """Answer the "Help improve Minds" consent screen if it is up. True if dismissed.
 
-    Consent.jinja takes over the page while ``error_reporting_consent_given`` is
-    False, which it always is on a wiped ~/.minds. It is not once-per-run: it can
+    The SPA consent screen (ConsentPage) takes over the page while
+    ``error_reporting_consent_given`` is False, which it always is on a wiped
+    ~/.minds. It is not once-per-run: it can
     be back on a later ``goto("/")``, and a caller that assumed otherwise spent
     the rest of the run driving a dialog it thought was the home page.
     """
@@ -779,6 +782,40 @@ def live_url(target: Page | Frame) -> str:
     with contextlib.suppress(Exception):
         return target.url
     return ""
+
+
+def _log_console_message(message: ConsoleMessage) -> None:
+    """Mirror a page's console errors and warnings into the run log, tagged with the emitting script and line.
+
+    Electron forwards only its main process's console to electron.log, so a
+    workspace page's own `console.error` -- the app's own account of a failure
+    -- lands nowhere the CI artifacts can show.
+    """
+    if message.type not in ("error", "warning"):
+        return
+    source = message.location
+    # Playwright reports the line 0-based.
+    origin = f"{source['url']}:{source['lineNumber'] + 1}" if source["url"] else "?"
+    logger.warning("[renderer:{}] {}: {}", message.type, origin, message.text)
+
+
+def _log_web_error(web_error: WebError) -> None:
+    """Mirror a page's uncaught exceptions into the run log."""
+    error = web_error.error
+    logger.warning("[renderer:pageerror] {}", error.stack or error.message)
+
+
+def capture_renderer_diagnostics(ctx: BrowserContext) -> None:
+    """Log console errors, warnings and uncaught exceptions from every page in ``ctx``, including later ones.
+
+    A page's out-of-process frames report here too, so a workspace document --
+    which lives under ``page.frames``, not ``ctx.pages`` -- is covered.
+
+    Playwright delivers a console message only to listeners registered when it
+    arrives, so whatever a page logged before this call is gone.
+    """
+    ctx.on("console", _log_console_message)
+    ctx.on("weberror", _log_web_error)
 
 
 def find_chat_window(ctx: BrowserContext, host: str | None = None) -> Frame | None:
@@ -1347,6 +1384,7 @@ def run_e2e() -> int:
         browser = pw.chromium.connect_over_cdp(cdp_url, timeout=60_000)
         # Single Electron context wraps all WebContentsViews as pages.
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+        capture_renderer_diagnostics(ctx)
         # Wait for first page (chrome shell or splash) to materialise.
         for _ in range(60):
             if ctx.pages:
@@ -1377,7 +1415,7 @@ def run_e2e() -> int:
         snap_page(win, "02-home-after-auth")
 
         # The post-login "Help improve Minds" error-reporting consent screen
-        # (Consent.jinja, shown while error_reporting_consent_given is False --
+        # (the SPA ConsentPage, shown while error_reporting_consent_given is False --
         # always here, since the runner's ~/.minds is wiped each run) sits on
         # the home page until answered. Dismiss it once via Continue; the
         # POST /consent + reload then proceeds home, so the create flow and the
@@ -2071,6 +2109,7 @@ def run_e2e() -> int:
             cdp_url2 = _wait_cdp(cdp_port2)
             browser = pw.chromium.connect_over_cdp(cdp_url2, timeout=60_000)
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            capture_renderer_diagnostics(ctx)
             for _ in range(60):
                 if ctx.pages:
                     break

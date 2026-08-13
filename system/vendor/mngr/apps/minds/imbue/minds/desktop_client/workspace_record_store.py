@@ -193,7 +193,7 @@ def read_device_label() -> str:
     return socket.gethostname()
 
 
-def _resolve_mngr_profile_dir(mngr_host_dir: Path) -> Path | None:
+def resolve_mngr_profile_dir(mngr_host_dir: Path) -> Path | None:
     """Resolve ``<host_dir>/profiles/<active-profile>``, or None when mngr is uninitialized.
 
     Mirrors the plugin's ``get_active_profile_dir`` without importing the
@@ -232,7 +232,7 @@ def collect_ssh_key_material(mngr_host_dir: Path, provider_kind: str, host_id: s
     without a recognizable key layout sync without SSH material -- the record
     still carries the backup env, which is the DR-critical part.
     """
-    profile_dir = _resolve_mngr_profile_dir(mngr_host_dir)
+    profile_dir = resolve_mngr_profile_dir(mngr_host_dir)
     if profile_dir is None:
         return None, None
     providers_dir = profile_dir / "providers"
@@ -259,9 +259,10 @@ def derive_openssh_public_key_line(private_key_text: str) -> str | None:
     either half is missing, which would silently clobber a materialized key.
 
     Both container formats found in mngr profiles are handled: traditional /
-    PKCS#8 PEM (mngr's client keypairs are PEM RSA keys, ``-----BEGIN RSA
-    PRIVATE KEY-----``) and the OpenSSH format (``-----BEGIN OPENSSH PRIVATE
-    KEY-----``) -- ``cryptography`` needs a different loader for each.
+    PKCS#8 PEM (older mngr installs generated PEM RSA client keys,
+    ``-----BEGIN RSA PRIVATE KEY-----``) and the OpenSSH format that current
+    mngr Ed25519 client keys use (``-----BEGIN OPENSSH PRIVATE KEY-----``) --
+    ``cryptography`` needs a different loader for each.
     """
     key_bytes = private_key_text.encode("utf-8")
     loader_errors: list[str] = []
@@ -811,7 +812,7 @@ class WorkspaceRecordStore(MutableModel):
         trusted from the wire), so materialized files always land where this
         install's provider will look.
         """
-        profile_dir = _resolve_mngr_profile_dir(self._effective_mngr_host_dir())
+        profile_dir = resolve_mngr_profile_dir(self._effective_mngr_host_dir())
         if profile_dir is None:
             return None
         instance_name = imbue_cloud_provider_name_for_account(account_email)

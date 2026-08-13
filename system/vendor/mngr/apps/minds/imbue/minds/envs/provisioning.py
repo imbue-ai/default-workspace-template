@@ -53,10 +53,13 @@ from pydantic import SecretStr
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import info_span
+from imbue.minds.build_info import DEFAULT_WEB_TEMPLATE_REPO_KEY
+from imbue.minds.build_info import FALLBACK_BRANCH
 from imbue.minds.config.data_types import ClientEnvConfig
 from imbue.minds.config.data_types import DeployEnvConfig
 from imbue.minds.config.data_types import DeployLifecycleConfig
 from imbue.minds.config.data_types import ModalEnvStrategy
+from imbue.minds.config.data_types import WebWorkspacesConfig
 from imbue.minds.config.loader import EnvConfigError
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.config.loader import repo_tier_client_config_path
@@ -103,6 +106,28 @@ from imbue.minds.envs.secret_lifecycle import make_deploy_id
 from imbue.minds.envs.secret_lifecycle import timestamped_secret_name
 from imbue.minds.errors import MindError
 
+
+def resolve_web_template_pin(web_workspaces: WebWorkspacesConfig) -> tuple[str, str]:
+    """Resolve the (template_repo, template_ref) pin for a tier's web creates.
+
+    Precedence per value: the ``MINDS_WEB_TEMPLATE_REPO`` /
+    ``MINDS_WEB_TEMPLATE_REF`` env var (deploy-time override, for dev
+    iteration on a branch) > the explicit deploy.toml pin > the default (the
+    canonical default-workspace-template repo key, and the app's pinned
+    release tag ``FALLBACK_BRANCH`` -- so the web pin moves with the release
+    automatically, matching the tag the pool is re-baked from).
+    """
+    repo_override = os.environ.get("MINDS_WEB_TEMPLATE_REPO")
+    ref_override = os.environ.get("MINDS_WEB_TEMPLATE_REF")
+    template_repo = repo_override or (
+        str(web_workspaces.template_repo) if web_workspaces.template_repo else DEFAULT_WEB_TEMPLATE_REPO_KEY
+    )
+    template_ref = ref_override or (
+        str(web_workspaces.template_ref) if web_workspaces.template_ref else FALLBACK_BRANCH
+    )
+    return template_repo, template_ref
+
+
 # Env var the deployed connector reads at startup to identify which
 # minds env it belongs to. Pushed alongside ``MINDS_TIER_GENERATION_ID``
 # in the per-env ``litellm-connector-<tier>`` Modal Secret. For dev-tier
@@ -119,6 +144,11 @@ MINDS_ENV_NAME_KEY: Final[str] = "MINDS_ENV_NAME"
 # so the deployed container sees it. This is the injection point
 # `test_deploy_rollback` uses to drive the auto-rollback path.
 INJECT_BROKEN_HEALTHCHECK_ENV_VAR: Final[str] = "MINDS_INJECT_BROKEN_HEALTHCHECK"
+
+# The frps tunnel-control port every relay listens on. Mirrors
+# ``DEFAULT_TUNNEL_CONTROL_PORT`` in ``apps/share_relay`` (not imported:
+# minds does not depend on the share_relay package); keep the two in sync.
+_RELAY_TUNNEL_CONTROL_PORT: Final[int] = 7000
 
 
 class ProviderCredentials(FrozenModel):
@@ -827,6 +857,7 @@ def _deploy_env_locked(
     first_pass_overrides = _compute_secret_overrides(
         name=name,
         lifecycle=lifecycle,
+        cloudflare_domain=str(deploy_config.cloudflare_domain),
         neon_record=neon_record,
         supertokens_record=supertokens_record,
         expected_connector_url=expected_connector_url,
@@ -868,6 +899,23 @@ def _deploy_env_locked(
         if generation_id is not None:
             connector_secret_overrides.setdefault(GENERATION_ID_KEY, generation_id)
         connector_secret_overrides.setdefault(MINDS_ENV_NAME_KEY, str(name))
+        # The tier's pinned web-create template + blessed shape (deploy.toml
+        # [web_workspaces]) drive the connector's POST /hosts/claim; the chrome
+        # origin lets the hosted web chrome embed shared workspaces (the chrome
+        # is path-served on the connector origin, so the two are the same URL).
+        # Both are scoped to tiers that opt into web workspace creation.
+        if deploy_config.web_workspaces is not None:
+            web_workspaces = deploy_config.web_workspaces
+            web_template_repo, web_template_ref = resolve_web_template_pin(web_workspaces)
+            connector_secret_overrides.setdefault("MINDS_WEB_TEMPLATE_REPO", web_template_repo)
+            connector_secret_overrides.setdefault("MINDS_WEB_TEMPLATE_REF", web_template_ref)
+            if web_workspaces.cpus is not None:
+                connector_secret_overrides.setdefault("MINDS_WEB_SHAPE_CPUS", str(int(web_workspaces.cpus)))
+            if web_workspaces.memory_gb is not None:
+                connector_secret_overrides.setdefault("MINDS_WEB_SHAPE_MEMORY_GB", str(int(web_workspaces.memory_gb)))
+            if web_workspaces.gpu_count is not None:
+                connector_secret_overrides.setdefault("MINDS_WEB_SHAPE_GPU_COUNT", str(int(web_workspaces.gpu_count)))
+            connector_secret_overrides.setdefault("SHARE_CHROME_ORIGIN", str(expected_connector_url).rstrip("/"))
         # When the operator sets MINDS_INJECT_BROKEN_HEALTHCHECK at deploy time,
         # propagate it into the deployed connector's Modal Secret so the
         # in-container healthcheck returns 500 and the auto-rollback path
@@ -1105,10 +1153,21 @@ def _expected_litellm_proxy_url(
             assert_never(unreachable)
 
 
+def relay_region_for_env(name: DevEnvName) -> str:
+    """The per-env relay region label: the env name as a DNS label.
+
+    Env names allow ``_`` (Modal/Neon accept it) but DNS labels do not, so
+    underscores map to hyphens. Collisions (``dev-a_b`` vs ``dev-a-b``) are
+    theoretically possible and acceptable on the dev/ci tiers this feeds.
+    """
+    return str(name).replace("_", "-").lower()
+
+
 def _compute_secret_overrides(
     *,
     name: DevEnvName,
     lifecycle: DeployLifecycleConfig,
+    cloudflare_domain: str,
     neon_record: NeonProjectRecord | None,
     supertokens_record: SuperTokensAppRecord | None,
     expected_connector_url: AnyUrl,
@@ -1126,6 +1185,20 @@ def _compute_secret_overrides(
         "supertokens": {"AUTH_WEBSITE_DOMAIN": str(expected_connector_url)},
         "litellm-connector": {"LITELLM_PROXY_URL": str(expected_litellm_proxy_url)},
     }
+    # Per-env Modal-env tiers (dev / ci) get a per-env relay region: the
+    # region label is the env name and the relay endpoint hostname is
+    # deterministic (``relay.<env>.<domain>``), so every dev env expects its
+    # OWN relay instead of competing for one shared dev relay whose
+    # plugin-auth URL can only point at a single env's connector. Stand the
+    # relay itself up with ``just provision-dev-relay`` (see
+    # docs/environments.md). Shared tiers (staging / production) keep their
+    # Vault-configured multi-region relay fleet untouched.
+    if lifecycle.modal_env_strategy == ModalEnvStrategy.PER_ENV:
+        region = relay_region_for_env(name)
+        overrides["sharing"] = {
+            "SHARE_DEFAULT_REGION": region,
+            "SHARE_RELAY_ENDPOINTS": f"{region}=relay.{region}.{cloudflare_domain}:{_RELAY_TUNNEL_CONTROL_PORT}",
+        }
     if lifecycle.creates_resources:
         assert neon_record is not None
         assert supertokens_record is not None
