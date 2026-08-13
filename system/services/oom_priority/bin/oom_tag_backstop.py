@@ -18,9 +18,11 @@ value; those are found via a ``/proc/<pid>/task/*/children`` walk and raised
 too. Children spawned after the tag inherit it.
 
 The write is raise-only -- it makes a process more expendable, never less: a
-process that tagged itself higher (the shared browser at the ceiling) is left
-alone, and programs whose expected band is ``PROTECTED`` (earlyoom, this
-listener itself) are never touched. Raising is also the direction that needs no
+process already tagged higher (a Chromium process the browser service's sweep
+remapped into the shared-browser band, reachable here as a descendant of the
+``browser`` program) is left alone, and programs whose expected band is
+``PROTECTED`` (earlyoom, this listener itself, and the one-shots env-converge
+and eval-worker) are never touched. Raising is also the direction that needs no
 capability.
 
 stdout carries the supervisord event-listener protocol (READY / RESULT

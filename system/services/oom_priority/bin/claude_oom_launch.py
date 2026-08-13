@@ -47,10 +47,12 @@ def _band_for(agent_name: str) -> int:
 
     - The primary (services) agent is pinned to the never-shed ``PRIMARY_AGENT``
       band (defensive; the primary never actually runs this wrapper).
-    - A chat (``user_created``) starts at ``CHAT_AGENT_BASE`` -- the most-expendable
-      chat band. The system_interface prioritizer pulls it toward the protected
-      floor as the user engages with it, so an un-re-tagged chat (dormant, or
-      managed outside the UI) stays maximally expendable rather than over-protected.
+    - A chat (``user_created``) starts at ``CHAT_AGENT_BASE``, the middle of the
+      chat range. The system_interface prioritizer moves it either way from
+      there -- down toward the protected floor as the user engages with it, up
+      toward ``CHAT_AGENT_STALE_CEILING`` (past the worker band) as it is left
+      alone -- so an un-re-tagged chat stays middling-expendable rather than
+      pinned to the protected floor.
     - Everything else -- a worker, or an agent whose record we cannot read to
       classify -- lands at ``WORKER_AGENT``, the least-protected agent tier: an
       agent we cannot identify must not be shielded by our ignorance."""

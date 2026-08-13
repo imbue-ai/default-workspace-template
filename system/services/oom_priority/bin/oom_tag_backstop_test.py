@@ -62,15 +62,24 @@ def test_builtin_program_missing_its_prefix_is_raised_to_its_own_band() -> None:
     assert proc.writes == [(200, bands.SERVICE_BANDS["share-gateway"])]
 
 
-def test_never_lowers_a_self_tagged_process() -> None:
-    # The browser tags itself to the ceiling at spawn; a correctly-prefixed
-    # process is already at its band. Neither may be lowered (or re-written).
-    proc = _FakeProc({300: bands.SHARED_BROWSER, 301: bands.SERVICE_BANDS["app-watcher"]})
+def test_never_lowers_a_process_already_above_its_band() -> None:
+    # The browser program sits at its service band, but the Chromium processes
+    # under it were remapped into the shared-browser band by the browser
+    # service's own sweep, and the descendant walk reaches them here. A
+    # correctly-prefixed process is already at its band. None may be lowered
+    # (or re-written).
+    proc = _FakeProc(
+        {
+            300: bands.SERVICE_BANDS["browser"],
+            310: bands.SHARED_BROWSER,
+            301: bands.SERVICE_BANDS["app-watcher"],
+        }
+    )
     oom_tag_backstop.handle_running_event(
         _running_payload("browser", 300),
         read_adj=proc.read,
         write_adj=proc.write,
-        list_descendants=lambda pid: [],
+        list_descendants=lambda pid: [310],
     )
     oom_tag_backstop.handle_running_event(
         _running_payload("app-watcher", 301),
@@ -82,8 +91,12 @@ def test_never_lowers_a_self_tagged_process() -> None:
 
 
 def test_protected_programs_are_never_touched() -> None:
+    # The one-shots (env-converge, eval-worker) matter as much as the OOM
+    # machinery here: the backstop *raises*, so a program missing from
+    # _NON_SERVICE_PROGRAM_BANDS is not merely left alone but actively pushed to
+    # USER_SERVICE (200), above every built-in.
     proc = _FakeProc({400: 0})
-    for program_name in ("earlyoom", "oom-tag-backstop", "deferred-install"):
+    for program_name in ("earlyoom", "oom-tag-backstop", "env-converge", "eval-worker"):
         oom_tag_backstop.handle_running_event(
             _running_payload(program_name, 400),
             read_adj=proc.read,

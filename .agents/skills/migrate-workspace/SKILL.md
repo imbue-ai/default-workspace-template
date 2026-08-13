@@ -453,9 +453,11 @@ reason. Never let an exclusion read as an oversight.
 
 **Record it in the ledger.** Append one line under a `## Migrations` section of
 `docs/VERSION_HISTORY.md` (create the section after `## Workspace` if absent),
-matching the existing line shape -- note padded to width 26, ending in a 7-char
-sha. Here the sha is **this migration's own commit in this workspace**. Then stage
-that one file **by name** and commit it; never `git add -A`.
+matching the existing line shape -- note padded to width 26 (but never fewer
+than two spaces before the sha: a long workspace name pushes its sha right
+rather than landing flush against it), ending in a 7-char sha. Here the sha is
+**this migration's own commit in this workspace**. Then stage that one file **by
+name** and commit it; never `git add -A`.
 
 ```
 - <today, YYYY-MM-DD>  migrated from <name>       <7-char sha>

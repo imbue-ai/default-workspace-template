@@ -131,7 +131,9 @@ _fetch_verify_install() {
     local tmpdir tarball actual_sha rc=0
     tmpdir="$(mktemp -d)"
     tarball="$tmpdir/$tool.tar.gz"
-    if ! curl -fsSL --retry 3 -o "$tarball" "$url"; then
+    # --retry-all-errors also retries a mid-transfer drop (curl exit 56),
+    # which plain --retry does not cover.
+    if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$tarball" "$url"; then
         _log "$tool: download failed: $url"
         rm -rf "$tmpdir"
         return 1
