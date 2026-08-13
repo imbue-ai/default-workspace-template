@@ -26,7 +26,13 @@ input to the chat composer.
 
 ### 1. `create_worker.py await` documented without its required `--name`
 
-**OBSERVED.** At 00:26:24 the lead ran
+**CONFIRMED -- reproduced by 2 of 2 independent leads.** The scenario-1 lead
+(`uilead1`, 22:03:33) made the identical mistake, from the identical source, and
+had the identical near-miss: it read the failed command's background notification
+as "Worker finished. Reading its report." before the empty output gave it away.
+Two leads, two runs, same wrong command -- this is a doc defect, not a slip.
+
+At 00:26:24 the sysedit lead ran
 
 ```
 create_worker.py await --task-file data/.tasks/harden/update-draw-input/task.md --timeout 90m
@@ -283,6 +289,115 @@ pass does not redo them.
 - **The full Step 3/4 mechanics**: committing the round in the worktree,
   `down` + `git worktree remove` (no `--force`) to free the branch, the
   `git merge-base` freshness check, merge, reveal. All clean.
+
+---
+
+## Scenario 1: a real lead runs the flow
+
+Lead chat `uilead1` in the redeployed container, given: *"the message box should
+show me how many characters I have typed - add a small counter under it"*.
+Frontend-only, visible, small.
+
+### What the new prose achieved
+
+- **The boot/open split held.** The lead booted the preview on its own, read
+  `PREVIEW_EXIT=0`, and only then ran `layout.py open`. It did not drive the
+  preview before opening it. This is exactly what `43d743a5` / `607e2697`
+  prescribe, and it is the behavior the sysedit run got wrong.
+- **The scoped private window worked, in both directions.** When `open` failed,
+  the lead reasoned "I can't put the preview tab on your screen yet... Let me
+  verify the counter renders correctly in the private window while I wait" and
+  drove Playwright -- correct, since no tab was open. Once the tab *was* open it
+  stopped driving and handed off ("Type in the message box there and watch the
+  counter update"). That is `e6157839` landing precisely as intended.
+- **The `update-app`-first pointer worked**: the lead read `update-app/SKILL.md`
+  as its second action, before touching any code.
+- It edited only the worktree, committed the round before surfacing, and never
+  touched the served tree.
+
+### 8. No guidance for `layout.py open` failing to reach a client
+
+**CONFIRMED.** With no browser client connected, both layouts failed:
+
+```
+error: layout op 'open' has no client to apply it (HTTP 412): No connected
+client has layout 'desktop' active. ... Connected clients: none.
+```
+
+The skill calls that `open` "the hand-off, not setup" and builds the rest of the
+step on it having happened, but says nothing about it failing. This lead
+improvised well -- verified privately, screenshotted, and surfaced the image via
+`show-files-in-chat` -- and then asked for approval anyway: *"Look good? Say the
+word and I'll make it live."*
+
+That is a materially weaker basis for approval than a live tab (the entire
+premise of the live-editing flow is that the user judges the real surface), and
+nothing in the skill either sanctions or forbids it. A less careful lead could
+just as easily have proceeded as though the user were looking. Worth a short
+prose branch: what to do when the hand-off cannot be delivered.
+
+### 9. The prescribed `for L in desktop mobile` loop gets abandoned once it burns a lead
+
+**CONFIRMED.** After the loop failed on both layouts, the lead's retry checked
+`layout.py context` and then ran only `layout.py open --layout desktop` --
+dropping the prescribed loop. Sensible adaptation, but the consequence is that
+the `mobile` layout never received the preview tab, and the skill's four
+prescriptions of that loop are not what an agent actually converges on. Related
+to finding 2 (the loop's exit code carries no usable signal).
+
+### 10. Two independent leads hit the same `networkidle` trap
+
+**CONFIRMED, reproduced across runs.** Both the sysedit lead (23:26:37) and this
+lead (21:49:17) wrote `pg.goto(url, wait_until="networkidle")` against a system
+interface instance, waited out the timeout, and then switched to
+`domcontentloaded`. The app holds live connections, so `networkidle` never
+settles. Two for two, roughly 40 seconds lost each time. One line in
+`type-system-interface.md` would stop it.
+
+### 11. The system-interface "no `## Change origin` marker" exception was ignored
+
+**CONFIRMED.** `update-system-interface` Step 3 states plainly:
+
+> Per the system-interface exception in `op-update.md`, there is **no
+> `## Change origin` marker and no worker gate**: user approval already happened
+> through your live loop.
+
+The lead wrote one anyway:
+
+```
+## Change origin
+ORIGIN: committed
+```
+
+and then wrote guidance into the task body telling the worker to read *"the
+`## Change origin` marker, then follow the matching references"* -- re-arming
+exactly the gate the exception exists to skip.
+
+The cause is visible in the transcript: at 22:02:17 the lead read
+`update-creation/SKILL.md` to get the task-file format, and that skill prescribes
+the marker. The exception lives in a mid-paragraph bullet of
+`update-system-interface` Step 3, read minutes earlier. The general rule was
+right in front of it and the override was not. If the exception matters, it needs
+to be stated where the format is defined, not only where the deviation is
+described.
+
+### 12. `propagate_changes` half-completes and leaves the desktop client down
+
+**CONFIRMED (dev-loop tooling, not the branch, but it degraded this run).** The
+redeploy exited **1**:
+
+```
+[electron] ERROR: Electron PID 17144 did not exit within 10 seconds after SIGTERM.
+[electron] The clean shutdown chain is broken.
+ERROR: Electron stop failed (exit code 1). Not starting a new instance.
+```
+
+By that point the *agent-side* update had already succeeded (rsync, frontend
+rebuild, agent restarted), so the container was fully updated while the desktop
+client stayed down -- and it is the client's absence that broke scenario 1's
+hand-off. Two things compound it: the failure is at the top of a very long rsync
+log, and the debug hint says `tail -50 /tmp/minds-electron.log`, a file that does
+not exist when the client was never started.
 
 ---
 
