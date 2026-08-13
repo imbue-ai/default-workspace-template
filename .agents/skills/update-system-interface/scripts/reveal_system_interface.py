@@ -97,8 +97,8 @@ Exit codes (``reveal``):
 
 Exit codes (``preview``):
     0  The preview is up.
-    1  It failed to build or boot (and tore itself down); or a bad argument, an
-       unreadable state file, or another pass's preview already holding the tab.
+    1  The ``--work-dir`` is missing or was never built; another pass's preview is
+       already holding the tab; or the boot failed (and tore itself down).
 """
 
 from __future__ import annotations
