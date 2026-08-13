@@ -101,7 +101,6 @@ Desktop client / dev loop:
 - `just forward-system-interface <agent>` -- Cloudflare tunnel for an agent.
 - `just sync-vendor-mngr [default_workspace_template]` -- sync `system/vendor/mngr` in default-workspace-template via `git archive` (committed snapshot; release flow). See `apps/minds/docs/vendor-mngr-sync.md`.
 - `just create-new-mind-repo <name> [parent_dir]` -- new private DEFAULT_WORKSPACE_TEMPLATE clone.
-- `just minds-css` -- compile the desktop client's Tailwind v4 stylesheet (app.css -> app.min.css).
 
 Tests:
 - `just minds-test-deployment [args]`, `...-cleanup`, `...-up`, `...-down`,

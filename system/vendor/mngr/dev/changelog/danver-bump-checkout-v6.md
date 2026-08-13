@@ -1,0 +1,1 @@
+Bump `actions/checkout` from v4 to v6 in the mirror gate and push workflows, matching the version already pinned everywhere else in the repo. v4 runs on the deprecated Node 20 runtime and emits a deprecation warning in CI; v6 runs on Node 24.

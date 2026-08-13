@@ -706,17 +706,10 @@ mechanism. Present the proposal to the user ONCE, in plain language:
 
 - the **title** and **description**;
 - the **repo name** (defaults to `slug`);
-- the **visibility** (default: **private**);
-- the **license**. Propose **MIT** and say what it means in one sentence:
-  anyone who gets the repo may use, change, and ship it, including
-  commercially, as long as they keep the copyright line. Give the copyright
-  holder you intend to write (their name, or the GitHub account) and let them
-  correct it. This is a real question, not a notification -- publishing under a
-  license they did not choose is not yours to decide. If they decline, the repo
-  ships with no `LICENSE`, which means nobody may reuse it; say that, since it
-  makes the template unusable to an adopter, and record their choice either
-  way. A private repo needs this as much as a public one: anyone they later
-  share it with is in the same position;
+- the **visibility** (default: **private**) -- and, if they choose public,
+  say in the same breath that the template ships under the **MIT license**,
+  so the licensing consequence is in front of them at the moment they make the
+  choice rather than after;
 - **what it will install** -- the `[environment]` declarations from
   `template.toml`, in plain language ("adopting this also installs
   poppler-utils"), or that it needs nothing beyond the stock environment. An
@@ -809,29 +802,12 @@ title: "The \"Daily\" Digest: v2"
 hand-edit must match it, or the validator's front-matter/TOML comparison fails
 the publish.
 
-**Write the license they chose (cwd = `$WT`).** If they accepted MIT, copy the
-canonical text rather than typing one from memory -- a hand-written license is
-not a license:
-
-```bash
-sed -e "s/<YEAR>/$(date +%Y)/" -e "s/<COPYRIGHT HOLDER>/<holder they confirmed>/" \
-    /home/user/workspace/.agents/skills/publish-template/references/LICENSE-MIT.txt \
-    > "$WT/LICENSE"
-sed -i "s|MINDS_TEMPLATE_LICENSE|Released under the [MIT License](LICENSE).|" "$WT/README.md"
-```
-
-If they declined, write no `LICENSE` and substitute the placeholder with the
-truth instead: `No license -- all rights reserved. Ask the author before
-reusing this.` Either way the placeholder must go; `validate_template.py`
-fails on a leftover `MINDS_TEMPLATE_LICENSE`, which is what stops a repo
-shipping with its License section unfilled.
-
 **Commit before §8's push.** Write any confirmed title/description edits into
 `template.md`'s front-matter (any activation requirement the publisher
 flagged as missing or wrong into its "Requirements" section AND the matching
 `[requirements]` entry in `template.toml`, any thumbnail edits into the
-`.svg`, and any README rewrites into `README.md`), and COMMIT that change --
-together with `LICENSE` -- with cwd = `$WT` before proceeding to §7/§8.
+`.svg`, and any README rewrites into `README.md`), and COMMIT that change with
+cwd = `$WT` before proceeding to §7/§8.
 
 Never push first and fix up the manifest or thumbnail with a second
 commit-and-re-push. This commit -- like everything else in this skill after
@@ -1195,7 +1171,9 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   commit; the `minds-v*` tag is always on an ancestor), so a pointing-at lookup
   comes up empty and the line would silently degrade to the unnamed `created from
   the workspace template` fallback. Insert `- <date>  created from <version or
-  "the workspace template">  <7-char sha>`, note padded to width 26. (This is the
+  "the workspace template">  <7-char sha>`, note padded to width 26 but never
+  fewer than two spaces before the sha (`created from minds-v0.3.NN` is exactly
+  26 chars, so a bare pad-to-26 would land the sha flush). (This is the
   OLDEST-marker end of §2's `BASE_REF` walk -- same markers, opposite pick.)
 
 - **Append the template entry.** Create the heading `### <slug>  --  <repo-url>`
@@ -1209,7 +1187,8 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   where `<n>` is **computed**, never typed: it is one greater than the highest
   `v<k>` already listed under this slug's heading (so a first publish is `v1`, and
   a later `update-published-template` run appends `v2`, `v3`, ... under the same
-  heading). Pad the note (`first published`) to width 35 so the sha lines up.
+  heading). Pad the note (`first published`) to width 35 so the sha lines up
+  (never fewer than two spaces before the sha).
   Compute the sha as `git rev-parse --short=7 "$SOURCE_SHA"`.
   **Idempotence, scoped to this slug** (two templates published from the same
   commit on the same day legitimately share a note and a sha): if a line already

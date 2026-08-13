@@ -1,0 +1,1 @@
+Trimmed the curl-retry comments in `system/scripts/setup_system.sh` and `system/scripts/install_secret_scanners.sh` down to the one non-obvious fact a maintainer needs -- that `--retry-all-errors` also retries a mid-transfer drop (curl exit 56) that plain `--retry` skips -- dropping the sha256 correctness argument and the cross-file references. No behavior change.
