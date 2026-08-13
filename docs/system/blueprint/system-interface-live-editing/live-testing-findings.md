@@ -424,7 +424,9 @@ hand-off. Two things compound it: the failure is at the top of a very long rsync
 log, and the debug hint says `tail -50 /tmp/minds-electron.log`, a file that does
 not exist when the client was never started.
 
-### Scenario 2 (partial): lease contention is handled correctly
+---
+
+## Scenario 2 (partial): lease contention is handled correctly
 
 A second lead (`uilead2`) was given an overlapping system-interface change while
 `uilead1` still held the lease. It ran the pre-flight, found `wor-vomo`, ran
