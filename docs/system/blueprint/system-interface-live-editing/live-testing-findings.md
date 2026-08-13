@@ -461,9 +461,12 @@ not exist when the client was never started.
   in this container (`mngr notify` -> "No such command"), so the end-to-end
   "Using existing mngr observe process" vs "Starting mngr observe in
   background..." branch was not run. The pieces underneath it are verified:
-  `_is_observe_running` imports and is a three-line delegate to
-  `is_observe_writer_running`, which is thoroughly exercised above, and the live
-  observer demonstrably writes to the path `get_default_events_base_dir` resolves.
+  `_is_observe_running` imports and delegates to `is_observe_writer_running`,
+  which is thoroughly exercised above, and the live observer demonstrably writes
+  to the path `get_default_events_base_dir` resolves. Its one piece of logic of
+  its own is untested here, though: it catches `ObserveLockProbeError`, prints a
+  notice, and answers "not running", so an unprobeable lock sends `mngr notify`
+  down the start-our-own-observer branch.
 
 - **`create_worker.py launch --branch` end to end.** Not re-run here; it is
   already covered by the sysedit transcript, where launch exited 0 on the current
