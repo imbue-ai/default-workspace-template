@@ -481,7 +481,8 @@ revealed twice, with opposite outcomes:
 The mechanism: a backend change makes reveal run `mngr start --restart
 system-services`, and the services agent *is* the supervisord parent, so this
 restarts every program in the workspace (app-watcher, browser, cron, earlyoom,
-host-backup, share-gateway, terminal, xvfb, and the system interface). Reveal
+host-backup, owner-exec, share-gateway, terminal, xvfb, and the system
+interface, plus a re-run of the env-converge and eval-worker one-shots). Reveal
 then waits `_HEALTH_ATTEMPTS = 30` x `_HEALTH_INTERVAL_SECONDS = 1.0` --
 **30 seconds** -- for the live service to answer. On a loaded container the whole
 stack does not reliably come back inside that budget.
