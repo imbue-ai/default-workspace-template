@@ -805,6 +805,57 @@ def test_a_frontend_that_was_already_broken_is_reported_not_rolled_back(
     assert "not serving a working frontend" in closing_line
 
 
+def test_a_blip_on_the_pre_probe_does_not_disarm_the_regression_check(repo: Path) -> None:
+    # The pre-reveal probe decides whether the reveal is answerable for the
+    # frontend at all, and it is wrong in only one direction: a single
+    # unanswered request would conclude "already broken" and silently downgrade
+    # a rollback into a warning for the rest of the run. So a non-answer is
+    # retried, and this reveal -- which really does break the frontend -- must
+    # still be rolled back rather than reported.
+    unanswered_calls = []
+
+    def unreachable_once_then_healthy(url: str) -> reveal_mod.FetchedPage | None:
+        if not unanswered_calls:
+            unanswered_calls.append(url)
+            return None
+        return _built_app_page(url)
+
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+
+    def responder(url: str) -> reveal_mod.FetchedPage | None:
+        has_built = any(c[:3] == ["npm", "run", "build"] for c in runner.calls)
+        return _placeholder_page(url) if has_built else unreachable_once_then_healthy(url)
+
+    http = _FakeHttp(_all_healthy, page_responder=responder)
+
+    code = _reveal(runner, http, _FakeSpawner(), repo)
+
+    # Rolled back (and escalated, because the fake keeps serving the
+    # placeholder afterwards) rather than exiting 0 with a warning.
+    assert code == 3
+    assert unanswered_calls  # the blip really did happen
+
+
+def test_the_pre_probe_retries_a_non_answer_but_not_a_verdict() -> None:
+    # The two halves of the same rule. A non-answer says nothing about the
+    # frontend, so it is worth asking again; a verdict -- here the placeholder,
+    # arriving as a perfectly healthy 200 -- is the service telling us the
+    # frontend is already broken, and asking again only spends the budget to
+    # reach the same answer.
+    answers = [None, None, _built_app_page("/")]
+    http = _FakeHttp(_all_healthy, page_responder=lambda url: answers.pop(0) if answers else _built_app_page(url))
+
+    assert reveal_mod._was_frontend_serving(http, _LIVE_BASE, lambda _seconds: None)
+    assert not answers  # it kept asking until it got an answer
+
+    verdict_http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+
+    assert not reveal_mod._was_frontend_serving(verdict_http, _LIVE_BASE, lambda _seconds: None)
+    assert len(verdict_http.page_urls) == 1
+
+
 # --- preconditions ----------------------------------------------------------
 
 
