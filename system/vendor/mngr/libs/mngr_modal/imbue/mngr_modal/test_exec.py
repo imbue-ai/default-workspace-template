@@ -61,6 +61,8 @@ def _exec_on_agent(
 
 @pytest.mark.acceptance
 @pytest.mark.rsync
+# Same transient sshd-handshake window as the other exec tests below.
+@pytest.mark.flaky
 @pytest.mark.timeout(300)
 def test_exec_echo_on_modal(
     temp_source_dir: Path,

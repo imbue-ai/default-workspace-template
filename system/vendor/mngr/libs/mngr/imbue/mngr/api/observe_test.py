@@ -3,10 +3,13 @@ import queue
 import subprocess
 import threading
 import time
+from collections.abc import Iterator
 from collections.abc import Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from typing import Final
 
 import psutil
 import pytest
@@ -28,19 +31,24 @@ from imbue.mngr.api.observe import AgentStateChangeEvent
 from imbue.mngr.api.observe import AgentStateEvent
 from imbue.mngr.api.observe import FullAgentStateEvent
 from imbue.mngr.api.observe import OBSERVE_EVENT_SOURCE
+from imbue.mngr.api.observe import ObserveEventFollower
 from imbue.mngr.api.observe import ObserveEventType
 from imbue.mngr.api.observe import ObserveLockError
+from imbue.mngr.api.observe import ObserveLockProbeError
+from imbue.mngr.api.observe import ObserveStreamUnavailableError
 from imbue.mngr.api.observe import _TrackedState
 from imbue.mngr.api.observe import _make_unknown_agent_details
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import append_agent_state_change_event
 from imbue.mngr.api.observe import append_observe_event
+from imbue.mngr.api.observe import find_last_full_state_offset
 from imbue.mngr.api.observe import get_agent_states_events_dir
 from imbue.mngr.api.observe import get_agent_states_events_path
 from imbue.mngr.api.observe import get_default_events_base_dir
 from imbue.mngr.api.observe import get_observe_events_dir
 from imbue.mngr.api.observe import get_observe_events_path
 from imbue.mngr.api.observe import get_observe_lock_path
+from imbue.mngr.api.observe import is_observe_writer_running
 from imbue.mngr.api.observe import load_base_state_from_history
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_change_event
@@ -51,6 +59,7 @@ from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import ProviderInstanceConfig
+from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentName
@@ -60,6 +69,7 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderBackendName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.testing import capture_loguru
 from imbue.mngr.utils.testing import make_test_agent_details
 from imbue.mngr.utils.testing import make_test_discovered_agent
@@ -1324,3 +1334,413 @@ def test_watch_pid_treats_wait_oserror_as_exit_and_enqueues(temp_mngr_ctx: MngrC
     observer._watch_pid("agent-1", "host-9", _RaisingWaitProcess(), 4321, threading.Event())
 
     assert observer._activity_queue.get_nowait() == "host-9"
+
+
+# === Follower Tests ===
+
+# Backstop so a wedged-sink test cannot leave a thread blocked forever if it fails
+# before releasing the sink itself. Never reached on the passing path.
+_WEDGED_SINK_RELEASE_TIMEOUT_SECONDS: Final[float] = 60.0
+
+
+class _ConsumerFoldError(MngrError):
+    """Stand-in for whatever a consumer's ``on_line`` sink might raise.
+
+    Deliberately not one of the exception types the follower's own file reads can
+    produce: the guarantee under test is that *any* unexpected exit marks the
+    stream dead, which is why the follower catches broadly rather than enumerating
+    the types a consumer's fold might raise.
+    """
+
+
+@contextmanager
+def _observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
+    """Hold the observe lock for the body, standing in for a live ``mngr observe``.
+
+    A follower refuses to run without this, so most follower tests need it as a
+    precondition rather than as their subject.
+    """
+    fd = acquire_observe_lock(events_base_dir)
+    try:
+        yield
+    finally:
+        release_observe_lock(fd)
+
+
+def test_a_held_observe_lock_is_what_makes_a_stream_followable(temp_host_dir: Path) -> None:
+    """The lock is the liveness signal: held means someone is writing the file."""
+    assert not is_observe_writer_running(temp_host_dir)
+    fd = acquire_observe_lock(temp_host_dir)
+    try:
+        assert is_observe_writer_running(temp_host_dir)
+    finally:
+        release_observe_lock(fd)
+    assert not is_observe_writer_running(temp_host_dir)
+
+
+def _unprobeable_events_base_dir(tmp_path: Path) -> Path:
+    """A base dir whose lock path cannot be opened for a reason other than absence.
+
+    A regular file where the base directory should be makes ``os.open`` fail with
+    ENOTDIR, which stands in for the permission problem this path really guards
+    against while staying deterministic and unaffected by running as root.
+    """
+    base_dir = tmp_path / "not-a-directory"
+    base_dir.write_text("")
+    return base_dir
+
+
+def test_a_lock_that_cannot_be_probed_is_not_reported_as_no_observer(tmp_path: Path) -> None:
+    """ "We could not look" is not evidence that nobody is observing.
+
+    Answering False would have every caller state that conclusion to a user as
+    fact, so the probe refuses to answer instead.
+    """
+    with pytest.raises(ObserveLockProbeError):
+        is_observe_writer_running(_unprobeable_events_base_dir(tmp_path))
+
+
+def test_follower_start_reports_why_the_lock_could_not_be_probed(tmp_path: Path) -> None:
+    """Unfollowable either way, but the caller is told what actually went wrong."""
+    follower = ObserveEventFollower(events_base_dir=_unprobeable_events_base_dir(tmp_path), on_line=lambda line: None)
+    with pytest.raises(ObserveStreamUnavailableError) as exc_info:
+        follower.start()
+    assert "Could not probe the observe lock" in str(exc_info.value)
+
+
+@pytest.mark.allow_warnings
+def test_follower_poll_does_not_blame_an_observer_exit_for_a_failed_probe(tmp_path: Path) -> None:
+    """The recorded detail is what a consumer puts in front of whoever must fix it.
+
+    Reporting "the observer exited" for a probe that never got an answer is a
+    diagnosis with no evidence behind it, and sends that person somewhere else.
+    """
+    follower = ObserveEventFollower(events_base_dir=_unprobeable_events_base_dir(tmp_path), on_line=lambda line: None)
+
+    follower.poll_once()
+
+    assert not follower.is_alive()
+    detail = follower.failure_detail() or ""
+    assert "Could not tell whether" in detail
+    assert "exited" not in detail
+
+
+def test_follower_refuses_to_start_when_no_observer_is_running(temp_host_dir: Path) -> None:
+    """Tailing a file nobody appends to is the exact failure this class prevents."""
+    follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=lambda line: None)
+    with pytest.raises(ObserveStreamUnavailableError):
+        follower.start()
+
+
+def test_follower_refuses_to_start_twice(temp_host_dir: Path) -> None:
+    """A follower is single-use, and both ways of restarting one are silent traps.
+
+    A second concurrent thread would share the first's read offset and forward
+    every line twice; a thread started after ``stop`` exits on its first loop
+    check and, because the stop flag is set, records no failure -- so ``is_alive``
+    would keep reporting True for a follower following nothing.
+    """
+    with _observer_holding_the_lock(temp_host_dir):
+        running = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=lambda line: None)
+        running.start()
+        try:
+            with pytest.raises(ObserveStreamUnavailableError):
+                running.start()
+        finally:
+            running.stop()
+        with pytest.raises(ObserveStreamUnavailableError):
+            running.start()
+
+
+def test_follower_refuses_to_start_after_a_stop_that_preceded_it(temp_host_dir: Path) -> None:
+    """A stop can land before the first successful start, and still burns the follower.
+
+    ``stop`` in a ``finally`` around a ``start`` that raised (no observer up yet) sets
+    the stop flag, so a later ``start`` would spawn a thread that exits on its first
+    loop check while ``is_alive`` keeps reporting True -- the trap ``start`` refuses.
+    """
+    follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=lambda line: None)
+    with pytest.raises(ObserveStreamUnavailableError):
+        follower.start()
+    follower.stop()
+
+    with _observer_holding_the_lock(temp_host_dir):
+        with pytest.raises(ObserveStreamUnavailableError):
+            follower.start()
+
+
+def test_follower_starts_folding_at_the_newest_snapshot(temp_host_dir: Path) -> None:
+    """Replaying a lone per-agent update first would collapse the view to that agent.
+
+    So the seed seeks to the last full-state line and replays forward from there --
+    the earlier snapshot and the updates before it are deliberately skipped.
+    """
+    old = make_test_agent_details(name="stale-agent", state=AgentLifecycleState.STOPPED)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([old]))
+    append_observe_event(temp_host_dir, make_agent_state_event(old))
+    current = make_test_agent_details(name="current-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([current]))
+
+    seen: list[str] = []
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=seen.append)
+        follower.poll_once()
+
+    assert len(seen) == 1
+    event = parse_observe_event_line(seen[0])
+    assert isinstance(event, FullAgentStateEvent)
+    assert [agent.name for agent in event.agents] == ["current-agent"]
+
+
+def test_find_last_full_state_offset_is_none_before_any_snapshot(temp_host_dir: Path) -> None:
+    agent = make_test_agent_details(state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_agent_state_event(agent))
+
+    assert find_last_full_state_offset(get_observe_events_path(temp_host_dir)) is None
+
+
+def test_offset_scan_ignores_a_half_written_snapshot(temp_host_dir: Path) -> None:
+    """A snapshot over the atomic-append size can leave a torn tail; it is not usable.
+
+    The offset must stay on the last COMPLETE snapshot, so replaying forward picks
+    the torn one up once the writer has finished it.
+    """
+    events_path = get_observe_events_path(temp_host_dir)
+    agent = make_test_agent_details(name="complete-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+    complete_offset = 0
+    torn = json.dumps(make_full_agent_state_event([agent]).model_dump(mode="json"), separators=(",", ":"))
+    with open(events_path, "a") as f:
+        f.write(torn[: len(torn) // 2])
+
+    assert find_last_full_state_offset(events_path) == complete_offset
+
+
+def test_follower_forwards_events_appended_after_it_caught_up(temp_host_dir: Path) -> None:
+    agent = make_test_agent_details(name="first-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+
+    seen: list[str] = []
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=seen.append)
+        follower.poll_once()
+        later = make_test_agent_details(name="later-agent", state=AgentLifecycleState.WAITING)
+        append_observe_event(temp_host_dir, make_agent_state_event(later))
+        follower.poll_once()
+
+    assert len(seen) == 2
+    second = parse_observe_event_line(seen[1])
+    assert isinstance(second, AgentStateEvent)
+    assert second.agent.name == "later-agent"
+
+
+def test_follower_waits_for_a_half_written_line_to_finish(temp_host_dir: Path) -> None:
+    """A partial tail is left in place and delivered once, whole, on a later poll."""
+    events_path = get_observe_events_path(temp_host_dir)
+    agent = make_test_agent_details(name="snapshot-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+
+    seen: list[str] = []
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=seen.append)
+        follower.poll_once()
+        later = make_test_agent_details(name="torn-agent", state=AgentLifecycleState.RUNNING)
+        line = json.dumps(make_agent_state_event(later).model_dump(mode="json"), separators=(",", ":"))
+        with open(events_path, "a") as f:
+            f.write(line[:20])
+        follower.poll_once()
+        assert len(seen) == 1
+        with open(events_path, "a") as f:
+            f.write(line[20:] + "\n")
+        follower.poll_once()
+
+    assert len(seen) == 2
+    assert parse_observe_event_line(seen[1]) is not None
+
+
+def test_follower_forwards_nothing_until_a_snapshot_exists(temp_host_dir: Path) -> None:
+    """Per-agent updates arriving before any snapshot cannot be folded, so they drop."""
+    agent = make_test_agent_details(name="early-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_agent_state_event(agent))
+
+    seen: list[str] = []
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=seen.append)
+        follower.poll_once()
+        append_observe_event(temp_host_dir, make_agent_state_event(agent))
+        follower.poll_once()
+        assert seen == []
+        append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+        follower.poll_once()
+
+    assert len(seen) == 1
+    assert isinstance(parse_observe_event_line(seen[0]), FullAgentStateEvent)
+
+
+def test_follower_seeding_past_history_waits_at_a_line_boundary(temp_host_dir: Path) -> None:
+    """Seeding with no snapshot yet must not land inside a line the writer is mid-way through.
+
+    Seeking to the raw file size does exactly that, and the leftover would then be
+    read as a whole line and logged as corruption -- the one thing the snapshot
+    check promises not to cry wolf about. Asserting no warnings is the point of the
+    test, so it deliberately does not carry ``allow_warnings``.
+    """
+    agent = make_test_agent_details(name="early-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_agent_state_event(agent))
+    events_path = get_observe_events_path(temp_host_dir)
+    snapshot_line = json.dumps(make_full_agent_state_event([agent]).model_dump(mode="json"), separators=(",", ":"))
+    torn_at = len(snapshot_line) // 2
+    with open(events_path, "a") as f:
+        f.write(snapshot_line[:torn_at])
+
+    seen: list[str] = []
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=seen.append)
+        follower.poll_once()
+        # The writer finishes the snapshot it had half-written.
+        with open(events_path, "a") as f:
+            f.write(snapshot_line[torn_at:] + "\n")
+        follower.poll_once()
+
+    assert len(seen) == 1, "the snapshot should arrive exactly once, whole"
+    assert isinstance(parse_observe_event_line(seen[0]), FullAgentStateEvent)
+
+
+@pytest.mark.allow_warnings
+def test_follower_reports_the_stream_dead_once_the_observer_exits(temp_host_dir: Path) -> None:
+    """A stream that died between ticks must read as dead, not as "no new events".
+
+    Marked ``allow_warnings``: a dead lifecycle stream is logged at ERROR on
+    purpose, and driving it is the point of this test.
+    """
+    agent = make_test_agent_details(state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+
+    fd = acquire_observe_lock(temp_host_dir)
+    follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=lambda line: None)
+    follower.poll_once()
+    assert follower.is_alive()
+
+    release_observe_lock(fd)
+    follower.poll_once()
+
+    assert not follower.is_alive()
+    assert "no longer arriving" in (follower.failure_detail() or "")
+
+
+def test_follower_reseeds_after_the_event_file_is_truncated(temp_host_dir: Path) -> None:
+    """A shrunk file means truncation or replacement; a stale offset would read garbage."""
+    events_path = get_observe_events_path(temp_host_dir)
+    agent = make_test_agent_details(name="before-truncate", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+
+    seen: list[str] = []
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=seen.append)
+        follower.poll_once()
+        assert len(seen) == 1
+        events_path.write_text("")
+        follower.poll_once()
+        replacement = make_test_agent_details(name="after-truncate", state=AgentLifecycleState.RUNNING)
+        append_observe_event(temp_host_dir, make_full_agent_state_event([replacement]))
+        follower.poll_once()
+
+    assert len(seen) == 2
+    event = parse_observe_event_line(seen[1])
+    assert isinstance(event, FullAgentStateEvent)
+    assert [a.name for a in event.agents] == ["after-truncate"]
+
+
+def test_started_follower_picks_up_new_events_on_its_own_thread(temp_host_dir: Path) -> None:
+    """The threaded path works end to end, not just the poll_once seam tests drive."""
+    agent = make_test_agent_details(name="threaded-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+
+    received: queue.Queue[str] = queue.Queue()
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(
+            events_base_dir=temp_host_dir, on_line=received.put, poll_interval_seconds=0.01
+        )
+        try:
+            follower.start()
+            assert parse_observe_event_line(received.get(timeout=10)) is not None
+            later = make_test_agent_details(name="threaded-later", state=AgentLifecycleState.WAITING)
+            append_observe_event(temp_host_dir, make_agent_state_event(later))
+            event = parse_observe_event_line(received.get(timeout=10))
+        finally:
+            follower.stop()
+
+    assert isinstance(event, AgentStateEvent)
+    assert event.agent.name == "threaded-later"
+
+
+def test_stopping_a_follower_whose_sink_is_wedged_says_so(temp_host_dir: Path) -> None:
+    """``stop`` may not report success for a thread that is still delivering events.
+
+    The thread can only outlive the join by being stuck inside ``on_line``, and it
+    is a daemon, so it keeps feeding a consumer that has just been told the
+    follower is stopped. Nothing here can kill it safely, which is why saying so
+    is the whole of the remedy.
+
+    The join timeout is shortened here for the same reason the poll interval is:
+    the wait elapsing is the whole point, so the test should not spend the default
+    on watching it elapse.
+    """
+    append_observe_event(temp_host_dir, make_full_agent_state_event([make_test_agent_details()]))
+    is_sink_entered = threading.Event()
+    may_sink_return = threading.Event()
+
+    def wedged_sink(line: str) -> None:
+        is_sink_entered.set()
+        may_sink_return.wait(timeout=_WEDGED_SINK_RELEASE_TIMEOUT_SECONDS)
+
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(
+            events_base_dir=temp_host_dir,
+            on_line=wedged_sink,
+            poll_interval_seconds=0.01,
+            join_timeout_seconds=0.05,
+        )
+        try:
+            follower.start()
+            assert is_sink_entered.wait(timeout=10.0), "the follower never delivered the seeded snapshot"
+            with capture_loguru(level="WARNING") as log_output:
+                follower.stop()
+        finally:
+            may_sink_return.set()
+
+    assert "did not exit within" in log_output.getvalue()
+
+
+@pytest.mark.allow_warnings
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_follow_thread_exiting_unexpectedly_marks_the_stream_dead(temp_host_dir: Path) -> None:
+    """A sink that raises kills the thread; liveness must not keep reporting healthy.
+
+    The follower cannot enumerate what a consumer's fold raises, so the guarantee is
+    structural: any exit that was not a deliberate stop records a failure.
+
+    The sink's exception is deliberately left to propagate out of the thread (so the
+    traceback survives rather than being laundered into a return value), which is why
+    the unhandled-thread-exception warning is expected here.
+    """
+    agent = make_test_agent_details(state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+
+    def explode(line: str) -> None:
+        raise _ConsumerFoldError("the consumer's fold failed")
+
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=explode, poll_interval_seconds=0.01)
+        try:
+            follower.start()
+            poll_until(lambda: not follower.is_alive(), timeout=10.0, poll_interval=0.01)
+        finally:
+            follower.stop()
+
+    assert not follower.is_alive()
+    # The specific cause, not just "it stopped": this string is what a consumer
+    # surfaces in a health endpoint, so the type and message are the diagnosis.
+    detail = follower.failure_detail() or ""
+    assert "_ConsumerFoldError" in detail
+    assert "the consumer's fold failed" in detail

@@ -1,0 +1,49 @@
+schema_version = "1.4"
+
+# The driver keeps these current in the box after every turn, so a timed-out
+# trial still hands the verifier a gradeable partial transcript. conversation
+# is the clean per-turn record the verifier grades; full_transcript is the raw
+# event stream kept for debugging.
+artifacts = [
+    "/logs/agent/conversation.jsonl",
+    "/logs/agent/full_transcript.jsonl",
+    "/logs/agent/state.json",
+]
+
+[task]
+name = "minds-evals/$case_id"
+version = "1.0.0"
+description = "Minds persona eval case $case_id: a multi-turn client conversation against a real Minds workspace"
+keywords = ["minds", "persona", "eval"]
+
+[metadata]
+case_id = "$case_id"
+mngr_branch = "$mngr_branch"
+mngr_sha = "$mngr_sha"
+dwt_repo = "$dwt_repo"
+dwt_branch = "$dwt_branch"
+
+[agent]
+# The case budget plus grace so the driver's own deadline (timeout_seconds)
+# fires first and marks the trial timed_out before harbor cancels run().
+timeout_sec = $agent_timeout_sec
+
+[verifier]
+timeout_sec = 600.0
+environment_mode = "separate"
+
+[verifier.env]
+ANTHROPIC_API_KEY = "$${ANTHROPIC_API_KEY}"
+
+# The verifier is a slim rewardkit container making one judge call, so it needs
+# far less than the box's 6 CPU / 16 GB. Without this block harbor copies the
+# top-level [environment] sizing wholesale. The image still builds from tests/
+# (separate mode); this only sets resources.
+[verifier.environment]
+cpus = 2
+memory_mb = 4096
+
+[environment]
+cpus = 6
+memory_mb = 16384
+workdir = "/work/mngr"

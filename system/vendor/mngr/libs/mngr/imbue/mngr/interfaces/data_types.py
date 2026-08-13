@@ -608,7 +608,15 @@ class AgentDetails(FrozenModel):
     type: str = Field(description="Agent type (claude, codex, etc.)")
     command: CommandString = Field(description="Command used to start the agent")
     work_dir: Path = Field(description="Working directory")
-    initial_branch: str | None = Field(description="Git branch name created for this agent")
+    initial_branch: str | None = Field(
+        description=(
+            "Git branch mngr placed this agent's work_dir on at creation, whether it created the "
+            "branch or checked out one that already existed. Recorded at create time and not "
+            "re-read, so an agent that checks out a different branch itself is not reflected here; "
+            "None for transfer modes that involve no git (none, rsync), and for a source repo that "
+            "was itself on no branch (detached HEAD)."
+        )
+    )
     create_time: datetime = Field(description="Creation timestamp")
     start_on_boot: bool = Field(description="Whether agent starts on host boot")
 
