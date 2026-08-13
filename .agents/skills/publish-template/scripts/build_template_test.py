@@ -41,6 +41,7 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
     _git("config", "user.name", "T", cwd=source)
     for relative in (
         "system",
+        "system/supervisord.conf.d",
         ".agents/skills/welcome",
         "docs",
         ".agents/skills/publish-template/scripts",
@@ -48,7 +49,15 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
     ):
         (source / relative).mkdir(parents=True, exist_ok=True)
     (source / "pyproject.toml").write_text('[project]\nname="x"\n')
-    (source / "system/supervisord.conf").write_text("[supervisord]\n")
+    # A base the assembly accepts as bootable: it must name the drop-in
+    # directory, and the config it ships has to realize at least one program.
+    # Programs live one per drop-in, so the main config only pulls them in.
+    (source / "system/supervisord.conf").write_text(
+        "[supervisord]\n\n[include]\nfiles = supervisord.conf.d/*.conf\n"
+    )
+    (source / "system/supervisord.conf.d/system_interface.conf").write_text(
+        "[program:system_interface]\ncommand=bash -c 'system-interface'\n"
+    )
     (source / "README.md").write_text("# base\n")
     (source / ".agents/skills/welcome/SKILL.md").write_text("base welcome\n")
     (source / "docs/VERSION_HISTORY.md").write_text("# V\n")
