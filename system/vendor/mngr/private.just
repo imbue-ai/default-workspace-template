@@ -682,6 +682,11 @@ minds-start branch="" default_workspace_template="" debug_port="":
     # Put the Node version apps/minds pins (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
+    # Build the SPA the app server actually serves. `pnpm start` only builds
+    # the legacy JinjaX stylesheet; static/ui/ is produced at wheel-build time
+    # and is gitignored, so without this a dev run serves whatever bundle
+    # happened to be built last -- or 404s on a fresh worktree.
+    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
     cd apps/minds && pnpm start
 
 # Launch the minds desktop client (electron) in dev mode against the

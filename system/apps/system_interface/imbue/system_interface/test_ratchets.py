@@ -74,8 +74,17 @@ def test_prevent_builtin_exception_raises() -> None:
     rc.check_builtin_exception_raises(_DIR, snapshot(0))
 
 
+# 5 of these swallow a decode error the rule is aimed at. The sixth, in
+# session_parser._find_permission_request, is a misfire: it is not a decode of
+# something expected to be JSON, it is a probe asking whether a JSON value
+# begins at a given `{` at all, walked across every brace at or before the
+# request_id key. "No" is the ordinary answer for a brace in prose or shell
+# output, so the warning the rule asks for would report a problem on input that
+# has nothing wrong with it, on most lines of most tool results. The genuine
+# failure -- a permission request we cannot read -- is already visible: the card
+# says so, which is the bug this parser exists to fix.
 def test_prevent_silent_decode_error_catches() -> None:
-    rc.check_silent_decode_error_catches(_DIR, snapshot(5))
+    rc.check_silent_decode_error_catches(_DIR, snapshot(6))
 
 
 # --- Import style ---
