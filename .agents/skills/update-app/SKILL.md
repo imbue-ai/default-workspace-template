@@ -192,8 +192,12 @@ layout active, so the layout the user is not on fails fast and harmlessly:
 `for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done`.
 **That `open` puts the tab on the user's screen the moment it returns** -- it is
 the act of showing them, so only run it on something you are ready for them to
-see, and never follow it by telling them to open the tab. For any other tab
-manipulation, see `manage-layout`. Background daemons have
+see, and never follow it by telling them to open the tab. What makes you ready
+is step 4: with no tab open yet you are still in the private window it asks for,
+so **run step 4's verification before this `open`, not after it** -- this is the
+one branch of the loop where the numbered order and that rule disagree, and the
+rule wins. (A tab that was already open gives you no such window; see step 4.)
+For any other tab manipulation, see `manage-layout`. Background daemons have
 no tab -- skip the tab refresh, but not the rest of this step.
 
 If you restarted the whole services agent rather than a single program, one
