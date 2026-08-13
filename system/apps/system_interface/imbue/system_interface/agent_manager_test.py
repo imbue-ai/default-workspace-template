@@ -42,6 +42,7 @@ from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _build_worktree_create_command
 from imbue.system_interface.agent_manager import _make_apps_file_handler
+from imbue.system_interface.agent_manager import _refuse_to_set_oom_score_adj
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
@@ -1195,6 +1196,54 @@ def test_follow_mode_folds_agents_from_the_running_observers_event_file(
             timeout=5.0,
             poll_interval=0.05,
         ), f"agents were {manager.get_agents()!r}"
+    finally:
+        manager.stop()
+        release_observe_lock(lock_fd)
+
+
+def test_follow_mode_is_built_without_the_power_to_write_oom_scores(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """A read-only second instance must not touch the authoritative one's scores.
+
+    The capability is withheld rather than the call sites gated, because
+    ``reapply`` is reachable in FOLLOW mode: every lifecycle event the follower
+    folds runs ``record_running_agents``, and the preview serves its own frontend,
+    which can post ``/api/activity``. Both would otherwise contend with the real
+    instance over the same ``/proc`` entries.
+    """
+    follower = AgentManager.build(broadcaster, events_mode=AgentEventsMode.FOLLOW)
+    # Identity, not the return value: the real ``set_oom_score_adj`` also returns
+    # False for a pid that does not exist, so asserting on the result would pass
+    # just as well against an instance that tried to write and merely missed.
+    assert follower._oom_prioritizer._set_adj is _refuse_to_set_oom_score_adj
+    assert _refuse_to_set_oom_score_adj(4242, 300) is False
+
+    authoritative = AgentManager.build(broadcaster, events_mode=AgentEventsMode.OBSERVE)
+    assert authoritative._oom_prioritizer._set_adj is bands.set_oom_score_adj
+
+
+def test_follow_mode_does_not_run_the_oom_staleness_sweep(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nor does it do the periodic work whose only product it cannot write."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    append_observe_event(tmp_path, make_full_agent_state_event([_agent_details("a-chat")]))
+
+    manager = AgentManager.build(broadcaster, events_mode=AgentEventsMode.FOLLOW)
+    lock_fd = acquire_observe_lock(tmp_path)
+    try:
+        manager.start()
+        assert poll_until(
+            lambda: manager.get_agent_events_status().is_alive,
+            timeout=5.0,
+            poll_interval=0.05,
+        ), f"status stayed {manager.get_agent_events_status()!r}"
+        assert manager._oom_prioritizer._sweep_thread is None
     finally:
         manager.stop()
         release_observe_lock(lock_fd)

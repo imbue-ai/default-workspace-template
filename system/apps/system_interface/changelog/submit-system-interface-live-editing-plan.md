@@ -45,3 +45,17 @@ stream that has not emitted a snapshot sits frozen at boot-state discovery).
 `/api/agents` is unchanged; it runs its own discovery, which is exactly why it
 answered 200 on an instance whose agent view was dead and could not serve as the
 health gate.
+
+**Only the authoritative instance manages chat OOM scores.** A `FOLLOW`-mode
+instance -- the preview, the reveal pre-flight -- is a read-only second view of a
+workspace another instance owns, so it is now built without the capability to
+write `oom_score_adj` at all, and it neither seeds nor runs the staleness sweep.
+Otherwise two instances would fight over the same `/proc` entries, and the
+preview would lose on the merits anyway: the frontend activity reports that
+supply the open/visible bonuses go to the authoritative instance, so the
+preview's writes would be both contending *and* worse. The capability is
+withheld rather than the call sites gated because `reapply` is reachable in
+`FOLLOW` mode by two paths that are easy to miss -- every folded lifecycle event
+runs `record_running_agents`, and the preview serves its own frontend, which can
+post `/api/activity` -- so a call site added later is inert by construction
+instead of needing to remember a mode check.

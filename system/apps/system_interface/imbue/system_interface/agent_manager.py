@@ -286,6 +286,26 @@ class _AppsFileHandler(FileSystemEventHandler):
     on_closed = _maybe_fire
 
 
+def _refuse_to_set_oom_score_adj(pid: int, adj: int) -> bool:
+    """The ``set_adj`` a non-authoritative instance gets: never writes, always fails.
+
+    A FOLLOW-mode instance (the ``update-system-interface`` preview, the reveal
+    pre-flight) is a read-only second view of a workspace that another instance
+    owns. Chat ``oom_score_adj`` is not shared state it may contribute to: the
+    two instances would fight over the same ``/proc`` entries, and this one would
+    lose anyway, since the frontend activity reports that supply the open/visible
+    bonuses go to the authoritative instance -- so its writes would be both
+    contending *and* worse.
+
+    Withholding the capability rather than gating the call sites is deliberate:
+    ``reapply`` is reached from the sweep, from ``record_activity``, and from
+    every lifecycle event via ``record_running_agents``, and the last of those
+    fires in FOLLOW mode too. A new call site added later is inert by
+    construction instead of needing to remember a mode check.
+    """
+    return False
+
+
 def _make_apps_file_handler(
     agent_id: str,
     on_change: Any,
@@ -424,10 +444,13 @@ class AgentManager:
         manager._auto_opened_assist_ids = set()
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
         # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
+        # Only the authoritative instance gets the capability to write scores; a
+        # FOLLOW-mode instance is handed one that never does (see
+        # ``_refuse_to_set_oom_score_adj``).
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_agent_ids=manager.get_chat_agent_ids,
             resolve_pid=lookup_pid_by_agent_id,
-            set_adj=set_oom_score_adj,
+            set_adj=set_oom_score_adj if events_mode is AgentEventsMode.OBSERVE else _refuse_to_set_oom_score_adj,
             resolve_process_started_at=manager._read_process_started_at,
         )
         return manager
@@ -435,9 +458,11 @@ class AgentManager:
     def start(self) -> None:
         """Perform initial agent discovery, then attach to the lifecycle event stream.
 
-        Also seeds and starts the OOM prioritizer. Seeding happens before the
-        sweep so the first pass ranks chats against their real message history
-        rather than treating a restart as "nothing has ever been messaged".
+        In OBSERVE mode this also seeds and starts the OOM prioritizer. Seeding
+        happens before the sweep so the first pass ranks chats against their real
+        message history rather than treating a restart as "nothing has ever been
+        messaged". A FOLLOW-mode instance skips both: chat OOM scores belong to
+        the one authoritative instance, and it cannot write them anyway.
 
         Never raises: a lifecycle stream that cannot be attached to is recorded
         as a failure and surfaced through :meth:`get_agent_events_status` (and
@@ -445,12 +470,12 @@ class AgentManager:
         means rather than the server dying at import-time-ish depth.
         """
         self._initial_discover()
-        self._seed_oom_prioritizer()
-        self._oom_prioritizer.start()
-        if self._events_mode is AgentEventsMode.FOLLOW:
-            self._start_follow()
-        else:
+        if self._events_mode is AgentEventsMode.OBSERVE:
+            self._seed_oom_prioritizer()
+            self._oom_prioritizer.start()
             self._start_observe()
+        else:
+            self._start_follow()
 
     def start_without_observe(self) -> None:
         """Start with initial discovery only, no observe subprocess. For testing."""
