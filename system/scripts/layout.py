@@ -12,7 +12,7 @@ Subcommands:
     split <ref-or-service> [...]        Add a panel relative to another panel; tabs into an existing adjacent group by default.
     close <ref-or-service>              Remove the named panel.
     move <ref-or-service> --relative-to <ref-or-service> [...]  Relocate a panel; iframe DOM is preserved.
-    rename <ref-or-service> <title>     Update the panel's tab title.
+    rename <ref-or-service> <title>     Rename the object machine-wide (the title shows in every view).
     maximize <ref-or-service>           Maximize the panel's group within the dockview.
     restore                             Exit a maximized group.
     replace-url <ref-or-service> <url>  Swap an iframe's src (service:<name>[/<path>] or https://...).
@@ -1671,9 +1671,9 @@ def main(argv: list[str] | None = None) -> int:
     _add_required_layout_argument(p_move)
     p_move.set_defaults(func=_cmd_move)
 
-    p_rename = subparsers.add_parser("rename", help="Update a panel's tab title")
+    p_rename = subparsers.add_parser("rename", help="Rename the object machine-wide")
     p_rename.add_argument("ref", help="Panel ref")
-    p_rename.add_argument("title", help="New tab title")
+    p_rename.add_argument("title", help="New title, shown in every view")
     _add_required_layout_argument(p_rename)
     p_rename.set_defaults(func=_cmd_rename)
 
