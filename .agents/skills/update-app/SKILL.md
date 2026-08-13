@@ -145,7 +145,8 @@ process restarts:
   markup. Skip straight to the refresh.
 
 - **Change to the service *definition*** (its port, its `command`, its log
-  config, or adding/removing a program): edit `system/supervisord.conf`, then
+  config, or adding/removing a program): edit the program's own
+  `system/supervisord.conf.d/<name>.conf`, then
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
