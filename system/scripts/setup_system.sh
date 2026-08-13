@@ -42,12 +42,9 @@ fi
 : "${LATCHKEY_VERSION:=3.4.1}"
 : "${RESTIC_VERSION:=0.18.1}"
 
-# Shared curl flags for the pinned-binary downloads below. `--retry` alone only
-# covers curl's built-in "transient" set (timeouts and 5xx like a GitHub-release
-# 503); `--retry-all-errors` extends that to a mid-transfer connection drop
-# (curl exit 56, CURLE_RECV_ERROR), which otherwise aborts the whole provision
-# under `set -e`. Every download below is sha256-verified, so a retry can never
-# smuggle in a corrupt artifact. install_secret_scanners.sh retries the same way.
+# Shared curl flags for the pinned-binary downloads below. --retry-all-errors
+# also retries a mid-transfer drop (curl exit 56), which plain --retry does not
+# cover.
 CURL_RETRY=(--retry 5 --retry-all-errors --retry-delay 2)
 
 # Install a downloaded binary atomically: fetch to a temp file beside the target,
