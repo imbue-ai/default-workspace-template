@@ -251,30 +251,45 @@ harness conforms to this contract only when its test is green.
 
 ## Part E — Known limitations
 
-Where the implementations do not fully meet Parts A–D, and why. E1–E2 are conformance gaps
-against the contract itself; E3–E7 are upstream behavior we do not control; E8 is what we chose
-not to build.
+Where the implementations do not fully meet Parts A–D, and why. E1–E3 are conformance gaps
+against the contract itself; E4–E8 are upstream behavior we do not control; E9–E10 are the test
+quirks and what we chose not to build.
 
-### E1. claude — a send holding `message.lock` past the bounded wait (A4 / Interrupt §return)
-**Rare, and stop wins by design.** Stop takes mngr's per-agent `message.lock` with a bounded
-wait, then refreshes the mirror and captures the block under it — so a message that parked
-between the caller's last mirror read and the SIGKILL rides the returned block instead of dying
-silently with the process.
+### E1. claude and pi — queued chips blink out during a restart-based shoulder-tap (A1a)
+**A visual blip, not a lost message.** The shoulder-tap never returns anything to the composer —
+it drains the queue and **resends it**. On claude and pi that goes through `restart_drain`: the
+queue block is captured, the agent is restarted, and the block is resent as one merged turn.
+
+The restart clears the harness's own queue, so the chips disappear at that instant — but the
+resent block is not a frontend POST, so no "Sending…" bubble covers the window. The messages are
+briefly in no visible state, then reappear a moment later as a committed turn. They are never
+lost; A1a's "not even momentarily" is what this misses.
+
+**codex does not have this.** Its atomic shoulder-tap merges into the live turn with no restart,
+and the ledger marks each chip `is_sending=True` while it re-sends, so the chip stays
+continuously visible and renders as "Sending…" instead of blinking out. Closing the gap on
+claude/pi means the same thing: keep the captured block visible as sending chips across the
+restart window rather than letting the queue snapshot go empty.
+
+### E2. claude — a send holding `message.lock` past the bounded wait (stop, not shoulder-tap)
+**Rare, and stop wins by design.** This is the **stop button**, not the shoulder-tap. Stop takes
+mngr's per-agent `message.lock` with a bounded wait, then refreshes the mirror and captures the
+block under it — so a message that parked between the caller's last mirror read and the SIGKILL
+rides the returned block instead of dying silently with the process.
 
 When that wait **expires** — an idle-start send holding the lock through its turn-confirm — stop
 must still win, so it refreshes and hammers anyway. That message is **stopped and never runs**.
 Whether it also comes back to the composer depends on a race: if its enqueue landed before the
-best-effort re-capture, it rides the returned block; if it landed after, in the dead epoch, it
-does not. The conservation test accepts **both** shapes deliberately (`conservation_storm_test.py`,
-slow-send branch), because on a heavily stalled machine the lock holder can release just inside
-the wait and the base drain then captures it under the lock.
+best-effort re-capture it rides the returned block; if it landed after, in the dead epoch, it does
+not. `conservation_storm_test.py` accepts **both** shapes deliberately on its slow-send branch,
+because on a heavily stalled machine the lock holder can release just inside the wait and the base
+drain then captures the message under the lock.
 
-So on this one branch a message can be neither Delivered nor Returned — it is stopped. This is
-the deliberate "stop must win" posture (matching pi/codex, which never hold the lock at all), not
-an accident. It is the closest thing to a message going missing on a shoulder-tap, and it needs a
-send in flight at the instant of the stop plus a lock held past the bounded wait.
+So on this one branch a message can end neither Delivered nor Returned — it is stopped. That is
+the deliberate "stop must win" posture (matching pi and codex, which never hold the lock at all),
+not an accident.
 
-### E2. pi and claude — the queue and the transcript ride different transports (A3b ordering)
+### E3. pi and claude — the queue and the transcript ride different transports (A3b ordering)
 A3b requires depart-before-arrive: the chip is removed **first**, then the transcript turn
 appears. Both harnesses emit in that order — it is the ordering we control.
 
@@ -285,7 +300,7 @@ a turn. Millisecond-scale and self-correcting on the next update; there is no do
 only a momentary double-show. Closing it fully would need both updates on one transport, or a
 sequence number the frontend orders on — neither is built.
 
-### E3. pi — `ctx.abort()` drains the queue into an unreadable editor
+### E4. pi — `ctx.abort()` drains the queue into an unreadable editor
 `ctx.abort` routes to `_extensionAbortHandler` →
 `restoreQueuedMessagesToEditor({abort: true})`. It empties pi's native steer queue into the TUI
 editor buffer **unsent**, then aborts. The extension's pi API (`sendUserMessage`, `setModel`,
@@ -302,7 +317,7 @@ re-parks the steers, stranded until the next user prompt.
 A turn counter used for ABA-safety must be **persisted across restart**: a fresh process resets
 it, and a naive reset re-aliases turn id N onto a different turn.
 
-### E4. codex — the daemon does not enforce service tiers
+### E5. codex — the daemon does not enforce service tiers
 `thread/settings/update` keeps whatever `serviceTier` is set, even on a model that does not
 support `priority`. The daemon will not reject or clear it. So the guarantee "a no-fast model has
 no fast, and clearing it works" is **frontend-enforced**:
@@ -315,7 +330,7 @@ Related: `model/list` is per-account *and* per-model. Efforts differ per model (
 some `low→max`, some `low→xhigh`) and `service_tiers` is non-empty only on some families. **A
 static uniform catalog cannot represent this** — which is why the catalog is daemon-sourced.
 
-### E5. codex — hook trust is not bypassable on the resume path
+### E6. codex — hook trust is not bypassable on the resume path
 `codex resume <id> --remote` stops on a "Hooks need review" screen and **ignores**
 `--dangerously-bypass-hook-trust`. Until trust is granted, no hooks fire on any turn, typed or
 programmatic. `wait_for_ready_signal` therefore selects "Trust all and continue" once at create
@@ -325,25 +340,25 @@ one-time and `start`/`connect` never see the screen.
 The daemon must also launch as `codex --dangerously-bypass-hook-trust --enable hooks app-server`
 — hooks are a default-off feature flag, so a bare `app-server` fires none.
 
-### E6. codex — programmatic turns fire no transcript hook
+### E7. codex — programmatic turns fire no transcript hook
 `codex_transcript_path` is written by mngr rather than derived from a hook, because a
 programmatic `turn/start` does not fire the hook that would otherwise record it.
 
-### E7. codex — `turn/started` / `turn/completed` are not emitted by 0.147
+### E8. codex — `turn/started` / `turn/completed` are not emitted by 0.147
 The app-server stopped emitting those notifications; only `thread/status/changed` remains. The
 activity dot therefore follows mngr's authoritative RUNNING state via `CodexActivityTracker` (the
 same lifecycle+transcript path as claude and pi), not the ledger's turn notifications. The ledger
 stays the queue/message-lifecycle authority. Deriving the dot from the ledger's notifications is
 what stuck it on "Thinking".
 
-### E8. Test-environment quirks (not product bugs)
+### E9. Test-environment quirks (not product bugs)
 - `test_codex_agent_full_lifecycle` is functionally green end-to-end but exits non-zero locally on
   the resource-guard mark check (`@pytest.mark.tmux` / `rsync` "marked but never invoked"): in a
   sandbox those binaries do not route through the guard's PATH wrapper. In CI the wrappers are
   active and the marks pass. The same cause makes several `adopt`/`destroy` unit tests "fail"
   locally.
 
-### E9. Deliberately not closed
+### E10. Deliberately not closed
 - **claude model/effort switches do not survive restart.** Launch settings re-pin the model every
   relaunch; only `fastMode` is recorded per-agent. Fix is to record model+effort in the same
   per-agent settings file. (The restart precedence here was inferred, not observed — verify
