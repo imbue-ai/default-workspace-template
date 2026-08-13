@@ -51,6 +51,18 @@ def _parse_main_config() -> configparser.ConfigParser:
     return parser
 
 
+def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
+    """The program and event-listener names a parsed config declares itself.
+
+    Its ``[include]``\\ s are not followed, so this is what that one file says.
+    """
+    return {
+        section.partition(":")[2]
+        for section in parser.sections()
+        if section.startswith(("program:", "eventlistener:"))
+    }
+
+
 def test_include_glob_matches_every_dropin_file() -> None:
     """Every file in supervisord.conf.d/ is reached by the config's own glob.
 
@@ -78,11 +90,7 @@ def test_every_program_is_discoverable_through_the_include_glob() -> None:
     ``system_interface`` and made the emptiness look like one real program.
     """
     parser = _parse_main_config()
-    discovered = {
-        section.partition(":")[2]
-        for section in parser.sections()
-        if section.startswith(("program:", "eventlistener:"))
-    }
+    discovered = _programs_declared_in(parser)
     for path in _expand_include_patterns(parser):
         discovered.update(_SECTION_RE.findall(path.read_text()))
 
@@ -113,13 +121,7 @@ def test_a_program_free_main_config_implies_an_include_aware_vendored_probe() ->
     declared in the main config, and becomes a permanent regression guard once
     the vendored probe follows the globs.
     """
-    parser = _parse_main_config()
-    main_config_programs = {
-        section.partition(":")[2]
-        for section in parser.sections()
-        if section.startswith(("program:", "eventlistener:"))
-    }
-    if main_config_programs:
+    if _programs_declared_in(_parse_main_config()):
         return
 
     vendored_mngr = _REPO_ROOT / "system/vendor/mngr"
