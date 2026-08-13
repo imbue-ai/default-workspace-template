@@ -121,7 +121,7 @@ FOLLOW mode standing in for the preview:
 
 ```
 boot:                    200 {"agent_events":{"mode":"FOLLOW","is_alive":true, ...}}
-25s after SI restart:    503 {"status":"degraded","is_alive":false,"detail":"...exited..."}
+25s after SI restart:    503 {"status":"degraded","agent_events":{"is_alive":false,"detail":"...exited..."}}
 85s after SI restart:    503  (identical -- no self-heal)
 same instance, /api/agents: 200, full fresh agent listing
 ```
