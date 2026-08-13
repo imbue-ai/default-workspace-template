@@ -6,9 +6,7 @@ against the `gabriel/denim-pigeon` branch (mngr). Nothing here is fixed yet --
 this is the record, not the work.
 
 Each entry records what was observed, where it came from, and how sure we are it
-is real. "Repro" means it was reproduced deliberately during this testing pass;
-"observed" means it showed up in the sysedit transcript and has not yet been
-re-run.
+is real.
 
 ## Status key
 
