@@ -1444,6 +1444,23 @@ function retireLauncher(panelId: string | null): void {
   if (panel) dockview.removePanel(panel);
 }
 
+/** A launcher is a question -- "what goes in this pane?" -- and clicking off
+ *  to some other tab is an answer: not this, not now. Every launcher folds up
+ *  the moment a real panel takes focus, rather than lingering as a tab the
+ *  user has to close by hand. Only runs when the newly focused panel is NOT a
+ *  launcher itself, which also guarantees the dock cannot be emptied here: the
+ *  focused panel survives, and a group that held only its launcher collapses
+ *  away with it. */
+function retireLaunchersOnFocusLeaving(activePanelId: string): void {
+  if (!dockview) return;
+  if (panelParams.get(activePanelId)?.panelType === "launcher") return;
+  for (const panel of [...dockview.panels]) {
+    if (panel.id !== activePanelId && panelParams.get(panel.id)?.panelType === "launcher") {
+      dockview.removePanel(panel);
+    }
+  }
+}
+
 /** Keep the dock from ever being empty: the view a user emptied gets a
  *  launcher, which is the design's empty state. Suppressed while a layout is
  *  being mounted, where the teardown legitimately removes every panel. */
@@ -4254,6 +4271,7 @@ function initializeDockview(parentElement: HTMLElement): void {
   dv.api.onDidActivePanelChange((panel) => {
     if (panel === undefined || isApplyingLayout) return;
     touchPanelLastUsed(panel.id);
+    retireLaunchersOnFocusLeaving(panel.id);
   });
 
   // While awaitingInitialChat is true, every agents_updated event is
