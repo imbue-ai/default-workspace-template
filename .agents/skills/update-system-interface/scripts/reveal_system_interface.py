@@ -204,12 +204,11 @@ _HEALTH_INTERVAL_SECONDS = 1.0
 # Pre-flight boot is a fresh process on a throwaway port; give it the same grace.
 _PREFLIGHT_ATTEMPTS = 30
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
-# Budget for the pre-reveal frontend probe, which retries only a *non-answer*
-# (see :func:`_was_frontend_serving`). Shorter than the health budget on
-# purpose: this runs before any work has been done, so a service that is simply
-# down should not add 30s to a reveal that is about to fail its health check
-# anyway -- while still riding out the blip that would otherwise disarm the
-# whole regression check.
+# Budget for the frontend probe, which retries only a *non-answer* (see
+# :func:`_probe_frontend_until_answered`). Deliberately fewer attempts than the
+# health budget: a service that is down refuses immediately, so this rides out a
+# blip in about four seconds rather than holding up a decision -- to arm the
+# check, to roll back, to escalate -- that the reveal has to reach either way.
 _FRONTEND_PROBE_ATTEMPTS = 5
 _FRONTEND_PROBE_INTERVAL_SECONDS = 1.0
 
@@ -605,9 +604,9 @@ def probe_frontend(http: HttpClient, base_url: str) -> FrontendProbe:
     blank screen an unserved ``/assets`` path produces.
 
     ``is_answered`` separates "the service told us the frontend is broken" from
-    "the service told us nothing". Only the caller deciding whether a working
-    frontend was owed *beforehand* cares, and only because the second is worth
-    retrying (see :func:`_was_frontend_serving`).
+    "the service told us nothing", which is what makes the second worth retrying
+    (see :func:`_probe_frontend_until_answered`). This is the single-shot probe;
+    every decision in the reveal goes through the retrying one.
     """
     shell = http.get_page(f"{base_url}{SERVE_PATH}", timeout=10.0)
     if shell is None:
@@ -639,36 +638,40 @@ def probe_frontend(http: HttpClient, base_url: str) -> FrontendProbe:
     return FrontendProbe(None, is_answered=True)
 
 
-def describe_frontend_failure(http: HttpClient, base_url: str) -> str | None:
-    """Return why the live UI is not serving a working frontend, or ``None``."""
-    return probe_frontend(http, base_url).failure
-
-
-def _was_frontend_serving(
+def _probe_frontend_until_answered(
     http: HttpClient, base_url: str, sleeper: Callable[[float], None]
-) -> bool:
-    """Whether the live UI was serving a working frontend before the reveal.
+) -> FrontendProbe:
+    """:func:`probe_frontend`, retrying until the service actually answers.
 
-    This decides whether the reveal is answerable for the frontend afterwards,
-    and it is wrong in only one direction: a false "no" silently disarms the
-    regression check for the whole run, so a reveal that then breaks the UI is
-    reported rather than rolled back. A single unlucky request should not be
-    able to do that.
+    Every frontend verdict the reveal reaches is consequential and every one of
+    them is wrong if a single unlucky request decides it. Beforehand, a false
+    "not serving" silently disarms the regression check for the whole run, so a
+    reveal that then breaks the UI is reported rather than rolled back.
+    Afterwards, a false "not serving" reverts a change that landed fine -- and
+    on a frontend-only reveal this is the only liveness check there is, since
+    the health poll runs only when the backend restarted. During recovery it
+    turns a rollback that worked into an emergency.
 
     Only a *non-answer* is retried. A verdict -- the placeholder, a bad status,
-    a script served as HTML -- is the service telling us the frontend is
-    already broken; asking again reaches the same conclusion more slowly. The
-    budget is deliberately shorter than the 30s the health checks use: this
-    runs before any work has been done, so a service that is genuinely down
-    should not delay a reveal that is about to fail its health check anyway.
+    a script served as HTML -- is the service telling us the frontend really is
+    broken; asking again reaches the same conclusion more slowly. Exhausting the
+    budget returns the last non-answer, which reads as a failure: a UI that will
+    not answer is one the user cannot see either.
     """
-    for index in range(_FRONTEND_PROBE_ATTEMPTS):
-        probe = probe_frontend(http, base_url)
+    probe = probe_frontend(http, base_url)
+    for _ in range(_FRONTEND_PROBE_ATTEMPTS - 1):
         if probe.is_answered:
-            return probe.is_serving
-        if index < _FRONTEND_PROBE_ATTEMPTS - 1:
-            sleeper(_FRONTEND_PROBE_INTERVAL_SECONDS)
-    return False
+            return probe
+        sleeper(_FRONTEND_PROBE_INTERVAL_SECONDS)
+        probe = probe_frontend(http, base_url)
+    return probe
+
+
+def describe_frontend_failure(
+    http: HttpClient, base_url: str, sleeper: Callable[[float], None]
+) -> str | None:
+    """Return why the live UI is not serving a working frontend, or ``None``."""
+    return _probe_frontend_until_answered(http, base_url, sleeper).failure
 
 
 def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
@@ -790,7 +793,7 @@ def _apply_reveal(
     #
     # Ahead of the refresh below, so a reveal that regressed the frontend rolls
     # back instead of asking every open view to reload into it.
-    frontend_failure = describe_frontend_failure(http, base_url)
+    frontend_failure = describe_frontend_failure(http, base_url, sleeper)
     if frontend_failure is not None:
         if is_frontend_expected:
             raise RevealFailed(
@@ -955,7 +958,7 @@ def _recover_running_state(
     # otherwise a rollback that restored the tree but left nothing to serve
     # would report success and exit 2.
     if healthy and is_frontend_expected:
-        frontend_failure = describe_frontend_failure(http, base_url)
+        frontend_failure = describe_frontend_failure(http, base_url, sleeper)
         if frontend_failure is not None:
             sys.stderr.write(f"recovery left the frontend broken: {frontend_failure}\n")
             return False
@@ -995,7 +998,7 @@ def reveal(
     # Whether a working frontend is owed afterwards is decided by what was being
     # served *before* -- the reveal is answerable for regressions, not for a
     # workspace that was already broken when it arrived.
-    is_frontend_expected = _was_frontend_serving(http, resolved_base, sleeper)
+    is_frontend_expected = describe_frontend_failure(http, resolved_base, sleeper) is None
 
     try:
         try:
