@@ -12,5 +12,11 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // Emit .map files next to the bundles so production stack traces resolve
+    // back to the TypeScript source. They land in dist/assets/, ride onto the
+    // Modal image with the rest of dist, and are served by the existing
+    // /web/assets/ route. Note the maps embed the original source
+    // (sourcesContent), which is publicly fetchable from that route.
+    sourcemap: true,
   },
 });
