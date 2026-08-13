@@ -23,6 +23,7 @@ dependencies = [
     # deletes the service's console script and makes the next `uv run <name>`
     # a supervisord spawn error.
     "owner-exec",
+    "atlas-book",
 ]
 
 [dependency-groups]
@@ -83,6 +84,7 @@ mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 browser = { workspace = true }
+atlas-book = { workspace = true }
 imbue-common = { path = "system/vendor/mngr/libs/imbue_common", editable = true }
 imbue-mngr = { path = "system/vendor/mngr/libs/mngr", editable = true }
 imbue-mngr-claude = { path = "system/vendor/mngr/libs/mngr_claude", editable = true }

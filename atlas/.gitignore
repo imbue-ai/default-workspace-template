@@ -1,0 +1,8 @@
+# The Atlas tooling (the skill, scripts, apps) and this FROZEN marker are tracked
+# in git. The actual topic content is per-workspace and kept LOCAL only -- pages,
+# declarations, provenance, and the generated book are gitignored so they are not
+# committed or pushed. A fresh workspace starts with an empty book.
+*.md
+*.evidence.json
+index.md
+topics/*.toml
