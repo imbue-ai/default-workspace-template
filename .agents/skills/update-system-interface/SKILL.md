@@ -318,11 +318,16 @@ WORK_DIR=$(mngr ls --include 'name == "update-'"$SLUG"'"' --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
     --slug "update-$SLUG" --work-dir "$WORK_DIR"
+```
+
+Same hand-off rule as the first round: check the boot's exit code, *then* open --
+so this is a second command, not the next line of that one. Only once it is up:
+
+```bash
 for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
 
-Same hand-off rule as the first round: check the boot's exit code, *then* open,
-and once it is open it is the user's to judge -- you do not drive it.
+And once it is open it is the user's to judge -- you do not drive it.
 
 **Two things must both hold**, and the second is a real judgment, not a
 formality:
