@@ -22,7 +22,7 @@ rootfs back to that record at the pinned apt snapshot timestamp.
 - **Cargo is a non-critical source.** Unlike npm globals (which live on the
   rootfs and exist in a restored workspace only via the record), `~/.cargo/bin`
   binaries ride the backup as real files -- so the cargo record matters for
-  inspiration manifests and genuinely fresh homes, not ordinary restores. The
+  template manifests and genuinely fresh homes, not ordinary restores. The
   replay uses `cargo install --locked <crate>@<version>` (registry crates
   only; path/git installs are not recorded) and installs the recorded rustup
   default toolchain first; when rust itself is absent, entries are reported

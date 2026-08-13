@@ -260,14 +260,14 @@ Note the ticket id, then start it (its own tool call, nothing chained):
 tk start <ticket-id>
 ```
 
-Write the task file with the two-heredoc form -- an **unquoted** frontmatter block
-so the variables expand, then a **quoted** body so its backticks stay literal:
+Write the task file with the two-heredoc form the other worker skills use --
+an **unquoted** frontmatter block, then a **quoted** body so its backticks stay
+literal:
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/migrate-workspace/reports/report.md
 source_repo_root: <repo_root>
 source_host_dir: <host_dir>
@@ -382,9 +382,9 @@ staging, the encoded-project-dir detail, and why the primary is excluded.
 **Branches.** Fetch every `mngr/<name>` branch regardless of state, so no commits
 are lost, and carry the merged/unmerged classification into your report.
 
-**Inspirations.** The source's `inspiration-*.md` manifests and their `.svg`
+**Templates.** The source's `template.md` manifests and their `.svg`
 thumbnails come over as ordinary user content, and the old ledger's
-`## Inspirations` and `## Adopted inspirations` entries are **merged into** this
+`## Templates` and `## Adopted templates` entries are **merged into** this
 workspace's `docs/VERSION_HISTORY.md` -- append-only, existing lines copied
 through verbatim -- so published and adopted history survives. Do **not** carry
 the old `## Workspace` lines: those record where the *old* workspace came from.
@@ -453,9 +453,11 @@ reason. Never let an exclusion read as an oversight.
 
 **Record it in the ledger.** Append one line under a `## Migrations` section of
 `docs/VERSION_HISTORY.md` (create the section after `## Workspace` if absent),
-matching the existing line shape -- note padded to width 26, ending in a 7-char
-sha. Here the sha is **this migration's own commit in this workspace**. Then stage
-that one file **by name** and commit it; never `git add -A`.
+matching the existing line shape -- note padded to width 26 (but never fewer
+than two spaces before the sha: a long workspace name pushes its sha right
+rather than landing flush against it), ending in a 7-char sha. Here the sha is
+**this migration's own commit in this workspace**. Then stage that one file **by
+name** and commit it; never `git add -A`.
 
 ```
 - <today, YYYY-MM-DD>  migrated from <name>       <7-char sha>

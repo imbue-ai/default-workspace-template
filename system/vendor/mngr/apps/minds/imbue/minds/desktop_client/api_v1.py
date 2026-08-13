@@ -18,11 +18,13 @@ agents (deny-all baseline) while still cookie-reachable by the UI.
 Agent identity, when a route needs it, comes from the URL path's
 ``<agent_id>`` parameter -- *not* from the bearer token. The gateway's
 per-host permissions file is what gates which agent ids a given caller
-can talk about: at agent-create time the desktop client narrows the
-host's permission rule to ``/minds-api-proxy/api/v1/agents/<agent_id>/...``,
-so a request that reaches a route with a given ``<agent_id>`` has
-already been authorized by the gateway as "this is an agent that lives
-on the caller's host".
+can talk about: the desktop client registers every agent discovery
+reports into its host's allowlist, which is what lifts
+``/minds-api-proxy/api/v1/agents/<agent_id>/...`` out of the baseline's
+reject shortcut for unregistered ids (see ``docs/latchkey-permissions.md``
+for the rule ordering that implements it). So a request that reaches a
+route with a given ``<agent_id>`` has already been authorized by the
+gateway as "this is an agent that lives on the caller's host".
 """
 
 import itertools
@@ -125,11 +127,13 @@ from imbue.minds.desktop_client.backup_export import export_snapshot_zip
 from imbue.minds.desktop_client.backup_reaper import make_quota_evictor
 from imbue.minds.desktop_client.backup_verification_store import is_backup_verification_enabled
 from imbue.minds.desktop_client.backup_verification_store import set_backup_verification_enabled
-from imbue.minds.desktop_client.chrome_event_broadcast import build_open_help_payload
 from imbue.minds.desktop_client.create_helpers import REMOTE_SIGNIN_REDIRECT_URL
 from imbue.minds.desktop_client.create_helpers import color_for_new_workspace
 from imbue.minds.desktop_client.create_helpers import existing_workspace_host_names
 from imbue.minds.desktop_client.create_helpers import taken_host_names_on_provider
+from imbue.minds.desktop_client.create_status import status_text_for
+from imbue.minds.desktop_client.host_names import normalize_host_name_slug
+from imbue.minds.desktop_client.host_names import resolve_create_host_name
 from imbue.minds.desktop_client.host_timezone import read_host_timezone
 from imbue.minds.desktop_client.labeled_hosts import WORKSPACE_ID_LABELED_PROVIDER_NAMES
 from imbue.minds.desktop_client.labeled_hosts import find_host_by_workspace_id_label
@@ -153,14 +157,13 @@ from imbue.minds.desktop_client.sharing_handler import resolve_share_probe_host
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forward_supervisor
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
-from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
-from imbue.minds.desktop_client.templates import default_workspace_template_ref
-from imbue.minds.desktop_client.templates import normalize_host_name_slug
-from imbue.minds.desktop_client.templates import resolve_create_host_name
-from imbue.minds.desktop_client.templates import status_text_for
+from imbue.minds.desktop_client.ui_models import UiOpenHelpMessage
+from imbue.minds.desktop_client.ui_models import UiWorkspaceRefreshMessage
 from imbue.minds.desktop_client.workspace_create import build_backup_request_or_error
 from imbue.minds.desktop_client.workspace_create import build_create_on_created_callback
 from imbue.minds.desktop_client.workspace_create import resolve_effective_region
+from imbue.minds.desktop_client.workspace_defaults import FALLBACK_BRANCH
+from imbue.minds.desktop_client.workspace_defaults import default_workspace_template_ref
 from imbue.minds.desktop_client.workspace_lifecycle import MindHostAction
 from imbue.minds.desktop_client.workspace_lifecycle import perform_mind_host_action
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKind
@@ -977,6 +980,11 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
         return _json_error(f"Invalid backup_provider: {body.get('backup_provider')!r}", 400)
     backup_api_key_env = str(body.get("backup_api_key_env", ""))
     account_id = str(body.get("account_id", "")).strip()
+    is_web_access_enabled = bool(body.get("enable_web_access", False))
+    if is_web_access_enabled and not account_id:
+        # Web access is "shared with yourself": without an owning account there
+        # is nobody to grant, so fail fast instead of silently skipping later.
+        return _json_field_error("Web access requires a selected account.", "enable_web_access")
     submitted_region = str(body.get("region", "")).strip()
     instance_type = str(body.get("instance_type", "")).strip()
     if instance_type:
@@ -1092,7 +1100,13 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
     else:
         region = resolve_effective_region(launch_mode, submitted_region, minds_config, get_state().geo_location_cache)
     on_created = build_create_on_created_callback(
-        account_id, minds_config, launch_mode, region, display_name=host_name or resolved_host_name, color=color
+        account_id,
+        minds_config,
+        launch_mode,
+        region,
+        display_name=host_name or resolved_host_name,
+        color=color,
+        is_web_access_enabled=is_web_access_enabled,
     )
 
     try:
@@ -1237,7 +1251,7 @@ def _perform_workspace_lifecycle(agent_id: str, action: str) -> WorkspaceLifecyc
         get_state().mngr_binary,
         get_state().mngr_host_dir,
         parent_cg,
-        chrome_event_broadcaster=get_state().chrome_event_broadcaster,
+        ui_publisher=get_state().ui_publisher,
     )
     if not outcome.is_successful:
         reason = f": {outcome.failure_reason}" if outcome.failure_reason else ""
@@ -2342,11 +2356,41 @@ def _handle_bug_report(agent_id: str) -> OkResponse | Response:
     if not description:
         return _json_error("'description' field is required and must be a non-empty string", 400)
 
-    get_state().chrome_event_broadcaster.broadcast(
-        build_open_help_payload(description=description, workspace_agent_id=agent_id)
-    )
+    publisher = get_state().ui_publisher
+    if publisher is not None:
+        publisher.publish_one_shot(UiOpenHelpMessage(description=description, workspace_agent_id=agent_id))
     # The agent never submits to Sentry itself, so no report event is written here (the
     # response carries no ``event_id``); the human-reviewed send flows through ``/help/report``.
+    return OkResponse(ok=True)
+
+
+# -- Workspace view refresh route --
+
+
+@require_api_or_cookie_auth
+@API_SPEC.validate(resp=json_response_model(OkResponse))
+def _handle_workspace_refresh(agent_id: str) -> OkResponse:
+    """Rebuild the displayed view of a workspace, on behalf of an in-workspace agent.
+
+    An agent that changes the workspace's own interface -- typically followed by a
+    ``mngr start --restart system-services`` -- leaves any open view running the
+    pre-change frontend against the restarted backend. A restart that completes
+    quickly never trips the system-interface health tracker's STUCK threshold, so
+    no recovery-page redirect reloads the view on the agent's behalf. This route
+    is the agent's explicit request for that reload.
+
+    Takes no body: the path ``agent_id`` (which the gateway has already authorized)
+    is the whole request. It names the *workspace*, so a sub-agent asking for a
+    refresh addresses its workspace's primary agent id rather than its own.
+
+    Fire-and-forget by design, mirroring the broadcaster's own contract: a
+    workspace with no window open has nothing to refresh, and the agent's caller
+    must not fail because the user happens to have the workspace closed. The
+    response is ``ok`` either way.
+    """
+    publisher = get_state().ui_publisher
+    if publisher is not None:
+        publisher.publish_one_shot(UiWorkspaceRefreshMessage(agent_id=agent_id))
     return OkResponse(ok=True)
 
 
@@ -3263,5 +3307,9 @@ def create_api_v1_blueprint() -> Blueprint:
     # Bug reports (per-agent for the same gateway-permission reason; the agent_id
     # also scopes the report's workspace context).
     blueprint.add_url_rule("/agents/<agent_id>/report", view_func=_handle_bug_report, methods=["POST"])
+
+    # Workspace view refresh (per-agent for the same gateway-permission reason; the
+    # agent_id identifies which workspace's view to rebuild).
+    blueprint.add_url_rule("/agents/<agent_id>/refresh", view_func=_handle_workspace_refresh, methods=["POST"])
 
     return blueprint

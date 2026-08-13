@@ -61,22 +61,32 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 
 It classifies what changed and does only what is needed: refreshes dependencies
 if a manifest changed (`npm ci` / `uv tool install -e system/apps/system_interface
---reinstall`), rebuilds the gitignored `static/` bundle and broadcasts a
-`reload_system_interface` op (frontend), and/or restarts the services agent so
-the editable backend re-imports the merged `.py` (backend). For a backend change
-it pre-flights the merged code on a throwaway port before touching the live
-service, then polls the loopback endpoint to confirm health. If anything fails,
+--reinstall`), rebuilds the gitignored `static/` bundle (frontend), and/or
+restarts the services agent so the editable backend re-imports the merged `.py`
+(backend), then asks every open view of the workspace to reload --
+unconditionally, since a backend-only change leaves the open page rendering what
+it had already fetched. For a backend change it pre-flights the merged code on a
+throwaway port before touching the live service, then polls the loopback
+endpoint to confirm health. If anything fails,
 it restores the tree to `--rollback-to` as a forward revert commit, rebuilds and
 restarts from it, and re-confirms the UI is healthy -- so the served interface
 can never be left broken. The exit code reports the outcome (`0` revealed, `2`
 rolled back, `3` emergency, `1` precondition error).
 
-The `reload_system_interface` op it broadcasts goes to the loopback-only
+That reload is delegated to `system/scripts/refresh_workspace_view.py`, the shared
+helper every flow that restarts the services agent uses. It fires two channels,
+because neither reaches every viewer: a `reload_system_interface` op, and the Minds
+app's own refresh endpoint (which lands even when the page's WebSocket never came
+back from the restart).
+
+The `reload_system_interface` op goes to the loopback-only
 `/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;
 the dockview shell (`DockviewWorkspace.ts`) reloads the top-level page -- shell
 chrome plus every child chat iframe -- so the browser picks up the new hashed
-assets. This is distinct from `system/scripts/layout.py refresh`, which only reloads a
-single inner iframe/panel for arranging the workspace.
+assets. That reaches every attached browser, including anyone the workspace was
+shared with over a Cloudflare tunnel. This is distinct from
+`system/scripts/layout.py refresh`, which only reloads a single inner
+iframe/panel for arranging the workspace.
 
 ## Projects
 

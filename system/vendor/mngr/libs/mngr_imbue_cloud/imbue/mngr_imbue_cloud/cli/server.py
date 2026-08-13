@@ -83,10 +83,14 @@ from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 from imbue.mngr_imbue_cloud.primitives import SliceBakeOutcomeStatus
 from imbue.mngr_imbue_cloud.primitives import is_box_exclusive_to_tier
 from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
+from imbue.mngr_imbue_cloud.slices.autostart_backfill import SliceAutostartBackfillOutcome
+from imbue.mngr_imbue_cloud.slices.autostart_backfill import backfill_box_autostart
+from imbue.mngr_imbue_cloud.slices.autostart_backfill import build_autostart_backfill_report
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_MEMORY_PER_SLICE_GB
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_CPU_OVERCOMMIT_RATIO
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_PORT_RANGE_END
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_PORT_RANGE_START
+from imbue.mngr_imbue_cloud.slices.bare_metal import box_default_workspace_template_cache_dir
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_disk_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_instance_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_disk_gib
@@ -115,6 +119,7 @@ from imbue.mngr_imbue_cloud.slices.bare_metal_db import insert_slice_pool_host
 from imbue.mngr_imbue_cloud.slices.bare_metal_db import update_server
 from imbue.mngr_imbue_cloud.slices.bare_metal_prep import DEFAULT_LIMA_VERSION
 from imbue.mngr_imbue_cloud.slices.bare_metal_prep import build_box_prep_script
+from imbue.mngr_imbue_cloud.slices.lima_box_image_cache import LimaBoxImageCache
 from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
 from imbue.mngr_imbue_cloud.slices.ordering import DEFAULT_REINSTALL_OS_TEMPLATE
 from imbue.mngr_imbue_cloud.slices.ordering import build_and_assign_eco_cart
@@ -477,6 +482,72 @@ def list_servers(database_url: str | None, is_occupancy_verified: bool, env_name
         )
 
 
+@server.command(name="backfill-autostart")
+@click.option("--database-url", default=None, help="Pool DSN (else resolved from env/activated minds env).")
+@click.option(
+    "--server-id",
+    "server_ids",
+    multiple=True,
+    help="Restrict the sweep to these bare_metal_servers row ids (repeatable; default: every box).",
+)
+@click.option(
+    "--dry-run",
+    "is_dry_run",
+    is_flag=True,
+    default=False,
+    help="List the slice VMs that would be backfilled (with the per-VM start-script path) without applying.",
+)
+def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is_dry_run: bool) -> None:
+    """Backfill the volume-gated minds-autostart units onto existing slice VMs.
+
+    The fleet half of the reboot-resilience rollout (minds
+    docs/reboot-resilience-rollout.md Step 2): slices baked before the merged
+    installer keep the old racy oneshot until this sweep re-applies it. The
+    installer is idempotent and safe on running workspaces; a VM whose data
+    volume is not mounted is refused by the installer itself and reported as a
+    per-VM failure to investigate. Needs POOL_SSH_PRIVATE_KEY (injected by
+    `minds server backfill-autostart`).
+    """
+    conn = psycopg2.connect(resolve_pool_database_url(database_url))
+    try:
+        capacities = fetch_server_capacities(conn)
+    finally:
+        conn.close()
+    selected = [c.server for c in capacities if not server_ids or str(c.server.id) in set(server_ids)]
+    if server_ids:
+        unknown_ids = set(server_ids) - {str(s.id) for s in selected}
+        if unknown_ids:
+            raise click.ClickException(f"Unknown --server-id value(s): {sorted(unknown_ids)}")
+    outcomes: list[SliceAutostartBackfillOutcome] = []
+    unreadable_boxes: list[str] = []
+    with _pool_private_key_path() as private_key_path:
+        for box_server in selected:
+            if not box_server.public_address:
+                logger.warning("Box {} has no public_address; skipping (state unknown)", box_server.id)
+                unreadable_boxes.append(str(box_server.id))
+                continue
+            client = LimaSliceVpsClient(
+                box_address=str(box_server.public_address),
+                box_ssh_user=box_server.lima_service_user or "limahost",
+                private_key_path=str(private_key_path),
+                box_host_public_key=box_server.box_host_public_key,
+            )
+            # One unreachable box must not cost the rest of the fleet its
+            # sweep (the same resilience rule as the occupancy audit).
+            try:
+                outcomes.extend(backfill_box_autostart(client, str(box_server.id), is_dry_run=is_dry_run))
+            except (LimaCommandError, BareMetalProvisioningError, OSError) as exc:
+                logger.warning("Could not sweep box {} ({}): {}", box_server.id, box_server.public_address, exc)
+                unreadable_boxes.append(str(box_server.id))
+    report = build_autostart_backfill_report(outcomes, unreadable_boxes)
+    emit_json(report.model_dump(mode="json"))
+    if report.failed or report.unreadable_boxes:
+        raise click.ClickException(
+            f"{report.failed} VM(s) failed to backfill and {len(report.unreadable_boxes)} box(es) were "
+            "unreachable; see the JSON above and re-run against them once fixed."
+        )
+
+
 @server.command(name="register")
 @click.option("--ovh-service-name", required=True, help="OVH dedicated serviceName of the delivered box.")
 @click.option("--plan-code", required=True, help="Catalog planCode the box was ordered as.")
@@ -639,6 +710,13 @@ _SLICE_MNGR_CREATE_TIMEOUT_SECONDS: Final[int] = 2700
 # --max-concurrency). Bounds box CPU/IO/network contention so each create finishes
 # within its timeout; the rest queue and start as slots free.
 DEFAULT_SLICE_BAKE_CONCURRENCY: Final[int] = 4
+
+# How many times one requested slice is baked before its failure is recorded. A
+# failed bake destroys its VM and writes no pool row, so each retry is a clean fresh
+# slice -- transient failures (an SSH reset, a flaky image build) self-heal instead
+# of permanently consuming one of the requested slices. Production seed builds have
+# been observed failing 2-3 times in a row before succeeding, so allow 3 attempts.
+_SLICE_BAKE_ATTEMPT_COUNT: Final[int] = 3
 
 
 def _build_slice_create_args(
@@ -936,6 +1014,65 @@ def _bake_one_slice(
         )
 
 
+def _run_bake_attempts(
+    bake_once: Callable[[], SliceBakeOutcome],
+    attempt_count: int,
+    *,
+    termination_event: threading.Event,
+) -> SliceBakeOutcome:
+    """Run bake_once up to attempt_count times, returning the first success (else the last failure).
+
+    A failed bake destroys its VM and writes no pool row, so each attempt is a
+    clean fresh slice: a transient failure (an SSH reset, a flaky image build)
+    self-heals instead of permanently consuming one of the requested slices.
+
+    ``termination_event`` stops the retries: a terminated bake's kill sweep makes
+    every in-flight attempt fail, and retrying those would spawn replacement
+    ``mngr create`` workers (new VMs) after the operator killed the bake.
+    """
+    last_outcome: SliceBakeOutcome | None = None
+    for attempt_idx in range(attempt_count):
+        outcome = bake_once()
+        if outcome.status == SliceBakeOutcomeStatus.SUCCEEDED:
+            return outcome
+        last_outcome = outcome
+        if termination_event.is_set():
+            logger.info("Slice bake {} failed after the bake was terminated; not retrying", outcome.host_name)
+            return outcome
+        if attempt_idx < attempt_count - 1:
+            logger.warning(
+                "Slice bake {} failed (attempt {}/{}); retrying with a fresh slice: {}",
+                outcome.host_name,
+                attempt_idx + 1,
+                attempt_count,
+                outcome.error,
+            )
+    if last_outcome is None:
+        raise BareMetalProvisioningError(f"attempt_count must be positive, got {attempt_count}")
+    return last_outcome
+
+
+def _bake_one_slice_with_retry(*, termination_event: threading.Event, **worker_kwargs: Any) -> SliceBakeOutcome:
+    """The bake fan-out worker: one requested slice, baked with bounded retries."""
+    if termination_event.is_set():
+        # A worker still queued on the concurrency semaphore when the bake was
+        # terminated: its ``mngr create`` never started, and starting it now would
+        # carve a brand-new VM after the kill sweep (and stall the fan-out's
+        # post-interruption re-join for the create's full timeout).
+        logger.info("Slice bake terminated before this queued slice started; not baking it")
+        return SliceBakeOutcome(
+            host_name="slice-never-started",
+            server_id=str(worker_kwargs["server"].id),
+            status=SliceBakeOutcomeStatus.FAILED,
+            error="the bake was terminated before this slice's first attempt started",
+        )
+    return _run_bake_attempts(
+        lambda: _bake_one_slice(**worker_kwargs),
+        _SLICE_BAKE_ATTEMPT_COUNT,
+        termination_event=termination_event,
+    )
+
+
 # The per-item result type produced by a bounded fan-out's workers (bake and
 # destroy outcomes today).
 OutcomeT = TypeVar("OutcomeT")
@@ -1032,14 +1169,39 @@ def _describe_bake_outcome(outcome: SliceBakeOutcome) -> str:
     return f"{outcome.host_name} {outcome.status}"
 
 
-def _handle_bake_join_interruption(is_main_thread: bool) -> None:
+def _run_bake_fan_out(
+    *,
+    bake_worker_kwargs: Mapping[str, Any],
+    slice_count: int,
+    max_concurrency: int,
+    progress_noun: str,
+    is_main_thread: bool,
+    termination_event: threading.Event,
+) -> list[SliceBakeOutcome]:
+    """Run one phase of the slice bake fan-out (the seed phase or the fill phase)."""
+    worker_kwargs = {**bake_worker_kwargs, "termination_event": termination_event}
+    return run_outcome_workers_in_bounded_threads(
+        worker=_bake_one_slice_with_retry,
+        worker_kwargs_list=[worker_kwargs for _ in range(slice_count)],
+        max_concurrency=max_concurrency,
+        thread_name_prefix="bake",
+        progress_noun=progress_noun,
+        describe_outcome=_describe_bake_outcome,
+        interruption_exception_types=(SliceBakeTerminatedError,),
+        on_join_interrupted=lambda: _handle_bake_join_interruption(is_main_thread, termination_event),
+    )
+
+
+def _handle_bake_join_interruption(is_main_thread: bool, termination_event: threading.Event) -> None:
     """React to the bake fan-out's join loop being interrupted (a SIGTERM/SIGINT-raised error).
 
     Without this, the in-flight ``mngr create`` workers would be reparented and keep
-    carving VMs after we exit. Ignore further signals, then kill the workers so no
-    new VM appears; the fan-out re-joins the worker threads afterward and the bake's
-    ``finally`` reaps the orphans.
+    carving VMs after we exit. Set the termination event first (so a killed worker's
+    per-slice retry loop returns its failure instead of spawning a replacement bake),
+    ignore further signals, then kill the workers so no new VM appears; the fan-out
+    re-joins the worker threads afterward and the bake's ``finally`` reaps the orphans.
     """
+    termination_event.set()
     if is_main_thread:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -1549,6 +1711,13 @@ def allocate_slices(
     size stamped on top, and records ``region`` (the lease-region label, not the
     box's raw datacenter code) so the connector's region-filtered lease matches.
 
+    A cache-tag (``--from-tag``) bake onto a box with no tar for the tag yet runs a
+    seed phase first: one slice baked alone builds + publishes the box image tar, so
+    the fan-out only ever takes the warm docker-load path. Every requested slice
+    (seeder included) is baked with bounded retries -- a failed bake destroys its VM
+    and writes no row, so a retry is a clean fresh slice -- and a seed that fails all
+    its attempts aborts the whole bake up front with one clear error.
+
     ``env_name`` (the activated minds env) is stamped into every slice's lima names
     so envs can share a box: free-slot capacity is read from the box's REAL
     occupancy (all envs + legacy), each carve reserves its slot + ports under a box
@@ -1649,6 +1818,16 @@ def allocate_slices(
         default_workspace_template_cache_tag = (
             f"default-workspace-template:{repo_branch_or_tag}" if (is_from_tag and repo_branch_or_tag) else None
         )
+        # Seed-first: a cache-tag bake onto a box that does not hold this tag's tar
+        # yet runs a seed phase -- one slice baked alone -- before the fan-out. The
+        # seeder builds + publishes the box tar (its bounded retries absorb transient
+        # build failures), every later slice takes the warm docker-load path, and a
+        # build that keeps failing aborts the whole bake up front with one clear
+        # error instead of consuming one requested slice per failed build.
+        is_seed_phase_needed = default_workspace_template_cache_tag is not None and not LimaBoxImageCache(
+            slice_client=occupancy_client,
+            cache_dir=box_default_workspace_template_cache_dir(ssh_user),
+        ).has_tar(default_workspace_template_cache_tag)
         # One worker per slice, capped at ``max_concurrency`` at once by the shared
         # fan-out: each bake blocks on the semaphore before its ``mngr create``, so
         # the box is never contended by more than K simultaneous carves+builds
@@ -1676,19 +1855,52 @@ def allocate_slices(
         # allocate_slices there, but guard so an off-main-thread caller falls back to
         # the finally reap rather than crashing on install.
         is_main_thread = threading.current_thread() is threading.main_thread()
+        # Set by the join-interruption handler so the per-slice retry loops return
+        # their (kill-induced) failures instead of spawning replacement bakes.
+        bake_termination_event = threading.Event()
         previous_sigterm = signal.signal(signal.SIGTERM, _raise_on_bake_termination_signal) if is_main_thread else None
         previous_sigint = signal.signal(signal.SIGINT, _raise_on_bake_termination_signal) if is_main_thread else None
         try:
-            outcomes = run_outcome_workers_in_bounded_threads(
-                worker=_bake_one_slice,
-                worker_kwargs_list=[bake_worker_kwargs for _ in range(count)],
-                max_concurrency=max_concurrency,
-                thread_name_prefix="bake",
-                progress_noun="Slice bake",
-                describe_outcome=_describe_bake_outcome,
-                interruption_exception_types=(SliceBakeTerminatedError,),
-                on_join_interrupted=lambda: _handle_bake_join_interruption(is_main_thread),
+            if is_seed_phase_needed:
+                logger.info(
+                    "Box {} has no cached image tar for {}; seeding it with one slice before the fan-out",
+                    server.public_address,
+                    default_workspace_template_cache_tag,
+                )
+            seed_outcomes = (
+                _run_bake_fan_out(
+                    bake_worker_kwargs=bake_worker_kwargs,
+                    slice_count=1,
+                    max_concurrency=1,
+                    progress_noun="Seed slice bake",
+                    is_main_thread=is_main_thread,
+                    termination_event=bake_termination_event,
+                )
+                if is_seed_phase_needed
+                else []
             )
+            is_seed_failed = any(outcome.status == SliceBakeOutcomeStatus.FAILED for outcome in seed_outcomes)
+            if is_seed_failed:
+                logger.error(
+                    "Aborting the bake: the seed slice failed all {} attempts (its error is in the report); "
+                    "not attempting the remaining {} slice(s)",
+                    _SLICE_BAKE_ATTEMPT_COUNT,
+                    count - 1,
+                )
+            fill_count = 0 if is_seed_failed else count - len(seed_outcomes)
+            fill_outcomes = (
+                _run_bake_fan_out(
+                    bake_worker_kwargs=bake_worker_kwargs,
+                    slice_count=fill_count,
+                    max_concurrency=max_concurrency,
+                    progress_noun="Slice bake",
+                    is_main_thread=is_main_thread,
+                    termination_event=bake_termination_event,
+                )
+                if fill_count > 0
+                else []
+            )
+            outcomes = seed_outcomes + fill_outcomes
         except SliceBakeTerminatedError:
             # Top-level kill (e.g. the minds wrapper's subprocess timeout SIGTERMs us).
             # The fan-out's on_join_interrupted hook has already ignored further

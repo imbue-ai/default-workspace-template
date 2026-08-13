@@ -10,6 +10,8 @@ skips the ally eligibility check -- the operator knows best.
 
 import concurrent.futures
 import logging
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 from fastapi import APIRouter
@@ -21,7 +23,6 @@ from supertokens_python.syncio import list_users_by_account_info
 from supertokens_python.types.base import AccountInfoInput
 
 import imbue.remote_service_connector.auth as auth_module
-import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.litellm_client as litellm_client
@@ -32,6 +33,7 @@ from imbue.remote_service_connector.auth import clear_paid_status_cache
 from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.auth import require_admin_key
 from imbue.remote_service_connector.auth import require_ally_eligible
+from imbue.remote_service_connector.auth import require_verified_email
 from imbue.remote_service_connector.auth_proxy import AUTH_TENANT_ID
 from imbue.remote_service_connector.cloudflare import CloudflareOps
 from imbue.remote_service_connector.entitlements import AccountEntitlements
@@ -70,7 +72,10 @@ class AccountInfoResponse(BaseModel):
     """The caller's plan, entitlement values, and live usage."""
 
     user_id: str = Field(description="SuperTokens user id")
-    email: str = Field(description="The caller's verified email")
+    email: str = Field(
+        description="The caller's email -- a verified login-method email when one exists, otherwise the"
+        " unverified primary email (empty when the account has none)"
+    )
     plan_name: str = Field(description="Current plan name")
     entitlements: PlanEntitlements = Field(description="The account's current entitlement values")
     usage: AccountUsage = Field(description="Live usage, computed at request time")
@@ -230,10 +235,10 @@ def add_paid_email(request: Request, body: PaidListEntryRequest) -> dict[str, ob
         require_admin_key(request)
         email = _normalize_paid_email(body.value)
         _activate_paid_entry("paid_emails", "email", email)
-        # If this email already has an account, verify it now so the just-granted
-        # paid access is not blocked by an unverified email. Best-effort: never
-        # let a verification hiccup fail the paid-list write.
-        auth_proxy_module.mark_paid_email_verified_best_effort(email)
+        # Deliberately no auto-verification: paid-listing an email must never
+        # mark it verified (verification is proof of mailbox ownership, and
+        # ally eligibility requires the real thing). Verification is
+        # non-blocking everywhere else, so the account is not locked out.
         return {"status": "added", "email": email}
 
 
@@ -295,6 +300,34 @@ def compute_account_usage(ops: CloudflareOps, user_id_prefix: str, user_id: str)
     )
 
 
+# CLEANUP: remove these compatibility fields (and both helpers) once the
+# desktop fleet is on the first post-v0.3.11 minds release. v0.3.11 desktop
+# clients parse the /account and plan responses into models that REQUIRE the
+# Cloudflare-tunnel-era fields (max_tunnels / max_services_per_tunnel in
+# entitlements, tunnels in usage) with no defaults, so the first deploy after
+# migration 020 dropped those columns would break their Accounts page with a
+# validation error. Served as hardcoded zeros ("no tunnels exist anymore"),
+# which old clients render as an inert usage row.
+_DEPRECATED_TUNNEL_ENTITLEMENT_FIELDS: Final[dict[str, int]] = {"max_tunnels": 0, "max_services_per_tunnel": 0}
+
+
+def _with_deprecated_tunnel_entitlement_fields(entitlements_payload: Mapping[str, object]) -> dict[str, object]:
+    """Add the tunnel-era entitlement fields v0.3.11 clients require (see CLEANUP above)."""
+    return {**entitlements_payload, **_DEPRECATED_TUNNEL_ENTITLEMENT_FIELDS}
+
+
+def _with_deprecated_tunnel_account_fields(account_payload: dict[str, object]) -> dict[str, object]:
+    """Return a copy with the tunnel-era entitlement + usage fields v0.3.11 clients require (see CLEANUP above)."""
+    result = dict(account_payload)
+    entitlements_payload = result.get("entitlements")
+    usage_payload = result.get("usage")
+    if isinstance(entitlements_payload, dict):
+        result["entitlements"] = {**entitlements_payload, **_DEPRECATED_TUNNEL_ENTITLEMENT_FIELDS}
+    if isinstance(usage_payload, dict):
+        result["usage"] = {**usage_payload, "tunnels": 0}
+    return result
+
+
 @router.get("/account")
 def get_account(request: Request) -> dict[str, object]:
     """Return the caller's plan, entitlement values, and live usage.
@@ -308,18 +341,24 @@ def get_account(request: Request) -> dict[str, object]:
         user = authenticate_request(request)
         token = request.headers.get("authorization", "")[7:]
         user_id = auth_module.get_user_id_from_access_token(token)
+        # The backfill's paid-list check may only consume a verified email --
+        # an unverified account gets a plain explorer row.
         entitlements = entitlements_module.ensure_account_entitlements(
-            user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.email or ""
+            user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
         )
         usage = compute_account_usage(ops, user.user_id_prefix, user_id)
-        return AccountInfoResponse(
-            user_id=user_id,
-            email=user.email or "",
-            plan_name=entitlements.plan_name,
-            entitlements=entitlements.quota_values(),
-            usage=usage,
-            available_plans=[str(p["plan_name"]) for p in entitlements_module.get_entitlements_store().list_plans()],
-        ).model_dump()
+        return _with_deprecated_tunnel_account_fields(
+            AccountInfoResponse(
+                user_id=user_id,
+                email=user.email or "",
+                plan_name=entitlements.plan_name,
+                entitlements=entitlements.quota_values(),
+                usage=usage,
+                available_plans=[
+                    str(p["plan_name"]) for p in entitlements_module.get_entitlements_store().list_plans()
+                ],
+            ).model_dump()
+        )
 
 
 def apply_plan_to_account(user_id: str, plan_name: str, store: "EntitlementsStore | None" = None) -> PlanEntitlements:
@@ -345,17 +384,26 @@ def set_account_plan(request: Request, body: SetPlanRequest) -> dict[str, object
 
     Re-selecting the current plan is a no-op (so idempotent client retries
     never wipe operator-granted bumps). Switching to 'ally' requires a
-    paid-listed email.
+    *verified*, paid-listed email -- eligibility is domain ownership, so an
+    unverified email may never satisfy it.
     """
     with handle_endpoint_errors():
         user = authenticate_request(request)
-        entitlements = entitlements_module.resolve_entitlements_for_user(request, user)
+        user_id = auth_module.get_user_id_from_bearer_header(request)
+        entitlements = entitlements_module.resolve_entitlements_for_user(user_id, user)
         if body.plan == entitlements.plan_name:
-            return {"plan_name": entitlements.plan_name, "entitlements": entitlements.quota_values().model_dump()}
+            return {
+                "plan_name": entitlements.plan_name,
+                "entitlements": _with_deprecated_tunnel_entitlement_fields(entitlements.quota_values().model_dump()),
+            }
         if body.plan == PLAN_ALLY:
-            require_ally_eligible(user.email)
+            require_verified_email(user)
+            require_ally_eligible(user.verified_email)
         new_values = apply_plan_to_account(entitlements.user_id, body.plan)
-        return {"plan_name": body.plan, "entitlements": new_values.model_dump()}
+        return {
+            "plan_name": body.plan,
+            "entitlements": _with_deprecated_tunnel_entitlement_fields(new_values.model_dump()),
+        }
 
 
 def resolve_user_id_by_email(email: str) -> str:
@@ -384,14 +432,18 @@ def admin_get_account(request: Request, email: str) -> dict[str, object]:
         usage = compute_account_usage(
             cloudflare_module.get_cloudflare_ctx().ops, entitlements.user_id_prefix, entitlements.user_id
         )
-        return AccountInfoResponse(
-            user_id=entitlements.user_id,
-            email=email.strip().lower(),
-            plan_name=entitlements.plan_name,
-            entitlements=entitlements.quota_values(),
-            usage=usage,
-            available_plans=[str(p["plan_name"]) for p in entitlements_module.get_entitlements_store().list_plans()],
-        ).model_dump()
+        return _with_deprecated_tunnel_account_fields(
+            AccountInfoResponse(
+                user_id=entitlements.user_id,
+                email=email.strip().lower(),
+                plan_name=entitlements.plan_name,
+                entitlements=entitlements.quota_values(),
+                usage=usage,
+                available_plans=[
+                    str(p["plan_name"]) for p in entitlements_module.get_entitlements_store().list_plans()
+                ],
+            ).model_dump()
+        )
 
 
 @router.post("/admin/accounts/{email}/plan")
@@ -401,7 +453,10 @@ def admin_set_account_plan(request: Request, email: str, body: AdminSetPlanReque
         require_admin_key(request)
         entitlements = _admin_ensure_entitlements(email)
         new_values = apply_plan_to_account(entitlements.user_id, body.plan)
-        return {"plan_name": body.plan, "entitlements": new_values.model_dump()}
+        return {
+            "plan_name": body.plan,
+            "entitlements": _with_deprecated_tunnel_entitlement_fields(new_values.model_dump()),
+        }
 
 
 @router.post("/admin/accounts/{email}/quota")

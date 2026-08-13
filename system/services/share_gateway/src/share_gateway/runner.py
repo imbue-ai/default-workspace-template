@@ -156,6 +156,7 @@ class ShareStack:
             tls_key_path=materials_module.TLS_KEY_FILE.resolve(),
             https_port=materials_module.CADDY_HTTPS_PORT,
             gateway_port=materials_module.GATEWAY_PORT,
+            chrome_origin=self.materials.chrome_origin,
         )
 
     def render_current_frpc_config(self) -> str:

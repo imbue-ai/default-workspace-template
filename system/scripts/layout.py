@@ -1081,8 +1081,12 @@ def _cmd_load(args: argparse.Namespace) -> int:
     if status != 200 or not isinstance(body, dict):
         return _report_failure("load", status, body)
     target = body.get("target_client_id")
-    target_text = f"client {target}" if target else "all clients (requesting client unknown)"
-    sys.stderr.write(f"requested load of layout {body.get('layout')!r} on {target_text}\n")
+    target_text = (
+        f"client {target}" if target else "all clients (requesting client unknown)"
+    )
+    sys.stderr.write(
+        f"requested load of layout {body.get('layout')!r} on {target_text}\n"
+    )
     return EXIT_OK
 
 
@@ -1258,7 +1262,9 @@ def _cmd_split(args: argparse.Namespace) -> int:
     # anchor must already be a live panel. (``ref`` may legitimately be a
     # closed agent / not-yet-rendered service the script is about to
     # surface; the frontend handles creation.)
-    if (err := _require_open("split", relative_to, layout_name=args.layout)) is not None:
+    if (
+        err := _require_open("split", relative_to, layout_name=args.layout)
+    ) is not None:
         return err
     payload: dict[str, Any] = {
         "ref": ref,
@@ -1332,7 +1338,9 @@ def _cmd_move(args: argparse.Namespace) -> int:
     _validate_ref(ref)
     relative_to = _normalize_ref(args.relative_to)
     _validate_ref(relative_to)
-    if (err := _require_open("move", ref, relative_to, layout_name=args.layout)) is not None:
+    if (
+        err := _require_open("move", ref, relative_to, layout_name=args.layout)
+    ) is not None:
         return err
     payload: dict[str, Any] = {
         "ref": ref,

@@ -120,9 +120,12 @@ On `type: status`:
 
 - `name: done` -- merge the worker's branch:
   ```bash
-  git fetch . <WORKER_BRANCH>:<WORKER_BRANCH>
   git merge --no-ff <WORKER_BRANCH>
   ```
+  No fetch is needed first: the worker runs in a linked worktree of this same
+  repository, so its branch already exists in the shared ref store (and a
+  `git fetch . <WORKER_BRANCH>:<WORKER_BRANCH>` would be refused anyway while
+  the worker's worktree has the branch checked out).
   On a clean merge, close any tracking ticket and optionally destroy the
   worker. On a conflict, recovery depends on the calling skill: if it defines
   a staleness rule (the harden flows do -- see

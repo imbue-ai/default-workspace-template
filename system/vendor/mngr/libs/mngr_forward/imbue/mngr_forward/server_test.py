@@ -6,20 +6,27 @@ test, not here. This file covers the deterministic auth + routing
 surfaces using ``starlette.testclient.TestClient``.
 """
 
+import asyncio
 import io
 import json
+import socket as socket_module
+import tempfile
 import threading
+import time
 from pathlib import Path
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from pydantic import PrivateAttr
 from starlette.testclient import TestClient
+from starlette.types import Message
 from starlette.websockets import WebSocketDisconnect
 from websockets.sync.server import ServerConnection
 from websockets.sync.server import serve as ws_serve
 
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_forward.auth import FileAuthStore
 from imbue.mngr_forward.cookie import create_session_cookie
 from imbue.mngr_forward.cookie import create_subdomain_auth_token
@@ -29,6 +36,10 @@ from imbue.mngr_forward.envelope import EnvelopeWriter
 from imbue.mngr_forward.primitives import MNGR_FORWARD_SESSION_COOKIE_NAME
 from imbue.mngr_forward.primitives import OneTimeCode
 from imbue.mngr_forward.resolver import ForwardResolver
+from imbue.mngr_forward.server import _PROXY_BACKSTOP_TIMEOUT_SECONDS
+from imbue.mngr_forward.server import _PROXY_TIMEOUT
+from imbue.mngr_forward.server import _SSE_READ_TIMEOUT_SECONDS
+from imbue.mngr_forward.server import _STALL_NOTICE_SECONDS
 from imbue.mngr_forward.server import _is_loopback_url
 from imbue.mngr_forward.server import _sanitize_next_url
 from imbue.mngr_forward.server import _select_ws_receive_payload
@@ -36,6 +47,8 @@ from imbue.mngr_forward.server import create_forward_app
 from imbue.mngr_forward.ssh_tunnel import RemoteSSHInfo
 from imbue.mngr_forward.ssh_tunnel import SSHTunnelError
 from imbue.mngr_forward.ssh_tunnel import SSHTunnelManager
+from imbue.mngr_forward.ssh_tunnel import _create_short_path_tmpdir
+from imbue.mngr_forward.ssh_tunnel import _create_tunnel_listener
 
 # The workspace host every test agent runs on: requests route by the
 # ``host-<hex>.localhost`` Host header, and the resolver maps it back to the
@@ -862,6 +875,8 @@ def _make_forward_app_with_capture(
     *,
     backend_status: int = 200,
     raise_error: type[Exception] | None = None,
+    backend_delay_seconds: float = 0.0,
+    stall_notice_seconds: float = _STALL_NOTICE_SECONDS,
 ) -> tuple[FastAPI, io.StringIO, httpx.AsyncClient]:
     auth_store = FileAuthStore(data_directory=tmp_path)
     resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
@@ -879,15 +894,24 @@ def _make_forward_app_with_capture(
         listen_host="127.0.0.1",
         listen_port=18421,
         preauth_cookie_value=preauth,
+        stall_notice_seconds=stall_notice_seconds,
     )
 
     async def _capture(request: httpx.Request) -> httpx.Response:
         capture.append(request)
+        if backend_delay_seconds > 0:
+            await asyncio.sleep(backend_delay_seconds)
         if raise_error is not None:
             raise raise_error("simulated failure")
         return httpx.Response(backend_status, content=b"hi")
 
-    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_capture), follow_redirects=False)
+    # Configured exactly like the client ``_managed_lifespan`` builds, so a
+    # captured request's timeout reflects production rather than httpx's
+    # default. ``MockTransport`` never enforces one, so this changes nothing
+    # for the tests that only look at status codes and envelopes.
+    mock_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_capture), follow_redirects=False, timeout=_PROXY_TIMEOUT
+    )
     return app, envelope_output, mock_client
 
 
@@ -1217,6 +1241,207 @@ def test_subdomain_forward_emits_system_interface_backend_failure_on_non_sse_tim
     assert payload["reason"] == "CONNECT_ERROR"
 
 
+def test_sse_backend_requests_keep_a_tighter_read_budget_than_buffered_ones(tmp_path: Path) -> None:
+    """SSE pins its own read budget instead of riding along on the buffered backstop.
+
+    The buffered path's backstop is long enough that a silent backend is not
+    evidence of anything, which is the point -- a user app endpoint may
+    legitimately take that long. An SSE producer may not: it is expected to
+    heartbeat, so a silent stream is the fastest signal a wedged backend gives.
+    Only the per-request override on the SSE ``build_request`` keeps the two
+    apart, and losing it fails nothing else: the other SSE timeout test raises
+    its ``ReadTimeout`` from the transport, so it passes under any budget.
+    """
+    agent_id = AgentId()
+    preauth = "preauth-cookie-read-budget"
+    captured: list[httpx.Request] = []
+    app, _env_out, mock_client = _make_forward_app_with_capture(tmp_path, captured, agent_id, preauth)
+
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
+        app.state.http_client = mock_client
+        cookie = f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}"
+        sse_response = client.get("/api/events", headers={"cookie": cookie, "accept": "text/event-stream"})
+        buffered_response = client.get("/api/state", headers={"cookie": cookie, "accept": "application/json"})
+
+    assert sse_response.status_code == 200
+    assert buffered_response.status_code == 200
+    sse_request, buffered_request = captured
+    assert sse_request.extensions["timeout"]["read"] == _SSE_READ_TIMEOUT_SECONDS
+    assert buffered_request.extensions["timeout"]["read"] == _PROXY_BACKSTOP_TIMEOUT_SECONDS
+
+
+def test_subdomain_forward_reports_a_stalled_backend_without_abandoning_the_request(tmp_path: Path) -> None:
+    """A backend slower than the stall window emits ``STALLED`` but still delivers its response.
+
+    The stall notice exists so a consumer can start probing a possibly-wedged
+    workspace. It must not double as a request deadline: an endpoint that
+    legitimately takes longer than the window has to survive, and a window that
+    cancelled at its own expiry would kill it.
+    """
+    agent_id = AgentId()
+    preauth = "preauth-cookie-stall"
+    captured: list[httpx.Request] = []
+    app, env_out, mock_client = _make_forward_app_with_capture(
+        tmp_path,
+        captured,
+        agent_id,
+        preauth,
+        backend_delay_seconds=0.5,
+        stall_notice_seconds=0.05,
+    )
+
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
+        app.state.http_client = mock_client
+        response = client.get(
+            "/api/slow",
+            headers={
+                "cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}",
+                "accept": "application/json",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"hi"
+    lines = _envelope_lines(env_out)
+    assert len(lines) == 1
+    payload = json.loads(lines[0])["payload"]
+    assert payload["type"] == "system_interface_backend_failure"
+    assert payload["reason"] == "STALLED"
+    assert payload["status_code"] is None
+
+
+def test_subdomain_forward_emits_no_stall_envelope_when_the_backend_answers_in_time(tmp_path: Path) -> None:
+    """A backend that answers inside the stall window must not enroll the agent for probing.
+
+    Guards the cancel half of the timer: leaving it armed would emit a
+    ``STALLED`` envelope for every healthy request and keep every workspace
+    permanently enrolled as a probe suspect.
+    """
+    agent_id = AgentId()
+    preauth = "preauth-cookie-no-stall"
+    captured: list[httpx.Request] = []
+    app, env_out, mock_client = _make_forward_app_with_capture(
+        tmp_path,
+        captured,
+        agent_id,
+        preauth,
+        backend_delay_seconds=0.0,
+        stall_notice_seconds=0.05,
+    )
+
+    with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18421", follow_redirects=False) as client:
+        app.state.http_client = mock_client
+        response = client.get(
+            "/api/quick",
+            headers={
+                "cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}",
+                "accept": "application/json",
+            },
+        )
+        assert response.status_code == 200
+        # Polled from inside the block, where the client's event loop is still
+        # running, and for longer than the window: leaving the block first tears
+        # that loop down, so an uncancelled timer would die with it instead of
+        # firing and the assertion would hold no matter what.
+        assert not poll_until(lambda: _envelope_lines(env_out) != [], timeout=0.5, poll_interval=0.05), (
+            "the stall timer outlived the request it was armed for"
+        )
+
+
+async def _drive_request_until_client_disconnects(
+    app: FastAPI, path: str, preauth: str, disconnect_after_seconds: float
+) -> tuple[float, list[str], int | None]:
+    """Run one request through ``app``'s ASGI interface, disconnecting mid-flight.
+
+    ``TestClient`` cannot express this: its receive channel only yields
+    ``http.disconnect`` once the response is complete, which is exactly the
+    ordering under test. Returns how long the app took, the message types it
+    sent back, and the status it started the response with (``None`` if it
+    never started one).
+    """
+    sent_types: list[str] = []
+    sent_status: int | None = None
+    is_body_delivered = False
+
+    async def _receive() -> Message:
+        nonlocal is_body_delivered
+        if not is_body_delivered:
+            is_body_delivered = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await asyncio.sleep(disconnect_after_seconds)
+        return {"type": "http.disconnect"}
+
+    async def _send(message: Message) -> None:
+        nonlocal sent_status
+        sent_types.append(str(message["type"]))
+        if message["type"] == "http.response.start":
+            sent_status = int(message["status"])
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.1"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("utf-8"),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", f"{_TEST_HOST_ID}.localhost:18421".encode("utf-8")),
+            (b"cookie", f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}".encode("utf-8")),
+            (b"accept", b"application/json"),
+        ],
+        "client": ("127.0.0.1", 54321),
+        "server": ("127.0.0.1", 18421),
+    }
+    started_at = time.monotonic()
+    await app(scope, _receive, _send)
+    return time.monotonic() - started_at, sent_types, sent_status
+
+
+def test_subdomain_forward_abandons_the_backend_when_the_client_gives_up(tmp_path: Path) -> None:
+    """A client that disconnects releases the backend request instead of pinning it.
+
+    minds' health probe allows a workspace 2 seconds and then hangs up, but the
+    plugin-side handler outlives that timeout -- a buffered handler never reads
+    the receive channel, so the disconnect goes unnoticed. Left running to the
+    backstop, those abandoned probes accumulate at roughly one every four
+    seconds against httpx's 100-connection pool, and for a remote agent each one
+    also pins an SSH channel and its relay thread.
+    """
+    agent_id = AgentId()
+    preauth = "preauth-cookie-disconnect"
+    captured: list[httpx.Request] = []
+    app, env_out, mock_client = _make_forward_app_with_capture(
+        tmp_path,
+        captured,
+        agent_id,
+        preauth,
+        # Far longer than the disconnect, so finishing early can only mean the
+        # request was abandoned rather than awaited.
+        backend_delay_seconds=5.0,
+        stall_notice_seconds=_STALL_NOTICE_SECONDS,
+    )
+    app.state.http_client = mock_client
+    app.state.ssh_http_clients = {}
+    app.state.ssh_http_clients_lock = threading.Lock()
+
+    elapsed_seconds, sent_types, sent_status = asyncio.run(
+        _drive_request_until_client_disconnects(app, "/api/state", preauth, disconnect_after_seconds=0.05)
+    )
+
+    assert elapsed_seconds < 2.0, "the handler waited for the backend instead of abandoning the request"
+    assert sent_types == ["http.response.start", "http.response.body"]
+    # 499, not the 504 a genuinely-timed-out backend gets: nothing answered
+    # wrongly here, the client stopped listening. The status is only there to
+    # end the ASGI exchange, but it must not claim success or blame the backend.
+    assert sent_status == 499
+    assert len(captured) == 1, "the backend request should have been started before being abandoned"
+    # A client hanging up says nothing about the backend's health.
+    assert _envelope_lines(env_out) == []
+
+
 class _FailingTunnelManager(SSHTunnelManager):
     """SSHTunnelManager whose tunnel setup always fails, simulating a stopped container.
 
@@ -1341,6 +1566,113 @@ def test_subdomain_forward_websocket_emits_failure_on_ssh_tunnel_setup_error(tmp
     assert len(lines) == 1
     envelope = json.loads(lines[0])
     assert envelope["stream"] == "forward"
+    assert envelope["agent_id"] == str(agent_id)
+    payload = envelope["payload"]
+    assert payload["type"] == "system_interface_backend_failure"
+    assert payload["reason"] == "CONNECT_ERROR"
+
+
+class _AcceptThenCloseTunnelManager(SSHTunnelManager):
+    """Tunnel manager whose socket accepts a connection and immediately closes it.
+
+    This is what a forward tunnel does to an in-flight connection once it
+    retires itself over a transport-level failure: ``_open_and_relay`` closes
+    the accepted socket without ever speaking HTTP. The ``websockets`` client
+    reports that as ``InvalidMessage``, not as an ``OSError``.
+    """
+
+    _socket_tmpdir: tempfile.TemporaryDirectory[str] = PrivateAttr()
+    _socket_path: Path = PrivateAttr()
+    _server: socket_module.socket = PrivateAttr()
+    _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _thread: threading.Thread = PrivateAttr()
+
+    def model_post_init(self, __context: object) -> None:
+        # Not pytest's tmp_path: on macOS that lives under /var/folders/... and
+        # overflows AF_UNIX's sun_path on its own, so the socket is placed by
+        # the same rule the manager under test uses for its own.
+        self._socket_tmpdir = _create_short_path_tmpdir("mngr-fwd-ws-test-")
+        self._socket_path = Path(self._socket_tmpdir.name) / "accept-then-close.sock"
+        self._server = _create_tunnel_listener(self._socket_path)
+        self._thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self._thread.start()
+
+    def _accept_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            conn.close()
+
+    def get_tunnel_socket_path(self, ssh_info: RemoteSSHInfo, remote_host: str, remote_port: int) -> Path:
+        return self._socket_path
+
+    def cleanup(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5.0)
+        self._server.close()
+        self._socket_tmpdir.cleanup()
+        super().cleanup()
+
+
+def test_websocket_emits_failure_when_backend_closes_during_handshake(tmp_path: Path) -> None:
+    """A backend that closes mid-handshake must emit ``CONNECT_ERROR``, not escape as an ASGI error.
+
+    Regression test for the same class of bug as
+    ``test_websocket_forward_emits_failure_on_ssh_tunnel_setup_error``, reached
+    by a different exception. There the tunnel fails to open; here it opens and
+    then dies under the handshake, which is what happens when the tunnel retires
+    itself after its SSH transport stops answering (a laptop resumed from sleep).
+
+    ``websockets`` reports that as ``InvalidMessage`` (with an ``EOFError``
+    as its ``__cause__``), which descends from ``WebSocketException`` rather
+    than ``OSError``, so it used to slip past the handler's ``except`` and
+    escape into the ASGI framework. The cost was the same one that test
+    describes -- no envelope, so minds never enrolled the agent as a probe
+    suspect -- plus the client never received the 1011 close that tells it to
+    reconnect promptly.
+    """
+    auth_store = FileAuthStore(data_directory=tmp_path)
+    resolver = ForwardResolver(strategy=ForwardServiceStrategy(service_name="system_interface"))
+    agent_id = AgentId()
+    resolver.add_known_agent(agent_id)
+    resolver.set_agent_host(agent_id, _TEST_HOST_ID)
+    # Non-loopback URL + ssh_info so the handler takes the SSH-tunnel path.
+    resolver.update_services(agent_id, {"system_interface": "http://stub-backend:8000"})
+    resolver.update_ssh_info(
+        agent_id,
+        RemoteSSHInfo(user="root", host="stub-host", port=22, key_path=tmp_path / "fake_key"),
+    )
+    envelope_output = io.StringIO()
+    preauth = "preauth-cookie-ws-handshake-eof"
+    tunnel_manager = _AcceptThenCloseTunnelManager()
+    app = create_forward_app(
+        auth_store=auth_store,
+        resolver=resolver,
+        tunnel_manager=tunnel_manager,
+        envelope_writer=EnvelopeWriter(output=envelope_output),
+        listen_host="127.0.0.1",
+        listen_port=18422,
+        preauth_cookie_value=preauth,
+    )
+
+    try:
+        with TestClient(app, base_url=f"http://{_TEST_HOST_ID}.localhost:18422") as client:
+            with pytest.raises(WebSocketDisconnect):
+                with client.websocket_connect(
+                    f"ws://{_TEST_HOST_ID}.localhost:18422/api/ws",
+                    headers={"cookie": f"{MNGR_FORWARD_SESSION_COOKIE_NAME}={preauth}"},
+                ):
+                    pass
+    finally:
+        tunnel_manager.cleanup()
+
+    lines = _envelope_lines(envelope_output)
+    assert len(lines) == 1
+    envelope = json.loads(lines[0])
     assert envelope["agent_id"] == str(agent_id)
     payload = envelope["payload"]
     assert payload["type"] == "system_interface_backend_failure"

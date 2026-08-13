@@ -260,10 +260,15 @@ def close_ws(ws: simple_websocket.Client) -> None:
     """Close a WebSocket client, tolerating an already-closed connection.
 
     A handler that finishes (e.g. the proto-agent-logs not-found path) closes
-    the socket server-side first, so the client-side close would otherwise raise
-    ``ConnectionClosed``.
+    the socket server-side first, so the client-side close would otherwise raise.
+    Which exception it raises depends on how far the teardown has got: having
+    observed the close leaves ``connected`` false and raises ``ConnectionClosed``,
+    but losing the race to the descriptor teardown means writing the close frame
+    to a closed socket, which surfaces as ``OSError: [Errno 9] Bad file
+    descriptor``. Both mean the same thing here, and neither is the test's
+    subject -- the socket is being discarded either way.
     """
     try:
         ws.close()
-    except simple_websocket.ConnectionClosed:
+    except (simple_websocket.ConnectionClosed, OSError):
         pass

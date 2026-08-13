@@ -7,7 +7,12 @@
 // the Electron main process's SSE relay.
 
 import m from "mithril";
-import type { UiOpenHelpMessage, UiServerMessage, UiWorkspaceStoppedMessage } from "./messages";
+import type {
+  UiOpenHelpMessage,
+  UiServerMessage,
+  UiWorkspaceRefreshMessage,
+  UiWorkspaceStoppedMessage,
+} from "./messages";
 import { parseServerMessage } from "./messages";
 import type { AppStores } from "../models/boot";
 import { VISIBLE_AFTER_FAILURES, backoffDelayMs } from "./backoff";
@@ -34,8 +39,9 @@ export interface ChannelOptions {
   /** Called on one-shot messages the shell must act on. */
   onWorkspaceStopped?: (message: UiWorkspaceStoppedMessage) => void;
   onOpenHelp?: (message: UiOpenHelpMessage) => void;
+  onWorkspaceRefresh?: (message: UiWorkspaceRefreshMessage) => void;
   /** Relays state messages to the Electron main process (window bookkeeping);
-   * called for workspaces/health/workspace_stopped/open_help/discovery_health. */
+   * called for workspaces/health/workspace_stopped/open_help. */
   relayShellEvent?: (message: UiServerMessage) => void;
   /** Deterministic jitter for tests; defaults to Math.random. */
   jitter01?: () => number;
@@ -153,7 +159,6 @@ export class UiChannelClient {
       case "health":
       case "workspace_stopped":
       case "open_help":
-      case "discovery_health":
         this.options.relayShellEvent?.(message);
         break;
       default:
@@ -190,6 +195,9 @@ export class UiChannelClient {
         break;
       case "open_help":
         this.options.onOpenHelp?.(message);
+        break;
+      case "workspace_refresh":
+        this.options.onWorkspaceRefresh?.(message);
         break;
       case "reload_ui":
         (this.options.reloadPage ?? (() => location.reload()))();

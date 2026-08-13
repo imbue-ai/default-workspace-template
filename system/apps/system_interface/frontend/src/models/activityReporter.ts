@@ -9,6 +9,12 @@
  * module coalesces the many UI events that change those signals into a single
  * debounced POST.
  *
+ * These reports are also what keeps a chat's staleness clock alive: the backend
+ * ages a chat that goes unengaged for hours until it is *more* expendable than a
+ * worker. Switching to a tab counts as engagement (the transition into the
+ * `visible` set), but leaving one visible does not, so a report that repeats the
+ * same presence never resets the clock.
+ *
  * Presence (`open` / `visible`) is a full snapshot the caller recomputes and
  * reports whenever tabs change; the reporter retains the last one so a
  * `reportMessaged` recency bump carries the current presence with it. Every send

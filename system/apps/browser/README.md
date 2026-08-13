@@ -56,12 +56,15 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
     on purpose -- it makes browser_use's `_copy_profile()` use the dir in place
     instead of copying it to a temp dir (which would silently defeat persistence).
     Pinned by `browser-use==0.13.1` and guarded by an integration test.
-- **Memory shedding** (`oom_retag.py`): the daemon is tagged as the most
-  expendable thing in the workspace, but Chromium overwrites the inherited
-  `oom_score_adj` with its own values, which would leave renderers more
-  protected than the agents they serve. Every fleet event that can spawn a
-  Chromium process (launch, new page -- from any origin, including a human in
-  the viewer -- and navigation) triggers a short burst of sweeps on a daemon
-  thread that remaps Chromium's self-assigned values back into the browser
-  band, preserving their relative order. See "The Chromium exception" in
+- **Memory shedding** (`oom_retag.py`): Chromium's *renderers* are the most
+  expendable processes in the workspace -- they hold nearly all of a browser's
+  memory and shedding one costs a single tab. The daemon itself is not: it holds
+  little memory, Chromium outlives its death, and supervisord restarts it into
+  the same session, so it is tagged as an ordinary (most-expendable) service.
+  Chromium overwrites the inherited `oom_score_adj` with its own values, which
+  would leave renderers more protected than the agents they serve, so every
+  fleet event that can spawn a Chromium process (launch, new page -- from any
+  origin, including a human in the viewer -- and navigation) triggers a short
+  burst of sweeps on a daemon thread that remaps those values across the browser
+  band, renderers at the ceiling. See "The Chromium exception" in
   `system/services/oom_priority/README.md`.

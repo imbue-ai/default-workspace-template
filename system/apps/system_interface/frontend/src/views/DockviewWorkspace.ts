@@ -103,6 +103,7 @@ import {
   removeAgentLocally,
   removeAgentsUpdatedListener,
   reportClientState,
+  whenAppsLoaded,
   type AgentsUpdatedListener,
   type AppEntry,
   type LayoutOpEvent,
@@ -3213,7 +3214,17 @@ function displayNameForProject(projectId: string): string {
  * user just made, and the launcher is exactly the "pick what to start with"
  * surface the design asks for there.
  */
-function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boolean = false): void {
+async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boolean = false): Promise<void> {
+  if (!dockview) return;
+  // A restored layout re-derives every service/terminal origin from its
+  // service label below. On a share those labels only resolve once the app
+  // list has loaded (locally the bare name routes, so it never mattered
+  // before), so wait for it first -- bounded, so a workspace that reports no
+  // apps still proceeds -- to avoid mounting an unroutable ``<name>.<domain>``
+  // origin that the gateway 403s. A null (fresh-workspace) layout derives
+  // nothing, so it never waits.
+  if (saved) await whenAppsLoaded();
+  // ``dockview`` may have been torn down while awaiting; re-check before use.
   if (!dockview) return;
   const dv = dockview;
   awaitingInitialChat = false;
@@ -3372,7 +3383,7 @@ async function initializeActiveView(): Promise<void> {
   if (chosenId === null) {
     // No projects at all (server unreachable / no primary agent): run with the
     // fresh-workspace state; nothing persists.
-    applyLayoutContent(null, true);
+    await applyLayoutContent(null, true);
     m.redraw();
     return;
   }
@@ -3381,7 +3392,7 @@ async function initializeActiveView(): Promise<void> {
   refreshMachineInventory();
   const saved = (await fetchProjectContent(chosenId)) as SavedLayout | null;
   markServerContent(saved);
-  applyLayoutContent(saved, true);
+  await applyLayoutContent(saved, true);
   m.redraw();
 }
 
@@ -3404,7 +3415,7 @@ export async function switchToView(viewId: string): Promise<void> {
   refreshMachineInventory();
   const saved = (await fetchProjectContent(viewId)) as SavedLayout | null;
   markServerContent(saved);
-  applyLayoutContent(saved);
+  await applyLayoutContent(saved);
   m.redraw();
 }
 
@@ -3477,7 +3488,7 @@ export function handleProjectSyncEvent(event: ProjectSyncEvent): void {
         const saved = (await fetchProjectContent(event.projectId)) as SavedLayout | null;
         markServerContent(saved);
         beginRemoteApplySuppression();
-        applyLayoutContent(saved);
+        await applyLayoutContent(saved);
         m.redraw();
       })();
     }

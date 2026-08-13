@@ -16,12 +16,12 @@ The local desktop client is a Flask app that handles authentication and traffic 
 > `ws_gateway.py`. First paint is seeded from a bootstrap document inlined
 > into the served page.
 >
-> The legacy server-rendered JinjaX pages (`templates/`, `templates.py`) and
-> the vanilla-JS `static/*.js` are being removed; new UI work belongs in the
-> `frontend/` package, not in a template. The `/_chrome/events` SSE stream is
-> no longer consumed by any UI -- its payloads ride the WebSocket now (the
-> route itself, and the broker bridge that feeds the publisher, go away with
-> the legacy deletion follow-up).
+> All UI work belongs in the `frontend/` package. The only server-rendered
+> documents left are the dependency-free static pages that must work before
+> (or without) the SPA bundle: the one-time-code login flow (`ui_login.py`)
+> and the friendly error pages (`static_pages.py`). `static/` holds only the
+> embed contract module, the vendored Sentry browser bundle + its init, the
+> service icons, and the built SPA bundle (`static/ui/`, gitignored).
 
 Each workspace already runs its own `system_interface`, which serves the dockview UI at the workspace's bare origin; every other registered service owns its own origin (`<service>.host-<hex>.localhost:PORT/`), so nothing proxies or rewrites service traffic. The desktop client's job is to route browser traffic for `[<service>.]host-<hex>.localhost:PORT/*` to the right in-workspace backend -- it does not rewrite paths or inject anything itself.
 
@@ -30,6 +30,8 @@ This desktop client is a separate component from any individual workspace's web 
 ## Authentication
 
 Authentication is global (one session grants access to all agents). The desktop client uses `itsdangerous` for cookie signing. Auth works as follows:
+
+Note this is the *local* session with the desktop client itself. *Imbue account* sign-up/sign-in happens on the connector's hosted accounts pages in the system browser: the SPA drives `POST /auth/api/web-login/start` (which runs `mngr imbue_cloud auth login` -- browser + loopback + PKCE code exchange) and polls `GET /auth/api/web-login/status/<flow_id>` to render the waiting/copy-link modal. There are no in-app account sign-in pages anymore; the retired `/auth/login` and `/auth/signup` URLs 302 into the SPA with `?web-login=1`, which starts the browser flow on load.
 
 - **Signing key**: generated once on first server start, stored at `{data_directory}/signing_key`. Used to sign all auth cookies.
 - **One-time codes**: a login code is generated and printed to the terminal when the server starts. Codes are stored in `{data_directory}/one_time_codes.json` and can only be used once.
@@ -52,7 +54,7 @@ Authentication is global (one session grants access to all agents). The desktop 
     if you are authenticated:
         while the error-reporting consent question is unanswered, shows the consent screen
         if any workspaces are known (discovered locally or synced from other devices), lists them all -- even when there is exactly one
-        if none are known and the initial discovery is still running, shows a self-refreshing "Discovering agents" page
+        if none are known and the initial discovery is still running, shows a self-refreshing "Discovering workspaces" page
         once discovery completes with no workspaces, shows the agent creation form
 
 `/create` route (requires auth):
