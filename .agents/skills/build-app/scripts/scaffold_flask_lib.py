@@ -416,19 +416,23 @@ def _write_supervisord_program(repo_root: Path, name: str, port: int) -> Path:
     deleting the console script. `--all-packages` reinstates it, so the program
     repairs its own environment on the restart that follows.
 
-    Exits non-zero if any existing program already claims this name, whether in
-    the main config or in another drop-in: supervisord would otherwise silently
-    take whichever the include order happened to read last.
+    Exits non-zero if this name is already claimed, whether in the main config or
+    in another drop-in, and whether by a program or by an event listener:
+    supervisord holds both in one process-group namespace, so a duplicate name
+    either resolves silently to whichever the include order read last, or breaks
+    the config for every program at the next reread.
     """
     conf = repo_root / "system/supervisord.conf"
     if not conf.exists():
         sys.exit(f"error: {conf} not found (cannot register the new app)")
     for existing in _supervisord_conf_files(conf):
-        if f"[program:{name}]" in existing.read_text():
-            sys.exit(
-                f"error: {existing.relative_to(repo_root)} already has a "
-                f"[program:{name}] section"
-            )
+        text = existing.read_text()
+        for section in (f"[program:{name}]", f"[eventlistener:{name}]"):
+            if section in text:
+                sys.exit(
+                    f"error: {existing.relative_to(repo_root)} already has a "
+                    f"{section} section"
+                )
     path = _supervisord_conf_dir(conf) / f"{name}.conf"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port))
