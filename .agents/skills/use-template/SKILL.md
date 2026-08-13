@@ -211,27 +211,6 @@ a new manifest overrides its predecessor rather than accumulating beside it.
 Follow a link only if you need to understand where something came from; there is
 nothing to adopt there.
 
-**Read `LICENSE` and tell the user what they are taking on.** This is someone
-else's code arriving in their mind, and they are about to build on it, so say
-what they may do with it BEFORE they invest in adapting it, not after.
-
-- **MIT** -- what this flow publishes. They can use it, change it, ship it, and
-  sell it. The one obligation is that the copyright line and the licence text
-  travel with any copy they distribute: do not delete `LICENSE` when you merge,
-  and keep it if they later publish their own template built on this one. It
-  comes with no warranty and no support.
-- **Another licence.** Read it and summarise the real terms. Do not assume it
-  is permissive because the repo was easy to obtain -- a copyleft licence can
-  oblige them to publish their own source, which they should decide on
-  knowingly rather than discover later.
-- **No `LICENSE` at all.** Default copyright applies: no permission to use,
-  copy, or modify it. Being able to clone a repo is not a grant. Say so plainly
-  and let them decide whether to ask the author, rather than proceeding on the
-  theory that publishing it implied consent.
-
-Never infer a licence, and never add one on the author's behalf. Say what is
-actually there.
-
 ## 3. Activate first, then ask how to adapt
 
 In chat, in plain language, walk the user through what this template provides
