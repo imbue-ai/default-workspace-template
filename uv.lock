@@ -25,6 +25,7 @@ resolution-markers = [
 [manifest]
 members = [
     "app-watcher",
+    "atlas-book",
     "automations",
     "bootstrap",
     "browser",
@@ -276,6 +277,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/25/1e/faf0f247f6f881b98fc4d6d07e14085cb89d13665084e6d6ac1dc2c03d0b/asttokens-3.0.2.tar.gz", hash = "sha256:3ecdbd8f2cc195f53ccada3a613538bb5f9ef6f6869129f13e03c30a677b8fe2", size = 63136, upload-time = "2026-07-12T03:31:49.084Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/2b/04b8a15f3a1c77bc79ddf5c73875327f34b4fa75982df2b76e45e402d364/asttokens-3.0.2-py3-none-any.whl", hash = "sha256:9da13157f5b28becde0bd374fc677dcd3c290614264eff096f167c469cd9f933", size = 28702, upload-time = "2026-07-12T03:31:47.542Z" },
+]
+
+[[package]]
+name = "atlas-book"
+version = "0.1.0"
+source = { editable = "system/apps/atlas_book" }
+dependencies = [
+    { name = "flask" },
+    { name = "flask-sock" },
+    { name = "markdown-it-py" },
+    { name = "mdit-py-plugins" },
+    { name = "werkzeug" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "flask", specifier = ">=3.0" },
+    { name = "flask-sock", specifier = ">=0.7" },
+    { name = "markdown-it-py", specifier = ">=3.0" },
+    { name = "mdit-py-plugins", specifier = ">=0.4" },
+    { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [[package]]
@@ -1004,6 +1026,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "app-watcher" },
+    { name = "atlas-book" },
     { name = "bootstrap" },
     { name = "browser" },
     { name = "env-converge" },
@@ -1037,6 +1060,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "app-watcher", editable = "system/services/app_watcher" },
+    { name = "atlas-book", editable = "system/apps/atlas_book" },
     { name = "bootstrap", editable = "system/libs/bootstrap" },
     { name = "browser", editable = "system/apps/browser" },
     { name = "env-converge", editable = "system/services/env_converge" },
@@ -2380,6 +2404,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fc/6d/62e76bbb8144d6ed86e202b5edd8a4cb631e7c8130f3f4893c3f90262b10/mcp-1.26.0.tar.gz", hash = "sha256:db6e2ef491eecc1a0d93711a76f28dec2e05999f93afd48795da1c1137142c66", size = 608005, upload-time = "2026-01-24T19:40:32.468Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/d9/eaa1f80170d2b7c5ba23f3b59f766f3a0bb41155fbc32a69adfa1adaaef9/mcp-1.26.0-py3-none-any.whl", hash = "sha256:904a21c33c25aa98ddbeb47273033c435e595bbacfdb177f4bd87f6dceebe1ca", size = 233615, upload-time = "2026-01-24T19:40:30.652Z" },
+]
+
+[[package]]
+name = "mdit-py-plugins"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/fc/f8d0863f8862f25602c0404d75568e89fb6b4109804645e5cdfb1be5cf56/mdit_py_plugins-0.6.1.tar.gz", hash = "sha256:a2bca0f039f39dbd35fb74ae1b5f998608c437463371f0ff7f49a19a17a114d0", size = 56114, upload-time = "2026-05-13T09:03:38.91Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a5/69/6da5581c6a7fede7dc261bf4e67d6adca4196f176b43288b55b3db395b6e/mdit_py_plugins-0.6.1-py3-none-any.whl", hash = "sha256:214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d", size = 66663, upload-time = "2026-05-13T09:03:37.76Z" },
 ]
 
 [[package]]
