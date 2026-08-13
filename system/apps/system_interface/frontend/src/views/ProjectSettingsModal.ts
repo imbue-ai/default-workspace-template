@@ -407,8 +407,8 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
       m("p.destroy-dialog-message", [
         "Delete ",
         m("strong", attrs.project.name),
-        "? This deletes the view, not what it showed: every chat, terminal, browser and app in it keeps " +
-          "running, stays in Everything, and stays in any other project showing it.",
+        "? Its terminals and browsers are shut down — everywhere they appear. Chats and apps keep " +
+          "running, stay in Everything, and stay in any other project showing them.",
       ]),
       m("div.custom-url-dialog-actions", [
         m(

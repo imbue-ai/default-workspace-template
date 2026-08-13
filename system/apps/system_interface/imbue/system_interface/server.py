@@ -1306,6 +1306,50 @@ def _stop_project_members(refs: list[str]) -> dict[str, list[str]]:
     return {"stopped": stopped, "failed": failed, "left_running": left_running}
 
 
+def _deterministic_panel_id_for_ref(ref: str) -> str | None:
+    """The panel id a ref's tab is always filed under, or None when there is none.
+
+    A named terminal's panel id is deterministic (``terminal-session-<name>``,
+    mirroring the frontend's ``TERMINAL_PANEL_ID_PREFIX``), so its saved panel
+    can be addressed without a client in the loop. Browser and app pane ids are
+    minted per open, so those sweeps rely on ref-resolution instead.
+    """
+    if ref.startswith(_TERMINAL_REF_PREFIX):
+        return f"terminal-session-{ref[len(_TERMINAL_REF_PREFIX) :]}"
+    return None
+
+
+def _sweep_destroyed_ref(layout_dir: Path, ref: str) -> None:
+    """Drop a just-destroyed object's panel and membership from every view.
+
+    The same sweep the panel-delete endpoint runs, for destroys that happen
+    server-side (a project delete stopping its terminals and browsers): the
+    object is gone machine-wide, so its saved panels -- Everything's included
+    -- and its member entries must go too, or the next view to restore would
+    bring back a dead tab (for a terminal, one that silently respawns a fresh
+    session under the old id). Broadcasts what changed so clients still showing
+    the object drop it live instead of autosaving it back.
+    """
+    swept_project_ids = projects.remove_panel_from_all_projects(layout_dir, _deterministic_panel_id_for_ref(ref), ref)
+    if not swept_project_ids:
+        return
+    get_state().broadcaster.broadcast(
+        {
+            "type": "project_panel_removed",
+            "panel_id": _deterministic_panel_id_for_ref(ref),
+            "ref": ref,
+            "project_ids": swept_project_ids,
+        }
+    )
+    # Everything has no member list, so it never belongs in a members-changed
+    # event.
+    member_project_ids = [
+        swept_project_id for swept_project_id in swept_project_ids if swept_project_id != projects.EVERYTHING_VIEW_ID
+    ]
+    if member_project_ids:
+        _broadcast_members_changed(member_project_ids)
+
+
 def _delete_project_endpoint(project_id: str) -> Response:
     """Delete a project, stop what it showed, and report what actually happened.
 
@@ -1340,6 +1384,12 @@ def _delete_project_endpoint(project_id: str) -> Response:
             _broadcast_member_title_changed(stopped_ref, None)
         if member_last_used.clear_last_used(layout_dir, stopped_ref):
             _broadcast_member_last_used_changed(stopped_ref, None)
+        # A stopped object's saved panels and memberships go too, everywhere:
+        # the deleted project's own file went with the delete, but a panel left
+        # in another project's file -- or in Everything's -- would restore as a
+        # dead tab, and for a terminal silently respawn a session under the
+        # reused ref.
+        _sweep_destroyed_ref(layout_dir, stopped_ref)
     logger.info(
         "Deleted project {} (stopped {}, failed {}, left running {})",
         project_id,
@@ -1385,11 +1435,19 @@ def _delete_project_panel_endpoint(panel_id: str) -> Response:
     ref = raw_ref.strip() if isinstance(raw_ref, str) and raw_ref.strip() else None
     changed_project_ids = projects.remove_panel_from_all_projects(layout_dir, panel_id, ref)
     if changed_project_ids:
+        # The ref rides along so a client showing the object under a different
+        # panel id (browser and app pane ids are minted per open) can still
+        # drop it from its live dock.
         get_state().broadcaster.broadcast(
-            {"type": "project_panel_removed", "panel_id": panel_id, "project_ids": changed_project_ids}
+            {"type": "project_panel_removed", "panel_id": panel_id, "ref": ref, "project_ids": changed_project_ids}
         )
-        if ref is not None:
-            _broadcast_members_changed(changed_project_ids)
+        # The sweep reaches Everything's saved arrangement too, but Everything
+        # has no member list, so it never belongs in a members-changed event.
+        member_project_ids = [
+            project_id for project_id in changed_project_ids if project_id != projects.EVERYTHING_VIEW_ID
+        ]
+        if ref is not None and member_project_ids:
+            _broadcast_members_changed(member_project_ids)
     if ref is not None and member_titles.clear_title(layout_dir, ref):
         _broadcast_member_title_changed(ref, None)
     # The recency goes for the same reason as the name: a reused ref must not

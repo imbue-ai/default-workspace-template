@@ -3455,6 +3455,39 @@ export function handleProjectSyncEvent(event: ProjectSyncEvent): void {
     }
     return;
   }
+  if (event.kind === "panel_removed") {
+    // The object behind the panel was destroyed and its panel stripped from
+    // the named views' saved content (Everything included). The destroying
+    // client already dropped it live; any other client still showing it drops
+    // it here -- both because the tab is a corpse and because keeping it would
+    // make this client's next autosave write the dead panel straight back into
+    // the file the server just stripped. The removal is keyed on the live dock
+    // rather than on ``projectIds`` so a dock holding the panel unsaved sheds
+    // it too; on clients not showing it there is nothing to do. This client's
+    // panel for the object may wear a different id than the destroyer's
+    // (browser and app pane ids are minted per open), so the ref resolves
+    // against the local dock as well.
+    const doomedPanelIds = new Set<string>();
+    if (event.panelId !== null) doomedPanelIds.add(event.panelId);
+    if (event.ref !== null) {
+      const localPanelId = panelIdForMemberRef(event.ref);
+      if (localPanelId !== null) doomedPanelIds.add(localPanelId);
+      // The page outlives its panels by design, so it is torn down by ref even
+      // on a client whose current view holds no tab for it.
+      destroyLiveSurface(liveKeyForRef(event.ref, event.panelId ?? ""));
+    }
+    if (dockview) {
+      for (const doomedPanelId of doomedPanelIds) {
+        const panel = dockview.panels.find((candidate) => candidate.id === doomedPanelId);
+        if (!panel) continue;
+        const liveKey = liveKeyForPanel(doomedPanelId, panelParams.get(doomedPanelId));
+        if (liveKey !== null) destroyLiveSurface(liveKey);
+        dockview.removePanel(panel);
+      }
+    }
+    void refreshProjectsList();
+    return;
+  }
   if (event.kind === "deleted") {
     // Read the deleted project's name before the (async) refresh drops it
     // from the cache.

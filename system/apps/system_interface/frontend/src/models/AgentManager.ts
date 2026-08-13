@@ -172,6 +172,21 @@ type WsEvent =
       project_ids: string[];
     }
   | {
+      // A destroyed object's panel was stripped from these views' saved
+      // content (Everything included -- its id is "everything"). Any client
+      // still showing the panel drops it: the object behind it is gone
+      // machine-wide, and a live dock that kept it would autosave the dead
+      // panel straight back into the file the server just stripped.
+      // ``panel_id`` is null for kinds whose panel ids are minted per open
+      // (browser and app panes); ``ref`` is null when the destroyer knew only
+      // the panel -- each client resolves whichever it has against its own
+      // dock.
+      type: "project_panel_removed";
+      panel_id: string | null;
+      ref: string | null;
+      project_ids: string[];
+    }
+  | {
       // One object was renamed, machine-wide; ``title`` is null when its name
       // was cleared (or dropped because the object was destroyed). A name
       // belongs to the object rather than to a panel, so this reaches clients
@@ -207,13 +222,18 @@ export type LayoutSyncListener = (event: LayoutSyncEvent) => void;
  * mounted on it should fall back to, ``updated`` is display metadata only, and
  * ``members`` names every project whose member list moved -- which any client
  * has to act on, mounted on those projects or not, since membership is what
- * the sidebar lists rather than the layout.
+ * the sidebar lists rather than the layout. ``panel_removed`` says a destroyed
+ * object's panel was stripped from the named views' saved content (Everything
+ * included), so a client still showing that panel drops it from its live dock
+ * -- resolving by ``ref`` as well as by ``panelId``, since a browser or app
+ * pane's id is minted per open and differs from client to client.
  */
 export type ProjectSyncEvent =
   | { kind: "saved"; projectId: string; savedByClientId: string }
   | { kind: "deleted"; projectId: string; fallbackId: string }
   | { kind: "updated"; projectId: string }
-  | { kind: "members"; projectIds: string[] };
+  | { kind: "members"; projectIds: string[] }
+  | { kind: "panel_removed"; panelId: string | null; ref: string | null; projectIds: string[] };
 
 export type ProjectSyncListener = (event: ProjectSyncEvent) => void;
 
@@ -456,6 +476,17 @@ function handleEvent(event: WsEvent): void {
     case "project_members_changed":
       for (const listener of projectSyncListeners) {
         listener({ kind: "members", projectIds: event.project_ids });
+      }
+      break;
+
+    case "project_panel_removed":
+      for (const listener of projectSyncListeners) {
+        listener({
+          kind: "panel_removed",
+          panelId: event.panel_id ?? null,
+          ref: event.ref ?? null,
+          projectIds: event.project_ids,
+        });
       }
       break;
 
