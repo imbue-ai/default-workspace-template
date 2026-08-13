@@ -4,6 +4,7 @@ import queue
 import shlex
 import threading
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -25,6 +26,7 @@ from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import AgentRemovedEvent
@@ -37,26 +39,45 @@ from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentNameStyle
 from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
+from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
-from imbue.system_interface.activity_state import derive_activity_state
-from imbue.system_interface.activity_state import has_unmatched_tool_use
-from imbue.system_interface.activity_state import last_event_timestamp
-from imbue.system_interface.activity_state import last_event_type
-from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
+from imbue.system_interface.activity_state import is_lifecycle_dead
+from imbue.system_interface.activity_state import resolve_is_agent_running
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
-from imbue.system_interface.fast_mode_policy import FAST_MODE_BEFORE_DECISION
-from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
-from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.auth_check import find_unauthenticated_harness_reason
+from imbue.system_interface.harnesses.claude.launch_defaults import FAST_MODE_BEFORE_DECISION
+from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
+from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.harness_type import parse_harness
+from imbue.system_interface.harnesses.model import ModelChoice
+from imbue.system_interface.harnesses.model import match_option
+from imbue.system_interface.harnesses.model import read_model_identity
+from imbue.system_interface.harnesses.path_watch import PathWatcher
+from imbue.system_interface.harnesses.registry import build_tracker
+from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+
+# The role template every UI-created agent gets. The harness is chosen separately via
+# `--type` (see `_build_chat_create_command`); only the role varies in the template list,
+# and it travels as `harness`, not folded into the role name.
+CHAT_ROLE_TEMPLATE: Final[str] = "chat"
+
+# What the UI is told it just created. Always the role: both menu entries make a chat,
+# on different harnesses.
+CHAT_CREATION_TYPE: Final[str] = CHAT_ROLE_TEMPLATE
 
 _APPS_TOML_FILENAME = "data/.state/apps.toml"
 _APPS_TOML_BASENAME = "apps.toml"
@@ -74,19 +95,26 @@ _COMPLETION_SIGNAL_PUT_TIMEOUT_SECONDS = 5.0
 _ASSIST_AUTO_OPEN_LABEL = "assist"
 
 
-def _build_worktree_create_command(
+def _build_chat_create_command(
     mngr_binary: str,
     name: str,
     agent_id: str,
-    current_branch: str,
-    new_branch: str,
-    parent_labels: dict[str, str],
+    primary_labels: dict[str, str],
+    harness: HarnessType,
+    is_fast_mode_enabled: bool,
+    extra_role_templates: tuple[str, ...] = (),
 ) -> list[str]:
-    """Build the ``mngr create`` argv for a worktree agent.
+    """Build the ``mngr create`` argv for a chat agent on a given harness.
 
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without constructing an ``AgentManager`` or running a
-    subprocess (see ``agent_manager_test.py``).
+    The harness is selected with ``--type <harness>`` (which resolves
+    ``[agent_types.<harness>]`` directly), and the `chat` role template supplies
+    everything else -- the shared work directory and the output style. Every harness
+    shares this one builder: adding a harness means passing a different name here, not
+    writing another near-identical builder, and not adding a per-harness create template.
+
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable against the
+    live CLI without constructing an ``AgentManager`` or running a subprocess (see
+    ``agent_manager_test.py``).
     """
     cmd = [
         mngr_binary,
@@ -94,53 +122,22 @@ def _build_worktree_create_command(
         name,
         "--id",
         agent_id,
-        "--transfer",
-        "git-worktree",
-        "--branch",
-        f"{current_branch}:{new_branch}",
-        "--template",
-        "worktree",
-        "--label",
-        "user_created=true",
-        "--no-connect",
-    ]
-    # Inherit the project label from the parent agent. The worker belongs to its
-    # workspace by sharing the host; it carries no workspace label.
-    if "project" in parent_labels:
-        cmd.extend(["--label", f"project={parent_labels['project']}"])
-    return cmd
-
-
-def _build_chat_create_command(
-    mngr_binary: str,
-    name: str,
-    agent_id: str,
-    primary_labels: dict[str, str],
-    is_fast_mode_enabled: bool,
-) -> list[str]:
-    """Build the ``mngr create`` argv for a chat agent. Pure (see above)."""
-    cmd = [
-        mngr_binary,
-        "create",
-        name,
-        "--id",
-        agent_id,
-        "--transfer",
-        "none",
+        "--type",
+        harness,
         "--template",
         "chat",
+        *[arg for role in extra_role_templates for arg in ("--template", role)],
         # Tags this as a user-created agent so the OOM launch wrapper puts it in the
         # dynamic chat band (re-tagged from live UI engagement), not the worker band.
         "--label",
         "user_created=true",
-        # Chat is the one interactive agent type, so it is the only one that starts
-        # fast; .mngr/settings.toml defaults every other type to standard speed. See
-        # that file's [agent_types.claude] note for why the override targets `claude`
-        # rather than `chat`.
-        "-S",
-        f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}",
         "--no-connect",
     ]
+    # Chat is the one interactive agent type, so it is the only one that starts fast;
+    # .mngr/settings.toml defaults every other type to standard speed. Claude-specific:
+    # fast mode is a claude setting, so it is meaningless under any other harness.
+    if harness == HarnessType.CLAUDE:
+        cmd.extend(["-S", f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}"])
     # Inherit the project label from the primary agent. The chat agent belongs to
     # its workspace by sharing the host; it carries no workspace label.
     if "project" in primary_labels:
@@ -328,10 +325,25 @@ class AgentManager:
     _mngr_binary: str
     _host_dir: Path
     _activity_tracked_agents: set[str]
-    _has_unmatched_tool_use_by_agent: dict[str, bool]
-    _last_event_type_by_agent: dict[str, str | None]
-    _last_event_timestamp_by_agent: dict[str, str | None]
+    # Per-agent activity tracker, built from the agent's harness when tracking
+    # starts. Owns that harness's cached transcript signals and its derivation;
+    # see :mod:`harness_activity`.
+    _activity_tracker_by_agent: dict[str, HarnessActivityTracker]
     _activity_state_by_agent: dict[str, ActivityState]
+    # Per-agent live queued-message snapshot (a sibling of ``_activity_state_by_agent``),
+    # pushed to the frontend on the agents WebSocket. Fed by the agent's watcher via
+    # ``update_queued_messages`` and cleared on a working->IDLE transition through the
+    # per-agent idle handler the watcher registers (its ``notify_idle`` -- the queue
+    # backstop). Both are dropped when activity tracking stops.
+    _queued_messages_by_agent: dict[str, tuple[QueuedMessageState, ...]]
+    _queue_idle_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]]]]
+    # The last computed model choice per agent, and the filesystem watcher that
+    # re-derives it when the agent's minds_model_state.json changes. The live read is
+    # harness-neutral (the shared reader + the harness's registered state-file path), so
+    # there is no per-agent resolver to cache -- the switch endpoint builds one inline.
+    # None = the harness has recorded no model yet -> the bar renders logo-only.
+    _model_choice_by_agent: dict[str, ModelChoice | None]
+    _model_watcher_by_agent: dict[str, PathWatcher]
     # Assist chats whose tab we have already auto-opened (or that existed at
     # startup, seeded by ``_initial_discover`` so we never auto-open them). Lets
     # both discovery paths -- the per-agent delta and the full snapshot -- open
@@ -382,10 +394,12 @@ class AgentManager:
         manager._mngr_binary = mngr_binary
         manager._host_dir = get_host_dir()
         manager._activity_tracked_agents = set()
-        manager._has_unmatched_tool_use_by_agent = {}
-        manager._last_event_type_by_agent = {}
-        manager._last_event_timestamp_by_agent = {}
+        manager._activity_tracker_by_agent = {}
         manager._activity_state_by_agent = {}
+        manager._queued_messages_by_agent = {}
+        manager._queue_idle_handler_by_agent = {}
+        manager._model_choice_by_agent = {}
+        manager._model_watcher_by_agent = {}
         manager._auto_opened_assist_ids = set()
         # Built last: its ``list_chat_agent_ids`` callback reads ``_agents`` /
         # ``_lock``, which are set above.
@@ -423,10 +437,18 @@ class AgentManager:
         self._app_observers.clear()
 
         with self._lock:
+            model_watchers = list(self._model_watcher_by_agent.values())
+            self._model_watcher_by_agent.clear()
+        for watcher in model_watchers:
+            watcher.stop()
+
+        with self._lock:
             self._activity_tracked_agents.clear()
-            self._has_unmatched_tool_use_by_agent.clear()
-            self._last_event_type_by_agent.clear()
+            self._activity_tracker_by_agent.clear()
             self._activity_state_by_agent.clear()
+            self._queued_messages_by_agent.clear()
+            self._queue_idle_handler_by_agent.clear()
+            self._model_choice_by_agent.clear()
 
     @property
     def broadcaster(self) -> WebSocketBroadcaster:
@@ -490,6 +512,7 @@ class AgentManager:
             claude_config_dir=read_claude_config_dir_from_env_file(agent_state_dir),
             labels=agent_state.labels,
             work_dir=agent_state.work_dir,
+            harness=agent_state.harness,
         )
 
     def get_agent_matches_by_id(self, agent_id: str) -> list[AgentMatch]:
@@ -513,6 +536,16 @@ class AgentManager:
         """
         return self._messenger.send_to_agent(agent_id, message, self.get_agent_matches_by_id(str(agent_id)))
 
+    def press_key_chord_on_agent(self, agent_id: AgentId, key: str) -> bool:
+        """Press a tmux key token (e.g. ``"M-q"``) into the agent's pane, using the live cache.
+
+        The key-chord peer of ``send_message_to_agent``: it reads this manager's event-fed
+        location for the id and hands it to the ``MngrMessenger``, which delivers the press
+        through mngr's in-process message API (holding the per-agent ``message.lock``, so the
+        chord never interleaves with a text send). Returns True on success.
+        """
+        return self._messenger.press_key_chord_to_agent(agent_id, key, self.get_agent_matches_by_id(str(agent_id)))
+
     def remove_agent(self, agent_id: str) -> None:
         """Remove an agent from the tracked state and broadcast the update.
 
@@ -525,6 +558,7 @@ class AgentManager:
 
         self._stop_app_watcher(agent_id)
         self._stop_activity_tracking(agent_id)
+        self._stop_model_tracking(agent_id)
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def get_apps(self) -> list[AppEntry]:
@@ -560,7 +594,10 @@ class AgentManager:
                     "state": a.state,
                     "labels": a.labels,
                     "work_dir": a.work_dir,
+                    "harness": a.harness,
                     "activity_state": a.activity_state,
+                    "model_choice": a.model_choice.model_dump() if a.model_choice else None,
+                    "queued_messages": [queued.model_dump() for queued in a.queued_messages],
                 }
                 for a in self._agents.values()
             ]
@@ -583,54 +620,26 @@ class AgentManager:
         """Generate a random agent name using mngr's name generator."""
         return str(generate_agent_name(AgentNameStyle.COOLNAME))
 
-    def create_worktree_agent(self, name: str, selected_agent_id: str) -> str:
-        """Create a new worktree agent. Returns the pre-generated agent ID."""
-        agent_id = str(AgentId())
+    def create_chat_agent(
+        self,
+        name: str,
+        harness: HarnessType = HarnessType.CLAUDE,
+        extra_role_templates: tuple[str, ...] = (),
+    ) -> str:
+        """Create a chat agent in the primary agent's work dir on the given harness.
 
-        with self._lock:
-            work_dir = self._resolve_agent_work_dir(selected_agent_id)
-            parent = self._agents.get(selected_agent_id)
-            parent_labels = dict(parent.labels) if parent else {}
+        Returns the pre-generated agent ID. ``harness`` is also the name of the harness
+        create template it stacks; the `chat` role template supplies everything else, so a
+        new harness needs no new method here.
 
-        if work_dir is None:
-            msg = f"Cannot determine work directory for agent {selected_agent_id}"
-            raise AgentCreationError(msg)
+        An alt harness authenticates through its own CLI; if that CLI is signed out, refuse
+        the create up front (raising ``AgentCreationError``) rather than launch a chat that
+        can never take a turn. Claude is not gated -- its auth is the shared workspace login.
+        """
+        unauthenticated_reason = find_unauthenticated_harness_reason(harness)
+        if unauthenticated_reason is not None:
+            raise AgentCreationError(unauthenticated_reason)
 
-        current_branch = self._get_current_branch(Path(work_dir))
-        new_branch = f"mngr/{name}"
-
-        cmd = _build_worktree_create_command(
-            self._mngr_binary, name, agent_id, current_branch, new_branch, parent_labels
-        )
-
-        log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
-
-        proto_info = {
-            "agent_id": agent_id,
-            "name": name,
-            "creation_type": "worktree",
-            "parent_agent_id": None,
-        }
-        with self._lock:
-            self._proto_agents[agent_id] = proto_info
-            self._log_queues[agent_id] = log_queue
-
-        self._broadcaster.broadcast_proto_agent_created(
-            agent_id=agent_id,
-            name=name,
-            creation_type="worktree",
-            parent_agent_id=None,
-        )
-
-        labels = {"user_created": "true"}
-        if "project" in parent_labels:
-            labels["project"] = parent_labels["project"]
-        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels)
-
-        return agent_id
-
-    def create_chat_agent(self, name: str) -> str:
-        """Create a new chat agent in the primary agent's work dir. Returns the pre-generated agent ID."""
         agent_id = str(AgentId())
 
         with self._lock:
@@ -643,17 +652,25 @@ class AgentManager:
             raise AgentCreationError(msg)
 
         # New chats launch at the workspace's fast-mode setting: fast until the
-        # user answers the prompt, then whatever they chose.
+        # user answers the prompt, then whatever they chose. Only claude reads it.
         decision = read_workspace_fast_mode_decision(get_workspace_fast_mode_decision_path(Path(work_dir)))
         is_fast_mode_enabled = FAST_MODE_BEFORE_DECISION if decision is None else decision
-        cmd = _build_chat_create_command(self._mngr_binary, name, agent_id, primary_labels, is_fast_mode_enabled)
+        cmd = _build_chat_create_command(
+            self._mngr_binary,
+            name,
+            agent_id,
+            primary_labels,
+            harness,
+            is_fast_mode_enabled,
+            extra_role_templates,
+        )
 
         log_queue: queue.Queue[str | None] = queue.Queue(maxsize=10000)
 
         proto_info = {
             "agent_id": agent_id,
             "name": name,
-            "creation_type": "chat",
+            "creation_type": CHAT_CREATION_TYPE,
             "parent_agent_id": None,
         }
         with self._lock:
@@ -663,14 +680,14 @@ class AgentManager:
         self._broadcaster.broadcast_proto_agent_created(
             agent_id=agent_id,
             name=name,
-            creation_type="chat",
+            creation_type=CHAT_CREATION_TYPE,
             parent_agent_id=None,
         )
 
         labels: dict[str, str] = {}
         if "project" in primary_labels:
             labels["project"] = primary_labels["project"]
-        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels)
+        self._launch_creation_thread(agent_id, name, cmd, Path(work_dir), log_queue, labels, harness)
 
         return agent_id
 
@@ -682,11 +699,12 @@ class AgentManager:
         work_dir: Path,
         log_queue: queue.Queue[str | None],
         labels: dict[str, str],
+        harness: HarnessType,
     ) -> None:
         """Start a background thread to run agent creation and stream logs."""
         self._creation_cg.start_new_thread(
             target=self._run_creation,
-            args=(agent_id, agent_name, cmd, work_dir, log_queue, labels),
+            args=(agent_id, agent_name, cmd, work_dir, log_queue, labels, harness),
             name=f"create-{agent_id[:8]}",
             is_checked=False,
         )
@@ -700,15 +718,6 @@ class AgentManager:
             return self._own_work_dir
         return None
 
-    def _get_current_branch(self, work_dir: Path) -> str:
-        """Get the current git branch for a work directory."""
-        result = run_local_command_modern_version(
-            command=["git", "-C", str(work_dir), "branch", "--show-current"],
-            cwd=None,
-            is_checked=True,
-        )
-        return result.stdout.strip()
-
     def _run_creation(
         self,
         agent_id: str,
@@ -717,6 +726,7 @@ class AgentManager:
         work_dir: Path,
         log_queue: queue.Queue[str | None],
         labels: dict[str, str],
+        harness: HarnessType,
     ) -> None:
         """Run mngr create in the background, capture output, and always emit completion.
 
@@ -767,6 +777,7 @@ class AgentManager:
                         state="RUNNING",
                         labels=labels,
                         work_dir=str(work_dir),
+                        harness=harness,
                     )
         except Exception as e:
             # Force-demote success: the happy path sets success=True before
@@ -795,6 +806,7 @@ class AgentManager:
 
         if success:
             self._ensure_activity_tracking(agent_id)
+            self._ensure_model_tracking(agent_id)
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
         self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
 
@@ -810,6 +822,7 @@ class AgentManager:
                         state=agent_info.state,
                         labels=agent_info.labels,
                         work_dir=agent_info.work_dir,
+                        harness=agent_info.harness,
                     )
                     self._agents[agent_info.id] = agent_state
                     # Treat assist chats that already exist at startup as already-handled
@@ -821,6 +834,7 @@ class AgentManager:
                 if agent_info.id == self._own_agent_id and agent_info.work_dir:
                     self._start_app_watcher(agent_info.id, Path(agent_info.work_dir))
                 self._ensure_activity_tracking(agent_info.id)
+                self._ensure_model_tracking(agent_info.id)
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Initial agent discovery failed")
 
@@ -836,6 +850,7 @@ class AgentManager:
                     state=agent_info.state,
                     labels=agent_info.labels,
                     work_dir=agent_info.work_dir,
+                    harness=agent_info.harness,
                 )
 
             with self._lock:
@@ -845,9 +860,11 @@ class AgentManager:
 
             for agent_id in new_ids:
                 self._ensure_activity_tracking(agent_id)
+                self._ensure_model_tracking(agent_id)
             for agent_id in old_ids - new_ids:
                 self._stop_app_watcher(agent_id)
                 self._stop_activity_tracking(agent_id)
+                self._stop_model_tracking(agent_id)
 
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
@@ -1012,26 +1029,29 @@ class AgentManager:
                 state=agent.state.value,
                 labels=dict(agent.labels),
                 work_dir=str(agent.work_dir),
+                harness=parse_harness(str(agent.type)),
             )
             new_matches[agent_id] = _build_agent_match(agent)
 
         with self._lock:
-            # Rebuilding ``_agents`` wholesale drops the per-agent ``activity_state``
-            # (the observe payload carries no such field). Re-apply the cached value
-            # so the broadcast below does not blank the indicator for agents that are
-            # already tracked; the recompute pass just below then re-derives it from
-            # the (possibly changed) lifecycle state.
+            # Rebuilding ``_agents`` wholesale drops the per-agent derived fields
+            # (the observe payload carries neither ``activity_state`` nor
+            # ``model_choice``). Re-apply the cached values via ``model_copy`` so the
+            # broadcast below does not blank them for already-tracked agents; the
+            # recompute passes just below then re-derive from current disk/lifecycle.
             for agent_id, agent_state in new_agents.items():
+                updates: list[tuple[str, Any]] = []
                 cached_state = self._activity_state_by_agent.get(agent_id)
                 if cached_state is not None:
-                    new_agents[agent_id] = AgentStateItem(
-                        id=agent_state.id,
-                        name=agent_state.name,
-                        state=agent_state.state,
-                        labels=agent_state.labels,
-                        work_dir=agent_state.work_dir,
-                        activity_state=cached_state.value,
-                    )
+                    updates.append(to_update(agent_state.field_ref().activity_state, cached_state))
+                cached_choice = self._model_choice_by_agent.get(agent_id)
+                if cached_choice is not None:
+                    updates.append(to_update(agent_state.field_ref().model_choice, cached_choice))
+                cached_queued = self._queued_messages_by_agent.get(agent_id)
+                if cached_queued:
+                    updates.append(to_update(agent_state.field_ref().queued_messages, cached_queued))
+                if updates:
+                    new_agents[agent_id] = agent_state.model_copy_update(*updates)
             self._agents = new_agents
             self._match_by_agent_id = new_matches
 
@@ -1042,10 +1062,12 @@ class AgentManager:
             if agent_id == self._own_agent_id and added_agent_state.work_dir:
                 self._start_app_watcher(agent_id, Path(added_agent_state.work_dir))
             self._ensure_activity_tracking(agent_id)
+            self._ensure_model_tracking(agent_id)
 
         for agent_id in removed_agent_ids:
             self._stop_app_watcher(agent_id)
             self._stop_activity_tracking(agent_id)
+            self._stop_model_tracking(agent_id)
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
@@ -1167,27 +1189,169 @@ class AgentManager:
             return
         with self._lock:
             self._activity_tracked_agents.add(agent_id)
+            # Built once, from the harness the agent was created with. This is the
+            # single place a harness name selects behavior; everything downstream
+            # just calls the tracker.
+            if agent_id not in self._activity_tracker_by_agent:
+                agent_state = self._agents.get(agent_id)
+                harness = agent_state.harness if agent_state is not None else DEFAULT_HARNESS
+                self._activity_tracker_by_agent[agent_id] = build_tracker(harness)
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
     def _stop_activity_tracking(self, agent_id: str) -> None:
-        """Stop activity tracking and clear cached activity state."""
+        """Stop activity tracking and clear cached activity + queued state."""
         with self._lock:
             self._activity_tracked_agents.discard(agent_id)
-            self._has_unmatched_tool_use_by_agent.pop(agent_id, None)
-            self._last_event_type_by_agent.pop(agent_id, None)
-            self._last_event_timestamp_by_agent.pop(agent_id, None)
+            self._activity_tracker_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
+            self._queued_messages_by_agent.pop(agent_id, None)
+            self._queue_idle_handler_by_agent.pop(agent_id, None)
 
-    def _read_process_started_at(self, agent_id: str) -> float | None:
-        """Return the mtime of the agent's ``claude_process_started`` marker, or None.
+    def register_queue_idle_handler(self, agent_id: str, handler: Callable[[], list[dict[str, Any]]]) -> None:
+        """Register the agent watcher's working->IDLE queue backstop.
+
+        Called once when the watcher is created. On a working->IDLE transition
+        ``_recompute_activity_state`` invokes it: the handler clears the harness
+        queue populator and returns the resulting (empty) snapshot, which the same
+        broadcast that carries the IDLE state also carries.
+        """
+        with self._lock:
+            self._queue_idle_handler_by_agent[agent_id] = handler
+
+    def update_queued_messages(self, agent_id: str, snapshot: list[dict[str, Any]]) -> None:
+        """Cache and broadcast a fresh queued-message snapshot from the agent's watcher.
+
+        The full snapshot replaces the cached one wholesale (the frontend does the
+        same). No-op for an agent that is no longer tracked (a callback racing with
+        destruction). Only broadcasts when the snapshot actually changed.
+
+        A replayed snapshot can arrive with no recompute ever following it (e.g. a
+        priming replay for a stopped agent, whose lifecycle never changes again),
+        so the level-triggered idle sweep is run here, after caching and BEFORE the
+        broadcast: an idle agent's stale snapshot is drained via its idle handler
+        and the single broadcast below carries the post-sweep state, so phantoms
+        are never rendered. A live mid-turn agent derives non-IDLE (its transcript
+        signals are seeded before the watcher starts) and the snapshot stands.
+        """
+        queued = tuple(QueuedMessageState.model_validate(entry) for entry in snapshot)
+        with self._lock:
+            if agent_id not in self._activity_tracked_agents:
+                return
+            agent_state = self._agents.get(agent_id)
+            if agent_state is None:
+                return
+            if self._queued_messages_by_agent.get(agent_id, ()) == queued and agent_state.queued_messages == queued:
+                return
+            self._queued_messages_by_agent[agent_id] = queued
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().queued_messages, queued)
+            )
+        # Evaluate the level-triggered idle sweep before this snapshot is ever rendered:
+        # a replayed snapshot can arrive with no later recompute trigger (the event
+        # fan-out runs strictly before the snapshot push, and a permanently-dead agent
+        # never re-enters the observe delta), so a dead generation's orphans would
+        # otherwise broadcast and stick. ``broadcast_on_change=False`` keeps the single
+        # broadcast below authoritative -- it carries the post-sweep state.
+        self._recompute_activity_state(agent_id, broadcast_on_change=False)
+        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def _ensure_model_tracking(self, agent_id: str) -> None:
+        """Watch the agent's live model-state file once its state dir exists.
+
+        The live read is harness-neutral -- the shared reader over the harness's
+        registered ``minds_model_state.json`` -- so there is nothing to build per agent;
+        this just derives the current choice and, when the local state dir is present,
+        starts the one watch that drives every later recompute. Idempotent (the watch is
+        retried on later calls until the dir appears).
+        """
+        agent_state = self.get_agent_by_id(agent_id)
+        if agent_state is None:
+            return
+        with self._lock:
+            needs_watcher = agent_id not in self._model_watcher_by_agent
+        self._recompute_model_choice(agent_id, broadcast_on_change=False)
+        if needs_watcher and self._get_agent_state_dir(agent_id).exists():
+            state_path = get_model_state_path(agent_state.harness, self._get_agent_state_dir(agent_id))
+            new_watcher = PathWatcher.build(
+                (state_path,),
+                lambda: self._recompute_model_choice(agent_id, broadcast_on_change=True),
+            )
+            with self._lock:
+                already_watched = agent_id in self._model_watcher_by_agent
+                if not already_watched:
+                    self._model_watcher_by_agent[agent_id] = new_watcher
+            if not already_watched:
+                new_watcher.start()
+
+    def _stop_model_tracking(self, agent_id: str) -> None:
+        """Stop the model watcher and clear the cached choice for an agent."""
+        with self._lock:
+            watcher = self._model_watcher_by_agent.pop(agent_id, None)
+            self._model_choice_by_agent.pop(agent_id, None)
+        if watcher is not None:
+            watcher.stop()
+
+    def _recompute_model_choice(self, agent_id: str, *, broadcast_on_change: bool, force: bool = False) -> None:
+        """Recompute an agent's model choice from its live state file, then cache/broadcast it.
+
+        Mirrors ``_recompute_activity_state``: the disk read runs outside the lock,
+        the no-op guard suppresses an unchanged broadcast, and ``model_copy`` updates
+        only the ``model_choice`` slot. ``force`` bypasses the no-op guard so the
+        switch endpoint can push one authoritative choice even when the switch left
+        the derived value unchanged -- otherwise an optimistic pending pick that
+        resolves to the same value would never be superseded on the frontend.
+        """
+        # Resolve the harness first (like the activity recompute resolves its tracker): it
+        # names the state file to read, and the read must stay outside the lock.
+        with self._lock:
+            harness_state = self._agents.get(agent_id)
+        if harness_state is None:
+            return
+        # The disk read (minds_model_state.json) stays outside the lock. Only harness +
+        # state dir are needed -- not claude_config_dir, which would cost an env-file read.
+        identity = read_model_identity(get_model_state_path(harness_state.harness, self._get_agent_state_dir(agent_id)))
+        with self._lock:
+            agent_state = self._agents.get(agent_id)
+            if agent_state is None:
+                return
+            # identity is None when the harness has recorded no model yet (e.g. before a
+            # session's first statusline fire, or a remote agent) -> no choice, logo-only.
+            if identity is None:
+                choice: ModelChoice | None = None
+            else:
+                matched = match_option(identity, get_catalog(agent_state.harness).options)
+                choice = ModelChoice(identity=identity, matched=matched)
+            old_choice = self._model_choice_by_agent.get(agent_id)
+            if not force and old_choice == choice and agent_state.model_choice == choice:
+                return
+            self._model_choice_by_agent[agent_id] = choice
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().model_choice, choice)
+            )
+        if broadcast_on_change:
+            self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+    def refresh_model_choice(self, agent_id: str) -> None:
+        """Force one authoritative model-choice broadcast (bypassing the no-op guard).
+
+        Called after a switch so the optimistic frontend reconciles even when the
+        switch left the derived value unchanged.
+        """
+        self._recompute_model_choice(agent_id, broadcast_on_change=True, force=True)
+
+    def _read_process_started_at(self, agent_id: str, marker_filename: str) -> float | None:
+        """Return the mtime of the agent's ``*_process_started`` marker, or None.
 
         mngr touches this marker on every startup/resume (a fresh, not-mid-turn
-        Claude process), so its mtime is the boundary the activity tracker
-        compares transcript timestamps against. Returns ``None`` when the marker
-        is absent (e.g. an agent that has not restarted since the marker was
-        introduced) so the staleness override simply does not fire.
+        agent process), so its mtime is the boundary the activity tracker
+        compares transcript timestamps against. The filename is harness-specific
+        (``HarnessActivityTracker.marker_filename``) because each mngr plugin
+        writes its own -- ``claude_process_started`` / ``codex_process_started``.
+        Returns ``None`` when the marker is absent (e.g. an agent that has not
+        restarted since the marker was introduced) so the staleness override
+        simply does not fire.
         """
-        marker = self._get_agent_state_dir(agent_id) / "claude_process_started"
+        marker = self._get_agent_state_dir(agent_id) / marker_filename
         try:
             return marker.stat().st_mtime
         except OSError:
@@ -1203,39 +1367,75 @@ class AgentManager:
         Quietly does nothing when the agent is not being tracked for activity
         (e.g. a remote agent) or is no longer in ``_agents``.
         """
-        # Read the restart-boundary marker outside the lock (it is a filesystem
-        # stat, not shared state). Re-read on every recompute so a restart that
-        # touches the marker is reflected even when no new transcript events
-        # arrive -- the post-restart observe snapshot drives the recompute.
-        process_started_at = self._read_process_started_at(agent_id)
+        # Resolve the tracker first: it names the marker to stat, and the stat
+        # must stay outside the lock (it is a filesystem call, not shared state).
+        with self._lock:
+            tracker = self._activity_tracker_by_agent.get(agent_id)
+        if tracker is None:
+            return
+        # Re-read on every recompute so a restart that touches the marker is
+        # reflected even when no new transcript events arrive -- the post-restart
+        # observe snapshot drives the recompute.
+        process_started_at = self._read_process_started_at(agent_id, tracker.marker_filename)
+        # The `active` marker flips promptly at turn start/end, whereas the observe-reported
+        # lifecycle state can miss a short turn entirely -- so read the marker directly for a
+        # timely "is a turn in flight" signal (stat outside the lock, like the one above).
+        is_active_marker_present = (self._get_agent_state_dir(agent_id) / ACTIVE_MARKER_FILENAME).exists()
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
             agent_state = self._agents.get(agent_id)
             if agent_state is None:
                 return
-            has_pending_tool = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
-            cached_last_event_type = self._last_event_type_by_agent.get(agent_id)
-            tail_event_at = parse_iso_timestamp_to_epoch(self._last_event_timestamp_by_agent.get(agent_id))
-            new_state = derive_activity_state(
-                is_agent_running=agent_state.state in RUNNING_LIFECYCLE_STATES,
-                has_pending_tool_use=has_pending_tool,
-                tail_event_type=cached_last_event_type,
-                tail_event_at=tail_event_at,
+            new_state = tracker.derive(
+                is_agent_running=resolve_is_agent_running(agent_state.state, is_active_marker_present),
                 process_started_at=process_started_at,
             )
+            # A positively-dead lifecycle (STOPPED and friends -- never UNKNOWN, which is
+            # non-evidence) overrides whatever the transcript derives: the process's
+            # in-memory queue and in-flight turn died with it. Claude and pi already
+            # gate their derive on ``is_agent_running``; codex deliberately ignores the
+            # lifecycle there (its turn latch owns the RUNNING/WAITING flap, not the
+            # dead/alive axis), so without this override a dead codex agent keeps a
+            # phantom "Thinking" dot and the level-triggered sweep below never fires.
+            if is_lifecycle_dead(agent_state.state):
+                new_state = ActivityState.IDLE
             old_state = self._activity_state_by_agent.get(agent_id)
-            if old_state == new_state and agent_state.activity_state == new_state.value:
+            # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
+            # IDLE agent's harness queue is drained by definition, so ANY queued
+            # survivor while idle is stale -- an interrupt, our flush-restart SIGKILL,
+            # a crash, a hole in the harness's own ledger (an enqueue with no matching
+            # leave), or a stale entry re-surfaced by a backend restart's full replay
+            # (which sees no new working->IDLE transition to sweep it). So sweep
+            # whenever the agent is idle with a non-empty queue, even if the activity
+            # state itself did not change this cycle -- an edge-only backstop leaves
+            # such survivors stranded on an idle agent forever.
+            is_idle = new_state == ActivityState.IDLE
+            has_stale_queue = is_idle and bool(self._queued_messages_by_agent.get(agent_id))
+            if old_state == new_state and agent_state.activity_state == new_state.value and not has_stale_queue:
                 return
             self._activity_state_by_agent[agent_id] = new_state
-            self._agents[agent_id] = AgentStateItem(
-                id=agent_state.id,
-                name=agent_state.name,
-                state=agent_state.state,
-                labels=agent_state.labels,
-                work_dir=agent_state.work_dir,
-                activity_state=new_state.value,
+            # Update just this slot so any cached ``model_choice`` stays intact --
+            # each derived field updates its own field without knowing the others'.
+            self._agents[agent_id] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().activity_state, new_state)
             )
+            idle_handler = self._queue_idle_handler_by_agent.get(agent_id) if has_stale_queue else None
+
+        # The idle handler clears the watcher's queue populator and returns the
+        # resulting (empty) snapshot; it calls into the watcher, so it runs outside
+        # the lock, and its snapshot is folded into the same broadcast as the IDLE
+        # state below. Runs regardless of ``broadcast_on_change`` (it is a state
+        # mutation); only the broadcast itself is gated.
+        if idle_handler is not None:
+            drained = tuple(QueuedMessageState.model_validate(entry) for entry in idle_handler())
+            with self._lock:
+                idle_agent_state = self._agents.get(agent_id)
+                if idle_agent_state is not None and idle_agent_state.queued_messages != drained:
+                    self._queued_messages_by_agent[agent_id] = drained
+                    self._agents[agent_id] = idle_agent_state.model_copy_update(
+                        to_update(idle_agent_state.field_ref().queued_messages, drained)
+                    )
 
         if broadcast_on_change:
             self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
@@ -1244,46 +1444,34 @@ class AgentManager:
         """Recompute transcript-derived activity signals from the full event list.
 
         Called by ``server._get_or_create_watcher`` whenever the
-        :class:`AgentSessionWatcher` learns of new events. Cheap to call: short
-        circuits when both the unmatched-tool-use boolean and the last event
-        type are unchanged.
+        :class:`AgentSessionWatcher` learns of new events. Cheap to call: the
+        tracker short circuits when none of its derived signals changed, so a
+        streamed line that moves nothing skips both the recompute and its
+        per-event marker stat.
 
         No-op for agents not being tracked for activity (e.g. remote agents, or
         stale callbacks for an agent that was just destroyed).
         """
-        new_pending = has_unmatched_tool_use(events)
-        new_last_type = last_event_type(events)
-        new_last_timestamp = last_event_timestamp(events)
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
-            old_pending = self._has_unmatched_tool_use_by_agent.get(agent_id, False)
-            old_last_type = self._last_event_type_by_agent.get(agent_id)
-            if old_pending == new_pending and old_last_type == new_last_type:
+            tracker = self._activity_tracker_by_agent.get(agent_id)
+            if tracker is None or not tracker.observe(events):
                 return
-            self._has_unmatched_tool_use_by_agent[agent_id] = new_pending
-            self._last_event_type_by_agent[agent_id] = new_last_type
-            # Refreshed alongside the type so the stale-tail check sees the
-            # current tail's time. This sits under the same short-circuit above:
-            # a new event that leaves pending/type unchanged returns early and
-            # skips both this refresh and the recompute (and its per-event marker
-            # stat), so streamed lines that don't change the derived signals stay
-            # cheap.
-            self._last_event_timestamp_by_agent[agent_id] = new_last_timestamp
 
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def reset_activity_state(self, agent_id: str) -> None:
         """Force ``agent_id`` back to IDLE after an interrupt/restart.
 
-        Interrupting an agent restarts its Claude process. The restart abandons
+        Interrupting an agent restarts its harness process. The restart abandons
         the session transcript mid-turn -- the last recorded event is still an
         unmatched ``tool_use`` or a ``tool_result`` -- so the transcript-derived
         activity state stays pinned at TOOL_RUNNING / THINKING until the user
         sends another message. The restart is a backend action that the
         transcript never records, so the backend must reset the derived signals
-        explicitly: clearing the unmatched-tool-use flag and the cached last
-        event type makes :func:`derive_activity_state` settle on IDLE.
+        explicitly; ``HarnessActivityTracker.reset`` clears whichever signals
+        that harness caches, making its derive settle on IDLE.
 
         No-op for agents not being tracked for activity (remote agents, or a
         callback racing with destruction).
@@ -1291,9 +1479,10 @@ class AgentManager:
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
-            self._has_unmatched_tool_use_by_agent[agent_id] = False
-            self._last_event_type_by_agent[agent_id] = None
-            self._last_event_timestamp_by_agent[agent_id] = None
+            tracker = self._activity_tracker_by_agent.get(agent_id)
+            if tracker is None:
+                return
+            tracker.reset()
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
 
     def _read_apps(self, toml_path: Path) -> None:

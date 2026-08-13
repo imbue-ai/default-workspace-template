@@ -6,6 +6,8 @@ import threading
 import traceback
 from collections.abc import Callable
 from collections.abc import Iterator
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +25,6 @@ from werkzeug.exceptions import HTTPException
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
-from imbue.mngr_claude.claude_config import get_managed_settings_path
-from imbue.system_interface import claude_auth_endpoints
 from imbue.system_interface import client_activity
 from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import workspace_layouts
@@ -42,14 +42,30 @@ from imbue.system_interface.attachments import resolve_upload_path
 from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.fast_mode_policy import FastModeSettingsError
-from imbue.system_interface.fast_mode_policy import get_agent_fast_mode_write_path
-from imbue.system_interface.fast_mode_policy import get_workspace_fast_mode_decision_path
-from imbue.system_interface.fast_mode_policy import read_workspace_fast_mode_decision
-from imbue.system_interface.fast_mode_policy import resolve_agent_fast_mode
-from imbue.system_interface.fast_mode_policy import write_fast_mode_setting
-from imbue.system_interface.fast_mode_policy import write_workspace_fast_mode_decision
 from imbue.system_interface.file_serving import try_serve_file
+from imbue.system_interface.harnesses.claude import auth_endpoints
+from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
+from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.launch_defaults import write_workspace_fast_mode_decision
+from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
+from imbue.system_interface.harnesses.claude.tap import KEYBINDINGS_FILENAME
+from imbue.system_interface.harnesses.claude.tap import OK_TAP_STATUSES
+from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
+from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
+from imbue.system_interface.harnesses.codex.activity_state import current_open_turn_id
+from imbue.system_interface.harnesses.codex.model import CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.interrupt import restart_drain
+from imbue.system_interface.harnesses.model import ModelIdentity
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
+from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
+from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
+from imbue.system_interface.harnesses.registry import HARNESS_SPECS
+from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
+from imbue.system_interface.harnesses.registry import build_resolver
+from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_harness_spec
+from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
 from imbue.system_interface.layout_ops import allocate_terminal_panel_id
@@ -62,30 +78,29 @@ from imbue.system_interface.layout_ops import is_sessionless_browser_ref
 from imbue.system_interface.layout_ops import layout_inspect
 from imbue.system_interface.layout_ops import layout_list
 from imbue.system_interface.layout_ops import parse_tmux_sessions_output
-from imbue.system_interface.model_settings import MODEL_OPTIONS
-from imbue.system_interface.model_settings import is_valid_model_id
-from imbue.system_interface.model_settings import read_model_from_settings
-from imbue.system_interface.model_settings import supports_fast_mode
 from imbue.system_interface.models import ActivityRequest
 from imbue.system_interface.models import ActivityResponse
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentListItem
 from imbue.system_interface.models import AgentListResponse
+from imbue.system_interface.models import AgentRestartError
 from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
-from imbue.system_interface.models import CreateWorktreeRequest
+from imbue.system_interface.models import CreateCodexRequest
 from imbue.system_interface.models import DestroyAgentResponse
+from imbue.system_interface.models import DrainToComposerResponse
 from imbue.system_interface.models import ErrorResponse
 from imbue.system_interface.models import InterruptAgentResponse
-from imbue.system_interface.models import ModelSettingsResponse
+from imbue.system_interface.models import ModelOptionsResponse
+from imbue.system_interface.models import PoweredByResponse
 from imbue.system_interface.models import RandomNameResponse
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
-from imbue.system_interface.models import SetFastModeRequest
-from imbue.system_interface.models import SetModelRequest
+from imbue.system_interface.models import SetModelChoiceRequest
 from imbue.system_interface.models import SetWorkspaceFastModeRequest
+from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
 from imbue.system_interface.models import WorkspaceFastModeResponse
@@ -114,6 +129,14 @@ _BROWSER_SERVICE_NAME = "browser"
 # Pings detect (and tear down) half-dead peers without any asyncio machinery --
 # each connection owns its own thread, so a wedged send only stalls that thread.
 _WS_PING_INTERVAL_SECONDS = 25
+
+# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
+# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
+# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
+# teardown (a partial destroy the user saw as a 500). Every internal mngr
+# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
+# generous cap only converts spurious kills into patience.
+_DESTROY_TIMEOUT_SECONDS = 120.0
 
 
 class _ReflectClientSubprotocols:
@@ -209,6 +232,26 @@ def _inject_agent_id_meta_tag(html_content: str) -> str:
     return html_content.replace("</head>", f"{meta_tag}\n</head>")
 
 
+def _are_other_harnesses_enabled() -> bool:
+    """Whether the non-claude harness launchers are enabled, from ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``.
+
+    Off by default: the "New Codex agent"/"New Pi agent" launchers appear only
+    when this is set to a truthy value (``1``/``true``/``yes``/``on``), so every alt
+    harness can be dark-launched and turned on per host without a rebuild. Claude is the
+    workspace default and is never gated by this flag.
+    """
+    return os.environ.get("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _inject_enable_other_harnesses_meta_tag(html_content: str) -> str:
+    """Inject the alt-harness feature flag so the frontend can gate the non-claude launchers."""
+    meta_tag = (
+        f'<meta name="system-interface-enable-other-harnesses" '
+        f'content="{str(_are_other_harnesses_enabled()).lower()}">'
+    )
+    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+
+
 def _index() -> Response:
     index_path = STATIC_DIRECTORY / "index.html"
     if index_path.exists():
@@ -218,6 +261,7 @@ def _index() -> Response:
         html_content = _inject_base_path_meta_tag(html_content, root_path)
         html_content = _inject_hostname_meta_tag(html_content)
         html_content = _inject_agent_id_meta_tag(html_content)
+        html_content = _inject_enable_other_harnesses_meta_tag(html_content)
         if config.javascript_plugin_basenames:
             html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
         return _html_response(html_content)
@@ -404,11 +448,27 @@ def _send_message_endpoint(agent_id: str) -> Response:
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
 
+    # A harness whose queue-enqueue source is the send itself (one with no on-disk
+    # enqueue ledger) parks the message in its watcher's outbox BEFORE delivery -- an
+    # idle agent can drain the turn within one watcher poll, so parking after
+    # confirmation would lose the race to its own drain and strand the bubble. A failed
+    # send retracts the parked entry. The base hook is a no-op returning None, and only
+    # an EXISTING watcher is told: if none is watching, no UI needs a bubble.
+    watcher = get_state().watchers.get(agent_info.id)
+    queued_token = (
+        watcher.note_sent_message(send_message_request.message, datetime.now(timezone.utc).isoformat())
+        if watcher is not None
+        else None
+    )
+
     agent_manager: AgentManager = get_state().agent_manager
     success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
+
     if not success:
-        error = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(error.model_dump(), status_code=500)
+        if watcher is not None and queued_token is not None:
+            watcher.retract_sent_message(queued_token)
+        failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
+        return _json_response(failure.model_dump(), status_code=500)
 
     # Record which client (and layout) the message came from, so agents can
     # attribute requests to a client via ``layout.py context``. Legacy callers
@@ -428,96 +488,112 @@ def _send_message_endpoint(agent_id: str) -> Response:
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
-def _get_model_settings_endpoint(agent_id: str) -> Response:
-    """Return the agent's current model + fast-mode selection for the composer picker.
+def _get_harnesses_endpoint() -> Response:
+    """The static per-harness model catalogs -- the model bar's compile-time half.
 
-    The model comes from the agent's Claude Code ``settings.json`` (what ``/model``
-    writes). Fast mode is resolved separately because it is layered across two
-    settings files (see ``resolve_agent_fast_mode``). ``fast_mode_supported``
-    reflects the current model so the frontend knows whether to surface the toggle.
+    One response covers every harness (each catalog dumped verbatim: options,
+    switch mode, picker mode, powered-by label, shoulder-tap capability); the
+    frontend keys in by an agent's harness.
+    The non-claude harnesses are included only when their feature flag is on, matching
+    the rest of the UI.
+    """
+    catalogs: dict[str, Any] = {}
+    for harness in HARNESS_SPECS:
+        if harness != HarnessType.CLAUDE and not _are_other_harnesses_enabled():
+            continue
+        # A parsed catalog (pi) reads data files; a bad/absent one must be
+        # skipped, not 500 the endpoint for every other harness.
+        try:
+            catalogs[harness.value] = get_catalog(harness).model_dump()
+        except (OSError, ValueError) as e:
+            logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
+    return _json_response(catalogs)
+
+
+def _set_model_choice_endpoint(agent_id: str) -> Response:
+    """Apply a model/effort/fast selection by asking the agent's resolver to switch.
+
+    Harness-blind: it validates the request against the harness's catalog, then hands
+    a concrete identity to the resolver's ``switch`` (which decides how to apply it).
+    Returns 400 for an invalid selection, 404 for an unknown agent, 500 when the
+    switch fails. On success it forces one authoritative model-choice broadcast so
+    the optimistic frontend reconciles.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
-    model = read_model_from_settings(agent_info.claude_config_dir / "settings.json")
-    fast_mode = resolve_agent_fast_mode(
-        claude_settings_path=agent_info.claude_config_dir / "settings.json",
-        managed_settings_path=get_managed_settings_path(agent_info.agent_state_dir),
-    )
-    response = ModelSettingsResponse(
-        model=model,
-        fast_mode=fast_mode,
-        fast_mode_supported=supports_fast_mode(model),
-        options=MODEL_OPTIONS,
-    )
-    return _json_response(response.model_dump())
+    req = SetModelChoiceRequest.model_validate(request.get_json())
+    catalog = get_catalog(agent_info.harness)
+    # The picker only ever sends a catalog id, so validation is an exact id lookup.
+    option = next((opt for opt in catalog.options if opt.id == req.model_id), None)
+    if option is None:
+        return _json_response(ErrorResponse(detail=f"Unknown model '{req.model_id}'").model_dump(), status_code=400)
 
-
-def _set_model_endpoint(agent_id: str) -> Response:
-    """Switch the agent's Claude Code model by sending it a ``/model <id>`` command.
-
-    Delivered through the same interactive-send path as a chat message, so the
-    running session applies the change immediately and Claude Code persists it as
-    the agent's default (its ``settings.json`` ``model`` field). Returns 400 for
-    an unknown model id, 404 for an unknown agent, 500 if the command could not be
-    delivered.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    set_model_request = SetModelRequest.model_validate(request.get_json())
-    if not is_valid_model_id(set_model_request.model):
-        error = ErrorResponse(detail=f"Unknown model '{set_model_request.model}'")
-        return _json_response(error.model_dump(), status_code=400)
+    # Flat guards (rather than a branch per axis-presence) so effort is validated
+    # against the model's declared set: required + in-set when the model has efforts,
+    # and absent when it does not.
+    declared_efforts = {choice.level for choice in option.efforts}
+    has_effort_axis = len(option.efforts) > 0
+    if has_effort_axis and req.effort is None:
+        return _json_response(ErrorResponse(detail="This model requires an effort level").model_dump(), 400)
+    if has_effort_axis and req.effort is not None and req.effort not in declared_efforts:
+        return _json_response(
+            ErrorResponse(detail=f"'{req.effort}' is not a valid effort for '{req.model_id}'").model_dump(), 400
+        )
+    if not has_effort_axis and req.effort is not None:
+        return _json_response(ErrorResponse(detail=f"'{req.model_id}' has no effort axis").model_dump(), 400)
+    if req.fast and not option.supports_fast:
+        return _json_response(ErrorResponse(detail=f"'{req.model_id}' does not support fast mode").model_dump(), 400)
 
     agent_manager: AgentManager = get_state().agent_manager
-    success = agent_manager.send_message_to_agent(AgentId(agent_info.id), f"/model {set_model_request.model}")
-    if not success:
-        error = ErrorResponse(detail=f"Failed to switch model for agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(error.model_dump(), status_code=500)
+    # The live read is harness-neutral (shared reader), so the resolver -- which now owns
+    # only the switch/offer side -- is built inline from agent_info rather than cached.
+    resolver = build_resolver(agent_info)
 
+    identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
+    result = resolver.switch(
+        identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
+    )
+    if not result.ok:
+        detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
+        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
+
+    # Force one authoritative broadcast so the optimistic pick reconciles even when
+    # the resolved value is unchanged (see H1 in the model-bar plan).
+    agent_manager.refresh_model_choice(agent_info.id)
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
-def _set_fast_mode_endpoint(agent_id: str) -> Response:
-    """Toggle the agent's fast mode by sending it a ``/fast on|off`` command.
+def _get_model_options_endpoint(agent_id: str) -> Response:
+    """The model ids this agent should OFFER in the picker right now, or null for all.
 
-    Same interactive-send path as ``_set_model_endpoint``, which changes the running
-    session. Claude Code does not leave a usable record of the result -- it deletes
-    the ``fastMode`` key on ``/fast off`` instead of writing false -- so the change
-    is also written into the agent's own launch settings. That is what the composer's
-    toggle reads back, and what the agent comes back with if it restarts.
-
-    Fast mode is an Opus-only capability, so the frontend only surfaces the toggle
-    for Opus; this endpoint does not re-check the model, matching how ``/fast``
-    itself behaves.
+    Recomputed per request (the frontend calls it each time the picker opens) so a
+    dynamic, account-gated offer set -- pi's authenticated models -- reflects a
+    fresh login without a catalog refetch. ``null`` means offer the whole catalog (the
+    default for a static, non-gated harness). The catalog itself still supplies each
+    id's label and thinking levels; this only narrows which are shown.
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
+    offered = build_resolver(agent_info).list_offered_models()
+    return _json_response(ModelOptionsResponse(models=offered).model_dump())
 
-    set_fast_mode_request = SetFastModeRequest.model_validate(request.get_json())
-    command = "/fast on" if set_fast_mode_request.enabled else "/fast off"
 
-    agent_manager: AgentManager = get_state().agent_manager
-    success = agent_manager.send_message_to_agent(AgentId(agent_info.id), command)
-    if not success:
-        error = ErrorResponse(detail=f"Failed to set fast mode for agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(error.model_dump(), status_code=500)
+def _get_powered_by_endpoint(agent_id: str) -> Response:
+    """The agent's "Powered by" credit label -- a per-agent path decoupled from the model bar.
 
-    write_path = get_agent_fast_mode_write_path(agent_info.claude_config_dir, agent_info.agent_state_dir)
-    try:
-        write_fast_mode_setting(write_path, set_fast_mode_request.enabled)
-    except (FastModeSettingsError, OSError) as e:
-        # The running session already took the command, so report the part that
-        # failed: the setting will revert the next time the agent launches.
-        logger.opt(exception=e).error("Failed to record fast mode for agent {} at {}", agent_info.name, write_path)
-        error = ErrorResponse(detail=f"Set fast mode for agent '{agent_info.name}' but could not record it")
-        return _json_response(error.model_dump(), status_code=500)
-
-    return _json_response(SendMessageResponse(status="ok").model_dump())
+    The label is a pure function of the agent's harness, so it must never blink with the live
+    model choice or wait on the catalog fetch. This resolves the harness backend-side and
+    returns its product name directly, so the frontend can render the credit from ``agentId``
+    alone, independent of ``model_choice`` and of ``GET /api/harnesses``. 404 for an unknown
+    agent (e.g. a proto-agent), which the frontend treats as "don't show the credit yet".
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_label).model_dump())
 
 
 def _workspace_fast_mode_decision_path() -> Path | None:
@@ -656,15 +732,8 @@ def _interrupt_agent_endpoint(agent_id: str) -> Response:
 
     agent_name = agent_info.name
 
-    result = run_local_command_modern_version(
-        command=["mngr", "start", agent_name, "--restart", "--no-resume"],
-        cwd=None,
-        is_checked=False,
-        timeout=60.0,
-    )
-    success = result.returncode == 0
-    output = result.stdout.strip() if success else result.stderr.strip()
-    if not success:
+    is_restarted, output = _restart_agent_process(agent_name)
+    if not is_restarted:
         error = ErrorResponse(detail=f"Failed to interrupt agent '{agent_name}': {output}")
         return _json_response(error.model_dump(), status_code=500)
 
@@ -675,6 +744,252 @@ def _interrupt_agent_endpoint(agent_id: str) -> Response:
     get_state().agent_manager.reset_activity_state(agent_id)
 
     return _json_response(InterruptAgentResponse(status="ok").model_dump())
+
+
+def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
+    """Run ``mngr start <agent> --restart --no-resume``; return ``(is_restarted, output)``.
+
+    Stops the agent (ending any in-progress turn) and relaunches it fresh without
+    a resume prompt: conversation history is preserved (each harness resumes its
+    own on-disk session) and the in-harness queue is dropped by the SIGKILL.
+    ``output`` is stdout on success, stderr on failure (for the caller's message).
+    Refused by mngr for an ``is_primary=true`` agent; callers guard that with a
+    clearer 400 before calling.
+    """
+    result = run_local_command_modern_version(
+        command=["mngr", "start", agent_name, "--restart", "--no-resume"],
+        cwd=None,
+        is_checked=False,
+        timeout=60.0,
+    )
+    is_restarted = result.returncode == 0
+    return is_restarted, (result.stdout.strip() if is_restarted else result.stderr.strip())
+
+
+def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Response | None:
+    """A 400 refusing a restart-based queue action on the primary services agent, or None.
+
+    Both queue actions restart the agent; restarting the ``is_primary=true``
+    services agent would tear down the workspace's supervised services. The
+    frontend hides primary agents, so this is defense-in-depth for direct callers.
+    """
+    if agent_info.labels.get("is_primary") == "true":
+        error = ErrorResponse(
+            detail=(
+                f"Refusing to {action} agent '{agent_info.name}': it carries the "
+                "is_primary=true label (services agent for this workspace)"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+    return None
+
+
+def _interrupt_capabilities(
+    agent_info: AgentInfo,
+) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
+    """The harness-neutral capabilities a queue action binds for one agent: the queue mirror,
+    a process restart (``mngr start --restart --no-resume``), and an activity-settle.
+
+    Shared by the restart-drain flush and the (per-harness) stop button, mirroring how the
+    switch endpoint binds its ``send`` callback.
+    """
+    state = get_state()
+    watcher = state.get_or_create_watcher(agent_info)
+    return (
+        watcher,
+        lambda: _restart_agent_process(agent_info.name),
+        lambda: state.agent_manager.reset_activity_state(agent_info.id),
+    )
+
+
+def _flush_queue_endpoint(agent_id: str) -> Response:
+    """Shoulder tap: restart the agent and resend the whole queue as one turn.
+
+    Combining is required: after the restart the agent is idle, so sending the
+    messages one at a time would let the first open a turn and the rest re-queue.
+    Returns 404 for an unknown agent, 400 for the primary services agent, 500 if
+    the restart or the resend fails, 200 otherwise.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    refusal = _refuse_queue_action_on_primary(agent_info, "flush the queue of")
+    if refusal is not None:
+        return refusal
+
+    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+    # Empty-queue short-circuit lives HERE (not in the shared restart-drain): a flush with
+    # nothing queued would resend nothing, so it is a clean no-op. The stop button, by contrast,
+    # still interrupts an empty-queue turn -- so the restart-drain no longer short-circuits.
+    if not watcher.get_queued_block():
+        return _json_response(SendMessageResponse(status="ok").model_dump())
+
+    try:
+        block = restart_drain(agent_info, watcher, restart_process, settle_activity)
+    except AgentRestartError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+
+    if block:
+        agent_manager: AgentManager = get_state().agent_manager
+        is_sent = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        if not is_sent:
+            error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
+            return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(SendMessageResponse(status="ok").model_dump())
+
+
+# The atomic shoulder-tap control file (``CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME``) is codex's,
+# so it lives with the codex harness; the flush endpoint below and the stop-button override
+# (harnesses/codex/model.py) share that one filename, distinguishing flush vs retract by the
+# JSON key on each line rather than by a separate file.
+# pi's inbox name + the flush sentinel key live in harnesses/pi_coding/inbox.py, the shared
+# pi_inbox protocol (a JSON *object* line the extension reads; a normal message is a JSON
+# *string*, so the two never collide, and the queue watcher treats the object as a positional
+# clear rather than a queued message).
+
+
+def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
+    """Atomic shoulder tap: merge the queue into the live turn without restarting the agent.
+
+    The gentle counterpart to :func:`_flush_queue_endpoint` for the harnesses that can interrupt
+    natively. Rather than SIGKILL-restart the agent and resend the queue, it drops a control
+    signal the harness picks up on its own loop and merges the parked steer messages into one
+    turn, so the agent stays alive:
+
+    - codex: append one control line naming the currently-open turn to
+      ``shoulder_tap_atomic.jsonl``; the patched binary merges the parked steers into that turn,
+      ABA-gated on the turn id. Status ``no_open_turn`` (no write) when no turn is running.
+    - pi: append an interrupt sentinel to ``pi_inbox``; the lifecycle extension interrupts the
+      running turn (a no-op when idle) and resubmits the parked steers as one merged turn.
+
+    Returns 404 for an unknown agent, 400 for a non-atomic harness (claude) or the primary
+    services agent, 500 if the write fails, 200 otherwise (``tapped``, or codex ``no_open_turn``).
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    if not get_catalog(agent_info.harness).native_atomic_shoulder_tap_possible:
+        error = ErrorResponse(
+            detail=(
+                f"Agent '{agent_info.name}' runs the {agent_info.harness.value} harness, which does not "
+                "support an atomic shoulder tap"
+            )
+        )
+        return _json_response(error.model_dump(), status_code=400)
+    refusal = _refuse_queue_action_on_primary(agent_info, "shoulder-tap the queue of")
+    if refusal is not None:
+        return refusal
+
+    if agent_info.harness == HarnessType.PI_CODING:
+        # pi has no per-turn id, so there is no ABA target to compute here: the lifecycle
+        # extension gates the interrupt on "a turn is actually running" itself (a no-op when
+        # idle). Append one flush sentinel to pi's inbox; the extension interrupts the
+        # running turn and resubmits the parked steers as one merged turn.
+        inbox_path = agent_info.agent_state_dir / PI_INBOX_NAME
+        try:
+            append_pi_inbox_sentinel(inbox_path, PI_INTERRUPT_KEY)
+        except OSError as e:
+            logger.opt(exception=e).error("Failed to write pi interrupt sentinel at {}", inbox_path)
+            error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
+            return _json_response(error.model_dump(), status_code=500)
+        return _json_response(ShoulderTapAtomicResponse(status="tapped").model_dump())
+
+    if agent_info.harness == HarnessType.CLAUDE:
+        # claude has no control-file channel: it flushes its parked queue by cancelling the
+        # live turn. Delegate the whole flow (refresh-first gate, chord delivery via mngr's
+        # locked keypress, the bounded verdict watch, and the recovery send) to the executor.
+        return _claude_shoulder_tap(agent_info)
+
+    watcher = get_state().get_or_create_watcher(agent_info)
+    target_turn_id = current_open_turn_id(watcher.get_all_events())
+    if target_turn_id is None:
+        # No turn is running, so there is nothing to merge into -- do NOT write a control line
+        # (a stale target_turn_id would gate against a turn that never comes).
+        return _json_response(ShoulderTapAtomicResponse(status="no_open_turn").model_dump())
+
+    control_path = (
+        agent_info.agent_state_dir / get_harness_spec(agent_info.harness).model_state_relative_path
+    ) / CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME
+    try:
+        control_path.parent.mkdir(parents=True, exist_ok=True)
+        with control_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"target_turn_id": target_turn_id}) + "\n")
+    except OSError as e:
+        logger.opt(exception=e).error("Failed to write atomic shoulder-tap control line at {}", control_path)
+        error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
+        return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(ShoulderTapAtomicResponse(status="tapped").model_dump())
+
+
+def _claude_shoulder_tap(agent_info: AgentInfo) -> Response:
+    """Run claude's native shoulder tap and map the executor's status to an HTTP response.
+
+    The keypress and the recovery send both route through the agent manager (which delegates
+    to mngr's in-process message API, holding the per-agent ``message.lock``): dwt never drives
+    raw tmux. Terminal no-op / success statuses (``nothing_queued`` / ``no_open_turn`` /
+    ``tapped``) return 200; a dialog block returns 409; every other error returns 500.
+    """
+    state = get_state()
+    # The base watcher structurally satisfies the tap's watcher protocol (its shoulder-tap
+    # surface carries get_all_events / get_queued_messages / get_latest_main_session_file),
+    # so no narrowing is needed; the claude watcher supplies the real live-session file.
+    watcher = state.get_or_create_watcher(agent_info)
+    agent_manager: AgentManager = state.agent_manager
+    agent_id = AgentId(agent_info.id)
+
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=agent_info.agent_state_dir,
+        keybindings_path=agent_info.claude_config_dir / KEYBINDINGS_FILENAME,
+        watcher=watcher,
+        press_chord=lambda: agent_manager.press_key_chord_on_agent(agent_id, TAP_CHORD),
+        send_recovery=lambda text: agent_manager.send_message_to_agent(agent_id, text),
+    )
+    if result.status in OK_TAP_STATUSES:
+        return _json_response(ShoulderTapAtomicResponse(status=result.status.value).model_dump())
+    status_code = 409 if result.status == ClaudeTapStatus.PERMISSIONS_WAITING else 500
+    return _json_response(ErrorResponse(detail=result.detail).model_dump(), status_code=status_code)
+
+
+def _drain_to_composer_endpoint(agent_id: str) -> Response:
+    """Interrupt to composer: interrupt the running turn and hand the queued block back, unsent.
+
+    Dispatches through the harness's registered interrupt-to-composer implementation (the base
+    restart-drain by default; native overrides for pi, codex, and claude's empty-queue chord),
+    which returns the concatenated block the frontend drops into the composer for the user to
+    edit and send, rather than resent. Unlike the flush there is NO empty-queue short-circuit: a
+    stop mid-turn with nothing queued still interrupts (block comes back empty). The endpoint
+    binds the harness-neutral capabilities -- watcher, restart, activity-settle, and the native
+    cancel keypress (routed through mngr's locked message API, like the tap) -- and the
+    implementation uses whichever it needs. Returns 404 for an unknown agent, 400 for the primary
+    services agent, 500 if the interrupt fails, 200 with ``{block}`` otherwise.
+    """
+    agent_info = _find_agent(agent_id)
+    if agent_info is None:
+        return _agent_not_found_response(agent_id)
+    refusal = _refuse_queue_action_on_primary(agent_info, "interrupt the queue of")
+    if refusal is not None:
+        return refusal
+
+    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
+    agent_manager: AgentManager = get_state().agent_manager
+    interrupter = build_interrupt_to_composer(agent_info)
+    try:
+        block = interrupter.drain_to_composer(
+            watcher,
+            restart_process,
+            settle_activity,
+            lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+        )
+    except AgentRestartError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
+    except OSError as e:
+        logger.opt(exception=e).error("Failed to record the interrupt for agent {}", agent_info.name)
+        error = ErrorResponse(detail=f"Failed to record the interrupt for agent '{agent_info.name}'")
+        return _json_response(error.model_dump(), status_code=500)
+
+    return _json_response(DrainToComposerResponse(block=block).model_dump())
 
 
 def _get_subagent_events(agent_id: str, subagent_session_id: str) -> Response:
@@ -1193,22 +1508,6 @@ def _random_name_endpoint() -> Response:
     return _json_response(RandomNameResponse(name=name).model_dump())
 
 
-def _create_worktree_agent() -> Response:
-    """Create a new worktree agent."""
-    agent_manager: AgentManager = get_state().agent_manager
-    body = request.get_json()
-
-    try:
-        create_request = CreateWorktreeRequest(**body)
-        agent_name = create_request.name
-        selected_agent_id = create_request.selected_agent_id or agent_manager.get_own_agent_id()
-        agent_id = agent_manager.create_worktree_agent(agent_name, selected_agent_id)
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=400)
-
-
 def _create_chat_agent() -> Response:
     """Create a new chat agent in the primary agent's work directory."""
     agent_manager: AgentManager = get_state().agent_manager
@@ -1217,6 +1516,40 @@ def _create_chat_agent() -> Response:
     try:
         create_request = CreateChatRequest(**body)
         agent_id = agent_manager.create_chat_agent(create_request.name)
+        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+    except (AgentCreationError, OSError, ValueError) as e:
+        error = ErrorResponse(detail=str(e))
+        return _json_response(error.model_dump(), status_code=400)
+
+
+def _create_codex_agent() -> Response:
+    """Create a new codex chat agent in the primary agent's work directory.
+
+    Same `chat` role as _create_chat_agent, on the codex harness instead of claude.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    body = request.get_json()
+
+    try:
+        create_request = CreateCodexRequest(**body)
+        agent_id = agent_manager.create_chat_agent(create_request.name, HarnessType.CODEX)
+        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
+    except (AgentCreationError, OSError, ValueError) as e:
+        error = ErrorResponse(detail=str(e))
+        return _json_response(error.model_dump(), status_code=400)
+
+
+def _create_pi_agent() -> Response:
+    """Create a new pi chat agent in the primary agent's work directory.
+
+    Same ``chat`` role as _create_chat_agent, on the pi harness instead of claude.
+    """
+    agent_manager: AgentManager = get_state().agent_manager
+    body = request.get_json()
+
+    try:
+        create_request = CreateChatRequest(**body)
+        agent_id = agent_manager.create_chat_agent(create_request.name, HarnessType.PI_CODING)
         return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
@@ -1470,7 +1803,7 @@ def _destroy_agent(agent_id: str) -> Response:
         command=_build_destroy_command(agent_name),
         cwd=None,
         is_checked=False,
-        timeout=30.0,
+        timeout=_DESTROY_TIMEOUT_SECONDS,
     )
     success = result.returncode == 0
     output = result.stdout.strip() if success else result.stderr.strip()
@@ -1773,11 +2106,14 @@ def _layout_broadcast_endpoint() -> Response:
     return _json_response(response_body)
 
 
-def _handle_unhandled_exception(exc: Exception) -> Response:
+def _handle_unhandled_exception(exc: Exception) -> Response | HTTPException:
     # Let werkzeug's own HTTP errors (404 routing, 405, etc.) render normally;
-    # only genuine unhandled exceptions become a 500 JSON body.
+    # only genuine unhandled exceptions become a 500 JSON body. Returning the
+    # exception (not re-raising it) is how Flask keeps the real status code --
+    # a raise from inside the handler re-enters handle_exception and comes out
+    # as a 500.
     if isinstance(exc, HTTPException):
-        raise exc
+        return exc
     tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
     logger.error("Unhandled exception on {} {}: {}\n{}", request.method, request.path, exc, "".join(tb))
     return _json_response({"detail": f"Internal server error: {exc}"}, status_code=500)
@@ -1816,17 +2152,21 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/create-worktree", view_func=_create_worktree_agent, methods=["POST"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/create-codex", view_func=_create_codex_agent, methods=["POST"])
+    application.add_url_rule("/api/agents/create-pi", view_func=_create_pi_agent, methods=["POST"])
     application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/message", view_func=_send_message_endpoint, methods=["POST"])
+    application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
+    application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_choice_endpoint, methods=["POST"])
     application.add_url_rule(
-        "/api/agents/<agent_id>/model-settings", view_func=_get_model_settings_endpoint, methods=["GET"]
+        "/api/agents/<agent_id>/model-options", view_func=_get_model_options_endpoint, methods=["GET"]
     )
-    application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_endpoint, methods=["POST"])
-    application.add_url_rule("/api/agents/<agent_id>/fast", view_func=_set_fast_mode_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/agents/<agent_id>/powered-by", view_func=_get_powered_by_endpoint, methods=["GET"]
+    )
     application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/workspace/fast-mode",
@@ -1844,6 +2184,15 @@ def create_application(state: SystemInterfaceState) -> Flask:
         endpoint="_delete_attachment",
     )
     application.add_url_rule("/api/agents/<agent_id>/interrupt", view_func=_interrupt_agent_endpoint, methods=["POST"])
+    application.add_url_rule("/api/agents/<agent_id>/flush-queue", view_func=_flush_queue_endpoint, methods=["POST"])
+    application.add_url_rule(
+        "/api/agents/<agent_id>/shoulder-tap-atomic",
+        view_func=_shoulder_tap_atomic_endpoint,
+        methods=["POST"],
+    )
+    application.add_url_rule(
+        "/api/agents/<agent_id>/drain-to-composer", view_func=_drain_to_composer_endpoint, methods=["POST"]
+    )
     application.add_url_rule("/api/layouts", view_func=_list_layouts_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/layouts", view_func=_save_layout_as_endpoint, methods=["POST"], endpoint="_save_layout_as"
@@ -1882,7 +2231,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(
         "/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"]
     )
-    claude_auth_endpoints.register_routes(application)
+    auth_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
     application.add_url_rule(

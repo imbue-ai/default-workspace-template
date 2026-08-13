@@ -7,7 +7,7 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import { reportMessaged } from "./activityReporter";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
-import { reconcilePendingMessages } from "./PendingMessages";
+import { noteBackendArrivals } from "./OutgoingMessages";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -19,6 +19,14 @@ export interface ToolCall {
   tool_call_id: string;
   tool_name: string;
   input_preview: string;
+  // Human labels, computed by the harness's own parser: the tool's identity for
+  // the transcript block header, and verb + target for the live activity strip.
+  // They differ for claude ("Tool: Read" / "Reading foo.py") and are usually equal
+  // for codex, whose header would otherwise read a useless "Tool: exec". Rendering
+  // these is why no view needs to know which harness produced the event. Optional
+  // only for events parsed before the labels existed.
+  header_label?: string;
+  caption_label?: string;
   // For Agent tool calls: the description and subagent_type from the tool input, present
   // as soon as the call appears so the rich card can render before the subagent session is
   // linked. subagent_metadata (with the session_id for the click-through) is filled in once
@@ -61,6 +69,11 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // unless an explicit detector surfaces one, e.g. Stop-hook feedback, which is
   // isMeta yet shown as a chip. Absent/false for a genuine human turn.
   is_meta?: boolean;
+  // Claude Code's `isCompactSummary`: the record injected after auto-compaction,
+  // whose content is the carried-over summary ("This session is being continued
+  // ..."). Unlike is_meta it is NOT hidden -- an explicit detector surfaces it as a
+  // collapsed chip (UserMessageKind.SystemChip). Absent/false for a genuine turn.
+  is_compact_summary?: boolean;
 }
 
 /**
@@ -83,6 +96,16 @@ export interface AssistantMessageEvent extends BaseTranscriptEvent {
   } | null;
   // True when the text matches a known Claude auth-error pattern.
   is_auth_error: boolean;
+  // True when the text is a model API error (e.g. "API Error: 529 Overloaded"),
+  // stamped by the backend so the frontend can style it as an error. Harness-
+  // agnostic: any harness that surfaces a provider error stamps these same fields.
+  is_api_error: boolean;
+  // The normalized error kind ("overloaded", "rate_limit", "api_error", ...), or
+  // null when this is not an API error. Carried for wording; not required to render.
+  api_error_kind: string | null;
+  // True when the API error is the model provider's fault (a 5xx / overloaded)
+  // rather than our request -- these get the "not Minds' fault" note.
+  is_provider_fault: boolean;
 }
 
 /**
@@ -99,10 +122,35 @@ export interface ToolResultEvent extends BaseTranscriptEvent {
 }
 
 /**
+ * Every non-message marker a harness may emit. Mirrors the backend's
+ * `SpecialEventKind` (harnesses/events.py); the two must be kept in step, which is what
+ * turns an undeclared kind into a type error here rather than an event silently dropped.
+ *
+ * Turn boundaries come from codex, which records them in its rollout in real time.
+ * Claude's transcript has no equivalent and emits none.
+ */
+export type SpecialEventKind = "turn_started" | "turn_completed" | "turn_aborted";
+
+/**
+ * A harness marker that is not a message. Nothing renders these -- they exist so the
+ * event stream reflects the true transcript, and so the backend's activity derivation
+ * has an authoritative signal. Declared here so the union stays exhaustive.
+ */
+export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
+  type: "special";
+  kind: SpecialEventKind;
+}
+
+/**
  * A single entry in the transcript event stream, discriminated by `type`.
  * Narrow on `event.type` before touching variant-specific fields.
+ *
+ * The first three types are the core contract: every harness emits them with the same
+ * fields, which is why no view needs to know which harness produced an event. `special`
+ * is the declared extension point -- a harness may emit the kinds it registers, and
+ * renderers ignore them.
  */
-export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent;
+export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent | SpecialTranscriptEvent;
 
 // For hook compatibility
 export interface ResponseItem {
@@ -257,7 +305,18 @@ class TranscriptStore {
             added = true;
           }
         } else if (mergeLateSubagentMetadata(prior, event)) {
+          // The narrow claude case: late subagent linkage merges onto the held call.
           merged = true;
+        } else if (JSON.stringify(prior) !== JSON.stringify(event)) {
+          // A general supersession: the backend re-broadcast an already-held event with
+          // updated content (codex re-serialises an event under the same id). Replace it
+          // in place -- position unchanged -- so the held view reflects the latest.
+          const index = this.#events.indexOf(prior);
+          if (index !== -1) {
+            this.#events[index] = event;
+            this.#byId.set(event.event_id, event);
+            merged = true;
+          }
         }
       }
       if (added) {
@@ -478,10 +537,16 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
 
 export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): void {
   if (storeFor(agentId).append(newEvents)) {
-    // A live transcript event may be the real counterpart of an optimistic
-    // message the user just sent; drop any such bubble now that it has landed.
-    reconcilePendingMessages(agentId, getEventsForAgent(agentId));
     m.redraw();
+  }
+  // Route live user-message arrivals through the optimistic-send layer so a
+  // "Sending…" bubble drops the instant its real message lands in the transcript
+  // (no overlap). Deduped by event_id in noteBackendArrivals, so a re-streamed
+  // event is harmless. Only the live tail feeds this -- paging/backfill of old
+  // history goes through the other append paths and must not drop live bubbles.
+  const userEventIds = newEvents.filter((event) => event.type === "user_message").map((event) => event.event_id);
+  if (userEventIds.length > 0) {
+    noteBackendArrivals(agentId, userEventIds);
   }
 }
 
@@ -519,9 +584,6 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
-    // A snapshot reload (initial load or reconnect) may already contain the
-    // real counterpart of an optimistic message; reconcile against it too.
-    reconcilePendingMessages(agentId, result.events);
     return result.events;
   } catch (error) {
     const requestError = error as { code?: number; message?: string };
@@ -649,6 +711,40 @@ export async function interruptAgent(agentId: string): Promise<void> {
   await m.request({
     method: "POST",
     url: apiUrl("/api/agents/:agentId/interrupt"),
+    params: { agentId },
+  });
+}
+
+/** Shoulder tap: restart the agent and resend the whole queue as one combined
+ *  turn. Fire-and-forget -- the next WS snapshot (empty group) plus the new
+ *  committed turn reflect the result; nothing is painted locally. */
+export async function flushQueue(agentId: string): Promise<void> {
+  await m.request({
+    method: "POST",
+    url: apiUrl("/api/agents/:agentId/flush-queue"),
+    params: { agentId },
+  });
+}
+
+/** Atomic shoulder tap (codex / pi / claude): flush the queued messages into the live turn
+ *  without restarting the agent. Returns the backend status so the caller can release the
+ *  flush freeze on a terminal no-op (``no_open_turn`` / ``nothing_queued``) that commits
+ *  nothing -- otherwise the next WS snapshot / committed turn reflects the result and the
+ *  freeze is arrival-released. */
+export async function shoulderTapAtomic(agentId: string): Promise<{ status: string }> {
+  return await m.request<{ status: string }>({
+    method: "POST",
+    url: apiUrl("/api/agents/:agentId/shoulder-tap-atomic"),
+    params: { agentId },
+  });
+}
+
+/** Interrupt to composer: restart the agent and get the queued messages back as
+ *  one concatenated block to drop into the composer, unsent. */
+export async function drainToComposer(agentId: string): Promise<{ block: string }> {
+  return await m.request<{ block: string }>({
+    method: "POST",
+    url: apiUrl("/api/agents/:agentId/drain-to-composer"),
     params: { agentId },
   });
 }

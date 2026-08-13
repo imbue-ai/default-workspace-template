@@ -8,6 +8,8 @@ import { apiUrl } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
+import type { ModelChoice } from "./ModelSettings";
+import { noteBackendArrivals } from "./OutgoingMessages";
 import { parseJsonMessage } from "./ws-json";
 
 export interface AgentState {
@@ -16,11 +18,36 @@ export interface AgentState {
   state: string;
   labels: Record<string, string>;
   work_dir: string | null;
+  // The agent's harness ("claude", "codex", ...), from the backend. Carried for
+  // debugging and as the seam a future per-harness message detector would key on (see
+  // message-classification.ts, whose table is Claude Code's). NOTHING in the frontend
+  // reads it today: every harness difference is resolved backend-side, tool calls
+  // arrive pre-labelled, and activity arrives as an already-derived state.
+  harness?: string;
   // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the
   // system interface has no per-agent activity tracking available (e.g.
   // remote agents whose state directory is not present on this host,
   // proto-agents, non-Claude agent types).
   activity_state?: string | null;
+  // The agent's live model/effort/fast selection plus the catalog option it
+  // matched, pushed by the backend beside activity_state. Null when no model
+  // resolution is available. Drives the composer's model bar.
+  model_choice?: ModelChoice | null;
+  // Full snapshot of the messages currently parked in the agent's harness queue,
+  // in enqueue order, pushed by the backend beside activity_state. The chat panel
+  // renders the queued group from this; it is replaced wholesale on each push and
+  // the frontend holds no queued state of its own. Absent/empty when nothing is
+  // queued. Mirrors the backend ``QueuedMessageState`` (models.py) -- keep in step.
+  queued_messages?: QueuedMessage[];
+}
+
+/** One message currently parked in an agent's harness queue (the wire shape of
+ *  the backend ``QueuedMessageState``). The frontend renders these verbatim and
+ *  keys the bubble on ``queued_id``; it never derives or reconciles them. */
+export interface QueuedMessage {
+  queued_id: string;
+  content: string;
+  timestamp: string;
 }
 
 export interface AppEntry {
@@ -49,7 +76,7 @@ export interface TerminalSessionInfo {
 export interface ProtoAgent {
   agent_id: string;
   name: string;
-  creation_type: "worktree" | "chat";
+  creation_type: "chat";
   parent_agent_id: string | null;
 }
 
@@ -161,6 +188,8 @@ export type TerminalSessionListener = (terminalId: string | null, sessionId: str
 export type AgentActivityListener = (agentId: string, previous: string | null, current: string | null) => void;
 
 let agents: AgentState[] = [];
+// The JSON of the last agents_updated payload, to skip redundant identical pushes.
+let lastAgentsSerialized = "";
 let apps: AppEntry[] = [];
 // Whether an ``apps_updated`` carrying at least one registered service has
 // arrived. Until it has, ``labelForService`` cannot resolve a name to its
@@ -254,6 +283,15 @@ function scheduleReconnect(): void {
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "agents_updated": {
+      // The backend can broadcast the same snapshot many times during a turn (transcript
+      // churn), and a redraw on each identical push makes the model bar (its trusted-HTML
+      // logo especially) visibly flicker. Skip a push byte-identical to the last one: an
+      // idempotent update should cause no re-render.
+      const serialized = JSON.stringify(event.agents);
+      if (serialized === lastAgentsSerialized) {
+        break;
+      }
+      lastAgentsSerialized = serialized;
       // Diff against the outgoing snapshot (still in `agents` here) so we can
       // report per-agent activity transitions before replacing it. No separate
       // previous-state bookkeeping is needed -- the prior array is the record.
@@ -269,6 +307,13 @@ function handleEvent(event: WsEvent): void {
           for (const listener of agentActivityListeners) {
             listener(agent.id, previous, current);
           }
+        }
+        // Route a newly-queued message through the optimistic-send layer so its
+        // "Sending…" bubble drops the instant it becomes a real queued entry
+        // (no overlap). Deduped by queued_id, so re-pushed snapshots are harmless.
+        const queuedIds = (agent.queued_messages ?? []).map((queued) => queued.queued_id);
+        if (queuedIds.length > 0) {
+          noteBackendArrivals(agent.id, queuedIds);
         }
       }
       break;
@@ -290,7 +335,7 @@ function handleEvent(event: WsEvent): void {
       protoAgents.push({
         agent_id: event.agent_id,
         name: event.name,
-        creation_type: event.creation_type as "worktree" | "chat",
+        creation_type: event.creation_type as "chat",
         parent_agent_id: event.parent_agent_id,
       });
       break;
@@ -405,6 +450,13 @@ export function getAgents(): AgentState[] {
 
 export function getAgentById(id: string): AgentState | undefined {
   return agents.find((a) => a.id === id);
+}
+
+/** The full snapshot of an agent's currently-queued messages, in enqueue order.
+ *  Empty when nothing is queued (or the agent is unknown). The single source of
+ *  queued state -- the frontend never invents or reconciles it. */
+export function getQueuedMessagesForAgent(agentId: string): QueuedMessage[] {
+  return getAgentById(agentId)?.queued_messages ?? [];
 }
 
 export function removeAgentLocally(agentId: string): void {

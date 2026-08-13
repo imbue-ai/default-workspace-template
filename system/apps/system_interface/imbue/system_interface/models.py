@@ -2,6 +2,11 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.model import ModelAxis
+from imbue.system_interface.harnesses.model import ModelChoice
 
 
 class AgentCreationError(ValueError):
@@ -45,35 +50,34 @@ class SendMessageResponse(FrozenModel):
     status: str = Field(description="Status of the send operation")
 
 
-class ModelOption(FrozenModel):
-    """A selectable Claude Code model shown in the composer model picker."""
+class SetModelChoiceRequest(FrozenModel):
+    """Request body for POST /api/agents/{id}/model.
 
-    id: str = Field(description="Value sent to Claude Code's /model command (e.g. 'opus[1m]', 'sonnet')")
-    label: str = Field(description="Human-readable model name shown in the picker")
-    supports_fast_mode: bool = Field(description="Whether fast mode applies to this model (Opus only)")
+    One shape covering all three axes. ``effort`` is omitted for a model with no
+    effort axis, and defaults to None; ``fast`` is the intended fast state.
+    """
 
-
-class ModelSettingsResponse(FrozenModel):
-    """Response from GET /api/agents/{id}/model-settings."""
-
-    model: str = Field(description="The agent's currently configured model (raw settings.json value, e.g. 'opus[1m]')")
-    fast_mode: bool = Field(description="Whether fast mode is currently enabled for the agent")
-    fast_mode_supported: bool = Field(
-        description="Whether the current model supports fast mode (drives the toggle's visibility)"
+    model_id: str = Field(description="Model id to switch to; must be one of the harness catalog option ids")
+    effort: str | None = Field(default=None, description="Reasoning effort to set; None for a no-effort model")
+    fast: bool = Field(default=False, description="Whether fast mode should be on")
+    axes: tuple[ModelAxis, ...] = Field(
+        default=(),
+        description="Which axes this click changed (against the value the user saw); the switch applies only these",
     )
-    options: tuple[ModelOption, ...] = Field(description="The selectable models, in display order")
 
 
-class SetModelRequest(FrozenModel):
-    """Request body for POST /api/agents/{id}/model."""
+class ModelOptionsResponse(FrozenModel):
+    """Response from GET /api/agents/{id}/model-options."""
 
-    model: str = Field(description="Model id to switch to; must be one of the catalog option ids")
+    models: tuple[str, ...] | None = Field(
+        description="Model ids to offer in the picker right now, or null to offer the whole catalog"
+    )
 
 
-class SetFastModeRequest(FrozenModel):
-    """Request body for POST /api/agents/{id}/fast."""
+class PoweredByResponse(FrozenModel):
+    """Response from GET /api/agents/{id}/powered-by."""
 
-    enabled: bool = Field(description="True to enable fast mode, False to disable it")
+    label: str = Field(description="The agent's harness product name, shown as a 'Powered by <label>' credit")
 
 
 class WorkspaceFastModeResponse(FrozenModel):
@@ -103,6 +107,34 @@ class InterruptAgentResponse(FrozenModel):
     status: str = Field(description="Status of the interrupt operation")
 
 
+class DrainToComposerResponse(FrozenModel):
+    """Response from POST /api/agents/{id}/drain-to-composer.
+
+    Carries the concatenated queued block the frontend drops into the composer
+    (unsent) for the user to edit and send. Empty when the queue was already
+    drained by the time the action fired.
+    """
+
+    block: str = Field(description="The queued messages as one concatenated block, or '' if the queue was empty")
+
+
+class ShoulderTapAtomicResponse(FrozenModel):
+    """Response from POST /api/agents/{id}/shoulder-tap-atomic.
+
+    ``status`` is ``"tapped"`` when a control line targeting the live open turn was written
+    (the patched codex will merge the parked messages into that turn), or ``"no_open_turn"``
+    when no turn was running, so nothing was interrupted and no control line was written.
+    """
+
+    status: str = Field(description="'tapped' when the live turn was targeted, 'no_open_turn' when nothing was running")
+
+
+class AgentRestartError(RuntimeError):
+    """Raised when the ``mngr start --restart`` a queue action depends on fails."""
+
+    ...
+
+
 class ActivityRequest(FrozenModel):
     """Request body for the /api/activity endpoint.
 
@@ -130,6 +162,19 @@ class ErrorResponse(FrozenModel):
     detail: str = Field(description="Human-readable error description")
 
 
+class QueuedMessageState(FrozenModel):
+    """One currently-queued message on the per-agent WebSocket state.
+
+    The harness-agnostic wire shape of a queued message: the frontend renders the
+    queued group from a full snapshot of these, minted by the harness's queue
+    populator (see ``harnesses.queued_set``).
+    """
+
+    queued_id: str = Field(description="Stable id the populator minted; keys the rendered bubble")
+    content: str = Field(description="Verbatim text the user queued")
+    timestamp: str = Field(description="Enqueue timestamp (ISO string from the harness ledger)")
+
+
 class AgentStateItem(FrozenModel):
     """Agent state for the unified WebSocket stream."""
 
@@ -138,12 +183,36 @@ class AgentStateItem(FrozenModel):
     state: str = Field(description="The agent's lifecycle state")
     labels: dict[str, str] = Field(description="Agent labels (e.g., user_created, chat_parent_id)")
     work_dir: str | None = Field(description="The agent's working directory path")
-    activity_state: str | None = Field(
+    harness: HarnessType = Field(
+        default=DEFAULT_HARNESS,
+        description=(
+            "The agent's harness, narrowed from mngr's ``AgentDetails.type`` in "
+            "``agent_discovery``. Drives activity derivation and caption routing."
+        ),
+    )
+    activity_state: ActivityState | None = Field(
         default=None,
         description=(
             "Per-agent chat activity state value (THINKING / TOOL_RUNNING / "
             "IDLE), or None when no activity tracking is available for this "
             "agent."
+        ),
+    )
+    model_choice: ModelChoice | None = Field(
+        default=None,
+        description=(
+            "The agent's live model/effort/fast selection plus the catalog option "
+            "it matched, or None when no model resolution is available for this "
+            "agent. Twin of ``activity_state``; drives the composer's model bar."
+        ),
+    )
+    queued_messages: tuple[QueuedMessageState, ...] = Field(
+        default=(),
+        description=(
+            "Full snapshot of the messages currently parked in the agent's harness "
+            "queue, in enqueue order. Empty when nothing is queued (or the harness "
+            "has no queue populator). A sibling of ``activity_state``: ephemeral "
+            "live state pushed on the agents WebSocket, replaced wholesale each push."
         ),
     )
 
@@ -170,20 +239,17 @@ class TerminalSessionInfo(FrozenModel):
     cwd: str = Field(description="The session's current working directory (tmux session_path)")
 
 
-class CreateWorktreeRequest(FrozenModel):
-    """Request body for creating a worktree agent."""
-
-    name: str = Field(description="Name for the new worktree agent")
-    selected_agent_id: str = Field(
-        default="",
-        description="ID of the agent whose work dir to create the worktree from",
-    )
-
-
 class CreateChatRequest(FrozenModel):
     """Request body for creating a chat agent."""
 
     name: str = Field(description="Name for the new chat agent")
+
+
+class CreateCodexRequest(FrozenModel):
+    """Request body for creating a codex chat agent (same shape as chat: runs in
+    the primary agent's work dir, just a different harness `--type`)."""
+
+    name: str = Field(description="Name for the new codex agent")
 
 
 class CreateAgentResponse(FrozenModel):

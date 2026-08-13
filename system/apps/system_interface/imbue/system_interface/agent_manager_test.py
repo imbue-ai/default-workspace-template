@@ -16,6 +16,7 @@ from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
 from imbue.mngr.api.observe import make_full_agent_state_event
@@ -28,17 +29,21 @@ from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import poll_until
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
 from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.harnesses.auth_check import HARNESS_AUTH_CHECKS
+from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.agent_manager import _build_observe_command_argv
-from imbue.system_interface.agent_manager import _build_worktree_create_command
 from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.models import QueuedMessageState
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -49,15 +54,21 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 pytestmark = pytest.mark.flaky
 
 
-def _seed_agent(manager: AgentManager, agent_id: str) -> None:
+def _seed_agent(
+    manager: AgentManager,
+    agent_id: str,
+    harness: HarnessType = HarnessType.CLAUDE,
+    state: str = "RUNNING",
+) -> None:
     """Insert a placeholder ``AgentStateItem`` directly into the tracked map."""
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id,
             name=f"agent-{agent_id}",
-            state="RUNNING",
+            state=state,
             labels={},
             work_dir=None,
+            harness=harness,
         )
 
 
@@ -270,22 +281,32 @@ def test_create_chat_agent_broadcasts_proto_created(
     assert proto_msg["parent_agent_id"] is None
 
 
-def test_create_worktree_agent_broadcasts_proto_created(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, git_work_dir: Path
+def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type(
+    agent_manager: AgentManager,
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The proto_agent_created broadcast fires before the creation thread runs."""
+    """Both menu entries make a chat, so creation_type is the role -- never the harness."""
+    # Stub codex's sign-in preflight to a command that always reports signed in, so the
+    # create does not depend on a real (possibly signed-out) codex CLI in the test env.
+    monkeypatch.setitem(
+        HARNESS_AUTH_CHECKS,
+        HarnessType.CODEX,
+        HarnessAuthCheck(command=("true",), display_name="Codex", signin_instructions="Sign in."),
+    )
     q = broadcaster.register()
 
     with agent_manager._lock:
-        agent_manager._agents["parent-id"] = AgentStateItem(
-            id="parent-id",
-            name="parent",
+        agent_manager._agents[agent_manager._own_agent_id] = AgentStateItem(
+            id=agent_manager._own_agent_id,
+            name="primary",
             state="RUNNING",
             labels={},
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_worktree_agent("test-worktree", "parent-id")
+    agent_id = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
     agent_manager.stop()
 
     assert isinstance(agent_id, str)
@@ -294,22 +315,22 @@ def test_create_worktree_agent_broadcasts_proto_created(
     assert raw is not None
     proto_msg = json.loads(raw)
     assert proto_msg["type"] == "proto_agent_created"
-    assert proto_msg["creation_type"] == "worktree"
+    assert proto_msg["creation_type"] == "chat"
     assert proto_msg["parent_agent_id"] is None
 
 
 def test_get_log_queue_for_proto_agent(agent_manager: AgentManager, git_work_dir: Path) -> None:
-    """The log queue is available immediately after create_worktree_agent returns."""
+    """The log queue is available immediately after create_chat_agent returns."""
     with agent_manager._lock:
-        agent_manager._agents["parent-id"] = AgentStateItem(
-            id="parent-id",
-            name="parent",
+        agent_manager._agents[agent_manager._own_agent_id] = AgentStateItem(
+            id=agent_manager._own_agent_id,
+            name="primary",
             state="RUNNING",
             labels={},
             work_dir=str(git_work_dir),
         )
 
-    agent_id = agent_manager.create_worktree_agent("test-worktree", "parent-id")
+    agent_id = agent_manager.create_chat_agent("test-chat")
     log_q = agent_manager.get_log_queue(agent_id)
     assert log_q is not None
 
@@ -625,10 +646,19 @@ def test_unknown_observe_event_type_is_ignored(agent_manager: AgentManager) -> N
     assert agent_manager.get_agents() == []
 
 
-def test_create_worktree_raises_for_unknown_agent(agent_manager: AgentManager) -> None:
-    """Creating a worktree for an unknown agent raises."""
+def test_create_chat_raises_when_the_primary_work_dir_is_unknown(agent_manager: AgentManager) -> None:
+    """A chat has nowhere to be created if the primary's work dir cannot be resolved.
+
+    Both the registered agent and the own-work-dir fallback must be absent for the
+    guard to bite, so clear the fallback the fixture provides.
+    """
+    with agent_manager._lock:
+        agent_manager._agents.pop(agent_manager._own_agent_id, None)
+        # Empty is the unset form: it is what the manager starts with when
+        # MNGR_AGENT_WORK_DIR is absent, and the fallback treats it as falsy.
+        agent_manager._own_work_dir = ""
     with pytest.raises(AgentCreationError, match="Cannot determine work directory"):
-        agent_manager.create_worktree_agent("test", "nonexistent")
+        agent_manager.create_chat_agent("test")
 
 
 @pytest.mark.flaky
@@ -761,7 +791,7 @@ def test_run_creation_logs_header_and_completion(agent_manager: AgentManager, tm
     done_event = threading.Event()
 
     def run_and_signal() -> None:
-        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {})
+        agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, log_q, {}, HarnessType.CLAUDE)
         done_event.set()
 
     t = threading.Thread(target=run_and_signal, daemon=True)
@@ -916,28 +946,43 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 
-def test_worktree_create_argv_accepted_by_live_cli() -> None:
-    argv = _build_worktree_create_command(
+def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None:
+    """The harness/role split is the contract: `--type` picks the harness, the lone
+    `--template` picks the role.
+
+    The harness rides `--type <harness>` (resolving `[agent_types.<harness>]`
+    directly), and the `chat` role template -- which never sets `type` -- cannot
+    clobber it.
+    """
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
-        current_branch="main",
-        new_branch="mngr/demo",
-        parent_labels={"project": "proj"},
+        primary_labels={},
+        harness=HarnessType.CLAUDE,
+        is_fast_mode_enabled=True,
     )
-    assert_mngr_argv_valid(argv)
+    assert argv[argv.index("--type") + 1] == HarnessType.CLAUDE
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == ["chat"]
 
 
-def test_worktree_create_argv_without_project_label() -> None:
-    argv = _build_worktree_create_command(
+def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
+    """The codex harness reuses the chat role verbatim; only the `--type` differs."""
+    argv = _build_chat_create_command(
         mngr_binary="mngr",
         name="demo",
         agent_id="agent-123",
-        current_branch="main",
-        new_branch="mngr/demo",
-        parent_labels={},
+        primary_labels={"project": "proj"},
+        harness=HarnessType.CODEX,
+        is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
+    assert argv[argv.index("--type") + 1] == HarnessType.CODEX
+    templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
+    assert templates == ["chat"]
+    # fastMode is a claude setting, so it must not ride a codex create.
+    assert not any("fastMode" in token for token in argv)
 
 
 def test_chat_create_argv_accepted_by_live_cli() -> None:
@@ -946,6 +991,7 @@ def test_chat_create_argv_accepted_by_live_cli() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={"workspace": "ws", "project": "proj"},
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=True,
     )
     assert_mngr_argv_valid(argv)
@@ -961,6 +1007,7 @@ def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={},
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=True,
     )
     disabled_argv = _build_chat_create_command(
@@ -968,6 +1015,7 @@ def test_chat_create_argv_carries_the_workspace_fast_mode_setting() -> None:
         name="demo",
         agent_id="agent-123",
         primary_labels={},
+        harness=HarnessType.CLAUDE,
         is_fast_mode_enabled=False,
     )
     assert "agent_types.claude.settings_overrides.fastMode=true" in enabled_argv
@@ -1290,9 +1338,7 @@ def test_update_session_events_no_op_when_not_tracked(agent_manager: AgentManage
     )
     with agent_manager._lock:
         assert "ghost" not in agent_manager._activity_state_by_agent
-        assert "ghost" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "ghost" not in agent_manager._last_event_type_by_agent
-        assert "ghost" not in agent_manager._last_event_timestamp_by_agent
+        assert "ghost" not in agent_manager._activity_tracker_by_agent
 
 
 def test_reset_activity_state_clears_tool_running(
@@ -1339,9 +1385,7 @@ def test_reset_activity_state_no_op_when_not_tracked(agent_manager: AgentManager
     agent_manager.reset_activity_state("ghost")
     with agent_manager._lock:
         assert "ghost" not in agent_manager._activity_state_by_agent
-        assert "ghost" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "ghost" not in agent_manager._last_event_type_by_agent
-        assert "ghost" not in agent_manager._last_event_timestamp_by_agent
+        assert "ghost" not in agent_manager._activity_tracker_by_agent
 
 
 def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -1389,6 +1433,44 @@ def test_stale_transcript_tail_after_restart_shows_idle(agent_manager: AgentMana
         assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
 
 
+def test_codex_stale_transcript_tail_uses_the_codex_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """A codex agent's staleness override reads ``codex_process_started``.
+
+    The codex peer of ``test_stale_transcript_tail_after_restart_shows_idle``.
+    mngr_codex writes ``codex_process_started``, never the claude marker, so a
+    manager that stats a hardcoded ``claude_process_started`` finds nothing,
+    passes ``process_started_at=None``, and disables the override entirely --
+    leaving a codex agent that was killed mid-turn (an unclosed ``turn_started``)
+    pinned on "Thinking..." until the user sends another message.
+    """
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    # A turn opened in the distant past and never closed: the restart killed
+    # codex before it could write task_complete.
+    agent_manager.update_session_events(
+        "agent-1",
+        [{"type": "special", "kind": "turn_started", "timestamp": "2020-01-01T00:00:00.000Z"}],
+    )
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+
+    # The claude marker must NOT rescue a codex agent -- wrong harness, ignored.
+    (state_dir / "claude_process_started").touch()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+
+    # mngr_codex touches its own marker on resume; now the tail reads stale.
+    (state_dir / "codex_process_started").touch()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    with agent_manager._lock:
+        assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+        assert agent_manager._agents["agent-1"].activity_state == ActivityState.IDLE.value
+
+
 def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
     state_dir = tmp_path / "agents" / "agent-1"
     state_dir.mkdir(parents=True)
@@ -1403,18 +1485,389 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
     with agent_manager._lock:
         assert "agent-1" in agent_manager._activity_tracked_agents
         assert "agent-1" in agent_manager._activity_state_by_agent
-        assert "agent-1" in agent_manager._has_unmatched_tool_use_by_agent
-        assert "agent-1" in agent_manager._last_event_type_by_agent
-        assert "agent-1" in agent_manager._last_event_timestamp_by_agent
+        assert "agent-1" in agent_manager._activity_tracker_by_agent
 
     agent_manager._stop_activity_tracking("agent-1")
 
     with agent_manager._lock:
         assert "agent-1" not in agent_manager._activity_tracked_agents
         assert "agent-1" not in agent_manager._activity_state_by_agent
-        assert "agent-1" not in agent_manager._has_unmatched_tool_use_by_agent
-        assert "agent-1" not in agent_manager._last_event_type_by_agent
-        assert "agent-1" not in agent_manager._last_event_timestamp_by_agent
+        assert "agent-1" not in agent_manager._activity_tracker_by_agent
+
+
+def test_update_queued_messages_caches_broadcasts_and_serializes(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A fresh queued snapshot from the watcher is cached, broadcast, and serialized."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    listener = broadcaster.register()
+    try:
+        snapshot = [{"queued_id": "q1", "content": "hello", "timestamp": "2026-08-07T00:00:01.000Z"}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == (
+                QueuedMessageState(queued_id="q1", content="hello", timestamp="2026-08-07T00:00:01.000Z"),
+            )
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        agents = latest["agents"]
+        assert isinstance(agents, list)
+        assert agents[0]["queued_messages"] == snapshot
+        assert agent_manager.get_agents_serialized()[0]["queued_messages"] == snapshot
+    finally:
+        agent_manager.stop()
+
+
+def test_update_queued_messages_no_op_when_not_tracked(agent_manager: AgentManager) -> None:
+    """Pushing a queued snapshot for an untracked agent leaves no cache residue."""
+    agent_manager.update_queued_messages("ghost", [{"queued_id": "q", "content": "x", "timestamp": "t"}])
+    with agent_manager._lock:
+        assert "ghost" not in agent_manager._queued_messages_by_agent
+
+
+def test_working_to_idle_drains_the_queue_via_the_registered_handler(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A working->IDLE transition invokes the watcher's queue backstop and clears the group."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+
+    try:
+        # A queued message is showing while the agent is thinking. The transcript goes
+        # THINKING first: a snapshot arriving on an idle agent is swept at arrival by
+        # ``update_queued_messages``'s pre-broadcast recompute, and in production the
+        # enqueue only ever happens mid-turn.
+        agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
+        agent_manager.update_queued_messages(
+            "agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}]
+        )
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+
+        # The turn ends (assistant reply, no pending tools) -> IDLE, so the backstop fires.
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "user_message", "content": "go"}, {"type": "assistant_message", "tool_calls": []}],
+        )
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+        assert idle_calls == [True]
+    finally:
+        agent_manager.stop()
+
+
+def test_idle_agent_with_a_stale_queue_is_swept_without_a_transition(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The backstop is level-triggered: an already-IDLE agent that shows a queued
+    survivor is swept on the next recompute, even with no working->IDLE edge.
+
+    The survivor is seeded straight into the caches -- the shape of residue that
+    reached the manager with no trigger having run (a snapshot arriving through
+    ``update_queued_messages`` is already swept at arrival by its own pre-broadcast
+    recompute, covered separately)."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    # _ensure_activity_tracking seeds IDLE with no working->IDLE transition.
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+            # A stale queued entry is showing on the idle agent (no turn in flight).
+            stale = (QueuedMessageState(queued_id="q1", content="stale", timestamp="t"),)
+            agent_manager._queued_messages_by_agent["agent-1"] = stale
+            agent_state = agent_manager._agents["agent-1"]
+            agent_manager._agents["agent-1"] = agent_state.model_copy_update(
+                to_update(agent_state.field_ref().queued_messages, stale)
+            )
+
+        # A plain recompute (agent still IDLE, no edge) must sweep it.
+        agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+        assert idle_calls == [True]
+    finally:
+        agent_manager.stop()
+
+
+def test_queued_snapshot_arriving_while_idle_is_swept_before_broadcast(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A non-empty queued snapshot arriving while the derived state is IDLE (e.g.
+    the priming replay resurrecting a dead process's dangling enqueues for a
+    stopped agent) triggers the sweep at arrival, and the broadcast carries the
+    drained snapshot -- the phantoms are never rendered."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    listener = broadcaster.register()
+    try:
+        agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "ghost", "timestamp": "t"}])
+
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+        assert idle_calls == [True]
+        # The arrival still broadcasts, and no broadcast ever carried the phantom.
+        updates = [m for m in _drain(listener) if m.get("type") == "agents_updated"]
+        assert updates
+        for update in updates:
+            assert update["agents"][0]["queued_messages"] == []
+    finally:
+        agent_manager.stop()
+
+
+def test_stopped_codex_agent_snapshot_is_swept_before_any_broadcast(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A replayed snapshot arriving via ``update_queued_messages`` AFTER the last
+    recompute, for a STOPPED codex agent whose transcript still derives non-IDLE (an
+    open turn latch), is swept before its broadcast: no broadcast ever contains the
+    phantoms, and activity broadcasts IDLE.
+
+    The arrival order is the point -- the watcher's event fan-out (and its recompute)
+    runs strictly before the snapshot push, and a permanently-dead agent never
+    re-enters the observe delta, so ``update_queued_messages`` itself must trigger the
+    sweep. Seeding the cache by hand would pass without that trigger. Codex is the
+    harness whose derive ignores the lifecycle (the turn latch owns the turn flap), so
+    only the dead-lifecycle override settles it to IDLE.
+    """
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="STOPPED")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        # The dead process left an open turn latch (no turn_completed will ever come).
+        # The turn latch alone would derive THINKING; the dead lifecycle forces IDLE.
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
+        )
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.IDLE
+
+        listener = broadcaster.register()
+        # The dead generation's orphans arrive from the replayed ledger.
+        agent_manager.update_queued_messages(
+            "agent-1", [{"queued_id": "q1", "content": "phantom", "timestamp": "t"}]
+        )
+
+        messages = _drain(listener)
+        updates = [message for message in messages if message.get("type") == "agents_updated"]
+        assert updates, "the snapshot arrival still broadcasts (the swept state)"
+        for update in updates:
+            assert update["agents"][0]["queued_messages"] == []
+        assert updates[-1]["agents"][0]["activity_state"] == ActivityState.IDLE.value
+        assert idle_calls == [True]
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == ()
+    finally:
+        agent_manager.stop()
+
+
+def test_queued_snapshot_arriving_mid_turn_is_kept(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The same snapshot arriving with seeded mid-turn signals (derive non-IDLE)
+    is kept: the pre-broadcast sweep only drains an idle agent's queue, so a live
+    agent's genuine mirror survives a backend-restart replay."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    # Seeded mid-turn signals: a user_message at the tail derives THINKING.
+    agent_manager.update_session_events("agent-1", [{"type": "user_message", "content": "go"}])
+    listener = broadcaster.register()
+    try:
+        snapshot = [{"queued_id": "q1", "content": "parked", "timestamp": "t"}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        with agent_manager._lock:
+            assert agent_manager._agents["agent-1"].queued_messages == (
+                QueuedMessageState(queued_id="q1", content="parked", timestamp="t"),
+            )
+        assert idle_calls == []
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        agents = latest["agents"]
+        assert isinstance(agents, list)
+        assert agents[0]["queued_messages"] == snapshot
+    finally:
+        agent_manager.stop()
+
+
+def test_unknown_lifecycle_neither_sweeps_nor_forces_idle(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """UNKNOWN is non-evidence (an unreachable provider, not a death): a codex agent
+    mid-turn under an UNKNOWN lifecycle keeps its THINKING dot and its queued snapshot."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="UNKNOWN")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
+        )
+        with agent_manager._lock:
+            assert agent_manager._activity_state_by_agent["agent-1"] == ActivityState.THINKING
+
+        listener = broadcaster.register()
+        snapshot = [{"queued_id": "q1", "content": "still parked", "timestamp": "t"}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        assert latest["agents"][0]["queued_messages"] == snapshot
+        assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
+        assert idle_calls == []
+        with agent_manager._lock:
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+    finally:
+        agent_manager.stop()
+
+
+def test_running_mid_turn_agent_snapshot_passes_through_unchanged(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A RUNNING codex agent mid-turn keeps its queued snapshot: the pre-broadcast
+    recompute derives non-IDLE, so no sweep fires and the broadcast carries it."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX, state="RUNNING")
+    agent_manager._ensure_activity_tracking("agent-1")
+
+    idle_calls: list[bool] = []
+
+    def _drain_handler() -> list[dict[str, Any]]:
+        idle_calls.append(True)
+        return []
+
+    agent_manager.register_queue_idle_handler("agent-1", _drain_handler)
+    try:
+        agent_manager.update_session_events(
+            "agent-1",
+            [{"type": "special", "kind": "turn_started", "timestamp": "2026-08-07T00:00:00.000Z"}],
+        )
+        listener = broadcaster.register()
+        snapshot = [{"queued_id": "q1", "content": "queued mid-turn", "timestamp": "t"}]
+        agent_manager.update_queued_messages("agent-1", snapshot)
+
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        assert latest["agents"][0]["queued_messages"] == snapshot
+        assert latest["agents"][0]["activity_state"] == ActivityState.THINKING.value
+        assert idle_calls == []
+        with agent_manager._lock:
+            assert len(agent_manager._agents["agent-1"].queued_messages) == 1
+    finally:
+        agent_manager.stop()
+
+
+def test_stop_activity_tracking_clears_queued_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """Stopping tracking drops the queued snapshot and idle handler alongside activity state."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    agent_manager.register_queue_idle_handler("agent-1", lambda: [])
+    agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+
+    with agent_manager._lock:
+        assert "agent-1" in agent_manager._queued_messages_by_agent
+        assert "agent-1" in agent_manager._queue_idle_handler_by_agent
+
+    agent_manager._stop_activity_tracking("agent-1")
+
+    with agent_manager._lock:
+        assert "agent-1" not in agent_manager._queued_messages_by_agent
+        assert "agent-1" not in agent_manager._queue_idle_handler_by_agent
+
+
+def test_provider_snapshot_preserves_queued_messages_for_tracked_agent(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A re-listing observe snapshot must not wipe an already-tracked agent's queued group."""
+    test_agent_id = MngrAgentId()
+    str_id = str(test_agent_id)
+
+    state_dir = tmp_path / "agents" / str_id
+    state_dir.mkdir(parents=True)
+
+    agent = _agent_details("snapshot-agent", agent_id=test_agent_id, work_dir=str(tmp_path / "work"))
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    agent_manager.update_queued_messages(str_id, [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
+
+    listener = broadcaster.register()
+    try:
+        agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+        latest = _last_agents_updated(_drain(listener))
+        assert latest is not None
+        agents = latest["agents"]
+        assert isinstance(agents, list)
+        assert agents[0]["id"] == str_id
+        assert agents[0]["queued_messages"] == [{"queued_id": "q1", "content": "hi", "timestamp": "t"}]
+    finally:
+        agent_manager.stop()
 
 
 def test_agent_removed_event_fires_removal_side_effects(agent_manager: AgentManager, tmp_path: Path) -> None:
