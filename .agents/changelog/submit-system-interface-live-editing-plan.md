@@ -14,8 +14,35 @@ preview tab.
   rebinding, and records the new pid before the health wait so a later `down`
   can still reap it if it never comes up.
 
-- `reveal_system_interface.py` gained `preview-refresh`: bounce the preview's
-  inner app for a backend round without disturbing the wrapper or the tab.
+- The live loop calls that shared `refresh` directly, and `reveal_system_interface.py`
+  no longer wraps it -- nor `down`, which it used to expose as `unpreview`. Both
+  wrappers took a slug and did nothing with it but build the instance name
+  `si-preview-<slug>`, so each was a second place that had to agree with the
+  convention `preview` already owns. The flow now addresses the instance by the
+  name `preview` prints on success, and the script keeps only the two
+  sub-commands that carry real logic: `preview` (work_dir validation, the
+  system-interface env spec, the one-preview-at-a-time guard) and `reveal`.
+
+- **`layout.py open` is now documented as the act of showing the user
+  something, not as setup.** It mutates the workspace they are looking at, live,
+  the moment it returns -- but nothing said so, so an agent could open a preview
+  tab, keep driving it with Playwright as though the window were still private,
+  and then finish by telling the user to open the tab it had opened for them ten
+  minutes earlier. `CLAUDE.md` and `manage-layout` (including its description, so
+  it lands in context even for an agent that never loads the skill) now state the
+  consequence, and `update-system-interface`'s first round separates the boot
+  from the open: check the boot's exit code -- the strict health gate is the
+  verification -- and only then surface it.
+
+- **`update-app`'s Verify step now says *when* to verify: before the user can
+  see it, not after.** The step is inherited by every app flow including the
+  system interface, and it prescribes a Playwright assertion -- which is right
+  in `build-app` (verify is Step 3, surfacing the tab Step 4) and wrong once a
+  surface is already in front of the user, where the user is the verifier and a
+  scripted interaction lands in their view and their state. `interactive-delivery.md`
+  phase 5 carries the same rule for prototypes generally: the lead's own check
+  ends at "it came up", and the thorough pass belongs to the phase-7 worker,
+  which runs against its own instance.
 
 - `create_worker.py` (`launch-task`) gained a `--branch` passthrough to
   `mngr create`, so the harden worker can check out and extend the branch the

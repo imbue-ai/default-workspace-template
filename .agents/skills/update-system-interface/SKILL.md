@@ -73,7 +73,8 @@ never-break-it-silently rule). Three deltas:
   one preview tab, so only one system-interface edit may be in flight at a time.
 - **Breaking a stale one also means tearing down its orphaned pass:** its preview
   service and tab, its worktree, and its worker if one exists. Run the Step 4
-  teardown (`unpreview` + the `layout.py close` loop), `git worktree remove`, and
+  teardown (the shared script's `down` + the `layout.py close` loop),
+  `git worktree remove`, and
   `create_worker.py destroy` for whatever the abandoned pass left behind.
 
 **Pick a slug** `$SLUG` for the change. The branch is `mngr/update-$SLUG`; the
@@ -131,18 +132,21 @@ in
 [`type-system-interface.md`](../../shared/worker/references/type-system-interface.md);
 in the live loop you only need a clean build, not the full gate.
 
-**First round -- boot the preview.** After the first build, boot the worktree as
-a labeled preview tab and open it:
+`update-app`'s step 4, **Verify**, carries over with its own timing rule intact
+(*verify before the user can see it*) -- which here means the boot check below,
+and nothing after the tab is open. Two system-interface reasons make that
+sharper than usual: the preview keeps real agent discovery, so driving it is
+driving the user's real conversations against the real backend; and the tab you
+open in the first round stays open for the whole pass, so there is no later
+private window to verify in.
+
+**First round -- boot the preview, confirm it came up, then hand it over.** Boot
+it first, on its own:
 
 ```bash
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview \
     --slug "update-$SLUG" --work-dir "data/.tasks/si-live/update-$SLUG"
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
-
-The `for L in desktop mobile` loop is the same `--layout` handling `update-app`
-describes, and it applies to every `close` below too. (`refresh` is the
-exception: it takes no `--layout`.)
 
 `preview` boots `uv run system-interface` from the worktree's already-built app
 dir on a free port, with layout persistence neutered (it drops `MNGR_AGENT_ID`, so
@@ -153,14 +157,39 @@ the user opens as the `si-preview` tab. It never touches the served tree. (It
 refuses to boot if another pass's preview is already up rather than hijacking the
 tab; surface that and coordinate.)
 
+**Exit 0 is your verification that it works** -- the health gate is strict, and
+refuses to go green unless the lifecycle stream is really feeding the instance --
+so there is nothing further for you to check before showing it. On a non-zero
+exit, fix the build and re-run; do not open the tab on a broken boot. It also
+reports, on stderr, the instance name (`si-preview-update-$SLUG`) you address for
+every refresh and teardown below.
+
+Only once it is up, open the tab:
+
+```bash
+for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
+```
+
+**That `open` is the hand-off, not setup.** It puts the tab on the user's screen
+the moment it returns -- so from here the pass is interactive: every round ends
+by telling the user what changed and waiting. Do not drive the preview yourself
+after this point (`update-app` step 4 above), and never tell the user to "open
+si-preview" -- you already did, and they have been looking at it.
+
+The `for L in desktop mobile` loop is the same `--layout` handling `update-app`
+describes, and it applies to every `close` below too. (`refresh` is the
+exception: it takes no `--layout`.)
+
 **Re-running `preview` mid-loop is safe** -- the instance died, or you are picking
 the pass back up in a later turn -- so just boot and re-open (`layout.py open`
-focuses the existing tab rather than stacking a duplicate). Prefer
-`preview-refresh` for ordinary rounds anyway -- it is much faster and leaves the
-tab in place.
+focuses the existing tab rather than stacking a duplicate). Prefer the shared
+script's `refresh` (below) for ordinary rounds anyway -- it is much faster, and
+it keeps the port, so the tab stays pointed at a live instance.
 
 **Each subsequent round -- refresh in place; the tab never goes blank.** The tab
-points at the wrapper page, which never moves. After editing:
+points at the wrapper page, which never moves. Two different things are called
+"refresh" here, and you often want both: the shared script's `refresh` restarts
+the *server*, `layout.py refresh` reloads the *iframe*. After editing:
 
 - **Frontend-only round:** rebuild, then reload the iframe. No process bounce
   (the inner app serves the rebuilt `static/` bundle straight from disk):
@@ -175,15 +204,17 @@ points at the wrapper page, which never moves. After editing:
 
   ```bash
   # (rebuild first if the frontend also changed)
-  python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py preview-refresh \
-      --slug "update-$SLUG"
+  python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name "si-preview-update-$SLUG"
   python3 system/scripts/layout.py refresh si-preview
   ```
 
-  `preview-refresh` restarts only the inner app on the same port and re-runs the
-  health check; the wrapper frame and the user's tab are untouched. If it exits
-  non-zero the new build did not boot -- the tab will show an error until you fix
-  it and refresh again; the *live* UI is unaffected either way.
+  That is the shared script's own `refresh`, addressed by the instance name
+  `preview` printed -- there is no wrapper for it here, since it needs nothing
+  from this flow but the slug. It restarts only the inner app on the same port
+  and re-runs the health check; the wrapper frame and the user's tab are
+  untouched. If it exits non-zero the new build did not boot -- the tab will show
+  an error until you fix it and refresh again; the *live* UI is unaffected either
+  way.
 
 **Commit before each surface.** After each round you show the user, commit in the
 worktree so branch `HEAD` always equals what they are looking at:
@@ -221,7 +252,7 @@ worktrees, so before creating the worker you must release the lead's hold on
 
 ```bash
 # tear the live preview down and close its tab (it boots from the worktree)
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug "update-$SLUG"
+python3 .agents/shared/scripts/serve_isolated_instance.py down --name "si-preview-update-$SLUG"
 for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
 # then remove the lead's worktree, freeing the branch for the worker
 git worktree remove data/.tasks/si-live/update-$SLUG
@@ -289,6 +320,9 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
     --slug "update-$SLUG" --work-dir "$WORK_DIR"
 for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
+
+Same hand-off rule as the first round: check the boot's exit code, *then* open,
+and once it is open it is the user's to judge -- you do not drive it.
 
 **Two things must both hold**, and the second is a real judgment, not a
 formality:
@@ -386,11 +420,13 @@ interleave.
    destroy the worker, close the ticket, and release the lease:
 
    ```bash
-   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug "update-$SLUG"
+   python3 .agents/shared/scripts/serve_isolated_instance.py down --name "si-preview-update-$SLUG"
    for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
    ```
 
-   `unpreview` only handles the *service*; the `si-preview` tab is a layout panel
+   `down` is idempotent (a missing instance is a no-op success), so it is safe
+   after a reveal, after a rejection, or to clean up a half-set-up preview. It
+   only handles the *service*; the `si-preview` tab is a layout panel
    you must close yourself, or the user is left with a stale tab pointing at a
    deregistered service. Then destroy the worker per `launch-task`, close the
    `update-$SLUG` ticket, and release the editing lease with

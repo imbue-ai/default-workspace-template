@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -571,19 +572,19 @@ def test_restore_tree_removes_adds_and_checks_out_the_rest() -> None:
     ]
 
 
-# --- preview / unpreview adapters -------------------------------------------
+# --- the preview adapter ------------------------------------------------------
 #
-# ``preview`` / ``unpreview`` are thin system-interface adapters over the shared
+# ``preview`` is a thin system-interface adapter over the shared
 # ``serve_isolated_instance.py`` script. These tests assert the adapter validates
 # its input and hands the shared script the system-interface specifics; the
-# preview *mechanism* (booting, health, registration, teardown, state) is
-# exercised in ``.agents/shared/scripts/serve_isolated_instance_test.py``.
+# preview *mechanism* (booting, health, registration, refresh, teardown, state) is
+# exercised in ``.agents/shared/scripts/serve_isolated_instance_test.py``, which is
+# also where refreshing and tearing a live preview down are covered -- the flow
+# invokes those directly rather than through a wrapper here.
 
 
 _SLUG = "demo-change"
 _SERVE_UP = (sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "up")
-_SERVE_DOWN = (sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "down")
-_SERVE_REFRESH = (sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "refresh")
 
 
 def _make_work_dir(tmp_path: Path, *, built: bool = True) -> Path:
@@ -783,67 +784,24 @@ def test_preview_propagates_a_shared_script_failure(tmp_path: Path) -> None:
     assert code == 1
 
 
-def test_preview_refresh_delegates_to_the_shared_script(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
-
-    code = reveal_mod.preview_refresh(_SLUG, tmp_path, runner=runner)
-
-    assert code == 0
-    refresh_calls = runner.argvs_starting(*_SERVE_REFRESH)
-    assert len(refresh_calls) == 1
-    # Refreshes the same instance name the preview created for this slug; it never
-    # rebuilds or re-registers anything here (the shared script bounces the port).
-    assert _flag(refresh_calls[0], "--name") == reveal_mod._preview_instance_name(_SLUG)
-    assert not runner.ran("npm", "run", "build")
-
-
-def test_preview_refresh_propagates_a_shared_script_failure(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
-    runner.respond(_SERVE_REFRESH, _Result(returncode=1))
-
-    code = reveal_mod.preview_refresh(_SLUG, tmp_path, runner=runner)
-
-    assert code == 1
-
-
-def test_main_routes_preview_refresh_through_the_shared_script(tmp_path: Path) -> None:
-    # End-to-end wiring: main() -> preview_refresh() spawns a *real* subprocess of
-    # the shared script. No instance exists, so the shared ``refresh`` reports
-    # "nothing to refresh" (exit 1) -- which proves the routing reached it.
-    code = reveal_mod.main(
-        ["preview-refresh", "--slug", _SLUG, "--repo-root", str(tmp_path)]
+def test_the_shared_serve_script_path_resolves_to_a_runnable_script() -> None:
+    # ``preview`` spawns the shared script by this path, and the refresh/teardown
+    # halves of the flow are invoked directly by the agent rather than through
+    # this module -- so nothing else here would notice the ``parents[3]`` arithmetic
+    # drifting (a skill folder moving, the script being renamed). Run it for real.
+    assert reveal_mod._SHARED_SERVE_SCRIPT.is_file()
+    assert (
+        subprocess.run(
+            [sys.executable, str(reveal_mod._SHARED_SERVE_SCRIPT), "--help"],
+            capture_output=True,
+        ).returncode
+        == 0
     )
-    assert code == 1
-
-
-def test_unpreview_delegates_to_the_shared_script(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
-
-    code = reveal_mod.unpreview(_SLUG, tmp_path, runner=runner)
-
-    assert code == 0
-    down_calls = runner.argvs_starting(*_SERVE_DOWN)
-    assert len(down_calls) == 1
-    # Tears down the same instance name the preview created for this slug.
-    assert _flag(down_calls[0], "--name") == reveal_mod._preview_instance_name(_SLUG)
-
-
-def test_unpreview_propagates_a_shared_script_failure(tmp_path: Path) -> None:
-    runner = _RecordingRunner()
-    runner.respond(_SERVE_DOWN, _Result(returncode=1))
-
-    code = reveal_mod.unpreview(_SLUG, tmp_path, runner=runner)
-
-    assert code == 1
-
-
-def test_main_routes_unpreview_through_the_shared_script(tmp_path: Path) -> None:
-    # End-to-end wiring: main() -> unpreview() spawns a *real* subprocess of the
-    # shared script -- proving ``_SHARED_SERVE_SCRIPT`` resolves to an existing,
-    # runnable stdlib script. No instance exists, so the shared ``down`` is an
-    # idempotent no-op success.
-    code = reveal_mod.main(["unpreview", "--slug", _SLUG, "--repo-root", str(tmp_path)])
-    assert code == 0
+    # The prose the agent copies from (this module's docstring, the skill) names
+    # the same script repo-relatively; keep the two spellings in step.
+    assert str(reveal_mod._SHARED_SERVE_SCRIPT).endswith(
+        reveal_mod._SHARED_SERVE_SCRIPT_HINT
+    )
 
 
 def test_main_preview_rejects_a_bad_work_dir(tmp_path: Path) -> None:

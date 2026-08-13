@@ -40,9 +40,9 @@ Run via bare ``python3`` (standard library only), like ``forward_port.py`` and
 ``reload_system_interface``'s predecessor -- it orchestrates the environment, so
 it must not depend on any particular venv being synced.
 
-The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
-over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
-substrate every service flow shares). They hand it the system-interface
+The ``preview`` subcommand is a thin system-interface adapter over the shared
+``serve_isolated_instance.py`` motion (the previewable-instance substrate every
+service flow shares). It hands it the system-interface
 specifics -- boot ``uv run system-interface`` from an already-built
 ``--work-dir`` on a free port, with layout persistence neutered (drop
 MNGR_AGENT_ID so it can't clobber the live ``layout.json``); keep agent
@@ -67,12 +67,19 @@ The non-deterministic part -- opening the tab and gating on the user's judgment
 Usage:
     python3 reveal_system_interface.py reveal --rollback-to <pre-merge-sha> [--repo-root PATH]
     python3 reveal_system_interface.py preview --slug <name> --work-dir <built-work-dir> [--repo-root PATH]
-    python3 reveal_system_interface.py preview-refresh --slug <name> [--repo-root PATH]
-    python3 reveal_system_interface.py unpreview --slug <name> [--repo-root PATH]
 
-The ``preview-refresh`` subcommand re-boots the preview's inner app on its
-existing port (for a backend round in the live editing loop) so an edit/rebuild
-is picked up in place, without disturbing the wrapper frame or the user's tab.
+Refreshing a live preview in place and tearing it down are **not** commands here:
+they are the shared script's own, addressed by the instance name ``preview``
+prints on success (``si-preview-<slug>``)::
+
+    python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name si-preview-<slug>
+    python3 .agents/shared/scripts/serve_isolated_instance.py down --name si-preview-<slug>
+
+``refresh`` re-boots the preview's inner app on its existing port (for a backend
+round in the live editing loop) so an edit/rebuild is picked up in place, without
+disturbing the wrapper frame or the user's tab; ``down`` is the idempotent
+teardown. Neither needed anything from this script but the slug, so neither is
+wrapped here -- a wrapper would only duplicate the naming convention.
 
 Environment:
     MINDS_WORKSPACE_SERVER_URL  Base URL of the live workspace server
@@ -88,17 +95,15 @@ Exit codes (``reveal``):
        on the known-good revision (the requested change did NOT land).
     3  EMERGENCY: even rollback could not restore a healthy UI.
 
-Exit codes (``preview`` / ``preview-refresh`` / ``unpreview``):
-    0  Success (preview is up / rebooted in place / torn down).
-    1  The preview failed to build or boot (and tore itself down); or there was
-       no live preview to refresh, or the rebooted inner app never became
-       healthy; or a bad argument / unreadable state file.
+Exit codes (``preview``):
+    0  The preview is up.
+    1  It failed to build or boot (and tore itself down); or a bad argument, an
+       unreadable state file, or another pass's preview already holding the tab.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import socket
 import subprocess
@@ -143,9 +148,11 @@ _REFRESH_TIMEOUT_SECONDS = 120.0
 
 # Pre-merge preview: the deterministic boot + teardown of a previewable instance
 # is the shared ``serve_isolated_instance.py`` motion that every service flow
-# reuses. ``preview`` / ``unpreview`` below are thin adapters that hand it the
-# system-interface specifics; the shared script owns the ports, the
-# process/service teardown, and the state file. It lives two levels up under
+# reuses. ``preview`` below is a thin adapter that hands it the system-interface
+# specifics; the shared script owns the ports, the process/service teardown, and
+# the state file. Refreshing and tearing that instance down need no adapter here
+# -- they are the shared script's own ``refresh`` / ``down``, addressed by the
+# instance name ``preview`` prints on success. It lives two levels up under
 # ``.agents/shared/scripts/`` and is stdlib-only, so it runs under the same
 # interpreter as this script.
 _SHARED_SERVE_SCRIPT = (
@@ -154,6 +161,9 @@ _SHARED_SERVE_SCRIPT = (
     / "scripts"
     / "serve_isolated_instance.py"
 )
+# How to spell that script in a message an agent will copy: repo-root-relative,
+# like every other command in the flow, rather than the absolute resolved path.
+_SHARED_SERVE_SCRIPT_HINT = ".agents/shared/scripts/serve_isolated_instance.py"
 # The service names the preview registers: the inner booted app and the
 # outer wrapper the user actually opens. Fixed because the flow runs one preview
 # at a time -- enforced by the guard in ``preview`` (a different slug's live
@@ -758,7 +768,9 @@ def reveal(
 
 def _preview_instance_name(slug: str) -> str:
     """The name the shared script files this preview's instance under (its state
-    dir + the stable id ``unpreview`` tears down). One preview per slug."""
+    dir + the stable id its ``refresh`` / ``down`` address). One preview per
+    slug. ``preview`` prints this on success, so the caller never reconstructs
+    it."""
     return f"{PREVIEW_SERVICE_NAME}-{slug}"
 
 
@@ -837,13 +849,12 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
         return 1
     other = _find_other_preview(repo_root, slug)
     if other is not None:
-        other_slug = other.removeprefix(f"{PREVIEW_SERVICE_NAME}-")
         sys.stderr.write(
             f"preview: another pass's preview is already up ({other}); the "
             f"'{PREVIEW_SERVICE_NAME}' tab can only show one at a time, so booting "
             "this one would hijack it. Surface this to the user and coordinate "
             "with that pass -- or, if it is abandoned, tear it down first with "
-            f"'unpreview --slug {other_slug}'.\n"
+            f"'python3 {_SHARED_SERVE_SCRIPT_HINT} down --name {other}'.\n"
         )
         return 1
     result = runner.run(
@@ -884,56 +895,6 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     return int(getattr(result, "returncode", 0))
 
 
-def preview_refresh(slug: str, repo_root: Path, *, runner: Runner) -> int:
-    """Re-boot the preview's inner app on its existing port via the shared script.
-
-    Thin adapter over ``serve_isolated_instance.py refresh``. Used during the live
-    editing loop for a **backend** round: after the lead rebuilds/edits the code
-    in its worktree (which the inner app runs from), this bounces just the inner
-    app process on the same port so the new backend is picked up -- leaving the
-    wrapper frame, the service registration, and the user's tab untouched. A
-    frontend-only round needs no process bounce (the inner app serves the rebuilt
-    ``static/`` bundle straight from disk); the lead just rebuilds and reloads the
-    tab's iframe with ``layout.py refresh si-preview``. Either way the lead
-    reloads the iframe itself afterward -- this never touches the tab. Returns the
-    shared script's exit code (0 healthy; 1 if there is nothing to refresh or the
-    rebooted app did not come up)."""
-    result = runner.run(
-        [
-            sys.executable,
-            str(_SHARED_SERVE_SCRIPT),
-            "refresh",
-            "--name",
-            _preview_instance_name(slug),
-            "--repo-root",
-            str(repo_root),
-        ],
-        cwd=str(repo_root),
-        check=False,
-    )
-    return int(getattr(result, "returncode", 0))
-
-
-def unpreview(slug: str, repo_root: Path, *, runner: Runner) -> int:
-    """Tear down the preview for ``slug`` via the shared script. Idempotent: a
-    missing instance is a no-op success, so this is safe on reject, after a
-    successful reveal, or to recover from a half-set-up preview."""
-    result = runner.run(
-        [
-            sys.executable,
-            str(_SHARED_SERVE_SCRIPT),
-            "down",
-            "--name",
-            _preview_instance_name(slug),
-            "--repo-root",
-            str(repo_root),
-        ],
-        cwd=str(repo_root),
-        check=False,
-    )
-    return int(getattr(result, "returncode", 0))
-
-
 def _add_repo_root_arg(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--repo-root",
@@ -946,8 +907,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Manage the system-interface update lifecycle: preview a built "
-            "work_dir as a labeled tab, refresh that preview in place, reveal a "
-            "merged change with auto-recovery, and tear the preview down."
+            "work_dir as a labeled tab, and reveal a merged change with "
+            "auto-recovery. Refreshing that preview in place and tearing it "
+            "down are the shared serve_isolated_instance.py's own `refresh` / "
+            "`down`, by the instance name `preview` prints."
         )
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -982,25 +945,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     _add_repo_root_arg(preview_parser)
 
-    preview_refresh_parser = subparsers.add_parser(
-        "preview-refresh",
-        help="Re-boot the preview's inner app on its existing port to pick up a "
-        "backend edit/rebuild, without touching the wrapper or the user's tab.",
-    )
-    preview_refresh_parser.add_argument(
-        "--slug", required=True, help="The slug passed to 'preview'."
-    )
-    _add_repo_root_arg(preview_refresh_parser)
-
-    unpreview_parser = subparsers.add_parser(
-        "unpreview",
-        help="Tear down a preview (kill the server, deregister the service). Idempotent.",
-    )
-    unpreview_parser.add_argument(
-        "--slug", required=True, help="The slug passed to 'preview'."
-    )
-    _add_repo_root_arg(unpreview_parser)
-
     args = parser.parse_args(argv)
     repo_root = Path(args.repo_root).resolve()
     try:
@@ -1019,10 +963,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root,
                 runner=Runner(),
             )
-        if args.command == "preview-refresh":
-            return preview_refresh(args.slug, repo_root, runner=Runner())
-        if args.command == "unpreview":
-            return unpreview(args.slug, repo_root, runner=Runner())
         parser.error(f"unknown command: {args.command}")
         return 1
     except PreconditionError as exc:

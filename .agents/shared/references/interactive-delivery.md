@@ -74,6 +74,16 @@ specifics, but the shape below holds for all of them.
    nothing reaches the served branch or production state until the shape is
    confirmed.
 
+   **Do not test the prototype yourself; that is what you are surfacing it for.**
+   Your own check ends at "it came up" -- an exit code, a health probe, a `curl`,
+   a log line -- and it happens *before* you put the thing in front of the user.
+   Once it is in front of them, driving it (a browser session, a scripted
+   interaction) buys nothing the next few seconds of their attention won't, and
+   it costs the thing this phase exists for: speed. Worse, the surface is often
+   live -- wired to real data, real accounts, real conversations -- so your test
+   actions land in the user's view and in their state. The thorough pass is phase
+   7's, and it runs in a background worker against its own instance.
+
 6. **Hard gate: nothing hardened before confirmation.** Do not crystallize, write
    thorough tests, run review gates, or build production state on an unconfirmed
    creation. Hardening a moving target bakes in the wrong shape -- and bakes it

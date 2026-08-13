@@ -50,13 +50,19 @@ as sub-commands:
   live UI. No fetch, no re-checkout, no rebuild, and without merging or
   touching the served tree. (For a worker's work_dir, resolve it from
   `mngr ls --include 'name=="<name>"' --format json` -> `agents[0].work_dir`.)
-- `preview-refresh --slug <name>` re-boots the preview's inner app on its existing
-  port to pick up a backend edit/rebuild during the live loop, without disturbing
-  the wrapper frame or the user's tab (a frontend-only round needs no bounce --
-  just rebuild and `layout.py refresh si-preview`).
-- `unpreview --slug <name>` tears that down -- kill both servers, deregister both
-  services (idempotent).
 - `reveal --rollback-to <sha>` reveals the merged change (below).
+
+Refreshing a live preview and tearing it down are **not** sub-commands here --
+they needed nothing from this flow but the slug, so they are the shared
+`serve_isolated_instance.py`'s own `refresh` / `down`, addressed by the instance
+name `preview` prints on success (`si-preview-<slug>`):
+
+- `refresh --name si-preview-<slug>` re-boots the preview's inner app on its
+  existing port to pick up a backend edit/rebuild during the live loop, without
+  disturbing the wrapper frame or the user's tab (a frontend-only round needs no
+  bounce -- just rebuild and `layout.py refresh si-preview`).
+- `down --name si-preview-<slug>` tears it down -- kill both servers, deregister
+  both services (idempotent).
 
 The reveal, after merge, is a single self-healing command. With the known-good
 revision captured before the merge (`ROLLBACK_TO=$(git rev-parse HEAD)`):
