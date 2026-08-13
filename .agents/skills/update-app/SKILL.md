@@ -259,7 +259,11 @@ where the data dies. Encode these, cheapest first:
 - **Read-only verification needs no ceremony.** Most changes (UI, copy, a
   backend read path) can be exercised by curl/Playwright against the live
   service without writing anything. Reading the live store -- including to
-  *render* a preview -- is fine; the danger is only writes.
+  *render* a preview -- is fine; the danger is only writes. That is the *data*
+  question, and answering it does not settle the timing one above. Read-only
+  still means a browser drive belongs in the private window: once a tab is open,
+  a read-only Playwright pass writes nothing but still lands in the user's view,
+  and the live service is yours only for a `curl` or a health probe.
 
 - **If exercising the change must write, mutate, or delete data, never
   point it at the live store.** Copy the store to a scratch path *outside*
