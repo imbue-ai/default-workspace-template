@@ -25,7 +25,10 @@ from oom_priority import bands
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr_codex.app_server_client import CodexModel
+from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
+from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
+from imbue.system_interface.harnesses.codex.model import read_codex_model_options
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -857,6 +860,56 @@ def test_picker_open_reconciles_the_chip_and_switch_model_sets_for_codex(tmp_pat
     assert switch_response.status_code == 200
     assert picker_client.calls == [{"model": "gpt-5.6-terra", "effort": "high", "service_tier": "priority"}]
     assert messenger.sent == []
+
+
+class _FakeCodexConnection:
+    """A minimal stand-in for a live ``CodexLiveConnection`` for the connect-seed write-through."""
+
+    def __init__(self, models: tuple[CodexModel, ...]) -> None:
+        self.codex_models = models
+        self.is_alive = True
+        self.ledger = None
+
+    def stop(self) -> None:
+        pass
+
+
+def test_codex_connect_seed_persists_the_raw_model_options_sidecar(tmp_path: Path) -> None:
+    """The connect-time ``model/list`` seed writes the RAW list through to the codex sidecar (as well
+    as the in-memory set), so the chip resolves offline after a restart before the daemon reconnects."""
+    agent_id = "agent-00000000000000000000000000000015"
+    manager = AgentManager.build(WebSocketBroadcaster())
+    # Point the manager's state-dir root at tmp_path so the sidecar write lands in the sandbox.
+    manager._host_dir = tmp_path
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id,
+            name="seed-agent",
+            state="RUNNING",
+            labels={},
+            work_dir=str(tmp_path / "work"),
+            harness=HarnessType.CODEX,
+        )
+        manager._activity_tracked_agents.add(agent_id)
+    models = (
+        CodexModel.model_validate(
+            {
+                "id": "gpt-5.6-terra",
+                "model": "gpt-5.6-terra",
+                "displayName": "GPT-5.6-Terra",
+                "supportedReasoningEfforts": [{"reasoningEffort": "high"}],
+                "serviceTiers": [{"id": "priority"}],
+            }
+        ),
+    )
+    with patch.object(CodexLiveConnection, "build", return_value=_FakeCodexConnection(models)):
+        manager._ensure_codex_connection(agent_id)
+
+    state_dir = manager._get_agent_state_dir(agent_id)
+    assert read_codex_model_options(get_codex_model_options_path(state_dir)) == models
+    in_memory = manager.get_codex_model_options(agent_id)
+    assert in_memory is not None
+    assert [opt.id for opt in in_memory] == ["gpt-5.6-terra"]
 
 
 def test_model_options_returns_null_models_for_claude(client: FlaskClient, tmp_path: Path) -> None:

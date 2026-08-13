@@ -20,13 +20,17 @@ mirrored yet the file is absent, the reader returns ``None``, and the bar shows
 logo-only.
 """
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from typing import Protocol
 
 from loguru import logger
+from pydantic import ValidationError
 
+from imbue.mngr.utils.file_utils import atomic_write
+from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -98,6 +102,59 @@ def codex_model_to_option(model: CodexModel) -> ModelOption:
 def codex_models_to_options(models: tuple[CodexModel, ...]) -> tuple[ModelOption, ...]:
     """Map a whole ``model/list`` result to the per-agent catalog options (in daemon order)."""
     return tuple(codex_model_to_option(model) for model in models)
+
+
+# The codex-scoped sidecar that persists the RAW ``model/list`` result across a restart, so the
+# per-agent option set -- and thus the model chip -- resolves BEFORE the daemon reconnects. It sits
+# beside ``minds_model_state.json`` under CODEX_HOME. RAW ``CodexModel`` entries are stored (NOT
+# mapped ``ModelOption``s); :func:`codex_models_to_options` maps them on READ. This keeps the
+# preserve-and-surface contract: the raw daemon source is retained and the derived options are
+# recomputed from it, so a later change to the mapping needs no refetch.
+CODEX_MODEL_OPTIONS_FILENAME: str = "minds_codex_model_options.json"
+
+
+def get_codex_model_options_path(agent_state_dir: Path) -> Path:
+    """The agent's model-options sidecar: ``<CODEX_HOME>/minds_codex_model_options.json``."""
+    return get_codex_home(agent_state_dir) / CODEX_MODEL_OPTIONS_FILENAME
+
+
+def write_codex_model_options(model_options_path: Path, models: tuple[CodexModel, ...]) -> None:
+    """Persist the RAW ``model/list`` result to the sidecar (raw ``CodexModel`` entries, by alias).
+
+    The write-through called on every successful NON-EMPTY live fetch -- the connect-time seed and
+    each picker-open fetch -- so the per-agent option set survives a restart and the chip resolves
+    offline. An empty list is the caller's signal of a failed/absent fetch and must NOT reach here:
+    it would clobber a good sidecar (callers guard on ``if models``). A write failure is logged,
+    never raised -- a stale sidecar is preferable to breaking the caller (the connect path / the
+    picker endpoint), mirroring :func:`write_codex_model_state`."""
+    payload = {"models": [model.model_dump(by_alias=True) for model in models]}
+    try:
+        atomic_write(model_options_path, json.dumps(payload))
+    except OSError as exc:
+        logger.opt(exception=exc).warning("codex: failed to write model options to {}", model_options_path)
+
+
+def read_codex_model_options(model_options_path: Path) -> tuple[CodexModel, ...]:
+    """Load the persisted RAW ``model/list`` entries from the sidecar, or ``()`` if absent/malformed.
+
+    The lazy-load fallback SOURCE: when the in-memory per-agent option set is empty (post-restart,
+    before the daemon reconnects), the chip-match reads here and maps via
+    :func:`codex_models_to_options`. A missing/unparseable file yields ``()`` (the chip then falls
+    back to logo-only), and any single entry that no longer matches the ``CodexModel`` shape is
+    skipped rather than sinking the whole file -- so a daemon schema drift degrades gracefully."""
+    raw_models = read_json_dict(model_options_path).get("models")
+    if not isinstance(raw_models, list):
+        return ()
+    models: list[CodexModel] = []
+    for entry in raw_models:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            models.append(CodexModel.model_validate(entry))
+        except ValidationError as exc:
+            logger.debug("codex: skipping a malformed model-options entry in {} ({})", model_options_path, exc)
+    return tuple(models)
+
 
 # Codex writes its live state under CODEX_HOME (``<state_dir>/plugin/codex/home``), not at
 # the state-dir root, so the shared reader/watch path takes this relative directory as data.
@@ -271,6 +328,11 @@ class CodexModelResolver(HarnessModelResolver):
             return ()
         finally:
             client.close()
+        # Write-through (picker-open path): persist this fresh, non-empty raw list to the sidecar so
+        # the chip resolves offline after a restart. Only a non-empty fetch is persisted -- a failed
+        # fetch already returned above, so it never clobbers a good sidecar.
+        if models:
+            write_codex_model_options(get_codex_model_options_path(self._agent_state_dir), models)
         return codex_models_to_options(models)
 
     def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:

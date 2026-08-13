@@ -56,6 +56,9 @@ from imbue.system_interface.harnesses.claude.launch_defaults import read_workspa
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
 from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
+from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
+from imbue.system_interface.harnesses.codex.model import read_codex_model_options
+from imbue.system_interface.harnesses.codex.model import write_codex_model_options
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
@@ -363,7 +366,9 @@ class AgentManager:
     # three agree. It deliberately OUTLIVES connection churn: a momentarily-absent connection does not
     # drop it (the chip keeps matching), and a picker-open can populate/refresh it with no live
     # connection at all, as long as the daemon is reachable. ``None`` (absent key) until the first
-    # connect-seed or picker-open populates it -> the chip falls back to logo-only / the live file.
+    # connect-seed or picker-open populates it -> the chip-match then falls back to the persisted
+    # raw ``model/list`` sidecar (:func:`get_codex_model_options_path`), so a restart still resolves
+    # the chip before the daemon reconnects; only with neither populated does the bar go logo-only.
     _codex_model_options_by_agent: dict[str, tuple[ModelOption, ...]]
     # The last computed model choice per agent, and the filesystem watcher that
     # re-derives it when the agent's minds_model_state.json changes. The live read is
@@ -1330,9 +1335,12 @@ class AgentManager:
             return
         # Seed the ONE reconciled per-agent option set from the connect-time ``model/list`` (D2), so
         # the chip can match before any picker-open. A failed connect fetch (empty) is NOT stored --
-        # it must not clobber a set a prior picker-open already populated.
+        # it must not clobber a set a prior picker-open already populated. The same fresh, non-empty
+        # raw list is written through to the codex sidecar (write-through, connect path) so the chip
+        # still resolves after a restart before this connection is re-established.
         if connection.codex_models:
             self.store_codex_model_options(agent_id, codex_models_to_options(connection.codex_models))
+            write_codex_model_options(get_codex_model_options_path(state_dir), connection.codex_models)
         # The dot is derived by the tracker path from mngr's lifecycle + transcript; recompute now so a
         # freshly (re)built connection's agent shows the right dot immediately.
         self._recompute_activity_state(agent_id, broadcast_on_change=True)
@@ -1400,12 +1408,25 @@ class AgentManager:
 
         Seeded on connect from the live connection's ``model/list`` and refreshed by each picker-open
         fetch (:meth:`store_codex_model_options`), so immediately after an open all three agree.
-        ``None`` until a connect-seed or a picker-open has populated it (the chip then falls back to
-        logo-only / whatever the live state file already holds). Read straight from the stored set --
-        no daemon call in the hot chip-recompute path.
+
+        Match-source precedence: the live in-memory set wins; if it is empty (post-restart, before
+        the daemon reconnects) this falls back to the persisted raw ``model/list`` sidecar, mapping
+        it on read -- so the chip resolves offline instead of showing the "unrecognized model" shrug.
+        ``None`` only when neither the in-memory set nor the sidecar is populated (the chip then
+        falls back to logo-only / whatever the live state file already holds). The in-memory read is
+        the hot path; the sidecar read runs only while the set is empty, never after a reconnect
+        re-seeds it, so the reconciled live list always supersedes the on-disk fallback.
         """
         with self._lock:
-            return self._codex_model_options_by_agent.get(agent_id)
+            cached = self._codex_model_options_by_agent.get(agent_id)
+        if cached is not None:
+            return cached
+        # Fallback (outside the lock -- it does disk I/O): map the persisted raw sidecar. An absent
+        # or empty sidecar yields ``None`` (logo-only), never a spurious empty option set.
+        models = read_codex_model_options(get_codex_model_options_path(self._get_agent_state_dir(agent_id)))
+        if not models:
+            return None
+        return codex_models_to_options(models)
 
     def store_codex_model_options(self, agent_id: str, options: tuple[ModelOption, ...]) -> None:
         """Record the fresh per-agent codex option set (a connect-seed or a picker-open fetch, D2).
@@ -1413,7 +1434,9 @@ class AgentManager:
         This is the reconciliation point: the picker-open fetch and the connect-seed both land here,
         so the chip-match and the switch-validation read EXACTLY the set the picker just offered. A
         failed fetch (an empty tuple) is NOT stored by the callers, so a transient daemon miss never
-        clobbers the last-known set.
+        clobbers the last-known set. The same fresh raw list is also written through to the on-disk
+        sidecar by those callers (not here), which is the offline-restart fallback source
+        :meth:`get_codex_model_options` maps when this in-memory set is empty.
         """
         with self._lock:
             self._codex_model_options_by_agent[agent_id] = options
@@ -1422,11 +1445,12 @@ class AgentManager:
         """The option set an agent's live identity matches against (chip-match + switch-validation).
 
         Per-agent for codex (the ONE reconciled set seeded on connect and refreshed by each
-        picker-open, empty until first populated); the static harness catalog for every other
-        harness. This is the ONE spine seam the dynamic codex catalog needs -- the match SOURCE
-        becomes per-agent, while the matcher, the file read, and the broadcast stay shared. Never
-        holds ``_lock`` (``get_codex_model_options`` takes it), so callers must not invoke it while
-        holding the lock.
+        picker-open, falling back to the persisted sidecar while that set is empty -- see
+        :meth:`get_codex_model_options`); the static harness catalog for every other harness. This
+        is the ONE spine seam the dynamic codex catalog needs -- the match SOURCE becomes per-agent,
+        while the matcher, the file read, and the broadcast stay shared. Never holds ``_lock``
+        (``get_codex_model_options`` takes it, and reads the sidecar off-lock), so callers must not
+        invoke it while holding the lock.
         """
         if agent_state.harness == HarnessType.CODEX:
             options = self.get_codex_model_options(agent_state.id)

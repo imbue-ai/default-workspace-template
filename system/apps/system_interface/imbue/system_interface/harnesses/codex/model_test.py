@@ -29,6 +29,9 @@ from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PA
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
 from imbue.system_interface.harnesses.codex.model import codex_model_to_option
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
+from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
+from imbue.system_interface.harnesses.codex.model import read_codex_model_options
+from imbue.system_interface.harnesses.codex.model import write_codex_model_options
 from imbue.system_interface.harnesses.codex.model import _bind_root_thread
 from imbue.system_interface.harnesses.codex.model import _subscribe_root_thread
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -232,6 +235,72 @@ def test_list_offered_options_tolerates_a_daemon_failure(tmp_path: Path) -> None
     resolver, _opens = _resolver_over(tmp_path, client)
     assert resolver.list_offered_options() == ()
     assert client.closed is True
+
+
+# =============================================================================
+# The raw model-options sidecar (offline-restart persistence)
+# =============================================================================
+
+
+def test_write_then_read_round_trips_the_raw_model_list(tmp_path: Path) -> None:
+    # The sidecar persists the RAW CodexModel entries (by alias) and reads them back byte-identical,
+    # so the mapping (codex_models_to_options) is applied on READ, not at write time.
+    models = (
+        _codex_model("gpt-5.6-terra", "GPT-5.6-Terra", ("high",), tiers=("priority",)),
+        _codex_model("gpt-5.2", "GPT-5.2", ("low", "xhigh")),
+    )
+    path = get_codex_model_options_path(tmp_path)
+    write_codex_model_options(path, models)
+    assert read_codex_model_options(path) == models
+    # Mapping happens on read, yielding the same per-agent options the live fetch would.
+    assert [opt.id for opt in codex_models_to_options(read_codex_model_options(path))] == [
+        "gpt-5.6-terra",
+        "gpt-5.2",
+    ]
+
+
+def test_read_model_options_missing_or_non_list_is_empty(tmp_path: Path) -> None:
+    # An absent sidecar, and a present-but-malformed payload, both read as () -> the chip falls back
+    # to logo-only rather than crashing.
+    assert read_codex_model_options(get_codex_model_options_path(tmp_path)) == ()
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"models": "not-a-list"}))
+    assert read_codex_model_options(bad) == ()
+    bad.write_text("{ this is not json")
+    assert read_codex_model_options(bad) == ()
+
+
+def test_read_model_options_skips_a_malformed_entry(tmp_path: Path) -> None:
+    # A single entry that no longer matches the CodexModel shape is skipped; the valid ones survive,
+    # so a daemon schema drift degrades gracefully instead of dropping the whole file.
+    good = _codex_model("gpt-5.6-terra", "GPT-5.6-Terra", ("high",))
+    path = tmp_path / "options.json"
+    path.write_text(json.dumps({"models": [good.model_dump(by_alias=True), {"model": 123}, "not-a-dict"]}))
+    read_back = read_codex_model_options(path)
+    assert [model.model for model in read_back] == ["gpt-5.6-terra"]
+
+
+def test_list_offered_options_persists_the_sidecar_on_a_live_fetch(tmp_path: Path) -> None:
+    # Write-through (picker-open path): a successful model/list fetch persists the raw list to the
+    # sidecar, so the chip resolves offline after a restart. The mapped options are still returned.
+    models = (_codex_model("gpt-5.6-terra", "GPT-5.6-Terra", ("high",), tiers=("priority",)),)
+    client = _RecordingClient(models=models)
+    resolver, _opens = _resolver_over(tmp_path, client)
+    options = resolver.list_offered_options()
+    assert options is not None and [opt.id for opt in options] == ["gpt-5.6-terra"]
+    assert read_codex_model_options(get_codex_model_options_path(tmp_path)) == models
+
+
+def test_list_offered_options_failure_does_not_clobber_a_good_sidecar(tmp_path: Path) -> None:
+    # A failed fetch must never overwrite a good sidecar: the last-known raw list survives so the
+    # chip keeps matching offline.
+    good = (_codex_model("gpt-5.6-terra", "GPT-5.6-Terra", ("high",)),)
+    path = get_codex_model_options_path(tmp_path)
+    write_codex_model_options(path, good)
+    client = _RecordingClient(fail=True)
+    resolver, _opens = _resolver_over(tmp_path, client)
+    assert resolver.list_offered_options() == ()
+    assert read_codex_model_options(path) == good
 
 
 def test_switch_effort_only_sends_only_effort(tmp_path: Path) -> None:

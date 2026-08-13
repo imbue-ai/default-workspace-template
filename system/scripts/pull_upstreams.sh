@@ -13,11 +13,15 @@
 #
 # Usage:
 #   system/scripts/pull_upstreams.sh <dwt_branch> <mngr_branch> [--dry-run] [--commit] [--yes]
+#   system/scripts/pull_upstreams.sh <dwt_branch> --dwt-only [--dry-run]
 #
 # Options:
 #   --dry-run   Show what WOULD change; touch nothing.
 #   --commit    After re-vendoring mngr, make the re-vendor commit (else leaves it unstaged).
 #   --yes       Skip the confirm before that commit.
+#   --dwt-only  Pull ONLY from dwt (fetch + report). Skips the mngr re-vendor entirely,
+#               so system/vendor/mngr is never touched. Needs only <dwt_branch>
+#               (any <mngr_branch> is ignored).
 #
 # The mngr re-vendor:
 #   * UPDATES only files already vendored under system/vendor/mngr (the subset).
@@ -39,8 +43,10 @@ MNGR_BRANCH=""
 DRY_RUN=0
 DO_COMMIT=0
 ASSUME_YES=0
+DWT_ONLY=0
 
-usage() { sed -n '2,33p' "$0"; exit "${1:-1}"; }
+# Print the header comment block (lines 2 up to the `set -euo` line) as usage.
+usage() { sed -n '2,/^set /{/^set /!p;}' "$0"; exit "${1:-1}"; }
 
 positional=()
 while [ $# -gt 0 ]; do
@@ -48,21 +54,31 @@ while [ $# -gt 0 ]; do
         --dry-run|-n) DRY_RUN=1; shift ;;
         --commit) DO_COMMIT=1; shift ;;
         --yes|-y) ASSUME_YES=1; shift ;;
+        --dwt-only) DWT_ONLY=1; shift ;;
         -h|--help) usage 0 ;;
         -*) echo "unknown option: $1" >&2; usage 1 ;;
         *) positional+=("$1"); shift ;;
     esac
 done
-[ "${#positional[@]}" -eq 2 ] || { echo "error: need <dwt_branch> and <mngr_branch>" >&2; usage 1; }
-DWT_BRANCH="${positional[0]}"
-MNGR_BRANCH="${positional[1]}"
+if [ "$DWT_ONLY" -eq 1 ]; then
+    [ "${#positional[@]}" -ge 1 ] || { echo "error: --dwt-only needs <dwt_branch>" >&2; usage 1; }
+    DWT_BRANCH="${positional[0]}"
+    MNGR_BRANCH=""   # unused in --dwt-only
+else
+    [ "${#positional[@]}" -eq 2 ] || { echo "error: need <dwt_branch> and <mngr_branch>" >&2; usage 1; }
+    DWT_BRANCH="${positional[0]}"
+    MNGR_BRANCH="${positional[1]}"
+fi
 
-command -v rsync >/dev/null || { echo "error: rsync is required" >&2; exit 1; }
+# rsync is only needed for the mngr re-vendor leg, which --dwt-only skips.
+[ "$DWT_ONLY" -eq 1 ] || command -v rsync >/dev/null || { echo "error: rsync is required" >&2; exit 1; }
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-if ! git diff --quiet -- "$PREFIX" || ! git diff --cached --quiet -- "$PREFIX"; then
+# The re-vendor writes under $PREFIX, so it must be clean first. --dwt-only never
+# writes there, so the check does not apply.
+if [ "$DWT_ONLY" -eq 0 ] && { ! git diff --quiet -- "$PREFIX" || ! git diff --cached --quiet -- "$PREFIX"; }; then
     echo "REFUSING: $PREFIX has uncommitted changes -- commit or stash them first." >&2
     exit 2
 fi
@@ -73,14 +89,21 @@ trap cleanup EXIT
 
 echo "=============================================================="
 echo " pull plan"
-echo "   mngr  mngr-internal ${MNGR_BRANCH}  ->  ${PREFIX}  (re-vendor; updates working tree)"
-echo "   dwt   dwt ${DWT_BRANCH}              ->  (fetch + report only; you integrate)"
+if [ "$DWT_ONLY" -eq 1 ]; then
+    echo "   dwt   dwt ${DWT_BRANCH}  ->  (fetch + report only; you integrate)"
+    echo "   MODE: --dwt-only (mngr re-vendor skipped; ${PREFIX} untouched)"
+else
+    echo "   mngr  mngr-internal ${MNGR_BRANCH}  ->  ${PREFIX}  (re-vendor; updates working tree)"
+    echo "   dwt   dwt ${DWT_BRANCH}              ->  (fetch + report only; you integrate)"
+fi
 [ "$DRY_RUN" -eq 1 ] && echo "   MODE: --dry-run (show changes, touch nothing)"
 echo "=============================================================="
 
 # ============================================================================
 # 1) mngr re-vendor: mngr-internal <mngr_branch> -> system/vendor/mngr
+#    Skipped entirely in --dwt-only.
 # ============================================================================
+if [ "$DWT_ONLY" -eq 0 ]; then
 echo
 echo ">>> [1/2] re-vendor mngr from ${MNGR_BRANCH}"
 echo "    cloning ${MNGR_BRANCH} from mngr-internal (shallow; progress below)..."
@@ -147,12 +170,17 @@ if [ "$DRY_RUN" -eq 0 ] && [ "$DO_COMMIT" -eq 1 ]; then
         fi
     fi
 fi
+fi   # end: mngr re-vendor leg (skipped in --dwt-only)
 
 # ============================================================================
 # 2) dwt: fetch + report (read-only). No auto-merge -- it is a projection.
 # ============================================================================
 echo
-echo ">>> [2/2] dwt ${DWT_BRANCH} (fetch + report)"
+if [ "$DWT_ONLY" -eq 1 ]; then
+    echo ">>> [1/1] dwt ${DWT_BRANCH} (fetch + report)"
+else
+    echo ">>> [2/2] dwt ${DWT_BRANCH} (fetch + report)"
+fi
 if ! git fetch --quiet "$DWT_URL" "$DWT_BRANCH" 2>/dev/null; then
     echo "    warning: could not fetch '$DWT_BRANCH' from ${DWT_URL} (skipping)." >&2
 else

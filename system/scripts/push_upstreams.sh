@@ -10,12 +10,17 @@
 #
 # Usage:
 #   system/scripts/push_upstreams.sh <dwt_branch> <mngr_branch> [options]
+#   system/scripts/push_upstreams.sh <dwt_branch> --dwt-only [options]
 #
 # Options:
 #   --from <ref>   Commit to split (default: HEAD). Only committed work is pushed.
 #   --dry-run      Build both commits in throwaway checkouts and show their diffs,
 #                  but do NOT push anything. Nothing leaves your machine.
 #   --yes          Skip the interactive confirm before each push.
+#   --dwt-only     Push ONLY the workspace to dwt, with system/vendor/mngr included
+#                  verbatim (no vendoring split). The mngr-internal push is skipped
+#                  and the dwt commit carries the FULL tree. Needs only <dwt_branch>
+#                  (any <mngr_branch> is ignored).
 #
 # SAFETY (why this is agent-proof):
 #   * URL-ONLY. It never runs `git remote add`; the upstream URLs live only inside
@@ -41,8 +46,10 @@ MNGR_BRANCH=""
 SOURCE_REF="HEAD"
 ASSUME_YES=0
 DRY_RUN=0
+DWT_ONLY=0
 
-usage() { sed -n '2,32p' "$0"; exit "${1:-1}"; }
+# Print the header comment block (lines 2 up to the `set -euo` line) as usage.
+usage() { sed -n '2,/^set /{/^set /!p;}' "$0"; exit "${1:-1}"; }
 
 positional=()
 while [ $# -gt 0 ]; do
@@ -50,17 +57,26 @@ while [ $# -gt 0 ]; do
         --from) SOURCE_REF="${2:?--from needs a ref}"; shift 2 ;;
         --yes|-y) ASSUME_YES=1; shift ;;
         --dry-run|-n) DRY_RUN=1; shift ;;
+        --dwt-only) DWT_ONLY=1; shift ;;
         -h|--help) usage 0 ;;
         -*) echo "unknown option: $1" >&2; usage 1 ;;
         *) positional+=("$1"); shift ;;
     esac
 done
-[ "${#positional[@]}" -eq 2 ] || { echo "error: need <dwt_branch> and <mngr_branch>" >&2; usage 1; }
-DWT_BRANCH="${positional[0]}"
-MNGR_BRANCH="${positional[1]}"
+if [ "$DWT_ONLY" -eq 1 ]; then
+    [ "${#positional[@]}" -ge 1 ] || { echo "error: --dwt-only needs <dwt_branch>" >&2; usage 1; }
+    DWT_BRANCH="${positional[0]}"
+    MNGR_BRANCH=""   # unused in --dwt-only
+else
+    [ "${#positional[@]}" -eq 2 ] || { echo "error: need <dwt_branch> and <mngr_branch>" >&2; usage 1; }
+    DWT_BRANCH="${positional[0]}"
+    MNGR_BRANCH="${positional[1]}"
+fi
 
 # --- guards -------------------------------------------------------------------
-for b in "$DWT_BRANCH" "$MNGR_BRANCH"; do
+guarded_branches=("$DWT_BRANCH")
+[ "$DWT_ONLY" -eq 0 ] && guarded_branches+=("$MNGR_BRANCH")
+for b in "${guarded_branches[@]}"; do
     case "$b" in
         main|master|HEAD|"")
             echo "REFUSING: '$b' is not an allowed target branch (never main/master)." >&2
@@ -108,9 +124,14 @@ confirm() {
 
 echo "=============================================================="
 echo " push plan (source = $(git rev-parse --short "$SOURCE_REF"))"
-echo "   mngr  ${SUBTREE_PREFIX}  ->  ${MNGR_URL##*/}  branch ${MNGR_BRANCH}"
-echo "   dwt   (workspace)         ->  ${DWT_URL##*/}  branch ${DWT_BRANCH}"
-echo "   dwt keeps its pinned ${SUBTREE_PREFIX} (mngr diffs excluded)"
+if [ "$DWT_ONLY" -eq 1 ]; then
+    echo "   dwt   (FULL workspace, incl ${SUBTREE_PREFIX})  ->  ${DWT_URL##*/}  branch ${DWT_BRANCH}"
+    echo "   MODE: --dwt-only (mngr-internal push skipped; no vendoring split)"
+else
+    echo "   mngr  ${SUBTREE_PREFIX}  ->  ${MNGR_URL##*/}  branch ${MNGR_BRANCH}"
+    echo "   dwt   (workspace)         ->  ${DWT_URL##*/}  branch ${DWT_BRANCH}"
+    echo "   dwt keeps its pinned ${SUBTREE_PREFIX} (mngr diffs excluded)"
+fi
 [ "$DRY_RUN" -eq 1 ] && echo "   MODE: --dry-run (build + show diffs, push nothing)"
 echo "=============================================================="
 
@@ -121,6 +142,8 @@ echo "=============================================================="
 #    (it intentionally omits paths like .minds/template/ and some mirror/ files) --
 #    clearing would delete those upstream. Overlay = adds + edits only, no deletes.
 # ============================================================================
+# Skipped entirely in --dwt-only: no push to mngr-internal.
+if [ "$DWT_ONLY" -eq 0 ]; then
 echo
 echo ">>> [1/2] mngr subtree -> ${MNGR_BRANCH}"
 MNGR_CLONE="$(mktemp -d)"; TMP_DIRS+=("$MNGR_CLONE")
@@ -155,14 +178,21 @@ git archive "$SOURCE_SHA:$SUBTREE_PREFIX" | tar -x -C "$MNGR_CLONE/repo"
         fi
     fi
 )
+fi   # end: mngr leg (skipped in --dwt-only)
 
 # ============================================================================
-# 2) workspace -> dwt <dwt_branch>, WITHOUT the mngr diffs.
-#    Base on the published dwt tip; overlay the source's non-mngr tree; keep the
-#    dwt branch's own system/vendor/mngr untouched. Fast-forward, one commit.
+# 2) workspace -> dwt <dwt_branch>.
+#    Default: overlay the source's NON-mngr tree onto the published dwt tip and
+#    keep the dwt branch's own system/vendor/mngr untouched (vendoring split).
+#    --dwt-only: overlay the FULL source tree, system/vendor/mngr included.
+#    Either way: fast-forward, one commit.
 # ============================================================================
 echo
-echo ">>> [2/2] workspace -> ${DWT_BRANCH} (mngr excluded)"
+if [ "$DWT_ONLY" -eq 1 ]; then
+    echo ">>> [1/1] workspace -> ${DWT_BRANCH} (FULL tree, mngr included)"
+else
+    echo ">>> [2/2] workspace -> ${DWT_BRANCH} (mngr excluded)"
+fi
 if ! git fetch --quiet "$DWT_URL" "$DWT_BRANCH" 2>/dev/null; then
     echo "error: branch '$DWT_BRANCH' not found on ${DWT_URL}." >&2
     exit 1
@@ -172,22 +202,33 @@ DWT_WORKTREE="$(mktemp -d)/wt"
 git worktree add --quiet --detach "$DWT_WORKTREE" "$DWT_TIP"
 (
     cd "$DWT_WORKTREE"
-    # Make everything EXCEPT the vendored mngr match the source ref exactly
-    # (handles adds, edits, and deletes); leave system/vendor/mngr as dwt pins it.
-    git rm -rq --ignore-unmatch -- . ":(exclude)$SUBTREE_PREFIX" >/dev/null
-    git checkout "$SOURCE_SHA" -- . ":(exclude)$SUBTREE_PREFIX"
+    if [ "$DWT_ONLY" -eq 1 ]; then
+        # Full tree, mngr included: make the whole worktree match the source ref.
+        git rm -rq --ignore-unmatch -- . >/dev/null
+        git checkout "$SOURCE_SHA" -- .
+    else
+        # Make everything EXCEPT the vendored mngr match the source ref exactly
+        # (handles adds, edits, and deletes); leave system/vendor/mngr as dwt pins it.
+        git rm -rq --ignore-unmatch -- . ":(exclude)$SUBTREE_PREFIX" >/dev/null
+        git checkout "$SOURCE_SHA" -- . ":(exclude)$SUBTREE_PREFIX"
+    fi
     git add -A
     if git diff --cached --quiet; then
         echo "    dwt: no workspace changes vs ${DWT_BRANCH}; nothing to push."
         exit 0
     fi
-    git "${NOHOOKS[@]}" commit -qm "dwt: sync workspace changes (vendored mngr pinned; mngr work on ${MNGR_BRANCH})"
-    # HARD ASSERT: the dwt commit must not carry a single mngr path.
-    if git show --name-only --format= HEAD | grep -q "^${SUBTREE_PREFIX}/"; then
-        echo "    ABORT: system/vendor/mngr paths leaked into the dwt commit -- not pushing." >&2
-        exit 1
+    if [ "$DWT_ONLY" -eq 1 ]; then
+        git "${NOHOOKS[@]}" commit -qm "dwt: full workspace sync (system/vendor/mngr included; --dwt-only)"
+        echo "    --- dwt diff to push (stat; FULL tree incl ${SUBTREE_PREFIX}) ---"
+    else
+        git "${NOHOOKS[@]}" commit -qm "dwt: sync workspace changes (vendored mngr pinned; mngr work on ${MNGR_BRANCH})"
+        # HARD ASSERT: in the split mode the dwt commit must not carry a single mngr path.
+        if git show --name-only --format= HEAD | grep -q "^${SUBTREE_PREFIX}/"; then
+            echo "    ABORT: system/vendor/mngr paths leaked into the dwt commit -- not pushing." >&2
+            exit 1
+        fi
+        echo "    --- dwt diff to push (stat; must show NO ${SUBTREE_PREFIX}) ---"
     fi
-    echo "    --- dwt diff to push (stat; must show NO ${SUBTREE_PREFIX}) ---"
     git show --stat --format="    %h %s" HEAD
     if confirm "    push dwt -> ${DWT_BRANCH}?"; then
         git push "$DWT_URL" "HEAD:$DWT_BRANCH"
