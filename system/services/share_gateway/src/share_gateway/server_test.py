@@ -332,7 +332,7 @@ def test_loading_and_healthz_endpoints(tmp_path: Path) -> None:
     assert "refresh" in loading.get_data(as_text=True)
 
 
-def test_verify_exposes_owner_header_for_downstream_gating(tmp_path: Path) -> None:
+def test_verify_exposes_owner_header_and_never_the_owner_email(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("bob@example.com", is_owner=True))
 
@@ -340,6 +340,20 @@ def test_verify_exposes_owner_header_for_downstream_gating(tmp_path: Path) -> No
 
     assert resp.status_code == 200
     assert resp.headers["X-Share-Owner"] == "true"
+    # The owner's email is never revealed per-request -- apps read the injected
+    # owner-email file instead.
+    assert "X-Share-Email" not in resp.headers
+
+
+def test_verify_sets_owner_false_and_the_requester_email_for_a_non_owner(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers())
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Share-Owner"] == "false"
+    assert resp.headers["X-Share-Email"] == "bob@example.com"
 
 
 def test_callback_owner_is_admitted_without_a_grant(tmp_path: Path) -> None:
