@@ -9,8 +9,8 @@ All of them use ``configparser`` plus a hand-rolled expansion of the glob,
 because ``configparser`` does not follow supervisord's ``[include]``.
 
 That makes the glob a real contract, and one that fails *open*: a reader that
-misses the drop-ins still parses a valid config, just a nearly empty one, and
-its assertions pass over a single program. These tests pin the contract so that
+misses the drop-ins still parses a valid config, just an empty one, and its
+assertions pass over nothing at all. These tests pin the contract so that
 degradation is loud.
 """
 
@@ -91,9 +91,58 @@ def test_every_program_is_discoverable_through_the_include_glob() -> None:
         f"programs reachable through the include glob ({sorted(discovered)}) do not "
         f"match the drop-in files plus the main config's own programs ({sorted(expected)})"
     )
-    assert len(discovered) > len(_MAIN_CONFIG_PROGRAMS), (
-        "no more than the main config's own programs were discovered -- the "
-        "[include] expansion is not finding the drop-ins"
+
+
+def test_a_program_free_main_config_implies_an_include_aware_vendored_probe() -> None:
+    """The cross-repo release gate, as a check this repo's CI can actually see.
+
+    The minds desktop client's recovery probe reads ``system/supervisord.conf``
+    with ``configparser`` to source the system interface's inner port. An
+    include-blind probe meeting a main config that declares no programs finds no
+    port, degrades its port-listening and curl checks to UNKNOWN, and
+    misdiagnoses a healthy workspace as unresponsive.
+
+    Provisioning is tag-pinned and ``update-self`` is ceilinged to the running
+    app's template ref, so landing this on ``main`` harms nobody. What binds is
+    the release cut: a ``minds-v<N>`` template tag must not carry a program-free
+    main config unless the mngr commit tagged ``minds-v<N>`` carries the
+    include-aware probe. ``system/vendor/mngr`` is synced as part of that same
+    release, so the vendored copy is the artifact this repo can check.
+
+    This is deliberately a conditional: it says nothing while a program is
+    declared in the main config, and becomes a permanent regression guard once
+    the vendored probe follows the globs.
+    """
+    parser = _parse_main_config()
+    main_config_programs = {
+        section.partition(":")[2]
+        for section in parser.sections()
+        if section.startswith(("program:", "eventlistener:"))
+    }
+    if main_config_programs:
+        return
+
+    vendored_probe = (
+        _REPO_ROOT
+        / "system/vendor/mngr/apps/minds/imbue/minds/desktop_client/recovery_probe_script.txt"
+    )
+    if not vendored_probe.is_file():
+        return
+
+    source = vendored_probe.read_text()
+    # The mechanism, not the word: the probe must read the [include] files
+    # setting and glob its patterns, which is what following the directive means.
+    follows_includes = 'parser.get("include"' in source and "glob.glob(" in source
+    assert follows_includes, (
+        f"{vendored_probe.relative_to(_REPO_ROOT)} does not follow supervisord's "
+        "[include] globs, but system/supervisord.conf declares no programs -- so "
+        "that probe would find no system_interface program and report the "
+        "workspace unresponsive.\n\n"
+        "This is the release gate, not a broken test. To satisfy it: land "
+        "imbue-ai/mngr-internal#171 (the include-aware probe), then re-sync "
+        "system/vendor/mngr. Do NOT relax this assertion -- the alternative is "
+        "shipping a template tag that misdiagnoses every workspace on the "
+        "matching minds release."
     )
 
 

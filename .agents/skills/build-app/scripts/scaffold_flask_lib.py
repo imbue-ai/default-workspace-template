@@ -167,8 +167,8 @@ def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     # its [program:*] command, so scanning the config text for
     # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
     # Scans the main config AND every drop-in its [include] globs match, which
-    # is where all but system_interface now live -- missing the drop-ins would
-    # hand a new app a port another program already holds.
+    # is where every program lives -- missing the drop-ins would hand a new app
+    # a port another program already holds.
     ports: set[int] = set()
     for path in _supervisord_conf_files(supervisord_conf):
         ports.update(

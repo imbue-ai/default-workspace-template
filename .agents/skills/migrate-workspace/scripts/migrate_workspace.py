@@ -1325,9 +1325,9 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
         )
     ]
     # The source's programs live one per file under supervisord.conf.d/, so the
-    # fixed list above would find only system_interface. Enumerate the drop-ins
-    # first (one extra round trip) and read them in the same batched pass; a
-    # source predating the split simply has no such directory and lists nothing.
+    # fixed list above would find none of them. Enumerate the drop-ins first (one
+    # extra round trip) and read them in the same batched pass; a source predating
+    # the split declares its programs in the main config, which is already listed.
     remote_paths.extend(
         _list_remote_supervisord_dropins(target, f"{repo_root}/system/supervisord.conf.d")
     )
@@ -1357,10 +1357,10 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
 def _local_ports() -> list[AppPort]:
     """The app ports already taken in this workspace, from its own config and registry."""
     ports: list[AppPort] = []
-    # Every program but system_interface lives in its own supervisord.conf.d
-    # drop-in, so scanning only the main config would see one port and report
-    # every real app as free -- collisions would surface as two programs bound
-    # to the same port after the migration, not here.
+    # Every program lives in its own supervisord.conf.d drop-in, so scanning
+    # only the main config would see no ports at all and report every real app as
+    # free -- collisions would surface as two programs bound to the same port
+    # after the migration, not here.
     for conf in _local_supervisord_configs():
         ports.extend(parse_supervisord_ports(conf.read_text(encoding="utf-8")))
     registry = Path("data/.state/apps.toml")
