@@ -160,6 +160,15 @@ def _state_path(tmp_path: Path) -> Path:
     return mod._state_path(tmp_path, _NAME)
 
 
+def test_the_self_hint_still_names_where_this_script_actually_lives() -> None:
+    # ``up``'s boot-success hint prints ``python3 <_SELF_HINT> refresh|down
+    # --name ...`` as commands the agent copies, and the system-interface flow
+    # learns its instance name from that hint -- so the spelling has to stay
+    # runnable. A move or rename would leave the hardcoded constant naming a path
+    # that no longer exists, which nothing else here would notice.
+    assert str(_SCRIPT).endswith(mod._SELF_HINT)
+
+
 # --- bare instance (own testing) --------------------------------------------
 
 
