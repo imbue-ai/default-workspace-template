@@ -165,7 +165,12 @@ def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
     # gateway's WSGI server 400s WS handshakes, which would deny every WS
     # connection at the auth step.
     assert "header_up -Upgrade" in rendered
-    assert "copy_headers X-Share-Filtered-Cookie>Cookie" in rendered
+    # Inbound copies of the gateway's identity headers are stripped before the
+    # request reaches a backend, and only the verified /_auth/verify values are
+    # injected -- so a client can never forge ownership or an email.
+    assert "request_header -X-Share-Owner" in rendered
+    assert "request_header -X-Share-Email" in rendered
+    assert "copy_headers X-Share-Filtered-Cookie>Cookie X-Share-Owner X-Share-Email" in rendered
     assert "rewrite * /_auth/loading" in rendered
     assert "auto_https off" in rendered
     # h1/h2 only: h3 is UDP and cannot traverse the SNI-passthrough relay, so
