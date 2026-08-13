@@ -6,6 +6,8 @@ The `--layout` help and the module docstring now say so: mutating ops name the v
 
 Nothing about the op set or the failure modes changed. A mutating op still fails with a clear error listing the connected clients when none of them has the named view open.
 
+The `rename` op's help now says what rename actually does: it names the object machine-wide through the workspace's member-titles store, so the title shows in every view, not just one panel's tab.
+
 Let an app register its own icon.
 
 `system/scripts/forward_port.py --name <name> --url <url>` now accepts an optional `--icon` (the SVG markup itself) or `--icon-file` (a path read once, at registration time, whose *contents* are stored). The registry keeps the markup, not a path: a path would have to be readable, at render time, by every consumer of `apps.toml` — the system-interface server, the desktop client, anything reading it off a shared host — and those do not share a filesystem view with the service that registered.
