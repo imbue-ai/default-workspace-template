@@ -28,7 +28,7 @@ service name. Either:
   name the tab points at.
 
 Fix: re-check pre-flight (bind to 127.0.0.1, port matches
-`system/supervisord.conf`, name matches the tab's service name) and
+`system/supervisord.conf.d/<name>.conf`, name matches the tab's service name) and
 Step 3 verification.
 
 ## Service names must be DNS-safe
@@ -79,7 +79,8 @@ will fail loudly (the framework will print an error and exit). With
 crash loop visible via `supervisorctl status <name>` and
 `/var/log/supervisor/<name>-stderr.log`. Pick a different port.
 
-The scaffolder's port-picking pre-flight (which parses `system/supervisord.conf`
+The scaffolder's port-picking pre-flight (which parses `system/supervisord.conf`,
+every `system/supervisord.conf.d/*.conf`,
 and `data/.state/apps.toml`) catches this before you write the
 program entry. For the wrap-existing escape hatch, run `ss -tln`
 manually before choosing a port.
