@@ -26,7 +26,8 @@
  * The list building, kind filtering and recency ordering are exported as pure
  * functions above the component so they can be tested without a DOM, and so the
  * machine enumeration stays shared with the sidebar (buildLauncherRows is built
- * on Projects' buildEverythingMembers).
+ * on Projects' buildEverythingMembers, and the member rows arrive from the same
+ * source as the rail's tab list -- see buildLauncherSections).
  */
 
 import m from "mithril";
@@ -121,27 +122,34 @@ export function buildLauncherRows(
 }
 
 /**
- * Split the machine into the launcher's tables.
+ * Assemble the launcher's tables.
  *
- * A project shows some of the machine, so it gets the two-table split; opening
- * one of the rest adds it here without taking it from anywhere. Everything
- * shows all of it, so the split would degenerate into a full table beside an
- * empty one -- it gets the single machine-wide table instead. Input order is
- * preserved within each table (the recency sort is applied at render, per
+ * A project's "In this project" table IS its member list, in member order: the
+ * rows arrive already built from the same source as the rail's tab list, so a
+ * backgrounded member the machine reports no live signal for still shows here
+ * and the two surfaces cannot disagree. "On this machine" is the rest of the
+ * machine -- the machine-wide rows minus the members, deduped by ref; opening
+ * one of those adds it here without taking it from anywhere. Everything shows
+ * all of the machine, so the split would degenerate into a full table beside
+ * an empty one -- it gets the single machine-wide table instead. Input order
+ * is preserved within each table (the recency sort is applied at render, per
  * table, after the kind filter).
  */
 export function buildLauncherSections(
-  rows: readonly LauncherRow[],
-  memberRefs: readonly string[],
+  machineRows: readonly LauncherRow[],
+  memberRows: readonly LauncherRow[],
   isEverything: boolean,
 ): LauncherSection[] {
   if (isEverything) {
-    return [{ key: "on-machine", title: ON_MACHINE_TITLE, rows: [...rows], filesIntoProject: false }];
+    return [{ key: "on-machine", title: ON_MACHINE_TITLE, rows: [...machineRows], filesIntoProject: false }];
   }
-  const partition = partitionByMembership(rows, memberRefs);
+  const onMachine = partitionByMembership(
+    machineRows,
+    memberRows.map((row) => row.ref),
+  ).onMachine;
   return [
-    { key: "in-project", title: IN_PROJECT_TITLE, rows: partition.inProject, filesIntoProject: false },
-    { key: "on-machine", title: ON_MACHINE_TITLE, rows: partition.onMachine, filesIntoProject: true },
+    { key: "in-project", title: IN_PROJECT_TITLE, rows: [...memberRows], filesIntoProject: false },
+    { key: "on-machine", title: ON_MACHINE_TITLE, rows: onMachine, filesIntoProject: true },
   ];
 }
 
@@ -287,9 +295,11 @@ const FILE_VIEWER_TOOLTIP = "A file viewer is coming — no app backs it yet";
 export interface NewTabLauncherAttrs {
   // Everything the machine holds, already flattened (see buildLauncherRows).
   rows: readonly LauncherRow[];
-  // The active view's member refs, which the machine list is split against.
+  // The active view's members as rows, in member order, open or backgrounded --
+  // built from the same source as the rail's tab list, so "In this project"
+  // and the rail cannot disagree. The machine list is deduped against these.
   // Ignored when isEverything is set -- the unfiltered view has no member list.
-  memberRefs: readonly string[];
+  memberRows: readonly LauncherRow[];
   // Whether the active view is Everything, which renders the single
   // machine-wide table instead of the split.
   isEverything: boolean;
@@ -492,7 +502,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     view(vnode) {
       const attrs = vnode.attrs;
       const nowMs = attrs.nowMs ?? Date.now();
-      const sections = buildLauncherSections(attrs.rows, attrs.memberRefs, attrs.isEverything);
+      const sections = buildLauncherSections(attrs.rows, attrs.memberRows, attrs.isEverything);
 
       return m("div", { class: "new-tab-launcher bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
         m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, OPEN_NEW_TITLE),

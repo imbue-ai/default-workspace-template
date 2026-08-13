@@ -438,9 +438,9 @@ export function buildEverythingMembers(
   return rows;
 }
 
-/** A machine-wide list split by whether the project shows each object: the two
- *  tables the New Tab launcher renders, "In this project" and "On this
- *  machine". */
+/** A machine-wide list split by whether the project shows each object. The
+ *  New Tab launcher's "On this machine" table is the onMachine half; its "In
+ *  this project" table comes from the member list itself, not from here. */
 export interface MembershipPartition<T> {
   inProject: T[];
   onMachine: T[];

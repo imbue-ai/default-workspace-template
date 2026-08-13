@@ -59,7 +59,6 @@ import {
 } from "./liveSurfaces";
 import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
-import { CreateAgentModal } from "./CreateAgentModal";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ShareModal } from "./ShareModal";
 import { pickableApps } from "./AllAppsPicker";
@@ -245,21 +244,6 @@ function rebuildAgentTerminalUrl(url: string): string | null {
   // in the local cache yet; rebuild it without a name too.
   return args.length >= 3 ? buildAgentTerminalUrl(args[2]) : `${getTerminalUrl()}?arg=_&arg=agent`;
 }
-
-// Modal state
-let showNewAgentModal = false;
-
-// The dockview group whose "+" (or whose launcher tab) asked for a new chat /
-// browser tab. Captured at click time because those creates finish
-// asynchronously (a create POST has to return first), by which point the
-// active group may have changed. Consumed when the new tab is opened so it
-// lands in the pane it was asked for, then cleared.
-let newTabTargetGroup: DockviewGroupPanel | null = null;
-// The launcher tab the pending create was started from, if any. A launcher is
-// the question "what do you want in this pane", so answering it replaces the
-// launcher rather than leaving it behind -- but only once the answer actually
-// arrives, which for the async creates is when the object exists.
-let newTabSourceLauncherPanelId: string | null = null;
 
 // Second paragraph of each destroy confirmation. Destroying is not a louder
 // Close: closing a tab leaves the object running and still filed wherever it
@@ -1510,7 +1494,7 @@ function createLauncherRenderer(panelId: string): IContentRenderer {
         view: () =>
           m(NewTabLauncher, {
             rows: launcherRows(),
-            memberRefs: activeViewMemberRefs(),
+            memberRows: launcherMemberRows(),
             isEverything: mountedViewId !== null && isEverythingView(mountedViewId),
             onOpenNew: (kind: LaunchKind) => {
               openTabOfTypeInGroup(kind, groupForPanel(panelId), panelId);
@@ -1587,13 +1571,20 @@ function touchPanelLastUsed(panelId: string): void {
   })();
 }
 
-/** The active view's member refs, which the launcher splits the machine
- *  against. Empty for Everything, which has no member list -- and which the
- *  launcher renders as one machine-wide table instead of a split. */
-function activeViewMemberRefs(): string[] {
-  const viewId = mountedViewId;
-  if (viewId === null || isEverythingView(viewId)) return [];
-  return projectForViewId(availableProjects, viewId)?.members ?? [];
+/** The active view's members as launcher rows: the rail's tab list (see
+ *  getSidebarRows) decorated with the machine-wide last-used map. Sharing the
+ *  rail's source is what keeps the launcher's "In this project" table and the
+ *  rail from disagreeing -- a backgrounded member the machine reports no live
+ *  signal for still rows in both. For Everything the launcher renders the
+ *  single machine-wide table instead and ignores these. */
+function launcherMemberRows(): LauncherRow[] {
+  const lastUsed = getMemberLastUsed();
+  return getSidebarRows().map((row) => ({
+    ref: row.ref,
+    kind: row.kind,
+    label: row.label,
+    lastActiveMs: lastUsed[row.ref] ?? null,
+  }));
 }
 
 // ---------- The machine, as the sidebar and the launcher see it ----------
@@ -2776,20 +2767,16 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
  * machine-minted, and each create files the first free "Chat N" /
  * "Terminal N" / "Browser N" display name as it goes (see ``fileAutoTitle``).
  * The launcher that asked is only retired once the object actually exists,
- * which is why it is parked in ``newTabSourceLauncherPanelId`` rather than
- * closed here.
+ * which is why each create path retires it in its own completion handler
+ * rather than it being closed here.
  */
 function openTabOfTypeInGroup(
   tabType: QuickAddTabType,
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
 ): void {
-  newTabTargetGroup = targetGroup;
-  newTabSourceLauncherPanelId = launcherPanelId;
   if (tabType === "chat") {
     void openNewChat(targetGroup, launcherPanelId).then(() => {
-      newTabTargetGroup = null;
-      newTabSourceLauncherPanelId = null;
       m.redraw();
     });
     return;
@@ -2797,15 +2784,12 @@ function openTabOfTypeInGroup(
   if (tabType === "terminal") {
     void openNewTerminal(targetGroup).then((panelId) => {
       if (panelId !== null) retireLauncher(launcherPanelId);
-      newTabSourceLauncherPanelId = null;
       m.redraw();
     });
     return;
   }
   if (tabType === "browser") {
     void openNewBrowser(targetGroup, launcherPanelId).then(() => {
-      newTabTargetGroup = null;
-      newTabSourceLauncherPanelId = null;
       m.redraw();
     });
     return;
@@ -2817,7 +2801,6 @@ function openTabOfTypeInGroup(
   if (backingApp === undefined) return;
   openAppTab(backingApp);
   retireLauncher(launcherPanelId);
-  newTabSourceLauncherPanelId = null;
 }
 
 /** The shortcuts that go to an object the active view already shows instead of
@@ -2921,9 +2904,9 @@ function focusExistingForShortcut(tabType: FocusableTabType): boolean {
  * Chat always create a new agent and Browser and Terminal always create a new
  * session: Preston asked for the rail's chat to be "a singleton to refer to the
  * primary chat of each
- * project", and for the browser to behave the same way. Do not "fix" it back --
- * starting another one from scratch is what the launcher's "Open new" tiles are
- * for. Terminals were NOT extended, because only chat and browser were named.
+ * project", and for the browser to behave the same way, and later extended
+ * terminals to match. Do not "fix" it back -- starting another one from
+ * scratch is what the launcher's "Open new" tiles are for.
  *
  * A project therefore has exactly one chat of its own, started with the project
  * itself (``startProjectChat``), and this shortcut goes to that chat rather
@@ -4509,25 +4492,6 @@ export const DockviewWorkspace: m.Component = {
         style: "width: 100%; height: 100%;",
       },
       [
-        showNewAgentModal
-          ? m(CreateAgentModal, {
-              mode: "worktree",
-              onCreated(newAgentId: string, newAgentName: string) {
-                showNewAgentModal = false;
-                const targetGroup = newTabTargetGroup;
-                newTabTargetGroup = null;
-                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
-                retireLauncher(newTabSourceLauncherPanelId);
-                newTabSourceLauncherPanelId = null;
-              },
-              onCancel() {
-                showNewAgentModal = false;
-                newTabTargetGroup = null;
-                newTabSourceLauncherPanelId = null;
-              },
-            })
-          : null,
-
         showDestroyDialog && destroyTargetAgentId && destroyTargetAgentName
           ? m(DestroyConfirmDialog, {
               agentName: destroyTargetAgentName,

@@ -76,36 +76,52 @@ describe("buildLauncherRows", () => {
 });
 
 describe("buildLauncherSections", () => {
-  const ROWS = [
+  const MACHINE = [
     row("service:newsreader", "app", "Newsreader"),
     row("chat:a1", "chat", "Fix source authorization"),
     row("terminal:build", "terminal", "build"),
   ];
 
-  it("splits the machine into what this project shows and everything else", () => {
-    const sections = buildLauncherSections(ROWS, ["service:newsreader", "terminal:build"], false);
+  it("shows the member list under In this project, in member order", () => {
+    const members = [row("terminal:build", "terminal", "build"), row("service:newsreader", "app", "Newsreader")];
+    const sections = buildLauncherSections(MACHINE, members, false);
     expect(sections.map((section) => section.key)).toEqual(["in-project", "on-machine"]);
     expect(sections[0].title).toBe("In this project");
-    expect(sections[0].rows.map((each) => each.ref)).toEqual(["service:newsreader", "terminal:build"]);
+    expect(sections[0].rows.map((each) => each.ref)).toEqual(["terminal:build", "service:newsreader"]);
     expect(sections[1].rows.map((each) => each.ref)).toEqual(["chat:a1"]);
   });
 
+  it("lists a backgrounded member the machine reports no live signal for", () => {
+    // The rail lists this member, so the launcher must too: the in-project
+    // table is the member list, not the machine's report of it.
+    const backgrounded = row("url:deadbeef", "url", "Release notes");
+    const sections = buildLauncherSections(MACHINE, [backgrounded], false);
+    expect(sections[0].rows).toEqual([backgrounded]);
+    expect(sections[1].rows.map((each) => each.ref)).toEqual(MACHINE.map((each) => each.ref));
+  });
+
+  it("never lists a member under On this machine", () => {
+    const sections = buildLauncherSections(MACHINE, [row("chat:a1", "chat", "Fix source authorization")], false);
+    expect(sections[1].rows.map((each) => each.ref)).toEqual(["service:newsreader", "terminal:build"]);
+  });
+
   it("files a row into the project only when it comes from the machine half", () => {
-    const sections = buildLauncherSections(ROWS, ["service:newsreader"], false);
+    const sections = buildLauncherSections(MACHINE, [row("service:newsreader", "app", "Newsreader")], false);
     expect(sections.map((section) => section.filesIntoProject)).toEqual([false, true]);
   });
 
   it("renders one machine-wide table for Everything, which has no member list", () => {
-    const sections = buildLauncherSections(ROWS, [], true);
+    // Member rows are ignored outright: Everything shows the machine, whole.
+    const sections = buildLauncherSections(MACHINE, [row("terminal:build", "terminal", "build")], true);
     expect(sections).toHaveLength(1);
     expect(sections[0].title).toBe("On this machine");
-    expect(sections[0].rows.map((each) => each.ref)).toEqual(ROWS.map((each) => each.ref));
+    expect(sections[0].rows.map((each) => each.ref)).toEqual(MACHINE.map((each) => each.ref));
     // Everything is the unfiltered view: opening from it changes no membership.
     expect(sections[0].filesIntoProject).toBe(false);
   });
 
   it("puts every row in the machine half when the project shows nothing", () => {
-    const sections = buildLauncherSections(ROWS, [], false);
+    const sections = buildLauncherSections(MACHINE, [], false);
     expect(sections[0].rows).toEqual([]);
     expect(sections[1].rows).toHaveLength(3);
   });
@@ -266,7 +282,7 @@ type LauncherView = ReturnType<typeof NewTabLauncher>["view"];
 function launcherAttrs(overrides: Partial<NewTabLauncherAttrs> = {}): NewTabLauncherAttrs {
   return {
     rows: MACHINE_ROWS,
-    memberRefs: ["chat:a1", "service:newsreader"],
+    memberRows: [MACHINE_ROWS[0], MACHINE_ROWS[1]],
     isEverything: false,
     nowMs: NOW,
     onOpenNew: () => {},
@@ -311,7 +327,7 @@ describe("NewTabLauncher", () => {
   });
 
   it("renders the single machine-wide table for Everything", () => {
-    const rendered = texts(render({ isEverything: true, memberRefs: [] }));
+    const rendered = texts(render({ isEverything: true }));
     expect(rendered).not.toContain("In this project");
     expect(rendered).toContain("On this machine");
     expect(rendered).toContain("Fix source authorization");
@@ -375,14 +391,12 @@ describe("NewTabLauncher", () => {
   });
 
   it("says which table is empty, and distinguishes empty from filtered empty", () => {
-    expect(texts(render({ memberRefs: [] }))).toContain("Nothing is in this project yet.");
-    expect(texts(render({ memberRefs: MACHINE_ROWS.map((each) => each.ref) }))).toContain(
-      "Nothing else is running on this machine.",
-    );
+    expect(texts(render({ memberRows: [] }))).toContain("Nothing is in this project yet.");
+    expect(texts(render({ memberRows: MACHINE_ROWS }))).toContain("Nothing else is running on this machine.");
 
     // Same table, but with rows the filter hid rather than none to begin with.
     const component = NewTabLauncher();
-    const vnode = { attrs: launcherAttrs({ memberRefs: ["chat:a1"] }) } as Parameters<LauncherView>[0];
+    const vnode = { attrs: launcherAttrs({ memberRows: [MACHINE_ROWS[0]] }) } as Parameters<LauncherView>[0];
     (buttonsOf(component.view(vnode))[4].attrs?.onclick as () => void)();
     const checkbox = inputsOf(component.view(vnode))[0];
     (checkbox.attrs?.onchange as () => void)();
