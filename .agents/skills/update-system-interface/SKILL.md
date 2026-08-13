@@ -446,5 +446,6 @@ The safety (never serve a broken build) used to mean waiting out a full harden
 pass before the user could see *anything*, inverting "live first, ratify at
 turn-end." Code isolation and the auto-rollback reveal keep that safety while
 restoring the fast loop. Because preview boot, in-place refresh, and reveal are
-deterministic, they live as sub-commands of `reveal_system_interface.py`; the
-only non-deterministic part -- gating on the user's judgment -- stays with you.
+deterministic, they live in scripts: boot and reveal as sub-commands of
+`reveal_system_interface.py`, refresh as the shared script's own. The only
+non-deterministic part -- gating on the user's judgment -- stays with you.
