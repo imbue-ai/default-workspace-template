@@ -190,7 +190,10 @@ the change is ready to show, surface it instead by opening it on each named
 layout -- `open` requires `--layout` and only applies on clients with that
 layout active, so the layout the user is not on fails fast and harmlessly:
 `for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done`.
-For any other tab manipulation, see `manage-layout`. Background daemons have
+**That `open` puts the tab on the user's screen the moment it returns** -- it is
+the act of showing them, so only run it on something you are ready for them to
+see, and never follow it by telling them to open the tab. For any other tab
+manipulation, see `manage-layout`. Background daemons have
 no tab -- skip the tab refresh, but not the rest of this step.
 
 If you restarted the whole services agent rather than a single program, one
@@ -221,6 +224,21 @@ would (not just "the process is up"):
   `cross-flow-gotchas.md`.
 - **Daemon**: watch its log (`supervisorctl tail -f <name> stderr`) and
   confirm the new behavior actually fires.
+
+**Verify before the user can see it, not after.** This step belongs in the
+window where you are the only one looking -- before the tab exists, or after a
+restart but before the refresh in step 3. Once a surface is in front of the
+user, poking at it yourself is both redundant and wrong: they are the verifier
+for anything they can perceive, and driving a service they are watching means
+your test actions land in their view and, for anything wired to real data or
+real agents, in their state. `build-app` orders it this way for exactly this
+reason -- verify is its Step 3, surfacing the tab its Step 4.
+
+So if the change is already surfaced when you finish it, the honest sequence is
+apply -> restart -> refresh -> *tell them what changed*, and the checking you do
+is the cheap kind that cannot touch their view: a `curl`, a health probe, an
+exit code, a log line. Save the thorough pass for the turn-end harden worker,
+which runs against its own instance.
 
 ### Protect the user's data while you verify
 

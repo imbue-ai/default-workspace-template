@@ -1,6 +1,6 @@
 ---
 name: manage-layout
-description: Use when you want to rearrange the workspace dockview tabs (split, move, focus, rename, close, maximize, reload, swap a URL) or inspect the live layout.
+description: Use when you want to rearrange the workspace dockview tabs (split, move, focus, rename, close, maximize, reload, swap a URL) or inspect the live layout. Note that these ops change what the user is looking at, live -- `layout.py open` puts a tab on their screen the moment it returns, so it is the act of showing them something, not setup.
 metadata:
   crystallized: true
 ---
@@ -68,6 +68,14 @@ Consequences for you:
 | Surface a service / URL / terminal / chat alongside your chat | `python3 system/scripts/layout.py open <target> --layout <name>` |
 | Put a new terminal in the same tab group as your chat | `python3 system/scripts/layout.py split terminal --relative-to=self --direction=within --layout <name>` |
 | Close a tab | `python3 system/scripts/layout.py close <ref> --layout <name>` |
+
+**Every mutating op here changes what the user is looking at, live.** There is
+no staging area: `open` puts a tab on their screen the moment it returns, and
+`close` / `move` / `focus` / `refresh` rearrange the workspace under their
+hands. So treat `open` as *the act of showing them something*, not as setup --
+finish whatever you wanted to check privately before you call it, and never
+tell the user to open a tab you already opened. (`inspect`, `where`, `list`,
+and `context` are the read-only ones; they change nothing.)
 
 `open` is the opinionated default. It puts the new tab to the right
 of your chat, joining whatever group already lives there if one is

@@ -532,8 +532,10 @@ def up(
             f"preview up: open the '{preview_service_name}' service tab, e.g. "
             f"`python3 system/scripts/layout.py open --layout desktop "
             f"{preview_service_name}` (serving {cwd} "
-            f"on port {inner_port}, wrapped on port {wrapper_port}). Run "
-            f"'down --name {name}' to tear it down.\n"
+            f"on port {inner_port}, wrapped on port {wrapper_port}). Opening it "
+            "puts it on the user's screen. Run "
+            f"'refresh --name {name}' to pick up a later edit on this same port, "
+            f"and 'down --name {name}' to tear it down.\n"
         )
     else:
         sys.stdout.write(f"{inner_url}\n")

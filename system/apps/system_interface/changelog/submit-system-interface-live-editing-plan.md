@@ -1,7 +1,9 @@
 The README was updated to describe the live-editing flow (edit an isolated
-worktree, build, refresh a labeled preview tab in place, then merge and reveal)
-and the new `preview-refresh` sub-command for picking up a backend edit on the
-preview's existing port.
+worktree, build, refresh a labeled preview tab in place, then merge and reveal),
+and to note that refreshing a live preview on its existing port and tearing it
+down are the shared `serve_isolated_instance.py`'s own `refresh` / `down` --
+addressed by the instance name `preview` prints (`si-preview-<slug>`) -- rather
+than sub-commands of `reveal_system_interface.py`.
 
 A second system interface on the same host no longer breaks its own agent view.
 `mngr observe` is single-writer per mngr host dir, so a preview booted against

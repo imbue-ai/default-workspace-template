@@ -614,7 +614,7 @@ The report says which classes merged. Apply each; a clean pull-in is still
   ```bash
   python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal \
       --rollback-to "$ROLLBACK_TO"
-  python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
+  python3 .agents/shared/scripts/serve_isolated_instance.py down --name si-preview-update-self
   for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
   ```
 
