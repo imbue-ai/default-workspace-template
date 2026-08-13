@@ -4,7 +4,7 @@ THE PROPERTY (docs/design/harness-message-lifecycle-contract.md A1, U1): across 
 interleaving of send / park / stop / flush / restart, every accepted message ends in EXACTLY one
 terminal state -- delivered (a user turn on disk), or returned-to-composer (rides a captured stop
 block) -- never silently lost and never duplicated as a ghost re-queue after a replay. The one
-designed-in exception is the shipped "slow-send corner" (contract E1): a send still holding
+designed-in exception is the shipped "slow-send corner" (contract E2): a send still holding
 ``message.lock`` past the bounded wait when a stop hammers is *stopped, never runs* -- the ledger admits that message as
 KILLED, and only when the storm deliberately staged such a send.
 
