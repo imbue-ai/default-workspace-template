@@ -338,38 +338,6 @@ Two details worth keeping:
   regression test, then replaced it (*"test: cover char counter at the unit level
   instead of a slow e2e"*) and confirmed the unit test fails without the counter.
 
-### Scenario 2 (partial): lease contention is handled correctly
-
-A second lead (`uilead2`) was given an overlapping system-interface change while
-`uilead1` still held the lease. It ran the pre-flight, found `wor-vomo`, ran
-`tk show` to identify the holder, checked via `mngr ls` that the holder was still
-alive (`WAITING`, not crashed), and then **stopped and surfaced** rather than
-proceeding:
-
-> Another one of your chats (`uilead1`) is currently editing the workspace
-> interface and holds the edit lock. It's still alive (waiting, not crashed), so
-> it may be mid-change. Only one chat can safely edit the UI at a time -- if I
-> barge in, our changes would clobber each other...
-
-It offered wait-vs-override and did nothing else. The lease mechanism works, and
-the liveness check the skill asks for was performed unprompted.
-
-Told the lease was free, it re-verified that itself (`LEASE_FREE`) before taking
-it, rather than trusting the user's word -- then ran the same flow as lead 1:
-worktree, edit, build, commit, `preview` (exit 0), and only then `layout.py
-open`. Two for two on the boot/open split. It also read the `mobile` failure
-correctly ("the mobile layout isn't active -- harmless") while still surfacing
-the real consequence of the change unprompted ("it applies to *all* tab labels
--- they share one style"). Note it had to reason past the loop's non-zero exit to
-get there, which is finding 2 in practice.
-
-One thing to note before relying on that liveness check: `mngr ls` reported the
-same agents as `STOPPED` on a direct query minutes earlier while their tmux
-sessions and `claude` processes were plainly alive, and as `WAITING` here. If the
-state field can read `STOPPED` for a live agent, a lead following
-`worker-failure.md` could wrongly conclude a holder is dead and take the lease.
-Not chased down; noted as a thing to confirm.
-
 ### 8. No guidance for `layout.py open` failing to reach a client
 
 **CONFIRMED.** With no browser client connected, both layouts failed:
@@ -453,6 +421,38 @@ client stayed down -- and it is the client's absence that broke scenario 1's
 hand-off. Two things compound it: the failure is at the top of a very long rsync
 log, and the debug hint says `tail -50 /tmp/minds-electron.log`, a file that does
 not exist when the client was never started.
+
+### Scenario 2 (partial): lease contention is handled correctly
+
+A second lead (`uilead2`) was given an overlapping system-interface change while
+`uilead1` still held the lease. It ran the pre-flight, found `wor-vomo`, ran
+`tk show` to identify the holder, checked via `mngr ls` that the holder was still
+alive (`WAITING`, not crashed), and then **stopped and surfaced** rather than
+proceeding:
+
+> Another one of your chats (`uilead1`) is currently editing the workspace
+> interface and holds the edit lock. It's still alive (waiting, not crashed), so
+> it may be mid-change. Only one chat can safely edit the UI at a time -- if I
+> barge in, our changes would clobber each other...
+
+It offered wait-vs-override and did nothing else. The lease mechanism works, and
+the liveness check the skill asks for was performed unprompted.
+
+Told the lease was free, it re-verified that itself (`LEASE_FREE`) before taking
+it, rather than trusting the user's word -- then ran the same flow as lead 1:
+worktree, edit, build, commit, `preview` (exit 0), and only then `layout.py
+open`. Two for two on the boot/open split. It also read the `mobile` failure
+correctly ("the mobile layout isn't active -- harmless") while still surfacing
+the real consequence of the change unprompted ("it applies to *all* tab labels
+-- they share one style"). Note it had to reason past the loop's non-zero exit to
+get there, which is finding 2 in practice.
+
+One thing to note before relying on that liveness check: `mngr ls` reported the
+same agents as `STOPPED` on a direct query minutes earlier while their tmux
+sessions and `claude` processes were plainly alive, and as `WAITING` here. If the
+state field can read `STOPPED` for a live agent, a lead following
+`worker-failure.md` could wrongly conclude a holder is dead and take the lease.
+Not chased down; noted as a thing to confirm.
 
 ---
 
