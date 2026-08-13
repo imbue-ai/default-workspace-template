@@ -2401,9 +2401,16 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         # user would; each create auto-names "Terminal N". No tmux session
         # comes into being here -- session creation is lazy (on ttyd attach)
         # and no terminal service runs in this harness, exactly as in the
-        # auto-filed-name test above. Stop as soon as dockview folds the
-        # excess behind its "N more" control.
-        overflow_control = page.locator(".dv-tabs-overflow-dropdown-default")
+        # auto-filed-name test above.
+        #
+        # All eight are created rather than stopping at the first sign of the
+        # "N more" control: stopping there leaves exactly one tab folded away,
+        # and which one that is depends on how wide the runner's font draws the
+        # titles -- the fixture chat on one machine, a terminal on another. Every
+        # tab keeps at least 140px, so eight terminals plus the chat cannot fit
+        # in a 900px window whatever the metrics, and several tabs are folded
+        # away. The chat is only one of them, so a terminal is certainly among
+        # them, which is what the name assertions below need.
         for index in range(1, 9):
             page.locator(".dockview-add-tab-button").first.click()
             expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
@@ -2411,16 +2418,15 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
             expect(page.locator(".dv-default-tab-content", has_text=f"Terminal {index}").first).to_be_visible(
                 timeout=10000
             )
-            if overflow_control.is_visible():
-                break
-        else:
-            # The fold is observer-driven, so give it a beat before giving up.
-            wait_for(
-                lambda: overflow_control.is_visible(),
-                timeout=5.0,
-                poll_interval=0.1,
-                error_message="the strip never overflowed: a chat plus 8 terminals all fit at 900px wide",
-            )
+
+        # The fold is observer-driven, so give it a beat to catch up.
+        overflow_control = page.locator(".dv-tabs-overflow-dropdown-default")
+        wait_for(
+            lambda: overflow_control.is_visible(),
+            timeout=5.0,
+            poll_interval=0.1,
+            error_message="the strip never overflowed: a chat plus 8 terminals all fit at 900px wide",
+        )
 
         # Open the dropdown: the hidden tabs are listed ...
         overflow_control.click()
