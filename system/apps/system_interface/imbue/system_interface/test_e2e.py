@@ -2429,6 +2429,17 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         rows = container.locator(".dv-default-tab-content")
         expect(rows.first).to_be_visible(timeout=5000)
 
+        # ... under the names the strip says, not the creation-time snapshot.
+        # A terminal's panel comes into being titled by its raw session name
+        # and is renamed to "Terminal N" only once the auto-filed name lands,
+        # and dockview seeds each dropdown row's renderer from the panel's
+        # ORIGINAL init parameters -- so a row that read its title from those
+        # would say ``terminal-N`` here while the strip says "Terminal N".
+        expect(container.locator(".dv-default-tab-content", has_text=re.compile(r"^Terminal \d+$")).first).to_be_visible(
+            timeout=5000
+        )
+        expect(container.locator(".dv-default-tab-content", has_text=re.compile(r"^terminal-\d+$"))).to_have_count(0)
+
         # ... as bare rows: no controls revealed, and none hidden either. The
         # hover matters because that is the gesture the strip reveals its
         # minus and kebab on; the dropdown must have nothing to reveal.
