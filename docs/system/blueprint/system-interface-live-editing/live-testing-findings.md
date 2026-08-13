@@ -77,9 +77,13 @@ Failed to load resource: the server responded with a status of 404 (NOT FOUND)
 Failed to load resource: the server responded with a status of 500 (INTERNAL SERVER ERROR)
 ```
 
-Nobody chased them and the pass succeeded anyway. The 503 is plausibly
-`/api/health` polled during boot, and the 404 plausibly a preview-only asset --
-but the 500 is unexplained and should be identified before shipping.
+Nobody chased them and the pass succeeded anyway. The 404 is plausibly a
+preview-only asset, but the 503 and the 500 are both unexplained and should be
+identified before shipping. Note that the 503 is *not* the boot health poll, the
+obvious guess: these are console errors, so the page issued them, and nothing the
+frontend loads ever fetches `/api/health` -- the only callers of that route are
+`wait_healthy` in the shared serve script and `reveal_system_interface.py`, both
+probing over loopback from outside the browser.
 
 ---
 
