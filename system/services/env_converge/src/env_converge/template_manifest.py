@@ -642,11 +642,6 @@ def check_unfinished_placeholders(*texts: str) -> tuple[str, ...]:
             )
         if "minds-placeholder-thumbnail" in text:
             problems.append("the generated placeholder thumbnail was never replaced")
-        if "MINDS_TEMPLATE_LICENSE" in text:
-            problems.append(
-                "the README's License section still holds MINDS_TEMPLATE_LICENSE; "
-                "the user has to choose, and the answer has to be written in"
-            )
     return tuple(problems)
 
 

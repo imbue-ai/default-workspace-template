@@ -939,7 +939,7 @@ def _primary_agent_layout_dir() -> Path | None:
     agent_id = os.environ.get("MNGR_AGENT_ID", "")
     if not agent_id:
         return None
-    return get_host_dir() / "agents" / agent_id / "workspace_layout"
+    return workspace_layouts.primary_agent_layout_dir(get_host_dir(), agent_id)
 
 
 def _client_activity_events_path() -> Path | None:

@@ -1,20 +1,34 @@
 """Keep the browser process tree in the shared-browser memory-shedding band.
 
-The browser daemon is tagged to the top band (``SHARED_BROWSER``) at spawn and
-everything it launches inherits that -- except Chromium, which deliberately
-overwrites the inherited ``oom_score_adj`` once per process at startup with its
-own internal gradation (browser/zygote 0, gpu/utility 200, renderers 300). Left
-alone, that would make the memory-heavy renderers *more* protected than the
-agents whose work they serve, inverting the shedding order.
+The browser daemon is tagged as a *service* at spawn (the most expendable one,
+``SERVICE_BANDS["browser"]``), and everything it launches inherits that -- except
+Chromium, which deliberately overwrites the inherited ``oom_score_adj`` once per
+process at startup with its own internal gradation (browser/zygote 0, gpu/utility
+200, renderers 300). Left alone, that would leave the memory-heavy renderers far
+more protected than the agents whose work they serve, inverting the shedding
+order.
 
 The kernel cannot forbid that lowering without ``CAP_SYS_RESOURCE``, but
 Chromium writes each value exactly once (its periodic re-adjustment is
-ChromeOS-only), so an external raise sticks. The remapping preserves Chromium's
-relative ordering in compressed form (the gradation is worth keeping: shedding
-one renderer kills one tab, not the whole browser), only ever raises, and never
-touches a value already at or above the floor -- so the node/Playwright driver
-(inherited ceiling), crashpad (inherited ceiling), and already-remapped
-processes are left alone, and repeated sweeps are idempotent.
+ChromeOS-only), so an external raise sticks. The remapping spreads Chromium's own
+ordering across the whole band (the gradation is worth keeping: shedding one
+renderer kills one tab, not the whole browser, so renderers belong at the
+ceiling), only ever raises, and never touches a value already at or above the
+floor -- so an already-remapped process is left alone and repeated sweeps are
+idempotent.
+
+Who ends up where. The daemon is the sweep's *root*, never one of its own
+descendants, so it keeps its service band and stays far below the agents.
+Chromium's processes land where its gradation asks -- renderers at the ceiling,
+then gpu/utility, then the browser process at the floor. A descendant that never
+self-writes is remapped just above the floor (it inherited the daemon's low
+service value), so it still sits below every renderer, which is what we want: it
+holds almost no memory.
+
+Crashpad is the one part of the tree the sweep never reaches -- it re-parents to
+init, so it is not a descendant of the daemon and simply keeps whatever band it
+inherited at fork time. That is now the service band, which is where a couple of
+MB whose death costs crash reporting and frees nothing belongs.
 
 The sweep is purely event-driven: new Chromium processes appear only at moments
 the fleet can observe -- a browser launch, a new page (the CDP observer's

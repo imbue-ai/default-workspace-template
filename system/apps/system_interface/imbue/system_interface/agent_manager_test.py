@@ -1,21 +1,26 @@
 """Tests for the AgentManager."""
 
 import json
+import os
 import queue
 import shutil
 import threading
+import time
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
+from oom_priority import bands
 from watchdog.events import FileClosedNoWriteEvent
 from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 from watchdog.events import FileOpenedEvent
 
+from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
 from imbue.mngr.api.observe import make_full_agent_state_event
@@ -29,6 +34,8 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
+from imbue.system_interface import client_activity
+from imbue.system_interface import workspace_layouts
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
@@ -39,6 +46,7 @@ from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
+from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -564,9 +572,7 @@ def test_agent_state_event_locates_agent_immediately(agent_manager: AgentManager
     assert str(matches[0].provider_name) == "local"
 
 
-def test_on_apps_changed(
-    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
-) -> None:
+def test_on_apps_changed(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
     """Application changes are detected and broadcast."""
     q = broadcaster.register()
 
@@ -1554,3 +1560,116 @@ def test_full_snapshot_rebuilds_agent_set_and_broadcasts(
     msg = json.loads(raw)
     assert msg["type"] == "agents_updated"
     assert {a["id"] for a in msg["agents"]} == {str(second.id)}
+
+
+def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:
+    """Swap in an OOM prioritizer that captures its band writes, and return the log.
+
+    Wired to the manager's own ``get_chat_agent_ids`` / ``_read_process_started_at``
+    (the collaborators under test) but to a fake pid resolver and a capturing
+    ``set_adj``, so the manager's real seeding and lifecycle paths are exercised
+    without touching ``/proc``.
+    """
+    writes: list[tuple[int, int]] = []
+    manager._oom_prioritizer = ChatOomPrioritizer(
+        list_chat_agent_ids=manager.get_chat_agent_ids,
+        resolve_pid=lambda cid: pids.get(cid),
+        set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
+        resolve_process_started_at=manager._read_process_started_at,
+    )
+    return writes
+
+
+def _write_client_activity_message(host_dir: Path, agent_id: str, seconds_ago: float) -> None:
+    """Append one message event, stamped ``seconds_ago`` before now, to the activity log.
+
+    Relative to now rather than a fixed date because the band the seeded stamp
+    produces depends on how long ago it was: a pinned date drifts out of the
+    freshness ramp as wall-clock advances, and every chat then reads as equally
+    abandoned.
+    """
+    timestamp = format_nanosecond_iso_timestamp(datetime.now(timezone.utc) - timedelta(seconds=seconds_ago))
+    events_path = client_activity.get_events_path(
+        workspace_layouts.primary_agent_layout_dir(host_dir, "test-agent-id")
+    )
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    with events_path.open("a") as event_file:
+        event_file.write(
+            json.dumps(
+                {
+                    "timestamp": timestamp,
+                    "type": "message",
+                    "event_id": f"evt-{agent_id}-{timestamp}",
+                    "source": "client_activity",
+                    "client_id": "client-1",
+                    "device_kind": "desktop",
+                    "layout_slug": "desktop",
+                    "agent_id": agent_id,
+                    "agent_name": agent_id,
+                    "message_text": "hi",
+                    "is_message_truncated": False,
+                }
+            )
+            + "\n"
+        )
+
+
+def test_seeding_recovers_chat_message_recency_from_the_activity_log(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """A restarted system interface recovers which chats were recently messaged.
+
+    The prioritizer's recency state is in-memory, so on restart it is re-seeded
+    from the durable client-activity log. Without that, every chat would look
+    never-messaged and start aging from its process-start time.
+    """
+    older = _agent_details("older-chat", labels={"user_created": "true"})
+    newer = _agent_details("newer-chat", labels={"user_created": "true"})
+    agent_manager._handle_observe_event(make_full_agent_state_event([older, newer]))
+    writes = _capture_prioritizer_writes(agent_manager, {str(older.id): 10, str(newer.id): 20})
+
+    _write_client_activity_message(tmp_path, str(older.id), seconds_ago=60 * 60)
+    _write_client_activity_message(tmp_path, str(newer.id), seconds_ago=30 * 60)
+    agent_manager._seed_oom_prioritizer()
+    agent_manager._oom_prioritizer.reapply()
+
+    latest = {pid: adj for pid, adj in writes}
+    # The more recently messaged chat outranks the other, which only holds if the
+    # log's timestamps were found, parsed, and ordered.
+    assert latest[20] < latest[10]
+
+
+def _age_process_start_marker(manager: AgentManager, agent_id: str, seconds_ago: float) -> None:
+    """Backdate the agent's ``claude_process_started`` marker, so it reads as idle."""
+    state_dir = manager._get_agent_state_dir(agent_id)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    marker = state_dir / "claude_process_started"
+    marker.touch()
+    old = time.time() - seconds_ago
+    os.utime(marker, (old, old))
+
+
+def test_observe_events_exempt_a_running_chat_from_aging_out(agent_manager: AgentManager) -> None:
+    """A chat mid-turn stays below the worker band however long it has been idle.
+
+    The observe stream is the prioritizer's only view of a chat messaged outside
+    the workspace UI, so this is what keeps such a chat -- e.g. one running a long
+    task another agent kicked off -- from being shed mid-task.
+    """
+    chat = _agent_details("busy-chat", labels={"user_created": "true"}, state=AgentLifecycleState.RUNNING)
+    chat_id = str(chat.id)
+    agent_manager._handle_observe_event(make_full_agent_state_event([chat]))
+    _age_process_start_marker(agent_manager, chat_id, seconds_ago=3 * 24 * 3600)
+    writes = _capture_prioritizer_writes(agent_manager, {chat_id: 10})
+
+    agent_manager._handle_observe_event(make_full_agent_state_event([chat]))
+    assert writes, "a running chat should have been re-tagged from the observe event"
+    assert writes[-1][1] < bands.WORKER_AGENT
+
+    # The turn ends; the chat is no longer exempt, but the turn's end counts as
+    # engagement, so it resumes aging from now rather than from three days ago.
+    stopped = _agent_details(
+        "busy-chat", agent_id=chat.id, labels={"user_created": "true"}, state=AgentLifecycleState.WAITING
+    )
+    agent_manager._handle_observe_event(make_full_agent_state_event([stopped]))
+    assert writes[-1][1] == bands.CHAT_AGENT_BASE
