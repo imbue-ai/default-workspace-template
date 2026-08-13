@@ -6,11 +6,16 @@
 """Stand up a new Flask app (and its supervisord program entry).
 
 Creates `system/apps/<package>/` with a Flask starter (synchronous; flask-sock
-is available for WebSockets), updates the root pyproject.toml
-sources/dependencies (the `system/apps/*` member glob picks the package up
-automatically), appends a `[program:<name>]` block to
-system/supervisord.conf, and runs `uv sync --all-packages` to materialize the
-workspace.
+is available for WebSockets), writes a `[program:<name>]` block to its own
+`system/supervisord.conf.d/<name>.conf`, and runs `uv sync --all-packages` to
+materialize the workspace.
+
+Nothing shared is edited: the root pyproject.toml needs no entry (the
+`system/apps/*` workspace member glob already picks the package up, and
+`uv sync --all-packages` installs every member), and the supervisord program
+lives in its own file rather than being appended to a config shared with every
+other creation. That is what lets two agents scaffold two apps concurrently
+without touching the same file.
 
 Usage:
     uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \\
@@ -29,8 +34,6 @@ from pathlib import Path
 from typing import Iterable
 
 import tomlkit
-from tomlkit import TOMLDocument
-from tomlkit.items import Array, Table
 
 # Both kebab and snake forms are reserved so a kebab name that converts to
 # a snake-cased existing app or service name is also rejected.
@@ -95,14 +98,34 @@ def _validate_name(name: str) -> None:
         sys.exit(f"error: --name {name!r} is reserved")
 
 
+def _supervisord_conf_dir(supervisord_conf: Path) -> Path:
+    """The per-program drop-in directory beside ``supervisord_conf``.
+
+    Mirrors the ``[include] files = supervisord.conf.d/*.conf`` glob in the main
+    config, whose pattern supervisord joins to that file's own directory.
+    """
+    return supervisord_conf.parent / f"{supervisord_conf.name}.d"
+
+
+def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
+    """The main config plus every per-program drop-in, in supervisord's read order."""
+    main = [supervisord_conf] if supervisord_conf.exists() else []
+    return main + sorted(_supervisord_conf_dir(supervisord_conf).glob("*.conf"))
+
+
 def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     # Every app registers its localhost backend via a forward_port.py call in
-    # its [program:*] command, so scanning the whole config text for
+    # its [program:*] command, so scanning the config text for
     # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
-    if not supervisord_conf.exists():
-        return set()
-    text = supervisord_conf.read_text()
-    return {int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(text)}
+    # Scans the main config AND every drop-in under supervisord.conf.d/, which
+    # is where all but system_interface now live -- missing the drop-ins would
+    # hand a new app a port another program already holds.
+    ports: set[int] = set()
+    for path in _supervisord_conf_files(supervisord_conf):
+        ports.update(
+            int(match.group(1)) for match in LOCALHOST_PORT_RE.finditer(path.read_text())
+        )
+    return ports
 
 
 def _apps_toml_ports(apps_toml: Path) -> set[int]:
@@ -353,54 +376,9 @@ def _write_lib(
     return lib_dir
 
 
-def _ensure_in_array(array: Array, value: str) -> bool:
-    """Append value to a TOML array if missing. Returns True if appended."""
-    for item in array:
-        if str(item) == value:
-            return False
-    array.append(value)
-    return True
-
-
-def _update_root_pyproject(repo_root: Path, name: str, package: str) -> None:
-    path = repo_root / "pyproject.toml"
-    doc: TOMLDocument = tomlkit.parse(path.read_text())
-
-    project = doc.get("project")
-    if not isinstance(project, Table):
-        sys.exit("error: root pyproject.toml is missing a [project] table")
-    deps = project.get("dependencies")
-    if not isinstance(deps, Array):
-        sys.exit(
-            "error: root pyproject.toml [project].dependencies is missing or not an array"
-        )
-    _ensure_in_array(deps, name)
-
-    tool = doc.get("tool")
-    if not isinstance(tool, Table):
-        sys.exit("error: root pyproject.toml is missing a [tool] table")
-    uv = tool.get("uv")
-    if not isinstance(uv, Table):
-        sys.exit("error: root pyproject.toml is missing [tool.uv]")
-    workspace = uv.get("workspace")
-    if not isinstance(workspace, Table):
-        sys.exit("error: root pyproject.toml is missing [tool.uv.workspace]")
-    # No members edit needed: the root pyproject's "system/apps/*" member glob
-    # already covers every package under system/apps/.
-    sources = uv.get("sources")
-    if not isinstance(sources, Table):
-        sys.exit("error: root pyproject.toml is missing [tool.uv.sources]")
-    if name not in sources:
-        source_entry = tomlkit.inline_table()
-        source_entry["workspace"] = True
-        sources[name] = source_entry
-
-    path.write_text(tomlkit.dumps(doc))
-
-
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run --all-packages {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -416,24 +394,38 @@ stderr_logfile_backups=3
 """
 
 
-def _update_supervisord_conf(repo_root: Path, name: str, port: int) -> None:
-    # system/supervisord.conf is INI (not TOML) and has hand-written comments worth
-    # preserving, so append a [program:<name>] block as text rather than
-    # round-tripping through a parser. The command is wrapped in `bash -c "..."`
-    # because supervisord exec's commands directly (no shell) and this one chains
-    # forward_port.py with `&&`; the `oom_tag_service.py user` prefix tags the
-    # new (user-created) app so it is shed before any built-in app or service
-    # under memory pressure (see system/services/oom_priority/README.md).
-    path = repo_root / "system/supervisord.conf"
-    if not path.exists():
-        sys.exit(f"error: {path} not found (cannot register the new app)")
-    existing = path.read_text()
-    if f"[program:{name}]" in existing:
-        sys.exit(
-            f"error: system/supervisord.conf already has a [program:{name}] section"
-        )
-    block = _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port)
-    path.write_text(existing.rstrip("\n") + "\n\n" + block)
+def _write_supervisord_program(repo_root: Path, name: str, port: int) -> Path:
+    """Write the app's supervisord program to its own drop-in file.
+
+    The command is wrapped in `bash -c "..."` because supervisord exec's commands
+    directly (no shell) and this one chains forward_port.py with `&&`; the
+    `oom_tag_service.py user` prefix tags the new (user-created) app so it is
+    shed before any built-in app or service under memory pressure (see
+    system/services/oom_priority/README.md).
+
+    `uv run --all-packages` rather than a bare `uv run`: a root-closure-scoped
+    `uv sync` prunes workspace members the root does not depend on -- which is
+    every scaffolded creation, since none is registered as a root dependency --
+    deleting the console script. `--all-packages` reinstates it, so the program
+    repairs its own environment on the restart that follows.
+
+    Exits non-zero if any existing program already claims this name, whether in
+    the main config or in another drop-in: supervisord would otherwise silently
+    take whichever the include order happened to read last.
+    """
+    conf = repo_root / "system/supervisord.conf"
+    if not conf.exists():
+        sys.exit(f"error: {conf} not found (cannot register the new app)")
+    for existing in _supervisord_conf_files(conf):
+        if f"[program:{name}]" in existing.read_text():
+            sys.exit(
+                f"error: {existing.relative_to(repo_root)} already has a "
+                f"[program:{name}] section"
+            )
+    path = _supervisord_conf_dir(conf) / f"{name}.conf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port))
+    return path
 
 
 def _run_uv_sync(repo_root: Path) -> None:
@@ -498,15 +490,15 @@ def main() -> None:
     lib_dir = _write_lib(
         repo_root, args.name, args.description, port, list(args.extra_dep)
     )
-    _update_root_pyproject(repo_root, args.name, package)
-    _update_supervisord_conf(repo_root, args.name, port)
+    program_path = _write_supervisord_program(repo_root, args.name, port)
 
     if not args.skip_uv_sync:
         _run_uv_sync(repo_root)
 
     print(
         f"Created lib at {lib_dir.relative_to(repo_root)} "
-        f"(app `{args.name}` on port {port}; the tab renders at the service's "
+        f"(app `{args.name}` on port {port}, registered in "
+        f"{program_path.relative_to(repo_root)}; the tab renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
         f"references/verify.md (curl + Playwright against http://127.0.0.1:{port}/)."
