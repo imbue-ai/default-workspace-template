@@ -33,10 +33,12 @@ files = supervisord.conf.d/*.conf
 # be seen by both the port pre-flight and the name guard. The program is
 # ``dashboard`` rather than a real built-in because a name in RESERVED_NAMES is
 # refused before any config is read, which would make the name check below pass
-# without the main config being scanned at all.
+# without the main config being scanned at all. Its port is inside the auto-pick
+# range (which starts at 8080) so that the auto pick has to step over it -- a
+# port below the range would be invisible to the auto pick either way.
 _MAIN_CONF_WITH_INLINE_PROGRAM = _MAIN_CONF + """
 [program:dashboard]
-command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8000 --name dashboard && dashboard"
+command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8080 --name dashboard && dashboard"
 """
 
 _ROOT_PYPROJECT = """\
@@ -124,7 +126,7 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
         tmp_path, {"browser": 8081}, main_conf=_MAIN_CONF_WITH_INLINE_PROGRAM
     )
 
-    taken_port = _scaffold(root, "news", "--port", "8000")
+    taken_port = _scaffold(root, "news", "--port", "8080")
     assert taken_port.returncode != 0
     assert "already in use" in taken_port.stderr
 
@@ -132,10 +134,11 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
     assert taken_name.returncode != 0
     assert "supervisord.conf already has a [program:dashboard] section" in taken_name.stderr
 
-    # 8000 and 8081 are both held, so the auto pick steps over them.
+    # 8080 is held by the main config and 8081 by the drop-in, so the auto pick
+    # lands on 8082 -- it would answer 8080 if the main config went unread.
     ok = _scaffold(root, "news")
     assert ok.returncode == 0, ok.stderr
-    assert "http://localhost:8080" in (root / "system/supervisord.conf.d/news.conf").read_text()
+    assert "http://localhost:8082" in (root / "system/supervisord.conf.d/news.conf").read_text()
 
 
 def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None:
