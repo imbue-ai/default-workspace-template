@@ -460,6 +460,120 @@ Not chased down; noted as a thing to confirm.
 
 ---
 
+## Targeted round: `refresh`'s failure branches and `reveal`'s dependency path
+
+Both were named as untested; both were then exercised deliberately.
+
+### 13. `reveal`'s dependency-refresh path is unreliable, and its health verdict is not settled state
+
+**CONFIRMED. The most consequential finding of this round.** The same class of
+change -- adding a cosmetic `keywords` field to both
+`system/apps/system_interface/frontend/package.json` and
+`system/apps/system_interface/pyproject.toml`, which cannot break anything -- was
+revealed twice, with opposite outcomes:
+
+- **Run 1: exit 0**, "revealed: the live system interface is updated and confirmed
+  healthy". Five seconds later the live UI did not answer, and supervisord had a
+  new pid. The stack was still restarting *after* reveal declared success.
+- **Run 2: exit 2**, "backend did not become healthy after restart" -> automatic
+  rollback of a change that was fine.
+
+The mechanism: a backend change makes reveal run `mngr start --restart
+system-services`, and the services agent *is* the supervisord parent, so this
+restarts every program in the workspace (app-watcher, browser, cron, earlyoom,
+host-backup, share-gateway, terminal, xvfb, and the system interface). Reveal
+then waits `_HEALTH_ATTEMPTS = 30` x `_HEALTH_INTERVAL_SECONDS = 1.0` --
+**30 seconds** -- for the live service to answer. On a loaded container the whole
+stack does not reliably come back inside that budget.
+
+Across run 2 the supervisord pid changed five times: `73190 -> 78033 -> 79355 ->
+85187 -> 86160`. Two of those came *after* the rollback printed "rolled back to
+last-known-good; the live UI is confirmed healthy" at 16:37:49, with the pid
+still turning over at 16:37:52 and only settling at 16:38:07.
+
+So the verdict is a point-in-time probe, not a settled state: it can read green
+in a gap between restarts (run 1) or red on a change that was never broken
+(run 2). The red direction fails safe -- it rolls back rather than shipping
+something broken -- but it means a valid manifest change can simply refuse to
+land. The green direction is the concerning one, because auto-rollback is the
+whole safety net and it is armed by this check.
+
+Not memory-kill related: the shed ledger
+(`data/.state/oom_priority/events/shed.jsonl`) does not exist, so earlyoom killed
+nothing. Swap was heavily used (802M of 1023M), so the container was slow rather
+than starved.
+
+One caveat on the evidence: the availability poller used `curl --max-time 1`, so
+a slow-but-alive response records as unreachable. The supervisord pid changes are
+not timing-sensitive and are what the finding rests on; the exact duration of any
+outage is not established here.
+
+### 14. `down` reports success while leaking the process it failed to kill
+
+**CONFIRMED.** `_teardown` is documented as best-effort -- "Every step is
+unchecked" -- and `kill_process_group` only ever sends SIGTERM; nothing escalates
+to SIGKILL and nothing verifies the process died. Booted an instance whose
+service traps SIGTERM:
+
+```
+down -> DOWN_EXIT=0, "instance for 'termproof' torn down."
+3s later: process alive=yes, still serving http=200 on its port
+state dir: gone
+```
+
+The state file recording that pid and port is deleted, so nothing can find the
+survivor again; its port stays bound and the next `up` silently picks a different
+one. Note the asymmetry with `refresh`, which waits 15s for the same process
+(`_STOP_ATTEMPTS = 30` x `_STOP_INTERVAL_SECONDS = 0.5`) and *aborts safely*
+rather than proceeding -- `down` does not wait at all. The situation you reach
+for `down` in is often precisely a wedged instance.
+
+### 15. The inner log is shared across refreshes, so a failed refresh can quote the previous failure
+
+**CONFIRMED, and it actively misleads.** Refreshed twice against a deliberately
+broken worktree: first with a bad import (the process crashes), then, after
+removing that import, with a hang at import time (the process starts and never
+binds).
+
+The crash case is good -- the 33-line excerpt ended with the real
+`ModuleNotFoundError` traceback, which is exactly what an agent needs.
+
+The hang case is not. The new process wrote nothing, so the excerpt showed the
+tail of the *appended* log, ending in the traceback from the previous refresh:
+
+```
+refresh: inner server did not become healthy on port 59511 after reboot...
+  | ModuleNotFoundError: No module named 'this_module_does_not_exist_refresh_probe'
+```
+
+That import no longer existed in the source. An agent reading this would hunt a
+phantom while the real cause produced no output at all. The log is never
+truncated or marked with a boot boundary between refreshes.
+
+This narrows finding 5 usefully: the excerpt is good when the new process dies
+loudly, and misleading when it dies quietly or hangs.
+
+### Verified working in this round
+
+- **`refresh`'s port-release abort.** Against a SIGTERM-ignoring service it waited
+  exactly 15s, returned 1 with "did not exit in time; its port ... may still be
+  held. Aborting rather than risk a bind clash", and left the old instance intact
+  and still serving (http 200, recorded pid unchanged). A safe abort, not a
+  half-refreshed instance.
+- **The pid-before-health-wait guard, which is the point of that ordering.**
+  Against a build that hangs at import: refresh returned 1 after 62s, the *new*
+  pid was recorded in state, the process was alive -- and `down` then reaped it.
+  No leaked server, exactly as the comment claims.
+- **`reveal`'s rollback on the manifest path.** Run 2's exit 2 restored the tree
+  to the passed `--rollback-to`, wrote a rollback commit, and left the live UI
+  healthy (200 in 0.4s) with a clean tree.
+- **Abandoning a pass (Step 4's teardown path).** Lead 2, told to drop its change,
+  ran `down`, closed both layout tabs, removed the worktree, deleted the branch,
+  released the lease, and closed its records -- with nothing merged and the live
+  UI untouched.
+
+---
+
 ## Residual gaps (not covered by this pass)
 
 - **`mngr notify`'s read-only probe.** The notifications plugin is not installed
@@ -478,6 +592,11 @@ Not chased down; noted as a thing to confirm.
   different branch that never reaches it.
 
 - **`reveal` exit 3 (rollback itself fails).** Not provoked.
+
+- **`reveal`'s dependency path on a *quiet* host.** Findings 13's two runs both
+  ran on a container that was already swapping. Whether the 30s post-restart
+  budget is adequate on an idle host, and therefore whether this is a tuning
+  problem or a structural one, is not established.
 
 ---
 
