@@ -1,8 +1,8 @@
 """Claude's native shoulder tap: flush the parked message queue into the live turn.
 
-Contract C (see docs/design/queue_sweep) for claude, WITHOUT the SIGKILL-restart the
-base ``/flush-queue`` path uses. Cancelling claude's live turn makes it flush its parked
-queue through immediately -- the same auto-flush it performs at natural turn end. We
+The shoulder-tap contract (docs/design/harness-message-lifecycle-contract.md, Part B) for
+claude, WITHOUT the SIGKILL-restart the base ``/flush-queue`` path uses. Cancelling
+claude's live turn makes it flush its parked queue through immediately -- the same auto-flush it performs at natural turn end. We
 trigger that flush early by delivering a Chat-only ``meta+q`` -> ``chat:cancel`` chord
 (mngr provisions the binding; ``meta+q`` is inert in every non-Chat context, so a stray
 delivery can never be reinterpreted as ``confirm:no`` / ``autocomplete:dismiss`` / ...).
