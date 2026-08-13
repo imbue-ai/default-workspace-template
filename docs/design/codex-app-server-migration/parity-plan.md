@@ -285,14 +285,14 @@ turns, typed or programmatic. `wait_for_ready_signal` now selects "Trust all and
 (start/connect never see the screen). Verified live: with trust cleared, PreToolUse / UserPromptSubmit /
 SessionStart all fire on programmatic `turn/start` turns (a real tool call fired PreToolUse; a `mngr message`
 advanced `codex_transcript_path`'s mtime via the UserPromptSubmit hook) — so the earlier "hooks don't fire on
-programmatic turns" note was wrong, an artifact of testing against untrusted homes.
+programmatic turns" note was wrong, a side effect of testing against untrusted homes.
 
 **Full release lifecycle — functionally GREEN (verified live).** `test_codex_agent_full_lifecycle` runs
 the whole arc end-to-end against the real `codex` CLI and every leg succeeds: create (root established) →
 `mngr message` → transcript captured → `mngr stop` (STOPPED) → `mngr start` (resume same conversation) →
 `mngr message` → `destroy` (preserve) → **`--adopt` the preserved session** → `mngr message` → the adopted
 agent **recalls the pre-destroy secret** → destroy. The test process exits non-zero ONLY on the
-resource-guard mark check (`@pytest.mark.tmux`/`rsync` "marked but never invoked") — a sandbox artifact
+resource-guard mark check (`@pytest.mark.tmux`/`rsync` "marked but never invoked") — a sandbox quirk
 where tmux/rsync don't route through the guard's PATH wrapper (the same reason the 5 `adopt`/`destroy` unit
 tests "fail" here); in CI the wrappers are active and the marks pass. Reaching this leg required five fixes,
 each found by driving the real lifecycle: the `InteractiveAgentMixin` marker (`mngr message`), the socket
@@ -320,5 +320,5 @@ untouched files). Docs: `system_interface` changelog added; the stale `integrati
 - **Phase 1.5 (interrupt) / 2.7 (initial message):** optional — interrupt is owned by the Minds ledger by
   design; `initial_message` delivery as a first `turn/start` is unimplemented but rarely exercised.
 - **Model bar:** intentionally left blank for now (per direction).
-- **Release e2e mark artifact:** `test_codex_agent_full_lifecycle` is functionally green; its non-zero exit
+- **Release e2e mark quirk:** `test_codex_agent_full_lifecycle` is functionally green; its non-zero exit
   is only the sandbox `@pytest.mark.tmux/rsync` resource-guard, which passes in CI.
