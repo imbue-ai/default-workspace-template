@@ -204,6 +204,14 @@ _HEALTH_INTERVAL_SECONDS = 1.0
 # Pre-flight boot is a fresh process on a throwaway port; give it the same grace.
 _PREFLIGHT_ATTEMPTS = 30
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
+# Budget for the pre-reveal frontend probe, which retries only a *non-answer*
+# (see :func:`_was_frontend_serving`). Shorter than the health budget on
+# purpose: this runs before any work has been done, so a service that is simply
+# down should not add 30s to a reveal that is about to fail its health check
+# anyway -- while still riding out the blip that would otherwise disarm the
+# whole regression check.
+_FRONTEND_PROBE_ATTEMPTS = 5
+_FRONTEND_PROBE_INTERVAL_SECONDS = 1.0
 
 
 class RevealError(Exception):
@@ -275,6 +283,21 @@ class FetchedPage:
     @property
     def content_type(self) -> str:
         return self.headers.get("content-type", "")
+
+
+@dataclass(frozen=True)
+class FrontendProbe:
+    """What the live UI said when asked whether it serves a working frontend."""
+
+    # Why it is not serving one, or ``None`` when it is.
+    failure: str | None
+    # False when the service did not answer at all, so ``failure`` records a
+    # non-answer rather than a verdict about the frontend.
+    is_answered: bool
+
+    @property
+    def is_serving(self) -> bool:
+        return self.failure is None
 
 
 class HttpClient:
@@ -571,8 +594,8 @@ def _assert_bundle_built(repo_root: Path, *, live_service_restarted: bool) -> No
         )
 
 
-def describe_frontend_failure(http: HttpClient, base_url: str) -> str | None:
-    """Return why the live UI is not serving a working frontend, or ``None``.
+def probe_frontend(http: HttpClient, base_url: str) -> FrontendProbe:
+    """Ask the live UI whether it is serving a working frontend.
 
     The backend health endpoint cannot answer this: ``/api/agents`` is happy
     while the bundle is missing, and the placeholder page the user gets instead
@@ -580,29 +603,72 @@ def describe_frontend_failure(http: HttpClient, base_url: str) -> str | None:
     is this the real app shell, and does its module script actually load as
     JavaScript -- which together cover both the missing-bundle state and the
     blank screen an unserved ``/assets`` path produces.
+
+    ``is_answered`` separates "the service told us the frontend is broken" from
+    "the service told us nothing". Only the caller deciding whether a working
+    frontend was owed *beforehand* cares, and only because the second is worth
+    retrying (see :func:`_was_frontend_serving`).
     """
     shell = http.get_page(f"{base_url}{SERVE_PATH}", timeout=10.0)
     if shell is None:
-        return "the live service did not answer a request for the app shell"
+        return FrontendProbe("the live service did not answer a request for the app shell", is_answered=False)
     if shell.status != 200:
-        return f"the app shell returned HTTP {shell.status}"
+        return FrontendProbe(f"the app shell returned HTTP {shell.status}", is_answered=True)
     if shell.headers.get(FRONTEND_BUILT_HEADER) == "false":
-        return "the live service is serving the 'frontend not built' placeholder -- the compiled bundle is missing"
+        return FrontendProbe(
+            "the live service is serving the 'frontend not built' placeholder -- the compiled bundle is missing",
+            is_answered=True,
+        )
     match = _ASSET_REFERENCE_PATTERN.search(shell.body)
     if match is None:
-        return "the app shell loads no bundled script, so it is not the built app"
+        return FrontendProbe("the app shell loads no bundled script, so it is not the built app", is_answered=True)
     asset_url = f"{base_url}/assets/{match.group(1)}"
     asset = http.get_page(asset_url, timeout=10.0)
     if asset is None:
-        return f"the live service did not answer a request for the bundled script {asset_url}"
-    if asset.status != 200:
-        return f"the bundled script {asset_url} returned HTTP {asset.status}"
-    if "javascript" not in asset.content_type:
-        return (
-            f"the bundled script {asset_url} came back as '{asset.content_type}' rather than JavaScript, "
-            "so the browser will refuse it and render a blank page"
+        return FrontendProbe(
+            f"the live service did not answer a request for the bundled script {asset_url}", is_answered=False
         )
-    return None
+    if asset.status != 200:
+        return FrontendProbe(f"the bundled script {asset_url} returned HTTP {asset.status}", is_answered=True)
+    if "javascript" not in asset.content_type:
+        return FrontendProbe(
+            f"the bundled script {asset_url} came back as '{asset.content_type}' rather than JavaScript, "
+            "so the browser will refuse it and render a blank page",
+            is_answered=True,
+        )
+    return FrontendProbe(None, is_answered=True)
+
+
+def describe_frontend_failure(http: HttpClient, base_url: str) -> str | None:
+    """Return why the live UI is not serving a working frontend, or ``None``."""
+    return probe_frontend(http, base_url).failure
+
+
+def _was_frontend_serving(
+    http: HttpClient, base_url: str, sleeper: Callable[[float], None]
+) -> bool:
+    """Whether the live UI was serving a working frontend before the reveal.
+
+    This decides whether the reveal is answerable for the frontend afterwards,
+    and it is wrong in only one direction: a false "no" silently disarms the
+    regression check for the whole run, so a reveal that then breaks the UI is
+    reported rather than rolled back. A single unlucky request should not be
+    able to do that.
+
+    Only a *non-answer* is retried. A verdict -- the placeholder, a bad status,
+    a script served as HTML -- is the service telling us the frontend is
+    already broken; asking again reaches the same conclusion more slowly. The
+    budget is deliberately shorter than the 30s the health checks use: this
+    runs before any work has been done, so a service that is genuinely down
+    should not delay a reveal that is about to fail its health check anyway.
+    """
+    for index in range(_FRONTEND_PROBE_ATTEMPTS):
+        probe = probe_frontend(http, base_url)
+        if probe.is_answered:
+            return probe.is_serving
+        if index < _FRONTEND_PROBE_ATTEMPTS - 1:
+            sleeper(_FRONTEND_PROBE_INTERVAL_SECONDS)
+    return False
 
 
 def _refresh_workspace_view(repo_root: Path, runner: Runner) -> None:
@@ -929,7 +995,7 @@ def reveal(
     # Whether a working frontend is owed afterwards is decided by what was being
     # served *before* -- the reveal is answerable for regressions, not for a
     # workspace that was already broken when it arrived.
-    is_frontend_expected = describe_frontend_failure(http, resolved_base) is None
+    is_frontend_expected = _was_frontend_serving(http, resolved_base, sleeper)
 
     try:
         try:
