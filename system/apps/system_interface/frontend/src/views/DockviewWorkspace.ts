@@ -876,6 +876,12 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   let isPointerOver = false;
   let isMenuOpen = false;
   let isEditingTitle = false;
+  // Whether this instance is a row in the tab-overflow dropdown rather than a
+  // tab on the strip. dockview builds a FRESH renderer per dropdown open
+  // (``createTabRenderer("headerOverflow")``), so one panel can have two live
+  // instances at once and only the strip's may carry controls or own the
+  // panel's handle registration.
+  let isOverflowRow = false;
   // What dockview had the tab's draggable set to before an edit borrowed it.
   let wasTabDraggable: boolean | null = null;
 
@@ -955,6 +961,8 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   };
 
   content.addEventListener("dblclick", (event) => {
+    // A dropdown row only focuses; renaming happens on the strip.
+    if (isOverflowRow) return;
     // A launcher stands for no object, so there is nothing to name: the
     // gesture is refused outright rather than opening an editor whose commit
     // would have nowhere to go. The event still propagates -- to dockview a
@@ -1002,6 +1010,19 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
 
       if (params?.panelType === "chat") {
         appendChatLivenessDot(element, params.chatAgentId ?? params.agentId, disposables);
+      }
+
+      // An overflow-dropdown row is just the tab -- icon, title, liveness --
+      // with none of the strip's machinery: the row's whole job is to focus
+      // the tab, and the controls are on the strip once it is. The early
+      // return also keeps this instance away from ``tabHandlesByPanelId``:
+      // letting a dropdown row set (and, on dispose, delete) the panel's
+      // entry would leave the strip tab's Rename and title-fade pointing at
+      // a detached row after the dropdown closes.
+      if (parameters.tabLocation === "headerOverflow") {
+        isOverflowRow = true;
+        actions.remove();
+        return;
       }
 
       actions.appendChild(
@@ -1059,7 +1080,9 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       tabHandlesByPanelId.set(options.id, { element, refreshTitleFade, beginTitleEdit });
     },
     dispose() {
-      tabHandlesByPanelId.delete(options.id);
+      // A dropdown row never claimed the handle, so it must not take the
+      // strip tab's away with it.
+      if (!isOverflowRow) tabHandlesByPanelId.delete(options.id);
       for (const d of disposables) {
         d.dispose();
       }

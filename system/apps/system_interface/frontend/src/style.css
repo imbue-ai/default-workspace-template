@@ -1724,13 +1724,6 @@ body {
   font-weight: 600;
 }
 
-/* The inline minus and kebab belong to the strip, where the tab is a card with
-   room for controls; in the menu they would crowd every row. The row itself
-   focuses the tab, and the controls are there once it is. */
-.dockview-theme-light .dv-tabs-overflow-container .dv-custom-tab-actions {
-  display: none;
-}
-
 /* Bolding is confined to the title span. The tab's width is fixed by the
    equal-width rule, so the heavier face cannot reflow the strip -- at worst a
    long title fades a character earlier while hovered. */
