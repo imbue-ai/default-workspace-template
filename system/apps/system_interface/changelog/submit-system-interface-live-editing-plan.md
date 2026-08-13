@@ -51,9 +51,10 @@ instance -- the preview, the reveal pre-flight -- is a read-only second view of 
 workspace another instance owns, so it is now built without the capability to
 write `oom_score_adj` at all, and it neither seeds nor runs the staleness sweep.
 Otherwise two instances would fight over the same `/proc` entries, and the
-preview would lose on the merits anyway: the frontend activity reports that
-supply the open/visible bonuses go to the authoritative instance, so the
-preview's writes would be both contending *and* worse. The capability is
+preview would lose on the merits anyway: the open/visible bonuses come from
+frontend activity reports, and a second instance sees only its own -- the
+preview's tab set, which is not the workspace's, or for the headless reveal
+pre-flight nothing at all, which reads as every chat closed. The capability is
 withheld rather than the call sites gated because `reapply` is reachable in
 `FOLLOW` mode by two paths that are easy to miss -- every folded lifecycle event
 runs `record_running_agents`, and the preview serves its own frontend, which can
