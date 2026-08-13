@@ -115,7 +115,8 @@ than ~1s later, and it keeps the command self-documenting.
 For an app, also drop its `data/.state/apps.toml` entry with
 `python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded
 web lib, `build-app`'s `cleanup.md` reference covers the full
-teardown (reverting the lib and the root `pyproject.toml` edits).
+teardown (removing the lib; the root `pyproject.toml` needs no edit, since the
+scaffold never added one).
 
 ## Modifying a service
 

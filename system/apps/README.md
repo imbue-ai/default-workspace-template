@@ -15,8 +15,9 @@ Built-in apps:
 - `browser/` - The live browser tab: a headless Chromium streamed to the UI.
 
 Python packages in this folder are picked up automatically by the workspace's
-`system/apps/*` uv member glob -- no central registration needed beyond the
-root `pyproject.toml` dependency the scaffolder adds.
+`system/apps/*` uv member glob and installed by `uv sync --all-packages` -- no
+central registration needed, and the scaffolder adds no root `pyproject.toml`
+entry.
 
 An app usually runs as a supervised service (a `[program:*]` entry in
 `system/supervisord.conf.d/<name>.conf`) and registers its port via
