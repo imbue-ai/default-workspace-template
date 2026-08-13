@@ -443,7 +443,33 @@ stderr_logfile_backups=3
 """
 
 
-def _write_supervisord_program(repo_root: Path, name: str, port: int) -> Path:
+def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
+    """The drop-in this scaffold will write, once nothing else claims the name.
+
+    Exits non-zero if the name is already claimed, whether in the main config or
+    in a drop-in, and whether by a program or by an event listener: supervisord
+    holds both in one process-group namespace, so a duplicate name either
+    resolves silently to whichever the include order read last, or breaks the
+    config for every program at the next reread.
+
+    Runs before anything is written, so a refusal leaves no half-scaffolded lib
+    for the agent to clean up.
+    """
+    conf = repo_root / "system/supervisord.conf"
+    if not conf.exists():
+        sys.exit(f"error: {conf} not found (cannot register the new app)")
+    for existing in _supervisord_conf_files(conf):
+        text = existing.read_text()
+        for section in (f"[program:{name}]", f"[eventlistener:{name}]"):
+            if section in text:
+                sys.exit(
+                    f"error: {existing.relative_to(repo_root)} already has a "
+                    f"{section} section"
+                )
+    return _supervisord_program_path(conf, name)
+
+
+def _write_supervisord_program(path: Path, name: str, port: int) -> None:
     """Write the app's supervisord program to its own drop-in file.
 
     The command is wrapped in `bash -c "..."` because supervisord exec's commands
@@ -457,28 +483,9 @@ def _write_supervisord_program(repo_root: Path, name: str, port: int) -> Path:
     every scaffolded creation, since none is registered as a root dependency --
     deleting the console script. `--all-packages` reinstates it, so the program
     repairs its own environment on the restart that follows.
-
-    Exits non-zero if this name is already claimed, whether in the main config or
-    in another drop-in, and whether by a program or by an event listener:
-    supervisord holds both in one process-group namespace, so a duplicate name
-    either resolves silently to whichever the include order read last, or breaks
-    the config for every program at the next reread.
     """
-    conf = repo_root / "system/supervisord.conf"
-    if not conf.exists():
-        sys.exit(f"error: {conf} not found (cannot register the new app)")
-    for existing in _supervisord_conf_files(conf):
-        text = existing.read_text()
-        for section in (f"[program:{name}]", f"[eventlistener:{name}]"):
-            if section in text:
-                sys.exit(
-                    f"error: {existing.relative_to(repo_root)} already has a "
-                    f"{section} section"
-                )
-    path = _supervisord_program_path(conf, name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port))
-    return path
 
 
 def _run_uv_sync(repo_root: Path) -> None:
@@ -539,11 +546,12 @@ def main() -> None:
     )
     package = _kebab_to_snake(args.name)
     port = _pick_port(repo_root, args.port)
+    program_path = _reserve_supervisord_program_path(repo_root, args.name)
 
     lib_dir = _write_lib(
         repo_root, args.name, args.description, port, list(args.extra_dep)
     )
-    program_path = _write_supervisord_program(repo_root, args.name, port)
+    _write_supervisord_program(program_path, args.name, port)
 
     if not args.skip_uv_sync:
         _run_uv_sync(repo_root)

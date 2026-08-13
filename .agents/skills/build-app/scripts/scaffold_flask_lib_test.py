@@ -131,6 +131,7 @@ def test_a_dropin_the_include_glob_would_not_read_is_refused(tmp_path: Path) -> 
     assert result.returncode != 0
     assert "no [include] glob" in result.stderr
     assert not (root / "system/supervisord.conf.d/news.conf").exists()
+    assert not (root / "system/apps").exists()
 
 
 def test_a_port_held_by_a_non_default_include_directory_is_still_seen(tmp_path: Path) -> None:
@@ -163,13 +164,18 @@ def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
 
 
 def test_name_already_declared_by_a_dropin_is_refused(tmp_path: Path) -> None:
-    """Two programs of one name would collide; ``browser`` is not in RESERVED_NAMES."""
+    """Two programs of one name would collide; ``browser`` is not in RESERVED_NAMES.
+
+    The refusal has to come before anything is written: a half-scaffolded lib
+    left in the tree is foreign dirt the next hardening pass cannot clean.
+    """
     root = _make_workspace(tmp_path, {"browser": 8081})
 
     result = _scaffold(root, "browser")
 
     assert result.returncode != 0
     assert "supervisord.conf.d/browser.conf" in result.stderr
+    assert not (root / "system/apps").exists()
 
 
 def test_name_held_by_an_event_listener_is_refused(tmp_path: Path) -> None:
@@ -187,3 +193,4 @@ def test_name_held_by_an_event_listener_is_refused(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "[eventlistener:oom-tag-backstop]" in result.stderr
+    assert not (root / "system/apps").exists()
