@@ -2316,6 +2316,7 @@ dependencies = [
     { name = "pygtail" },
     { name = "pyinfra" },
     { name = "python-dotenv" },
+    { name = "python-frontmatter" },
     { name = "requests" },
     { name = "resource-guards" },
     { name = "rich" },
@@ -2346,6 +2347,7 @@ requires-dist = [
     { name = "pygtail", specifier = ">=0.14.0" },
     { name = "pyinfra", specifier = ">=3.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "python-frontmatter", specifier = ">=1.1.0" },
     { name = "requests", specifier = ">=2.26" },
     { name = "resource-guards", editable = "libs/resource_guards" },
     { name = "rich", specifier = ">=13.0" },
@@ -2519,10 +2521,14 @@ version = "0.1.4"
 source = { editable = "libs/mngr_codex" }
 dependencies = [
     { name = "imbue-mngr" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "imbue-mngr", editable = "libs/mngr" }]
+requires-dist = [
+    { name = "imbue-mngr", editable = "libs/mngr" },
+    { name = "websockets", specifier = ">=13" },
+]
 
 [[package]]
 name = "imbue-mngr-codex-usage"
