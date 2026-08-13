@@ -2096,8 +2096,10 @@ def test_launcher_shows_an_opened_tabs_recency_and_it_survives_a_reload(tmp_path
             error_message="focusing the chat never touched the machine's last-used store",
         )
 
-        # Back on the launcher, the row now wears that recency.
-        page.locator(".dv-default-tab-content", has_text="New tab").first.click()
+        # Back on the launcher -- focusing the chat folded the old one up, so
+        # the "+" opens a fresh one -- the row now wears that recency.
+        page.locator(".dockview-add-tab-button").first.click()
+        expect(page.locator(".new-tab-launcher").first).to_be_visible(timeout=10000)
         expect(chat_row).to_be_visible(timeout=10000)
         expect(chat_row).to_contain_text("just now")
 
