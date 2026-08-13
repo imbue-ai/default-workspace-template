@@ -51,7 +51,8 @@ This branch already edits `update-creation/SKILL.md`, so the fix is in scope.
 
 ### 2. The `for L in desktop mobile` layout loop exits non-zero on a normal workspace
 
-**OBSERVED.** At 23:26:08:
+**CONFIRMED, seen in two runs** -- the sysedit transcript, and again in scenario
+2 with a desktop client connected and only `mobile` absent. At 23:26:08:
 
 ```
 opened service:si-preview in tabs=[service:si-preview*]
