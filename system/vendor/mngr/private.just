@@ -1237,6 +1237,15 @@ audit-boxes:
 prep-server server_id *extra_args:
     uv run minds server prep --server-id "{{server_id}}" {{extra_args}}
 
+# Backfill the volume-gated minds-autostart units onto every existing slice VM
+# of the activated env's fleet (reboot-resilience rollout Step 2; see
+# apps/minds/docs/reboot-resilience-rollout.md). Idempotent and safe on running
+# workspaces. Pass --dry-run to list the per-VM plan first, or
+# --server-id <id> (repeatable) to scope to specific boxes.
+#   just backfill-autostart --dry-run
+backfill-autostart *extra_args:
+    uv run minds server backfill-autostart {{extra_args}}
+
 # One-time host-key backfill for the activated minds env. Keyscans every
 # pre-existing pool host + bare-metal box whose recorded sshd host key columns
 # are still null and records them, so rows baked before host-key pinning become

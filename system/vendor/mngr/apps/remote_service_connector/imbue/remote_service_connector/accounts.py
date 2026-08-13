@@ -10,6 +10,8 @@ skips the ally eligibility check -- the operator knows best.
 
 import concurrent.futures
 import logging
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 from fastapi import APIRouter
@@ -298,6 +300,34 @@ def compute_account_usage(ops: CloudflareOps, user_id_prefix: str, user_id: str)
     )
 
 
+# CLEANUP: remove these compatibility fields (and both helpers) once the
+# desktop fleet is on the first post-v0.3.11 minds release. v0.3.11 desktop
+# clients parse the /account and plan responses into models that REQUIRE the
+# Cloudflare-tunnel-era fields (max_tunnels / max_services_per_tunnel in
+# entitlements, tunnels in usage) with no defaults, so the first deploy after
+# migration 020 dropped those columns would break their Accounts page with a
+# validation error. Served as hardcoded zeros ("no tunnels exist anymore"),
+# which old clients render as an inert usage row.
+_DEPRECATED_TUNNEL_ENTITLEMENT_FIELDS: Final[dict[str, int]] = {"max_tunnels": 0, "max_services_per_tunnel": 0}
+
+
+def _with_deprecated_tunnel_entitlement_fields(entitlements_payload: Mapping[str, object]) -> dict[str, object]:
+    """Add the tunnel-era entitlement fields v0.3.11 clients require (see CLEANUP above)."""
+    return {**entitlements_payload, **_DEPRECATED_TUNNEL_ENTITLEMENT_FIELDS}
+
+
+def _with_deprecated_tunnel_account_fields(account_payload: dict[str, object]) -> dict[str, object]:
+    """Return a copy with the tunnel-era entitlement + usage fields v0.3.11 clients require (see CLEANUP above)."""
+    result = dict(account_payload)
+    entitlements_payload = result.get("entitlements")
+    usage_payload = result.get("usage")
+    if isinstance(entitlements_payload, dict):
+        result["entitlements"] = {**entitlements_payload, **_DEPRECATED_TUNNEL_ENTITLEMENT_FIELDS}
+    if isinstance(usage_payload, dict):
+        result["usage"] = {**usage_payload, "tunnels": 0}
+    return result
+
+
 @router.get("/account")
 def get_account(request: Request) -> dict[str, object]:
     """Return the caller's plan, entitlement values, and live usage.
@@ -317,14 +347,18 @@ def get_account(request: Request) -> dict[str, object]:
             user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
         )
         usage = compute_account_usage(ops, user.user_id_prefix, user_id)
-        return AccountInfoResponse(
-            user_id=user_id,
-            email=user.email or "",
-            plan_name=entitlements.plan_name,
-            entitlements=entitlements.quota_values(),
-            usage=usage,
-            available_plans=[str(p["plan_name"]) for p in entitlements_module.get_entitlements_store().list_plans()],
-        ).model_dump()
+        return _with_deprecated_tunnel_account_fields(
+            AccountInfoResponse(
+                user_id=user_id,
+                email=user.email or "",
+                plan_name=entitlements.plan_name,
+                entitlements=entitlements.quota_values(),
+                usage=usage,
+                available_plans=[
+                    str(p["plan_name"]) for p in entitlements_module.get_entitlements_store().list_plans()
+                ],
+            ).model_dump()
+        )
 
 
 def apply_plan_to_account(user_id: str, plan_name: str, store: "EntitlementsStore | None" = None) -> PlanEntitlements:
@@ -358,12 +392,18 @@ def set_account_plan(request: Request, body: SetPlanRequest) -> dict[str, object
         user_id = auth_module.get_user_id_from_bearer_header(request)
         entitlements = entitlements_module.resolve_entitlements_for_user(user_id, user)
         if body.plan == entitlements.plan_name:
-            return {"plan_name": entitlements.plan_name, "entitlements": entitlements.quota_values().model_dump()}
+            return {
+                "plan_name": entitlements.plan_name,
+                "entitlements": _with_deprecated_tunnel_entitlement_fields(entitlements.quota_values().model_dump()),
+            }
         if body.plan == PLAN_ALLY:
             require_verified_email(user)
             require_ally_eligible(user.verified_email)
         new_values = apply_plan_to_account(entitlements.user_id, body.plan)
-        return {"plan_name": body.plan, "entitlements": new_values.model_dump()}
+        return {
+            "plan_name": body.plan,
+            "entitlements": _with_deprecated_tunnel_entitlement_fields(new_values.model_dump()),
+        }
 
 
 def resolve_user_id_by_email(email: str) -> str:
@@ -392,14 +432,18 @@ def admin_get_account(request: Request, email: str) -> dict[str, object]:
         usage = compute_account_usage(
             cloudflare_module.get_cloudflare_ctx().ops, entitlements.user_id_prefix, entitlements.user_id
         )
-        return AccountInfoResponse(
-            user_id=entitlements.user_id,
-            email=email.strip().lower(),
-            plan_name=entitlements.plan_name,
-            entitlements=entitlements.quota_values(),
-            usage=usage,
-            available_plans=[str(p["plan_name"]) for p in entitlements_module.get_entitlements_store().list_plans()],
-        ).model_dump()
+        return _with_deprecated_tunnel_account_fields(
+            AccountInfoResponse(
+                user_id=entitlements.user_id,
+                email=email.strip().lower(),
+                plan_name=entitlements.plan_name,
+                entitlements=entitlements.quota_values(),
+                usage=usage,
+                available_plans=[
+                    str(p["plan_name"]) for p in entitlements_module.get_entitlements_store().list_plans()
+                ],
+            ).model_dump()
+        )
 
 
 @router.post("/admin/accounts/{email}/plan")
@@ -409,7 +453,10 @@ def admin_set_account_plan(request: Request, email: str, body: AdminSetPlanReque
         require_admin_key(request)
         entitlements = _admin_ensure_entitlements(email)
         new_values = apply_plan_to_account(entitlements.user_id, body.plan)
-        return {"plan_name": body.plan, "entitlements": new_values.model_dump()}
+        return {
+            "plan_name": body.plan,
+            "entitlements": _with_deprecated_tunnel_entitlement_fields(new_values.model_dump()),
+        }
 
 
 @router.post("/admin/accounts/{email}/quota")
