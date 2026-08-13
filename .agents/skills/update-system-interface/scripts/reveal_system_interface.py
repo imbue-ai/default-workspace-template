@@ -294,10 +294,6 @@ class FrontendProbe:
     # non-answer rather than a verdict about the frontend.
     is_answered: bool
 
-    @property
-    def is_serving(self) -> bool:
-        return self.failure is None
-
 
 class HttpClient:
     """Indirection over the loopback probes: the health checks (live service +
