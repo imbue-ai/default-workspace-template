@@ -122,12 +122,22 @@ def test_a_program_free_main_config_implies_an_include_aware_vendored_probe() ->
     if main_config_programs:
         return
 
-    vendored_probe = (
-        _REPO_ROOT
-        / "system/vendor/mngr/apps/minds/imbue/minds/desktop_client/recovery_probe_script.txt"
-    )
-    if not vendored_probe.is_file():
+    vendored_mngr = _REPO_ROOT / "system/vendor/mngr"
+    if not vendored_mngr.is_dir():
         return
+
+    # A missing probe is a failure, not a pass: the path lives in another repo's
+    # tree, so an upstream rename would otherwise retire this gate silently --
+    # leaving a program-free main config unguarded, which is the one outcome it
+    # exists to prevent.
+    vendored_probe = (
+        vendored_mngr / "apps/minds/imbue/minds/desktop_client/recovery_probe_script.txt"
+    )
+    assert vendored_probe.is_file(), (
+        f"{vendored_probe.relative_to(_REPO_ROOT)} is not in the vendored mngr subtree, "
+        "so the release gate below cannot read the recovery probe. If the probe moved "
+        "upstream, re-point this test at its new path -- do not drop the check."
+    )
 
     source = vendored_probe.read_text()
     # The mechanism, not the word: the probe must read the [include] files
