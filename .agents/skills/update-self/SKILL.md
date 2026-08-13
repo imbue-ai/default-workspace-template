@@ -331,11 +331,15 @@ relay their resolution via `mngr message`, consume the report, and re-arm.
 
 The one other thing a `question` can be is the worker's review-gate escape hatch
 (its §4c): a *process* question about whether or at what scope the gates run.
-That is not the user's to answer -- **answer it yourself** per `lead-proxy.md`,
-and the answer is to apply the §4c rule as written (the rule already is the
-proportionality decision), so reply, consume, and re-arm without involving the
-user. Escalate only if the worker has surfaced a real question of user intent
-inside it.
+That is not the user's to answer -- **answer it yourself** per `lead-proxy.md`.
+The default answer is to apply the §4c rule as written: the rule already is the
+proportionality decision, so any situation it covers gets the branch the rule
+gives it. Where the rule is genuinely silent -- the case §4c routes here --
+decide it on the rule's own principle rather than on the worker's proposal: the
+fallback is always more coverage, never less, so the gates run unless the worker
+has shown the skip branch's three conditions hold. Either way, reply, consume,
+and re-arm without involving the user. Escalate only if the worker has surfaced
+a real question of user intent inside it.
 
 For the conflict case, **compose the question per the §5a rules -- plain-language
 and pointed at a resolution, not the worker's raw conflict dump.** Lead with
