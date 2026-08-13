@@ -321,6 +321,14 @@ def test_chat_transcript_area_is_pure_white(e2e_server: tuple[str, list[AgentInf
 
 # Opening the "+" dropdown fetches the live terminal fleet, which shells out to
 # ``tmux list-sessions`` server-side -- hence the tmux mark.
+#
+# Marked flaky on an UNIDENTIFIED cause: it failed once inside a full-suite run
+# and then passed three times out of three on its own, with and without the
+# change that was in the tree at the time. That is the signature of the shell
+# -out racing something under parallel load rather than of a wrong assertion,
+# but the actual race has not been found, so this mark buys retries and does not
+# claim to be a fix.
+@pytest.mark.flaky
 @pytest.mark.tmux
 @pytest.mark.timeout(120, func_only=False)
 def test_add_tab_menu_lists_unopened_agent(tmp_path: Path, page: Page) -> None:
