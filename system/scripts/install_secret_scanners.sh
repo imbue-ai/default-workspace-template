@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pinned installer for the two secret-scanner binaries the
-# publish-inspiration skill's scan gate (scan_secrets.sh) hard-requires:
+# publish-template skill's scan gate (scan_secrets.sh) hard-requires:
 #
 #   - betterleaks (MIT)        -- gitleaks' successor, by the gitleaks author
 #   - kingfisher  (Apache-2.0) -- MongoDB's scanner; the scan gate always
@@ -131,7 +131,9 @@ _fetch_verify_install() {
     local tmpdir tarball actual_sha rc=0
     tmpdir="$(mktemp -d)"
     tarball="$tmpdir/$tool.tar.gz"
-    if ! curl -fsSL --retry 3 -o "$tarball" "$url"; then
+    # --retry-all-errors also retries a mid-transfer drop (curl exit 56),
+    # which plain --retry does not cover.
+    if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$tarball" "$url"; then
         _log "$tool: download failed: $url"
         rm -rf "$tmpdir"
         return 1

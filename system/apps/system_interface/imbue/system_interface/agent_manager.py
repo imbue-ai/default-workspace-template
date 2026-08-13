@@ -38,6 +38,8 @@ from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentNameStyle
 from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
+from imbue.system_interface import client_activity
+from imbue.system_interface import workspace_layouts
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import derive_activity_state
@@ -386,13 +388,12 @@ class AgentManager:
     # both discovery paths -- the per-agent delta and the full snapshot -- open
     # each new assist chat exactly once without reopening it on later snapshots.
     _auto_opened_assist_ids: set[str]
-    # Re-tags chat agents' OOM ``oom_score_adj`` from live UI activity (open /
-    # visible / recently-messaged). Driven purely by the ``/api/activity`` endpoint
-    # (via ``record_activity``): a chat launches at the expendable band and is
-    # protected only as engagement is reported, so no periodic re-tag is needed.
-    # The messaged-revive path is race-free without one -- the send blocks until the
-    # revived process is ready (and its pid is registered before that), and the
-    # frontend posts activity only after the send returns.
+    # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: UI presence and
+    # messages (via ``record_activity``, from the ``/api/activity`` endpoint),
+    # lifecycle changes (via ``record_running_agents``, from the observe stream),
+    # and elapsed idle time (via its own slow sweep, started in ``start``). A chat
+    # is protected while engaged and climbs past the worker band once it has been
+    # left alone long enough.
     _oom_prioritizer: ChatOomPrioritizer
 
     @classmethod
@@ -436,18 +437,26 @@ class AgentManager:
         manager._last_event_timestamp_by_agent = {}
         manager._activity_state_by_agent = {}
         manager._auto_opened_assist_ids = set()
-        # Built last: its ``list_chat_agent_ids`` callback reads ``_agents`` /
-        # ``_lock``, which are set above.
+        # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
+        # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_agent_ids=manager.get_chat_agent_ids,
             resolve_pid=lookup_pid_by_agent_id,
             set_adj=set_oom_score_adj,
+            resolve_process_started_at=manager._read_process_started_at,
         )
         return manager
 
     def start(self) -> None:
-        """Start the observe subprocess and perform initial agent discovery."""
+        """Start the observe subprocess and perform initial agent discovery.
+
+        Also seeds and starts the OOM prioritizer. Seeding happens before the
+        sweep so the first pass ranks chats against their real message history
+        rather than treating a restart as "nothing has ever been messaged".
+        """
         self._initial_discover()
+        self._seed_oom_prioritizer()
+        self._oom_prioritizer.start()
         self._start_observe()
 
     def start_without_observe(self) -> None:
@@ -457,6 +466,7 @@ class AgentManager:
     def stop(self) -> None:
         """Stop the observe subprocess, file watchers, and creation threads."""
         self._shutdown_event.set()
+        self._oom_prioritizer.stop()
 
         if self._observe_cg is not None:
             self._observe_cg.shutdown()
@@ -524,6 +534,26 @@ class AgentManager:
             visible_ids=visible_ids,
             messaged_id=messaged_id,
         )
+
+    def _seed_oom_prioritizer(self) -> None:
+        """Seed the prioritizer's per-chat message times from the client-activity log.
+
+        The prioritizer's own recency state is in-memory, so without this a
+        restart of the system interface would forget which chats are in active use
+        and start every one of them aging from its process-start time. Quietly
+        does nothing when the log is unavailable (a dev/test setup with no layout
+        dir, or a workspace where nothing has been messaged yet).
+        """
+        if not self._own_agent_id:
+            return
+        layout_dir = workspace_layouts.primary_agent_layout_dir(self._host_dir, self._own_agent_id)
+        events = client_activity.read_client_activity_events(client_activity.get_events_path(layout_dir))
+        last_message_at_by_agent_id: dict[str, float] = {}
+        for agent_id, timestamp in client_activity.last_message_time_by_agent(events).items():
+            messaged_at = parse_iso_timestamp_to_epoch(timestamp)
+            if messaged_at is not None:
+                last_message_at_by_agent_id[agent_id] = messaged_at
+        self._oom_prioritizer.seed_last_message_times(last_message_at_by_agent_id)
 
     def get_agent_info_by_id(self, agent_id: str) -> AgentInfo | None:
         """Resolve an agent id to its web-UI :class:`AgentInfo` (with resolved dirs), or None."""
@@ -1131,6 +1161,16 @@ class AgentManager:
         # handler resolves ``chat:<name>`` against its known-agents list and drops the
         # open if the agent is not there yet, so the chat must be known first.
         self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+
+        # Hand the OOM prioritizer the current mid-turn set. This is its only view
+        # of a chat messaged outside the workspace UI (by mngr or another agent):
+        # entering a running state is the observable consequence of such a message,
+        # and it keeps a chat exempt from its staleness climb for the turn's
+        # duration. After the broadcast because it writes to /proc, which the UI
+        # update should not wait on.
+        self._oom_prioritizer.record_running_agents(
+            [agent_id for agent_id, agent in new_agents.items() if agent.state in RUNNING_LIFECYCLE_STATES]
+        )
 
         # A newly-created chat usually surfaces as a freshly-added agent here, so
         # auto-open assist chats that have appeared. ``_maybe_auto_open_assist``

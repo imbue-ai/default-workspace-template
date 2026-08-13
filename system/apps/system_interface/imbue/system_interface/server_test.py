@@ -83,6 +83,27 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
         assert "test" in response.text
 
 
+def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
+    """The shell must never be cached, or a reload cannot pick up a new build.
+
+    The built assets are content-hashed, so the shell is the only document whose
+    freshness decides which bundle a reloaded page runs. A page cannot drop its
+    own HTTP cache (``location.reload(true)`` is Firefox-only), so a cacheable
+    shell would let a reveal's reload land right back on the old interface --
+    including through a shared Cloudflare tunnel, where an intermediary may
+    cache anything not marked otherwise.
+    """
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><body>test</body></html>")
+
+    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
+        test_client = create_application(build_test_state()).test_client()
+        response = test_client.get("/")
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+
+
 def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: Path) -> None:
     """When static dir has no index.html, show a helpful message."""
     empty_dir = tmp_path / "static"
@@ -599,6 +620,9 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
         list_chat_agent_ids=manager.get_chat_agent_ids,
         resolve_pid=lambda cid: pids.get(cid),
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
+        # No process-start marker in this fake, so the chat's idle time comes from
+        # the reported activity alone -- which is what these tests are about.
+        resolve_process_started_at=lambda _cid: None,
     )
     return manager
 
@@ -618,7 +642,14 @@ def test_activity_endpoint_retags_a_chat_from_the_report() -> None:
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
     # Open + visible + most-recently messaged -> the most-protected chat band.
-    assert writes == [(4242, bands.chat_agent_oom_score_adj(is_open=True, is_visible=True, recency_rank=0))]
+    assert writes == [
+        (
+            4242,
+            bands.chat_agent_oom_score_adj(
+                is_open=True, is_visible=True, recency_rank=0, idle_seconds=0.0, is_mid_turn=False
+            ),
+        )
+    ]
 
 
 def test_activity_endpoint_defaults_missing_fields() -> None:
@@ -635,7 +666,16 @@ def test_activity_endpoint_defaults_missing_fields() -> None:
     response = client.post("/api/activity", json={})
 
     assert response.status_code == 200
-    assert writes == [(4242, bands.chat_agent_oom_score_adj(is_open=False, is_visible=False, recency_rank=None))]
+    # Nothing has ever engaged this chat and it has no process-start marker, so its
+    # idle time is unknown -- which counts as fresh, not abandoned.
+    assert writes == [
+        (
+            4242,
+            bands.chat_agent_oom_score_adj(
+                is_open=False, is_visible=False, recency_rank=None, idle_seconds=None, is_mid_turn=False
+            ),
+        )
+    ]
 
 
 def test_interrupt_agent_returns_404_for_unknown_agent(client: FlaskClient) -> None:
@@ -1411,9 +1451,9 @@ def test_layout_broadcast_refresh_bypasses_mutex(app: Flask) -> None:
 def test_layout_broadcast_reload_system_interface_emits_ws_message(app: Flask) -> None:
     """``reload_system_interface`` broadcasts a layout_op so the shell reloads.
 
-    This is the frontend-reveal trigger: the reload script POSTs this op and the
-    dockview shell responds by reloading the whole top-level page. It carries no
-    args and bypasses the mutex (read-only).
+    ``system/scripts/refresh_workspace_view.py`` POSTs this op after any
+    interface change, and the dockview shell responds by reloading the whole
+    top-level page. It carries no args and bypasses the mutex (read-only).
     """
     client = app.test_client()
     with serve_app(app) as served:
