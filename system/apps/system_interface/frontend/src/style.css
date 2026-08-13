@@ -1933,31 +1933,6 @@ body {
     0 0 0 4px var(--color-accent);
 }
 
-/* ── Layout save/load/delete dialog ── */
-.layout-dialog-list {
-  max-height: 220px;
-  overflow-y: auto;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  margin-bottom: 12px;
-}
-
-.layout-dialog-item {
-  padding: 8px 12px;
-  font-size: 14px;
-  color: var(--color-text-primary);
-  cursor: pointer;
-}
-
-.layout-dialog-item:hover {
-  background: var(--color-bg-hover);
-}
-
-.layout-dialog-item-selected {
-  background: var(--color-bg-hover);
-  font-weight: 600;
-}
-
 /* ── Custom tab renderer ── */
 .dv-custom-tab {
   gap: 4px;

@@ -14,7 +14,7 @@
  * dialog rather than a second stacked dialog -- because the modal already owns
  * the screen and the name being deleted is right there in the preview.
  *
- * Shell and class names follow LayoutDialog -- the shared `.custom-url-dialog`
+ * Shell and class names follow the shared `.custom-url-dialog`
  * markup, a backdrop click to dismiss, Enter in the name field to save. Escape
  * is listened for on the document (as FastModeModal does) rather than on the
  * name field alone, because focus here just as easily sits on a swatch or a
