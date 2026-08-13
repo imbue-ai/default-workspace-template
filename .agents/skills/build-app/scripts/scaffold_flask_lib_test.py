@@ -30,10 +30,13 @@ files = supervisord.conf.d/*.conf
 
 # A workspace that predates the split, or one whose mind moved a program back:
 # the scaffolder still reads the main config, so a program declared there has to
-# be seen by both the port pre-flight and the name guard.
+# be seen by both the port pre-flight and the name guard. The program is
+# ``dashboard`` rather than a real built-in because a name in RESERVED_NAMES is
+# refused before any config is read, which would make the name check below pass
+# without the main config being scanned at all.
 _MAIN_CONF_WITH_INLINE_PROGRAM = _MAIN_CONF + """
-[program:system_interface]
-command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8000 --name system_interface && system-interface"
+[program:dashboard]
+command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8000 --name dashboard && dashboard"
 """
 
 _ROOT_PYPROJECT = """\
@@ -125,8 +128,9 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
     assert taken_port.returncode != 0
     assert "already in use" in taken_port.stderr
 
-    taken_name = _scaffold(root, "system-interface")
+    taken_name = _scaffold(root, "dashboard")
     assert taken_name.returncode != 0
+    assert "supervisord.conf already has a [program:dashboard] section" in taken_name.stderr
 
     # 8000 and 8081 are both held, so the auto pick steps over them.
     ok = _scaffold(root, "news")
