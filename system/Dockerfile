@@ -10,6 +10,27 @@ ENV PATH="/root/.local/bin:$PATH"
 ARG CLAUDE_CODE_VERSION=2.1.207
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
+# Pin Codex CLI; passed to setup_system.sh. Keep in sync with the default in
+# system/scripts/setup_system.sh. Bump deliberately, not by accident.
+ARG CODEX_VERSION=0.147.0
+ENV CODEX_VERSION=${CODEX_VERSION}
+
+# Pin Node.js (installed from a nodejs.org release tarball, not apt -- pi needs
+# Node 22+). Pin the Pi CLI. All passed to setup_system.sh; keep in sync
+# with the defaults there. Bump deliberately, not by accident.
+ARG NODE_VERSION=22.23.2
+ENV NODE_VERSION=${NODE_VERSION}
+ARG PI_VERSION=0.83.0
+ENV PI_VERSION=${PI_VERSION}
+
+# Pin the pi extension packages baked into the image at /opt/pi-extensions
+# (setup_system.sh); seed_home_skeleton.sh copies the tree into ~/.pi/agent at
+# first boot. Keep in sync with the pins in seed_home_skeleton.sh.
+ARG PI_SUBAGENTS_VERSION=0.45.0
+ENV PI_SUBAGENTS_VERSION=${PI_SUBAGENTS_VERSION}
+ARG PI_WEB_ACCESS_VERSION=0.19.0
+ENV PI_WEB_ACCESS_VERSION=${PI_WEB_ACCESS_VERSION}
+
 # ============================================================================
 # System toolchain (repo-independent). Shared verbatim with the Lima provider,
 # which runs this exact script in the VM. setup_system.sh installs the system
@@ -73,14 +94,17 @@ COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/app
 
 # system/vendor/mngr path-dependency manifests. The root pyproject.toml's
 # [tool.uv.sources] points imbue-common, imbue-mngr, imbue-mngr-claude,
-# resource-guards, and concurrency-group at system/vendor/mngr/libs/<pkg>; uv
-# needs each pyproject.toml present to resolve the workspace. mngr_modal
-# and mngr_wait are also workspace members whose transitive deps benefit
-# from pre-warming even though only mngr_wait is registered post-COPY
-# (as a mngr plugin, not a tool install).
+# imbue-mngr-codex, imbue-mngr-pi-coding,
+# resource-guards, and concurrency-group at
+# system/vendor/mngr/libs/<pkg>; uv needs each pyproject.toml present to
+# resolve the workspace. mngr_modal and mngr_wait are also workspace members
+# whose transitive deps benefit from pre-warming even though only mngr_wait
+# is registered post-COPY (as a mngr plugin, not a tool install).
 COPY system/vendor/mngr/libs/imbue_common/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/imbue_common/pyproject.toml
 COPY system/vendor/mngr/libs/mngr/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_claude/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_claude/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_codex/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_codex/pyproject.toml
+COPY system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_pi_coding/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_modal/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_modal/pyproject.toml
 COPY system/vendor/mngr/libs/mngr_wait/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/mngr_wait/pyproject.toml
 COPY system/vendor/mngr/libs/resource_guards/pyproject.toml /home/user/workspace/system/vendor/mngr/libs/resource_guards/pyproject.toml

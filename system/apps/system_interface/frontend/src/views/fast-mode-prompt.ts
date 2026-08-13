@@ -15,7 +15,7 @@
  */
 
 import type { TranscriptEvent } from "../models/Response";
-import { getModelSettings } from "../models/ModelSettings";
+import { getAgentFastMode } from "../models/ModelSettings";
 import { getWorkspaceFastMode, openFastModePrompt } from "../models/WorkspaceFastMode";
 import { isNonBoundaryUserMessage, parsePermissionResolution } from "./message-classification";
 
@@ -31,7 +31,7 @@ export function countUserTurns(events: TranscriptEvent[]): number {
       continue;
     }
     const content = event.content ?? "";
-    if (isNonBoundaryUserMessage(content, event.is_meta)) {
+    if (isNonBoundaryUserMessage(content, event.is_meta, event.is_compact_summary)) {
       continue;
     }
     if (parsePermissionResolution(content) !== null) {
@@ -58,8 +58,7 @@ export function isFastModePromptOwed(agentId: string, events: TranscriptEvent[],
   if (!isAgentIdle) {
     return false;
   }
-  const settings = getModelSettings(agentId);
-  if (settings === null || !settings.fast_mode) {
+  if (!getAgentFastMode(agentId)) {
     return false;
   }
   return countUserTurns(events) >= FAST_MODE_GRACE_TURN_COUNT;

@@ -1,0 +1,100 @@
+"""Codex's activity-state derivation -- the codex peer of :mod:`harnesses.claude.activity_state`.
+
+Unlike claude, codex writes authoritative turn-boundary markers to its rollout in real time --
+``task_started`` when a user turn begins, ``task_complete`` / ``turn_aborted`` when it ends (surfaced
+by :mod:`harnesses.codex.session_parser` as ``turn_started`` / ``turn_completed`` / ``turn_aborted``
+special events). So "the agent is working" is a simple latch on those, with **no reliance on the
+(unreliable-for-codex, and polled-hence-laggy) mngr lifecycle**. Verified against real rollouts:
+``task_started`` lands ~seconds before the first assistant text and ``task_complete`` just after the
+last, so the dot stays lit across the whole turn and clears only once the text is on screen.
+
+Within an open turn the transcript refines *what* the agent is doing: an in-flight tool call reads
+TOOL_RUNNING, which the client renders as the tool's own verb ("Running", "Web search", ...) from the
+labels each ``tool_call`` event already carries; plain reasoning reads THINKING.
+"""
+
+from collections.abc import Sequence
+from typing import Any
+
+from imbue.imbue_common.pure import pure
+from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import is_transcript_tail_stale
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.system_interface.harnesses.events import SpecialEventKind
+
+
+@pure
+def turn_open(events: Sequence[dict[str, Any]]) -> bool:
+    """True iff the codex transcript's most recent turn boundary is an open turn.
+
+    Walks from the end for the latest turn-lifecycle marker, which codex emits as a ``special``
+    event: ``turn_started`` -> the turn is in progress (True); ``turn_completed`` / ``turn_aborted``
+    -> the turn ended (False); no marker at all -> False (not in a turn). Every other event
+    (assistant messages, tool calls/results) is skipped, so a turn that is mid-tool still reads open.
+    """
+    for event in reversed(list(events)):
+        if event.get("type") != SPECIAL_EVENT_TYPE:
+            continue
+        kind = event.get("kind")
+        if kind == SpecialEventKind.TURN_STARTED.value:
+            return True
+        if kind in (SpecialEventKind.TURN_COMPLETED.value, SpecialEventKind.TURN_ABORTED.value):
+            return False
+    return False
+
+
+def has_pending_codex_tool_use(events: Sequence[dict[str, Any]]) -> bool:
+    """True iff a codex tool call has no matching ``tool_result`` yet (a tool is in flight).
+
+    Codex nests its tool calls inside ``assistant_message`` events (each ``tool_calls`` entry carries a
+    ``tool_call_id``) and emits ``tool_result`` events separately, keyed by the same ``tool_call_id``
+    (see :mod:`harnesses.codex.session_parser`). A call id with no matching result means the tool is
+    still running. Matching is order-independent, like the claude ``tool_use``/``tool_result`` matcher.
+    """
+    called: set[str] = set()
+    resulted: set[str] = set()
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "assistant_message":
+            for tool_call in event.get("tool_calls") or ():
+                tool_call_id = tool_call.get("tool_call_id")
+                if tool_call_id:
+                    called.add(tool_call_id)
+        elif event_type == "tool_result":
+            tool_call_id = event.get("tool_call_id")
+            if tool_call_id:
+                resulted.add(tool_call_id)
+        else:
+            # Non-tool events (user_message, reasoning, turn markers) carry no tool-call state.
+            pass
+    return bool(called - resulted)
+
+
+@pure
+def derive(
+    *,
+    turn_open: bool,
+    has_pending_tool_use: bool,
+    tail_event_at: float | None = None,
+    process_started_at: float | None = None,
+) -> ActivityState:
+    """Derive an ``ActivityState`` for a codex agent from the transcript turn latch.
+
+    ``turn_open`` is :func:`turn_open`. ``tail_event_at`` / ``process_started_at`` feed
+    :func:`activity_state.is_transcript_tail_stale` (using the ``codex_process_started`` marker) so a
+    turn abandoned by a prior process (a mid-turn restart that left an unclosed ``task_started``) reads
+    IDLE rather than pinned "Thinking...".
+
+    Priority:
+      1. transcript tail predates the current process (stale) -> IDLE (restart guard).
+      2. no open turn -> IDLE (the authoritative waiting-for-the-user signal).
+      3. a tool call in flight -> TOOL_RUNNING.
+      4. otherwise (turn open, no tool) -> THINKING.
+    """
+    if is_transcript_tail_stale(tail_event_at=tail_event_at, process_started_at=process_started_at):
+        return ActivityState.IDLE
+    if not turn_open:
+        return ActivityState.IDLE
+    if has_pending_tool_use:
+        return ActivityState.TOOL_RUNNING
+    return ActivityState.THINKING
