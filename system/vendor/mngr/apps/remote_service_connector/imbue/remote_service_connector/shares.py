@@ -206,6 +206,32 @@ def resolve_share_region(datacenter: str | None) -> str:
     return default_region
 
 
+def resolve_share_region_for_share(
+    existing_region: str | None,
+    datacenter: str | None,
+    preferred_region: str | None,
+) -> str:
+    """Pick the region for one share bring-up, sticky on the share's existing row.
+
+    The region is baked into the workspace domain (DNS, PSL boundary, cert
+    SANs, session cookies), so a re-share must never silently move it: an
+    existing row's region wins as long as a relay still serves it. A fresh
+    share prefers the host's datacenter mapping (pool hosts); a host the
+    connector has no datacenter record of (a local workspace) may instead be
+    steered by the caller's ``preferred_region`` -- the desktop measures its
+    own latency to each relay, which is the best proximity signal available
+    for a workspace running on the user's machine. Unknown preferred regions
+    are ignored (not errors), so a stale client never breaks on relay-map
+    changes.
+    """
+    endpoint_by_region = share_relay_endpoint_map()
+    if existing_region is not None and existing_region in endpoint_by_region:
+        return existing_region
+    if datacenter is None and preferred_region is not None and preferred_region in endpoint_by_region:
+        return preferred_region
+    return resolve_share_region(datacenter)
+
+
 class FrpsAuthDecision(BaseModel):
     """The reply the connector returns to the frps server plugin.
 
@@ -321,6 +347,7 @@ class ShareStore(Protocol):
     def activate_share_and_rotate_token(
         self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str, entry_label: str | None
     ) -> None: ...
+    def update_share_entry_label(self, host_id: str, user_label: str, entry_label: str) -> None: ...
     def deactivate_share(self, host_id: str, user_label: str) -> None: ...
     def delete_relay_tokens(self, host_id: str, user_label: str) -> None: ...
     def find_share_by_token_hash(self, token_hash: str) -> dict[str, Any] | None: ...
@@ -420,6 +447,18 @@ class PostgresShareStore:
                     cur.execute(
                         "INSERT INTO relay_tokens (token_hash, host_id, user_id) VALUES (%s, %s, %s)",
                         (token_hash, coordinate.host_id, coordinate.user_label),
+                    )
+        finally:
+            conn.close()
+
+    def update_share_entry_label(self, host_id: str, user_label: str, entry_label: str) -> None:
+        conn = db.get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE shares SET entry_label = %s, updated_at = NOW() WHERE host_id = %s AND user_id = %s",
+                        (entry_label, host_id, user_label),
                     )
         finally:
             conn.close()
@@ -607,14 +646,35 @@ def normalize_entry_label(value: str) -> str | None:
     """The normalized (stripped, lowercased) entry label, or None when it is not a single origin label.
 
     The shape rule for every entry-label source: client-supplied share creates
-    and the connector's own apps.toml reads. The label is interpolated into
-    ``https://<label>.<workspace domain>/`` URLs by the hosted chrome, so
-    anything beyond one hostname label must be refused.
+    and the labels recorded from frps ``NewProxy`` claims. The label is
+    interpolated into ``https://<label>.<workspace domain>/`` URLs by the
+    hosted chrome, so anything beyond one hostname label must be refused.
     """
     stripped = value.strip().lower()
     if not _ENTRY_LABEL_RE.match(stripped):
         return None
     return stripped
+
+
+# The workspace shell service, whose origin label is the hosted chrome's entry
+# point into a share. frpc's NewProxy claims carry the workspace's own service
+# labels, so an allowed claim is where the connector learns the entry label --
+# with no access into the workspace. The bare name (no ``-<rand>`` suffix)
+# covers legacy labels that predate the random-suffix scheme.
+_ENTRY_SERVICE_LABEL_NAME = "system_interface"
+
+
+def entry_label_from_claimed_domains(workspace_domain: str, claimed_custom_domains: list[str]) -> str | None:
+    """The shell service's origin label among a NewProxy claim's custom domains, or None."""
+    suffix = "." + workspace_domain.lower()
+    for claimed in claimed_custom_domains:
+        normalized_claim = claimed.strip().lower()
+        if not normalized_claim.endswith(suffix):
+            continue
+        label = normalized_claim[: -len(suffix)]
+        if label == _ENTRY_SERVICE_LABEL_NAME or label.startswith(_ENTRY_SERVICE_LABEL_NAME + "-"):
+            return normalize_entry_label(label)
+    return None
 
 
 class CreateShareRequest(BaseModel):
@@ -629,6 +689,16 @@ class CreateShareRequest(BaseModel):
         ),
     )
 
+    preferred_region: str | None = Field(
+        default=None,
+        description=(
+            "Preferred relay region code (e.g. us1). Honored only for hosts the connector has no "
+            "datacenter record of (local workspaces) and only when a relay serves that region; a "
+            "re-share always keeps the share's existing region. Clients typically pick this by "
+            "measuring their own latency to each relay from GET /shares/relays."
+        ),
+    )
+
     @field_validator("entry_label")
     @classmethod
     def _validate_entry_label(cls, value: str | None) -> str | None:
@@ -638,6 +708,16 @@ class CreateShareRequest(BaseModel):
         if normalized is None:
             raise InvalidShareCoordinateError(f"entry_label must be a single origin label, got {value!r}")
         return normalized
+
+    @field_validator("preferred_region")
+    @classmethod
+    def _validate_preferred_region(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip().lower()
+        if _SHARE_DNS_LABEL_RE.match(stripped) is None:
+            raise InvalidShareCoordinateError(f"preferred_region must be a DNS label, got {value!r}")
+        return stripped
 
 
 class FrpsAuthRequest(BaseModel):
@@ -660,8 +740,12 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
         user_id = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
-        datacenter = store.get_pool_host_datacenter(body.host_id)
-        region = resolve_share_region(datacenter)
+        existing_share = store.get_share(body.host_id, user_label)
+        region = resolve_share_region_for_share(
+            existing_region=str(existing_share["region"]) if existing_share is not None else None,
+            datacenter=store.get_pool_host_datacenter(body.host_id),
+            preferred_region=body.preferred_region,
+        )
         coordinate = make_share_coordinate(
             host_id=body.host_id,
             user_label=user_label,
@@ -678,6 +762,21 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
             "region": region,
             "relay_endpoint": share_relay_endpoint_map()[region],
             "relay_token": relay_token,
+        }
+
+
+@router.get("/shares/relays")
+def list_share_relays(request: Request) -> dict[str, object]:
+    """The region -> relay tunnel-control endpoint map, plus the default region.
+
+    Lets clients pick a ``preferred_region`` for a local workspace's share by
+    measuring their own latency to each relay's tunnel-control endpoint.
+    """
+    with handle_endpoint_errors():
+        _require_share_user(request)
+        return {
+            "relays": share_relay_endpoint_map(),
+            "default_region": require_share_env("SHARE_DEFAULT_REGION"),
         }
 
 
@@ -764,7 +863,14 @@ def frps_auth(plugin_secret: str, body: FrpsAuthRequest) -> dict[str, object]:
         if body.op == _FRPS_NEW_PROXY_OP:
             claimed_domains = _extract_frps_custom_domains(body.content)
             claimed_subdomain = _extract_frps_subdomain(body.content)
-            return decide_frps_new_proxy(
-                str(share["workspace_domain"]), claimed_domains, claimed_subdomain
-            ).model_dump()
+            decision = decide_frps_new_proxy(str(share["workspace_domain"]), claimed_domains, claimed_subdomain)
+            # An allowed claim carries the workspace's own service labels, so
+            # this is where the connector learns the chrome's entry origin --
+            # without ever reaching into the workspace. Recorded on every
+            # claim so a re-registered shell label self-heals the share row.
+            if not decision.reject:
+                entry_label = entry_label_from_claimed_domains(str(share["workspace_domain"]), claimed_domains)
+                if entry_label is not None:
+                    store.update_share_entry_label(str(share["host_id"]), str(share["user_id"]), entry_label)
+            return decision.model_dump()
         return _frps_allow().model_dump()

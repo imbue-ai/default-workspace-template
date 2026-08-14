@@ -1292,6 +1292,15 @@ class FakeCursor:
                         )
                     )
 
+        elif "update pool_hosts set status = 'unreachable'" in query_lower:
+            # Lease-time quarantine of a row whose SSH key injection failed.
+            raw_host_id = params[0]
+            host_id = UUID(raw_host_id) if isinstance(raw_host_id, str) else raw_host_id
+            for row in self._backend.pool_rows:
+                if row.host_id == host_id:
+                    row.status = "unreachable"
+                    break
+
         elif "update pool_hosts set status = 'removing'" in query_lower:
             raw_host_id = params[0]
             host_id = UUID(raw_host_id) if isinstance(raw_host_id, str) else raw_host_id
@@ -1478,6 +1487,13 @@ class FakeCursor:
                 deactivated_share["state"] = "inactive"
                 deactivated_share["updated_at"] = _SHARE_ROW_UPDATED_AT
 
+        elif query_lower.startswith("update shares set entry_label"):
+            entry_label, host_id, user_label = params
+            labeled_share = self._backend.find_share(host_id, user_label)
+            if labeled_share is not None:
+                labeled_share["entry_label"] = entry_label
+                labeled_share["updated_at"] = _SHARE_ROW_UPDATED_AT
+
         elif query_lower.startswith("update shares set last_tunnel_login_at"):
             logged_in_share = self._backend.find_share(params[0], params[1])
             if logged_in_share is not None:
@@ -1639,6 +1655,9 @@ class FakePoolBackend:
 
     pool_rows: list[FakePoolRow]
     append_key_calls: list[tuple[str, int, str, str, str, str]]
+    # vps_address values whose SSH key injection fails (simulating a dead
+    # host); the lease path quarantines such rows and tries the next one.
+    append_key_failure_addresses: set[str]
     # Recorded server-side share-materials injections (SSH is faked): each entry
     # is ``(host, container_ssh_port, {remote_path: content})``.
     written_container_files: list[tuple[str, int, dict[str, str]]]
@@ -1655,9 +1674,6 @@ class FakePoolBackend:
     # simulate a start script that exits non-zero.
     started_agent_containers: list[tuple[str, int]]
     agent_start_should_fail: bool
-    # What the faked apps.toml read reports as the workspace's shell label
-    # (None simulates a workspace whose services have not registered).
-    workspace_entry_label: str | None
     # Recorded slice-VM teardowns (the box SSH is faked); set
     # ``slice_teardown_should_fail`` to simulate a teardown that cannot complete.
     slice_teardowns: list[tuple[Any, Any, str | None, str | None]]
@@ -1795,7 +1811,6 @@ class FakePoolBackend:
             (hosts_module, "_append_authorized_key", self.append_authorized_key),
             (hosts_module, "_write_files_on_container", self.write_files_on_container),
             (hosts_module, "_adopt_workspace_on_container", self.adopt_workspace_on_container),
-            (hosts_module, "_read_workspace_entry_label", self.read_workspace_entry_label),
             (hosts_module, "_start_workspace_agent_on_container", self.start_workspace_agent_on_container),
             (hosts_module, "clean_up_slice_on_box", self.clean_up_slice_on_box),
         ]
@@ -1955,17 +1970,8 @@ class FakePoolBackend:
         self.append_key_calls.append(
             (host, port, user, management_key_pem, public_key_to_add, expected_host_public_key)
         )
-
-    def read_workspace_entry_label(
-        self,
-        host: str,
-        port: int,
-        user: str,
-        management_key_pem: str,
-        expected_host_public_key: str,
-    ) -> str | None:
-        """Return the configured entry label instead of reading apps.toml over SSH."""
-        return self.workspace_entry_label
+        if host in self.append_key_failure_addresses:
+            raise paramiko.SSHException(f"injected key injection failure for {host}")
 
     def adopt_workspace_on_container(
         self,
@@ -2111,13 +2117,13 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend = FakePoolBackend()
     backend.pool_rows = []
     backend.append_key_calls = []
+    backend.append_key_failure_addresses = set()
     backend.written_container_files = []
     backend.written_container_seed_only_paths = []
     backend.adopted_containers = []
     backend.adopt_should_fail = False
     backend.started_agent_containers = []
     backend.agent_start_should_fail = False
-    backend.workspace_entry_label = "system_interface-testlbl"
     backend.slice_teardowns = []
     backend.slice_teardown_should_fail = False
     backend.paid_domains = {}

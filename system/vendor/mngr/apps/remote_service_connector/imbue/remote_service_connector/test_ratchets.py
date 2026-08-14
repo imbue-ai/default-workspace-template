@@ -123,7 +123,7 @@ def test_prevent_functools_partial() -> None:
 
 
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(15))
+    rc.check_async_await(_DIR, snapshot(17))
 
 
 # --- Naming conventions ---
@@ -245,7 +245,7 @@ def test_prevent_underscore_imports() -> None:
 
 
 def test_prevent_init_methods_in_non_exception_classes() -> None:
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(4))
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(5))
 
 
 def test_prevent_cast_usage() -> None:
