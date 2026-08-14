@@ -79,13 +79,14 @@ def test_claim_leases_adopts_and_enables_sharing(monkeypatch: pytest.MonkeyPatch
     expected_domain = f"{_HOST_ID_STR}.{_OWNER_LABEL}.{_DEFAULT_REGION}.{_CONTENT_DOMAIN}"
     assert body["workspace_domain"] == expected_domain
     assert body["region"] == _DEFAULT_REGION
-    # The chrome's routable entry origin: the shell label read from the
-    # workspace (the bare domain is unrouted on the relay), recorded on the
-    # share row for later status reads.
-    assert body["entry_label"] == "system_interface-testlbl"
+    # The chrome's routable entry origin is recorded later, by the frps
+    # NewProxy callback once the workspace's tunnel claims its service labels
+    # -- a fresh claim has no label yet (the connector never reads anything
+    # from inside the workspace).
+    assert body["entry_label"] is None
     share_row = backend.find_share(_HOST_ID_STR, _OWNER_LABEL)
     assert share_row is not None
-    assert share_row["entry_label"] == "system_interface-testlbl"
+    assert share_row["entry_label"] is None
 
     # The row is leased to the caller and the caller's key was injected on
     # both sshd endpoints.

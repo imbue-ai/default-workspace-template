@@ -152,6 +152,38 @@ def test_enable_sharing_seeds_grants_if_absent_but_always_replaces_share_env(
         }
 
 
+def test_enable_sharing_reports_a_previously_recorded_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The entry label is recorded by the frps NewProxy callback once the
+    # workspace's tunnel claims its service labels; a re-enable must neither
+    # wipe it (activation passes None; the COALESCE keeps the row's value)
+    # nor stop reporting it.
+    _install_share_env(monkeypatch)
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_leased_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+        host_id_str=_HOST_ID_STR,
+    )
+
+    first = client.post(f"/hosts/{_HOST_DB_ID}/enable-sharing", headers=_user_headers())
+    assert first.status_code == 200
+    assert first.json()["entry_label"] is None
+
+    # Simulate the tunnel's NewProxy claim having recorded the shell label.
+    share_row = backend.find_share(_HOST_ID_STR, _OWNER_LABEL)
+    assert share_row is not None
+    share_row["entry_label"] = "system_interface-elm7wydc"
+
+    second = client.post(f"/hosts/{_HOST_DB_ID}/enable-sharing", headers=_user_headers())
+
+    assert second.status_code == 200
+    assert second.json()["entry_label"] == "system_interface-elm7wydc"
+    share_row_after = backend.find_share(_HOST_ID_STR, _OWNER_LABEL)
+    assert share_row_after is not None
+    assert share_row_after["entry_label"] == "system_interface-elm7wydc"
+
+
 def test_enable_sharing_conflicts_when_owned_host_is_not_leased(monkeypatch: pytest.MonkeyPatch) -> None:
     # A host the caller owns but that is mid-release ('removing') is not leased,
     # so sharing cannot be enabled on it.

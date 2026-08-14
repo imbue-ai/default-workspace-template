@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WireRecord } from "../api";
-import { type Tile, resolveTileHealth } from "./overview";
+import { type Tile, resolveTileHealth, visibleTiles } from "./overview";
 
 const HOST_ID = "host-" + "f".repeat(32);
 const DOMAIN = `${HOST_ID}.owner.us1.example.com`;
@@ -29,7 +29,11 @@ function record(overrides: Partial<WireRecord>): WireRecord {
 }
 
 function tile(overrides: Partial<WireRecord> = {}): Tile {
-  return { record: record(overrides), health: "checking", workspaceDomain: null };
+  return {
+    record: record(overrides),
+    health: "checking",
+    workspaceDomain: null,
+  };
 }
 
 interface StubOptions {
@@ -40,7 +44,8 @@ interface StubOptions {
 function stubConnectorAndGateway(options: StubOptions): void {
   vi.stubGlobal("fetch", async (url: string) => {
     if (url.startsWith(`/shares/${HOST_ID}/status`)) {
-      if (options.shareState === null) return new Response(null, { status: 404 });
+      if (options.shareState === null)
+        return new Response(null, { status: 404 });
       return new Response(
         JSON.stringify({
           host_id: HOST_ID,
@@ -57,7 +62,8 @@ function stubConnectorAndGateway(options: StubOptions): void {
         // surfaces from fetch as a rejection, not an HTTP status.
         throw new TypeError("NetworkError when attempting to fetch resource");
       }
-      if (options.probe === "alive_204") return new Response(null, { status: 204 });
+      if (options.probe === "alive_204")
+        return new Response(null, { status: 204 });
       return new Response(JSON.stringify({ backend: options.probe.backend }), {
         status: 200,
       });
@@ -130,5 +136,20 @@ describe("resolveTileHealth", () => {
     await resolveTileHealth(t);
 
     expect(t.health).toBe("destroyed");
+  });
+});
+
+describe("visibleTiles", () => {
+  it("hides destroyed tiles by default and shows them only via the toggle", () => {
+    const active = tile();
+    const destroyed = tile({ state: "destroyed" });
+
+    expect(visibleTiles([active, destroyed], false)).toEqual([active]);
+    expect(visibleTiles([active, destroyed], true)).toEqual([
+      active,
+      destroyed,
+    ]);
+    expect(visibleTiles([destroyed], false)).toEqual([]);
+    expect(visibleTiles([], false)).toEqual([]);
   });
 });

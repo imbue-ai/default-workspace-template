@@ -100,6 +100,8 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slot_count
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_slice_resource_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import find_server_capacity_by_id
 from imbue.mngr_imbue_cloud.slices.bare_metal import foreign_tier_slice_names
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_degraded_md_arrays
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_raw_swap_devices
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_instance_name
 from imbue.mngr_imbue_cloud.slices.bare_metal_db import POOL_HOST_STATUS_LEASED
@@ -346,6 +348,7 @@ def audit_box_against_tier(
         box_host_public_key=server_to_audit.box_host_public_key,
     )
     disk_names = client.list_disk_names()
+    mdstat_text, proc_swaps_text = client.read_box_health_texts()
     return BoxTierAudit(
         server_id=str(server_to_audit.id),
         public_address=str(server_to_audit.public_address),
@@ -355,6 +358,8 @@ def audit_box_against_tier(
         foreign_tier_slices=tuple(sorted(foreign_tier_slice_names(disk_names, env_name)))
         if env_name is not None
         else (),
+        degraded_md_arrays=tuple(parse_degraded_md_arrays(mdstat_text)),
+        raw_swap_devices=tuple(parse_raw_swap_devices(proc_swaps_text)),
     )
 
 
@@ -495,7 +500,7 @@ def list_servers(database_url: str | None, is_occupancy_verified: bool, env_name
     "is_dry_run",
     is_flag=True,
     default=False,
-    help="List the slice VMs that would be backfilled (with the per-VM start-script path) without applying.",
+    help="List the slice VMs that would be backfilled (probing each VM's reachability) without applying.",
 )
 def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is_dry_run: bool) -> None:
     """Backfill the volume-gated minds-autostart units onto existing slice VMs.
@@ -503,8 +508,10 @@ def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is
     The fleet half of the reboot-resilience rollout (minds
     docs/reboot-resilience-rollout.md Step 2): slices baked before the merged
     installer keep the old racy oneshot until this sweep re-applies it. The
-    installer is idempotent and safe on running workspaces; a VM whose data
-    volume is not mounted is refused by the installer itself and reported as a
+    installer is idempotent and safe on running workspaces, fires the
+    workspace start immediately, and the sweep only reports a VM as
+    backfilled after observing that fired run succeed; a VM whose data volume
+    is not mounted is refused by the installer itself and reported as a
     per-VM failure to investigate. Needs POOL_SSH_PRIVATE_KEY (injected by
     `minds server backfill-autostart`).
     """

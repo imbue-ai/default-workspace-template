@@ -855,6 +855,30 @@ def test_sdk_middleware_default_recipe_apis_are_all_disabled() -> None:
         assert all(disable_flags.values()), disable_flags
 
 
+def test_append_next_to_email_verify_link_handles_both_query_shapes() -> None:
+    appended = auth_proxy_mod.append_next_to_email_verify_link(
+        "https://accounts.example/auth/verify-email?token=t1&tenantId=public",
+        "/share/authorize?machine_domain=d&state=s",
+    )
+    assert appended == (
+        "https://accounts.example/auth/verify-email?token=t1&tenantId=public"
+        "&next=%2Fshare%2Fauthorize%3Fmachine_domain%3Dd%26state%3Ds"
+    )
+    bare = auth_proxy_mod.append_next_to_email_verify_link("https://accounts.example/verify", "/x")
+    assert bare == "https://accounts.example/verify?next=%2Fx"
+
+
+def test_continue_path_from_send_user_context_accepts_only_root_relative_paths() -> None:
+    key = "verification_email_next_path"
+    accepted = auth_proxy_mod.continue_path_from_send_user_context({key: "/share/authorize?a=1"})
+    assert accepted == "/share/authorize?a=1"
+    # Absent, foreign-host, scheme-relative, and non-string values are all refused.
+    assert auth_proxy_mod.continue_path_from_send_user_context({}) is None
+    assert auth_proxy_mod.continue_path_from_send_user_context({key: "https://evil.example/x"}) is None
+    assert auth_proxy_mod.continue_path_from_send_user_context({key: "//evil.example/x"}) is None
+    assert auth_proxy_mod.continue_path_from_send_user_context({key: 7}) is None
+
+
 def test_ensure_asgi_root_path_middleware_defaults_a_missing_root_path() -> None:
     """Modal's ASGI shim omits root_path; the wrapper must default it to "".
 
