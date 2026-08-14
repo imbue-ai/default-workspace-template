@@ -37,7 +37,7 @@ import { icon } from "./icons";
 import type { IconName } from "./icons";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
-import { openAppNameFromSearch } from "./open-app-deeplink";
+import { openAppNameFromQuery } from "./open-app-deeplink";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
@@ -2855,7 +2855,7 @@ function initializeDockview(parentElement: HTMLElement): void {
  *  holds the deep link itself for as long as that workspace stays displayed.
  */
 async function consumeOpenAppDeepLink(): Promise<void> {
-  const name = openAppNameFromSearch(window.location.search);
+  const name = openAppNameFromQuery(window.location.search);
   if (name === null) return;
   if (name === "system_interface") {
     alert(`Cannot open "${name}": it is the workspace interface itself, not an app tab.`);

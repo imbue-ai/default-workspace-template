@@ -7,9 +7,12 @@
 // Pure helpers only -- the dockview side lives in ``DockviewWorkspace.ts``
 // (``consumeOpenAppDeepLink``).
 
-/** The requested app name in ``search`` (a ``location.search`` string), or null. */
-export function openAppNameFromSearch(search: string): string | null {
-  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+/** The requested app name in ``query`` (a URL query string, with or without its
+ *  leading ``?``), or null. Named for the URL component, not for searching --
+ *  this reads a deep link's parameter and has nothing to do with finding
+ *  anything. */
+export function openAppNameFromQuery(query: string): string | null {
+  const params = new URLSearchParams(query.startsWith("?") ? query.slice(1) : query);
   const name = params.get("open_app");
   return name !== null && name !== "" ? name : null;
 }
