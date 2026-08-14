@@ -82,6 +82,136 @@ def test_lease_host_fails_closed_when_host_keys_missing(monkeypatch: pytest.Monk
     assert backend.append_key_calls == []
 
 
+def test_lease_host_quarantines_dead_host_and_leases_the_next_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row whose SSH key injection fails is quarantined and the next match is leased.
+
+    This is the 2026-08 production outage shape: the oldest available row sat on a
+    dead box, and every lease retried it forever. The fix flips the dead row to
+    'unreachable' (so it leaves rotation) and serves the caller from the next row
+    in the same request.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.append_key_failure_addresses = {"10.0.0.1"}
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"),
+        version="v0.1.0",
+        vps_address="10.0.0.1",
+    )
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000002"),
+        version="v0.1.0",
+        vps_address="10.0.0.2",
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["host_db_id"] == "00000000-0000-0000-0000-000000000002"
+    # The dead row is quarantined, the healthy one is leased.
+    assert backend.pool_rows[0].status == "unreachable"
+    assert backend.pool_rows[1].status == "leased"
+    assert backend.pool_rows[1].leased_to_user == _USER_STUB_USER_ID_PREFIX
+
+
+def test_lease_host_returns_503_when_the_only_candidate_was_quarantined(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When quarantining drains the pool, the caller gets the standard no-capacity 503.
+
+    Retrying cannot help (there are no rows left to try), so this must read as
+    no-capacity -- the client maps 503 to its lease-unavailable error -- while the
+    dead row still leaves rotation.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.append_key_failure_addresses = {"10.0.0.1"}
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"),
+        version="v0.1.0",
+        vps_address="10.0.0.1",
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 503
+    assert "No pre-created agents" in resp.json()["detail"]
+    assert backend.pool_rows[0].status == "unreachable"
+
+
+def test_lease_host_keeps_quarantine_when_a_keyless_row_stops_the_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A keyless row after a quarantined one still 503s, and the quarantine sticks.
+
+    The keyless-row 503 is raised after the lease transaction commits: raising it
+    inside would roll back the quarantine of the dead row tried first, and every
+    retry would re-wedge on that same dead row (the outage shape all over again).
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.append_key_failure_addresses = {"10.0.0.1"}
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"),
+        version="v0.1.0",
+        vps_address="10.0.0.1",
+    )
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000002"),
+        version="v0.1.0",
+        vps_address="10.0.0.2",
+        outer_host_public_key=None,
+        container_host_public_key=None,
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 503
+    assert "host-key backfill" in resp.json()["detail"]
+    # The dead row's quarantine survives the keyless-row 503.
+    assert backend.pool_rows[0].status == "unreachable"
+    assert backend.pool_rows[1].status == "available"
+
+
+def test_lease_host_bounds_quarantine_attempts_and_returns_502(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A request quarantines at most three rows, then returns a retryable 502.
+
+    The cap bounds the request's worst-case latency; the fourth dead row stays
+    available for the caller's retry (which quarantines onward from there).
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.append_key_failure_addresses = {"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"}
+    for idx in (1, 2, 3, 4):
+        backend.add_available_host(
+            host_id=UUID(f"00000000-0000-0000-0000-00000000000{idx}"),
+            version="v0.1.0",
+            vps_address=f"10.0.0.{idx}",
+        )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 502
+    assert "quarantined" in resp.json()["detail"]
+    assert [row.status for row in backend.pool_rows] == ["unreachable", "unreachable", "unreachable", "available"]
+
+
 def test_lease_host_returns_503_when_pool_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /hosts/lease returns 503 when no hosts are available."""
     client, _backend = _make_pool_test_client(monkeypatch)
@@ -463,6 +593,63 @@ def test_slice_name_env_owner_returns_none_for_legacy_and_non_slice_names() -> N
     assert hosts_mod.slice_name_env_owner("some-other-vm") is None
 
 
+# Verbatim from the 2026-08-07 production incident box (51.81.185.229): nvme0
+# dropped off the bus, both RAID1 arrays run degraded on nvme1, and the dead
+# disk's raw swap partition lingers as a "(deleted)" entry.
+_DEGRADED_MDSTAT = """\
+Personalities : [raid1] [linear] [multipath] [raid0] [raid6] [raid5] [raid4] [raid10]
+md2 : active raid1 nvme1n1p2[1]
+      1046528 blocks super 1.2 [2/1] [_U]
+      bitmap: 1/1 pages [4KB], 65536KB chunk
+
+md3 : active raid1 nvme1n1p3[1]
+      936244224 blocks super 1.2 [2/1] [_U]
+      bitmap: 7/7 pages [28KB], 65536KB chunk
+
+unused devices: <none>
+"""
+
+_HEALTHY_MDSTAT = """\
+Personalities : [raid1]
+md3 : active raid1 nvme0n1p3[0] nvme1n1p3[1]
+      935460864 blocks super 1.2 [2/2] [UU]
+md2 : active raid1 nvme0n1p2[0] nvme1n1p2[1]
+      1046528 blocks super 1.2 [2/2] [UU]
+unused devices: <none>
+"""
+
+_INCIDENT_PROC_SWAPS = """\
+Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
+/dev/nvme1n1p4                          partition\t524284\t\t220932\t\t-2
+/dev/nvme0n1p4\\040(deleted)             partition\t524284\t\t346108\t\t-3
+/swapfile                               file\t\t33554428\t1426020\t\t-4
+"""
+
+
+def test_parse_degraded_md_arrays_reports_arrays_missing_a_member() -> None:
+    assert hosts_mod._parse_degraded_md_arrays(_DEGRADED_MDSTAT) == ["md2", "md3"]
+
+
+def test_parse_degraded_md_arrays_reports_nothing_for_healthy_arrays() -> None:
+    assert hosts_mod._parse_degraded_md_arrays(_HEALTHY_MDSTAT) == []
+    assert hosts_mod._parse_degraded_md_arrays("") == []
+
+
+def test_parse_raw_swap_devices_flags_partitions_but_not_the_swapfile() -> None:
+    # Both raw partitions are flagged -- including the dead disk's lingering
+    # "(deleted)" entry -- while the mirrored swapfile is not.
+    assert hosts_mod._parse_raw_swap_devices(_INCIDENT_PROC_SWAPS) == [
+        "/dev/nvme1n1p4",
+        "/dev/nvme0n1p4\\040(deleted)",
+    ]
+
+
+def test_parse_raw_swap_devices_ignores_md_backed_swap_and_empty_input() -> None:
+    md_swap = "Filename\tType\tSize\tUsed\tPriority\n/dev/md1 partition 524284 0 -2\n"
+    assert hosts_mod._parse_raw_swap_devices(md_swap) == []
+    assert hosts_mod._parse_raw_swap_devices("") == []
+
+
 def test_build_slice_teardown_commands_includes_disk_when_present() -> None:
     """Verify that when a data disk name is supplied, teardown emits both the instance
     delete and a separate disk delete command (in that order). The test would fail if the
@@ -535,35 +722,3 @@ def test_build_container_file_write_command_seed_only_creates_when_absent_and_sk
     target.write_text(edited)
     _run_container_file_write_command(target, seed, is_seed_only=True)
     assert target.read_text() == edited
-
-
-def test_parse_entry_label_from_apps_toml_returns_the_shell_services_label() -> None:
-    apps_toml = (
-        '[[apps]]\nname = "owner-exec"\nlabel = "owner-exec-abc123"\n\n'
-        '[[apps]]\nname = "system_interface"\nlabel = "system_interface-elm7wydc"\n'
-    )
-    assert hosts_mod._parse_entry_label_from_apps_toml(apps_toml) == "system_interface-elm7wydc"
-
-
-def test_parse_entry_label_from_apps_toml_returns_none_when_the_shell_service_is_absent() -> None:
-    # A workspace whose services have not registered yet (or registered other
-    # services only) yields no entry label; the share still comes up.
-    assert hosts_mod._parse_entry_label_from_apps_toml("") is None
-    assert hosts_mod._parse_entry_label_from_apps_toml('[[apps]]\nname = "owner-exec"\nlabel = "x1"\n') is None
-
-
-def test_parse_entry_label_from_apps_toml_returns_none_for_malformed_toml() -> None:
-    assert hosts_mod._parse_entry_label_from_apps_toml("this is not toml [") is None
-
-
-def test_parse_entry_label_from_apps_toml_refuses_a_label_that_is_not_a_single_origin_label() -> None:
-    # apps.toml is writable from inside the workspace and the label is
-    # interpolated into https://<label>.<domain>/ URLs by the chrome, so it
-    # gets the same shape rule POST /shares enforces on client-supplied labels.
-    hostile = '[[apps]]\nname = "system_interface"\nlabel = "evil.example.com/#"\n'
-    assert hosts_mod._parse_entry_label_from_apps_toml(hostile) is None
-
-
-def test_parse_entry_label_from_apps_toml_normalizes_the_label() -> None:
-    apps_toml = '[[apps]]\nname = "system_interface"\nlabel = " System_Interface-ABC "\n'
-    assert hosts_mod._parse_entry_label_from_apps_toml(apps_toml) == "system_interface-abc"

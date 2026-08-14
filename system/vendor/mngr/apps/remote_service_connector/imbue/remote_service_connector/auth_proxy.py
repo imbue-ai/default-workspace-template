@@ -14,6 +14,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
+from urllib.parse import quote
 
 from fastapi import APIRouter
 from fastapi import HTTPException
@@ -25,6 +26,8 @@ from supertokens_python import SupertokensConfig
 from supertokens_python import init as supertokens_init
 from supertokens_python.async_to_sync_wrapper import sync as _supertokens_sync_run
 from supertokens_python.exceptions import GeneralError as SuperTokensGeneralError
+from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConfig
+from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryInterface
 from supertokens_python.recipe import emailpassword as st_emailpassword_recipe
 from supertokens_python.recipe import emailverification as st_emailverification_recipe
 from supertokens_python.recipe import session as st_session_recipe
@@ -263,7 +266,70 @@ _verification_email_sent_at_monotonic_by_user_id: dict[str, float] = {}
 _verification_email_cooldown_lock = threading.Lock()
 
 
-def send_verification_email_with_cooldown(user_id: str, recipe_user_id: RecipeUserId, email: str) -> bool:
+# user_context key carrying a local continue path for the verification link:
+# the share flow's way to route a visitor back to the shared workspace after
+# they click the link. Consumed by the email-delivery override below.
+_VERIFICATION_EMAIL_NEXT_CONTEXT_KEY: Final[str] = "verification_email_next_path"
+
+
+def append_next_to_email_verify_link(email_verify_link: str, continue_next_path: str) -> str:
+    """Append a local continue path to a verification link's query string."""
+    separator = "&" if "?" in email_verify_link else "?"
+    return f"{email_verify_link}{separator}next={quote(continue_next_path, safe='')}"
+
+
+def continue_path_from_send_user_context(user_context: Mapping[str, Any]) -> str | None:
+    """The validated local continue path a verification send carries, or None.
+
+    Only root-relative paths are honored (``//host`` is scheme-relative and
+    would leave the accounts origin), so the emailed link can never route to
+    a foreign host.
+    """
+    value = user_context.get(_VERIFICATION_EMAIL_NEXT_CONTEXT_KEY)
+    if isinstance(value, str) and value.startswith("/") and not value.startswith("//"):
+        return value
+    return None
+
+
+class _ContinuePathEmailDelivery(EmailDeliveryInterface[Any]):
+    """Email delivery that carries the share flow's continue path into verification links.
+
+    Wraps the recipe's default delivery service: when a send's ``user_context``
+    holds a local next path (set only by the share broker's contextual send),
+    it is appended to the emailed link so the verify-email page can offer
+    "Continue to the shared workspace". Every other send passes through
+    untouched.
+    """
+
+    def __init__(self, original: EmailDeliveryInterface[Any]) -> None:
+        self._original = original
+
+    # Async because the SDK's EmailDeliveryInterface contract is async (like
+    # the ASGI middlewares above); nothing else in this module may be.
+    async def send_email(self, template_vars: Any, user_context: dict[str, Any]) -> None:
+        continue_next_path = continue_path_from_send_user_context(user_context)
+        if continue_next_path is not None and hasattr(template_vars, "email_verify_link"):
+            template_vars.email_verify_link = append_next_to_email_verify_link(
+                template_vars.email_verify_link, continue_next_path
+            )
+        await self._original.send_email(template_vars, user_context)
+
+
+def with_continue_path_in_verification_links(
+    original: EmailDeliveryInterface[Any],
+) -> EmailDeliveryInterface[Any]:
+    """The emailverification recipe's email-delivery override hook (see _ContinuePathEmailDelivery)."""
+    return _ContinuePathEmailDelivery(original)
+
+
+def send_verification_email_with_cooldown(
+    user_id: str,
+    recipe_user_id: RecipeUserId,
+    email: str,
+    # A local path the verification link should route the user back to after
+    # verifying (the share flow); None sends the plain link.
+    continue_next_path: str | None = None,
+) -> bool:
     """Send a verification email unless one went out to this user moments ago.
 
     Returns True when an email was sent, False when the cooldown suppressed it.
@@ -294,6 +360,7 @@ def send_verification_email_with_cooldown(user_id: str, recipe_user_id: RecipeUs
             user_id=user_id,
             recipe_user_id=recipe_user_id,
             email=email,
+            user_context=({_VERIFICATION_EMAIL_NEXT_CONTEXT_KEY: continue_next_path} if continue_next_path else None),
         )
         is_sent = True
     finally:
@@ -1105,6 +1172,9 @@ def init_supertokens() -> None:
             st_emailverification_recipe.init(
                 mode="OPTIONAL",
                 override=st_emailverification_recipe.InputOverrideConfig(apis=disable_emailverification_default_apis),
+                # Carries the share flow's continue path into verification
+                # links (see with_continue_path_in_verification_links).
+                email_delivery=EmailDeliveryConfig(override=with_continue_path_in_verification_links),
             ),
         ],
         mode="asgi",

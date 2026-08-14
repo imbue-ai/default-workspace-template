@@ -58,6 +58,16 @@ export async function resolveTileHealth(tile: Tile): Promise<void> {
   }
 }
 
+// Exported for tests: destroyed workspaces are hidden by default (they linger
+// for the whole backup-retention window), shown only via the explicit toggle.
+export function visibleTiles(
+  tiles: Tile[],
+  isShowingDestroyed: boolean,
+): Tile[] {
+  if (isShowingDestroyed) return tiles;
+  return tiles.filter((tile) => tile.record.state !== "destroyed");
+}
+
 const HEALTH_BADGES: Record<TileHealth, [string, string]> = {
   checking: ["...", "bg-slate-200 text-slate-600"],
   healthy: ["healthy", "bg-emerald-100 text-emerald-700"],
@@ -75,6 +85,7 @@ export function OverviewView(): m.Component {
   let stalePendingHostIds = new Set<string>();
   let loading = true;
   let error = "";
+  let isShowingDestroyed = false;
 
   async function load(): Promise<void> {
     loading = true;
@@ -160,6 +171,9 @@ export function OverviewView(): m.Component {
       void load();
     },
     view() {
+      const destroyedCount = tiles.filter(
+        (tile) => tile.record.state === "destroyed",
+      ).length;
       return m(
         "div",
         { class: "p-6 space-y-4" },
@@ -236,7 +250,7 @@ export function OverviewView(): m.Component {
         m(
           "div",
           { class: "grid gap-4 sm:grid-cols-2 lg:grid-cols-3" },
-          tiles.map((tile) => {
+          visibleTiles(tiles, isShowingDestroyed).map((tile) => {
             const [label, badgeClass] = HEALTH_BADGES[tile.health];
             const isOpenable =
               tile.record.state !== "destroyed" &&
@@ -305,6 +319,20 @@ export function OverviewView(): m.Component {
             );
           }),
         ),
+        destroyedCount > 0
+          ? m(
+              "button",
+              {
+                class: "text-sm text-slate-500 underline",
+                onclick() {
+                  isShowingDestroyed = !isShowingDestroyed;
+                },
+              },
+              isShowingDestroyed
+                ? "Hide destroyed workspaces"
+                : `Show ${destroyedCount} destroyed workspace${destroyedCount === 1 ? "" : "s"}`,
+            )
+          : null,
       );
     },
   };

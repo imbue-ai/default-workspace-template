@@ -164,12 +164,13 @@ The paid lists are managed by a separate set of endpoints authenticated by the f
 
 A shared workspace lives at `<service>.<host-id>.<user-label>.<region>.<content-domain>` behind a self-hosted frps relay; the connector owns the share records, relay tokens, and certificate issuance:
 
-- `POST /shares` -- Enable sharing for one workspace. Body: `{"host_id": "host-<32hex>"}`. Returns the workspace domain, the relay endpoint the workspace's frpc should dial, and the plaintext relay token (returned exactly once; only its hash is stored). Re-sharing rotates the token.
+- `POST /shares` -- Enable sharing for one workspace. Body: `{"host_id": "host-<32hex>"}`, plus an optional `preferred_region` (honored only for hosts the connector has no datacenter record of, e.g. local workspaces; a re-share always keeps the share's existing region). Returns the workspace domain, the relay endpoint the workspace's frpc should dial, and the plaintext relay token (returned exactly once; only its hash is stored). Re-sharing rotates the token.
 - `GET /shares` -- List the caller's share records (active and inactive).
+- `GET /shares/relays` -- The region -> relay tunnel-control endpoint map plus the default region, so clients can pick a `preferred_region` by measuring their own latency.
 - `DELETE /shares/{host_id}` -- Disable sharing (share goes `inactive`, relay token deleted).
-- `GET /shares/{host_id}/status` -- One share's domain, tunnel-liveness signal, and certificate expiry.
+- `GET /shares/{host_id}/status` -- One share's domain, tunnel-liveness signal, certificate expiry, and the chrome's entry label.
 - `POST /shares/cert` -- Sign the workspace's CSR via ACME DNS-01 (authenticated by the share's relay token; the workspace keeps its private key).
-- `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` operations.
+- `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` operations. An allowed `NewProxy` also records the workspace's shell-service label as the share's chrome entry origin (the connector never reads anything from inside the workspace).
 - `GET /share/authorize`, `GET /share/jwks.json` -- the accounts broker: authorizes a visit to a shared workspace against the hosted accounts surface's browser session and mints the short-lived handoff JWT (`GET /share/login` survives only as a permanent redirect to the merged `/login` page).
 
 ### Buckets (signed-in user only)
