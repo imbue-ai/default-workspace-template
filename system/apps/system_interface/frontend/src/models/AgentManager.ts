@@ -81,7 +81,7 @@ export interface LayoutOpEvent {
   requesterAgentId: string;
 }
 
-type WsEvent =
+export type WsEvent =
   | { type: "agents_updated"; agents: AgentState[] }
   | { type: "apps_updated"; apps: AppEntry[] }
   | {
@@ -257,7 +257,10 @@ function scheduleReconnect(): void {
   }, delayMs);
 }
 
-function handleEvent(event: WsEvent): void {
+/** Apply one server event to this module's state. Exported as the seam tests
+ *  drive the socket through: the transport is a plain envelope around this, so
+ *  feeding an event here exercises exactly what a live frame would. */
+export function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "agents_updated": {
       // Diff against the outgoing snapshot (still in `agents` here) so we can

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildSessionTerminalUrl } from "./AgentManager";
+import { buildSessionTerminalUrl, handleEvent, whenAppRegistered } from "./AgentManager";
+import type { AppEntry } from "./AgentManager";
 
 /** Read back the repeated ``arg`` query params in order. */
 function parseArgs(url: string): string[] {
@@ -39,5 +40,70 @@ describe("buildSessionTerminalUrl", () => {
     expect(url).not.toContain(" ");
     // ...but decoding recovers the exact session name and workdir.
     expect(parseArgs(url)).toEqual(["_", "session", "my term", "id", "/a b/c"]);
+  });
+});
+
+describe("whenAppRegistered", () => {
+  /** Feed the module an ``apps_updated`` frame naming exactly ``names``. The
+   *  frame is a full replace, which is also how the module's state is put into
+   *  a known shape at the start of each case (it is module-level, so it carries
+   *  across cases in this file). */
+  function registerApps(...names: string[]): void {
+    const apps: AppEntry[] = names.map((name) => ({ name, url: `http://${name}.test/`, label: `${name}-x7k9` }));
+    handleEvent({ type: "apps_updated", apps });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    registerApps();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resolves at once for an app that is already registered", async () => {
+    registerApps("web");
+    await expect(whenAppRegistered("web")).resolves.toBe(true);
+  });
+
+  it("resolves when the app arrives in a later frame", async () => {
+    const pending = whenAppRegistered("web");
+    registerApps("web");
+    await expect(pending).resolves.toBe(true);
+  });
+
+  it("keeps waiting through a frame that carries only other apps", async () => {
+    // The reason this exists rather than a ``whenAppsLoaded`` + membership
+    // check: the shell registers ITSELF, so the app list goes non-empty at boot
+    // no matter which other services are up. A waiter on a slower app must not
+    // be woken by that frame.
+    const pending = whenAppRegistered("web");
+    let isSettled = false;
+    void pending.then(() => (isSettled = true));
+
+    registerApps("system_interface");
+    await Promise.resolve();
+    expect(isSettled).toBe(false);
+
+    registerApps("system_interface", "web");
+    await expect(pending).resolves.toBe(true);
+  });
+
+  it("gives up with false once the budget runs out", async () => {
+    const pending = whenAppRegistered("web", 5000);
+    vi.advanceTimersByTime(5000);
+    await expect(pending).resolves.toBe(false);
+  });
+
+  it("stays on its verdict when the app shows up after giving up", async () => {
+    const pending = whenAppRegistered("web", 5000);
+    vi.advanceTimersByTime(5000);
+    await expect(pending).resolves.toBe(false);
+
+    // Late arrival: the waiter is already settled and gone, so this must not
+    // flip the verdict or throw on a stale entry.
+    registerApps("web");
+    await expect(pending).resolves.toBe(false);
   });
 });
