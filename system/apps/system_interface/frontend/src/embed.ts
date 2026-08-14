@@ -20,12 +20,25 @@ import {
   type ContractEndpoint,
   type ContractMessage,
 } from "@minds/embed-contract";
+import * as embedContract from "@minds/embed-contract";
+
+// PERMISSION_REQUEST_RESOLVED postdates the vendored embed_contract snapshot (it arrives with
+// the next mngr release sync; this repo deliberately does not edit system/vendor by hand). A
+// named import of a missing export fails the rollup build, so probe the namespace and fall
+// back to the literal. Until the sync lands the endpoint drops the (to it) unknown type before
+// any handler runs, so the resolution relay stays dormant and cards keep the transcript-driven
+// flip; the moment the sync lands the relay goes live with no code change here.
+export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved" =
+  "PERMISSION_REQUEST_RESOLVED" in embedContract
+    ? embedContract.PERMISSION_REQUEST_RESOLVED
+    : "minds:permission-request-resolved";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
 // One replaceable handler per embedder->workspace type, registered by the
 // feature that owns it (dockview registers close-active-tab at boot; the
-// Claude sign-in modal registers/clears the mint ack around its handshake).
+// permission cards register the resolution relay at boot; the Claude sign-in
+// modal registers/clears the mint ack around its handshake).
 const handlerByType: Partial<Record<string, EmbedderMessageHandler>> = {};
 
 // Created on first use rather than at import time so importing this module
@@ -46,6 +59,7 @@ function getEndpoint(): ContractEndpoint {
       handlers: {
         [CLOSE_ACTIVE_TAB]: (message) => handlerByType[CLOSE_ACTIVE_TAB]?.(message),
         [OPEN_AI_KEYS_ACK]: (message) => handlerByType[OPEN_AI_KEYS_ACK]?.(message),
+        [PERMISSION_REQUEST_RESOLVED]: (message) => handlerByType[PERMISSION_REQUEST_RESOLVED]?.(message),
       },
     });
   }
