@@ -128,7 +128,13 @@ const ICON_BOX_CLASS = "flex w-[27px] shrink-0 items-center justify-center";
 // site that sits between rows shared by both rail states (see below) -- the
 // rule has to keep occupying its height even hidden, or the shortcut rows
 // under it shift down by that height the moment it appears.
-const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t";
+//
+// The hairline color is carried here rather than left to each call site: a
+// bare `border-t` in Tailwind v4 draws in `currentColor`, so a divider that
+// forgets it renders as a black rule against the rail's text color instead of
+// the intended hairline. A call site overrides it (to transparent) rather than
+// supplying it.
+const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t border-border";
 
 const ROW_CLASS = "flex h-7 w-full shrink-0 cursor-pointer items-center gap-1 rounded-md text-left";
 
