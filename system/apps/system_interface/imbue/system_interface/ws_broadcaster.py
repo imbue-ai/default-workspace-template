@@ -1,6 +1,8 @@
 import json
 import queue
 import threading
+from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 
 from loguru import logger as _loguru_logger
@@ -171,12 +173,17 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast an agents_updated event."""
         self.broadcast({"type": "agents_updated", "agents": agents})
 
-    def broadcast_apps_updated(self, apps: list[dict[str, str | bool]]) -> None:
+    def broadcast_apps_updated(self, apps: Sequence[Mapping[str, str | bool]]) -> None:
         """Broadcast an apps_updated event.
 
         Values are not all strings: an entry carries `internal` as a bool (see
         AppEntry), which is what tells the client an app has a port to forward
         but no page of its own to offer.
+
+        Read-only and covariant (Sequence/Mapping rather than list/dict) because
+        this only serializes what it is handed: `list` and `dict` are invariant,
+        so a caller holding a plain `list[dict[str, str]]` -- every app registered
+        without the bool -- could not pass it without annotating the literal.
         """
         self.broadcast({"type": "apps_updated", "apps": apps})
 
