@@ -2826,34 +2826,8 @@ function initializeDockview(parentElement: HTMLElement): void {
   void initializeActiveLayout().finally(() => void consumeOpenAppDeepLink());
 }
 
-/** Open (or focus) the app tab a ``?open_app=<name>`` deep link asked for.
- *
- *  The desktop client's cross-workspace app selector lands on the shell with
- *  this parameter (via the ``/goto/<host-id>/`` cookie bridge).
- *
- *  The open goes through ``addPanelForRef`` as a ``service:<name>`` ref, the one
- *  place that owns service dedup + panelParams bookkeeping + addPanel, so a deep
- *  link lands identically to the same app opened from the "+" menu or by an
- *  agent. One consequence is deliberate and worth knowing: ``terminal`` takes
- *  that ref's "New terminal" path, so it allocates a real tmux session (rather
- *  than mounting an arg-less ttyd origin) and, like the button, adds a fresh tab
- *  each time instead of deduping.
- *
- *  A name that is not registered yet is waited on rather than dropped: on a cold
- *  workspace the services come up staggered behind the shell, so the link
- *  routinely arrives first. Only once the wait runs out is the name treated as
- *  genuinely absent -- and then it is reported, because the user clicked an app
- *  and is owed an answer either way. ``system_interface`` is refused up front:
- *  it IS registered (the shell is a service like any other), so waiting on it
- *  would succeed and then iframe the shell into itself.
- *
- *  The parameter is deliberately NOT stripped from the URL. Re-consuming it is
- *  harmless -- ``addPanelForRef`` focuses the existing tab rather than stacking
- *  a duplicate -- and leaving it is what makes a reload retry a link that
- *  arrived too early. In the desktop client there is no address bar to clean
- *  anyway: the shell renders inside the client's content iframe, and the client
- *  holds the deep link itself for as long as that workspace stays displayed.
- */
+/** Open (or focus) the tab a ``?open_app=<name>`` deep link named. The parameter
+ *  is left in the URL on purpose: re-reading only re-focuses, so a reload retries. */
 async function consumeOpenAppDeepLink(): Promise<void> {
   const name = openAppNameFromQuery(window.location.search);
   if (name === null) return;
@@ -2865,9 +2839,8 @@ async function consumeOpenAppDeepLink(): Promise<void> {
     alert(`Cannot open "${name}": no app by that name is registered in this workspace.`);
     return;
   }
-  // A null return means the dockview went away while we waited (the user
-  // navigated off the shell). Silent by design: there is no longer anyone
-  // looking at this workspace to report to.
+  // A null return means the dockview went away while we waited (user navigated
+  // off): silent by design, there is nobody looking at this workspace to tell.
   addPanelForRef(`service:${name}`, getPrimaryAgentId(), {});
   m.redraw();
 }

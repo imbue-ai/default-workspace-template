@@ -170,11 +170,8 @@ let apps: AppEntry[] = [];
 // 403. Callers that build share-critical origins wait via ``whenAppsLoaded``.
 let appsLoaded = false;
 let appsLoadedWaiters: (() => void)[] = [];
-// Waiters on one NAMED service appearing, which is a different question from
-// ``appsLoaded``: services register independently (each via
-// ``forward_port.py``), and the shell itself is one of them, so the list goes
-// non-empty as soon as ``system_interface`` registers -- while a slower app is
-// still on its way. See ``whenAppRegistered``.
+// Waiters on one NAMED service appearing -- a different question from
+// ``appsLoaded``. See ``whenAppRegistered``.
 let appRegisteredWaiters: { name: string; wake: (isRegistered: boolean) => void }[] = [];
 let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
@@ -258,8 +255,7 @@ function scheduleReconnect(): void {
 }
 
 /** Apply one server event to this module's state. Exported as the seam tests
- *  drive the socket through: the transport is a plain envelope around this, so
- *  feeding an event here exercises exactly what a live frame would. */
+ *  drive the socket through (the transport is a plain envelope around it). */
 export function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "agents_updated": {
@@ -479,17 +475,8 @@ export function whenAppsLoaded(timeoutMs = 5000): Promise<void> {
   });
 }
 
-/** Resolve once the service ``name`` is registered -- true when it is (or
- *  already was), false if it has not appeared within ``timeoutMs``.
- *
- *  ``whenAppsLoaded`` is the wrong signal for this: it reports that the app
- *  LIST is non-empty, not that any particular app is in it. The shell registers
- *  itself (``system_interface``), so that flips at boot no matter which other
- *  services have come up -- a caller asking "is app X here?" right after it
- *  would get a no for an app that is merely seconds behind. Waiting on the name
- *  is what separates "not registered yet" (transient, on a cold workspace) from
- *  "not registered at all" (a bad or stale name), which callers report
- *  differently. */
+/** True once service ``name`` registers, false after ``timeoutMs``. Not
+ *  ``whenAppsLoaded``: the shell's own entry makes that list non-empty at boot. */
 export function whenAppRegistered(name: string, timeoutMs = 5000): Promise<boolean> {
   if (apps.some((app) => app.name === name)) return Promise.resolve(true);
   return new Promise((resolve) => {

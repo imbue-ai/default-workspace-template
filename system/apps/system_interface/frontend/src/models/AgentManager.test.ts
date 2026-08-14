@@ -44,10 +44,8 @@ describe("buildSessionTerminalUrl", () => {
 });
 
 describe("whenAppRegistered", () => {
-  /** Feed the module an ``apps_updated`` frame naming exactly ``names``. The
-   *  frame is a full replace, which is also how the module's state is put into
-   *  a known shape at the start of each case (it is module-level, so it carries
-   *  across cases in this file). */
+  /** Feed the module an ``apps_updated`` frame naming exactly ``names``. A full
+   *  replace, so it also resets the module-level state each case starts from. */
   function registerApps(...names: string[]): void {
     const apps: AppEntry[] = names.map((name) => ({ name, url: `http://${name}.test/`, label: `${name}-x7k9` }));
     handleEvent({ type: "apps_updated", apps });
@@ -74,10 +72,8 @@ describe("whenAppRegistered", () => {
   });
 
   it("keeps waiting through a frame that carries only other apps", async () => {
-    // The reason this exists rather than a ``whenAppsLoaded`` + membership
-    // check: the shell registers ITSELF, so the app list goes non-empty at boot
-    // no matter which other services are up. A waiter on a slower app must not
-    // be woken by that frame.
+    // Why this function exists at all: the shell registers ITSELF, so the list
+    // goes non-empty at boot -- that frame must not wake a waiter on another app.
     const pending = whenAppRegistered("web");
     let isSettled = false;
     void pending.then(() => (isSettled = true));
