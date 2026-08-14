@@ -1574,18 +1574,19 @@ body {
 }
 
 /* The pane card. It is pulled up 1px so its top border lands on the strip's
-   last row, where the active tab covers it and the junction closes.
-
-   Its top-left corner is square while the other three are rounded: that corner
-   is where the strip meets the card, and the tabs above keep their own rounded
-   top-left, so a curve here would sit directly under the tab's curve and read
-   as a double bevel. Square, the card's left edge runs straight up into the
-   strip and the tab's rounding is the only shape in that corner. */
+   last row, where the active tab covers it and the junction closes. */
 .dockview-theme-light .dv-groupview > .dv-content-container {
   margin-top: -1px;
   background: var(--si-pane-surface);
   border: 1px solid var(--si-pane-border);
-  border-radius: 0 var(--si-pane-radius) var(--si-pane-radius) var(--si-pane-radius);
+  border-radius: var(--si-pane-radius);
+}
+
+/* Square only where the first tab connects to it. */
+.dockview-theme-light
+  .dv-groupview:has(> .dv-tabs-and-actions-container .dv-tabs-container > .dv-tab:first-child.dv-active-tab)
+  > .dv-content-container {
+  border-top-left-radius: 0;
 }
 
 /* Panels render with dockview's "always" renderer, which hoists their content
@@ -1593,11 +1594,13 @@ body {
    sized to the card exactly, so it takes the card's rounded clip here, and a
    1px transparent border keeps the content off the hairline.
 
-   The overlay sits outside the group's subtree and is shared by every pane, so
-   it cannot carry the card's asymmetric clip: it rounds all four corners. A
-   panel painted anything other than white therefore leaves the card's own white
-   showing in the square top-left corner, under the strip. The card's outline,
-   which is what reads as the shape, is still exactly right. */
+   The overlay sits outside the group's subtree and carries nothing that says
+   which pane it belongs to, so this clip cannot be the conditional one the card
+   above gets: it rounds all four corners. Where a card is square at the
+   top-left, a panel painted anything other than white therefore leaves the
+   card's own white showing in that corner -- directly under the white active
+   tab that squared it. The card's outline, which is what reads as the shape, is
+   still exactly right. */
 .dockview-theme-light .dv-render-overlay {
   border: 1px solid transparent;
   border-radius: var(--si-pane-radius);
