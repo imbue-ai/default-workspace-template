@@ -1514,10 +1514,12 @@ body {
   /* The canvas runs edge to edge and the padding is the outermost pane gap, so
      the grey is painted across the padding too. Clipping it to the content box
      instead would let the app's off-white body show as a band around the dock,
-     which reads as a seam rather than as an inset. Only the top carries that
-     gap -- against the title bar -- so the dock sits flush against the
-     viewport on the left, right and bottom. */
-  padding: 4px 0 0 0;
+     which reads as a seam rather than as an inset. The top carries that gap
+     against the title bar, and the left carries a matching one so the rail has
+     a few pixels of canvas to hover into before it reaches the literal window
+     edge -- flush there makes the reveal awkward to land the pointer on. Right
+     and bottom stay flush against the viewport. */
+  padding: 4px 0 0 4px;
   background: var(--si-canvas);
 }
 

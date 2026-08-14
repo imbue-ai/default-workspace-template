@@ -1922,7 +1922,7 @@ def test_shut_down_terminal_leaves_no_resurrected_tab_in_everything(tmp_path: Pa
             expect(terminal_tab).to_be_visible(timeout=15000)
             terminal_tab.hover()
             terminal_tab.locator(".dv-custom-tab-action").last.click()
-            page.locator("[role='menuitem']", has_text="Shut down terminal").click()
+            page.locator("[role='menuitem']", has_text="Quit Terminal 1").click()
             page.locator(".destroy-dialog-btn-destroy").click()
 
             # The whole blast radius. The tab leaves the mounted project ...

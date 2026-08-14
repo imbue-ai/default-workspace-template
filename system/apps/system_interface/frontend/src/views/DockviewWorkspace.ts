@@ -728,22 +728,35 @@ function tabMenuEntries(panelId: string): TabMenuEntry[] {
   return entries;
 }
 
+/** What the tab itself is currently called, for a destructive verb's label --
+ *  "Quit {name}" always matches the name printed on the tab, whatever kind of
+ *  object it is. Falls back to the panel's own title (set at creation, before
+ *  any name is filed) on the rare chance the live dock has already lost the
+ *  panel by the time the menu renders. */
+function currentTabTitle(panelId: string, fallback: string): string {
+  return dockview?.panels.find((candidate) => candidate.id === panelId)?.title ?? fallback;
+}
+
 /** The destructive verb for one tab, or null for a kind that has none. Each
  *  raises its own confirmation, which is where what the destroy takes down --
- *  and that it reaches every project, not just this one -- is spelled out. */
+ *  and that it reaches every project, not just this one -- is spelled out.
+ *  Every kind reads "Quit {name}" behind the power icon: shutting an object
+ *  down is one act with one wording, whether it is an agent, a terminal, a
+ *  browser, or (weaker, see below) an app. */
 function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | null {
   if (params.panelType === "chat") {
     const chatAgentId = params.chatAgentId ?? params.agentId;
     // The primary agent runs the workspace's own services; destroying it would
     // take the machine down, so it is not offered.
     if (!chatAgentId || chatAgentId === getPrimaryAgentId()) return null;
+    const agentName = getAgentById(chatAgentId)?.name ?? chatAgentId;
     return {
-      label: "Shut down agent",
-      iconName: "close",
+      label: `Quit ${currentTabTitle(panelId, agentName)}`,
+      iconName: "power",
       isDestructive: true,
       run: () => {
         destroyTargetAgentId = chatAgentId;
-        destroyTargetAgentName = getAgentById(chatAgentId)?.name ?? chatAgentId;
+        destroyTargetAgentName = agentName;
         destroyTargetPanelId = panelId;
         showDestroyDialog = true;
         m.redraw();
@@ -755,8 +768,8 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
     // A terminal still allocating its tmux session name has no session to kill.
     if (!sessionName) return null;
     return {
-      label: "Shut down terminal",
-      iconName: "close",
+      label: `Quit ${currentTabTitle(panelId, sessionName)}`,
+      iconName: "power",
       isDestructive: true,
       run: () => {
         terminalDestroySessionName = sessionName;
@@ -772,8 +785,8 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
     const browserName = sessionParamFromUrl(params.url);
     if (browserName === null) return null;
     return {
-      label: "Shut down browser",
-      iconName: "close",
+      label: `Quit ${currentTabTitle(panelId, browserName)}`,
+      iconName: "power",
       isDestructive: true,
       run: () => {
         browserDestroyName = browserName;
@@ -789,12 +802,13 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
   // verbs above, so what the ref's kind says decides here rather than the
   // panel's shape -- a bare ``service:terminal`` pane must not offer to
   // unregister the terminal service out from under every terminal tab.
-  // Naming the verb "unregister" rather than "shut down" is the whole point:
-  // the workspace can take an app out of the registry and out of every
-  // project, and it cannot stop the program answering on the port.
+  // The weaker truth behind this one's "Quit" (shared wording, not shared
+  // power) is spelled out in its own confirmation: the workspace can take an
+  // app out of the registry and out of every project, and it cannot stop the
+  // program answering on the port.
   if (serviceName !== undefined && memberKindFromRef(memberRef("app", serviceName)) === "app") {
     return {
-      label: `Quit ${serviceName}`,
+      label: `Quit ${currentTabTitle(panelId, serviceName)}`,
       iconName: "power",
       isDestructive: true,
       run: () => {
