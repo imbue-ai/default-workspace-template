@@ -292,6 +292,52 @@ minds-test-electron *args:
 minds-test-electron-flow *args:
   xvfb-run -a uv run --package minds python apps/minds/scripts/electron_full_flow_e2e.py {{args}}
 
+# Generate a harbor task dataset from a minds eval config (one task per persona
+# case). Datasets default OUTSIDE the repo tree: each generated task embeds a
+# full mngr-internal clone, which must not sit under the repo's apps/ scan (it
+# would trip the snapshot-resume marked-test discovery). They are regenerable
+# from the checked-in config, so a scratch dir is fine; pass a unique <output>
+# per dataset.
+[group("minds evals")]
+minds-evals-generate config output="/tmp/minds-evals/datasets/generated":
+    uv run minds-evals-harbor generate --config "{{config}}" --output "{{output}}"
+
+# Run a generated dataset on Modal with the persona driver. Requires
+# ANTHROPIC_API_KEY (decider + judge) and ~/.modal.toml. Each trial boots its
+# own 6-CPU/16-GB box, so this is a scheduled/nightly regression job, not a
+# per-PR gate. `concurrency` bounds simultaneous boxes -- set it to the case
+# count so all cases run in one wave (cost = concurrency * box size). push_r2
+# defaults false everywhere, including CI. Extra harbor args pass through last;
+# --ak snapshot_mode=per-turn overrides the default of final.
+[group("minds evals")]
+minds-evals-run dataset job_name concurrency="4" push_r2="false" *harbor_args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY -- the decider and judge call the Anthropic API}"
+    cmd=(uv run harbor run
+        -p "{{dataset}}"
+        -a imbue.minds_evals.driver:MindsPersonaDriver
+        -e modal
+        -n "{{concurrency}}"
+        -y
+        --job-name "{{job_name}}"
+        -o apps/minds_evals/jobs
+        --agent-setup-timeout-multiplier 3
+        --ak snapshot_mode=final
+        --ek sandbox_timeout_secs=14400
+        {{harbor_args}})
+    echo ">> ${cmd[*]}"
+    "${cmd[@]}"
+    if [ "{{push_r2}}" = "true" ] || [ "${MINDS_EVALS_PUSH_R2:-0}" = "1" ]; then
+        # Reuse the old harness's scoped R2 creds file when present.
+        if [ -f "$HOME/.minds-eval/r2.env" ]; then set -a; . "$HOME/.minds-eval/r2.env"; set +a; fi
+        : "${MINDS_EVAL_BUCKET:?R2 push needs MINDS_EVAL_BUCKET (see apps/minds_evals/README.md)}"
+        : "${MINDS_EVAL_S3_ENDPOINT:?R2 push needs MINDS_EVAL_S3_ENDPOINT}"
+        aws s3 sync "apps/minds_evals/jobs/{{job_name}}" \
+            "s3://${MINDS_EVAL_BUCKET}/harbor-jobs/{{job_name}}" \
+            --endpoint-url "${MINDS_EVAL_S3_ENDPOINT}"
+    fi
+
 # Create an independent default-workspace-template checkout nested in the
 # current mngr checkout at .external_worktrees/default-workspace-template -- the
 # CLAUDE.md convention for developing default_workspace_template alongside mngr. Defaults the default_workspace_template branch
@@ -636,6 +682,11 @@ minds-start branch="" default_workspace_template="" debug_port="":
     # Put the Node version apps/minds pins (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
+    # Build the SPA the app server actually serves. `pnpm start` only builds
+    # the legacy JinjaX stylesheet; static/ui/ is produced at wheel-build time
+    # and is gitignored, so without this a dev run serves whatever bundle
+    # happened to be built last -- or 404s on a fresh worktree.
+    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
     cd apps/minds && pnpm start
 
 # Launch the minds desktop client (electron) in dev mode against the
