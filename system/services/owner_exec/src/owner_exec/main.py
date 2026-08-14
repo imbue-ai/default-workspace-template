@@ -83,6 +83,7 @@ def _register_port() -> None:
                 SERVICE_NAME,
                 "--url",
                 f"http://{LISTEN_HOST}:{LISTEN_PORT}",
+                "--internal",
             ],
             cwd=cwd,
             check=False,

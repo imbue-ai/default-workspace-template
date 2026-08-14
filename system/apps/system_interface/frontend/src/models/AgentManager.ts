@@ -44,6 +44,10 @@ export interface AppEntry {
   // icon, which is the common case: callers fall back to the generic app
   // glyph.
   icon?: string;
+  // Registered with ``forward_port.py --internal``: has a port to forward but
+  // no page of its own (e.g. owner-exec, a loopback exec server the share
+  // gateway routes through). Consumers offering apps to open must exclude it.
+  internal?: boolean;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start

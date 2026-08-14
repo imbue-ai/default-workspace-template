@@ -42,11 +42,14 @@ import { icon } from "./icons";
 // than typing.
 const FILTER_ROW_THRESHOLD = 8;
 
-// Apps this list deliberately never offers. The surrounding chrome UI is not a
-// tab-able app -- opening it would nest the whole workspace inside one of its
-// own panels -- and the terminal and browser services are fleets with their own
-// shortcut rows, reached by creating a session rather than by opening the
-// service. Same exclusions the rail's own shortcut list makes.
+// Apps this list deliberately never offers, by name -- a DIFFERENT reason
+// than `internal` (filtered in `pickableApps` below): each of these has a
+// real page, just reached through its own path instead of this one. The
+// surrounding chrome UI is not a tab-able app -- opening it would nest the
+// whole workspace inside one of its own panels -- and the terminal and
+// browser services are fleets with their own shortcut rows, reached by
+// creating a session rather than by opening the service. Same exclusions the
+// rail's own shortcut list makes.
 const HIDDEN_APP_NAMES: ReadonlySet<string> = new Set(["system_interface", "terminal", "browser"]);
 
 // The size every glyph in this list is drawn at, app icon and generic alike.
@@ -74,7 +77,7 @@ function pinIcon(isPinned: boolean): string {
  *  the same set. */
 export function pickableApps(): AppEntry[] {
   return getApps()
-    .filter((app) => !HIDDEN_APP_NAMES.has(app.name))
+    .filter((app) => !app.internal && !HIDDEN_APP_NAMES.has(app.name))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

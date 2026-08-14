@@ -132,6 +132,18 @@ describe("pickableApps", () => {
       "zulip",
     ]);
   });
+
+  it("hides an internal app -- a port with no page of its own", () => {
+    // owner-exec: registered with forward_port.py --internal, so it has a URL
+    // to forward but nothing to open. A different reason than the name-based
+    // exclusions above, which all have a real page reached some other way.
+    const withInternal: AppEntry[] = [
+      ...APPS,
+      { name: "owner-exec", url: "http://oe", label: "oe-1", internal: true },
+    ];
+    appState.apps = withInternal;
+    expect(pickableApps().map((app) => app.name)).not.toContain("owner-exec");
+  });
 });
 
 describe("filterApps", () => {
