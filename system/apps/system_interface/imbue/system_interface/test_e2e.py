@@ -351,6 +351,15 @@ def test_chat_transcript_area_is_pure_white(e2e_server: tuple[str, list[AgentInf
     )
 
 
+# Marked flaky on an UNIDENTIFIED cause: it failed once inside a full-suite run
+# and then passed three times out of three on its own, with and without the
+# change that was in the tree at the time. That is the signature of the launcher
+# 's terminal-fleet fetch -- which shells out to ``tmux list-sessions``
+# server-side -- racing something under parallel load rather than of a wrong
+# assertion, but the actual race has not been found, so this mark buys retries
+# and does not claim to be a fix. (The tmux mark that accompanied this one lives
+# on the module now, since every test here reaches the same shell-out.)
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_new_tab_launcher_lists_unopened_agent(tmp_path: Path, page: Page) -> None:
     """The New Tab launcher lists agents that exist but have no open chat.
