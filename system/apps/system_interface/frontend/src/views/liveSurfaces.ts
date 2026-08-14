@@ -346,6 +346,13 @@ export function reconcileLiveSurfaces(): void {
       style.top = `${rect.top}px`;
       style.width = `${rect.width}px`;
       style.height = `${rect.height}px`;
+      // The pane's own corners, not a fixed radius: the card squares its
+      // top-left while the leftmost tab is the active one, and a page clipped
+      // to a rounded corner over that square one shows the card's white
+      // through the gap -- obvious under anything dark, like a terminal.
+      // Copying the card's whole shorthand keeps the two in step whatever the
+      // rule decides, rather than restating the condition here.
+      style.borderRadius = rect.radius;
       style.display = "";
     }
     if (surface.isVisible !== (rect !== null)) {
@@ -371,7 +378,9 @@ export function reconcileLiveSurfaces(): void {
  * switched to is already in the right place on the first paint, instead of
  * spending a frame at the position the outgoing view left it in.
  */
-function slotRect(surface: LiveSurface): { left: number; top: number; width: number; height: number } | null {
+function slotRect(
+  surface: LiveSurface,
+): { left: number; top: number; width: number; height: number; radius: string } | null {
   const api = surface.boundApi;
   if (api === null || layerHost === null || !api.isVisible) return null;
   const pane = api.group.element.querySelector<HTMLElement>(":scope > .dv-content-container");
@@ -381,5 +390,11 @@ function slotRect(surface: LiveSurface): { left: number; top: number; width: num
   // there would hand a framed terminal a zero-column viewport to fit itself to.
   if (box.width <= 0 || box.height <= 0) return null;
   const host = layerHost.getBoundingClientRect();
-  return { left: box.left - host.left, top: box.top - host.top, width: box.width, height: box.height };
+  return {
+    left: box.left - host.left,
+    top: box.top - host.top,
+    width: box.width,
+    height: box.height,
+    radius: getComputedStyle(pane).borderRadius,
+  };
 }
