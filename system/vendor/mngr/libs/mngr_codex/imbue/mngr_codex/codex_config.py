@@ -50,7 +50,6 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
-from typing import Final
 
 import tomlkit
 

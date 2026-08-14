@@ -10,6 +10,7 @@ import tomllib
 from collections import deque
 from collections.abc import Callable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -24,7 +25,6 @@ from imbue.imbue_common.ratchet_testing.ratchets import assert_posix_compatible
 from imbue.mngr.agents.base_agent import BaseAgent
 from imbue.mngr.agents.base_agent import SendKeysAgent
 from imbue.mngr.agents.tui_agent import InteractiveTuiAgent
-from imbue.mngr.interfaces.agent import InteractiveAgentMixin
 from imbue.mngr.api.preservation import get_local_preserved_agent_dir
 from imbue.mngr.api.testing import FakeHost
 from imbue.mngr.config.data_types import MngrContext
@@ -35,6 +35,7 @@ from imbue.mngr.errors import MessageDeliveredButBlockedError
 from imbue.mngr.errors import PluginMngrError
 from imbue.mngr.errors import SendMessageError
 from imbue.mngr.errors import UserInputError
+from imbue.mngr.interfaces.agent import InteractiveAgentMixin
 from imbue.mngr.interfaces.data_types import CommandResult
 from imbue.mngr.interfaces.data_types import FileType
 from imbue.mngr.interfaces.host import CreateAgentOptions
@@ -388,8 +389,8 @@ def _initialize_result() -> dict[str, Any]:
     return {"userAgent": "mngr", "codexHome": "/h", "platformFamily": "unix", "platformOs": "linux"}
 
 
-def _thread_read_result(status: Mapping[str, Any], turns: list[Mapping[str, Any]]) -> dict[str, Any]:
-    return {"thread": {"id": "thread-1", "status": status, "turns": turns}}
+def _thread_read_result(status: Mapping[str, Any], turns: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    return {"thread": {"id": "thread-1", "status": status, "turns": list(turns)}}
 
 
 def _scripted_codex_agent(
@@ -530,7 +531,7 @@ def test_send_message_raises_delivered_but_blocked_when_agent_blocks(
 
 def _status_transport(
     status: Mapping[str, Any],
-    turns: list[Mapping[str, Any]],
+    turns: Sequence[Mapping[str, Any]],
     *,
     loaded: list[str] | None = None,
 ) -> _ScriptedTransport:
@@ -1106,7 +1107,9 @@ def test_clear_hook_trust_prompt_selects_trust_all_when_prompt_is_showing(
     sent: list[str] = []
 
     class _Agent(CodexAgent):
-        def capture_pane_content(self, include_scrollback: bool = False, window: "int | str | None" = None) -> str | None:
+        def capture_pane_content(
+            self, include_scrollback: bool = False, window: "int | str | None" = None
+        ) -> str | None:
             return _HOOK_TRUST_SCREEN
 
         def _send_hook_trust_keypress(self) -> None:

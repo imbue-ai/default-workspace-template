@@ -87,6 +87,7 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
 from imbue.mngr import hookimpl
+from imbue.mngr.agents.base_agent import BaseAgent
 from imbue.mngr.agents.common_transcript import maybe_provision_common_transcript_scripts
 from imbue.mngr.agents.common_transcript import provision_raw_transcript_scripts
 from imbue.mngr.agents.common_transcript import provision_scripts_to_commands_dir
@@ -94,7 +95,6 @@ from imbue.mngr.agents.installation import ensure_cli_installed
 from imbue.mngr.agents.installation import verify_pinned_cli_version
 from imbue.mngr.agents.output_styles import read_output_style_files
 from imbue.mngr.agents.output_styles import resolve_output_style
-from imbue.mngr.agents.base_agent import BaseAgent
 from imbue.mngr.api.preservation import PreservedItem
 from imbue.mngr.api.preservation import adopt_sessions
 from imbue.mngr.api.preservation import build_transcript_preserved_items
@@ -118,13 +118,13 @@ from imbue.mngr.hosts.common import symlink_on_host
 from imbue.mngr.interfaces.agent import AgentInterface
 from imbue.mngr.interfaces.agent import CliBackedAgentMixin
 from imbue.mngr.interfaces.agent import HasAutoInstallMixin
-from imbue.mngr.interfaces.agent import InteractiveAgentMixin
 from imbue.mngr.interfaces.agent import HasCommonTranscriptMixin
 from imbue.mngr.interfaces.agent import HasPermissionPolicyMixin
 from imbue.mngr.interfaces.agent import HasSessionAdoptionMixin
 from imbue.mngr.interfaces.agent import HasSessionPreservationMixin
 from imbue.mngr.interfaces.agent import HasUnattendedModeMixin
 from imbue.mngr.interfaces.agent import HasVersionManagementMixin
+from imbue.mngr.interfaces.agent import InteractiveAgentMixin
 from imbue.mngr.interfaces.data_types import FileType
 from imbue.mngr.interfaces.host import CreateAgentOptions
 from imbue.mngr.interfaces.host import HostInterface
@@ -158,9 +158,9 @@ from imbue.mngr_codex.codex_config import PROCESS_STARTED_MARKER_FILENAME
 from imbue.mngr_codex.codex_config import RAW_TRANSCRIPT_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import RECORD_SESSION_POINTERS_SCRIPT_NAME
 from imbue.mngr_codex.codex_config import ROOT_SESSION_FILENAME
-from imbue.mngr_codex.codex_config import TRANSCRIPT_PATH_FILENAME
 from imbue.mngr_codex.codex_config import RUST_LOG_VALUE
 from imbue.mngr_codex.codex_config import SESSIONS_RELATIVE_PATH
+from imbue.mngr_codex.codex_config import TRANSCRIPT_PATH_FILENAME
 from imbue.mngr_codex.codex_config import build_codex_config
 from imbue.mngr_codex.codex_config import build_codex_hooks_config
 from imbue.mngr_codex.codex_config import extract_latest_codex_version
@@ -569,6 +569,18 @@ class CodexAgent(
             return LifecycleProbeResult(state=AgentLifecycleState.WAITING, pid=base_probe.pid)
         live_state = AgentLifecycleState.RUNNING if activity.is_active else AgentLifecycleState.WAITING
         return LifecycleProbeResult(state=live_state, pid=base_probe.pid)
+
+    def is_blocked_on_dialog(self) -> bool:
+        """Whether codex is parked on an approval/input it cannot self-clear.
+
+        Sourced from the daemon's live ``thread/status`` (``waitingOnApproval`` /
+        ``waitingOnUserInput``), not from a ``permissions_waiting`` marker file: this
+        harness has no lifecycle markers, the daemon is authoritative. Best-effort per
+        the interface contract -- an unreadable daemon yields False (nothing detected),
+        matching the WAITING degrade the lifecycle path already takes.
+        """
+        activity = self._resolve_live_activity()
+        return activity is not None and activity.is_blocked
 
     def compute_waiting_reason(self) -> WaitingReason | None:
         """Return why the agent is waiting (or None if actively running), from live status.

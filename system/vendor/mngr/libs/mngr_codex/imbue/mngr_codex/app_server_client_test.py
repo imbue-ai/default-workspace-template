@@ -596,12 +596,19 @@ def test_read_thread_status_retries_without_turns_for_unmaterialized_thread() ->
                 {
                     "jsonrpc": "2.0",
                     "id": request["id"],
-                    "error": {"code": -32000, "message": "thread abc is not materialized yet; includeTurns unavailable"},
+                    "error": {
+                        "code": -32000,
+                        "message": "thread abc is not materialized yet; includeTurns unavailable",
+                    },
                 }
             )
         else:
             transport.push(
-                {"jsonrpc": "2.0", "id": request["id"], "result": {"thread": {"id": "thread-1", "status": {"type": "idle"}}}}
+                {
+                    "jsonrpc": "2.0",
+                    "id": request["id"],
+                    "result": {"thread": {"id": "thread-1", "status": {"type": "idle"}}},
+                }
             )
 
     transport.respond("thread/read", _respond_thread_read)

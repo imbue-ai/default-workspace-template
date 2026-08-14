@@ -569,7 +569,9 @@ class CodexAppServerClient(MutableModel):
         status_map: Mapping[str, Any] = status if isinstance(status, Mapping) else {}
         status_type = str(status_map.get("type", "notLoaded"))
         raw_flags = status_map.get("activeFlags")
-        active_flags = tuple(flag for flag in raw_flags if isinstance(flag, str)) if isinstance(raw_flags, list) else ()
+        active_flags = (
+            tuple(flag for flag in raw_flags if isinstance(flag, str)) if isinstance(raw_flags, list) else ()
+        )
         active_turn_id = _find_in_progress_turn_id(thread_map.get("turns"))
         self.active_turn_id = active_turn_id
         return ThreadStatusSnapshot(status_type=status_type, active_flags=active_flags, active_turn_id=active_turn_id)
@@ -662,7 +664,7 @@ class CodexAppServerClient(MutableModel):
             return self._start_turn(thread_id, text_input, client_id)
         return self._steer_turn(thread_id, active_turn_id, text_input, client_id, is_retry_allowed, text)
 
-    def _start_turn(self, thread_id: str, text_input: list[Mapping[str, Any]], client_id: str) -> Disposition:
+    def _start_turn(self, thread_id: str, text_input: Sequence[Mapping[str, Any]], client_id: str) -> Disposition:
         result = self._request(
             "turn/start",
             {"threadId": thread_id, "input": text_input, "clientUserMessageId": client_id},
@@ -678,7 +680,7 @@ class CodexAppServerClient(MutableModel):
         self,
         thread_id: str,
         expected_turn_id: str,
-        text_input: list[Mapping[str, Any]],
+        text_input: Sequence[Mapping[str, Any]],
         client_id: str,
         is_retry_allowed: bool,
         text: str,
