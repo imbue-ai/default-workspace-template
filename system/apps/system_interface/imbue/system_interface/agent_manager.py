@@ -611,11 +611,17 @@ class AgentManager:
         with self._lock:
             return list(self._apps)
 
-    def get_apps_serialized(self) -> list[dict[str, str]]:
+    def get_apps_serialized(self) -> list[dict[str, str | bool]]:
         """Return the primary agent's app list serialized for JSON."""
         with self._lock:
             return [
-                {"name": app.name, "url": app.url, "label": app.label, "icon": app.icon}
+                {
+                    "name": app.name,
+                    "url": app.url,
+                    "label": app.label,
+                    "icon": app.icon,
+                    "internal": app.internal,
+                }
                 for app in self._apps
             ]
 
@@ -1415,8 +1421,9 @@ class AgentManager:
                     url = entry.get("url", "")
                     label = entry.get("label", "")
                     icon = _accepted_icon(str(entry.get("icon", "")))
+                    internal = bool(entry.get("internal", False))
                     if name and url:
-                        apps.append(AppEntry(name=name, url=url, label=label, icon=icon))
+                        apps.append(AppEntry(name=name, url=url, label=label, icon=icon, internal=internal))
             except (OSError, tomllib.TOMLDecodeError, KeyError, ValueError) as e:
                 _loguru_logger.opt(exception=e).error("Failed to parse {}", toml_path)
 

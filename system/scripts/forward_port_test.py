@@ -216,6 +216,41 @@ def test_reregistering_with_an_icon_replaces_the_previous_one(tmp_path: Path) ->
     assert rows[0]["icon"] == _OTHER_ICON
 
 
+def test_register_without_internal_omits_the_key(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(["--name", "web", "--url", "http://localhost:8000"], apps_file)
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert "internal" not in rows[0]
+
+
+def test_register_internal_marks_the_entry(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "owner-exec", "--url", "http://localhost:8793", "--internal"], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert rows[0]["internal"] is True
+
+
+def test_reregistering_without_internal_clears_a_previously_internal_entry(tmp_path: Path) -> None:
+    """Unlike the icon, ``internal`` has no tri-state to preserve: a service's
+    own registration call always passes the flag or always omits it, so every
+    call is authoritative rather than sticky."""
+    apps_file = tmp_path / "apps.toml"
+    result = _run(
+        ["--name", "web", "--url", "http://localhost:8000", "--internal"], apps_file
+    )
+    assert result.returncode == 0, result.stderr
+
+    result = _run(["--name", "web", "--url", "http://localhost:8001"], apps_file)
+    assert result.returncode == 0, result.stderr
+    rows = _read_apps(apps_file)
+    assert len(rows) == 1
+    assert "internal" not in rows[0]
+
+
 def test_an_oversized_icon_is_rejected(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     forward_port = _load_module("_forward_port_icon_cap", _SCRIPT)

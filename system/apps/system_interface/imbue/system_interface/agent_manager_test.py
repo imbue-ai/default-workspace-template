@@ -224,6 +224,27 @@ def test_read_apps_drops_an_unsafe_icon(agent_manager: AgentManager, tmp_path: P
     assert apps[0].icon == ""
 
 
+def test_read_apps_reads_the_internal_flag(agent_manager: AgentManager, tmp_path: Path) -> None:
+    toml_file = tmp_path / "apps.toml"
+    toml_file.write_text(
+        "[[apps]]\n"
+        'name = "owner-exec"\n'
+        'url = "http://localhost:8793"\n'
+        "internal = true\n"
+        "\n"
+        "[[apps]]\n"
+        'name = "web"\n'
+        'url = "http://localhost:8000"\n'
+    )
+
+    agent_manager._read_apps(toml_file)
+
+    apps = agent_manager.get_apps()
+    assert apps[0].internal is True
+    # A row with no `internal` key -- every ordinary app -- reads back False.
+    assert apps[1].internal is False
+
+
 def test_read_apps_handles_missing_file(agent_manager: AgentManager, tmp_path: Path) -> None:
     toml_file = tmp_path / "nonexistent.toml"
     agent_manager._read_apps(toml_file)
@@ -281,7 +302,13 @@ def test_get_apps_serialized(agent_manager: AgentManager) -> None:
 
     serialized = agent_manager.get_apps_serialized()
     assert serialized == [
-        {"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1", "icon": ""}
+        {
+            "name": "web",
+            "url": "http://localhost:8000",
+            "label": "web-x7k9q2w1",
+            "icon": "",
+            "internal": False,
+        }
     ]
 
 
@@ -296,7 +323,33 @@ def test_get_apps_serialized_carries_the_icon(agent_manager: AgentManager) -> No
 
     serialized = agent_manager.get_apps_serialized()
     assert serialized == [
-        {"name": "web", "url": "http://localhost:8000", "label": "web-x7k9q2w1", "icon": icon}
+        {
+            "name": "web",
+            "url": "http://localhost:8000",
+            "label": "web-x7k9q2w1",
+            "icon": icon,
+            "internal": False,
+        }
+    ]
+
+
+def test_get_apps_serialized_carries_internal(agent_manager: AgentManager) -> None:
+    """The frontend's `pickableApps` excludes an internal app everywhere it
+    offers apps to open, so the flag has to reach it over the wire."""
+    with agent_manager._lock:
+        agent_manager._apps = [
+            AppEntry(name="owner-exec", url="http://localhost:8793", internal=True),
+        ]
+
+    serialized = agent_manager.get_apps_serialized()
+    assert serialized == [
+        {
+            "name": "owner-exec",
+            "url": "http://localhost:8793",
+            "label": "",
+            "icon": "",
+            "internal": True,
+        }
     ]
 
 

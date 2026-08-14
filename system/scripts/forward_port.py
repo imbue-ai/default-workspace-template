@@ -274,13 +274,18 @@ def _save_apps(path: Path, doc: tomlkit.TOMLDocument) -> None:
         raise
 
 
-def _upsert(path: Path, name: str, url: str, icon: str | None = None) -> None:
+def _upsert(path: Path, name: str, url: str, icon: str | None = None, internal: bool = False) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
 
     ``icon`` is None when the caller said nothing about an icon, which leaves
     any icon already on the entry alone: a service that re-registers on every
     restart (the normal supervisord case) must not silently lose the icon it
     registered earlier, or the workspace would flip back to a generic glyph.
+
+    ``internal`` has no such tri-state: it is a plain flag a service's own
+    registration call either always passes or always omits, so every call is
+    authoritative and simply sets it -- unlike the icon, there is no "leave it
+    as it was" case to preserve.
     """
     doc = _load_apps(path)
     apps = doc.get("apps", [])
@@ -295,18 +300,25 @@ def _upsert(path: Path, name: str, url: str, icon: str | None = None) -> None:
                 app["label"] = mint_service_label(name)
             if icon is not None:
                 app["icon"] = icon
+            if internal:
+                app["internal"] = True
+            elif "internal" in app:
+                del app["internal"]
             _save_apps(path, doc)
             return
 
-    # No existing entry -- append with a freshly-minted label. The ``icon`` key
-    # is omitted entirely when there is none, so rows without an icon keep the
-    # shape they have always had (consumers read a missing icon as "none").
+    # No existing entry -- append with a freshly-minted label. The ``icon`` and
+    # ``internal`` keys are omitted entirely when there is nothing to say, so
+    # the common row keeps the shape it has always had (a missing key reads as
+    # "no icon" / "not internal").
     entry = tomlkit.table()
     entry.add("name", name)
     entry.add("url", url)
     entry.add("label", mint_service_label(name))
     if icon is not None:
         entry.add("icon", icon)
+    if internal:
+        entry.add("internal", True)
     apps.append(entry)
     _save_apps(path, doc)
 
@@ -359,6 +371,17 @@ def main() -> None:
         action="store_true",
         help="Remove the named app instead of adding it",
     )
+    parser.add_argument(
+        "--internal",
+        action="store_true",
+        help=(
+            "Register without offering this as an app to open: no row in the "
+            "New Tab launcher's machine table, the rail's All apps popover, or "
+            "its shortcuts. For machinery with a port to forward (share/embed "
+            "routing) but no page of its own to show -- a name with nothing "
+            "behind it would otherwise open blank."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.remove and not args.url:
@@ -395,7 +418,7 @@ def main() -> None:
             if args.remove:
                 _remove(apps_file, args.name)
             else:
-                _upsert(apps_file, args.name, args.url, icon)
+                _upsert(apps_file, args.name, args.url, icon, internal=args.internal)
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
