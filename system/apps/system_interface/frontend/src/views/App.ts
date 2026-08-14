@@ -9,9 +9,7 @@ import {
   openMemberRow,
   openTabOfType,
   refreshProjects,
-  removeMemberRefFromView,
   removeMemberRow,
-  renameMemberRef,
   setAppPinnedInView,
   shareMemberRow,
   startProjectChat,
@@ -86,8 +84,6 @@ export function App(): m.Component {
               onRemoveFromView: (row: SidebarTabRow) => {
                 removeMemberRow(row);
               },
-              onRemoveContentFromView: (ref: string) => removeMemberRefFromView(ref),
-              onRenameMember: (ref: string, title: string) => renameMemberRef(ref, title),
               onShareApp: (row: SidebarTabRow) => {
                 shareMemberRow(row);
               },

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_TAB_TITLE_LENGTH, normalizeTabTitle, tabRenameBlockedReason } from "./tab-rename";
+import { MAX_TAB_TITLE_LENGTH, normalizeTabTitle } from "./tab-rename";
 
 describe("normalizeTabTitle", () => {
   it("keeps an ordinary name as it was typed", () => {
@@ -41,23 +41,5 @@ describe("normalizeTabTitle", () => {
   it("keeps a title that is exactly at the cap whole", () => {
     const exact = "b".repeat(MAX_TAB_TITLE_LENGTH);
     expect(normalizeTabTitle(exact)).toBe(exact);
-  });
-});
-
-describe("tabRenameBlockedReason", () => {
-  it("allows any row, backgrounded ones included", () => {
-    // The whole point of keying names by ref: a member with no panel -- still
-    // running, just not docked -- has somewhere to keep a name, so the gesture
-    // is offered on it like on any other row. Whether a row is open no longer
-    // reaches this decision at all, which is what the argument shape asserts.
-    expect(tabRenameBlockedReason({ isStagedForRemoval: false })).toBeNull();
-  });
-
-  it("refuses a row already staged for removal, and says why", () => {
-    // That row is struck through and leaving this list on Save; naming it in
-    // the same visit is withheld with an explanation and one click of Undo.
-    const reason = tabRenameBlockedReason({ isStagedForRemoval: true });
-    expect(reason).not.toBeNull();
-    expect(reason).toContain("Undo the removal");
   });
 });

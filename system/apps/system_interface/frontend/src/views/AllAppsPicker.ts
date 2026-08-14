@@ -180,10 +180,17 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
     );
   }
 
+  /** "Pinned in <project>" carries a user-chosen name of unbounded length into
+   *  this fixed-width popover -- clipped with an ellipsis rather than wrapped
+   *  or blowing out the popover's width, with the full name still reachable
+   *  via the native title tooltip. */
   function groupHeading(label: string): m.Vnode {
     return m(
       "div",
-      { class: "px-3 pt-2 pb-1 text-[11px] font-semibold tracking-wide text-text-faint uppercase" },
+      {
+        class: "truncate px-3 pt-2 pb-1 text-[11px] font-semibold tracking-wide text-text-faint uppercase",
+        title: label,
+      },
       label,
     );
   }

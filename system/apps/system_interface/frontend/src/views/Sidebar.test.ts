@@ -1,8 +1,16 @@
+// @vitest-environment jsdom
+//
+// The pure helpers below never touch the DOM and would run fine under
+// vitest's node default, but the switcher-rendering suite further down mounts
+// the actual component and needs real DOM APIs (event dispatch, document.body,
+// getBoundingClientRect) to do it -- jsdom is the whole file's environment
+// rather than one describe block's, since Vitest only reads the environment
+// pragma once, for the file.
 import { describe, expect, it, vi } from "vitest";
 
 // Mithril captures `requestAnimationFrame` at import time so it can schedule
-// redraws. Vitest's default (node) environment has no such global, so provide
-// a polyfill before any import is evaluated.
+// redraws. jsdom provides one, so this is a no-op here; it stays so the pure
+// helpers above would still work if this file ever moved back to node.
 vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
@@ -14,8 +22,12 @@ vi.mock("../models/AgentManager", () => ({
   getApps: () => [],
 }));
 
-import type { SidebarTabRow } from "./Sidebar";
-import { nextGlyphIndex, nextProjectName, pinnedAppNamesForView, placeMenu } from "./Sidebar";
+import m from "mithril";
+
+import type { ProjectInfo } from "../models/Projects";
+import { EVERYTHING_VIEW_ID } from "../models/Projects";
+import type { SidebarAttrs, SidebarTabRow } from "./Sidebar";
+import { Sidebar, nextGlyphIndex, nextProjectName, pinnedAppNamesForView, placeMenu } from "./Sidebar";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
 
 /** A tab-list row, built the way the workspace builds them (see
@@ -122,5 +134,173 @@ describe("nextGlyphIndex", () => {
   it("starts repeating once every glyph is in use", () => {
     const allGlyphs = SQUIGGLE_GLYPHS.map((_glyph, index) => index);
     expect(nextGlyphIndex(allGlyphs)).toBe(0);
+  });
+});
+
+// ---------- Rendering: the switcher dropdown and the rail's tooltips ----------
+
+const PROJECT_A: ProjectInfo = {
+  project_id: "project-a",
+  name: "Alpha",
+  color: "#c0392b",
+  glyph: 0,
+  has_content: true,
+  members: [],
+};
+const PROJECT_B: ProjectInfo = {
+  project_id: "project-b",
+  name: "Beta",
+  color: "#2980b9",
+  glyph: 1,
+  has_content: true,
+  members: [],
+};
+
+function makeAttrs(overrides: Partial<SidebarAttrs> = {}): SidebarAttrs {
+  return {
+    projects: [PROJECT_A, PROJECT_B],
+    activeViewId: PROJECT_A.project_id,
+    rows: [],
+    onSelectView: vi.fn(),
+    onProjectsChanged: vi.fn(),
+    onProjectCreated: vi.fn(),
+    onOpenTabType: vi.fn(),
+    onOpenApp: vi.fn(),
+    onSetAppPinned: vi.fn(),
+    onOpenRow: vi.fn(),
+    onRemoveFromView: vi.fn(),
+    onShareApp: vi.fn(),
+    onDeleteFromMachine: vi.fn(),
+    ...overrides,
+  };
+}
+
+/** Mounts a fresh Sidebar instance into a detached root and returns a
+ *  `redraw` the test calls after simulating an event. Driven with plain
+ *  `m.render` rather than `m.mount`'s RAF-scheduled auto-redraw, so every
+ *  state change the component's own closures make lands synchronously and no
+ *  test has to race a timer for it. */
+function mountSidebar(attrs: SidebarAttrs): { root: HTMLElement; redraw: () => void } {
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+  const component = Sidebar();
+  const redraw = (): void => {
+    m.render(root, m(component, attrs));
+  };
+  redraw();
+  return { root, redraw };
+}
+
+function click(element: Element | null): void {
+  if (element === null) throw new Error("nothing to click");
+  element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+}
+
+/** The switcher's row for this label -- the row's own click target, not the
+ *  edit pencil nested inside it. */
+function switcherRow(root: HTMLElement, label: string): HTMLElement {
+  const rows = Array.from(root.querySelectorAll(".project-rail-menu-item"));
+  const found = rows.find((candidate) => candidate.textContent?.includes(label));
+  if (found === undefined) throw new Error(`no switcher row for "${label}"`);
+  return found as HTMLElement;
+}
+
+describe("Sidebar switcher dropdown", () => {
+  it("opens on a header click and gives every project row its own edit pencil", () => {
+    const { root, redraw } = mountSidebar(makeAttrs());
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    expect(root.querySelector('[aria-label="Project settings for Alpha"]')).not.toBeNull();
+    expect(root.querySelector('[aria-label="Project settings for Beta"]')).not.toBeNull();
+  });
+
+  it("marks only the current project's row with the plain background -- no checkmark, no swapped icon", () => {
+    const { root, redraw } = mountSidebar(makeAttrs({ activeViewId: PROJECT_A.project_id }));
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    expect(switcherRow(root, "Alpha").className).toContain("bg-bg-sidebar");
+    expect(switcherRow(root, "Beta").className).not.toContain("bg-bg-sidebar");
+  });
+
+  it("marks Everything the same way when it is the active view, but gives it no edit pencil", () => {
+    const { root, redraw } = mountSidebar(makeAttrs({ activeViewId: EVERYTHING_VIEW_ID }));
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    const everythingRow = switcherRow(root, "Everything");
+    expect(everythingRow.className).toContain("bg-bg-sidebar");
+    expect(everythingRow.querySelector('[aria-label^="Project settings"]')).toBeNull();
+  });
+
+  it("switches to a non-current row on a plain click", () => {
+    const attrs = makeAttrs({ activeViewId: PROJECT_A.project_id });
+    const { root, redraw } = mountSidebar(attrs);
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    click(switcherRow(root, "Beta"));
+    expect(attrs.onSelectView).toHaveBeenCalledWith(PROJECT_B.project_id);
+  });
+
+  it("does nothing when the current row is clicked outside its pencil", () => {
+    const attrs = makeAttrs({ activeViewId: PROJECT_A.project_id });
+    const { root, redraw } = mountSidebar(attrs);
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    click(switcherRow(root, "Alpha"));
+    expect(attrs.onSelectView).not.toHaveBeenCalled();
+  });
+
+  it("opens a non-current row's own settings from its pencil, without switching to it", () => {
+    const attrs = makeAttrs({ activeViewId: PROJECT_A.project_id });
+    const { root, redraw } = mountSidebar(attrs);
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    click(root.querySelector('[aria-label="Project settings for Beta"]'));
+    redraw();
+    expect(attrs.onSelectView).not.toHaveBeenCalled();
+    const nameField = root.querySelector("input.custom-url-dialog-input") as HTMLInputElement | null;
+    expect(nameField?.value).toBe("Beta");
+  });
+
+  it("sizes the dropdown to its own fixed width rather than the header's", () => {
+    const { root, redraw } = mountSidebar(makeAttrs());
+    click(root.querySelector(".project-rail-header"));
+    redraw();
+    const menu = root.querySelector('.project-rail-menu[role="menu"]') as HTMLElement | null;
+    expect(menu?.style.width).toBe("280px");
+  });
+});
+
+describe("Sidebar tooltips", () => {
+  // The custom hover bubble (see hoverTooltip.ts), not a native `title` --
+  // that's the mechanism every workspace tooltip already uses, this rail's
+  // shortcuts included, so the copy is what changed here, not how it shows.
+  async function bubbleTextAfterHover(trigger: Element | null): Promise<string | null | undefined> {
+    if (trigger === null) throw new Error("nothing to hover");
+    trigger.dispatchEvent(new MouseEvent("mouseenter"));
+    // Past the hover-intent delay (TOOLTIP_DELAY_MS = 250ms in hoverTooltip.ts).
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    return document.querySelector(".minds-tooltip")?.textContent;
+  }
+
+  it("shows a static 'Switch projects' tooltip on the header, not the project's name", async () => {
+    const { root } = mountSidebar(makeAttrs({ activeViewId: PROJECT_A.project_id }));
+    expect(await bubbleTextAfterHover(root.querySelector(".project-rail-header"))).toBe("Switch projects");
+  });
+
+  it("carries the designed copy on the working shortcut rows, 'A agent chat' included", async () => {
+    const { root } = mountSidebar(makeAttrs());
+    const expectations: readonly [label: string, tooltip: string][] = [
+      ["Chat", "A agent chat to work alongside you"],
+      ["Browser", "A browser that agents can control on your behalf"],
+      ["Terminal", "A terminal to run commands in your workspace"],
+    ];
+    for (const [label, tooltip] of expectations) {
+      // hoverTooltipAttrs listens on the shortcut's wrapping span, not the
+      // button nested inside it (see shortcutRow in Sidebar.ts).
+      const button = Array.from(root.querySelectorAll(".project-rail-shortcut")).find((candidate) =>
+        candidate.textContent?.includes(label),
+      );
+      expect(await bubbleTextAfterHover(button?.parentElement ?? null)).toBe(tooltip);
+    }
   });
 });
