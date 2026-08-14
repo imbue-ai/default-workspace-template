@@ -2821,8 +2821,7 @@ function initializeDockview(parentElement: HTMLElement): void {
   addLayoutSyncListener(_layoutSyncListener);
 
   // Pick this browser's active named layout and mount its content, then honor
-  // any ?open_app deep link (after the restore, so an already-restored tab for
-  // the app is focused rather than duplicated).
+  // any ?open_app deep link.
   void initializeActiveLayout().finally(() => void consumeOpenAppDeepLink());
 }
 
@@ -2839,8 +2838,6 @@ async function consumeOpenAppDeepLink(): Promise<void> {
     alert(`Cannot open "${name}": no app by that name is registered in this workspace.`);
     return;
   }
-  // A null return means the dockview went away while we waited (user navigated
-  // off): silent by design, there is nobody looking at this workspace to tell.
   addPanelForRef(`service:${name}`, getPrimaryAgentId(), {});
   m.redraw();
 }
