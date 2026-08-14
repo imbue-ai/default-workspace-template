@@ -18,8 +18,10 @@ finding (4) is rooted in mngr's follower.
 
 `ObserveEventFollower._follow_loop` currently breaks out permanently on the
 first recorded failure, and `_record_failure` is first-cause-wins forever. The
-"deliberately no restart" rationale is OBSERVE-specific (retrying would fight
-over the lock); a follower holds no lock, so re-probing costs nothing.
+"deliberately no restart" rationale (stated in the DWT consumer's
+`_record_events_failure`, not in the follower itself) is OBSERVE-specific
+(retrying would fight over the lock); a follower holds no lock, so re-probing
+costs nothing.
 
 Split failures into two categories:
 
