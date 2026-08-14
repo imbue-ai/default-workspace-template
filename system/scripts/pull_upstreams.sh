@@ -23,13 +23,19 @@
 #               so system/vendor/mngr is never touched. Needs only <dwt_branch>
 #               (any <mngr_branch> is ignored).
 #
-# The mngr re-vendor:
-#   * UPDATES only files already vendored under system/vendor/mngr (the subset).
-#   * NEVER adds mngr-repo-only paths (.minds/template/ ...) or deletes -- it reports those.
+# The mngr re-vendor makes the vendored subtrees MATCH the mngr branch:
+#   * UPDATES every file already vendored under system/vendor/mngr.
+#   * ADDS a new upstream file when its directory is already vendored (it belongs to a
+#     subtree we track). A file outside every vendored directory -- .minds/template/, dev/,
+#     a new top-level tree -- is mngr-repo infrastructure and is only REPORTED.
+#   * DELETES files vendored here but gone upstream, via `git rm` so they land in the diff.
+#     A vendored copy of mngr must not hold a file mngr itself deleted.
 #
 # SAFETY:
 #   * URL-ONLY: never runs `git remote add`; URLs live only in a throwaway clone/fetch.
-#   * Refuses if system/vendor/mngr already has uncommitted changes (won't clobber).
+#   * Refuses if system/vendor/mngr already has uncommitted changes (won't clobber), so the
+#     adds/deletes are always reviewable against a clean base.
+#   * --dry-run reports every add/update/delete and touches nothing.
 #   * Only your working tree under system/vendor/mngr is written; the dwt side is read-only.
 #
 set -euo pipefail
@@ -115,8 +121,25 @@ UPSTREAM_SHA="$(git -C "$TMP/repo" rev-parse HEAD)"
 
 git ls-files "$PREFIX" | sed "s|^$PREFIX/||" | sort > "$TMP/vendored.txt"
 ( cd "$TMP/repo" && git ls-files ) | sort > "$TMP/upstream.txt"
-comm -23 "$TMP/upstream.txt" "$TMP/vendored.txt" > "$TMP/upstream_only.txt"   # new upstream (ignored)
-comm -13 "$TMP/upstream.txt" "$TMP/vendored.txt" > "$TMP/vendored_only.txt"   # gone upstream (kept)
+comm -23 "$TMP/upstream.txt" "$TMP/vendored.txt" > "$TMP/upstream_only.txt"   # new upstream
+comm -13 "$TMP/upstream.txt" "$TMP/vendored.txt" > "$TMP/vendored_only.txt"   # gone upstream -> deleted
+
+# Split the new-upstream files by whether their directory is ALREADY vendored. A file landing in
+# a directory we vendor belongs to a subtree we track, so it is added; one landing anywhere else
+# (`.minds/template/`, `dev/`, a new top-level tree) is mngr-repo infrastructure with no meaning
+# in a workspace, so it is only reported. This keeps "which subtrees do we vendor" implicit in
+# the tree itself rather than in a hand-maintained list that drifts.
+sed 's|/[^/]*$||' "$TMP/vendored.txt" | sort -u > "$TMP/vendored_dirs.txt"
+: > "$TMP/to_add.txt"; : > "$TMP/skipped_add.txt"
+while IFS= read -r rel; do
+    dir="${rel%/*}"
+    [ "$dir" = "$rel" ] && dir="."
+    if grep -qxF -- "$dir" "$TMP/vendored_dirs.txt"; then
+        printf '%s\n' "$rel" >> "$TMP/to_add.txt"
+    else
+        printf '%s\n' "$rel" >> "$TMP/skipped_add.txt"
+    fi
+done < "$TMP/upstream_only.txt"
 
 # rsync --existing: update files that ALREADY exist under $PREFIX; never create, never delete.
 # --checksum compares by CONTENT; we drop time-sync (-rlpgoD = -a minus -t) so a fresh clone's
@@ -139,15 +162,38 @@ else
     fi
 fi
 
-if [ -s "$TMP/upstream_only.txt" ]; then
+if [ -s "$TMP/to_add.txt" ]; then
     echo
-    echo "    NOT added -- $(wc -l < "$TMP/upstream_only.txt") upstream file(s) not vendored here (add by hand if wanted):"
-    sed 's/^/      + /' "$TMP/upstream_only.txt" | head -n 40
-    [ "$(wc -l < "$TMP/upstream_only.txt")" -gt 40 ] && echo "      ... (truncated)"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "    would add -- $(wc -l < "$TMP/to_add.txt") new upstream file(s) in already-vendored directories:"
+    else
+        while IFS= read -r rel; do
+            mkdir -p "$PREFIX/${rel%/*}"
+            cp -p "$TMP/repo/$rel" "$PREFIX/$rel"
+        done < "$TMP/to_add.txt"
+        git add -- "$PREFIX" >/dev/null 2>&1 || true
+        echo "    added -- $(wc -l < "$TMP/to_add.txt") new upstream file(s) in already-vendored directories:"
+    fi
+    sed 's/^/      + /' "$TMP/to_add.txt" | head -n 40
+    [ "$(wc -l < "$TMP/to_add.txt")" -gt 40 ] && echo "      ... (truncated)"
+fi
+if [ -s "$TMP/skipped_add.txt" ]; then
+    echo
+    echo "    NOT added -- $(wc -l < "$TMP/skipped_add.txt") upstream file(s) outside every vendored directory:"
+    sed 's/^/      ~ /' "$TMP/skipped_add.txt" | head -n 40
+    [ "$(wc -l < "$TMP/skipped_add.txt")" -gt 40 ] && echo "      ... (truncated)"
 fi
 if [ -s "$TMP/vendored_only.txt" ]; then
     echo
-    echo "    kept -- $(wc -l < "$TMP/vendored_only.txt") file(s) vendored here but gone upstream (not deleted):"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "    would delete -- $(wc -l < "$TMP/vendored_only.txt") file(s) vendored here but gone upstream:"
+    else
+        # git rm so the removals land in the diff and are reviewable. A vendored copy of mngr has
+        # no business holding a file mngr itself deleted.
+        ( cd "$PREFIX" && sed 's|^|./|' "$TMP/vendored_only.txt" | tr '\n' '\0' \
+            | xargs -0 --no-run-if-empty git rm -q --ignore-unmatch -- )
+        echo "    deleted -- $(wc -l < "$TMP/vendored_only.txt") file(s) vendored here but gone upstream:"
+    fi
     sed 's/^/      - /' "$TMP/vendored_only.txt" | head -n 40
     [ "$(wc -l < "$TMP/vendored_only.txt")" -gt 40 ] && echo "      ... (truncated)"
 fi
