@@ -1690,6 +1690,20 @@ body > .dv-tab.dv-dragged {
   border-color: var(--si-pane-border);
 }
 
+/* The leftmost tab's top-left corner is square, not rounded: it sits directly
+   above the pane card's own left edge, so a curve there would round away from
+   that edge and leave a notch between the two. The card squares the same
+   corner when this tab is the active one (see the rule above the card), and
+   the two right angles then continue into each other as one outline.
+
+   Scoped to the live strip's own container so it reaches neither the
+   overflow dropdown's rows (already square all round) nor the drag ghost,
+   which is a direct child of `<body>` and stays fully rounded while it
+   floats free of any pane. */
+.dockview-theme-light .dv-tabs-container > .dv-tab:first-child {
+  border-top-left-radius: 0;
+}
+
 /* Hovering an inactive tab paints NOTHING. A fill at the strip's edges always
    fights the pane's rounded corner below it (two attempts at that shape both
    read as a boxy cutoff), so the hover affordance is everything except a
