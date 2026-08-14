@@ -885,7 +885,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       {
         type: "button",
         class:
-          "flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-faint opacity-0 " +
+          "flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-faint opacity-0 " +
           "hover:bg-bg-hover hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100",
         "aria-label": `Project settings for ${project.name}`,
         ...hoverTooltipAttrs(`Project settings for ${project.name}`),
