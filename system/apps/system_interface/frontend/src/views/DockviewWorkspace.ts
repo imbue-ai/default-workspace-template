@@ -37,6 +37,7 @@ import { icon } from "./icons";
 import type { IconName } from "./icons";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
+import { openAppNameFromSearch, searchWithoutOpenApp } from "./open-app-deeplink";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
@@ -2818,8 +2819,42 @@ function initializeDockview(parentElement: HTMLElement): void {
   };
   addLayoutSyncListener(_layoutSyncListener);
 
-  // Pick this browser's active named layout and mount its content.
-  void initializeActiveLayout();
+  // Pick this browser's active named layout and mount its content, then honor
+  // any ?open_app deep link (after the restore, so an already-restored tab for
+  // the app is focused rather than duplicated).
+  void initializeActiveLayout().finally(() => void consumeOpenAppDeepLink());
+}
+
+/** Open (or focus) the app tab a ``?open_app=<name>`` deep link asked for.
+ *
+ *  The desktop client's cross-workspace app selector lands on the shell with
+ *  this parameter (via the ``/goto/<host-id>/`` cookie bridge). It is consumed
+ *  exactly once: stripped from the address bar immediately so a reload (or a
+ *  layout autosave of the URL-less kind) does not re-open the tab. Unknown or
+ *  not-yet-registered names no-op -- the link may race a workspace whose
+ *  services have not registered yet, or name an app since removed.
+ *  ``system_interface`` is refused outright: iframing the shell into itself
+ *  recurses.
+ */
+async function consumeOpenAppDeepLink(): Promise<void> {
+  const name = openAppNameFromSearch(window.location.search);
+  if (name === null) return;
+  window.history.replaceState(
+    window.history.state,
+    "",
+    window.location.pathname + searchWithoutOpenApp(window.location.search) + window.location.hash,
+  );
+  if (name === "system_interface") return;
+  await whenAppsLoaded();
+  if (!getApps().some((app) => app.name === name)) return;
+  const existingPanelId = findIframePanelIdForService(name);
+  if (existingPanelId !== null && dockview) {
+    const existing = dockview.panels.find((p) => p.id === existingPanelId);
+    if (existing) dockview.setActivePanel(existing);
+  } else {
+    openIframeTab(deriveServiceOrigin(labelForService(name)), name, "iframe", name);
+  }
+  m.redraw();
 }
 
 async function executeDestroy(agentId: string, panelId: string): Promise<void> {
