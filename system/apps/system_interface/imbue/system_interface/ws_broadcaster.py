@@ -171,8 +171,13 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast an agents_updated event."""
         self.broadcast({"type": "agents_updated", "agents": agents})
 
-    def broadcast_apps_updated(self, apps: list[dict[str, str]]) -> None:
-        """Broadcast an apps_updated event."""
+    def broadcast_apps_updated(self, apps: list[dict[str, str | bool]]) -> None:
+        """Broadcast an apps_updated event.
+
+        Values are not all strings: an entry carries `internal` as a bool (see
+        AppEntry), which is what tells the client an app has a port to forward
+        but no page of its own to offer.
+        """
         self.broadcast({"type": "apps_updated", "apps": apps})
 
     def broadcast_proto_agent_created(
