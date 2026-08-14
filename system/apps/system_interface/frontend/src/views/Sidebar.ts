@@ -455,6 +455,18 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   let searchQuery = "";
   let menuError: string | null = null;
   let rootElement: HTMLElement | null = null;
+  // The view a switch was last rendered for, so a completed switch can force
+  // the rail closed as a fallback to the hover-driven collapse: switching
+  // rebuilds the rail's own DOM subtree (a fresh element under wherever the
+  // pointer already rests), and a brand new element mid-hover gets a native
+  // `mouseenter` with no native `mouseleave` to match once the pointer
+  // actually leaves -- the browser's hover tracking was never reset for it,
+  // so `expanded` stays stuck true with nothing left to flip it back. A
+  // completed switch is itself a strong enough signal that the interaction is
+  // over; if the pointer genuinely is still over the rail, the very next real
+  // mouseenter re-expands it, so this cannot make the rail wrongly collapse
+  // out from under an actual hover.
+  let lastRenderedViewId: string | null = null;
 
   function isAnyMenuOpen(): boolean {
     return openMenu !== null || settingsProject !== null;
@@ -1064,6 +1076,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
+      if (lastRenderedViewId !== null && lastRenderedViewId !== attrs.activeViewId) {
+        closeMenus();
+      }
+      lastRenderedViewId = attrs.activeViewId;
       const isEverything = isEverythingView(attrs.activeViewId);
       const project = attrs.projects.find((candidate) => candidate.project_id === attrs.activeViewId) ?? null;
       const viewName = isEverything ? EVERYTHING_VIEW_NAME : (project?.name ?? "");

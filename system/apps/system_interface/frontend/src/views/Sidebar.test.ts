@@ -268,6 +268,33 @@ describe("Sidebar switcher dropdown", () => {
     const menu = root.querySelector('.project-rail-menu[role="menu"]') as HTMLElement | null;
     expect(menu?.style.width).toBe("280px");
   });
+
+  it("collapses the rail on a completed view switch, even with no mouseleave", () => {
+    // Regression: switching views rebuilds the rail's own DOM subtree, so a
+    // pointer already resting on it picks up a fresh native mouseenter with
+    // no mouseleave to follow -- nothing native is left to flip `expanded`
+    // back once the pointer actually does leave later. A completed switch is
+    // itself strong evidence the interaction is over, so it collapses the
+    // rail directly rather than depending solely on hover. Driven with raw
+    // `m.render` rather than `mountSidebar`, since this needs a SECOND render
+    // with a genuinely different `activeViewId`, not a re-render of the same
+    // attrs `mountSidebar`'s closure captured.
+    const root = document.createElement("div");
+    document.body.appendChild(root);
+    const component = Sidebar();
+    const render = (activeViewId: string): void => {
+      m.render(root, m(component, makeAttrs({ activeViewId })));
+    };
+
+    render(PROJECT_A.project_id);
+    // The rail's own top-level element carries the hover handlers.
+    root.firstElementChild?.dispatchEvent(new MouseEvent("mouseenter"));
+    render(PROJECT_A.project_id);
+    expect(root.querySelector(".project-rail-search")).not.toBeNull();
+
+    render(PROJECT_B.project_id);
+    expect(root.querySelector(".project-rail-search")).toBeNull();
+  });
 });
 
 describe("Sidebar tooltips", () => {
