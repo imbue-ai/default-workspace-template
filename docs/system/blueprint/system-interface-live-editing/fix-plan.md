@@ -85,9 +85,10 @@ teaches to print it (2a).
   helper so the offline and online paths agree.
 - `mngr_imbue_cloud/hosts/host.py` passes the two branch-name args positionally
   into `super().create_agent_state(...)`; switch to keyword args.
-- Changelog prose: the entry's opening sentence says `initial_branch` "reports
-  the branch an agent's work_dir is actually on", looser than the field's own
-  recorded-at-create-time doc; tighten the sentence.
+- Changelog prose: the opening sentence of the entry's `initial_branch`
+  paragraph says the field "reports the branch an agent's work_dir is actually
+  on", looser than the field's own recorded-at-create-time doc; tighten the
+  sentence.
 
 ---
 
