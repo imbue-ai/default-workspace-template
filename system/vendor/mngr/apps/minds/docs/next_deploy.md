@@ -124,7 +124,13 @@ a dev/ci env first where possible.
 - [ ] `just prep-server` on every existing production box (box-level slice
   autostart unit + the unattended-upgrades no-auto-reboot pin; also applies
   any pending lima upgrade) -- from
-  [reboot-resilience-rollout.md](./reboot-resilience-rollout.md).
+  [reboot-resilience-rollout.md](./reboot-resilience-rollout.md). This sweep
+  now ALSO retires the unmirrored per-disk swap partitions (the 2026-08-07
+  nvme-failure blast radius; prep step 7b), so run it even on boxes already
+  prepped for the autostart unit. Verify per box:
+  `cat /proc/swaps` as `limahost@<box>` must list only `/swapfile`, and
+  `just audit-boxes` must show empty `raw_swap_devices` /
+  `degraded_md_arrays` for every box.
 
 ## Post-deploy cleanup
 
@@ -183,3 +189,13 @@ a dev/ci env first where possible.
   `update-self` restarts their services, at which point `forward_port.py`
   mints origin labels for legacy rows automatically; meanwhile the forwarder
   and desktop route them by service name.
+
+- Old workspaces' system_interface still renders service panels (terminal,
+  browser) as iframes at `/service/<name>/...` on its own origin, behind a
+  service-worker bootstrap whose `document.cookie` write the new desktop's
+  partitioned content embedding rejects -- without mitigation the panel
+  reloads forever (found in the dev-josh-1 rehearsal of this deployment).
+  The forward proxy now 307-redirects those navigations to the service's own
+  origin (CLEANUP-marked in `mngr_forward/server.py`), so pre-update
+  workspaces keep working terminals; `update-self` retires the whole
+  mechanism per workspace.

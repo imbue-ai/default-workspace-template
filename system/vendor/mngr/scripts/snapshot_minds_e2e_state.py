@@ -660,9 +660,13 @@ def _create_workspace_in_sandbox(sandbox: modal.Sandbox) -> None:
     because Electron needs an X display.
     """
     command = "cd /code/mngr && xvfb-run -a uv run python -c {}".format(shlex.quote(_IN_SANDBOX_RUNNER_PROGRAM))
-    # Budget: 1500s, sized for the Electron create itself (the in-sandbox
-    # DEFAULT_WORKSPACE_TEMPLATE container build, the headline phase -- a few
-    # minutes in practice, so this carries large headroom).
+    # Budget: 1500s. The wrapped runner budgets 900s for the post-submit create
+    # phase alone (its headline cost is the in-sandbox DEFAULT_WORKSPACE_TEMPLATE
+    # container build, legitimately ~8-10.5 minutes in CI), plus the Electron
+    # launch/attach and system-interface phases. Keeping this exec timeout above
+    # any realistic run total means a stall hits the runner's own per-phase
+    # deadline (which names the stuck phase) rather than this generic exec
+    # timeout.
     returncode = _exec_in_sandbox(
         sandbox,
         command,

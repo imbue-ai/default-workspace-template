@@ -10,6 +10,7 @@ import {
   claimHost,
   createBucket,
   rollBucketKey,
+  shareStatus,
 } from "./api";
 import {
   type Ed25519Keypair,
@@ -129,18 +130,35 @@ async function pushWorkspaceRecord(
   }));
 }
 
+// Wait until the workspace's routable entry origin answers, returning the
+// entry label it answered at. The label is recorded server-side only once the
+// workspace's tunnel claims its service labels (the frps NewProxy callback),
+// so a fresh claim starts without one: re-resolve it from the share status on
+// every poll until it appears (the bare domain never routes, so there is
+// nothing to probe before then).
 async function waitForHealthy(
-  probeHost: string,
+  hostId: string,
+  workspaceDomain: string,
+  initialEntryLabel: string | null,
   onProgress: (progress: CreateProgress) => void,
-): Promise<void> {
+): Promise<string> {
   const deadline = Date.now() + HEALTH_POLL_TIMEOUT_MS;
+  let entryLabel = initialEntryLabel;
   for (;;) {
-    const health = await probeWorkspaceHealth(probeHost);
-    if (health.reachable) return;
+    if (entryLabel === null) {
+      const status = await shareStatus(hostId).catch(() => null);
+      entryLabel = status?.entry_label ?? null;
+    }
+    if (entryLabel !== null) {
+      const health = await probeWorkspaceHealth(
+        workspaceEntryHost(workspaceDomain, entryLabel),
+      );
+      if (health.reachable) return entryLabel;
+    }
     if (Date.now() > deadline) {
       throw new CreateFlowError(
         "health",
-        `The workspace at ${probeHost} did not come up within ${HEALTH_POLL_TIMEOUT_MS / 1000}s`,
+        `The workspace at ${workspaceDomain} did not come up within ${HEALTH_POLL_TIMEOUT_MS / 1000}s`,
       );
     }
     onProgress({
@@ -211,8 +229,15 @@ export async function provisionBackupsOverExec(
     step: "backups",
     message: "Locating the workspace's exec service...",
   });
+  // A pending record persisted before the tunnel came up has no entry label;
+  // the share status carries the tunnel-recorded one by the time we get here.
+  let entryLabel = claim.entry_label;
+  if (entryLabel === null) {
+    const status = await shareStatus(claim.host_id).catch(() => null);
+    entryLabel = status?.entry_label ?? null;
+  }
   const health = await probeWorkspaceHealth(
-    workspaceEntryHost(claim.workspace_domain, claim.entry_label),
+    workspaceEntryHost(claim.workspace_domain, entryLabel),
   );
   const execOrigin = execOriginFromHealth(claim.workspace_domain, health);
   if (execOrigin === null) {
@@ -317,11 +342,19 @@ export async function finishCreateFlow(
     step: "health",
     message: "Waiting for the workspace to come online...",
   });
-  await waitForHealthy(
-    workspaceEntryHost(pending.workspace_domain, pending.entry_label),
+  const entryLabel = await waitForHealthy(
+    pending.host_id,
+    pending.workspace_domain,
+    pending.entry_label ?? null,
     onProgress,
   );
-  await savePendingCreate({ ...pending, step: "waiting_healthy" });
+  // Persist the learned entry label so the backups step (which runs later,
+  // from the workspace view) can locate the exec service without re-resolving.
+  await savePendingCreate({
+    ...pending,
+    entry_label: entryLabel,
+    step: "waiting_healthy",
+  });
 
   // Backups need the owner workspace session (established by the iframe's
   // silent handoff), so the workspace view finishes that step -- see

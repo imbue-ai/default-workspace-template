@@ -37,7 +37,8 @@ export interface ClaimResult {
   region: string;
   // The shell service's origin label; the routable entry origin is
   // `${entry_label}.${workspace_domain}` (the bare domain is unrouted on
-  // the relay). Null when the connector could not read it.
+  // the relay). Null until the workspace's tunnel claims its service labels
+  // (the connector's frps NewProxy callback records it).
   entry_label: string | null;
 }
 

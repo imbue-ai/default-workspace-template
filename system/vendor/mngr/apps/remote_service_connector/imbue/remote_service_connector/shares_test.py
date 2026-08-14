@@ -12,11 +12,13 @@ from imbue.remote_service_connector.shares import DEFAULT_MAX_SHARED_WORKSPACES_
 from imbue.remote_service_connector.shares import check_share_quota
 from imbue.remote_service_connector.shares import decide_frps_new_proxy
 from imbue.remote_service_connector.shares import derive_share_user_label
+from imbue.remote_service_connector.shares import entry_label_from_claimed_domains
 from imbue.remote_service_connector.shares import generate_relay_token
 from imbue.remote_service_connector.shares import hash_relay_token
 from imbue.remote_service_connector.shares import make_share_coordinate
 from imbue.remote_service_connector.shares import parse_relay_endpoint_map
 from imbue.remote_service_connector.shares import resolve_share_region
+from imbue.remote_service_connector.shares import resolve_share_region_for_share
 from imbue.remote_service_connector.testing import _CONTENT_DOMAIN
 from imbue.remote_service_connector.testing import _FRPS_SECRET
 from imbue.remote_service_connector.testing import _OTHER_HOST_ID
@@ -126,6 +128,29 @@ def test_decide_frps_new_proxy_rejects_subdomain_claims() -> None:
     assert decide_frps_new_proxy(domain, [f"auth-x7k9q2w1.{domain}"], claimed_subdomain="evil").reject is True
 
 
+def test_entry_label_from_claimed_domains_picks_the_shell_label() -> None:
+    domain = f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.imbueminds.com"
+    claims = [f"terminal-abcd1234.{domain}", f"system_interface-elm7wydc.{domain}", f"auth-x7k9q2w1.{domain}"]
+    assert entry_label_from_claimed_domains(domain, claims) == "system_interface-elm7wydc"
+    # Legacy shell labels predate the random-suffix scheme.
+    assert entry_label_from_claimed_domains(domain, [f"system_interface.{domain}"]) == "system_interface"
+    # Case-insensitive, like the NewProxy authorization itself.
+    assert (
+        entry_label_from_claimed_domains(domain, [f"SYSTEM_INTERFACE-ELM7WYDC.{domain}".upper()])
+        == "system_interface-elm7wydc"
+    )
+
+
+def test_entry_label_from_claimed_domains_ignores_non_shell_and_foreign_claims() -> None:
+    domain = f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.imbueminds.com"
+    foreign = f"system_interface-elm7wydc.{_OTHER_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.imbueminds.com"
+    assert entry_label_from_claimed_domains(domain, []) is None
+    assert entry_label_from_claimed_domains(domain, [f"terminal-abcd1234.{domain}"]) is None
+    assert entry_label_from_claimed_domains(domain, [foreign]) is None
+    # A lookalike prefix without the ``-`` separator is not the shell service.
+    assert entry_label_from_claimed_domains(domain, [f"system_interfacex.{domain}"]) is None
+
+
 def test_parse_relay_endpoint_map_parses_multiple_regions() -> None:
     parsed = parse_relay_endpoint_map(_RELAY_ENDPOINTS)
     assert parsed == {
@@ -160,6 +185,30 @@ def test_resolve_share_region_requires_default_region_in_map(monkeypatch: pytest
     monkeypatch.setenv("SHARE_DEFAULT_REGION", "us1")
     with pytest.raises(MissingShareConfigError):
         resolve_share_region(None)
+
+
+def test_resolve_share_region_for_share_is_sticky_on_the_existing_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
+    monkeypatch.setenv("SHARE_DEFAULT_REGION", "us1")
+    # An existing region outranks both the datacenter mapping and a preference.
+    assert resolve_share_region_for_share("us2", "US-WEST-OR", None) == "us2"
+    assert resolve_share_region_for_share("us2", None, "us1") == "us2"
+    # A recorded region no longer served by any relay falls through.
+    assert resolve_share_region_for_share("eu9", None, None) == "us1"
+
+
+def test_resolve_share_region_for_share_honors_preference_only_without_a_datacenter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
+    monkeypatch.setenv("SHARE_DEFAULT_REGION", "us1")
+    # Local workspaces (no datacenter record) may be steered by the caller.
+    assert resolve_share_region_for_share(None, None, "us2") == "us2"
+    # A pool host's datacenter mapping wins over the caller's preference.
+    assert resolve_share_region_for_share(None, "US-WEST-OR", "us2") == "us1"
+    # An unknown preference is ignored, never an error.
+    assert resolve_share_region_for_share(None, None, "eu9") == "us1"
+    assert resolve_share_region_for_share(None, None, None) == "us1"
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +394,72 @@ def test_create_share_records_and_status_reports_the_entry_label(monkeypatch: py
     assert status_after["entry_label"] == "system_interface-abc123"
 
 
+def test_create_share_honors_preferred_region_for_local_hosts_and_stays_sticky(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The stub host has no pool row (a local workspace), so the caller's
+    # measured preference picks the relay on the first share.
+    client, _backend = _make_share_test_client(monkeypatch)
+
+    created = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "preferred_region": "us2"},
+        headers=_share_headers(),
+    ).json()
+    assert created["region"] == "us2"
+    assert ".us2." in created["workspace_domain"]
+    assert created["relay_endpoint"] == "relay-us2.infra.example.com:7000"
+
+    # A re-share with a different preference keeps the baked region: the
+    # domain (DNS, PSL boundary, cert, session cookies) must never silently move.
+    recreated = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "preferred_region": "us1"},
+        headers=_share_headers(),
+    ).json()
+    assert recreated["region"] == "us2"
+    assert recreated["workspace_domain"] == created["workspace_domain"]
+
+
+def test_create_share_ignores_an_unknown_preferred_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+
+    created = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "preferred_region": "eu9"},
+        headers=_share_headers(),
+    ).json()
+
+    assert created["region"] == "us1"
+
+
+def test_create_share_rejects_a_malformed_preferred_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+
+    resp = client.post(
+        "/shares",
+        json={"host_id": _SHARE_STUB_HOST_ID, "preferred_region": "Not A Region!"},
+        headers=_share_headers(),
+    )
+
+    assert resp.status_code == 422
+
+
+def test_list_share_relays_returns_the_region_endpoint_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+
+    resp = client.get("/shares/relays", headers=_share_headers())
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "relays": {
+            "us1": "relay-us1.infra.example.com:7000",
+            "us2": "relay-us2.infra.example.com:7000",
+        },
+        "default_region": "us1",
+    }
+
+
 def test_create_share_rejects_a_malformed_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
 
@@ -449,6 +564,46 @@ def test_frps_auth_rejects_token_of_inactive_share(monkeypatch: pytest.MonkeyPat
     resp = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_login_op(created["relay_token"]))
 
     assert resp.json()["reject"] is True
+
+
+def test_frps_auth_new_proxy_records_the_shell_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The tunnel's hostname claim is where the connector learns the chrome's
+    # entry origin (it never reads anything from inside the workspace).
+    client, backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    domain = created["workspace_domain"]
+
+    resp = client.post(
+        f"/frps/auth/{_FRPS_SECRET}",
+        json=_new_proxy_op(
+            created["relay_token"],
+            [f"terminal-abcd1234.{domain}", f"system_interface-elm7wydc.{domain}", f"auth-x7k9q2w1.{domain}"],
+        ),
+    )
+
+    assert resp.json()["reject"] is False
+    share = backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL)
+    assert share is not None
+    assert share["entry_label"] == "system_interface-elm7wydc"
+    status = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers()).json()
+    assert status["entry_label"] == "system_interface-elm7wydc"
+
+
+def test_frps_auth_rejected_new_proxy_records_no_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    domain = created["workspace_domain"]
+    foreign = "system_interface-elm7wydc.host-" + "b" * 32 + ".x.us1.example.com"
+
+    resp = client.post(
+        f"/frps/auth/{_FRPS_SECRET}",
+        json=_new_proxy_op(created["relay_token"], [f"system_interface-elm7wydc.{domain}", foreign]),
+    )
+
+    assert resp.json()["reject"] is True
+    share = backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL)
+    assert share is not None
+    assert share["entry_label"] is None
 
 
 def test_frps_auth_new_proxy_allows_single_labels_under_own_domain_only(monkeypatch: pytest.MonkeyPatch) -> None:
