@@ -119,8 +119,10 @@ Returns auth options, credentials status, and developer notes about the service.
 
 It is possible to associate credentials with a specific account
 (and have credentials for more than a single account per service).
-The user can do that by clicking "Add account" on the "Connectors" settings
-page in the Minds app.
+The user can do that from the Permissions tab of this machine's options in the
+Minds app (the key icon in the tabs along the top): "Add connection" lists the
+services that already have an account here under "Add another account", and the
+ones that do not under "Connect a new service".
 
 Another way is for you to send a permission request with an "account"
 in the payload as described above - approving the permission request will prompt
@@ -144,7 +146,7 @@ as the key means "unknown account".
 When the existing credentials are expired or invalid, there are currently two ways  to trigger a new login:
 
 - By re-sending the permission request to the user (use this when there's just a single account for the given service)
-- By disconnecting and reconnecting the account on the "Connectors" settings page (tell the user to do that if there are more than one account configured for the given service).
+- By having the user reconnect the account from the Permissions tab of this machine's options in the Minds app (the key icon in the tabs along the top): "Add connection" then "Add another account" for that service. Tell the user to do that if there is more than one account configured for the given service.
 
 
 ## When the gateway is unreachable

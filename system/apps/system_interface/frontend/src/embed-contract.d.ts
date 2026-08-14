@@ -13,6 +13,7 @@ declare module "@minds/embed-contract" {
   export const BRING_APP_TO_FRONT: "minds:bring-app-to-front";
   export const CLOSE_ACTIVE_TAB: "minds:close-active-tab";
   export const OPEN_AI_KEYS_ACK: "minds:open-ai-keys-ack";
+  export const PERMISSION_REQUEST_RESOLVED: "minds:permission-request-resolved";
 
   export const REQUEST_ID_PATTERN: RegExp;
   export const AGENT_ID_PATTERN: RegExp;

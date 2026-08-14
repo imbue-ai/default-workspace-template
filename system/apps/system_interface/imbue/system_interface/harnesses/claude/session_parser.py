@@ -49,6 +49,41 @@ _TK_OUTPUT_DECORATION_PATTERN = re.compile(
 # `tk_command_parsing` parser (see `_is_tk_lifecycle_call`).
 _TK_LIFECYCLE_VERBS = frozenset({"create", "start", "close"})
 
+# A latchkey permission request is created by POSTing to the reserved
+# `latchkey-self.invalid/permission-requests` host (see the latchkey skill), and
+# the gateway echoes the created request back on stdout as a JSON object. The
+# chat's permission card reads that object for everything it shows: the title,
+# the agent's rationale, and the request id its "Review & respond" button hands
+# to the Minds app. The object routinely runs past `_MAX_OUTPUT_LENGTH` -- the
+# gateway pretty-prints it and echoes the request's `target` and precomputed
+# `effect` alongside the fields the card wants, and curl writes a progress meter
+# ahead of it -- so head truncation cuts it mid-object and the card can read
+# nothing at all. It is therefore located and parsed BEFORE truncation, carried
+# on the event as `permission_request`, and kept whole in `output`.
+_PERMISSION_REQUEST_ID_KEY = '"request_id"'
+
+# Ceiling on a preserved permission-request object. Preservation rescues the
+# handful of fields the card renders; it is not licence to open an unbounded
+# hole in the output limit, and the object is carried twice (parsed on the event
+# and verbatim in `output`). A body past this size is left to ordinary head
+# truncation and is not treated as a request at all.
+_MAX_PERMISSION_REQUEST_LENGTH = 8000
+
+# Cap on the candidate `{`s probed in one tool result. Failing probes are not
+# constant-time: each one constructs a JSONDecodeError whose line/column
+# bookkeeping rescans the document up to the error position, so output that is
+# mostly braces costs O(braces x length) -- measured at 35 ms for a wall of
+# 10_000 braces, 3.0 s for 100_000 (quadratic growth), versus 3 ms for the
+# same 100KB wall once capped at 1000 probes. Legitimate output has only a
+# handful of braces at or before the object's `request_id` key (curl's progress
+# meter has none; the pretty-printed object contributes its own opening brace
+# plus a few from any JSON a batched command printed earlier), so 1000 is two
+# to three orders of magnitude of headroom.
+_MAX_PERMISSION_REQUEST_PROBES = 1000
+
+# Stateless and reused across candidate offsets rather than rebuilt per probe.
+_JSON_DECODER = json.JSONDecoder()
+
 _SOURCE = "claude/common_transcript"
 
 _AGENT_ID_PATTERN = re.compile(r"agentId:\s*(\S+)")
@@ -227,16 +262,104 @@ def _is_tk_lifecycle_call(tool_name: str, tool_input: Any) -> bool:
     return any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments)
 
 
-def _truncate_tool_output(content: str) -> str:
-    """Truncate a tool result to the head limit, but keep any tk decoration
-    lines (`Updated <id> -> <status>` and `tk-step <id> title|summary: ...`)
-    that fall past the cut, appended after the truncation marker. This preserves
-    the progress view's step structure and decoration even when a tk command's
-    output is pushed past the limit."""
+class _PermissionRequest(FrozenModel):
+    """A permission-request object found in a tool result."""
+
+    details: dict[str, Any] = Field(description="The parsed permission-request object the gateway echoed")
+    body: str = Field(description="The object's verbatim JSON text, exactly as it appeared in the tool output")
+
+
+def _is_permission_request(parsed: dict[str, Any]) -> bool:
+    """True for the shape the gateway echoes when it creates a request: a
+    non-empty string `request_id` alongside a `payload` object. Every request
+    type carries both (the gateway rejects a create without a payload), and
+    demanding the pair keeps unrelated tool output that merely mentions a
+    request id from being mistaken for a permission request."""
+    request_id = parsed.get("request_id")
+    if not isinstance(request_id, str) or not request_id:
+        return False
+    return isinstance(parsed.get("payload"), dict)
+
+
+def _find_permission_request(content: str) -> _PermissionRequest | None:
+    """Locate the permission-request object a creation POST echoed in `content`.
+
+    Returns the first such object, or None -- which is the case for essentially
+    every tool result, so the cheap substring guard runs first and the JSON work
+    happens only for output that could plausibly be a request.
+
+    Candidate starts are the `{`s at or before the `request_id` key (the object
+    encloses it, which also bounds the scan), and each is decoded with
+    `JSONDecoder.raw_decode`, which parses one JSON value and reports where it
+    ended. Taking the end from the decoder -- instead of assuming the object runs
+    to the end of stdout -- is what makes this robust to anything the command
+    printed after the response. The number of candidates tried is capped at
+    `_MAX_PERMISSION_REQUEST_PROBES` so a pathological brace-heavy output cannot
+    stall parsing; past the cap the result is treated like any other output.
+    """
+    marker = content.find(_PERMISSION_REQUEST_ID_KEY)
+    if marker < 0:
+        return None
+    probes = 0
+    start = content.find("{")
+    while 0 <= start <= marker:
+        probes += 1
+        if probes > _MAX_PERMISSION_REQUEST_PROBES:
+            return None
+        try:
+            parsed, end = _JSON_DECODER.raw_decode(content, start)
+        except json.JSONDecodeError:
+            # Not a decode failure worth reporting: this is a probe asking
+            # whether a JSON value begins at this `{` at all, and "no" is the
+            # ordinary answer for a brace in prose or shell output.
+            parsed, end = None, start
+        except RecursionError:
+            # The C scanner recurses per nesting level and raises this -- NOT a
+            # JSONDecodeError -- on absurdly deep input like `{"a": ` repeated.
+            # Letting it escape would crash the whole parse, and every later
+            # candidate inside the same nest would just recurse again, so give
+            # up on the result: no gateway echo nests thousands deep.
+            return None
+        if isinstance(parsed, dict) and _is_permission_request(parsed):
+            body = content[start:end]
+            if len(body) > _MAX_PERMISSION_REQUEST_LENGTH:
+                return None
+            return _PermissionRequest(details=parsed, body=body)
+        start = content.find("{", start + 1)
+    return None
+
+
+def _tk_decoration_after(content: str, cut: int) -> list[str]:
+    """The tk decoration lines in `content` that end past `cut`."""
+    return [m.group(0) for m in _TK_OUTPUT_DECORATION_PATTERN.finditer(content) if m.end() > cut]
+
+
+def _rebuild_around_permission_request(content: str, request: _PermissionRequest) -> str:
+    """Replace an over-long tool output with only what the chat reads out of it:
+    every tk decoration line, then the permission-request object, whole and last.
+
+    The object has to be the last JSON object in the result -- and the only one --
+    because the card's raw-output fallback reads from the first `{` to the end of
+    the string. That rules out the tk-style append (the head's own chopped copy of
+    the object would be found first), so the head is replaced rather than kept, and
+    the tk lines sit ahead of the object so both guarantees hold at once. What is
+    dropped is curl's progress meter and anything the command printed around the
+    response, none of which the chat reads."""
+    return "...\n" + "\n".join([*_tk_decoration_after(content, 0), request.body])
+
+
+def _truncate_tool_output(content: str, permission_request: _PermissionRequest | None = None) -> str:
+    """Truncate a tool result to the head limit, but keep what the chat reads out
+    of the part past the cut: the tk decoration lines (`Updated <id> -> <status>`
+    and `tk-step <id> title|summary: ...`), appended after the truncation marker so
+    a step's structure is never lost, and a permission-request object, preserved
+    whole in place of the head (see `_rebuild_around_permission_request`)."""
     if len(content) <= MAX_TOOL_OUTPUT_LENGTH:
         return content
+    if permission_request is not None:
+        return _rebuild_around_permission_request(content, permission_request)
     head = content[:MAX_TOOL_OUTPUT_LENGTH]
-    preserved = [m.group(0) for m in _TK_OUTPUT_DECORATION_PATTERN.finditer(content) if m.end() > MAX_TOOL_OUTPUT_LENGTH]
+    preserved = _tk_decoration_after(content, MAX_TOOL_OUTPUT_LENGTH)
     if preserved:
         return head + "...\n" + "\n".join(preserved)
     return head + "..."
@@ -530,7 +653,14 @@ def _parse_user_message(
             if tool_name == "Agent":
                 extracted_subagent_id = _extract_subagent_id(structured_agent_id, result_content)
 
-            result_content = _truncate_tool_output(result_content)
+            # Likewise BEFORE truncation: a permission-request response is
+            # routinely longer than the output limit, so the object is located
+            # and parsed while it is still intact. The card then reads the
+            # request off the event instead of re-parsing a string that
+            # truncation may have cut mid-object.
+            permission_request = _find_permission_request(result_content)
+
+            result_content = _truncate_tool_output(result_content, permission_request)
 
             event = {
                 "timestamp": timestamp,
@@ -548,6 +678,8 @@ def _parse_user_message(
 
             if extracted_subagent_id:
                 event["subagent_id"] = extracted_subagent_id
+            if permission_request is not None:
+                event["permission_request"] = permission_request.details
 
             existing_event_ids.add(event_id)
             new_events.append((timestamp, event))
