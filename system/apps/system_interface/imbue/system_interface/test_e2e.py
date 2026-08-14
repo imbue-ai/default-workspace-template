@@ -1460,6 +1460,38 @@ AUTOSAVE_SETTLE_MS = 3000
 _FIXTURE_CHAT_REF = "chat:agent-test-123"
 
 
+def _drop_overlay_styles(page: Page) -> dict[str, Any] | None:
+    """What the drop overlay currently showing looks like, or None if there is none.
+
+    Read as computed style rather than as markup because the whole question is
+    what the user sees: whether the selection paints a region, and whether it
+    carries the pseudo-element that draws the insertion line. Its left edge
+    comes back too, since a line is only right if it is on the correct edge.
+    """
+    return page.evaluate(
+        """() => {
+            const el = document.querySelector('.dv-drop-target-selection');
+            if (!el) return null;
+            const style = getComputedStyle(el);
+            const after = getComputedStyle(el, '::after');
+            const box = el.getBoundingClientRect();
+            return {
+                background: style.backgroundColor,
+                afterContent: after.content,
+                afterWidth: after.width,
+                afterBackground: after.backgroundColor,
+                side: el.classList.contains('dv-drop-target-left')
+                    ? 'left'
+                    : el.classList.contains('dv-drop-target-right')
+                      ? 'right'
+                      : 'other',
+                left: box.left,
+                right: box.right,
+            };
+        }"""
+    )
+
+
 def _member_titles(layout_dir: Path) -> dict[str, str]:
     """Every name the user has given an object, straight out of the store on disk.
 
@@ -2487,3 +2519,96 @@ def test_overflowed_tabs_list_as_plain_rows_and_the_strip_keeps_its_handles(tmp_
         expect(editor).to_have_value(clicked_title)
         editor.press("Escape")
         expect(page.locator(".dv-custom-tab-title-input:visible")).to_have_count(0)
+
+
+_DRAG_OVERLAY_PORT = 18881
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Path, page: Page) -> None:
+    """A drop onto a tab is a seam; a drop onto a pane is a region.
+
+    Dropping onto a tab asks "before or after this one?", which is a position
+    BETWEEN two tabs rather than an area, so it draws as a thin insertion line
+    against the edge the tab would land on. dockview thins its own overlay into
+    a line only when the target is under 100px wide, and the strip holds every
+    tab at a 140px floor, so left alone a tab drop paints a block over half of
+    its neighbour -- which reads as "replace that half" rather than "insert
+    here".
+
+    Dropping into a pane still asks "which side?", which IS a region, so that
+    one keeps a filled wash. Both are asserted in one test because the pair is
+    the point: the same overlay element has to say two different things, and a
+    rule that turned tab drops into lines by reaching too widely would take the
+    pane's wash with it.
+
+    Computed styles are what get asserted, since this is entirely a question of
+    what the user sees: a transparent selection carrying a 2px pseudo-element
+    on the correct edge, against a selection whose own background is the wash.
+    """
+    with _running_e2e_server(tmp_path, _DRAG_OVERLAY_PORT, primary_agent_id="primary-services-agent") as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        page.goto(base_url)
+        expect(page.locator(".dv-default-tab-content", has_text="test-agent").first).to_be_visible(timeout=15000)
+
+        # A second tab, so there is a neighbour to drop against.
+        page.locator(".dockview-add-tab-button").first.click()
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+        page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
+        expect(page.locator(".dv-default-tab-content", has_text="Terminal 1").first).to_be_visible(timeout=10000)
+
+        dragged = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Terminal 1")).first
+        target_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="test-agent")).first
+        source_box = dragged.bounding_box()
+        assert source_box is not None, "the dragged tab has no box"
+        page.mouse.move(source_box["x"] + source_box["width"] / 2, source_box["y"] + source_box["height"] / 2)
+        page.mouse.down()
+
+        # Measured mid-drag: the strip re-lays its tabs out once one of them is
+        # being carried, so a box read before the press points somewhere else by
+        # the time the pointer arrives.
+        target_box = target_tab.bounding_box()
+        assert target_box is not None, "the target tab has no box"
+        page.mouse.move(target_box["x"] + target_box["width"] * 0.2, target_box["y"] + target_box["height"] / 2, steps=25)
+        # The overlay animates between targets; let it arrive before reading it.
+        page.wait_for_timeout(400)
+        target_box = target_tab.bounding_box()
+        assert target_box is not None, "the target tab lost its box mid-drag"
+        tab_overlay = _drop_overlay_styles(page)
+        assert tab_overlay is not None, "no drop overlay appeared over the tab"
+
+        # The selection itself paints nothing -- the line is the whole of it --
+        # and the line sits against the tab's own left edge rather than halfway
+        # across it.
+        assert tab_overlay["background"] == "rgba(0, 0, 0, 0)", (
+            f"a tab drop should not wash the tab, got {tab_overlay['background']}"
+        )
+        assert tab_overlay["afterContent"] not in ("none", ""), "the tab drop drew no insertion line"
+        assert tab_overlay["afterWidth"] == "2px", f"the insertion line should be 2px, got {tab_overlay['afterWidth']}"
+        assert tab_overlay["afterBackground"] != "rgba(0, 0, 0, 0)", "the insertion line is invisible"
+
+        # And it is on a seam: whichever side dockview picked, the line is drawn
+        # against that edge of the whole tab rather than halfway across it.
+        assert tab_overlay["side"] in ("left", "right"), (
+            f"a drop onto a tab should pick a side, got {tab_overlay['side']}"
+        )
+        line_x = tab_overlay["left"] if tab_overlay["side"] == "left" else tab_overlay["right"]
+        seam_x = target_box["x"] if tab_overlay["side"] == "left" else target_box["x"] + target_box["width"]
+        assert abs(line_x - seam_x) <= 1, (
+            f"the {tab_overlay['side']} line should sit on that edge of the tab ({seam_x}), got {line_x}"
+        )
+
+        # The same drag over the pane body keeps the region wash, and grows no
+        # line: the two answers stay different.
+        pane_box = page.locator(".dv-content-container").first.bounding_box()
+        assert pane_box is not None, "the pane has no box"
+        page.mouse.move(pane_box["x"] + pane_box["width"] * 0.15, pane_box["y"] + pane_box["height"] / 2, steps=25)
+        pane_overlay = _drop_overlay_styles(page)
+        assert pane_overlay is not None, "no drop overlay appeared over the pane"
+        assert pane_overlay["background"] != "rgba(0, 0, 0, 0)", "a pane drop should still show its region"
+        assert pane_overlay["afterContent"] in ("none", ""), "a pane drop should not draw an insertion line"
+
+        page.mouse.up()

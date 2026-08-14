@@ -1764,6 +1764,61 @@ body {
   height: 12px;
 }
 
+/* ── Drag and drop ──
+   A drop onto a PANE and a drop onto a TAB are different questions and get
+   different answers. "Which side of this pane?" is a region, so it stays a
+   filled wash -- but a neutral grey light enough to read the pane through,
+   rather than dockview's opaque blue-grey slab. "Before or after this tab?" is
+   a position BETWEEN two tabs, not a region, so it draws as an insertion line
+   at that edge instead of shading half of the neighbouring tab.
+
+   Every drop target paints the same way -- a `dv-drop-target-selection` sized
+   to the half it would take -- so the tab case is picked out structurally, by
+   the selection sitting inside a `.dv-tab`. dockview only thins the selection
+   into a line by itself when the target is under 100px wide, and a tab here is
+   never allowed to get that narrow (the strip holds them at a 140px floor), so
+   left it alone every tab drop reads as a block over half its neighbour.
+
+   The selection's box is an inline style, animated between targets, so the
+   line is a pseudo-element on the edge the selection already sits against
+   rather than an attempt to resize it: a left-drop selection covers the tab's
+   left half, so its left edge IS the seam the tab would land on, and a
+   right-drop selection's right edge likewise.
+
+   Only the left/right variants lose their fill. A drop onto the empty end of
+   the strip has no side to it and keeps the wash, which is what says the drop
+   will land there at all. */
+.dockview-theme-light.dockview-theme-light {
+  --dv-drag-over-background-color: rgba(0, 0, 0, 0.06);
+  --dv-drag-over-border-color: transparent;
+}
+
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-left,
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-right {
+  background-color: transparent;
+}
+
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-left::after,
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-right::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  /* Neutral, like everything else on the dock: the accent is chrome's, and an
+     insertion caret here would be the one accent-colored thing in the pane. */
+  background: var(--color-text-primary);
+}
+
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-left::after {
+  left: 0;
+}
+
+.dockview-theme-light.dockview-theme-light .dv-tab .dv-drop-target-selection.dv-drop-target-right::after {
+  right: 0;
+}
+
 /* Chat panel within dockview */
 .chat-panel {
   /* The pane card's own white: a chat fills its pane edge to edge, so anything
