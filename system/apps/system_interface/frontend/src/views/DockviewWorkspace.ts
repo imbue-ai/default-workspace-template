@@ -547,7 +547,7 @@ interface TabMenuItem {
   run: () => void;
 }
 
-// A separator between groups of items; the design puts one above "Close tab".
+// A separator between groups of items; the design puts one above "Hide tab".
 const MENU_DIVIDER = "divider";
 
 type TabMenuEntry = TabMenuItem | typeof MENU_DIVIDER;
@@ -666,8 +666,8 @@ function openTabMenuAt(
  * Refresh reloads what the tab is showing, which means nothing for a terminal
  * (its tmux session is the content, and reattaching is not a refresh) so that
  * one goes without. Share is an app affordance: the share surface is per
- * registered service. Close tab is always last above the destructive verb,
- * because closing is the safe, membership-preserving one -- the object keeps
+ * registered service. Hide tab is always last above the destructive verb,
+ * because hiding is the safe, membership-preserving one -- the object keeps
  * running and stays filed wherever it was filed.
  *
  * The destructive verb is whatever taking the object off the machine means for
@@ -716,7 +716,7 @@ function tabMenuEntries(panelId: string): TabMenuEntry[] {
     });
   }
   entries.push({
-    label: "Close tab",
+    label: "Hide tab",
     iconName: "minus",
     run: () => {
       const panel = dockview?.panels.find((candidate) => candidate.id === panelId);

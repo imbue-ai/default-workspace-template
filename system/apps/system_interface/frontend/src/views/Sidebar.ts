@@ -1140,7 +1140,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             "div",
             {
               class:
-                "machine-sidebar absolute inset-y-0 left-0 z-20 flex flex-col overflow-hidden border " +
+                // `bottom-[4px]` rather than `inset-y-0`: expanded, this is a
+                // floating card, and it needs the same gap under it that the
+                // canvas gives it above and to its left -- otherwise its
+                // rounded bottom corners and shadow run off the window edge.
+                // The dock itself stays flush at the bottom; this insets only
+                // the rail.
+                "machine-sidebar absolute top-0 bottom-[4px] left-0 z-20 flex flex-col overflow-hidden border " +
                 `${RAIL_PADDING_CLASS} transition-[width] duration-150 ease-out ` +
                 (expanded ? EXPANDED_CLASS : COLLAPSED_CLASS),
             },
