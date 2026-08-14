@@ -1,11 +1,10 @@
 /**
- * The two decisions behind renaming an object, kept apart from the two places
- * that offer it: the double-click editor on the tab itself, and the same
- * gesture on a row of the project settings dialog's "In this project" list.
+ * What a typed title becomes before it is filed as an object's name.
  *
- * Both go through the same rename in the end, so they have to agree on what a
- * typed title becomes and on which rows can be renamed at all. Neither answer
- * needs a DOM, a panel or a project, which is why they live here.
+ * Every rename path -- the tab's own double-click editor and the agent-facing
+ * layout op alike -- goes through `renameMemberRef` in the end, and both hand
+ * it a title normalized here first. Needs no DOM, panel or project, which is
+ * why it lives apart from them.
  */
 
 /** Longest title kept. Far more than the 220px tab ceiling can show -- the
@@ -29,25 +28,4 @@ export function normalizeTabTitle(raw: string): string | null {
   if (collapsed === "") return null;
   // Trimmed again in case the cut landed on the space between two words.
   return collapsed.slice(0, MAX_TAB_TITLE_LENGTH).trimEnd();
-}
-
-/**
- * Why this object cannot be renamed right now, or null when it can.
- *
- * A name is filed by REF and belongs to the object rather than to the panel
- * showing it (see models/MemberTitles), so *being open is no longer a
- * condition*: a backgrounded member -- still running, just not docked -- is
- * renameable like any other, because the name has somewhere to live either way.
- * Nothing a view lists is refused on what it is.
- *
- * What is left is the settings dialog's own staging. A row already marked for
- * removal is struck through and on its way out of that list, so it is not
- * offered a name in the same visit; the removal is undone with one click, and
- * the rename is there again. This sentence is the tooltip that says so.
- */
-export function tabRenameBlockedReason(row: { isStagedForRemoval: boolean }): string | null {
-  if (row.isStagedForRemoval) {
-    return "This is being removed from the project on save. Undo the removal to rename it.";
-  }
-  return null;
 }

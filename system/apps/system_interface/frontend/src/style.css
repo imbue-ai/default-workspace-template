@@ -1481,8 +1481,10 @@ body {
    card floating on it whose active tab is physically part of the card. The
    pieces that make that read as one shape:
 
-   - the canvas runs edge to edge, and its 4px padding is the gap the outermost
-     panes sit in rather than a rim of some other color;
+   - the canvas runs edge to edge. A 4px top padding is the gap the outermost
+     panes sit in against the title bar above, rather than a rim of some other
+     color; the left, right and bottom edges carry no padding, so the dock
+     sits flush against the viewport there;
    - each group insets itself 2px, which puts 4px of bare canvas between two
      adjacent panes -- that gap is the whole of a split separator;
    - the tab strip paints nothing, so it is canvas with labels on it. The active
@@ -1512,8 +1514,10 @@ body {
   /* The canvas runs edge to edge and the padding is the outermost pane gap, so
      the grey is painted across the padding too. Clipping it to the content box
      instead would let the app's off-white body show as a band around the dock,
-     which reads as a seam rather than as an inset. */
-  padding: 4px;
+     which reads as a seam rather than as an inset. Only the top carries that
+     gap -- against the title bar -- so the dock sits flush against the
+     viewport on the left, right and bottom. */
+  padding: 4px 0 0 0;
   background: var(--si-canvas);
 }
 
@@ -1662,6 +1666,22 @@ body {
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: var(--si-pane-radius) var(--si-pane-radius) 0 0;
+}
+
+/* The drag ghost: dockview-core clones the dragged `.dv-tab` (tab.js,
+   `dragHandler.onDragStart`), copies its FULL computed style onto the clone
+   as inline styles, and appends the clone as a direct child of `<body>`
+   (dnd/ghost.js's `addGhostImage`) so the browser can use it as the drag
+   image. The clone therefore inherits this tab's square BOTTOM corners --
+   which exist only so a connected tab can meet the pane card below it -- but
+   the ghost has no pane under it while it floats, so it reads as a
+   half-rounded chip instead of a floating card. `body > .dv-tab` reaches
+   only that clone: every live tab is nested many levels deeper, under
+   `.dockview-theme-light`, never a direct child of `<body>`. `!important` is
+   required because the copied computed style already sets `border-radius`
+   inline, which otherwise beats any selector here regardless of specificity. */
+body > .dv-tab.dv-dragged {
+  border-radius: var(--si-pane-radius) !important;
 }
 
 .dockview-theme-light .dv-tab.dv-active-tab {
@@ -2186,29 +2206,6 @@ body {
   color: var(--color-text-secondary);
   margin: 0 0 16px;
   line-height: 1.5;
-}
-
-.destroy-dialog-children {
-  margin-bottom: 16px;
-}
-
-.destroy-dialog-children-warning {
-  font-size: 13px;
-  font-weight: 500;
-  color: #dc2626;
-  margin: 0 0 8px;
-}
-
-.destroy-dialog-children-list {
-  list-style: disc;
-  margin: 0;
-  padding-left: 20px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-}
-
-.destroy-dialog-children-list li {
-  margin-bottom: 2px;
 }
 
 .destroy-dialog-actions {

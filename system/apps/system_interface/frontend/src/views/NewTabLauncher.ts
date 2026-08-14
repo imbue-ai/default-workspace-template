@@ -505,39 +505,41 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       const sections = buildLauncherSections(attrs.rows, attrs.memberRows, attrs.isEverything);
 
       return m("div", { class: "new-tab-launcher bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
-        m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, OPEN_NEW_TITLE),
-        m(
-          "div",
-          { class: "flex flex-wrap gap-2 px-2" },
-          OPEN_NEW_TILES.map((tile) => {
-            const isDisabled = tile.kind === "files";
-            return m(
-              "button",
-              {
-                key: tile.kind,
-                type: "button",
-                "aria-disabled": isDisabled ? "true" : undefined,
-                class:
-                  "new-tab-launcher-tile border-border flex h-11 items-center gap-2 rounded-lg border px-4 " +
-                  "text-[13px] font-medium " +
-                  (isDisabled
-                    ? "text-text-faint cursor-not-allowed"
-                    : "text-text-primary hover:bg-bg-hover cursor-pointer"),
-                onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.kind),
-                ...(isDisabled ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP) : {}),
-              },
-              [
-                m(
-                  "span",
-                  { class: "text-text-faint flex shrink-0 items-center" },
-                  m.trust(launcherIcon(tile.kind, GLYPH_SIZE)),
-                ),
-                tile.label,
-              ],
-            );
-          }),
-        ),
-        sections.map((section) => sectionView(section, attrs, nowMs)),
+        m("div", { class: "mx-auto w-full max-w-4xl" }, [
+          m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, OPEN_NEW_TITLE),
+          m(
+            "div",
+            { class: "flex gap-2 px-2" },
+            OPEN_NEW_TILES.map((tile) => {
+              const isDisabled = tile.kind === "files";
+              return m(
+                "button",
+                {
+                  key: tile.kind,
+                  type: "button",
+                  "aria-disabled": isDisabled ? "true" : undefined,
+                  class:
+                    "new-tab-launcher-tile border-border flex h-9 flex-1 items-center justify-center gap-2 " +
+                    "rounded-lg border px-4 text-[13px] font-medium " +
+                    (isDisabled
+                      ? "text-text-faint cursor-not-allowed"
+                      : "text-text-primary hover:bg-bg-hover cursor-pointer"),
+                  onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.kind),
+                  ...(isDisabled ? hoverTooltipAttrs(FILE_VIEWER_TOOLTIP) : {}),
+                },
+                [
+                  m(
+                    "span",
+                    { class: "text-text-faint flex shrink-0 items-center" },
+                    m.trust(launcherIcon(tile.kind, GLYPH_SIZE)),
+                  ),
+                  tile.label,
+                ],
+              );
+            }),
+          ),
+          sections.map((section) => sectionView(section, attrs, nowMs)),
+        ]),
       ]);
     },
   };

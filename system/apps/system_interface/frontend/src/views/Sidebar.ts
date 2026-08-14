@@ -107,12 +107,6 @@ export interface SidebarAttrs {
   // nothing can be removed from the home. The object keeps running and stays
   // in every other project showing it.
   onRemoveFromView: (row: SidebarTabRow) => void;
-  // The settings dialog's staged removals, applied on Save. Rejects so the
-  // dialog can show the reason instead of the rail alerting behind it.
-  onRemoveContentFromView: (ref: string) => Promise<void>;
-  // The settings dialog's staged renames, applied by the same Save. The name is
-  // the object's, machine-wide, so a rejection is the dialog's to report.
-  onRenameMember: (ref: string, title: string) => Promise<void>;
   // Open the machine's share surface with this app pre-selected.
   onShareApp: (row: SidebarTabRow) => void;
   // Destroy the object behind this row, machine-wide. The workspace confirms
@@ -130,7 +124,11 @@ const RAIL_PADDING_CLASS = "p-[5px]";
 const ICON_BOX_CLASS = "flex w-[27px] shrink-0 items-center justify-center";
 
 // Full-bleed against the rail's padding, so a divider spans the whole card.
-const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t border-border";
+// Color, not the element, is what's conditional on `expanded` at the one call
+// site that sits between rows shared by both rail states (see below) -- the
+// rule has to keep occupying its height even hidden, or the shortcut rows
+// under it shift down by that height the moment it appears.
+const DIVIDER_CLASS = "-mx-[5px] shrink-0 border-t";
 
 const ROW_CLASS = "flex h-7 w-full shrink-0 cursor-pointer items-center gap-1 rounded-md text-left";
 
@@ -140,8 +138,11 @@ const ROW_CLASS = "flex h-7 w-full shrink-0 cursor-pointer items-center gap-1 ro
 const MENU_CARD_CLASS =
   "project-rail-menu fixed z-50 rounded-lg border border-border bg-surface py-1 text-[13px] text-text-primary";
 const MENU_SHADOW_STYLE = "box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);";
+// `group` so a row's own trailing controls (the switcher's edit pencil) can
+// reveal themselves on `group-hover:`, the same reveal-on-hover pattern the
+// tab list's kebab uses.
 const MENU_ROW_CLASS =
-  "project-rail-menu-item flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left hover:bg-bg-hover";
+  "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left hover:bg-bg-hover";
 
 // Minimum gap between a floating menu and the window edges, matching the
 // tooltip's own margin so everything that floats clears the frame alike.
@@ -149,6 +150,10 @@ const MENU_MARGIN = 6;
 
 const HEADER_GLYPH_SIZE = 18;
 const MENU_GLYPH_SIZE = 16;
+
+// The switcher dropdown's own width, wider than the rail (37-240px) it hangs
+// off: a project name plus its edit pencil need more room than that.
+const SWITCHER_MENU_WIDTH = 280;
 
 // Inner markup for the rail's own glyphs, drawn on the same 24x24 Feather grid
 // as `icons.ts`. They live here rather than in that shared table because the
@@ -228,6 +233,14 @@ const SHORTCUT_ROWS: readonly { tabType: QuickAddTabType; label: string }[] = [
 // nothing to open. It stays in the list -- it is one of the design's four
 // starting points -- but renders disabled rather than pretending to work.
 const FILE_VIEWER_TOOLTIP = "A file viewer is coming to this workspace";
+
+// Copy for the rail's three working shortcuts, as designed -- "A agent chat"
+// included, not a typo to silently correct.
+const SHORTCUT_TOOLTIPS: Record<Exclude<QuickAddTabType, "files">, string> = {
+  chat: "A agent chat to work alongside you",
+  browser: "A browser that agents can control on your behalf",
+  terminal: "A terminal to run commands in your workspace",
+};
 
 /**
  * Full <svg> string for a view's identity, sized to `size` pixels square.
@@ -497,10 +510,20 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     menuError = null;
   }
 
-  /** Run what a row asked for, then put the rail back to rest. */
+  /** Run what a row asked for, then close whatever menu it came from.
+   *
+   *  Does not force the rail to collapse -- unlike `closeMenus`, which is for
+   *  the definitive-dismiss paths (outside click, Escape, window blur) where
+   *  the pointer is known to be elsewhere. A pick can come from a row sitting
+   *  directly in the rail's own (still-rendered) card, where the pointer is
+   *  usually still resting after the click; forcing `expanded` false there
+   *  used to snap the rail collapsed under a pointer that never left it. The
+   *  real `onmouseleave` handler is what collapses it now, whenever the
+   *  pointer actually goes. */
   function pick(action: () => void): void {
     action();
-    closeMenus();
+    openMenu = null;
+    menuError = null;
   }
 
   async function createNewProject(attrs: SidebarAttrs): Promise<void> {
@@ -550,7 +573,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           "items-center gap-1 px-[5px] text-left text-text-primary hover:bg-bg-hover",
         "aria-haspopup": "menu",
         "aria-expanded": openMenu?.kind === "switcher" ? "true" : "false",
-        ...hoverTooltipAttrs(viewName),
+        // Static, not the current project's name: the header's own label
+        // already says which view is mounted, so the tooltip's job is to say
+        // what the button does, not repeat that.
+        ...hoverTooltipAttrs("Switch projects"),
         onclick: (event: MouseEvent) => {
           if (openMenu?.kind === "switcher") {
             openMenu = null;
@@ -619,7 +645,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           key: `tab-type:${row.tabType}`,
           iconMarkup: railIcon(row.tabType, ROW_GLYPH_SIZE),
           label: row.label,
-          tooltip: row.tabType === "files" ? FILE_VIEWER_TOOLTIP : row.label,
+          tooltip: row.tabType === "files" ? FILE_VIEWER_TOOLTIP : SHORTCUT_TOOLTIPS[row.tabType],
           onclick: row.tabType === "files" ? null : () => pick(() => attrs.onOpenTabType(row.tabType)),
         }),
       ),
@@ -813,6 +839,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   function menuRow(options: {
     iconMarkup: string | null;
     label: string;
+    // The row for whatever is currently mounted. Marked with a plain
+    // background rather than a checkmark or a swapped-in icon, so it reads
+    // the same way regardless of what else the row carries (the switcher's
+    // edit pencil sits on every row now, current or not).
     isActive?: boolean;
     isDestructive?: boolean;
     isQuiet?: boolean;
@@ -821,17 +851,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     onmouseenter?: (event: MouseEvent) => void;
     trailing?: m.Children;
   }): m.Vnode {
-    const tone = options.isDestructive
-      ? "text-red-600"
-      : options.isQuiet
-        ? "text-text-faint"
-        : options.isActive
-          ? "font-semibold text-text-primary"
-          : "text-text-primary";
+    const tone = options.isDestructive ? "text-red-600" : options.isQuiet ? "text-text-faint" : "text-text-primary";
     return m(
       "div",
       {
-        class: `${MENU_ROW_CLASS} ${tone}`,
+        class: `${MENU_ROW_CLASS} ${tone} ` + (options.isActive ? "bg-bg-sidebar" : ""),
         role: "menuitem",
         ...(options.tooltip === null || options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip)),
         onclick: options.onclick,
@@ -847,22 +871,30 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     );
   }
 
-  function checkMark(): m.Vnode {
-    return m("span", { class: "flex shrink-0 items-center" }, m.trust(icon("check", { size: 14 })));
-  }
-
-  /** The gear the current project's row carries instead of a checkmark.
-   *
-   *  Picking the project you are already in does nothing, so that row's click
-   *  target is spent: it opens the project's settings instead, which is also
-   *  where the row's own name, color and glyph are edited. The gear is a plain
-   *  affordance rather than a nested button -- the whole row is the target, so
-   *  a button inside it would only add a second thing to aim at. */
-  function settingsGear(): m.Vnode {
+  /** The pencil every switcher project row carries: opens that row's own
+   *  project settings, never the row it happens to render in the current
+   *  view. It stops propagation so it never also fires the row's own click
+   *  (switch to that project, or nothing on the one already mounted) -- the
+   *  same shape the tab list's kebab uses for the same reason. Revealed on
+   *  row hover via `group-hover:` rather than sitting there always, matching
+   *  that kebab too. Everything carries no pencil: it is not a project, and
+   *  has no settings to open. */
+  function switcherEditButton(project: ProjectInfo, onOpen: (project: ProjectInfo) => void): m.Vnode {
     return m(
-      "span",
-      { class: "flex shrink-0 items-center text-text-faint" },
-      m.trust(icon("settings", { size: 14, strokeWidth: 1.75 })),
+      "button",
+      {
+        type: "button",
+        class:
+          "flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-faint opacity-0 " +
+          "hover:bg-bg-hover hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100",
+        "aria-label": `Project settings for ${project.name}`,
+        ...hoverTooltipAttrs(`Project settings for ${project.name}`),
+        onclick: (event: MouseEvent) => {
+          event.stopPropagation();
+          onOpen(project);
+        },
+      },
+      m.trust(icon("edit", { size: 14, strokeWidth: 1.75 })),
     );
   }
 
@@ -872,8 +904,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       anchor,
       placement: "below",
       role: "menu",
-      // Sized to the header it hangs off, so the two read as one control.
-      width: anchor.width,
+      // Its own width rather than the header's: a project name plus the edit
+      // pencil next to it need more room than the rail itself provides, which
+      // the header's own width would otherwise clamp this to (down to 37px
+      // collapsed).
+      width: SWITCHER_MENU_WIDTH,
       children: [
         attrs.projects.map((project) => {
           const isCurrent = project.project_id === attrs.activeViewId;
@@ -881,14 +916,16 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             iconMarkup: viewIdentityMarkup(project, MENU_GLYPH_SIZE),
             label: project.name,
             isActive: isCurrent,
-            trailing: isCurrent ? settingsGear() : null,
-            tooltip: isCurrent ? `Project settings for ${project.name}` : null,
+            trailing: switcherEditButton(project, (target) =>
+              pick(() => {
+                settingsProject = target;
+              }),
+            ),
             onclick: () =>
               pick(() => {
-                if (isCurrent) {
-                  settingsProject = project;
-                  return;
-                }
+                // Already there: the row's click target is spent, and its
+                // pencil (not this) is what opens its settings now.
+                if (isCurrent) return;
                 attrs.onSelectView(project.project_id);
               }),
           });
@@ -910,7 +947,6 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           iconMarkup: compositeSquiggleMarkup(MENU_GLYPH_SIZE),
           label: EVERYTHING_VIEW_NAME,
           isActive: isEverythingActive,
-          trailing: isEverythingActive ? checkMark() : null,
           onclick: () => pick(() => attrs.onSelectView(EVERYTHING_VIEW_ID)),
         }),
       ],
@@ -998,11 +1034,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     });
   }
 
-  /** The settings modal, opened from the header's context menu. It re-lists on
-   *  the way back out rather than patching the cached registry: the server
-   *  normalizes the name, and a delete has to be reconciled against the mounted
-   *  view anyway -- which the workspace does off the `project_deleted`
-   *  broadcast, the same path another client's delete takes. */
+  /** The settings modal, opened from the header's context menu or from any
+   *  switcher row's edit pencil. It re-lists on the way back out rather than
+   *  patching the cached registry: the server normalizes the name, and a
+   *  delete has to be reconciled against the mounted view anyway -- which the
+   *  workspace does off the `project_deleted` broadcast, the same path
+   *  another client's delete takes. */
   function settingsModal(attrs: SidebarAttrs): m.Children {
     const project = settingsProject;
     if (project === null) return null;
@@ -1021,17 +1058,6 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         attrs.onProjectsChanged();
       },
       onCancel: close,
-      // The gear only appears on the row for the view already mounted, so the
-      // rail's own rows are that project's contents -- no second fetch, and no
-      // way for the two lists to disagree.
-      contents: attrs.rows.map((row) => ({
-        ref: row.ref,
-        kind: row.kind,
-        label: row.label,
-        isOpen: row.isOpen,
-      })),
-      onRemoveContent: (ref: string) => attrs.onRemoveContentFromView(ref),
-      onRenameContent: (ref: string, title: string) => attrs.onRenameMember(ref, title),
     });
   }
 
@@ -1104,9 +1130,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             },
             [
               header(project, viewName),
-              // Collapsed, the rail is only the view's glyph and the shortcut
-              // icons: no search, no tab list, no All apps, no dividers.
-              expanded ? m("div", { class: `${DIVIDER_CLASS} mb-1` }) : null,
+              // Always rendered, unlike the rest of the expanded-only chrome
+              // below: it sits between rows both rail states share (the
+              // header and the shortcuts), so removing it collapsed rather
+              // than just hiding its line would shift those shared rows down
+              // by its height the instant the rail expands.
+              m("div", { class: `${DIVIDER_CLASS} mb-1 ` + (expanded ? "border-border" : "border-transparent") }),
               shortcuts(attrs, shortcutApps),
               expanded ? allAppsRow() : null,
               expanded ? m("div", { class: `${DIVIDER_CLASS} mt-1` }) : null,

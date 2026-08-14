@@ -184,6 +184,22 @@ describe("AllAppsPicker", () => {
     expect(texts(tree)).toContain("Unpinned");
   });
 
+  it("clips a long project name in the pinned heading instead of wrapping it", () => {
+    // The popover is a fixed 240px card, and a project name is user-chosen
+    // free text -- nothing bounds its length. Clipped via truncate/title
+    // rather than a hand-picked character count, so it still tracks actual
+    // rendered width rather than an arbitrary string length.
+    appState.apps = APPS;
+    const longName = "A Very Long Project Name That Would Otherwise Wrap Onto Several Lines";
+    const tree = render({ projectName: longName, pinnedAppNames: ["docs"] });
+    const headingText = `Pinned in ${longName}`;
+    expect(texts(tree)).toContain(headingText);
+    const heading = flatten(tree).find(
+      (n): n is VnodeLike => typeof n === "object" && n !== null && (n as VnodeLike).attrs?.title === headingText,
+    );
+    expect(heading?.attrs?.className).toContain("truncate");
+  });
+
   it("renders one flat list with no toggles under Everything", () => {
     // Everything pins nothing: every app on the machine is in its tab list
     // already, so there is no membership here to add or remove.

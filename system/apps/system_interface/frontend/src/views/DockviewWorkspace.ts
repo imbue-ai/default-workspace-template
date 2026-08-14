@@ -794,8 +794,8 @@ function tabDestroyEntry(panelId: string, params: PanelParams): TabMenuItem | nu
   // project, and it cannot stop the program answering on the port.
   if (serviceName !== undefined && memberKindFromRef(memberRef("app", serviceName)) === "app") {
     return {
-      label: "Unregister app",
-      iconName: "close",
+      label: `Quit ${serviceName}`,
+      iconName: "power",
       isDestructive: true,
       run: () => {
         appDeregisterName = serviceName;
@@ -1035,7 +1035,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
         // A minus, not an "x": this puts the tab away and leaves the object
         // running and filed wherever it was filed. Ending it for good is the
         // menu's job, and wears the "x".
-        createTabActionButton("Close tab", "minus", disposables, () => {
+        createTabActionButton("Hide tab", "minus", disposables, () => {
           parameters.api.close();
         }),
       );
@@ -1886,12 +1886,12 @@ export function setAppPinnedInView(app: AppEntry, isPinned: boolean): void {
 }
 
 /**
- * Stop showing one ref in the mounted view, reporting failure to the caller.
+ * Stop showing one ref in the mounted view, resolving or rejecting with why.
  *
- * The awaitable half of ``removeMemberRow``. The rail's row menu removes on
- * click and can only shout about a failure, but the project settings dialog
- * stages its removals and applies them on Save, so it needs the rejection to
- * put next to its own Save button rather than behind an alert.
+ * Kept apart from ``removeMemberRefWithAlert`` only so that shape has
+ * something awaitable to wrap: every current caller fires and forgets through
+ * it, catching the rejection into an alert rather than needing the promise
+ * itself.
  */
 export async function removeMemberRefFromView(ref: string): Promise<void> {
   const viewId = mountedViewId;
@@ -3932,21 +3932,21 @@ async function handleMove(args: Record<string, unknown>, requesterAgentId: strin
 /**
  * Name an object, machine-wide.
  *
- * The one rename path: the agent-facing ``layout_op``, the tab's own
- * double-click editor and the project settings dialog all land here. The name
- * goes to the machine's title store keyed by the object's ref (see
- * models/MemberTitles), not into this view's saved layout, so every view
- * showing the object says the same thing and an object with no panel anywhere
- * -- backgrounded, or filed in no project at all -- can be named too. Nothing
- * is written to ``panelParams``: ``params.title`` stays the *derived* name,
- * which is what the tab falls back to if the chosen one is ever cleared.
+ * The one rename path: the agent-facing ``layout_op`` and the tab's own
+ * double-click editor both land here. The name goes to the machine's title
+ * store keyed by the object's ref (see models/MemberTitles), not into this
+ * view's saved layout, so every view showing the object says the same thing
+ * and an object with no panel anywhere -- backgrounded, or filed in no project
+ * at all -- can be named too. Nothing is written to ``panelParams``:
+ * ``params.title`` stays the *derived* name, which is what the tab falls back
+ * to if the chosen one is ever cleared.
  *
  * The tab strip is repainted here rather than waiting for the broadcast that
  * follows, so the tab the user just typed into settles immediately; the
  * broadcast repaints every other client (and this one again, harmlessly).
- * Throws with the server's detail when the rename is refused, which is why the
- * settings dialog -- the one caller with somewhere to put a message -- awaits
- * it.
+ * Throws with the server's detail when the rename is refused: both callers
+ * await it and report the rejection their own way -- an alert on the tab
+ * editor, a console warning on the agent-facing op.
  */
 export async function renameMemberRef(ref: string, title: string): Promise<void> {
   await setMemberTitle(ref, title);
