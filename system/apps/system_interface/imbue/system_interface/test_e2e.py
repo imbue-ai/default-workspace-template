@@ -940,12 +940,21 @@ def _collapse_rail(page: Page) -> None:
     Driving the rail leaves the pointer resting on it, and an expanded rail is a
     240px panel floating OVER the dock rather than beside it -- so a test that
     just switched views and then reaches for a tab is reaching through it.
-    Moving the pointer away is what a user does without thinking about it. The
-    wait is for the rows the rail only draws while expanded, because folding up
-    is a 150ms transition rather than an instant.
+    Moving the pointer away is what a user does without thinking about it.
+
+    The caller has usually just triggered a view switch, which by itself
+    forces the rail closed now (Sidebar.ts tracks the last view it rendered
+    for and collapses on a change, not only on mouseleave) -- a completed
+    switch rebuilds the rail's own DOM subtree, and a pointer already resting
+    on it at that moment gets a fresh native mouseenter with no mouseleave to
+    follow, so mouseleave alone could never be trusted to fire again. The
+    ``mouse.move`` here still matters for tests that expand the rail WITHOUT
+    switching (e.g. just opening a menu), and the generous timeout matches
+    this file's usual margin for a wait that can land behind a server
+    round-trip, in case one is still in flight.
     """
     page.mouse.move(600, 400)
-    expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
+    expect(page.locator(".project-rail-search")).to_have_count(0, timeout=15000)
 
 
 @pytest.mark.timeout(120, func_only=False)
