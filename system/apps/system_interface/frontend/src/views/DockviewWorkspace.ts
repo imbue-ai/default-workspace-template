@@ -2835,6 +2835,14 @@ function initializeDockview(parentElement: HTMLElement): void {
  *  services have not registered yet, or name an app since removed.
  *  ``system_interface`` is refused outright: iframing the shell into itself
  *  recurses.
+ *
+ *  The open itself goes through ``addPanelForRef`` as a ``service:<name>`` ref,
+ *  the one place that owns service dedup + panelParams bookkeeping + addPanel,
+ *  so a deep link lands identically to the same app opened from the "+" menu or
+ *  by an agent. One consequence is deliberate and worth knowing: ``terminal``
+ *  takes that ref's "New terminal" path, so it allocates a real tmux session
+ *  (rather than mounting an arg-less ttyd origin) and, like the button, adds a
+ *  fresh tab each time instead of deduping.
  */
 async function consumeOpenAppDeepLink(): Promise<void> {
   const name = openAppNameFromSearch(window.location.search);
@@ -2846,14 +2854,11 @@ async function consumeOpenAppDeepLink(): Promise<void> {
   );
   if (name === "system_interface") return;
   await whenAppsLoaded();
+  // Guard before building the ref: an unregistered name has no origin label, so
+  // ``addPanelForRef`` would mount an unroutable bare-name origin rather than
+  // no-op.
   if (!getApps().some((app) => app.name === name)) return;
-  const existingPanelId = findIframePanelIdForService(name);
-  if (existingPanelId !== null && dockview) {
-    const existing = dockview.panels.find((p) => p.id === existingPanelId);
-    if (existing) dockview.setActivePanel(existing);
-  } else {
-    openIframeTab(deriveServiceOrigin(labelForService(name)), name, "iframe", name);
-  }
+  addPanelForRef(`service:${name}`, getPrimaryAgentId(), {});
   m.redraw();
 }
 
