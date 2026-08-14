@@ -958,7 +958,7 @@ def test_permission_request_survives_output_truncation() -> None:
     output = _make_permission_request_output(_LONG_RATIONALE)
     assert len(output) > 2000
     lines = [_make_tool_result_line("uuid-perm", "2026-01-01T00:00:00Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     request = events[0]["permission_request"]
     assert request["request_id"] == _REQUEST_ID
     assert request["rationale"] == _LONG_RATIONALE
@@ -974,7 +974,7 @@ def test_permission_request_preserved_when_not_last_on_stdout() -> None:
     ends at the object, so the card's first-`{` fallback parses."""
     output = _make_permission_request_output(_LONG_RATIONALE) + "\nrequest submitted, waiting for the user\n"
     lines = [_make_tool_result_line("uuid-tail", "2026-01-01T00:00:01Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert events[0]["permission_request"]["rationale"] == _LONG_RATIONALE
     assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
 
@@ -985,7 +985,7 @@ def test_permission_request_found_past_earlier_json_in_output() -> None:
     and the preserved output leads with the request, not the earlier JSON."""
     output = '{"rules": []}\n' + _make_permission_request_output(_LONG_RATIONALE)
     lines = [_make_tool_result_line("uuid-pre", "2026-01-01T00:00:02Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert events[0]["permission_request"]["rationale"] == _LONG_RATIONALE
     assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
 
@@ -999,7 +999,7 @@ def test_short_permission_request_output_is_attached_and_left_intact() -> None:
         '"payload":{"path":"/tmp/report","access":"WRITE"}}'
     )
     lines = [_make_tool_result_line("uuid-short", "2026-01-01T00:00:03Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert events[0]["output"] == output
     assert events[0]["permission_request"]["payload"]["access"] == "WRITE"
 
@@ -1010,7 +1010,7 @@ def test_tk_decoration_survives_alongside_preserved_permission_request() -> None
     transitions and the object stays last and alone for the card."""
     output = "Updated s1 -> closed\n" + _make_permission_request_output(_LONG_RATIONALE)
     lines = [_make_tool_result_line("uuid-both", "2026-01-01T00:00:04Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert "Updated s1 -> closed" in events[0]["output"]
     assert _preserved_request_json(events[0]["output"])["request_id"] == _REQUEST_ID
 
@@ -1022,7 +1022,7 @@ def test_ordinary_large_output_is_unaffected_by_request_preservation() -> None:
     output = json.dumps({"items": [{"id": index, "name": "x" * 50} for index in range(100)]})
     assert len(output) > 2000
     lines = [_make_tool_result_line("uuid-big", "2026-01-01T00:00:05Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert "permission_request" not in events[0]
     assert events[0]["output"].endswith("...")
     assert len(events[0]["output"]) <= 2003
@@ -1034,7 +1034,7 @@ def test_unrelated_request_id_json_is_not_a_permission_request() -> None:
     grows a permission-request field nor dodges the output limit."""
     output = json.dumps({"request_id": "abc123", "status": "ok", "data": "y" * 3000})
     lines = [_make_tool_result_line("uuid-other", "2026-01-01T00:00:06Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert "permission_request" not in events[0]
     assert events[0]["output"].endswith("...")
 
@@ -1045,7 +1045,7 @@ def test_oversized_permission_request_falls_back_to_truncation() -> None:
     pathological response cannot widen the output limit without bound."""
     output = _make_permission_request_output("y" * 9000)
     lines = [_make_tool_result_line("uuid-huge", "2026-01-01T00:00:07Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert "permission_request" not in events[0]
     assert events[0]["output"].endswith("...")
     assert len(events[0]["output"]) <= 2003
@@ -1060,7 +1060,7 @@ def test_permission_request_probe_loop_is_capped() -> None:
     attached -- even though a well-formed request sits beyond the wall."""
     output = "{" * (_MAX_PERMISSION_REQUEST_PROBES * 3) + _make_permission_request_output("hidden beyond the cap")
     lines = [_make_tool_result_line("uuid-wall", "2026-01-01T00:00:08Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert "permission_request" not in events[0]
     assert events[0]["output"].endswith("...")
     assert len(events[0]["output"]) <= 2003
@@ -1072,7 +1072,7 @@ def test_permission_request_within_probe_cap_still_parses() -> None:
     is found and preserved just the same."""
     output = "{" * (_MAX_PERMISSION_REQUEST_PROBES - 10) + _make_permission_request_output(_LONG_RATIONALE)
     lines = [_make_tool_result_line("uuid-under", "2026-01-01T00:00:09Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert events[0]["permission_request"]["request_id"] == _REQUEST_ID
     assert events[0]["permission_request"]["rationale"] == _LONG_RATIONALE
 
@@ -1084,6 +1084,6 @@ def test_deeply_nested_json_probe_does_not_crash_parsing() -> None:
     ordinary output."""
     output = '{"a": ' * 100_000 + '"request_id"'
     lines = [_make_tool_result_line("uuid-deep", "2026-01-01T00:00:10Z", "toolu_1", output)]
-    events = parse_session_lines(lines)
+    events = parse_lines(lines)
     assert "permission_request" not in events[0]
     assert events[0]["output"].endswith("...")
