@@ -122,8 +122,9 @@ hang case's excerpt must not contain the crash case's `ModuleNotFoundError`.
 
 ### 2c. `down` verifies death and escalates (finding 14)
 
-`_teardown` sends SIGTERM and never checks. Reuse the machinery `refresh`
-already has: SIGTERM -> `_wait_process_gone` -> SIGKILL -> short wait. Only
+`_teardown` sends SIGTERM and never checks. Reuse `refresh`'s existing SIGTERM
++ `_wait_process_gone` wait, but where `refresh` aborts, escalate: SIGTERM ->
+`_wait_process_gone` -> SIGKILL -> short wait. Only
 delete the state dir once every recorded process group is confirmed gone; if
 one survives SIGKILL (unkillable D-state), print its pid, keep the state dir,
 and exit nonzero -- never report success while leaking a pinned port. `down` on
