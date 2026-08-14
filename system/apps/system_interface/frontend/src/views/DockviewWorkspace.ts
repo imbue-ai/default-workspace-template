@@ -37,7 +37,7 @@ import { icon } from "./icons";
 import type { IconName } from "./icons";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
-import { openAppNameFromSearch, searchWithoutOpenApp } from "./open-app-deeplink";
+import { openAppNameFromSearch } from "./open-app-deeplink";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
@@ -54,6 +54,7 @@ import {
   removeAgentLocally,
   removeAgentsUpdatedListener,
   reportClientState,
+  whenAppRegistered,
   whenAppsLoaded,
   type AgentsUpdatedListener,
   type LayoutOpEvent,
@@ -2828,36 +2829,45 @@ function initializeDockview(parentElement: HTMLElement): void {
 /** Open (or focus) the app tab a ``?open_app=<name>`` deep link asked for.
  *
  *  The desktop client's cross-workspace app selector lands on the shell with
- *  this parameter (via the ``/goto/<host-id>/`` cookie bridge). It is consumed
- *  exactly once: stripped from the address bar immediately so a reload (or a
- *  layout autosave of the URL-less kind) does not re-open the tab. Unknown or
- *  not-yet-registered names no-op -- the link may race a workspace whose
- *  services have not registered yet, or name an app since removed.
- *  ``system_interface`` is refused outright: iframing the shell into itself
- *  recurses.
+ *  this parameter (via the ``/goto/<host-id>/`` cookie bridge).
  *
- *  The open itself goes through ``addPanelForRef`` as a ``service:<name>`` ref,
- *  the one place that owns service dedup + panelParams bookkeeping + addPanel,
- *  so a deep link lands identically to the same app opened from the "+" menu or
- *  by an agent. One consequence is deliberate and worth knowing: ``terminal``
- *  takes that ref's "New terminal" path, so it allocates a real tmux session
- *  (rather than mounting an arg-less ttyd origin) and, like the button, adds a
- *  fresh tab each time instead of deduping.
+ *  The open goes through ``addPanelForRef`` as a ``service:<name>`` ref, the one
+ *  place that owns service dedup + panelParams bookkeeping + addPanel, so a deep
+ *  link lands identically to the same app opened from the "+" menu or by an
+ *  agent. One consequence is deliberate and worth knowing: ``terminal`` takes
+ *  that ref's "New terminal" path, so it allocates a real tmux session (rather
+ *  than mounting an arg-less ttyd origin) and, like the button, adds a fresh tab
+ *  each time instead of deduping.
+ *
+ *  A name that is not registered yet is waited on rather than dropped: on a cold
+ *  workspace the services come up staggered behind the shell, so the link
+ *  routinely arrives first. Only once the wait runs out is the name treated as
+ *  genuinely absent -- and then it is reported, because the user clicked an app
+ *  and is owed an answer either way. ``system_interface`` is refused up front:
+ *  it IS registered (the shell is a service like any other), so waiting on it
+ *  would succeed and then iframe the shell into itself.
+ *
+ *  The parameter is deliberately NOT stripped from the URL. Re-consuming it is
+ *  harmless -- ``addPanelForRef`` focuses the existing tab rather than stacking
+ *  a duplicate -- and leaving it is what makes a reload retry a link that
+ *  arrived too early. In the desktop client there is no address bar to clean
+ *  anyway: the shell renders inside the client's content iframe, and the client
+ *  holds the deep link itself for as long as that workspace stays displayed.
  */
 async function consumeOpenAppDeepLink(): Promise<void> {
   const name = openAppNameFromSearch(window.location.search);
   if (name === null) return;
-  window.history.replaceState(
-    window.history.state,
-    "",
-    window.location.pathname + searchWithoutOpenApp(window.location.search) + window.location.hash,
-  );
-  if (name === "system_interface") return;
-  await whenAppsLoaded();
-  // Guard before building the ref: an unregistered name has no origin label, so
-  // ``addPanelForRef`` would mount an unroutable bare-name origin rather than
-  // no-op.
-  if (!getApps().some((app) => app.name === name)) return;
+  if (name === "system_interface") {
+    alert(`Cannot open "${name}": it is the workspace interface itself, not an app tab.`);
+    return;
+  }
+  if (!(await whenAppRegistered(name))) {
+    alert(`Cannot open "${name}": no app by that name is registered in this workspace.`);
+    return;
+  }
+  // A null return means the dockview went away while we waited (the user
+  // navigated off the shell). Silent by design: there is no longer anyone
+  // looking at this workspace to report to.
   addPanelForRef(`service:${name}`, getPrimaryAgentId(), {});
   m.redraw();
 }

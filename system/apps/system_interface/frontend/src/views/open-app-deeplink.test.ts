@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openAppNameFromSearch, searchWithoutOpenApp } from "./open-app-deeplink";
+import { openAppNameFromSearch } from "./open-app-deeplink";
 
 describe("openAppNameFromSearch", () => {
   it("extracts the requested app name", () => {
@@ -15,14 +15,8 @@ describe("openAppNameFromSearch", () => {
     expect(openAppNameFromSearch("?other=1")).toBeNull();
     expect(openAppNameFromSearch("?open_app=")).toBeNull();
   });
-});
 
-describe("searchWithoutOpenApp", () => {
-  it("strips only the open_app parameter", () => {
-    expect(searchWithoutOpenApp("?open_app=web&layout=dev")).toBe("?layout=dev");
-  });
-
-  it("returns an empty string when nothing else remains", () => {
-    expect(searchWithoutOpenApp("?open_app=web")).toBe("");
+  it("reads the name alongside other parameters", () => {
+    expect(openAppNameFromSearch("?layout=dev&open_app=web")).toBe("web");
   });
 });
