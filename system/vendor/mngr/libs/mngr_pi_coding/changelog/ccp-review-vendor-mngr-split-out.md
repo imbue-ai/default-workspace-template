@@ -80,3 +80,5 @@ a substantive tool ran with no in-progress step; an open-steps carryover reminde
 turn's system prompt in `before_agent_start`; and an open-steps stop nudge is written to stderr on
 `agent_settled`. Step state is read from the vendored `ticket` binary (invoked via `bash`, so it works
 on a noexec mount). See `system/scripts/POLICY_HOOKS.md`.
+
+The lifecycle extension now writes `model_state.json` instead of `minds_model_state.json`, matching the rename on the claude side: the plugin has no reason to be named for one of its clients.

@@ -42,3 +42,5 @@ activity-event format have a single source of truth. The Minds workspace stop bu
 after a native (chord) interrupt: claude fires no hook when the user interrupts a turn, so the
 `active` marker is otherwise stranded and the agent keeps reporting RUNNING for ~60s; clearing it
 drops the activity indicator immediately and the emitted event pokes `mngr observe` to re-probe.
+
+Renamed the agent's live model-state file from `minds_model_state.json` to `model_state.json`. The plugin has no reason to be aware of Minds -- Minds is one client of this file, not what it is for -- and the name is now the plain description of its contents. The pi lifecycle extension's copy is renamed to match. Agents created before this write the old name until their next model change, so a client reading the new name sees no selection until then; nothing else depends on it.
