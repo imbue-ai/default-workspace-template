@@ -68,6 +68,9 @@ def raise_as_http(exc: Exception) -> NoReturn:
             detail={
                 "code": "email_not_verified",
                 "email": exc.email,
+                # Whether the refusal itself sent the verification email
+                # (null when no send was attempted in this context).
+                "sent": exc.is_verification_email_sent,
                 "message": str(exc),
             },
         ) from exc

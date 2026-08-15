@@ -489,7 +489,6 @@ class FakeSuperTokensBackend:
             "update_email_or_password": self.update_email_or_password,
             "create_email_verification_token": self.create_email_verification_token,
             "verify_email_using_token": self.verify_email_using_token,
-            "get_provider": self.get_provider,
             "get_accounts_oauth_provider": self.get_accounts_oauth_provider,
             "manually_create_or_update_user": self.manually_create_or_update_user,
             "_sdk_create_browser_session": self.sdk_create_browser_session,
@@ -531,7 +530,7 @@ class FakeSuperTokensBackend:
         display_name: str | None = "OAuth User",
         is_verified: bool = True,
     ) -> None:
-        """Register an OAuth provider so ``get_provider`` returns it."""
+        """Register an OAuth provider (returned by ``get_accounts_oauth_provider``; tests reach it via ``registered_providers``)."""
         provider = FakeProvider()
         provider.provider_id = provider_id
         provider.email = email
@@ -876,17 +875,6 @@ class FakeSuperTokensBackend:
         return VerifyEmailUsingTokenOkResult(
             user=EmailVerificationUser(recipe_user_id=RecipeUserId(user_id), email=email),
         )
-
-    def get_provider(
-        self,
-        *,
-        tenant_id: str,
-        third_party_id: str,
-        client_type: str | None = None,
-        user_context: dict[str, Any] | None = None,
-    ) -> FakeProvider | None:
-        del tenant_id, client_type, user_context
-        return self.registered_providers.get(third_party_id)
 
     def get_accounts_oauth_provider(self) -> FakeProvider | None:
         """Stand-in for the accounts surface's env-driven Google provider: configured iff 'google' is registered."""
@@ -3233,6 +3221,20 @@ def _make_pool_quota_web_test_client(
     st_backend = make_fake_supertokens_backend()
     st_backend.install_on_app_module(app_mod, monkeypatch)
     return client, backend, entitlements_store, litellm, st_backend
+
+
+def _sign_in_browser_user(client: TestClient, st_backend: FakeSuperTokensBackend, email: str) -> str:
+    """Sign up an email/password user (unverified) and plant its cookie-based browser session on ``client``.
+
+    Returns the new user's SuperTokens user id; call
+    ``st_backend.mark_email_verified`` on it when the test needs a verified
+    account.
+    """
+    signup = st_backend.sign_up(tenant_id="public", email=email, password="pw-123456")
+    assert isinstance(signup, EPSignUpOkResult)
+    session = st_backend.sdk_create_browser_session(None, signup.user.id)
+    client.cookies.set(FakeSuperTokensBackend.BROWSER_SESSION_COOKIE, session.access_token)
+    return signup.user.id
 
 
 def _admin_key_headers() -> dict[str, str]:

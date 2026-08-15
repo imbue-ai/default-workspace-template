@@ -369,6 +369,7 @@ layers = [
     "imbue.mngr_imbue_cloud.slices",
     "imbue.mngr_imbue_cloud.connector",
     "imbue.mngr_imbue_cloud.config",
+    "imbue.mngr_imbue_cloud.interfaces",
     "imbue.mngr_imbue_cloud.data_types",
     "imbue.mngr_imbue_cloud.errors",
     "imbue.mngr_imbue_cloud.primitives",

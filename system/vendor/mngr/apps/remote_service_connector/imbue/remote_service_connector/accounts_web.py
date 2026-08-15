@@ -1057,9 +1057,6 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
             provider_id="google",
             callback_url=redirect_uri,
             query_params=dict(request.query_params),
-            # The cookie session below is this flow's session; minting bearer
-            # tokens too would orphan a session in the core.
-            is_bearer_session_minted=False,
         )
         if auth_result.status == ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS:
             return _login_redirect(next_path, "password_account")

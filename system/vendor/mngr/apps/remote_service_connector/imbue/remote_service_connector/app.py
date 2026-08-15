@@ -46,6 +46,7 @@ from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
+from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth_proxy import EnsureAsgiRootPathMiddleware
@@ -187,6 +188,10 @@ def fastapi_app() -> FastAPI:
         # SuperTokens middleware has attached its SameSite=None session cookies,
         # appending the CHIPS Partitioned attribute the SDK cannot emit itself.
         web_app.add_middleware(PartitionedCookieMiddleware)
+    # Outermost of all: one structured access-log line per request (client IP,
+    # method, path, status, duration -- no query strings or bodies), so abuse
+    # investigations have a per-request record in the Modal function logs.
+    web_app.add_middleware(RequestLoggingMiddleware)
     return web_app
 
 

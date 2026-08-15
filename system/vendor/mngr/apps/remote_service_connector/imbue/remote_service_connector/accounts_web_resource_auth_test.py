@@ -10,29 +10,18 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from starlette.testclient import TestClient
-from supertokens_python.recipe.emailpassword.interfaces import SignUpOkResult as EPSignUpOkResult
 
-from imbue.remote_service_connector.testing import FakeSuperTokensBackend
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
 from imbue.remote_service_connector.testing import _make_pool_quota_web_test_client
+from imbue.remote_service_connector.testing import _sign_in_browser_user
 from imbue.remote_service_connector.testing import _user_headers
 
 _BROWSER_EMAIL = "webuser@example.com"
 
 
-def _sign_in_browser(client: TestClient, st_backend: FakeSuperTokensBackend) -> str:
-    """Sign up + plant a cookie-based browser session on the client; returns the user id."""
-    signup = st_backend.sign_up(tenant_id="public", email=_BROWSER_EMAIL, password="pw-123456")
-    assert isinstance(signup, EPSignUpOkResult)
-    session = st_backend.sdk_create_browser_session(None, signup.user.id)
-    client.cookies.set(FakeSuperTokensBackend.BROWSER_SESSION_COOKIE, session.access_token)
-    return signup.user.id
-
-
 def test_hosts_list_accepts_the_browser_session_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend, _entitlements, _litellm, st_backend = _make_pool_quota_web_test_client(monkeypatch)
-    _sign_in_browser(client, st_backend)
+    _sign_in_browser_user(client, st_backend, _BROWSER_EMAIL)
 
     resp = client.get("/hosts")
 
@@ -54,7 +43,7 @@ def test_bearer_header_still_wins_over_the_cookie(monkeypatch: pytest.MonkeyPatc
     # to the bearer stub user, so it only appears if the bearer identity won
     # (the cookie user would see an empty list).
     client, backend, _entitlements, _litellm, st_backend = _make_pool_quota_web_test_client(monkeypatch)
-    _sign_in_browser(client, st_backend)
+    _sign_in_browser_user(client, st_backend, _BROWSER_EMAIL)
     lease_db_id = UUID("00000000-0000-0000-0000-0000000000ee")
     backend.add_leased_host(host_id=lease_db_id, version="v0.1.0", leased_to_user=_USER_STUB_USER_ID_PREFIX)
 
@@ -66,7 +55,7 @@ def test_bearer_header_still_wins_over_the_cookie(monkeypatch: pytest.MonkeyPatc
 
 def test_cookie_authenticated_state_change_rejects_a_cross_site_origin(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend, _entitlements, _litellm, st_backend = _make_pool_quota_web_test_client(monkeypatch)
-    _sign_in_browser(client, st_backend)
+    _sign_in_browser_user(client, st_backend, _BROWSER_EMAIL)
 
     resp = client.post(
         "/sync/scrub-secrets",
@@ -79,7 +68,7 @@ def test_cookie_authenticated_state_change_rejects_a_cross_site_origin(monkeypat
 
 def test_cookie_authenticated_state_change_accepts_the_same_origin(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend, _entitlements, _litellm, st_backend = _make_pool_quota_web_test_client(monkeypatch)
-    _sign_in_browser(client, st_backend)
+    _sign_in_browser_user(client, st_backend, _BROWSER_EMAIL)
 
     resp = client.post(
         "/sync/scrub-secrets",
@@ -98,7 +87,10 @@ def test_claim_accepts_the_browser_session_cookie(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("MINDS_WEB_TEMPLATE_REPO", "github.com/imbue-ai/default-workspace-template")
     monkeypatch.setenv("MINDS_WEB_TEMPLATE_REF", "mngr/test-pin")
     client, backend, _entitlements, _litellm, st_backend = _make_pool_quota_web_test_client(monkeypatch)
-    _sign_in_browser(client, st_backend)
+    browser_user_id = _sign_in_browser_user(client, st_backend, _BROWSER_EMAIL)
+    # Workspace creation requires a verified email (the unverified refusal has
+    # its own tests in hosts_verified_email_test.py).
+    st_backend.mark_email_verified(browser_user_id)
     backend.add_available_host(
         host_id=UUID("00000000-0000-0000-0000-0000000000cf"),
         version="v0.1.0",
@@ -122,7 +114,7 @@ def test_claim_accepts_the_browser_session_cookie(monkeypatch: pytest.MonkeyPatc
 
 def test_sync_records_round_trip_via_the_browser_session(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend, _entitlements, _litellm, st_backend = _make_pool_quota_web_test_client(monkeypatch)
-    _sign_in_browser(client, st_backend)
+    _sign_in_browser_user(client, st_backend, _BROWSER_EMAIL)
     host_id = "host-" + "b" * 32
 
     put_resp = client.put(

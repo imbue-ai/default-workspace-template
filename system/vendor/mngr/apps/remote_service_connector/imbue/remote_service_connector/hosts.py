@@ -30,6 +30,7 @@ from pydantic import Field
 from pydantic import field_validator
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
+import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.relays as relays_module
 import imbue.remote_service_connector.shares as shares_module
@@ -589,9 +590,14 @@ def lease_host(request: Request, body: LeaseHostRequest) -> dict[str, object]:
     leases so two simultaneous requests cannot both squeeze past the count
     check. Stopped workspaces still hold their lease (and their slice), so
     they count against the quota too.
+
+    Requires a verified email (spam/abuse mitigation): an unverified account
+    gets the structured ``email_not_verified`` 403, and the refusal itself
+    sends the verification email (under the server-side cooldown).
     """
     with handle_endpoint_errors():
         user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
+        auth_proxy_module.require_verified_email_for_remote_workspace(user, full_user_id)
         entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         return _lease_pool_host(user, entitlements, body).model_dump()
 
@@ -1589,10 +1595,13 @@ def claim_host(request: Request, body: ClaimHostRequest) -> dict[str, object]:
 
     A failure after the lease releases it (slice teardown) before the error
     propagates, so a retry starts clean. Refused with 503 when the tier has
-    no pinned web template configured.
+    no pinned web template configured. Like ``/hosts/lease``, requires a
+    verified email: an unverified account gets the structured
+    ``email_not_verified`` 403 and the refusal sends the verification email.
     """
     with handle_endpoint_errors():
         user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
+        auth_proxy_module.require_verified_email_for_remote_workspace(user, full_user_id)
         entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         pinned_attributes = _web_claim_pinned_attributes()
         if pinned_attributes is None:

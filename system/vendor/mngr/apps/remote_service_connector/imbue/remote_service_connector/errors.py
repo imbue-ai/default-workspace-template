@@ -176,19 +176,29 @@ class R2BucketActiveWorkspaceError(RuntimeError):
 
 
 class EmailNotVerifiedError(PermissionError):
-    """Raised when an action that authorizes by email ownership is attempted with an unverified email.
+    """Raised when an action that requires a verified email is attempted without one.
 
     Mapped to a structured 403 (``code: email_not_verified``) so clients can
-    respond with a contextual "verify your email" prompt. Only raised by the
-    ``require_verified_email`` guard -- most endpoints accept unverified
-    accounts.
+    respond with a contextual "verify your email" prompt. Raised by the
+    ``require_verified_email`` guard and the remote-workspace-creation gate --
+    most endpoints accept unverified accounts.
+
+    ``is_verification_email_sent`` reports whether the refusal itself sent the
+    verification email (the workspace-creation gate does, server-side); None
+    means no send was attempted (the guard-only contexts, where clients drive
+    the send). A custom ``message`` overrides the generic prose.
     """
 
-    def __init__(self, email: str | None) -> None:
+    def __init__(self, email: str | None, is_verification_email_sent: bool | None, message: str | None) -> None:
         self.email = email
+        self.is_verification_email_sent = is_verification_email_sent
         super().__init__(
-            f"This action requires a verified email address ({email or 'no email on the account'}). "
-            "Verify it via the link we email you, then retry."
+            message
+            if message is not None
+            else (
+                f"This action requires a verified email address ({email or 'no email on the account'}). "
+                "Verify it via the link we email you, then retry."
+            )
         )
 
 
