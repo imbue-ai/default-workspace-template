@@ -477,7 +477,7 @@ def _send_message_endpoint(agent_id: str) -> Response:
     # is told: if none is watching, no UI needs a bubble.
     watcher = get_state().watchers.get(agent_info.id)
     queued_token = (
-        watcher.note_sent_message(send_message_request.message, datetime.now(timezone.utc).isoformat(), message_id)
+        watcher.note_sent_message(send_message_request.message, message_id)
         if watcher is not None
         else None
     )

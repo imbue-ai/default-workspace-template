@@ -66,7 +66,7 @@ class HarnessSpec(FrozenModel):
     # The model resolver class -- a true peer of watcher_class/tracker_class, so it
     # sits flat here and AgentManager calls ``.build(agent_info)`` on it the same way.
     resolver_class: type[HarnessModelResolver]
-    # Where the harness writes its uniform ``minds_model_state.json``, RELATIVE to the agent
+    # Where the harness writes its uniform ``model_state.json``, RELATIVE to the agent
     # state dir -- the one per-harness difference the shared live read/watch takes as data.
     # ``Path(".")`` = the state-dir root (claude, pi); codex writes under its CODEX_HOME.
     model_state_relative_path: Path
@@ -180,7 +180,7 @@ def build_interrupt_to_composer(agent_info: AgentInfo) -> InterruptToComposer:
 
 
 def get_model_state_path(harness: HarnessType, agent_state_dir: Path) -> Path:
-    """The agent's live ``minds_model_state.json`` -- the file the shared reader parses and
+    """The agent's live ``model_state.json`` -- the file the shared reader parses and
     the model watcher watches -- under its harness's registered relative directory.
 
     Takes the harness + state dir (not the whole ``AgentInfo``) so the hot recompute path

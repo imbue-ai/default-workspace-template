@@ -34,7 +34,7 @@
 //      model comes from launch args / pi settings, its effort from the thinking
 //      level), so the chat model bar cannot read the selection off disk. Instead
 //      this extension writes the harness-uniform
-//      `$MNGR_AGENT_STATE_DIR/minds_model_state.json`
+//      `$MNGR_AGENT_STATE_DIR/model_state.json`
 //      (`{model: "provider/id", effort, fast}` -- the schema every harness's
 //      writer emits; see docs/system/blueprint/live-model-state/ in the
 //      workspace template) from the pi-resolved values: on `session_start`
@@ -181,7 +181,7 @@ const SESSION_FILE_NAME = "pi_session_file";
 // written for the chat model bar to read before turn 1 and across switches.
 // Kept in sync with the shared reader on the system-interface side
 // (harnesses/model.py).
-const MODEL_STATE_NAME = "minds_model_state.json";
+const MODEL_STATE_NAME = "model_state.json";
 // mngr appends one JSON-encoded message string per line here; we inject each new
 // line into the live session via pi.sendUserMessage (no tmux keystrokes). Kept
 // in sync with _INBOX_FILE_NAME in plugin.py.
@@ -820,7 +820,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // Model/effort switching from the chat model bar: a single-slot mailbox (see
   // CONTROL_NAME). We apply the intent natively via pi.setModel /
   // pi.setThinkingLevel; applying fires model_select / thinking_level_select,
-  // whose handlers below write minds_model_state.json, so the bar reconciles
+  // whose handlers below write model_state.json, so the bar reconciles
   // from the live state file with no extra wiring.
   //
   // Model resolution needs ctx.modelRegistry, which pi hands to event handlers, not to this
@@ -913,7 +913,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       // Session file and model state land BEFORE the readiness sentinel: the
       // sentinel is the signal mngr's create wait reports readiness on, and
       // everything the chat surface needs at first paint (the model bar reads
-      // minds_model_state.json) must already be on disk when that signal fires.
+      // model_state.json) must already be on disk when that signal fires.
       recordSessionFile(ctx);
       recordModelState(ctx);
       mkdirSync(dirname(sentinelPath), { recursive: true });
@@ -929,7 +929,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
 
   // pi's model + thinking-level (effort) selectors. model_select fires on the
   // /model command, Ctrl+P cycling, or session restore; thinking_level_select on any
-  // thinking change. Recording both keeps minds_model_state.json live so the chat model
+  // thinking change. Recording both keeps model_state.json live so the chat model
   // bar reconciles to a terminal-side switch.
   pi.on("model_select", (event, ctx) => {
     safe("model_select", () => {

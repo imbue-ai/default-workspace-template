@@ -72,7 +72,9 @@ from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import read_model_identity
 from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.registry import build_tracker
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
@@ -299,6 +301,24 @@ def _make_apps_file_handler(
     return handler
 
 
+def _assert_special_kinds_declared(harness: HarnessType, events: list[dict[str, Any]]) -> None:
+    """Fail fast when a harness emits a ``special`` kind it never declared.
+
+    ``HarnessSpec.special_kinds`` is the harness's statement of which turn markers its
+    parser can produce; ``events.py`` calls an undeclared kind a bug. This is the one
+    funnel every harness's events pass through, so checking here is what makes that
+    statement enforced rather than documentation. Cheap: only ``special`` events are
+    looked at, and the declaration is a frozenset.
+    """
+    declared = get_harness_spec(harness).special_kinds
+    for event in events:
+        if event.get("type") != SPECIAL_EVENT_TYPE:
+            continue
+        kind = event.get("kind")
+        if kind not in {k.value for k in declared}:
+            raise AssertionError(f"{harness.value} emitted undeclared special kind {kind!r} (declared: {sorted(k.value for k in declared)})")
+
+
 class AgentManager:
     """Manages agent lifecycle detection, app-registry watching, and agent creation.
 
@@ -375,7 +395,7 @@ class AgentManager:
     # the chip before the daemon reconnects; only with neither populated does the bar go logo-only.
     _codex_model_options_by_agent: dict[str, tuple[ModelOption, ...]]
     # The last computed model choice per agent, and the filesystem watcher that
-    # re-derives it when the agent's minds_model_state.json changes. The live read is
+    # re-derives it when the agent's model_state.json changes. The live read is
     # harness-neutral (the shared reader + the harness's registered state-file path), so
     # there is no per-agent resolver to cache -- the switch endpoint builds one inline.
     # None = the harness has recorded no model yet -> the bar renders logo-only.
@@ -1601,7 +1621,7 @@ class AgentManager:
         """Watch the agent's live model-state file once its state dir exists.
 
         The live read is harness-neutral -- the shared reader over the harness's
-        registered ``minds_model_state.json`` -- so there is nothing to build per agent;
+        registered ``model_state.json`` -- so there is nothing to build per agent;
         this just derives the current choice and, when the local state dir is present,
         starts the one watch that drives every later recompute. Idempotent (the watch is
         retried on later calls until the dir appears).
@@ -1649,7 +1669,7 @@ class AgentManager:
             harness_state = self._agents.get(agent_id)
         if harness_state is None:
             return
-        # The disk read (minds_model_state.json) stays outside the lock. Only harness +
+        # The disk read (model_state.json) stays outside the lock. Only harness +
         # state dir are needed -- not claude_config_dir, which would cost an env-file read.
         identity = read_model_identity(get_model_state_path(harness_state.harness, self._get_agent_state_dir(agent_id)))
         # The match SOURCE is per-agent for a dynamic harness (codex): its options come from the
@@ -1830,6 +1850,9 @@ class AgentManager:
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
+            agent_state = self._agents.get(agent_id)
+            if agent_state is not None:
+                _assert_special_kinds_declared(agent_state.harness, events)
             tracker = self._activity_tracker_by_agent.get(agent_id)
             if tracker is None or not tracker.observe(events):
                 return

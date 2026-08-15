@@ -165,7 +165,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
     # and reflected into the model-bar state file (:meth:`_reflect_effective_model`) so a framework
     # fallback shows in the bar rather than the selected model lying.
     _turn_state: dict[str, Any]
-    # The agent's uniform ``minds_model_state.json`` -- where the effective model is reflected.
+    # The agent's uniform ``model_state.json`` -- where the effective model is reflected.
     _model_state_path: Path
     # The shared watch loop: a recursive watchdog on the sessions dir plus the poll
     # safety net, invoking _emit_unsent once at start and on every wake. Replaces the
@@ -236,7 +236,11 @@ class CodexSessionWatcher(AgentSessionWatcher):
         re-scheduling on rotation). It calls ``_emit_unsent`` once at start -- to
         broadcast whatever already exists, since the agent may have run before the UI
         connected -- and again on every filesystem wake or poll timeout.
+
+        Idempotent: a second call would otherwise strand the first watcher's thread.
         """
+        if self._path_watcher is not None:
+            return
         # Watch CODEX_HOME (the parent of ``sessions/``) recursively so an append to whichever
         # rollout is live wakes the loop immediately, with the poll as the safety net. (The queue
         # is owned by the live ledger now, not tailed here, so there is no sidecar to watch.)
@@ -380,7 +384,7 @@ class CodexSessionWatcher(AgentSessionWatcher):
         return new_events
 
     def _reflect_effective_model(self, model: Any, effort: Any) -> None:
-        """Write the effective per-turn model into ``minds_model_state.json`` when it DIVERGES from
+        """Write the effective per-turn model into ``model_state.json`` when it DIVERGES from
         what the file already holds (§4b).
 
         The file is the harness-neutral model-bar read path; the ledger writes the SELECTED settings

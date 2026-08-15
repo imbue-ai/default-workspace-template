@@ -268,7 +268,7 @@ class _ClaudeWorld:
         """
         text = self.new_text()
         self.ledger.accepted.append(text)
-        token = self.watcher.note_sent_message(text, _iso_timestamp(self._tick()), self.new_token())
+        token = self.watcher.note_sent_message(text, self.new_token())
         assert token is not None, "claude's watcher always mints a Sending token"
         self._sending[token] = text
         assert text in _split_block(self.watcher.get_in_flight_block()), "a noted send must be in the Sending registry"
@@ -586,7 +586,7 @@ def _run_stop_with_in_flight_send(world: _ClaudeWorld) -> None:
     world.watcher.get_all_events()
 
     in_flight_text = world.new_text()
-    token = world.watcher.note_sent_message(in_flight_text, _iso_timestamp(world._tick()), world.new_token())
+    token = world.watcher.note_sent_message(in_flight_text, world.new_token())
     assert token is not None, "claude's watcher always mints a Sending token"
     world._sending[token] = in_flight_text
     sender = world.begin_inflight_send(in_flight_text)

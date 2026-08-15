@@ -141,11 +141,11 @@ from imbue.mngr_claude.stream_buffer import SnapshotDeltaReader
 
 _READY_SIGNAL_TIMEOUT_SECONDS: Final[float] = 10.0
 
-# The live model-state file the chat model bar reads, at the agent state dir
-# root. Seeded at provision from the launch settings; thereafter written by
-# the statusline script. Kept in sync with claude_status_line.sh (the
-# workspace-side writer) and the system interface's harness registry.
-_MODEL_STATE_FILE_NAME: Final[str] = "minds_model_state.json"
+# The agent's live model selection, at the agent state dir root, for any client
+# that wants to show or reconcile it. Seeded at provision from the launch
+# settings; thereafter written by the statusline script. Kept in sync with
+# claude_status_line.sh, the workspace-side writer.
+_MODEL_STATE_FILE_NAME: Final[str] = "model_state.json"
 
 # Paths within ~/.claude/ to sync to the per-agent config dir.
 # Used by both get_files_for_deploy() and provision() to ensure consistency.
@@ -2253,7 +2253,7 @@ class ClaudeCoreAgent(
             provision_backgroun_script_thread.join(60.0)
 
     def _seed_model_state(self, host: OnlineHostInterface) -> None:
-        """Seed ``minds_model_state.json`` from the launch settings before first start.
+        """Seed ``model_state.json`` from the launch settings before first start.
 
         The statusline script (``claude_status_line.sh``) is the live writer of
         this file, but its first fire lands seconds after the session starts --

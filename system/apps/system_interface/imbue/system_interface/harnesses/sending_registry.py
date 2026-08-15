@@ -124,7 +124,7 @@ class SendingStateWatcherMixin:
         self._sending_registry = SendingRegistry.build()
         self._sending_lock = threading.Lock()
 
-    def note_sent_message(self, content: str, timestamp: str, message_id: str = "") -> str | None:
+    def note_sent_message(self, content: str, message_id: str = "") -> str | None:
         """Record a message the send endpoint is about to deliver as *Sending* (contract A1).
 
         Keyed by the sender's stable send-time id (or a minted one when the caller sent

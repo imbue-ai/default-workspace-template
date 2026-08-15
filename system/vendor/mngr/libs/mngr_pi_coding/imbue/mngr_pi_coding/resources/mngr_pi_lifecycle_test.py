@@ -132,7 +132,7 @@ def test_in_memory_session_does_not_clobber_recorded_file(tmp_path: Path) -> Non
     assert (state / "pi_session_file").read_text() == "/s/s1.jsonl"
 
 
-_MODEL_STATE = Path("minds_model_state.json")
+_MODEL_STATE = Path("model_state.json")
 
 
 def test_model_state_written_on_session_start(tmp_path: Path) -> None:
@@ -165,7 +165,7 @@ def test_sentinel_not_written_when_model_state_write_fails(tmp_path: Path) -> No
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     # A directory at the model-state path makes its writeFileSync fail (EISDIR).
-    (state_dir / "minds_model_state.json").mkdir()
+    (state_dir / "model_state.json").mkdir()
     state = _run_extension(
         tmp_path,
         [

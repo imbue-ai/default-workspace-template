@@ -69,8 +69,8 @@ class _MixinHost(SendingStateWatcherMixin):
 def test_mixin_tracks_and_resolves_sending_state() -> None:
     host = _MixinHost.build()
     # note_sent_message records and returns a token; the block reflects send order.
-    t1 = host.note_sent_message("first", "ts")
-    host.note_sent_message("second", "ts", message_id="explicit-id")
+    t1 = host.note_sent_message("first")
+    host.note_sent_message("second", message_id="explicit-id")
     assert t1 is not None
     assert host.get_in_flight_block() == "first\nsecond"
     # commit / retract each drop exactly the named message.
@@ -82,7 +82,7 @@ def test_mixin_tracks_and_resolves_sending_state() -> None:
 
 def test_mixin_uses_the_supplied_message_id_as_the_token() -> None:
     host = _MixinHost.build()
-    returned = host.note_sent_message("hi", "ts", message_id="stable-42")
+    returned = host.note_sent_message("hi", message_id="stable-42")
     assert returned == "stable-42"
 
 

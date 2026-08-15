@@ -1,7 +1,7 @@
 """A shared "watch these paths -> call this callback" utility.
 
 The model tracking needs to re-derive an agent's choice whenever its live
-``minds_model_state.json`` changes, without inventing a fourth bespoke
+``model_state.json`` changes, without inventing a fourth bespoke
 watchdog-Observer-plus-poll-loop block (the claude and codex session watchers each
 hand-roll their own; those are candidate future adopters of this util). This wraps
 the one shared primitive that already exists --

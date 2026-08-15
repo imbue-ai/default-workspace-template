@@ -5,7 +5,7 @@ The one place Claude's model bar behavior lives: the static catalog (the models
 :class:`ClaudeModelResolver` that applies a change by sending Claude Code the
 ``/model`` / ``/effort`` / ``/fast`` slash commands. The live READ is
 harness-neutral: Claude's statusline script writes the uniform
-``minds_model_state.json`` at the agent state-dir root, which the shared reader
+``model_state.json`` at the agent state-dir root, which the shared reader
 parses; this resolver never reads it.
 
 Claude Code exposes no stable programmatic model list, so the catalog is
@@ -14,7 +14,7 @@ maintained by hand to match the aliases ``claude --model`` accepts. Opus uses th
 mode is an Opus-only capability. The ``ultra`` effort (ultracode) is declared but
 hidden from the picker -- valid and matchable if a live read reports it, never
 offered. Each option's ``harness_reported_model_id`` is the suffix-free API id the
-statusline reports (``claude-fable-5``), matched against a live read; the ``[1m]``
+statusline reports (``claude-sonnet-5``), matched against a live read; the ``[1m]``
 context suffix is a launch alias, not a runtime id, so it never appears there.
 """
 
@@ -53,17 +53,10 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     options=(
         ModelOption(
             id="opus[1m]",
-            label="Opus 5 (1M)",
+            label="Opus 4.8 (1M)",
             efforts=_CLAUDE_EFFORTS,
             supports_fast=True,
             harness_reported_model_id="claude-opus-4-8",
-        ),
-        ModelOption(
-            id="fable",
-            label="Fable 5",
-            efforts=_CLAUDE_EFFORTS,
-            supports_fast=False,
-            harness_reported_model_id="claude-fable-5",
         ),
         ModelOption(
             id="sonnet",
@@ -88,7 +81,7 @@ CLAUDE_CATALOG: HarnessCatalog = HarnessCatalog(
     native_atomic_shoulder_tap_possible=True,
 )
 
-# The statusline writes minds_model_state.json at the agent state-dir root; the registry
+# The statusline writes model_state.json at the agent state-dir root; the registry
 # wires this as the harness's model_state_relative_path (the shared reader reads there).
 CLAUDE_STATE_RELATIVE_PATH: Path = Path(".")
 
@@ -167,7 +160,7 @@ class ClaudeModelResolver(HarnessModelResolver):
         # (medium -> xhigh -> medium) still sends /effort medium. Diffing here against
         # disk instead would drop that second change whenever disk had not yet reflected
         # the first. Each command lands in the session; the statusline mirrors the
-        # effective state to minds_model_state.json, and the watch fires a fresh recompute.
+        # effective state to model_state.json, and the watch fires a fresh recompute.
         if ModelAxis.MODEL in axes:
             if not send(f"/model {identity.model_id}"):
                 return SwitchResult(ok=False, detail="Failed to deliver /model to the agent")

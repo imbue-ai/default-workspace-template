@@ -5,7 +5,7 @@ Codex drives the stock ``codex app-server``: a model/effort/fast change is
 effective settings back on ``thread/settings/updated``. The live model chip is
 kept uniform: the ledger (:mod:`~imbue.system_interface.harnesses.codex.ledger`)
 mirrors each ``thread/settings/updated`` to the agent's
-``minds_model_state.json`` -- ``{"model", "effort", "fast"}``, the uniform
+``model_state.json`` -- ``{"model", "effort", "fast"}``, the uniform
 live-state schema -- and the shared reader
 (:func:`~imbue.system_interface.harnesses.model.read_model_identity`) parses that
 file via the harness's registered relative path (``plugin/codex/home``, i.e.
@@ -60,7 +60,7 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
     # chip-match is against the per-agent set (see AgentManager._model_options_for), not this.
     options=(),
     # ON_CHANGE: switch() applies thread/settings/update over the app-server and the daemon echoes
-    # thread/settings/updated, which the ledger mirrors to minds_model_state.json in well under a
+    # thread/settings/updated, which the ledger mirrors to model_state.json in well under a
     # second; the shared reader reconciles the chip. That round-trip is fast enough that the chip
     # moves on the CONFIRMED, pushed change (no optimistic overlay). A model the account cannot use
     # is not an RPC error -- the daemon falls back and echoes the effective value, which the mirror
@@ -106,7 +106,7 @@ def codex_models_to_options(models: tuple[CodexModel, ...]) -> tuple[ModelOption
 
 # The codex-scoped sidecar that persists the RAW ``model/list`` result across a restart, so the
 # per-agent option set -- and thus the model chip -- resolves BEFORE the daemon reconnects. It sits
-# beside ``minds_model_state.json`` under CODEX_HOME. RAW ``CodexModel`` entries are stored (NOT
+# beside ``model_state.json`` under CODEX_HOME. RAW ``CodexModel`` entries are stored (NOT
 # mapped ``ModelOption``s); :func:`codex_models_to_options` maps them on READ. This keeps the
 # preserve-and-surface contract: the raw daemon source is retained and the derived options are
 # recomputed from it, so a later change to the mapping needs no refetch.
@@ -368,6 +368,6 @@ class CodexModelResolver(HarnessModelResolver):
             return SwitchResult(ok=False, detail="Failed to apply the model change")
         finally:
             client.close()
-        # ON_CHANGE: the daemon's thread/settings/updated echo, mirrored to minds_model_state.json,
+        # ON_CHANGE: the daemon's thread/settings/updated echo, mirrored to model_state.json,
         # is pushed back as the authoritative choice, moving the chip on the confirmed change.
         return SwitchResult(ok=True)

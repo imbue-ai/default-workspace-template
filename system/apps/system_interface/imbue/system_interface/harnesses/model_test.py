@@ -40,18 +40,18 @@ _OPTIONS = (_OPUS, _HAIKU, _GPT, _NO_EFFORT)
 
 
 def test_model_state_path_joins_relative_dir(tmp_path: Path) -> None:
-    assert model_state_path(tmp_path, Path(".")) == tmp_path / "minds_model_state.json"
-    assert model_state_path(tmp_path, Path("plugin/codex/home")) == tmp_path / "plugin/codex/home/minds_model_state.json"
+    assert model_state_path(tmp_path, Path(".")) == tmp_path / "model_state.json"
+    assert model_state_path(tmp_path, Path("plugin/codex/home")) == tmp_path / "plugin/codex/home/model_state.json"
 
 
 def test_read_model_identity_reads_model_effort_and_fast(tmp_path: Path) -> None:
-    path = tmp_path / "minds_model_state.json"
+    path = tmp_path / "model_state.json"
     path.write_text(json.dumps({"model": "claude-fable-5", "effort": "xhigh", "fast": False}))
     assert read_model_identity(path) == ModelIdentity(model_id="claude-fable-5", effort="xhigh", fast=False)
 
 
 def test_read_model_identity_fast_true(tmp_path: Path) -> None:
-    path = tmp_path / "minds_model_state.json"
+    path = tmp_path / "model_state.json"
     path.write_text(json.dumps({"model": "claude-opus-4-8", "effort": "max", "fast": True}))
     assert read_model_identity(path) == ModelIdentity(model_id="claude-opus-4-8", effort="max", fast=True)
 
@@ -62,13 +62,13 @@ def test_read_model_identity_none_when_file_absent(tmp_path: Path) -> None:
 
 
 def test_read_model_identity_none_when_no_model(tmp_path: Path) -> None:
-    path = tmp_path / "minds_model_state.json"
+    path = tmp_path / "model_state.json"
     path.write_text(json.dumps({"effort": "high", "fast": True}))
     assert read_model_identity(path) is None
 
 
 def test_read_model_identity_effort_none_when_absent(tmp_path: Path) -> None:
-    path = tmp_path / "minds_model_state.json"
+    path = tmp_path / "model_state.json"
     path.write_text(json.dumps({"model": "claude-fable-5", "fast": False}))
     live = read_model_identity(path)
     assert live is not None
@@ -79,7 +79,7 @@ def test_read_model_identity_tolerates_the_old_codex_schema(tmp_path: Path) -> N
     # An installed codex binary that still writes {model, reasoning_effort, service_tier}
     # must NOT crash: the model chip lights (model is unchanged), effort is None (unknown
     # key ignored), and fast is off (no `fast` key).
-    path = tmp_path / "minds_model_state.json"
+    path = tmp_path / "model_state.json"
     path.write_text(json.dumps({"model": "gpt-5.6-sol", "reasoning_effort": "high", "service_tier": "priority"}))
     assert read_model_identity(path) == ModelIdentity(model_id="gpt-5.6-sol", effort=None, fast=False)
 

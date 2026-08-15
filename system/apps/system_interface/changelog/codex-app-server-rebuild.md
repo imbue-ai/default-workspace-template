@@ -1,3 +1,0 @@
-The codex agent's activity indicator ("Thinking...") now follows mngr's live working state, matching claude and the other agents, and no longer sticks on after a turn ends.
-
-Previously the codex dot was reduced from the app-server's turn-lifecycle notifications; a newer codex build stopped emitting those, so the dot could stay on "Thinking" after the agent finished. It now derives from mngr's authoritative RUNNING state (from the daemon's live `thread/status`): idle shows nothing, a turn in flight shows "Thinking...", and an in-flight tool call shows the tool's own verb ("Running", "Web search", "Editing", ...) from the labels already carried on each tool event. The live connection stays as the queue and message-lifecycle authority; it just no longer drives the dot.

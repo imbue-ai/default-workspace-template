@@ -2342,7 +2342,7 @@ def test_seed_model_state_writes_launch_selection(
 
     agent._seed_model_state(host)
 
-    state = json.loads((agent._get_agent_dir() / "minds_model_state.json").read_text())
+    state = json.loads((agent._get_agent_dir() / "model_state.json").read_text())
     assert state == {"model": "opus[1m]", "effort": None, "fast": False}
 
 
@@ -2359,7 +2359,7 @@ def test_seed_model_state_skips_when_no_model_pinned(
 
     agent._seed_model_state(host)
 
-    assert not (agent._get_agent_dir() / "minds_model_state.json").exists()
+    assert not (agent._get_agent_dir() / "model_state.json").exists()
 
 
 def test_configure_agent_hooks_does_not_touch_existing_settings_local(

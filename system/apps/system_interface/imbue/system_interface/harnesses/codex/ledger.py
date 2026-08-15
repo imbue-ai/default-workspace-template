@@ -51,7 +51,7 @@ or returns one of our chips and is not a tracked entry.
 
 The ledger is a near-pure reducer over the client's notification callbacks plus the synchronous
 :meth:`send`. Its one side effect is the model-bar mirror: on every ``thread/settings/updated`` it
-writes the effective ``{model, effort, fast}`` to the agent's ``minds_model_state.json`` (the
+writes the effective ``{model, effort, fast}`` to the agent's ``model_state.json`` (the
 event-driven replacement for the fork's write), so the shared, harness-neutral model-bar read path
 reconciles the chip with no codex special-casing. All logic is therefore unit-testable by driving a
 :class:`CodexAppServerClient` over a scripted in-memory transport (constructor injection), with no
@@ -263,7 +263,7 @@ class CodexMessageLedger(MutableModel):
     # stream. The ledger owns live user-turns (Fix 1); the rollout file reader suppresses them live.
     # ``None`` disables emission -- used by tests that only assert queue/state transitions.
     on_user_turn: Callable[[dict[str, Any]], None] | None = None
-    # Where to mirror the effective model settings (the agent's uniform ``minds_model_state.json``).
+    # Where to mirror the effective model settings (the agent's uniform ``model_state.json``).
     # ``None`` disables the mirror -- used by tests that do not exercise the model bar.
     model_state_path: Path | None = None
     now: Callable[[], str] = _iso_now
@@ -444,7 +444,7 @@ class CodexMessageLedger(MutableModel):
             self._sweep_idle()
 
     def _on_settings_updated(self, params: dict[str, Any]) -> None:
-        """Mirror the daemon's effective model settings to the uniform ``minds_model_state.json``.
+        """Mirror the daemon's effective model settings to the uniform ``model_state.json``.
 
         The model bar is harness-neutral on the read side: ``agent_manager._recompute_model_choice``
         reads this file, matches it against the catalog, and pushes the chip -- one code path for

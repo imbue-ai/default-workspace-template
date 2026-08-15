@@ -27,7 +27,6 @@ def test_catalog_options_carry_suffix_free_reported_ids() -> None:
     reported = {option.id: option.harness_reported_model_id for option in CLAUDE_CATALOG.options}
     assert reported == {
         "opus[1m]": "claude-opus-4-8",
-        "fable": "claude-fable-5",
         "sonnet": "claude-sonnet-5",
         "haiku": "claude-haiku-4-5",
     }

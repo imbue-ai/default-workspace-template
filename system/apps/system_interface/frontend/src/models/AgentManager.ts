@@ -18,11 +18,13 @@ export interface AgentState {
   state: string;
   labels: Record<string, string>;
   work_dir: string | null;
-  // The agent's harness ("claude", "codex", ...), from the backend. Carried for
-  // debugging and as the seam a future per-harness message detector would key on (see
-  // message-classification.ts, whose table is Claude Code's). NOTHING in the frontend
-  // reads it today: every harness difference is resolved backend-side, tool calls
-  // arrive pre-labelled, and activity arrives as an already-derived state.
+  // The agent's harness ("claude", "codex", ...), from the backend. Read in three
+  // places: ModelBar picks the harness's catalog with it, ChatPanel gates the
+  // claude-only fast-mode prompt on it, and MessageInput intercepts /login and
+  // /logout for claude. Everything else is resolved backend-side -- tool calls arrive
+  // pre-labelled and activity arrives as an already-derived state -- so those three
+  // are the whole surface, and the two claude comparisons are the ones a per-harness
+  // capability on the catalog should eventually replace.
   harness?: string;
   // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the
   // system interface has no per-agent activity tracking available (e.g.

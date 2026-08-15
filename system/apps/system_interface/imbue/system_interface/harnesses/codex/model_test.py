@@ -111,7 +111,7 @@ def test_state_relative_path_is_under_codex_home() -> None:
     # The registered relative dir must resolve to the same place get_codex_home does, so the
     # shared reader finds the file the patched codex writes under CODEX_HOME.
     assert model_state_path(Path("/agent"), CODEX_STATE_RELATIVE_PATH) == get_codex_home(Path("/agent")) / (
-        "minds_model_state.json"
+        "model_state.json"
     )
 
 

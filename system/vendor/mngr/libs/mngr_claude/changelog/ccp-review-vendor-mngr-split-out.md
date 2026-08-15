@@ -21,7 +21,7 @@ workspace's statusline command, which Claude Code re-runs on every session start
 message, and refresh tick -- strictly more reactive than the hook (which could not see idle
 `/model` switches) and immune to the `<synthetic>` model ids the hook could record from
 framework-generated transcript messages. The statusline writes the harness-uniform
-`$MNGR_AGENT_STATE_DIR/minds_model_state.json` snapshot that the system interface reads for
+`$MNGR_AGENT_STATE_DIR/model_state.json` snapshot that the system interface reads for
 every harness.
 
 Claude provisioning now installs a Chat-only `meta+q` -> `chat:cancel` keybinding that the

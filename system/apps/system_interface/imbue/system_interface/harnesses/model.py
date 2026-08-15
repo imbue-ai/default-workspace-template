@@ -74,7 +74,7 @@ class ModelOption(FrozenModel):
     # The raw model id the harness reports in its live state file, matched against a
     # live read (:func:`match_option`). ``None`` means "same as ``id``" -- for a harness
     # whose reported id equals its switch id (codex, pi). Claude reports a suffix-free
-    # API id (``claude-fable-5``) that differs from the ``[1m]``-suffixed switch id, so
+    # API id (``claude-opus-4-8``) that differs from the ``[1m]``-suffixed switch id, so
     # its options set this explicitly.
     harness_reported_model_id: str | None = None
 
@@ -183,11 +183,11 @@ class SwitchResult(FrozenModel):
 # The one live model-state file every harness writes ({model, effort, fast}), read by
 # the shared reader below. The harness's directory for it is per-harness DATA (its
 # ``model_state_relative_path`` on the registry); the file NAME is uniform.
-MODEL_STATE_NAME: str = "minds_model_state.json"
+MODEL_STATE_NAME: str = "model_state.json"
 
 
 def model_state_path(state_dir: Path, relative_path: Path) -> Path:
-    """The agent's live model-state file: ``<state_dir>/<relative_path>/minds_model_state.json``.
+    """The agent's live model-state file: ``<state_dir>/<relative_path>/model_state.json``.
 
     ``relative_path`` is the harness's registered directory for the file (state-dir root
     for claude/pi, ``plugin/codex/home`` for codex) -- the one per-harness difference the
@@ -197,7 +197,7 @@ def model_state_path(state_dir: Path, relative_path: Path) -> Path:
 
 
 def read_model_identity(state_path: Path) -> ModelIdentity | None:
-    """The live selection from a harness's ``minds_model_state.json``, or None.
+    """The live selection from a harness's ``model_state.json``, or None.
 
     Reads the uniform ``{"model", "effort", "fast"}`` schema every harness writes. Returns
     None when the file is absent, unparseable, or records no model yet (the bar shows
@@ -275,7 +275,7 @@ class HarnessModelResolver(ABC):
     """Applies (for a switchable harness) ONE agent's model choice.
 
     The live READ is harness-neutral -- every harness writes the uniform
-    ``minds_model_state.json`` that :func:`read_model_identity` parses, at the directory
+    ``model_state.json`` that :func:`read_model_identity` parses, at the directory
     the harness registers as ``HarnessSpec.model_state_relative_path`` (read-side data on
     the spec, beside ``catalog_factory`` -- deliberately NOT on this resolver, which is
     now write-only) -- so the resolver only owns the harness-specific WRITE side:

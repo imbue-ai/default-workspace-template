@@ -615,9 +615,9 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     data = response.get_json()
     assert "claude" in data
     claude = data["claude"]
-    assert [option["id"] for option in claude["options"]] == ["opus[1m]", "fable", "sonnet", "haiku"]
+    assert [option["id"] for option in claude["options"]] == ["opus[1m]", "sonnet", "haiku"]
     # Each option carries the suffix-free reported id the matcher keys on.
-    assert claude["options"][1]["harness_reported_model_id"] == "claude-fable-5"
+    assert claude["options"][0]["harness_reported_model_id"] == "claude-opus-4-8"
     assert claude["switch_mode"] == "eager_then_reconcile"
     assert claude["powered_by_label"] == "Claude Code"
 
