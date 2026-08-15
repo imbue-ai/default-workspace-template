@@ -1022,7 +1022,7 @@ def _push_settings_updated(
     client.poll_notifications()
 
 
-def test_settings_updated_mirrors_to_minds_model_state_and_reads_back(tmp_path: Path) -> None:
+def test_settings_updated_mirrors_to_model_state_and_reads_back(tmp_path: Path) -> None:
     """The writer produces the uniform {model, effort, fast} file from a scripted
     thread/settings/updated, and the shared read path then yields the matching ModelChoice."""
     transport = ScriptedTransport()

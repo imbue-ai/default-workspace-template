@@ -1805,7 +1805,7 @@ def test_note_sent_message_records_in_flight_and_commit_clears_it(tmp_path: Path
     (claude_config_dir / "projects").mkdir(parents=True)
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
-    token = watcher.note_sent_message("in flight now", "2026-01-01T00:00:00Z", "msg-1")
+    token = watcher.note_sent_message("in flight now", "msg-1")
     assert token == "msg-1"
     assert watcher.get_in_flight_block() == "in flight now"
 
@@ -1821,7 +1821,7 @@ def test_note_sent_message_mints_a_token_when_none_supplied(tmp_path: Path) -> N
     (claude_config_dir / "projects").mkdir(parents=True)
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
-    token = watcher.note_sent_message("no id supplied", "2026-01-01T00:00:00Z")
+    token = watcher.note_sent_message("no id supplied")
     assert token
     assert watcher.get_in_flight_block() == "no id supplied"
     watcher.retract_sent_message(token)
@@ -1836,8 +1836,8 @@ def test_in_flight_block_preserves_send_order_across_two_sends(tmp_path: Path) -
     (claude_config_dir / "projects").mkdir(parents=True)
     watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
 
-    watcher.note_sent_message("first", "2026-01-01T00:00:00Z", "a")
-    watcher.note_sent_message("second", "2026-01-01T00:00:01Z", "b")
+    watcher.note_sent_message("first", "a")
+    watcher.note_sent_message("second", "b")
     assert watcher.get_in_flight_block() == "first\nsecond"
 
     watcher.commit_sent_message("a")

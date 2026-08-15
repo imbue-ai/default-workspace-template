@@ -357,7 +357,9 @@ class ClaudeSessionWatcher(SendingStateWatcherMixin, AgentSessionWatcher):
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """Start watching session files in a background thread."""
+        """Start watching session files in a background thread. Idempotent."""
+        if self._thread is not None:
+            return
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"watcher-{self._agent_id}")
         self._thread.start()
 

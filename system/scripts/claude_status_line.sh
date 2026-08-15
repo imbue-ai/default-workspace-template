@@ -27,9 +27,9 @@ if [[ -n "${MNGR_AGENT_STATE_DIR:-}" && -n "$PAYLOAD" ]]; then
         if [[ -n "$STATE" ]]; then
             # Fixed tmp name: Claude Code cancels in-flight statusline scripts,
             # and a fixed name self-heals orphaned tmp files on the next fire.
-            TMP="$MNGR_AGENT_STATE_DIR/minds_model_state.json.tmp"
+            TMP="$MNGR_AGENT_STATE_DIR/model_state.json.tmp"
             if printf '%s' "$STATE" > "$TMP" 2>/dev/null; then
-                mv -f "$TMP" "$MNGR_AGENT_STATE_DIR/minds_model_state.json" 2>/dev/null || true
+                mv -f "$TMP" "$MNGR_AGENT_STATE_DIR/model_state.json" 2>/dev/null || true
             fi
         fi
     fi

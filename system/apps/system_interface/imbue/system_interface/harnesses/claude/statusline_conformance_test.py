@@ -4,7 +4,7 @@ This is the one test that exercises the real ``system/scripts/claude_status_line
 the writer that lives in the dwt tree (there is no test project for ``system/scripts/``) --
 against a REAL captured 2.1.207 statusline payload. It runs the script via subprocess with
 the payload on stdin, then feeds the file it produced through the shared reader and matcher,
-proving the writer's output and the reader agree on the uniform ``minds_model_state.json``
+proving the writer's output and the reader agree on the uniform ``model_state.json``
 contract. The fixture beside this file is a byte copy of
 ``docs/system/blueprint/live-model-state/statusline-payload-v2.1.207.json``.
 """
@@ -55,7 +55,7 @@ def test_statusline_writes_state_the_shared_reader_matches(tmp_path: Path) -> No
     # The script still prints its status line to stdout.
     assert result.stdout != ""
 
-    written = state_dir / "minds_model_state.json"
+    written = state_dir / "model_state.json"
     assert written.is_file(), "the statusline script did not write the model-state file"
 
     identity = read_model_identity(written)
@@ -63,10 +63,10 @@ def test_statusline_writes_state_the_shared_reader_matches(tmp_path: Path) -> No
     # The captured payload: model claude-fable-5, effort high, fast off.
     assert identity == ModelIdentity(model_id="claude-fable-5", effort="high", fast=False)
 
-    matched = match_option(identity, CLAUDE_CATALOG.options)
-    assert matched is not None
-    assert matched.id == "fable"
-    assert matched.label == "Fable 5"
+    # Fable is not offered in the picker, so the live read matches no catalog option --
+    # the conformance this test proves is that the writer and reader agree on the file,
+    # not that every model the statusline can report is one we offer.
+    assert match_option(identity, CLAUDE_CATALOG.options) is None
 
 
 def test_statusline_skips_a_nested_session(tmp_path: Path) -> None:
@@ -86,4 +86,4 @@ def test_statusline_skips_a_nested_session(tmp_path: Path) -> None:
         env={"PATH": "/usr/bin:/bin", "MNGR_AGENT_STATE_DIR": str(state_dir)},
         check=True,
     )
-    assert not (state_dir / "minds_model_state.json").exists()
+    assert not (state_dir / "model_state.json").exists()

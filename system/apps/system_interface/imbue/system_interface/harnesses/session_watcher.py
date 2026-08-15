@@ -123,7 +123,7 @@ class AgentSessionWatcher(ABC):
         """Apply the working->IDLE backstop and return the resulting snapshot (empty by default)."""
         return []
 
-    def note_sent_message(self, content: str, timestamp: str, message_id: str = "") -> str | None:
+    def note_sent_message(self, content: str, message_id: str = "") -> str | None:
         """The UI is about to send ``content`` to this agent (called BEFORE the send).
 
         No-op returning None by default. A harness that tracks the *Sending* state

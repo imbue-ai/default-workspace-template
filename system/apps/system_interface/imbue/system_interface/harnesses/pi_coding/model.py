@@ -15,7 +15,7 @@ authed subset), handled at picker-open time, not here.
 
 The live selection is read by the shared reader
 (:func:`~imbue.system_interface.harnesses.model.read_model_identity`) from the uniform
-``minds_model_state.json`` the pi lifecycle extension writes at the agent state-dir root,
+``model_state.json`` the pi lifecycle extension writes at the agent state-dir root,
 refreshed at session start (before the first turn), on every ``/model`` or thinking-level
 change, and on resume. There is no launch default -- pi is many-provider/many-auth -- so
 the bar shows logo-only until the extension records a model. This resolver only owns the
@@ -67,7 +67,7 @@ from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 # (mngr_pi_coding/resources/mngr_pi_lifecycle.ts).
 _CONTROL_NAME: str = "pi_control.json"
 
-# The lifecycle extension writes minds_model_state.json at the agent state-dir root; the
+# The lifecycle extension writes model_state.json at the agent state-dir root; the
 # registry wires this as the harness's model_state_relative_path (the shared reader reads there).
 PI_STATE_RELATIVE_PATH: Path = Path(".")
 

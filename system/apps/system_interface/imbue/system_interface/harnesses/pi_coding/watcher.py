@@ -176,7 +176,11 @@ class PiSessionWatcher(SendingStateWatcherMixin, AgentSessionWatcher):
         /new rotation) plus the inbox file. It calls ``_emit_unsent`` once at start -- to
         broadcast whatever already exists, since the agent may have run before the UI
         connected -- and on every filesystem wake or poll timeout.
+
+        Idempotent: a second call would otherwise strand the first watcher's thread.
         """
+        if self._path_watcher is not None:
+            return
         self._path_watcher = PathWatcher.build((self._sessions_dir, self._inbox_path), self._emit_unsent)
         self._path_watcher.start()
 
