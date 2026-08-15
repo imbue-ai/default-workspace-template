@@ -81,7 +81,7 @@ export interface LayoutOpEvent {
   requesterAgentId: string;
 }
 
-type WsEvent =
+export type WsEvent =
   | { type: "agents_updated"; agents: AgentState[] }
   | { type: "apps_updated"; apps: AppEntry[] }
   | {
@@ -170,6 +170,9 @@ let apps: AppEntry[] = [];
 // 403. Callers that build share-critical origins wait via ``whenAppsLoaded``.
 let appsLoaded = false;
 let appsLoadedWaiters: (() => void)[] = [];
+// Waiters on one NAMED service appearing -- a different question from
+// ``appsLoaded``. See ``whenAppRegistered``.
+let appRegisteredWaiters: { name: string; wake: (isRegistered: boolean) => void }[] = [];
 let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
@@ -251,7 +254,9 @@ function scheduleReconnect(): void {
   }, delayMs);
 }
 
-function handleEvent(event: WsEvent): void {
+/** Apply one server event to this module's state. Exported as the seam tests
+ *  drive the socket through (the transport is a plain envelope around it). */
+export function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "agents_updated": {
       // Diff against the outgoing snapshot (still in `agents` here) so we can
@@ -283,6 +288,11 @@ function handleEvent(event: WsEvent): void {
         const waiters = appsLoadedWaiters;
         appsLoadedWaiters = [];
         for (const wake of waiters) wake();
+      }
+      // Release anyone waiting on a specific service that this frame carries.
+      // Iterated over a copy: each ``wake`` removes its own entry.
+      for (const waiter of [...appRegisteredWaiters]) {
+        if (apps.some((app) => app.name === waiter.name)) waiter.wake(true);
       }
       break;
 
@@ -462,6 +472,23 @@ export function whenAppsLoaded(timeoutMs = 5000): Promise<void> {
     };
     appsLoadedWaiters.push(wake);
     setTimeout(wake, timeoutMs);
+  });
+}
+
+/** True once service ``name`` registers, false after ``timeoutMs``. Not
+ *  ``whenAppsLoaded``: the shell's own entry makes that list non-empty at boot. */
+export function whenAppRegistered(name: string, timeoutMs = 5000): Promise<boolean> {
+  if (apps.some((app) => app.name === name)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const wake = (isRegistered: boolean): void => {
+      if (settled) return;
+      settled = true;
+      appRegisteredWaiters = appRegisteredWaiters.filter((waiter) => waiter.wake !== wake);
+      resolve(isRegistered);
+    };
+    appRegisteredWaiters.push({ name, wake });
+    setTimeout(() => wake(false), timeoutMs);
   });
 }
 

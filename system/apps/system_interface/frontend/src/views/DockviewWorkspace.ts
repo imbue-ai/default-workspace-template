@@ -37,6 +37,7 @@ import { icon } from "./icons";
 import type { IconName } from "./icons";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
+import { openAppNameFromQuery } from "./open-app-deeplink";
 import {
   addAgentsUpdatedListener,
   addLayoutOpListener,
@@ -53,6 +54,7 @@ import {
   removeAgentLocally,
   removeAgentsUpdatedListener,
   reportClientState,
+  whenAppRegistered,
   whenAppsLoaded,
   type AgentsUpdatedListener,
   type LayoutOpEvent,
@@ -2818,8 +2820,26 @@ function initializeDockview(parentElement: HTMLElement): void {
   };
   addLayoutSyncListener(_layoutSyncListener);
 
-  // Pick this browser's active named layout and mount its content.
-  void initializeActiveLayout();
+  // Pick this browser's active named layout and mount its content, then honor
+  // any ?open_app deep link.
+  void initializeActiveLayout().finally(() => void consumeOpenAppDeepLink());
+}
+
+/** Open (or focus) the tab a ``?open_app=<name>`` deep link named. The parameter
+ *  is left in the URL on purpose: re-reading only re-focuses, so a reload retries. */
+async function consumeOpenAppDeepLink(): Promise<void> {
+  const name = openAppNameFromQuery(window.location.search);
+  if (name === null) return;
+  if (name === "system_interface") {
+    alert(`Cannot open "${name}": it is the workspace interface itself, not an app tab.`);
+    return;
+  }
+  if (!(await whenAppRegistered(name))) {
+    alert(`Cannot open "${name}": no app by that name is registered in this workspace.`);
+    return;
+  }
+  addPanelForRef(`service:${name}`, getPrimaryAgentId(), {});
+  m.redraw();
 }
 
 async function executeDestroy(agentId: string, panelId: string): Promise<void> {
