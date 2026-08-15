@@ -19,7 +19,7 @@ integrate them with a reducer agent, and generate an HTML report (the behavior
 recipe's report adds a per-coordinate coverage matrix of claimed vs verified
 coverage).
 
-Agents report escalations independently of their own outcome, so a passing test can still flag a problem that needs a suite-wide fix. The reducer collapses changes that many agents made identically into one shared fix, writes a single changelog entry for the run, and -- when given a `GH_TOKEN` via `--reducer-env` -- opens the run's pull request with the mapper status breakdown and escalations table in its description.
+Agents report escalations independently of their own outcome, so a passing test can still flag a problem that needs a suite-wide fix. The reducer collapses changes that many agents made identically into one shared fix, writes a single changelog entry for the run, and -- when given a `GH_TOKEN` via `--reducer-env` -- opens the run's pull request, whose description leads with the report link and carries the mapper status breakdown, the reducer's unresolved escalations in full, and its resolved ones one line each. The reducer's escalations are groupings of the test agents', so the per-agent list stays in the HTML report rather than the pull request.
 
 ## Variants
 

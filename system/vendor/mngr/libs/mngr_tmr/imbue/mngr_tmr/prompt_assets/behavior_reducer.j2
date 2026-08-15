@@ -134,8 +134,8 @@ it, but keep two guardrails:
 - Only consolidate when the shared fixture genuinely improves clarity;
   over-extraction makes witnesses harder to read against their behavior units.
 
-Verify every consolidation by running the affected witnessing tests. Record
-each under "normalizations" in the outcome.
+Verify every consolidation by running the affected witnessing tests. Record each
+as a resolved escalation in the outcome (see its schema below).
 
 ## Audit the witness links and record verified coverage
 
@@ -167,11 +167,13 @@ For each distinct blocker:
 
 - If you can resolve it suite-wide AND verify it by running the affected
   witnessing tests, do so, remove the FIXME comment, commit as `[NORMALIZE]`,
-  and record it under "normalizations".
+  and record it under "escalations" with `resolved_in_commit_hash` set to that
+  commit.
 - If it requires something the environment does not provide (credentials,
   infrastructure), or is otherwise beyond what you can verify here, leave the
-  FIXME in place and record it under "escalations" so it reaches the user. Do
-  NOT apply an unverifiable cross-cutting change.
+  FIXME in place and record it under "escalations" with no
+  `resolved_in_commit_hash`, so it reaches the user. Do NOT apply an
+  unverifiable cross-cutting change.
 
 # Writing the outcome and publishing outputs
 
@@ -188,8 +190,12 @@ The schema is:
  "impl_priority": ["branch3"],
  "impl_commit_hashes": {"branch3": "def5678"},
  "failed": ["branch4"],
- "normalizations": [{"summary_markdown": "Consolidated two independently-created signin fixtures into conftest (verified across 4 witnesses)"}],
- "escalations": [{"title": "workspace-bridge witnesses need a Docker daemon", "detail_markdown": "The bridge scenarios cannot be driven in this environment; their units stay PARTIAL_IMPROVABLE until a daemon is available."}]}
+ "escalations": [
+   {"kind": "HARNESS_DEFECT",
+    "description_markdown": "The workspace-bridge witnesses need a Docker daemon this environment lacks.\n\nThe bridge scenarios cannot be driven here, so their units stay PARTIAL_IMPROVABLE until a daemon is available."},
+   {"kind": "SUITE_DUPLICATION",
+    "description_markdown": "Two independently-created signin fixtures did the same thing.\n\nConsolidated into conftest and verified across 4 witnesses.",
+    "resolved_in_commit_hash": "abc1234"}]}
 
 Fields:
 - squashed_branches: branch names whose test commits were squashed
@@ -197,8 +203,7 @@ Fields:
 - impl_priority: impl branch names in priority order, highest first
 - impl_commit_hashes: mapping of impl branch name to its commit hash on the integrated branch
 - failed: branch names that could not be integrated
-- normalizations: suite-wide cleanups you applied and verified (each with summary_markdown). Omit or use [] if none.
-- escalations: cross-cutting problems you could NOT resolve or verify, to surface to the user (each with title and detail_markdown). Omit or use [] if none.
+- escalations: every cross-cutting problem you report, resolved and unresolved alike. Each has kind (one of "UNCAUGHT_BUG", "FIX_DIRECTION_AMBIGUOUS", "HARNESS_DEFECT", "SUITE_DUPLICATION"), description_markdown (first line a one-sentence summary), an optional member_ids list, and resolved_in_commit_hash present ONLY when you fixed and verified it -- its presence is what marks the escalation resolved. A suite-wide cleanup you applied is a resolved escalation, so it belongs here too; there is no separate normalizations field. Omit or use [] if none.
 
 Then, finally, publish the outputs archive. Run this from the git repo root:
 

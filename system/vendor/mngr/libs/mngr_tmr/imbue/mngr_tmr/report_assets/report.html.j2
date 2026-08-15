@@ -5,13 +5,21 @@
 
     rows              -- list[RowView]                       all renderable rows
     sections          -- list[SectionView]                   grouped rows + their kind/label/color/anchor
-    toc_links         -- list[TocLinkView]                   sidebar entries (subset of sections with >0 rows)
+    toc_groups        -- list[{label, links}]                sidebar entries under two headings: "Integration"
+                                                             (the escalation sections) and "Tests" (outcome sections)
     has_artifacts     -- bool                                whether to inject the asciinema head + JS + panels
     artifact_panels   -- list[PanelView]                     slide-in panels (one per agent that has artifacts)
     integrator        -- IntegratorResult | None             reduced-branch summary (drives merged-status cells)
-    escalation_views  -- list[{title, detail_html, kind, kind_label, source}]  mapper + integrator escalations (detail pre-rendered)
-    normalization_views -- list[{summary_html}]              suite-wide cleanups the integrator applied (summary pre-rendered)
-    run_commands      -- list[(label, cmd)]                  top-of-report command hints (and reintegrate is used in UNRESOLVED hint)
+    has_integrator    -- bool                                whether the integration report renders at all
+    mapper_escalation_count    -- int                        how many escalations the mappers raised in total;
+                                                             each one renders under its own row
+    unresolved_escalation_views -- list[{summary, description_html, kind_label, scale_label, resolved_in_commit_hash}]
+    resolved_escalation_views   -- same shape; resolved_in_commit_hash is always set
+    rows[].escalations -- list[{id, description_html, kind_label, locations}]  rendered under their own row
+    ungrouped_escalation_ids   -- list[str]                  mapper escalation ids no group claims
+    unresolved_anchor / resolved_anchor -- str               ids the sidebar links to
+    unresolved_color / resolved_color -- str                 heading colors matching the sidebar
+    run_commands      -- list[(label, cmd)]                  top-of-report command hints (and reintegrate is used in FIX_FAILED hint)
     reintegrate_cmd   -- str                                 pre-extracted "Reintegrate" command (HTML-escaped)
     asciinema_css_url -- str                                 only meaningful when has_artifacts
     asciinema_js_url  -- str                                 only meaningful when has_artifacts
@@ -36,10 +44,13 @@
   </style>
 </head>
 <body>
-{%- if toc_links %}
+{%- if toc_groups %}
   <div class="toc-sidebar">
-{%- for link in toc_links %}
+{%- for group in toc_groups %}
+    <div class="toc-group-label">{{ group.label }}</div>
+{%- for link in group.links %}
     <a href="#{{ link.anchor }}" class="toc-link" style="color: {{ link.color }};">{{ link.label }} ({{ link.count }})</a>
+{%- endfor %}
 {%- endfor %}
   </div>
 {%- endif %}
@@ -53,35 +64,66 @@
 {%- endfor %}
     </div>
 {%- endif %}
-{%- if escalation_views %}
-    <div class="escalations">
-      <h2 style="color: rgb(244, 67, 54);">Escalations ({{ escalation_views|length }})</h2>
-      <p>Raised by the agents for attention beyond their own test. <strong>Blocker</strong> stopped
-      an agent; <strong>Shared pattern</strong> means the fix worked but the same problem recurs
-      across sibling tests, so one suite-wide change should replace the local ones.</p>
-      <ul>
-{%- for esc in escalation_views %}
-        <li><strong>{{ esc.title }}</strong>
-          <span class="esc-kind">{{ esc.kind_label }}</span>
-          <span class="esc-source"><code>{{ esc.source }}</code></span>
-          <div class="md">{{ esc.detail_html|safe }}</div></li>
-{%- endfor %}
-      </ul>
-    </div>
+{%- if has_integrator %}
+    <h2 class="group-heading">Integration</h2>
+    <div class="integration-report">
+      <p>The integrator is the only step that sees every mapper's report at once, so its
+      escalations are groupings of theirs: many agents describe one problem in their own words.
+      A group with no members is one the integrator found by reading the whole integrated diff,
+      which no single mapper could have seen.{% if mapper_escalation_count %} Each of the
+      {{ mapper_escalation_count }} mapper escalation(s) is shown in full under the test that
+      raised it, below.{% endif %}</p>
+{%- if ungrouped_escalation_ids %}
+      <p class="coverage-warning"><strong>{{ ungrouped_escalation_ids|length }} mapper escalation(s)
+      belong to no group below</strong>, so the grouped view is not the whole run. Each is still
+      shown under the test that raised it.</p>
 {%- endif %}
-{%- if normalization_views %}
-    <div class="normalizations">
-      <h2>Suite normalizations ({{ normalization_views|length }})</h2>
-      <ul>
-{%- for norm in normalization_views %}
-        <li class="md">{{ norm.summary_html|safe }}</li>
-{%- endfor %}
-      </ul>
     </div>
+{%- if unresolved_escalation_views %}
+    <h3 id="{{ unresolved_anchor }}" style="color: {{ unresolved_color }};">Unresolved escalations ({{ unresolved_escalation_views|length }})</h3>
+    <p>Problems the integrator could not resolve within the run. Each needs a decision or a change
+    from a person, so each carries its whole description.</p>
+    <table class="escalation-table">
+      <thead>
+        <tr><th>Escalation</th><th>Kind</th><th>Reports</th></tr>
+      </thead>
+      <tbody>
+{%- for esc in unresolved_escalation_views %}
+        <tr>
+          <td class="md esc-description-cell">{{ esc.description_html|safe }}</td>
+          <td>{{ esc.kind_label }}</td>
+          <td class="esc-scale-cell">{{ esc.scale_label }}</td>
+        </tr>
+{%- endfor %}
+      </tbody>
+    </table>
+{%- endif %}
+{%- if resolved_escalation_views %}
+    <h3 id="{{ resolved_anchor }}" style="color: {{ resolved_color }};">Resolved escalations ({{ resolved_escalation_views|length }})</h3>
+    <p>Fixed and verified within the run. Shown as one line each; the commit carries the detail.</p>
+    <table class="escalation-table escalation-table-with-commit">
+      <thead>
+        <tr><th>Escalation</th><th>Kind</th><th>Reports</th><th>Commit</th></tr>
+      </thead>
+      <tbody>
+{%- for esc in resolved_escalation_views %}
+        <tr>
+          <td>{{ esc.summary }}</td>
+          <td>{{ esc.kind_label }}</td>
+          <td class="esc-scale-cell">{{ esc.scale_label }}</td>
+          <td><code>{{ esc.resolved_in_commit_hash[:10] }}</code></td>
+        </tr>
+{%- endfor %}
+      </tbody>
+    </table>
+{%- endif %}
+{%- endif %}
+{%- if sections %}
+    <h2 class="group-heading">Tests</h2>
 {%- endif %}
 {%- for section in sections %}
-    <h2 id="{{ section.anchor }}" style="color: {{ section.color }};">{{ section.label }} ({{ section.rows|length }})</h2>
-{%- if section.kind == "UNRESOLVED" %}
+    <h3 id="{{ section.anchor }}" style="color: {{ section.color }};">{{ section.label }} ({{ section.rows|length }})</h3>
+{%- if section.kind == "FIX_FAILED" %}
     <div class="unresolved-hint">
       <p>To resolve issues with an agent that could not land its fix:</p>
       <ol>
@@ -93,7 +135,7 @@
       </ol>
     </div>
 {%- endif %}
-{%- if section.kind == "NON_IMPL_FIXES" and integrator and integrator.squashed_commit_hash %}
+{%- if section.kind == "TEST_AND_DOC_FIXES" and integrator and integrator.squashed_commit_hash %}
     <p class="squashed-hash">Squashed commit: <code>{{ integrator.squashed_commit_hash[:10] }}</code></p>
 {%- endif %}
     <table>
@@ -142,6 +184,35 @@
         </tr>
 {%- if row.summary_html and section.kind != "RUNNING" %}
         <tr class="summary-row"><td colspan="{{ section.col_count }}" class="md summary-cell">{{ row.summary_html|safe }}</td></tr>
+{%- endif %}
+{%- if row.escalations and section.kind != "RUNNING" %}
+        <tr class="escalation-row">
+          <td colspan="{{ section.col_count }}">
+            <span class="row-escalations-label">Escalations ({{ row.escalations|length }})</span>
+            <table class="row-escalations escalation-table">
+              <thead>
+                <tr><th>Escalation</th><th>Kind</th><th>Location</th></tr>
+              </thead>
+              <tbody>
+{%- for esc in row.escalations %}
+                <tr>
+                  <td class="esc-description-cell">
+                    <div class="md">{{ esc.description_html|safe }}</div>
+                    <code class="esc-id">{{ esc.id }}</code>
+                  </td>
+                  <td>{{ esc.kind_label }}</td>
+                  <td>
+{%- for location in esc.locations %}
+                    <code class="esc-location">{{ location }}</code>
+{%- endfor %}
+{%- if not esc.locations %}-{% endif %}
+                  </td>
+                </tr>
+{%- endfor %}
+              </tbody>
+            </table>
+          </td>
+        </tr>
 {%- endif %}
 {%- endfor %}
       </tbody>

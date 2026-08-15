@@ -18,33 +18,36 @@ Layout of ``inputs_dir`` matches what the orchestrator rsyncs to the reducer:
 import argparse
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 
 from imbue.mngr.primitives import AgentName
 from imbue.mngr_tmr.prompts import TESTING_AGENT_OUTCOME_FILENAME
 from imbue.mngr_tmr.report import EXTRACTED_TEST_OUTPUT_DIR
-from imbue.mngr_tmr.report import Escalation
-from imbue.mngr_tmr.report import EscalationKind
+from imbue.mngr_tmr.report import IntegratorEscalation
 from imbue.mngr_tmr.report import ReportSection
 from imbue.mngr_tmr.report import TestMapReduceResult
 from imbue.mngr_tmr.report import escalation_kind_label
+from imbue.mngr_tmr.report import escalation_scale_label
+from imbue.mngr_tmr.report import first_line
 from imbue.mngr_tmr.report import load_integrator_outcome_file
 from imbue.mngr_tmr.report import load_testing_agent_outcome
 from imbue.mngr_tmr.report import report_section_of
 from imbue.mngr_tmr.report import section_label
+from imbue.mngr_tmr.report import sort_escalations
+from imbue.mngr_tmr.report import split_summary
 
 # Order the status breakdown reads in: the sections a reviewer most needs to act
 # on come first, and the uneventful ones last.
 _BREAKDOWN_ORDER: list[ReportSection] = [
     ReportSection.IMPL_FIXES,
-    ReportSection.NON_IMPL_FIXES,
-    ReportSection.UNRESOLVED,
+    ReportSection.TEST_AND_DOC_FIXES,
+    ReportSection.FIX_FAILED,
+    ReportSection.INDETERMINATE,
     ReportSection.FAILED,
     ReportSection.CLEAN_PASS,
     ReportSection.RUNNING,
 ]
-
-_ESCALATION_KIND_ORDER: list[EscalationKind] = [EscalationKind.BLOCKER, EscalationKind.SHARED_PATTERN]
 
 
 def _escape_cell(text: str) -> str:
@@ -55,14 +58,6 @@ def _escape_cell(text: str) -> str:
     contain either.
     """
     return text.replace("|", "\\|").replace("\r", " ").replace("\n", " ").strip()
-
-
-def _first_line(text: str) -> str:
-    """Return the first non-empty line of a markdown blob."""
-    for line in text.splitlines():
-        if line.strip():
-            return line.strip()
-    return ""
 
 
 def collect_results(inputs_dir: Path) -> list[TestMapReduceResult]:
@@ -122,60 +117,85 @@ def build_status_breakdown(results: list[TestMapReduceResult]) -> str:
     return "\n".join(lines)
 
 
-def build_escalations_table(
-    results: list[TestMapReduceResult],
-    reducer_escalations: tuple[Escalation, ...] = (),
-) -> str:
-    """Render every escalation as a markdown table, blockers first.
+def build_escalations_section(reducer_escalations: Sequence[IntegratorEscalation]) -> str:
+    """Render the integrator's escalations: unresolved in full, then resolved in one line each.
 
-    Covers both the test agents' escalations and the reducer's own -- the latter
-    include the repeated-change groups it found, which are the most actionable
-    thing the run produces and must not be omitted from the PR.
+    Unresolved escalations are what a reviewer has to act on, so they carry their
+    whole description. Resolved ones are already fixed and verified, so a line
+    and their scale is enough, and the commit carries the rest.
+
+    Both halves report the same three things about an escalation -- its text, its
+    kind, and how many mapper reports it covers -- in the same words the HTML
+    report uses, with resolved ones adding the commit. Unresolved ones are
+    headings rather than table rows only because a markdown table cell cannot
+    hold the multi-paragraph description they carry.
+
+    Only the integrator's escalations appear. They are groupings of the mappers',
+    and a run of this size produces hundreds of mapper reports -- reproducing
+    them here overran GitHub's 65 KB body limit, which is what the grouping
+    exists to fix. The full raw list lives in the HTML report.
     """
-    rows: list[tuple[EscalationKind, str, str, str]] = []
-    for result in results:
-        for escalation in result.escalations:
-            rows.append(
-                (
-                    escalation.kind,
-                    str(result.agent_name),
-                    escalation.title,
-                    _first_line(escalation.detail_markdown),
-                )
-            )
-    for escalation in reducer_escalations:
-        rows.append((escalation.kind, "integrator", escalation.title, _first_line(escalation.detail_markdown)))
-    if not rows:
+    unresolved = sort_escalations([e for e in reducer_escalations if not e.is_resolved])
+    resolved = sort_escalations([e for e in reducer_escalations if e.is_resolved])
+    if not unresolved and not resolved:
         return "### Escalations\n\nNone reported."
 
-    rows.sort(key=lambda row: (_ESCALATION_KIND_ORDER.index(row[0]), row[1]))
-    lines = [
-        f"### Escalations ({len(rows)})",
-        "",
-        "| Kind | Source | Title | Detail |",
-        "| --- | --- | --- | --- |",
-    ]
-    for kind, source, title, detail in rows:
-        lines.append(
-            f"| {escalation_kind_label(kind)} | `{_escape_cell(source)}` "
-            f"| {_escape_cell(title)} | {_escape_cell(detail)} |"
-        )
-    return "\n".join(lines)
+    lines: list[str] = []
+    if unresolved:
+        lines += [f"### Unresolved escalations ({len(unresolved)})", ""]
+        for escalation in unresolved:
+            # One split, so the heading and the body below it cannot disagree
+            # about where the summary sentence ends.
+            summary, detail = split_summary(escalation.description_markdown)
+            lines += [
+                f"#### {summary}",
+                "",
+                f"*{escalation_kind_label(escalation.kind)} -- {escalation_scale_label(escalation)}*",
+                "",
+                detail,
+                "",
+            ]
+    if resolved:
+        if lines:
+            lines.append("")
+        lines += [
+            f"### Resolved escalations ({len(resolved)})",
+            "",
+            "| Escalation | Kind | Reports | Commit |",
+            "| --- | --- | --- | --- |",
+        ]
+        for escalation in resolved:
+            summary = _escape_cell(first_line(escalation.description_markdown))
+            commit = escalation.resolved_in_commit_hash or ""
+            lines.append(
+                f"| {summary} | {escalation_kind_label(escalation.kind)} "
+                f"| {escalation_scale_label(escalation)} | `{commit[:10]}` |"
+            )
+    return "\n".join(lines).rstrip()
+
+
+def _reducer_escalations(reducer_outcome_path: Path | None) -> tuple[IntegratorEscalation, ...]:
+    """Read the integrator's escalations, or none when it has not written them yet.
+
+    The title is built before the PR exists and the outcome file may legitimately
+    be absent (a run whose integrator failed still opens a PR), so a missing file
+    means "no escalations to report" rather than an error.
+    """
+    if reducer_outcome_path is None:
+        return ()
+    outcome = load_integrator_outcome_file(reducer_outcome_path)
+    return outcome.escalations if outcome is not None else ()
 
 
 def build_pr_summary(inputs_dir: Path, reducer_outcome_path: Path | None = None) -> str:
     """Build the full markdown summary block for the PR description.
 
     ``reducer_outcome_path`` is the integrator's own outcome file, when it has
-    already been written; its escalations join the table.
+    already been written; its escalations are the run's escalation sections.
     """
     results = collect_results(inputs_dir)
-    reducer_escalations: tuple[Escalation, ...] = ()
-    if reducer_outcome_path is not None:
-        reducer_outcome = load_integrator_outcome_file(reducer_outcome_path)
-        if reducer_outcome is not None:
-            reducer_escalations = reducer_outcome.escalations
-    return "\n\n".join([build_status_breakdown(results), build_escalations_table(results, reducer_escalations)])
+    reducer_escalations = _reducer_escalations(reducer_outcome_path)
+    return "\n\n".join([build_status_breakdown(results), build_escalations_section(reducer_escalations)])
 
 
 def _format_run_date(run_name: str) -> str:
@@ -190,20 +210,33 @@ def _format_run_date(run_name: str) -> str:
     return run_name
 
 
-def build_pr_title(branch_name: str, results: list[TestMapReduceResult]) -> str:
+def build_pr_title(
+    branch_name: str,
+    results: list[TestMapReduceResult],
+    reducer_escalations: Sequence[IntegratorEscalation] = (),
+) -> str:
     """Build the PR title: mechanical, but readable at a glance in a PR list.
 
     ``branch_name`` is the reducer's own branch, ``<variant>/<run>/reducer``,
     which is where the variant and run name come from.
+
+    The escalation count is the number of *unresolved* integrator escalations --
+    the problems still needing a person. Counting raw mapper escalations instead
+    put "429 escalated" in a title whose run held 21 distinct problems, and
+    counting resolved ones too would advertise work already done.
     """
     parts = branch_name.split("/")
     variant = parts[0] if parts else branch_name
     run_name = parts[1] if len(parts) > 1 else ""
 
     counts = Counter(report_section_of(result) for result in results)
-    fixes = counts.get(ReportSection.IMPL_FIXES, 0) + counts.get(ReportSection.NON_IMPL_FIXES, 0)
-    unresolved = counts.get(ReportSection.UNRESOLVED, 0) + counts.get(ReportSection.FAILED, 0)
-    escalations = sum(len(result.escalations) for result in results)
+    fixes = counts.get(ReportSection.IMPL_FIXES, 0) + counts.get(ReportSection.TEST_AND_DOC_FIXES, 0)
+    unresolved = (
+        counts.get(ReportSection.FIX_FAILED, 0)
+        + counts.get(ReportSection.INDETERMINATE, 0)
+        + counts.get(ReportSection.FAILED, 0)
+    )
+    escalations = sum(1 for escalation in reducer_escalations if not escalation.is_resolved)
 
     # Only non-zero facts earn a place, so the common "everything was clean"
     # run gets a short title instead of a row of zeros.
@@ -211,9 +244,11 @@ def build_pr_title(branch_name: str, results: list[TestMapReduceResult]) -> str:
     if fixes:
         summary_bits.append(f"{fixes} fixed")
     if unresolved:
-        summary_bits.append(f"{unresolved} unresolved")
+        # Not "unresolved": that word now names an escalation state, and these
+        # are agents that did not finish, which is a different thing.
+        summary_bits.append(f"{unresolved} unfinished")
     if escalations:
-        summary_bits.append(f"{escalations} escalated")
+        summary_bits.append(f"{escalations} escalations unresolved")
     if not summary_bits:
         summary_bits.append(f"{len(results)} tests clean")
 
@@ -228,7 +263,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--reducer-outcome",
         type=Path,
-        help="Path to the integrator's own outcome file, so its escalations join the table",
+        help="Path to the integrator's own outcome file, whose escalations are the run's escalation sections "
+        "and whose unresolved count the title reports",
     )
     parser.add_argument(
         "--title",
@@ -238,7 +274,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv[1:])
 
     if args.title:
-        print(build_pr_title(args.title, collect_results(args.inputs_dir)))
+        print(build_pr_title(args.title, collect_results(args.inputs_dir), _reducer_escalations(args.reducer_outcome)))
     else:
         print(build_pr_summary(args.inputs_dir, args.reducer_outcome))
     return 0

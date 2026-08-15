@@ -9,8 +9,11 @@
     integrator              -- IntegratorResult | None    reduced-branch summary (drives merged-status cells)
     coverage_rows           -- list[CoverageRowView]      one per reported unit: claimed vs verified coverage
     behavior_escalation_views   -- list[{coordinate, problem_html, proposed_edit_html}]
-    escalation_views        -- list[{title, detail_html}] integrator blockers surfaced to the user
-    normalization_views     -- list[{summary_html}]       suite-wide cleanups the integrator applied
+    unresolved_escalation_views -- list[{summary, description_html, kind_label, scale_label, resolved_in_commit_hash}]
+                                                          integrator escalations still needing a person
+    resolved_escalation_views   -- same shape; resolved_in_commit_hash is always set
+    unresolved_anchor / resolved_anchor -- str            ids the sidebar links to
+    unresolved_color / resolved_color   -- str            heading colors matching the sidebar
     corpus_violation_paths  -- tuple[str, ...] | None     egress-gate finding (None: not run; empty: clean)
     run_commands            -- list[(label, cmd)]         top-of-report command hints
     css                     -- str                        inlined verbatim (shared report.css)
@@ -80,30 +83,47 @@
       </ul>
     </div>
 {%- endif %}
-{%- if escalation_views %}
+{%- if unresolved_escalation_views %}
     <div class="escalations">
-      <h2 style="color: rgb(244, 67, 54);">Escalations ({{ escalation_views|length }})</h2>
-      <p>These cross-cutting blockers could not be resolved automatically and need your attention:</p>
-      <ul>
-{%- for esc in escalation_views %}
-        <li><strong>{{ esc.title }}</strong><div class="md">{{ esc.detail_html|safe }}</div></li>
+      <h2 id="{{ unresolved_anchor }}" style="color: {{ unresolved_color }};">Unresolved escalations ({{ unresolved_escalation_views|length }})</h2>
+      <p>Problems the integrator could not resolve within the run. Each needs a decision or a change
+      from a person, so each carries its whole description.</p>
+      <table class="escalation-table">
+        <thead><tr><th>Escalation</th><th>Kind</th><th>Reports</th></tr></thead>
+        <tbody>
+{%- for esc in unresolved_escalation_views %}
+          <tr>
+            <td class="md esc-description-cell">{{ esc.description_html|safe }}</td>
+            <td>{{ esc.kind_label }}</td>
+            <td class="esc-scale-cell">{{ esc.scale_label }}</td>
+          </tr>
 {%- endfor %}
-      </ul>
+        </tbody>
+      </table>
     </div>
 {%- endif %}
-{%- if normalization_views %}
-    <div class="normalizations">
-      <h2>Suite normalizations ({{ normalization_views|length }})</h2>
-      <ul>
-{%- for norm in normalization_views %}
-        <li class="md">{{ norm.summary_html|safe }}</li>
+{%- if resolved_escalation_views %}
+    <div class="resolved-escalations">
+      <h2 id="{{ resolved_anchor }}" style="color: {{ resolved_color }};">Resolved escalations ({{ resolved_escalation_views|length }})</h2>
+      <p>Fixed and verified within the run; the commit carries the detail.</p>
+      <table class="escalation-table escalation-table-with-commit">
+        <thead><tr><th>Escalation</th><th>Kind</th><th>Reports</th><th>Commit</th></tr></thead>
+        <tbody>
+{%- for esc in resolved_escalation_views %}
+          <tr>
+            <td>{{ esc.summary }}</td>
+            <td>{{ esc.kind_label }}</td>
+            <td class="esc-scale-cell">{{ esc.scale_label }}</td>
+            <td><code>{{ esc.resolved_in_commit_hash[:10] }}</code></td>
+          </tr>
 {%- endfor %}
-      </ul>
+        </tbody>
+      </table>
     </div>
 {%- endif %}
 {%- for section in sections %}
     <h2 id="{{ section.anchor }}" style="color: {{ section.color }};">{{ section.label }} ({{ section.rows|length }})</h2>
-{%- if section.kind == "NON_IMPL_FIXES" and integrator and integrator.squashed_commit_hash %}
+{%- if section.kind == "TEST_AND_DOC_FIXES" and integrator and integrator.squashed_commit_hash %}
     <p class="squashed-hash">Squashed commit: <code>{{ integrator.squashed_commit_hash[:10] }}</code></p>
 {%- endif %}
     <table>
