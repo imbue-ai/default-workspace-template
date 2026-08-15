@@ -3,6 +3,7 @@
 import base64
 import contextlib
 import json
+import re
 import secrets
 import uuid
 from collections.abc import Iterator
@@ -57,11 +58,14 @@ import imbue.remote_service_connector.hosts as hosts_module
 import imbue.remote_service_connector.litellm_client as litellm_client_mod
 import imbue.remote_service_connector.r2.stores as r2_stores_mod
 import imbue.remote_service_connector.share_broker as share_broker_module
+import imbue.remote_service_connector.stop_start as stop_start_module
+import imbue.remote_service_connector.storage as connector_storage_module
 import imbue.remote_service_connector.sync as sync_mod
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.auth import derive_user_id_prefix
 from imbue.remote_service_connector.cloudflare import CloudflareCtx
 from imbue.remote_service_connector.errors import CloudflareApiError
+from imbue.remote_service_connector.errors import MissingStorageConfigError
 from imbue.remote_service_connector.errors import PoolHostCleanupError
 from imbue.remote_service_connector.errors import R2BucketNotEmptyError
 from imbue.remote_service_connector.errors import R2BucketNotFoundError
@@ -1009,14 +1013,16 @@ class FakePoolRow:
     """In-memory record for a single pool_hosts row."""
 
     host_id: UUID
-    vps_address: str
+    # Placement columns are None while the workspace is stopped (mirrors the
+    # nullable DB columns from migration 024).
+    vps_address: str | None
     vps_instance_id: str
     agent_id: str
     host_id_str: str
     host_name: str
-    ssh_port: int
+    ssh_port: int | None
     ssh_user: str
-    container_ssh_port: int
+    container_ssh_port: int | None
     status: str
     version: str
     attributes: dict[str, Any] | None
@@ -1029,6 +1035,13 @@ class FakePoolRow:
     bare_metal_server_id: UUID | None
     outer_host_public_key: str | None
     container_host_public_key: str | None
+    stop_requested_at: datetime | None
+    stopped_at: datetime | None
+    artifact_manifest: dict[str, Any] | None
+    wrapped_dek: str | None
+    artifact_generation: int
+    transition_heartbeat_at: datetime | None
+    transition_error: str | None
 
 
 def _row_attributes(row: "FakePoolRow") -> dict[str, Any]:
@@ -1095,7 +1108,19 @@ def _make_pool_row(
     row.bare_metal_server_id = None
     row.outer_host_public_key = outer_host_public_key
     row.container_host_public_key = container_host_public_key
+    row.stop_requested_at = None
+    row.stopped_at = None
+    row.artifact_manifest = None
+    row.wrapped_dek = None
+    row.artifact_generation = 0
+    row.transition_heartbeat_at = None
+    row.transition_error = None
     return row
+
+
+def _statuses_in_query(query_lower: str) -> set[str]:
+    """The single-quoted status literals a query's IN (...) list names."""
+    return set(re.findall(r"'([a-z_]+)'", query_lower))
 
 
 # Fixed timestamps for fake workspace-sync rows; list order stands in for
@@ -1146,10 +1171,170 @@ class FakeCursor:
 
         elif "select count(*) from pool_hosts" in query_lower:
             user_id_prefix = params[0]
+            counted_statuses = _statuses_in_query(query_lower) or {"leased"}
             count = sum(
-                1 for row in self._backend.pool_rows if row.status == "leased" and row.leased_to_user == user_id_prefix
+                1
+                for row in self._backend.pool_rows
+                if row.status in counted_statuses and row.leased_to_user == user_id_prefix
             )
             self._results = [(count,)]
+
+        elif query_lower.startswith("select id, status, leased_to_user, host_id"):
+            # stop_start supervisor: full-row read by id.
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
+                self._results = [self._backend.workspace_supervisor_tuple(found)]
+
+        elif query_lower.startswith("select status from pool_hosts"):
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
+                self._results = [(found.status,)]
+
+        elif query_lower.startswith("select leased_to_user, id, status"):
+            # workspaces.py: owned-workspace read (ownership column + info columns).
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
+                self._results = [(found.leased_to_user,) + self._backend.workspace_info_tuple(found)]
+
+        elif "from pool_hosts" in query_lower and "order by leased_at" in query_lower:
+            # workspaces.py: full-lifecycle list endpoint.
+            listed_statuses = _statuses_in_query(query_lower)
+            for row in self._backend.pool_rows:
+                if row.leased_to_user == params[0] and row.status in listed_statuses:
+                    self._results.append(self._backend.workspace_info_tuple(row))
+
+        elif query_lower.startswith("update pool_hosts set status = 'stopping', stop_requested_at"):
+            found = self._backend.find_pool_row(params[0])
+            if found is not None and found.status == "leased":
+                found.status = "stopping"
+                found.stop_requested_at = datetime.now(timezone.utc)
+                found.transition_error = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set status = 'starting'"):
+            found = self._backend.find_pool_row(params[0])
+            if found is not None and found.status in ("stopped", "stopping"):
+                found.status = "starting"
+                found.transition_error = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set status = 'crashed'"):
+            reason, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status in ("leased", "stopping", "stopped", "starting"):
+                found.status = "crashed"
+                found.transition_error = reason
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set transition_heartbeat_at"):
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
+                found.transition_heartbeat_at = datetime.now(timezone.utc)
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set transition_error"):
+            message, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None:
+                found.transition_error = message
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set wrapped_dek"):
+            wrapped, manifest_json, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "stopping":
+                found.wrapped_dek = wrapped
+                found.artifact_manifest = json.loads(manifest_json)
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set status = 'stopped', stopped_at"):
+            manifest_json, generation, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "stopping":
+                found.status = "stopped"
+                found.stopped_at = datetime.now(timezone.utc)
+                found.vps_address = None
+                found.ssh_port = None
+                found.container_ssh_port = None
+                found.artifact_manifest = json.loads(manifest_json)
+                found.artifact_generation = int(generation)
+                found.transition_error = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set status = 'stopped', transition_error"):
+            message, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "starting" and found.stopped_at is not None:
+                found.status = "stopped"
+                found.transition_error = message
+                found.vps_address = None
+                found.ssh_port = None
+                found.container_ssh_port = None
+                found.bare_metal_server_id = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set status = 'stopping', transition_error"):
+            message, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "starting":
+                found.status = "stopping"
+                found.transition_error = message
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set status = 'leased', stop_requested_at = null"):
+            found = self._backend.find_pool_row(params[0])
+            if found is not None and found.status == "starting":
+                found.status = "leased"
+                found.stop_requested_at = None
+                found.stopped_at = None
+                found.artifact_manifest = None
+                found.wrapped_dek = None
+                found.transition_error = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set status = 'leased', vps_address"):
+            vps_address, ssh_port, container_ssh_port, server_id, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None and found.status == "starting":
+                found.status = "leased"
+                found.vps_address = vps_address
+                found.ssh_port = ssh_port
+                found.container_ssh_port = container_ssh_port
+                found.bare_metal_server_id = UUID(server_id) if isinstance(server_id, str) else server_id
+                found.stop_requested_at = None
+                found.stopped_at = None
+                found.transition_error = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("update pool_hosts set bare_metal_server_id = null"):
+            found = self._backend.find_pool_row(params[0])
+            if found is not None and found.status == "stopped":
+                found.bare_metal_server_id = None
+                found.transition_heartbeat_at = None
+                self.rowcount = 1
+
+        elif query_lower.startswith("select id from pool_hosts where") and "transition_heartbeat_at" in query_lower:
+            # Watchdog: in-flight rows whose supervisor heartbeat is stale.
+            # The fake treats "no heartbeat recorded" as stale.
+            for row in self._backend.pool_rows:
+                is_in_flight = row.status in ("stopping", "starting") or (
+                    row.status == "stopped" and row.bare_metal_server_id is not None
+                )
+                if is_in_flight and row.transition_heartbeat_at is None:
+                    self._results.append((row.host_id,))
+
+        elif "from bare_metal_servers where id" in query_lower:
+            box = self._backend.find_box_row(params[0])
+            if box is not None:
+                self._results = [self._backend.box_tuple(box)]
+
+        elif "from bare_metal_servers where status = 'ready'" in query_lower:
+            # The candidate-box listing selects the box columns plus region.
+            self._results = [
+                self._backend.box_tuple(box) + (box["region"],)
+                for box in self._backend.box_rows
+                if box["status"] == "ready"
+            ]
 
         elif "from pool_hosts" in query_lower and "status = 'available'" in query_lower:
             # The connector serialises the request attributes via json.dumps
@@ -1264,6 +1449,7 @@ class FakeCursor:
                             row.lima_instance_name,
                             row.lima_disk_name,
                             row.bare_metal_server_id,
+                            row.host_id_str,
                         )
                     ]
                     break
@@ -1308,6 +1494,10 @@ class FakeCursor:
                 if row.host_id == host_id:
                     row.status = "removing"
                     row.released_at = "2026-01-02T00:00:00+00:00"
+                    # The crashed-release flip also clears the box link, so a
+                    # retry never re-requires the dead box's teardown.
+                    if "bare_metal_server_id = null" in query_lower:
+                        row.bare_metal_server_id = None
                     break
 
         elif "from paid_emails" in query_lower and "select 1" in query_lower:
@@ -1536,6 +1726,58 @@ class FakeCursor:
                     self._results = [(pool_row.region,)]
                     break
 
+        elif "from relays order by relay_id" in query_lower:
+            self._results = [
+                self._backend.relay_tuple(relay_row)
+                for relay_row in sorted(self._backend.relay_rows, key=lambda row: row["relay_id"])
+            ]
+
+        elif query_lower.startswith("insert into relays"):
+            relay_id, region, tunnel_endpoint, ip_address, instance_name = params
+            self._backend.upsert_relay(relay_id, region, tunnel_endpoint, ip_address, instance_name)
+
+        elif query_lower.startswith("update relays set is_active = false"):
+            self.rowcount = 0
+            for relay_row in self._backend.relay_rows:
+                if relay_row["relay_id"] == params[0]:
+                    relay_row["is_active"] = False
+                    self.rowcount = 1
+
+        elif query_lower.startswith("update relays set health"):
+            health, consecutive_probe_failures, relay_id = params
+            for relay_row in self._backend.relay_rows:
+                if relay_row["relay_id"] == relay_id:
+                    relay_row["health"] = health
+                    relay_row["consecutive_probe_failures"] = consecutive_probe_failures
+
+        elif query_lower.startswith("insert into share_tunnel_logins"):
+            host_id, user_label, relay_id = params
+            for login_row in self._backend.share_tunnel_login_rows:
+                if (
+                    login_row["host_id"] == host_id
+                    and login_row["user_id"] == user_label
+                    and login_row["relay_id"] == relay_id
+                ):
+                    login_row["last_login_at"] = _SHARE_ROW_UPDATED_AT
+                    break
+            else:
+                self._backend.share_tunnel_login_rows.append(
+                    {
+                        "host_id": host_id,
+                        "user_id": user_label,
+                        "relay_id": relay_id,
+                        "last_login_at": _SHARE_ROW_UPDATED_AT,
+                    }
+                )
+
+        elif query_lower.startswith("select relay_id, last_login_at from share_tunnel_logins"):
+            host_id, user_label = params
+            self._results = [
+                (login_row["relay_id"], login_row["last_login_at"])
+                for login_row in sorted(self._backend.share_tunnel_login_rows, key=lambda row: row["relay_id"])
+                if login_row["host_id"] == host_id and login_row["user_id"] == user_label
+            ]
+
         elif query_lower.startswith("insert into issued_certs"):
             workspace_domain, host_id, user_label, ca_name, cert_chain_pem, sans_json, not_after = params
             self._backend.issued_cert_rows.append(
@@ -1650,6 +1892,33 @@ _SHARE_ROW_CREATED_AT = "2026-01-01T00:00:00+00:00"
 _SHARE_ROW_UPDATED_AT = "2026-01-02T00:00:00+00:00"
 
 
+def make_relay_row(
+    relay_id: str,
+    region: str = "us1",
+    tunnel_endpoint: str | None = None,
+    ip_address: str = "198.51.100.9",
+    instance_name: str = "",
+    is_active: bool = True,
+    health: str = "healthy",
+    consecutive_probe_failures: int = 0,
+) -> dict[str, Any]:
+    """One relays-table row dict, keyed like relays._RELAY_COLUMN_NAMES.
+
+    The shape ``RelayStore.list_relays`` returns; the tunnel endpoint defaults
+    to ``<ip>:7000`` (what the provisioning flow registers).
+    """
+    return {
+        "relay_id": relay_id,
+        "region": region,
+        "tunnel_endpoint": tunnel_endpoint if tunnel_endpoint is not None else f"{ip_address}:7000",
+        "ip_address": ip_address,
+        "instance_name": instance_name,
+        "is_active": is_active,
+        "health": health,
+        "consecutive_probe_failures": consecutive_probe_failures,
+    }
+
+
 class FakePoolBackend:
     """In-memory pool database replacement for testing host pool + paid-list endpoints."""
 
@@ -1678,6 +1947,35 @@ class FakePoolBackend:
     # ``slice_teardown_should_fail`` to simulate a teardown that cannot complete.
     slice_teardowns: list[tuple[Any, Any, str | None, str | None]]
     slice_teardown_should_fail: bool
+    # Seeded bare_metal_servers rows for stop/start supervisor tests.
+    box_rows: list[dict[str, Any]]
+    # Workspace stop/start fakes: the tier storage config (None = unconfigured,
+    # endpoints answer 503), recorded S3 prefix deletions (set
+    # ``delete_prefix_should_fail`` to simulate a storage outage), the box command log,
+    # files "written" to boxes, the transfer status feed (popped per read; the
+    # last entry repeats), whether the detached transfer pid looks alive,
+    # whether the VM still exists on its origin box (the restart-in-place
+    # check), canned age-keygen/reserve outputs, spawned supervisor ids, an
+    # optional substring that makes matching box commands fail, an optional
+    # callback invoked with each box command before it is answered (for
+    # mid-transfer state changes), and an optional callback invoked on each
+    # supervisor sleep (for mid-wait state changes).
+    storage_config: Any
+    deleted_prefixes: list[str]
+    delete_prefix_should_fail: bool
+    box_command_log: list[str]
+    box_file_writes: dict[str, str]
+    transfer_status_sequence: list[str]
+    transfer_alive: bool
+    vm_exists_on_origin: bool
+    age_keygen_output: str
+    reserve_rc: int
+    reserve_stdout: str
+    reserve_stderr: str
+    spawned_supervisors: list[str]
+    box_command_should_fail_matching: str | None
+    box_command_callback: Any
+    sleep_callback: Any
     # Paid-list stores: value -> {"is_paid", "created_at", "updated_at"}.
     paid_domains: dict[str, dict[str, Any]]
     paid_emails: dict[str, dict[str, Any]]
@@ -1703,6 +2001,67 @@ class FakePoolBackend:
     relay_token_rows: list[dict[str, Any]]
     issued_cert_rows: list[dict[str, Any]]
     acme_account_rows: list[dict[str, Any]]
+    # Relay fleet inventory rows (mirroring the relays table, keyed like
+    # relays._RELAY_COLUMN_NAMES) and per-(share, relay) login stamps
+    # (mirroring share_tunnel_logins).
+    relay_rows: list[dict[str, Any]]
+    share_tunnel_login_rows: list[dict[str, Any]]
+
+    def add_relay(
+        self,
+        relay_id: str,
+        region: str,
+        tunnel_endpoint: str,
+        ip_address: str = "198.51.100.1",
+        instance_name: str = "",
+        is_active: bool = True,
+        health: str = "healthy",
+    ) -> None:
+        """Seed a relay row (bypassing the admin endpoint), defaulting to active + healthy."""
+        self.relay_rows.append(
+            make_relay_row(
+                relay_id=relay_id,
+                region=region,
+                tunnel_endpoint=tunnel_endpoint,
+                ip_address=ip_address,
+                instance_name=instance_name,
+                is_active=is_active,
+                health=health,
+            )
+        )
+
+    def upsert_relay(
+        self, relay_id: str, region: str, tunnel_endpoint: str, ip_address: str, instance_name: str
+    ) -> None:
+        """Mirror the admin endpoint's INSERT ... ON CONFLICT (relay_id) upsert (revive-on-reregister)."""
+        for relay_row in self.relay_rows:
+            if relay_row["relay_id"] == relay_id:
+                relay_row.update(
+                    {
+                        "region": region,
+                        "tunnel_endpoint": tunnel_endpoint,
+                        "ip_address": ip_address,
+                        "instance_name": instance_name,
+                        "is_active": True,
+                        "health": "healthy",
+                        "consecutive_probe_failures": 0,
+                    }
+                )
+                return
+        self.add_relay(relay_id, region, tunnel_endpoint, ip_address, instance_name)
+
+    def relay_tuple(self, relay_row: dict[str, Any]) -> tuple[Any, ...]:
+        """Project a relay row into the SELECT column order PostgresRelayStore uses."""
+        return (
+            relay_row["relay_id"],
+            relay_row["region"],
+            relay_row["tunnel_endpoint"],
+            relay_row["ip_address"],
+            relay_row["instance_name"],
+            relay_row["is_active"],
+            relay_row["health"],
+            relay_row["consecutive_probe_failures"],
+        )
 
     def add_share(
         self,
@@ -1796,6 +2155,145 @@ class FakePoolBackend:
             existing["is_paid"] = False
             existing["updated_at"] = _PAID_ENTRY_UPDATED_AT
 
+    def add_box(
+        self,
+        server_id: UUID,
+        public_address: str = "10.9.9.9",
+        lima_service_user: str = "limahost",
+        box_host_public_key: str = "ssh-ed25519 AAAA boxkey",
+        slot_count: int = 6,
+        status: str = "ready",
+        region: str = "vin",
+    ) -> dict[str, Any]:
+        """Seed a bare_metal_servers row for stop/start supervisor tests."""
+        box = {
+            "id": server_id,
+            "public_address": public_address,
+            "lima_service_user": lima_service_user,
+            "box_host_public_key": box_host_public_key,
+            "slot_count": slot_count,
+            "status": status,
+            "region": region,
+        }
+        self.box_rows.append(box)
+        return box
+
+    def find_box_row(self, raw_id: Any) -> dict[str, Any] | None:
+        server_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
+        for box in self.box_rows:
+            if box["id"] == server_id:
+                return box
+        return None
+
+    def box_tuple(self, box: dict[str, Any]) -> tuple[Any, ...]:
+        """Project a box row into the SELECT column order stop_start uses."""
+        return (
+            box["id"],
+            box["public_address"],
+            box["lima_service_user"],
+            box["box_host_public_key"],
+            box["slot_count"],
+        )
+
+    def find_pool_row(self, raw_id: Any) -> "FakePoolRow | None":
+        row_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
+        for row in self.pool_rows:
+            if row.host_id == row_id:
+                return row
+        return None
+
+    def workspace_info_tuple(self, row: "FakePoolRow") -> tuple[Any, ...]:
+        """Project a row into workspaces.py's _WORKSPACE_SELECT_COLUMNS order."""
+        return (
+            row.host_id,
+            row.status,
+            row.vps_address,
+            row.ssh_port,
+            row.ssh_user,
+            row.container_ssh_port,
+            row.agent_id,
+            row.host_id_str,
+            row.host_name,
+            _row_attributes(row),
+            row.leased_at,
+            row.stop_requested_at,
+            row.stopped_at,
+            row.transition_error,
+            row.outer_host_public_key,
+            row.container_host_public_key,
+        )
+
+    def workspace_supervisor_tuple(self, row: "FakePoolRow") -> tuple[Any, ...]:
+        """Project a row into stop_start's _WORKSPACE_ROW_SELECT column order."""
+        return (
+            row.host_id,
+            row.status,
+            row.leased_to_user,
+            row.host_id_str,
+            row.vps_address,
+            row.ssh_port,
+            row.ssh_user,
+            row.container_ssh_port,
+            row.bare_metal_server_id,
+            row.lima_instance_name,
+            row.lima_disk_name,
+            row.region,
+            row.stop_requested_at,
+            row.artifact_manifest,
+            row.wrapped_dek,
+            row.artifact_generation,
+        )
+
+    def run_box_command_fake(
+        self, box: Any, command: str, input_text: str | None = None, timeout_seconds: float = 0
+    ) -> tuple[int, str, str]:
+        """Pattern-matched stand-in for stop_start._run_box_command."""
+        self.box_command_log.append(command)
+        if self.box_command_callback is not None:
+            self.box_command_callback(command)
+        if self.box_command_should_fail_matching and self.box_command_should_fail_matching in command:
+            return 1, "", "injected failure"
+        if "age-keygen" in command:
+            return 0, self.age_keygen_output, ""
+        if '/status"' in command and command.startswith("cat"):
+            text = (
+                self.transfer_status_sequence[0]
+                if len(self.transfer_status_sequence) == 1
+                else self.transfer_status_sequence.pop(0)
+            )
+            return 0, text, ""
+        if "kill -0" in command:
+            return (0 if self.transfer_alive else 1), "", ""
+        if "reserve.sh" in command:
+            return self.reserve_rc, self.reserve_stdout, self.reserve_stderr
+        if command.startswith("[ -d "):
+            return (0 if self.vm_exists_on_origin else 1), "", ""
+        return 0, "", ""
+
+    def write_box_file_fake(self, box: Any, instance_name: str, filename: str, content: str) -> None:
+        self.box_file_writes[f"{instance_name}/{filename}"] = content
+
+    def sleep_fake(self, seconds: float) -> None:
+        if self.sleep_callback is not None:
+            self.sleep_callback(seconds)
+
+    def read_storage_config_fake(self) -> Any:
+        if self.storage_config is None:
+            raise MissingStorageConfigError("WORKSPACE_STORAGE_BUCKET")
+        return self.storage_config
+
+    def is_storage_configured_fake(self) -> bool:
+        return self.storage_config is not None
+
+    def delete_prefix_fake(self, config: Any, prefix: str) -> int:
+        if self.delete_prefix_should_fail:
+            raise OSError(f"simulated storage outage deleting prefix {prefix}")
+        self.deleted_prefixes.append(prefix)
+        return 0
+
+    def record_spawned_supervisor(self, host_db_id: str) -> None:
+        self.spawned_supervisors.append(host_db_id)
+
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Swap DB and SSH functions on their owning modules with fakes.
 
@@ -1813,6 +2311,13 @@ class FakePoolBackend:
             (hosts_module, "_adopt_workspace_on_container", self.adopt_workspace_on_container),
             (hosts_module, "_start_workspace_agent_on_container", self.start_workspace_agent_on_container),
             (hosts_module, "clean_up_slice_on_box", self.clean_up_slice_on_box),
+            (stop_start_module, "_run_box_command", self.run_box_command_fake),
+            (stop_start_module, "_write_box_file", self.write_box_file_fake),
+            (stop_start_module, "_sleep", self.sleep_fake),
+            (stop_start_module.spawner, "hook", self.record_spawned_supervisor),
+            (connector_storage_module, "read_storage_config", self.read_storage_config_fake),
+            (connector_storage_module, "is_storage_configured", self.is_storage_configured_fake),
+            (connector_storage_module, "delete_prefix", self.delete_prefix_fake),
         ]
         for target_module, name, fake in fakes:
             monkeypatch.setattr(target_module, name, fake)
@@ -2108,6 +2613,11 @@ class FakePoolBackend:
             leased_at="2026-01-01T00:00:00+00:00",
         )
         row.released_at = "2026-01-02T00:00:00+00:00"
+        # An interrupted release of a leased slice row retains its box link and
+        # lima names, which is what makes its VM teardown retryable.
+        row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
+        row.lima_instance_name = f"mngr-slice-test-{host_id.hex}"
+        row.lima_disk_name = f"mngr-slice-test-{host_id.hex}-data"
         self.pool_rows.append(row)
         return row
 
@@ -2137,7 +2647,48 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.relay_token_rows = []
     backend.issued_cert_rows = []
     backend.acme_account_rows = []
+    # The standard test fleet: one relay per region, mirroring what the
+    # provisioning flow registers. Tests exercising an empty or altered fleet
+    # mutate ``relay_rows`` directly.
+    backend.relay_rows = []
+    backend.share_tunnel_login_rows = []
+    backend.add_relay(_RELAY_ID_US1, "us1", _RELAY_ENDPOINT_US1, ip_address="198.51.100.1")
+    backend.add_relay(_RELAY_ID_US2, "us2", _RELAY_ENDPOINT_US2, ip_address="198.51.100.2")
+    backend.box_rows = []
+    backend.storage_config = None
+    backend.deleted_prefixes = []
+    backend.delete_prefix_should_fail = False
+    backend.box_command_log = []
+    backend.box_file_writes = {}
+    backend.transfer_status_sequence = [
+        "STAGE=uploaded\nFINISHED=1\nSHA_DISK=aa11\nBYTES_DISK=100\nSHA_DATADISK=bb22\nBYTES_DATADISK=50\nSHA_META=cc33\nBYTES_META=10\n"
+    ]
+    backend.transfer_alive = False
+    backend.vm_exists_on_origin = True
+    backend.age_keygen_output = (
+        "# created: 2026-01-01T00:00:00Z\n# public key: age1qtestrecipient\nAGE-SECRET-KEY-1TESTIDENTITY\n"
+    )
+    backend.reserve_rc = 0
+    backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001\n"
+    backend.reserve_stderr = ""
+    backend.spawned_supervisors = []
+    backend.box_command_should_fail_matching = None
+    backend.box_command_callback = None
+    backend.sleep_callback = None
     return backend
+
+
+def make_storage_config(retention_seconds: int = 0) -> "connector_storage_module.StorageConfig":
+    """A storage config for stop/start tests (retention 0 so stops finalize immediately)."""
+    return connector_storage_module.StorageConfig(
+        s3_endpoint="https://s3.test.example",
+        s3_region="us-east-va",
+        access_key_id="testaccess",
+        secret_access_key="testsecret",
+        bucket="mngr-workspaces-test",
+        kek_base64=base64.b64encode(b"0" * 32).decode("ascii"),
+        retention_seconds=retention_seconds,
+    )
 
 
 class InMemorySyncStore:
@@ -2280,6 +2831,7 @@ def make_fake_orphan_bucket_store() -> InMemoryOrphanBucketStore:
 # Canonical plan values matching the committed deploy.toml [plans] blocks.
 EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 2,
+    "max_total_workspaces": 10,
     "max_buckets": 5,
     "max_total_bucket_bytes": 50 * 1024**3,
     "monthly_llm_spend_usd": 0.0,
@@ -2287,6 +2839,7 @@ EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
 }
 ALLY_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 10,
+    "max_total_workspaces": 50,
     "max_buckets": 20,
     "max_total_bucket_bytes": 500 * 1024**3,
     "monthly_llm_spend_usd": 1000.0,
@@ -2778,9 +3331,14 @@ _SHARE_STUB_EMAIL = "sharer@example.com"
 _SHARE_STUB_HOST_ID = "host-" + "a" * 32
 _OTHER_HOST_ID = "host-" + "b" * 32
 _CONTENT_DOMAIN = "minds-test.example"
-_DEFAULT_REGION = "us1"
-_RELAY_ENDPOINTS = "us1=relay-us1.infra.example.com:7000,us2=relay-us2.infra.example.com:7000"
 _FRPS_SECRET = "frps-plugin-secret-8d1c44"
+
+# The seeded test relay fleet: one relay per region, mirroring what the
+# provisioning flow registers in the relays table.
+_RELAY_ID_US1 = "relay-" + "1" * 16
+_RELAY_ID_US2 = "relay-" + "2" * 16
+_RELAY_ENDPOINT_US1 = "relay-us1.infra.example.com:7000"
+_RELAY_ENDPOINT_US2 = "relay-us2.infra.example.com:7000"
 
 
 def _share_headers() -> dict[str, str]:
@@ -2875,8 +3433,6 @@ def _make_share_test_client_with_fakes(
     """Shared client setup; ``session_fakes`` supplies the token -> user resolution to install on the auth module."""
     monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://fake-supertokens.example.com")
     monkeypatch.setenv("SHARE_CONTENT_DOMAIN", _CONTENT_DOMAIN)
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", _DEFAULT_REGION)
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
     monkeypatch.setenv("FRPS_AUTH_SECRET", _FRPS_SECRET)
     for name, fake_impl in session_fakes.items():
         monkeypatch.setattr(auth_mod, name, fake_impl)

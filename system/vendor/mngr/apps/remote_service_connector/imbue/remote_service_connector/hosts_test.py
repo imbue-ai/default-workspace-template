@@ -13,6 +13,7 @@ from imbue.remote_service_connector.testing import _make_pool_quota_test_client
 from imbue.remote_service_connector.testing import _make_pool_test_client
 from imbue.remote_service_connector.testing import _seed_entitlements_row
 from imbue.remote_service_connector.testing import _user_headers
+from imbue.remote_service_connector.testing import make_storage_config
 
 
 def test_lease_host_returns_available_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -441,6 +442,110 @@ def test_release_host_fails_loudly_when_slice_teardown_fails(monkeypatch: pytest
     # The row is NOT deleted; it stays 'removing' so the teardown is retryable.
     assert len(backend.pool_rows) == 1
     assert backend.pool_rows[0].status == "removing"
+
+
+def test_release_host_of_crashed_row_survives_a_dead_box(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Releasing a 'crashed' row whose box is unreachable still deletes the row.
+
+    'crashed' is the operator's abandon-time assertion that the box is
+    permanently dead, so the teardown attempt is best-effort: its failure is
+    logged and the release proceeds, instead of wedging the row in 'removing'
+    forever against a box that will never answer.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.slice_teardown_should_fail = True
+    row = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000cd"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    row.status = "crashed"
+    row.transition_error = "abandoned: box permanently dead"
+    row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000cd/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+
+
+def test_release_host_of_crashed_row_still_attempts_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Releasing a 'crashed' row whose box turns out reachable tears the VM down normally."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    row = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000ce"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    row.status = "crashed"
+    row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000ce/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+    assert len(backend.slice_teardowns) == 1
+
+
+def test_release_host_of_crashed_row_stays_best_effort_across_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crashed release interrupted after its status flip still completes on retry.
+
+    The flip to 'removing' clears the box link, so a retry -- which reads
+    'removing', not 'crashed' -- does not turn into a must-succeed teardown
+    against the permanently dead box. Here the first attempt fails at the
+    artifact deletion (a transient storage outage); the retry, with storage
+    healed but the box still dead, must release cleanly.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    backend.delete_prefix_should_fail = True
+    backend.slice_teardown_should_fail = True
+    row = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000cf"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    row.status = "crashed"
+    row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
+
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000cf/release", headers=_user_headers())
+    assert resp.status_code == 500
+    assert len(backend.pool_rows) == 1
+    assert backend.pool_rows[0].status == "removing"
+
+    backend.delete_prefix_should_fail = False
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000cf/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+
+
+def test_release_host_of_mid_restore_starting_row_skips_teardown_and_deletes_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Releasing a 'starting' row whose restore has not yet placed its VM must succeed.
+
+    Between a stop finalize and the restore's final CAS the row has no box link
+    (bare_metal_server_id is NULL): there is no recorded VM anywhere, so a
+    release must not attempt a slice teardown (which can only fail, wedging the
+    row in 'removing' forever) -- it deletes the row directly.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    row = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000ab"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    row.status = "starting"
+    row.vps_address = None
+    row.ssh_port = None
+    row.container_ssh_port = None
+    row.lima_instance_name = "mngr-slice-test-" + "ab" * 16
+    row.lima_disk_name = "mngr-slice-test-" + "ab" * 16 + "-data"
+    assert row.bare_metal_server_id is None
+    resp = client.post("/hosts/00000000-0000-0000-0000-0000000000ab/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+    assert backend.slice_teardowns == []
 
 
 def test_release_host_returns_403_for_non_owner(monkeypatch: pytest.MonkeyPatch) -> None:

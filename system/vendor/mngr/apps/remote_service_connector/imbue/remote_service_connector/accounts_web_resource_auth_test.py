@@ -95,8 +95,6 @@ def test_claim_accepts_the_browser_session_cookie(monkeypatch: pytest.MonkeyPatc
     # (like lease and key minting) resolves entitlements. This is exactly the
     # 401 the first live browser create hit.
     monkeypatch.setenv("SHARE_CONTENT_DOMAIN", "shares.example")
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", "us1")
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", "us1=relay-us1.shares.example:7000")
     monkeypatch.setenv("MINDS_WEB_TEMPLATE_REPO", "github.com/imbue-ai/default-workspace-template")
     monkeypatch.setenv("MINDS_WEB_TEMPLATE_REF", "mngr/test-pin")
     client, backend, _entitlements, _litellm, st_backend = _make_pool_quota_web_test_client(monkeypatch)

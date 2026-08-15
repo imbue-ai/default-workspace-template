@@ -13,16 +13,13 @@ from typing import Final
 import httpx
 import pytest
 
-from imbue.minds.cli.paid import admin_key_from_supertokens_secret
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
-from imbue.minds.envs.vault_reader import VaultPath
-from imbue.minds.envs.vault_reader import read_vault_kv
+from imbue.minds.deployment_tests.helpers import ci_admin_auth_header
 
 pytestmark = [pytest.mark.release, pytest.mark.minds_services]
 
 _HTTP_TIMEOUT_SECONDS: Final[float] = 60.0
-_CI_SUPERTOKENS_VAULT_PATH: Final[VaultPath] = VaultPath("secrets/minds/ci/supertokens")
 
 
 def _connector_url(env: SharedEnvHandle) -> str:
@@ -31,13 +28,6 @@ def _connector_url(env: SharedEnvHandle) -> str:
 
 def _auth_header(user: VerifiedUserHandle) -> dict[str, str]:
     return {"Authorization": f"Bearer {user.session_token.get_secret_value()}"}
-
-
-def _admin_header() -> dict[str, str]:
-    admin_key = admin_key_from_supertokens_secret(
-        read_vault_kv(_CI_SUPERTOKENS_VAULT_PATH), str(_CI_SUPERTOKENS_VAULT_PATH)
-    )
-    return {"Authorization": f"Bearer {admin_key}"}
 
 
 def test_backup_retention_policy_endpoint_serves_the_window(shared_env: SharedEnvHandle) -> None:
@@ -102,7 +92,7 @@ def test_reap_cycle_deletes_tombstoned_bucket_and_record(
 
         dry = httpx.post(
             f"{base}/admin/sweep/backup-retention?dry_run=1&window_seconds=0",
-            headers=_admin_header(),
+            headers=ci_admin_auth_header(),
             timeout=_HTTP_TIMEOUT_SECONDS,
         )
         dry.raise_for_status()
@@ -111,7 +101,7 @@ def test_reap_cycle_deletes_tombstoned_bucket_and_record(
 
         reap = httpx.post(
             f"{base}/admin/sweep/backup-retention?window_seconds=0",
-            headers=_admin_header(),
+            headers=ci_admin_auth_header(),
             timeout=_HTTP_TIMEOUT_SECONDS,
         )
         reap.raise_for_status()
@@ -138,6 +128,6 @@ def test_reap_cycle_deletes_tombstoned_bucket_and_record(
         )
         httpx.post(
             f"{base}/admin/sweep/backup-retention?window_seconds=0",
-            headers=_admin_header(),
+            headers=ci_admin_auth_header(),
             timeout=_HTTP_TIMEOUT_SECONDS,
         )
