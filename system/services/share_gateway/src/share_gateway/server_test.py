@@ -64,8 +64,6 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
     grants_path.write_text(grants_text)
     materials = ShareMaterials(
         workspace_domain=_DOMAIN,
-        relay_host="relay.example.com",
-        relay_port=7000,
         relay_token="tok",
         connector_url="https://connector.example.com",
         broker_url=_BROKER_URL,
