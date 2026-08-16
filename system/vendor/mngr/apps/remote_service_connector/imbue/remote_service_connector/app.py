@@ -39,6 +39,7 @@ import imbue.remote_service_connector.r2.stores as r2_stores_module
 import imbue.remote_service_connector.stop_start as stop_start_module
 import imbue.remote_service_connector.sync as sync_module
 from imbue.modal_app_kit.deploy import deploy_metadata_secret
+from imbue.modal_app_kit.deploy import read_custom_domains
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import read_min_containers
@@ -94,6 +95,15 @@ _MIN_CONTAINERS = read_min_containers("MINDS_CONNECTOR_MIN_CONTAINERS")
 # ci/test tier) means "don't pin it" -- the function falls back to Modal's
 # own default scaledown window.
 _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
+
+# Modal custom domains for the web function (the tier's user-facing accounts +
+# web-chrome hosts). ``minds env deploy`` threads the tier's ``[origins]``
+# hosts from its committed ``deploy.toml`` here at ``modal deploy`` time.
+# Every named domain must already be registered and verified in the deploying
+# Modal workspace (dashboard -> Domains) or the deploy fails. None (the
+# default) deploys with only the ``*.modal.run`` URL -- dev/ci tiers and any
+# deploy outside the wrapper.
+_CUSTOM_DOMAINS = read_custom_domains("MINDS_CONNECTOR_CUSTOM_DOMAINS")
 
 # All build steps (the hash-locked pip install onto the digest-pinned base --
 # see ``imbue.modal_app_kit.image``) come first and are cached; local source is
@@ -165,7 +175,7 @@ def _connector_secrets() -> list[modal.Secret]:
 # because each concurrent request holds one direct Neon connection and one
 # threadpool thread for its duration.
 @modal.concurrent(max_inputs=8)
-@modal.asgi_app()
+@modal.asgi_app(custom_domains=_CUSTOM_DOMAINS)
 def fastapi_app() -> FastAPI:
     init_supertokens()
     # The SuperTokens middleware serves the accounts surface's browser-session

@@ -231,6 +231,24 @@ Email-addressed operator management of per-account entitlements, authenticated b
 - `POST /admin/accounts/{email}/plan` -- Body `{"plan": "..."}`; always resets to the plan's defaults (the operator's way to wipe manual bumps; skips the ally eligibility check).
 - `POST /admin/accounts/{email}/quota` -- Body `{"entitlement": "...", "value": N}`; bump a single entitlement.
 
+There is deliberately **no account-deletion endpoint** here: fully removing a user (its SuperTokens identity plus every connector-DB row keyed to it) is a destructive operator action done out-of-band, not something the connected clients need. Use the local operator tool `scripts/delete_accounts.py` (repo root) for that -- see "Fully deleting accounts" below.
+
+### Fully deleting accounts (`scripts/delete_accounts.py`)
+
+`scripts/delete_accounts.py` is a **local** operator tool (private -- not in the public-mirror allowlist, and it lives at the repo root, not in this app) that fully deletes accounts by talking directly to a tier's live backends, so it needs **no connector deploy**. For each account in a CSV it removes the connector-DB rows keyed to the user (`account_entitlements`, `workspace_records`, `account_key_bundles`, `r2_cleanup_grants`, and `shares` / `relay_tokens` keyed by the account's 32-hex share label), best-effort-deletes the LiteLLM internal user, and deletes the SuperTokens identity itself last (so a partial run is safe to re-run).
+
+It is **dry-run by default** (prints the plan, changes nothing until `--execute`), refuses any account still holding a leased pool host (release those via `mngr pool destroy` first), tolerates target tables absent from a tier's DB, and leaves each account's `host-<hex>` R2 backup buckets to the backup-retention reaper (deleting the workspace records orphans them). Credentials resolve per value from an explicit flag, else an environment variable, else the tier's HCP Vault entries.
+
+```bash
+export VAULT_TOKEN=...   # or a prior `vault login`
+# Dry run (default): show exactly what would be deleted for every account in the CSV.
+uv run python scripts/delete_accounts.py --tier production --accounts-file accounts.csv
+# Actually delete:
+uv run python scripts/delete_accounts.py --tier production --accounts-file accounts.csv --execute
+```
+
+The accounts file is a CSV with a header row containing a `user_id` column (an `email` column, when present, is used only for reporting).
+
 ### Auth
 
 These endpoints front the SuperTokens core so that clients (e.g. the `minds` desktop client) never need the SuperTokens API key. They require `SUPERTOKENS_CONNECTION_URI` (and usually `SUPERTOKENS_API_KEY`) to be configured on the server; otherwise they return 503. All of them are unauthenticated *except* `/auth/session/revoke`, `/auth/session/revoke-current`, `/auth/email/send-verification`, and `/auth/email/is-verified`, which must be called with the caller's own access token (see below); those deliberately accept a session whose email is not yet verified.

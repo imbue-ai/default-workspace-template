@@ -15,7 +15,7 @@
 #     context even though it's never committed.
 [private]
 _generate-dockerignore:
-    grep -vE '^/?\.dockerignore$|^/libs/mngr/imbue/mngr/resources/Dockerfile\.release$' .gitignore > .dockerignore
+    bash scripts/generate_dockerignore.sh
 
 # Generate Dockerfile.release from Dockerfile + Dockerfile.release.extras so the
 # two Dockerfiles stay in sync without duplicating the base layers. Strips the

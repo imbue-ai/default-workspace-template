@@ -29,6 +29,13 @@ enable_docker = true
 # `uv sync --all-packages` after every thin diff, refreshing dist-info).
 build_inputs = [
     "libs/mngr/imbue/mngr/resources/Dockerfile",
+    # The sandbox base image's `COPY . /code/mngr/` is filtered by the
+    # .dockerignore that scripts/generate_dockerignore.sh derives from
+    # .gitignore, so a change to either alters which files exist in the
+    # image and must rebuild the checkpoint (a stale checkpoint silently
+    # drops newly-unignored committed files -- seen with .minds/template).
+    "scripts/generate_dockerignore.sh",
+    ".gitignore",
     "pyproject.toml",
     "uv.lock",
     # The Dockerfile pre-fetches the dugite-native git payload pinned by this
