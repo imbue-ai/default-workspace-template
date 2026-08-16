@@ -49,7 +49,6 @@ from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import InvalidCsrError
 from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
-from imbue.remote_service_connector.shares import hash_relay_token
 from imbue.remote_service_connector.shares import require_share_env
 
 logger = logging.getLogger(__name__)
@@ -427,14 +426,8 @@ def issue_share_cert(request: Request, body: IssueShareCertRequest) -> dict[str,
     for both first issuance and renewal; the workspace keeps its private key.
     """
     with handle_endpoint_errors():
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.lower().startswith("bearer "):
-            raise HTTPException(status_code=401, detail="Missing Bearer credentials")
-        relay_token = auth_header[7:]
+        share = shares_module.require_active_share_by_relay_token(request)
         store = shares_module.get_share_store()
-        share = store.find_share_by_token_hash(hash_relay_token(relay_token))
-        if share is None or share["state"] != "active":
-            raise HTTPException(status_code=401, detail="Unknown or inactive relay token")
         workspace_domain = str(share["workspace_domain"])
         issued_today = store.count_certs_issued_in_last_day(str(share["host_id"]), str(share["user_id"]))
         if issued_today >= _MAX_CERT_ISSUANCES_PER_DAY:

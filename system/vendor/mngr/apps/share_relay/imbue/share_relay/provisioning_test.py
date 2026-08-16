@@ -10,9 +10,11 @@ from imbue.share_relay.provisioning import pick_image_id
 from imbue.share_relay.provisioning import pick_public_ipv4
 
 
-def test_build_relay_instance_name_is_env_and_region_scoped() -> None:
-    assert build_relay_instance_name("dev-josh-1", RegionCode("dev-josh-1")) == "share-relay-dev-josh-1-dev-josh-1"
-    assert build_relay_instance_name("production", RegionCode("us1")) == "share-relay-production-us1"
+def test_build_relay_instance_name_is_env_region_and_ordinal_scoped() -> None:
+    assert (
+        build_relay_instance_name("dev-josh-1", RegionCode("dev-josh-1"), 1) == "share-relay-dev-josh-1-dev-josh-1-1"
+    )
+    assert build_relay_instance_name("production", RegionCode("us1"), 2) == "share-relay-production-us1-2"
 
 
 def test_pick_image_id_matches_exact_name() -> None:

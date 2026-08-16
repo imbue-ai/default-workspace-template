@@ -18,7 +18,7 @@ import { Icon16 } from "../components/Icon";
 import { PageContainer } from "../components/Layout";
 import { Notice } from "../components/Notice";
 import { routeLinkAttrs } from "../components/route-link";
-import { isMachineStateKnown, mindControlsFor } from "./landing-controls";
+import { isMachineStateKnown, mindControlsFor, rowClickActionFor } from "./landing-controls";
 import { Spinner } from "../components/Spinner";
 import { StatusBadge } from "../components/StatusBadge";
 
@@ -169,9 +169,10 @@ export const LandingPage: m.ClosureComponent = () => {
     const health = stores.health.statusFor(entry.id);
     const returnTo = `/goto/${stores.workspaces.toHostScopedId(entry.id)}/`;
     const liveness = state.tracker.displayedLiveness(entry.id, entry.liveness ?? "");
-    if (health !== "healthy") {
+    const action = rowClickActionFor(entry, liveness, health === "healthy");
+    if (action === "recover") {
       m.route.set(recoveryRoute(entry.id, returnTo, null));
-    } else if ((entry.supports_shutdown ?? false) && liveness === "STOPPED") {
+    } else if (action === "recover-start") {
       // The container is stopped: entering directly would strand the user on
       // the loader, so go straight to Recovery, which dispatches the start.
       // A start, not a bounce -- there is nothing running to stop first.
@@ -565,7 +566,7 @@ export const LandingPage: m.ClosureComponent = () => {
             ])
           : isDiscovering
             ? m("div", { class: "flex flex-col items-center justify-center min-h-[80vh] gap-6" }, [
-                m("p", { class: "text-tertiary text-center" }, "Discovering machines..."),
+                m("p", { class: "text-tertiary text-center" }, "Discovering workspaces..."),
                 m(ButtonLink, { variant: "primary", ...routeLinkAttrs("/create") }, "Create"),
               ])
             : m("div", { class: "text-center py-12" }, [

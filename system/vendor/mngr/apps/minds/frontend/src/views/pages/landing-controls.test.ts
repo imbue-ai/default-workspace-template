@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMachineStateKnown, mindControlsFor } from "./landing-controls";
+import { isMachineStateKnown, mindControlsFor, rowClickActionFor } from "./landing-controls";
 
 describe("mindControlsFor", () => {
   it("offers only Start for a shutdown-capable stopped machine", () => {
@@ -51,6 +51,25 @@ describe("mindControlsFor", () => {
 
   it("keeps the controls through a reconnect, which is not a loss of state", () => {
     expect(mindControlsFor({ supports_shutdown: true }, "RUNNING", "reconnecting").isStopShown).toBe(true);
+  });
+});
+
+describe("rowClickActionFor", () => {
+  it("routes an unhealthy machine to recovery regardless of liveness", () => {
+    expect(rowClickActionFor({ supports_shutdown: true }, "STOPPED", false)).toBe("recover");
+    expect(rowClickActionFor({ supports_shutdown: false }, "RUNNING", false)).toBe("recover");
+  });
+
+  it("auto-starts any stopped shutdown-capable machine through recovery", () => {
+    // Cloud machines included: recovery's start step shares the Start/Stop
+    // buttons' generous budget, so even a minutes-long restore is handled.
+    expect(rowClickActionFor({ supports_shutdown: true }, "STOPPED", true)).toBe("recover-start");
+  });
+
+  it("enters a running or non-shutdown-capable machine directly", () => {
+    expect(rowClickActionFor({ supports_shutdown: true }, "RUNNING", true)).toBe("enter");
+    expect(rowClickActionFor({ supports_shutdown: false }, "STOPPED", true)).toBe("enter");
+    expect(rowClickActionFor({}, "UNKNOWN", true)).toBe("enter");
   });
 });
 

@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from imbue.remote_service_connector.errors import InvalidShareCoordinateError
-from imbue.remote_service_connector.errors import MissingShareConfigError
+from imbue.remote_service_connector.errors import NoActiveRelaysError
 from imbue.remote_service_connector.errors import ShareQuotaExceededError
 from imbue.remote_service_connector.shares import DEFAULT_MAX_SHARED_WORKSPACES_PER_USER
 from imbue.remote_service_connector.shares import check_share_quota
@@ -16,13 +16,15 @@ from imbue.remote_service_connector.shares import entry_label_from_claimed_domai
 from imbue.remote_service_connector.shares import generate_relay_token
 from imbue.remote_service_connector.shares import hash_relay_token
 from imbue.remote_service_connector.shares import make_share_coordinate
-from imbue.remote_service_connector.shares import parse_relay_endpoint_map
 from imbue.remote_service_connector.shares import resolve_share_region
 from imbue.remote_service_connector.shares import resolve_share_region_for_share
 from imbue.remote_service_connector.testing import _CONTENT_DOMAIN
 from imbue.remote_service_connector.testing import _FRPS_SECRET
 from imbue.remote_service_connector.testing import _OTHER_HOST_ID
-from imbue.remote_service_connector.testing import _RELAY_ENDPOINTS
+from imbue.remote_service_connector.testing import _RELAY_ENDPOINT_US1
+from imbue.remote_service_connector.testing import _RELAY_ENDPOINT_US2
+from imbue.remote_service_connector.testing import _RELAY_ID_US1
+from imbue.remote_service_connector.testing import _RELAY_ID_US2
 from imbue.remote_service_connector.testing import _SHARE_STUB_HOST_ID
 from imbue.remote_service_connector.testing import _SHARE_STUB_USER_ID
 from imbue.remote_service_connector.testing import _SHARE_STUB_USER_LABEL
@@ -151,64 +153,46 @@ def test_entry_label_from_claimed_domains_ignores_non_shell_and_foreign_claims()
     assert entry_label_from_claimed_domains(domain, [f"system_interfacex.{domain}"]) is None
 
 
-def test_parse_relay_endpoint_map_parses_multiple_regions() -> None:
-    parsed = parse_relay_endpoint_map(_RELAY_ENDPOINTS)
-    assert parsed == {
-        "us1": "relay-us1.infra.example.com:7000",
-        "us2": "relay-us2.infra.example.com:7000",
-    }
+# _SHARE_STUB_HOST_ID (host-aaa...) hash-spreads to us1 and _OTHER_HOST_ID
+# (host-bbb...) to us2 under the deterministic fallback; several assertions
+# below rely on that stability.
+_BOTH_REGIONS = ["us1", "us2"]
 
 
-@pytest.mark.parametrize("raw", ["", "us1", "=relay:7000", "us1=", ",,,"])
-def test_parse_relay_endpoint_map_rejects_malformed_entries(raw: str) -> None:
-    with pytest.raises(MissingShareConfigError):
-        parse_relay_endpoint_map(raw)
+def test_resolve_share_region_maps_datacenters_and_falls_back() -> None:
+    assert resolve_share_region("US-WEST-OR", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
+    assert resolve_share_region("US-EAST-VA", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us2"
+    # Unmapped datacenters and latency-unknown hosts spread deterministically.
+    assert resolve_share_region("EU-WEST-FR", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
+    assert resolve_share_region(None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
+    assert resolve_share_region(None, _BOTH_REGIONS, _OTHER_HOST_ID) == "us2"
 
 
-def test_resolve_share_region_maps_datacenters_and_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", "us1")
-    assert resolve_share_region("US-WEST-OR") == "us1"
-    assert resolve_share_region("US-EAST-VA") == "us2"
-    assert resolve_share_region("EU-WEST-FR") == "us1"
-    assert resolve_share_region(None) == "us1"
+def test_resolve_share_region_ignores_mapped_region_without_relay() -> None:
+    assert resolve_share_region("US-EAST-VA", ["dev-someone-1"], _SHARE_STUB_HOST_ID) == "dev-someone-1"
 
 
-def test_resolve_share_region_ignores_mapped_region_without_relay(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", "dev-someone-1=relay.dev.example.com:7000")
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", "dev-someone-1")
-    assert resolve_share_region("US-EAST-VA") == "dev-someone-1"
+def test_resolve_share_region_raises_without_any_eligible_region() -> None:
+    with pytest.raises(NoActiveRelaysError):
+        resolve_share_region(None, [], _SHARE_STUB_HOST_ID)
 
 
-def test_resolve_share_region_requires_default_region_in_map(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", "us2=relay-us2.infra.example.com:7000")
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", "us1")
-    with pytest.raises(MissingShareConfigError):
-        resolve_share_region(None)
-
-
-def test_resolve_share_region_for_share_is_sticky_on_the_existing_row(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", "us1")
+def test_resolve_share_region_for_share_is_sticky_on_the_existing_row() -> None:
     # An existing region outranks both the datacenter mapping and a preference.
-    assert resolve_share_region_for_share("us2", "US-WEST-OR", None) == "us2"
-    assert resolve_share_region_for_share("us2", None, "us1") == "us2"
+    assert resolve_share_region_for_share("us2", "US-WEST-OR", None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us2"
+    assert resolve_share_region_for_share("us2", None, "us1", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us2"
     # A recorded region no longer served by any relay falls through.
-    assert resolve_share_region_for_share("eu9", None, None) == "us1"
+    assert resolve_share_region_for_share("eu9", None, None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
 
 
-def test_resolve_share_region_for_share_honors_preference_only_without_a_datacenter(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", "us1")
+def test_resolve_share_region_for_share_honors_preference_only_without_a_datacenter() -> None:
     # Local workspaces (no datacenter record) may be steered by the caller.
-    assert resolve_share_region_for_share(None, None, "us2") == "us2"
+    assert resolve_share_region_for_share(None, None, "us2", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us2"
     # A pool host's datacenter mapping wins over the caller's preference.
-    assert resolve_share_region_for_share(None, "US-WEST-OR", "us2") == "us1"
+    assert resolve_share_region_for_share(None, "US-WEST-OR", "us2", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
     # An unknown preference is ignored, never an error.
-    assert resolve_share_region_for_share(None, None, "eu9") == "us1"
-    assert resolve_share_region_for_share(None, None, None) == "us1"
+    assert resolve_share_region_for_share(None, None, "eu9", _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
+    assert resolve_share_region_for_share(None, None, None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +209,7 @@ def test_create_share_returns_domain_endpoint_and_token(monkeypatch: pytest.Monk
     body = resp.json()
     assert body["workspace_domain"] == f"{_SHARE_STUB_HOST_ID}.{_SHARE_STUB_USER_LABEL}.us1.{_CONTENT_DOMAIN}"
     assert body["region"] == "us1"
-    assert body["relay_endpoint"] == "relay-us1.infra.example.com:7000"
+    assert body["relay_endpoints"] == [{"relay_id": _RELAY_ID_US1, "endpoint": _RELAY_ENDPOINT_US1}]
     assert body["relay_token"]
     share = backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL)
     assert share is not None
@@ -243,7 +227,7 @@ def test_create_share_uses_pool_host_datacenter_region(monkeypatch: pytest.Monke
     assert resp.status_code == 200
     body = resp.json()
     assert body["region"] == "us2"
-    assert body["relay_endpoint"] == "relay-us2.infra.example.com:7000"
+    assert body["relay_endpoints"] == [{"relay_id": _RELAY_ID_US2, "endpoint": _RELAY_ENDPOINT_US2}]
 
 
 def test_create_share_again_rotates_token_and_keeps_one_row(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -358,7 +342,7 @@ def test_share_status_reports_state_endpoint_and_login_stamp(monkeypatch: pytest
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
 
     login_body = {"op": "Login", "content": {"metas": {"relay_token": created["relay_token"]}}}
-    login_resp = client.post(f"/frps/auth/{_FRPS_SECRET}", json=login_body)
+    login_resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=login_body)
     assert login_resp.json()["reject"] is False
 
     resp = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers())
@@ -367,8 +351,11 @@ def test_share_status_reports_state_endpoint_and_login_stamp(monkeypatch: pytest
     body = resp.json()
     assert body["state"] == "active"
     assert body["workspace_domain"] == created["workspace_domain"]
-    assert body["relay_endpoint"] == "relay-us1.infra.example.com:7000"
+    assert body["relay_endpoints"] == [{"relay_id": _RELAY_ID_US1, "endpoint": _RELAY_ENDPOINT_US1}]
     assert body["last_tunnel_login_at"] is not None
+    # The per-relay login stamp identifies WHICH relay the tunnel reached.
+    assert [entry["relay_id"] for entry in body["relays"]] == [_RELAY_ID_US1]
+    assert body["relays"][0]["last_login_at"] is not None
     assert body["cert_not_after"] is None
     assert backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL) is not None
 
@@ -408,7 +395,7 @@ def test_create_share_honors_preferred_region_for_local_hosts_and_stays_sticky(
     ).json()
     assert created["region"] == "us2"
     assert ".us2." in created["workspace_domain"]
-    assert created["relay_endpoint"] == "relay-us2.infra.example.com:7000"
+    assert created["relay_endpoints"] == [{"relay_id": _RELAY_ID_US2, "endpoint": _RELAY_ENDPOINT_US2}]
 
     # A re-share with a different preference keeps the baked region: the
     # domain (DNS, PSL boundary, cert, session cookies) must never silently move.
@@ -453,11 +440,83 @@ def test_list_share_relays_returns_the_region_endpoint_map(monkeypatch: pytest.M
     assert resp.status_code == 200
     assert resp.json() == {
         "relays": {
-            "us1": "relay-us1.infra.example.com:7000",
-            "us2": "relay-us2.infra.example.com:7000",
-        },
-        "default_region": "us1",
+            "us1": [_RELAY_ENDPOINT_US1],
+            "us2": [_RELAY_ENDPOINT_US2],
+        }
     }
+
+
+def test_create_share_returns_every_relay_of_a_multi_relay_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+    second_relay_id = "relay-" + "3" * 16
+    backend.add_relay(second_relay_id, "us1", "relay-us1b.infra.example.com:7000", ip_address="198.51.100.3")
+
+    body = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+
+    assert body["region"] == "us1"
+    assert body["relay_endpoints"] == [
+        {"relay_id": _RELAY_ID_US1, "endpoint": _RELAY_ENDPOINT_US1},
+        {"relay_id": second_relay_id, "endpoint": "relay-us1b.infra.example.com:7000"},
+    ]
+
+
+def test_create_share_returns_503_when_no_relay_is_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+    backend.relay_rows.clear()
+
+    resp = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers())
+
+    assert resp.status_code == 503
+
+
+def test_create_share_ignores_retired_relays(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+    for relay_row in backend.relay_rows:
+        if relay_row["region"] == "us2":
+            relay_row["is_active"] = False
+
+    # us2 is no longer eligible, so the datacenter-mapped region falls through
+    # to the spread over the remaining region.
+    backend.add_available_host(host_id=uuid4(), version="1", host_id_str=_SHARE_STUB_HOST_ID, region="US-EAST-VA")
+    body = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+
+    assert body["region"] == "us1"
+    assert body["relay_endpoints"] == [{"relay_id": _RELAY_ID_US1, "endpoint": _RELAY_ENDPOINT_US1}]
+
+
+# ---------------------------------------------------------------------------
+# Gateway assignment endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_share_assignment_returns_endpoints_for_the_relay_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    second_relay_id = "relay-" + "3" * 16
+    backend.add_relay(second_relay_id, "us1", "relay-us1b.infra.example.com:7000", ip_address="198.51.100.3")
+
+    resp = client.get("/shares/assignment", headers={"Authorization": f"Bearer {created['relay_token']}"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["workspace_domain"] == created["workspace_domain"]
+    assert body["relay_endpoints"] == [
+        {"relay_id": _RELAY_ID_US1, "endpoint": _RELAY_ENDPOINT_US1},
+        {"relay_id": second_relay_id, "endpoint": "relay-us1b.infra.example.com:7000"},
+    ]
+    assert body["poll_seconds"] > 0
+
+
+def test_share_assignment_rejects_missing_unknown_and_revoked_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+
+    assert client.get("/shares/assignment").status_code == 401
+    assert client.get("/shares/assignment", headers={"Authorization": "Bearer nope"}).status_code == 401
+
+    client.delete(f"/shares/{_SHARE_STUB_HOST_ID}", headers=_share_headers())
+    revoked = client.get("/shares/assignment", headers={"Authorization": f"Bearer {created['relay_token']}"})
+    assert revoked.status_code == 401
 
 
 def test_create_share_rejects_a_malformed_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -495,6 +554,27 @@ def test_share_status_reports_cert_expiry_when_issued(monkeypatch: pytest.Monkey
     assert resp.json()["cert_not_after"] == "2026-10-01T00:00:00+00:00"
 
 
+def test_share_status_reports_empty_endpoints_when_the_region_lost_its_relays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Status is a read: a share whose region has no active relay left must
+    # still answer (with an empty endpoint list) rather than 503 -- only
+    # share bring-up hard-fails on a relay-less region.
+    client, backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    assert created["region"] == "us1"
+    for relay_row in backend.relay_rows:
+        if relay_row["region"] == "us1":
+            relay_row["is_active"] = False
+
+    resp = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers())
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"] == "active"
+    assert body["relay_endpoints"] == []
+
+
 # ---------------------------------------------------------------------------
 # frps plugin auth endpoint
 # ---------------------------------------------------------------------------
@@ -519,7 +599,7 @@ def _new_proxy_op(relay_token: str, custom_domains: list[str]) -> dict[str, obje
 def test_frps_auth_rejects_wrong_plugin_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
 
-    resp = client.post("/frps/auth/wrong-secret", json=_login_op("whatever"))
+    resp = client.post(f"/frps/auth/wrong-secret/{_RELAY_ID_US1}", json=_login_op("whatever"))
 
     assert resp.status_code == 401
 
@@ -528,7 +608,7 @@ def test_frps_auth_is_disabled_without_configured_secret(monkeypatch: pytest.Mon
     client, _backend = _make_share_test_client(monkeypatch)
     monkeypatch.delenv("FRPS_AUTH_SECRET")
 
-    resp = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_login_op("whatever"))
+    resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op("whatever"))
 
     assert resp.status_code == 403
 
@@ -537,7 +617,7 @@ def test_frps_auth_login_allows_active_share_and_stamps_liveness(monkeypatch: py
     client, backend = _make_share_test_client(monkeypatch)
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
 
-    resp = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_login_op(created["relay_token"]))
+    resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
 
     assert resp.status_code == 200
     assert resp.json() == {"reject": False, "reject_reason": "", "unchange": True}
@@ -549,10 +629,10 @@ def test_frps_auth_login_allows_active_share_and_stamps_liveness(monkeypatch: py
 def test_frps_auth_rejects_unknown_and_missing_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     client, _backend = _make_share_test_client(monkeypatch)
 
-    unknown = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_login_op("not-a-real-token"))
+    unknown = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op("not-a-real-token"))
     assert unknown.json()["reject"] is True
 
-    missing = client.post(f"/frps/auth/{_FRPS_SECRET}", json={"op": "Login", "content": {}})
+    missing = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json={"op": "Login", "content": {}})
     assert missing.json()["reject"] is True
 
 
@@ -561,9 +641,27 @@ def test_frps_auth_rejects_token_of_inactive_share(monkeypatch: pytest.MonkeyPat
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
     client.delete(f"/shares/{_SHARE_STUB_HOST_ID}", headers=_share_headers())
 
-    resp = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_login_op(created["relay_token"]))
+    resp = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
 
     assert resp.json()["reject"] is True
+
+
+def test_frps_auth_rejects_unknown_and_retired_relay_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A retired relay leaves frps auth (not just assignment and DNS): even a
+    # valid relay token must be rejected when the path's relay id has no
+    # active row.
+    client, backend = _make_share_test_client(monkeypatch)
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+
+    unknown_relay_id = "relay-" + "9" * 16
+    unknown = client.post(f"/frps/auth/{_FRPS_SECRET}/{unknown_relay_id}", json=_login_op(created["relay_token"]))
+    assert unknown.json()["reject"] is True
+
+    for relay_row in backend.relay_rows:
+        if relay_row["relay_id"] == _RELAY_ID_US1:
+            relay_row["is_active"] = False
+    retired = client.post(f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_login_op(created["relay_token"]))
+    assert retired.json()["reject"] is True
 
 
 def test_frps_auth_new_proxy_records_the_shell_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -574,7 +672,7 @@ def test_frps_auth_new_proxy_records_the_shell_entry_label(monkeypatch: pytest.M
     domain = created["workspace_domain"]
 
     resp = client.post(
-        f"/frps/auth/{_FRPS_SECRET}",
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
         json=_new_proxy_op(
             created["relay_token"],
             [f"terminal-abcd1234.{domain}", f"system_interface-elm7wydc.{domain}", f"auth-x7k9q2w1.{domain}"],
@@ -596,7 +694,7 @@ def test_frps_auth_rejected_new_proxy_records_no_entry_label(monkeypatch: pytest
     foreign = "system_interface-elm7wydc.host-" + "b" * 32 + ".x.us1.example.com"
 
     resp = client.post(
-        f"/frps/auth/{_FRPS_SECRET}",
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
         json=_new_proxy_op(created["relay_token"], [f"system_interface-elm7wydc.{domain}", foreign]),
     )
 
@@ -612,19 +710,25 @@ def test_frps_auth_new_proxy_allows_single_labels_under_own_domain_only(monkeypa
     domain = created["workspace_domain"]
 
     allowed = client.post(
-        f"/frps/auth/{_FRPS_SECRET}",
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
         json=_new_proxy_op(created["relay_token"], [f"terminal-abcd1234.{domain}", f"auth-x7k9q2w1.{domain}"]),
     )
     assert allowed.json()["reject"] is False
 
     # The bare domain and the wildcard must not route under the explicit-claim model.
-    bare = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_new_proxy_op(created["relay_token"], [domain]))
+    bare = client.post(
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_new_proxy_op(created["relay_token"], [domain])
+    )
     assert bare.json()["reject"] is True
-    wildcard = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_new_proxy_op(created["relay_token"], [f"*.{domain}"]))
+    wildcard = client.post(
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_new_proxy_op(created["relay_token"], [f"*.{domain}"])
+    )
     assert wildcard.json()["reject"] is True
 
     foreign_domain = f"terminal-abcd1234.{domain.replace(_SHARE_STUB_HOST_ID, _OTHER_HOST_ID)}"
-    rejected = client.post(f"/frps/auth/{_FRPS_SECRET}", json=_new_proxy_op(created["relay_token"], [foreign_domain]))
+    rejected = client.post(
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}", json=_new_proxy_op(created["relay_token"], [foreign_domain])
+    )
     assert rejected.json()["reject"] is True
 
 
@@ -633,7 +737,7 @@ def test_frps_auth_allows_unsubscribed_ops_unchanged(monkeypatch: pytest.MonkeyP
     created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
 
     resp = client.post(
-        f"/frps/auth/{_FRPS_SECRET}",
+        f"/frps/auth/{_FRPS_SECRET}/{_RELAY_ID_US1}",
         json={"op": "Ping", "content": {"user": {"metas": {"relay_token": created["relay_token"]}}}},
     )
 

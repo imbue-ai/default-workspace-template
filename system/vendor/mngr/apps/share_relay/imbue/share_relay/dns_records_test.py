@@ -1,31 +1,19 @@
 import httpx
 import pytest
-from pydantic import AnyHttpUrl
 
-from imbue.share_relay.data_types import RelayConfiguration
 from imbue.share_relay.dns_records import RelayDnsError
+from imbue.share_relay.dns_records import reconcile_a_record_set
 from imbue.share_relay.dns_records import relay_dns_record_names
-from imbue.share_relay.dns_records import upsert_a_record
-from imbue.share_relay.primitives import ContentDomain
-from imbue.share_relay.primitives import RegionCode
-
-
-def _config() -> RelayConfiguration:
-    return RelayConfiguration(
-        region=RegionCode("us1"),
-        content_domain=ContentDomain("minds-test.example"),
-        plugin_auth_url=AnyHttpUrl("https://connector.example/frps/auth/secret-1"),
-    )
 
 
 def test_relay_dns_record_names_cover_relay_host_and_content_wildcard() -> None:
-    assert relay_dns_record_names(_config()) == [
+    assert relay_dns_record_names("us1.minds-test.example") == [
         "relay.us1.minds-test.example",
         "*.us1.minds-test.example",
     ]
 
 
-def test_upsert_a_record_creates_when_absent() -> None:
+def test_reconcile_a_record_set_creates_missing_records() -> None:
     seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -37,63 +25,84 @@ def test_upsert_a_record_creates_when_absent() -> None:
         return httpx.Response(200, json={"success": True, "result": {"id": "rec-new"}})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        record_id = upsert_a_record(client, "zone-1", "*.us1.minds-test.example", "203.0.113.7")
+        changed = reconcile_a_record_set(client, "zone-1", "*.us1.minds-test.example", ["203.0.113.7", "203.0.113.8"])
 
-    assert record_id == "rec-new"
-    assert [method for method, _path in seen] == ["GET", "POST"]
+    assert changed is True
+    assert [method for method, _path in seen] == ["GET", "POST", "POST"]
 
 
-def test_upsert_a_record_updates_when_present() -> None:
+def test_reconcile_a_record_set_is_a_noop_when_the_set_matches() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "GET":
-            return httpx.Response(200, json={"success": True, "result": [{"id": "rec-old"}]})
-        assert request.method == "PUT"
-        assert request.url.path.endswith("/rec-old")
-        return httpx.Response(200, json={"success": True, "result": {"id": "rec-old"}})
+        assert request.method == "GET"
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "result": [
+                    {"id": "rec-1", "content": "203.0.113.7"},
+                    {"id": "rec-2", "content": "203.0.113.8"},
+                ],
+            },
+        )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        record_id = upsert_a_record(client, "zone-1", "relay.us1.minds-test.example", "203.0.113.7")
+        changed = reconcile_a_record_set(client, "zone-1", "*.us1.minds-test.example", ["203.0.113.8", "203.0.113.7"])
 
-    assert record_id == "rec-old"
+    assert changed is False
 
 
-def test_upsert_a_record_deletes_stale_duplicates() -> None:
-    # Leftover duplicates (e.g. old round-robin entries) would keep answering
-    # with the old IP; the upsert must converge on exactly one A record.
+def test_reconcile_a_record_set_adds_and_deletes_to_converge() -> None:
+    # A dead relay's IP leaves the set and a fresh relay's joins it, in one pass.
     seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append((request.method, request.url.path))
         if request.method == "GET":
             return httpx.Response(
-                200, json={"success": True, "result": [{"id": "rec-old"}, {"id": "rec-dup1"}, {"id": "rec-dup2"}]}
+                200,
+                json={
+                    "success": True,
+                    "result": [
+                        {"id": "rec-keep", "content": "203.0.113.7"},
+                        {"id": "rec-stale", "content": "203.0.113.9"},
+                    ],
+                },
             )
-        return httpx.Response(200, json={"success": True, "result": {"id": "rec-old"}})
+        return httpx.Response(200, json={"success": True, "result": {"id": "rec-x"}})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        record_id = upsert_a_record(client, "zone-1", "relay.us1.minds-test.example", "203.0.113.7")
+        changed = reconcile_a_record_set(
+            client, "zone-1", "relay.us1.minds-test.example", ["203.0.113.7", "203.0.113.8"]
+        )
 
-    assert record_id == "rec-old"
+    assert changed is True
     assert seen[1:] == [
-        ("PUT", "/client/v4/zones/zone-1/dns_records/rec-old"),
-        ("DELETE", "/client/v4/zones/zone-1/dns_records/rec-dup1"),
-        ("DELETE", "/client/v4/zones/zone-1/dns_records/rec-dup2"),
+        ("POST", "/client/v4/zones/zone-1/dns_records"),
+        ("DELETE", "/client/v4/zones/zone-1/dns_records/rec-stale"),
     ]
 
 
-def test_upsert_a_record_raises_on_cloudflare_error() -> None:
+def test_reconcile_a_record_set_refuses_an_empty_ip_set() -> None:
+    # Emptying a region's record set would take every share in it down even
+    # harder than a dead relay; the caller must always pass at least one IP.
+    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(500))) as client:
+        with pytest.raises(RelayDnsError, match="empty IP set"):
+            reconcile_a_record_set(client, "zone-1", "*.us1.minds-test.example", [])
+
+
+def test_reconcile_a_record_set_raises_on_cloudflare_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={"success": False, "errors": [{"code": 9109}]})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(RelayDnsError):
-            upsert_a_record(client, "zone-1", "relay.us1.minds-test.example", "203.0.113.7")
+            reconcile_a_record_set(client, "zone-1", "relay.us1.minds-test.example", ["203.0.113.7"])
 
 
-def test_upsert_a_record_raises_on_non_json_response() -> None:
+def test_reconcile_a_record_set_raises_on_non_json_response() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(502, text="<html>bad gateway</html>")
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(RelayDnsError, match="status 502"):
-            upsert_a_record(client, "zone-1", "relay.us1.minds-test.example", "203.0.113.7")
+            reconcile_a_record_set(client, "zone-1", "relay.us1.minds-test.example", ["203.0.113.7"])

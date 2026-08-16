@@ -30,8 +30,11 @@ from pydantic import Field
 from pydantic import field_validator
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
+import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.entitlements as entitlements_module
+import imbue.remote_service_connector.relays as relays_module
 import imbue.remote_service_connector.shares as shares_module
+import imbue.remote_service_connector.storage as storage_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.entitlements import AccountEntitlements
@@ -155,11 +158,23 @@ class LeasedHostInfo(BaseModel):
     )
 
 
-# What counts as one "remote workspace": a pool-host row leased to the user
-# (running or stopped -- stopped workspaces still hold their lease and slice).
-# Shared by the lease-time quota check and the /account usage display so the
-# two can never drift.
-_COUNT_LEASED_HOSTS_SQL: Final = "SELECT COUNT(*) FROM pool_hosts WHERE leased_to_user = %s AND status = 'leased'"
+# The workspace lifecycle statuses a user's row can hold. "Running" rows hold
+# (or are about to hold) a bare-metal slot: leased, plus the in-flight stopping
+# (VM halted but slot retained until the upload finalizes) and starting
+# transitions. "Total" adds stopped rows, whose VM exists only as encrypted
+# objects in the tier bucket. Shared by the quota checks and the /account
+# usage display so the two can never drift.
+RUNNING_WORKSPACE_STATUSES: Final[tuple[str, ...]] = ("leased", "stopping", "starting")
+TOTAL_WORKSPACE_STATUSES: Final[tuple[str, ...]] = RUNNING_WORKSPACE_STATUSES + ("stopped",)
+
+
+def _count_by_statuses_sql(statuses: tuple[str, ...]) -> str:
+    literals = ", ".join(f"'{status}'" for status in statuses)
+    return f"SELECT COUNT(*) FROM pool_hosts WHERE leased_to_user = %s AND status IN ({literals})"
+
+
+COUNT_RUNNING_WORKSPACES_SQL: Final = _count_by_statuses_sql(RUNNING_WORKSPACE_STATUSES)
+_COUNT_TOTAL_WORKSPACES_SQL: Final = _count_by_statuses_sql(TOTAL_WORKSPACE_STATUSES)
 
 # Quarantine status for a row whose host could not be reached at lease time
 # (SSH key injection failed). Inert everywhere else: every other query filters
@@ -203,7 +218,7 @@ def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, exp
 
 
 @contextlib.contextmanager
-def _management_ssh_client(
+def management_ssh_client(
     host: str,
     port: int,
     user: str,
@@ -235,7 +250,7 @@ def _append_authorized_key(
     expected_host_public_key: str,
 ) -> None:
     """SSH into a host using the management key and append a public key to authorized_keys."""
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=15, expected_host_public_key=expected_host_public_key
     ) as client:
         key_line = public_key_to_add.strip()
@@ -267,11 +282,11 @@ def build_slice_teardown_commands(lima_instance_name: str, lima_disk_name: str |
     return tuple(commands)
 
 
-def _run_ssh_commands_on_box(
+def run_ssh_commands_on_box(
     host: str, port: int, user: str, management_key_pem: str, commands: tuple[str, ...], box_host_public_key: str
 ) -> None:
     """SSH into the box with the pool management key and run each command, raising on failure."""
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=box_host_public_key
     ) as client:
         for command in commands:
@@ -324,7 +339,7 @@ def clean_up_slice_on_box(
         )
     management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
     commands = build_slice_teardown_commands(lima_instance_name, lima_disk_name)
-    _run_ssh_commands_on_box(box_address, 22, lima_service_user, management_key_pem, commands, box_host_public_key)
+    run_ssh_commands_on_box(box_address, 22, lima_service_user, management_key_pem, commands, box_host_public_key)
 
 
 # Slice lima resources are named ``mngr-slice-<env>-<host-hex>`` (the data disk
@@ -510,7 +525,7 @@ def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
         # to the exception. If either read fails we did NOT reconcile this box; let
         # the failure propagate rather than silently skipping (which would look
         # like a clean audit and could mask vanished/leaked VMs).
-        with _management_ssh_client(
+        with management_ssh_client(
             public_address,
             22,
             user,
@@ -575,9 +590,14 @@ def lease_host(request: Request, body: LeaseHostRequest) -> dict[str, object]:
     leases so two simultaneous requests cannot both squeeze past the count
     check. Stopped workspaces still hold their lease (and their slice), so
     they count against the quota too.
+
+    Requires a verified email (spam/abuse mitigation): an unverified account
+    gets the structured ``email_not_verified`` 403, and the refusal itself
+    sends the verification email (under the server-side cooldown).
     """
     with handle_endpoint_errors():
         user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
+        auth_proxy_module.require_verified_email_for_remote_workspace(user, full_user_id)
         entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         return _lease_pool_host(user, entitlements, body).model_dump()
 
@@ -612,7 +632,7 @@ def _lease_pool_host(
                 # transaction, then enforce the workspace quota. The
                 # advisory lock releases automatically at commit/rollback.
                 cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (user.user_id_prefix,))
-                cur.execute(_COUNT_LEASED_HOSTS_SQL, (user.user_id_prefix,))
+                cur.execute(COUNT_RUNNING_WORKSPACES_SQL, (user.user_id_prefix,))
                 count_row = cur.fetchone()
                 leased_count = int(count_row[0]) if count_row is not None else 0
                 if leased_count >= entitlements.max_remote_workspaces:
@@ -621,6 +641,18 @@ def _lease_pool_host(
                         entitlements.max_remote_workspaces,
                         leased_count,
                         "remote workspaces",
+                    )
+                # A new lease adds to the running AND total counts, so both
+                # caps gate it (stopped workspaces consume only the total).
+                cur.execute(_COUNT_TOTAL_WORKSPACES_SQL, (user.user_id_prefix,))
+                total_row = cur.fetchone()
+                total_count = int(total_row[0]) if total_row is not None else 0
+                if total_count >= entitlements.max_total_workspaces:
+                    raise_quota_exceeded(
+                        "max_total_workspaces",
+                        entitlements.max_total_workspaces,
+                        total_count,
+                        "total workspaces (running + stopped)",
                     )
                 # Build the lease selection dynamically. A hard ``region``
                 # adds an equality filter; when unset the lease is
@@ -775,6 +807,10 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
     ``removing`` and the endpoint returns an error (5xx) so the client retries;
     we never report success on a failed teardown. A failure before ``removing``
     is committed (lookup, ownership, the status flip) surfaces as an error too.
+    The one exception is a ``crashed`` row (operator-asserted permanently dead
+    box): its teardown is best-effort, so a failure is logged, the row is
+    deleted anyway, and any VM actually left behind surfaces in the
+    box-reconcile sweep.
 
     Idempotent at the HTTP layer: a release on a row that is already gone
     (deleted) or no longer leased returns 200 ``status: already_released``.
@@ -790,7 +826,7 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
                 # (it raises "can't adapt type 'UUID'").
                 cur.execute(
                     "SELECT leased_to_user, status, "
-                    "lima_instance_name, lima_disk_name, bare_metal_server_id "
+                    "lima_instance_name, lima_disk_name, bare_metal_server_id, host_id "
                     "FROM pool_hosts WHERE id = %s",
                     (str(host_db_id),),
                 )
@@ -804,34 +840,108 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
                     lima_instance_name,
                     lima_disk_name,
                     bare_metal_server_id,
+                    mngr_host_id,
                 ) = row
                 # Ownership check first: we don't want to leak a status
                 # signal to other users via the response code.
                 if leased_to_user != user.user_id_prefix:
                     raise HTTPException(status_code=403, detail="You do not own this host lease")
-                # Only a leased or already-removing row is eligible for
-                # cleanup; anything else is treated as already released.
-                if status not in ("leased", "removing"):
+                # Any lifecycle status the user can hold is releasable; only
+                # 'available' rows (already back in the pool) report released.
+                if status not in ("leased", "removing", "stopping", "starting", "stopped", "crashed"):
                     return ReleaseHostResponse(status="already_released").model_dump()
-                if status == "leased":
-                    cur.execute(
-                        "UPDATE pool_hosts SET status = 'removing', released_at = NOW() WHERE id = %s",
-                        (str(host_db_id),),
-                    )
+                # leased/stopping rows always have a VM, so teardown runs --
+                # and fails loudly on corrupt bookkeeping -- exactly as before.
+                # For every other status the box link itself says whether a VM
+                # exists: it is NULL after a stop finalizes (stopped/crashed)
+                # and during a restore before its final CAS places the VM
+                # (starting, and removing rows descended from such a release,
+                # including crashed ones -- the flip below clears the link).
+                # With a NULL link there is nothing the connector could ever
+                # tear down, so forcing teardown would just wedge the row in
+                # 'removing' forever; the artifacts (if any) are the only
+                # cloud resource left.
+                is_vm_expected = status in ("leased", "stopping") or (bare_metal_server_id is not None)
+                if status != "removing":
+                    if status == "crashed":
+                        # A crashed row's teardown below is best-effort, so the
+                        # flip to ``removing`` must also clear the box link: a
+                        # retry after a partial failure (say the artifact
+                        # deletion raising) reads ``removing`` -- not
+                        # ``crashed`` -- and must not turn into a must-succeed
+                        # teardown against the permanently dead box. The
+                        # teardown attempt below still runs with the values
+                        # read above; a VM left on a box that was actually
+                        # alive surfaces in the box-reconcile sweep.
+                        cur.execute(
+                            "UPDATE pool_hosts SET status = 'removing', released_at = NOW(), "
+                            "bare_metal_server_id = NULL WHERE id = %s",
+                            (str(host_db_id),),
+                        )
+                    else:
+                        cur.execute(
+                            "UPDATE pool_hosts SET status = 'removing', released_at = NOW() WHERE id = %s",
+                            (str(host_db_id),),
+                        )
                     conn.commit()
             # Past the commit point: the row is durably ``removing``. A teardown
             # failure below leaves the row ``removing`` and surfaces a 5xx so the
             # client retries.
-            _finish_releasing_pool_host(
-                conn,
-                host_db_id,
-                lima_instance_name,
-                lima_disk_name,
-                bare_metal_server_id,
-            )
+            _delete_workspace_artifacts(mngr_host_id)
+            if is_vm_expected and status == "crashed":
+                # ``crashed`` is the operator's assertion (via abandon) that the
+                # box is permanently dead, so a must-succeed teardown adds no
+                # safety and would wedge the row in ``removing`` forever. Try
+                # anyway with the usual bounded SSH timeout; if the operator was
+                # wrong and the box is alive, any VM this leaves behind is
+                # exactly what the box-reconcile sweep surfaces.
+                try:
+                    _finish_releasing_pool_host(
+                        conn,
+                        host_db_id,
+                        lima_instance_name,
+                        lima_disk_name,
+                        bare_metal_server_id,
+                    )
+                except (PoolHostCleanupError, paramiko.SSHException, OSError) as e:
+                    logger.warning(
+                        "Releasing crashed workspace %s: teardown against box %s failed (%s); deleting the row anyway",
+                        host_db_id,
+                        bare_metal_server_id,
+                        e,
+                    )
+                    _delete_pool_host_row(conn, host_db_id)
+            elif is_vm_expected:
+                _finish_releasing_pool_host(
+                    conn,
+                    host_db_id,
+                    lima_instance_name,
+                    lima_disk_name,
+                    bare_metal_server_id,
+                )
+            else:
+                _delete_pool_host_row(conn, host_db_id)
         finally:
             conn.close()
         return ReleaseHostResponse(status="released").model_dump()
+
+
+def _delete_workspace_artifacts(mngr_host_id: str | None) -> None:
+    """Delete a released workspace's stop/start artifacts from the tier bucket.
+
+    A no-op when storage is unconfigured for this env (nothing could have
+    been uploaded) or the row has no host id recorded. Raises on a real
+    deletion failure so the release stays retryable (row remains
+    ``removing``).
+    """
+    if not mngr_host_id:
+        return
+    if not storage_module.is_storage_configured():
+        return
+    storage_config = storage_module.read_storage_config()
+    storage_module.delete_prefix(
+        storage_config, f"{storage_module.workspace_key_prefix(storage_config, mngr_host_id)}/"
+    )
 
 
 def _finish_releasing_pool_host(
@@ -893,7 +1003,15 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
 
 @router.get("/hosts")
 def list_leased_hosts(request: Request) -> list[dict[str, object]]:
-    """List all hosts currently leased by the authenticated user."""
+    """List all hosts currently leased by the authenticated user.
+
+    Deprecated in favor of ``GET /workspaces`` (which returns every
+    lifecycle state with a ``status`` field). Kept leased-only forever so
+    released clients -- which treat every returned row as a live,
+    SSH-reachable lease -- never see a stopped workspace here.
+    CLEANUP: remove this route (and the client fallbacks to it) once every
+    supported mngr/minds client consumes /workspaces.
+    """
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
         conn = db.get_pool_db_connection()
@@ -929,11 +1047,20 @@ def list_leased_hosts(request: Request) -> list[dict[str, object]]:
 
 
 def count_leased_hosts(user_id_prefix: str) -> int:
-    """Count the user's current pool-host leases (the remote-workspace usage number)."""
+    """Count the user's running workspaces (the max_remote_workspaces usage number)."""
+    return _count_user_workspaces(user_id_prefix, COUNT_RUNNING_WORKSPACES_SQL)
+
+
+def count_total_workspaces(user_id_prefix: str) -> int:
+    """Count the user's running + stopped workspaces (the max_total_workspaces usage number)."""
+    return _count_user_workspaces(user_id_prefix, _COUNT_TOTAL_WORKSPACES_SQL)
+
+
+def _count_user_workspaces(user_id_prefix: str, count_sql: str) -> int:
     conn = db.get_pool_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(_COUNT_LEASED_HOSTS_SQL, (user_id_prefix,))
+            cur.execute(count_sql, (user_id_prefix,))
             row = cur.fetchone()
     finally:
         conn.close()
@@ -969,7 +1096,6 @@ class EnableSharingResponse(BaseModel):
 def build_share_env_text(
     *,
     workspace_domain: str,
-    relay_endpoint: str,
     relay_token: str,
     connector_url: str,
     broker_url: str,
@@ -978,14 +1104,15 @@ def build_share_env_text(
     """Render share.env in the shape the workspace's share-gateway parses.
 
     Mirrors the desktop's ``build_share_env_text``; ``SHARE_CHROME_ORIGIN`` is
-    new and is what lets the hosted chrome embed the workspace and probe
-    ``/_health``. The keys are a wire contract with the share-gateway's
-    ``parse_share_materials`` (duplicated, not imported -- the connector image
-    ships none of the workspace code).
+    what lets the hosted chrome embed the workspace and probe ``/_health``.
+    Deliberately carries NO relay endpoint: the gateway fetches its current
+    relay set from ``GET /shares/assignment`` (relay-token auth) and re-polls,
+    so fleet changes never require re-injecting materials. The keys are a wire
+    contract with the share-gateway's ``parse_share_materials`` (duplicated,
+    not imported -- the connector image ships none of the workspace code).
     """
     lines = [
         f"export SHARE_WORKSPACE_DOMAIN={workspace_domain}",
-        f"export SHARE_RELAY_ENDPOINT={relay_endpoint}",
         f"export SHARE_RELAY_TOKEN={relay_token}",
         f"export SHARE_CONNECTOR_URL={connector_url}",
         f"export SHARE_BROKER_URL={broker_url}",
@@ -1045,7 +1172,7 @@ def _write_files_on_container(
     See ``build_container_file_write_command`` for the write semantics (base64
     transport, temp-file-and-rename atomicity, seed-if-absent skipping).
     """
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         for remote_path, content in files_by_remote_path.items():
@@ -1124,10 +1251,13 @@ def _enable_sharing_core(
     management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
     store = shares_module.get_share_store()
     existing_share = store.get_share(host_id, user_label)
+    relay_rows = shares_module.active_relay_rows()
     region = shares_module.resolve_share_region_for_share(
         existing_region=str(existing_share["region"]) if existing_share is not None else None,
         datacenter=store.get_pool_host_datacenter(host_id),
         preferred_region=None,
+        eligible_regions=relays_module.eligible_regions(relay_rows),
+        host_id=host_id,
     )
     coordinate = shares_module.make_share_coordinate(
         host_id=host_id,
@@ -1150,7 +1280,6 @@ def _enable_sharing_core(
     base_url = accounts_web_module.accounts_public_base_url(request)
     share_env_text = build_share_env_text(
         workspace_domain=coordinate.workspace_domain,
-        relay_endpoint=shares_module.share_relay_endpoint_map()[region],
         relay_token=relay_token,
         connector_url=base_url,
         broker_url=base_url,
@@ -1310,7 +1439,7 @@ def _adopt_workspace_on_container(
     Raises ``paramiko.SSHException`` / ``OSError`` on any failure; the caller
     releases the lease and surfaces the error.
     """
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         sftp = client.open_sftp()
@@ -1402,7 +1531,7 @@ def _start_workspace_agent_on_container(
     the lease -- a claim that cannot boot the workspace must not hand the user
     a dead lease.
     """
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         command = f"bash -lc 'exec {_START_SERVICES_AGENT_SCRIPT}'"
@@ -1431,14 +1560,16 @@ def _release_lease_after_failed_claim(host_db_id: UUID) -> None:
                 # the slice's lima bookkeeping.
                 cur.execute(
                     "SELECT leased_to_user, status, "
-                    "lima_instance_name, lima_disk_name, bare_metal_server_id "
+                    "lima_instance_name, lima_disk_name, bare_metal_server_id, host_id "
                     "FROM pool_hosts WHERE id = %s",
                     (str(host_db_id),),
                 )
                 row = cur.fetchone()
                 if row is None:
                     return
-                (_leased_to_user, _status, lima_instance_name, lima_disk_name, bare_metal_server_id) = row
+                (_leased_to_user, _status, lima_instance_name, lima_disk_name, bare_metal_server_id, _mngr_host_id) = (
+                    row
+                )
                 cur.execute(
                     "UPDATE pool_hosts SET status = 'removing', released_at = NOW() WHERE id = %s",
                     (str(host_db_id),),
@@ -1464,10 +1595,13 @@ def claim_host(request: Request, body: ClaimHostRequest) -> dict[str, object]:
 
     A failure after the lease releases it (slice teardown) before the error
     propagates, so a retry starts clean. Refused with 503 when the tier has
-    no pinned web template configured.
+    no pinned web template configured. Like ``/hosts/lease``, requires a
+    verified email: an unverified account gets the structured
+    ``email_not_verified`` 403 and the refusal sends the verification email.
     """
     with handle_endpoint_errors():
         user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
+        auth_proxy_module.require_verified_email_for_remote_workspace(user, full_user_id)
         entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         pinned_attributes = _web_claim_pinned_attributes()
         if pinned_attributes is None:

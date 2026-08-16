@@ -2692,6 +2692,7 @@ dependencies = [
     { name = "click" },
     { name = "click-option-group" },
     { name = "concurrency-group" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "imbue-common" },
     { name = "imbue-mngr" },
@@ -2711,6 +2712,7 @@ requires-dist = [
     { name = "click" },
     { name = "click-option-group" },
     { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "cryptography", specifier = ">=42.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "imbue-common", editable = "libs/imbue_common" },
     { name = "imbue-mngr", editable = "libs/mngr" },
@@ -5285,6 +5287,7 @@ version = "0.1.0"
 source = { editable = "apps/remote_service_connector" }
 dependencies = [
     { name = "acme" },
+    { name = "boto3" },
     { name = "click" },
     { name = "cryptography" },
     { name = "fastapi", extra = ["standard"] },
@@ -5305,6 +5308,7 @@ dependencies = [
 [package.dev-dependencies]
 image = [
     { name = "acme" },
+    { name = "boto3" },
     { name = "cryptography" },
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx" },
@@ -5319,6 +5323,7 @@ image = [
 [package.metadata]
 requires-dist = [
     { name = "acme", specifier = ">=2.11" },
+    { name = "boto3", specifier = ">=1.34" },
     { name = "click", specifier = ">=8.0" },
     { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
@@ -5339,6 +5344,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 image = [
     { name = "acme", specifier = "==5.6.0" },
+    { name = "boto3", specifier = "==1.43.6" },
     { name = "cryptography", specifier = "==48.0.1" },
     { name = "fastapi", extras = ["standard"], specifier = "==0.139.2" },
     { name = "httpx", specifier = "==0.28.1" },

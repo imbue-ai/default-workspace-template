@@ -34,12 +34,17 @@ that audit:
   `data/.secrets/cloudflare_tunnel.env` idempotently at boot. Cloudflare-side
   records are still cleaned centrally (see post-deploy cleanup).
 - [x] **RSA -> Ed25519 client-key migration.** Done for per-host-keyed
-  (imbue_cloud) workspaces: the desktop migrates RSA-keyed RUNNING hosts in
-  the background (append on both layers, verify, swap, rollback on failure;
-  once per host), and `minds migrate-ssh-keys` runs the same pass manually.
-  Lima's shared root key is out of scope for now (each VM's authorized_keys
-  is overwritten from its baked lima.yaml every boot); lima workspaces gain
-  web-drivability later via per-host keys.
+  (imbue_cloud slice) workspaces, now folded into slice adoption: when
+  `ensure_adopted` runs (at lease, and once per process on discovery for
+  existing leases) it rotates a legacy RSA client key to Ed25519 through the
+  reconciler desired state -- durable across VM restarts (the earlier
+  standalone append/swap migration was reverted by cidata replay and by the
+  reconciler itself) and de-authorizing the RSA key when done. The
+  standalone minds scheduler and `minds migrate-ssh-keys` CLI are removed;
+  `mngr imbue_cloud hosts rotate` is the manual path. Lima's shared root key
+  remains out of scope (each VM's authorized_keys is overwritten from its
+  baked lima.yaml every boot); lima workspaces gain web-drivability later
+  via per-host keys.
 - [x] **`[web_workspaces]` defaults from the release tag.** Done:
   `template_repo`/`template_ref` are optional, resolved as env var
   (`MINDS_WEB_TEMPLATE_REPO`/`REF`) > deploy.toml pin > default (canonical
@@ -53,11 +58,15 @@ Everything here can be done and verified BEFORE any change that could affect
 existing staging or production users, and should be. Verify each item against
 a dev/ci env first where possible.
 
-- [ ] **Relays.** Provision + deploy + DNS the staging and production relay
-  fleets (`us1`/`us2`-style regions) with `share-relay`; confirm each tier's
-  `SHARE_RELAY_ENDPOINTS` Vault entry matches the relays actually deployed.
+- [ ] **Relays.** Provision + register + deploy the staging and production
+  relay fleets (two relays per `us1`/`us2` region; blueprint/multi-relay) with
+  `share-relay`; confirm `mngr imbue_cloud admin relays list` matches the
+  instances actually deployed (the relays table replaced the old
+  `SHARE_RELAY_ENDPOINTS` / `SHARE_DEFAULT_REGION` Vault keys -- remove them
+  from the tier `sharing` entries) and that the health sweep is maintaining
+  the region DNS record sets.
   Confirm the content domains' Public-Suffix-List situation (each region is
-  one wildcard DNS record and one PSL entry; PSL propagation is slow and
+  one wildcard DNS record set and one PSL entry; PSL propagation is slow and
   affects cross-user cookie isolation between shared workspaces).
 - [ ] **Vault entries per tier.** Confirm before deploying: the new
   `relay-ssh` operator-only entry; `OVH_CLOUD_PROJECT_ID`;

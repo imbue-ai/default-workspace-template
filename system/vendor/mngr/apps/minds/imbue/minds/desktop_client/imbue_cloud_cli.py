@@ -177,6 +177,20 @@ class LiteLLMKeyMaterial(FrozenModel):
     base_url: AnyUrl
 
 
+class ShareCliRelayEndpoint(FrozenModel):
+    """One relay a shared workspace tunnels to (from `shares create` / `shares status`)."""
+
+    relay_id: str
+    endpoint: str
+
+
+class ShareCliRelayLogin(FrozenModel):
+    """One relay's last tunnel Login stamp for a share (from `shares status`)."""
+
+    relay_id: str
+    last_login_at: str | None = None
+
+
 class ShareCliInfo(FrozenModel):
     """Result of `mngr imbue_cloud shares create` / `shares status`."""
 
@@ -184,7 +198,10 @@ class ShareCliInfo(FrozenModel):
     workspace_domain: str
     region: str
     state: str
-    relay_endpoint: str | None = None
+    relay_endpoints: tuple[ShareCliRelayEndpoint, ...] = ()
+    # Per-relay tunnel login stamps; `shares status` output only (ops signal,
+    # not shown in the end-user UI).
+    relays: tuple[ShareCliRelayLogin, ...] = ()
     relay_token: SecretStr | None = None
     last_tunnel_login_at: str | None = None
     cert_not_after: str | None = None
@@ -469,21 +486,6 @@ class ImbueCloudCli(MutableModel):
             return []
         return [LeasedHost.model_validate(entry) for entry in entries if isinstance(entry, dict)]
 
-    def enable_web_access(self, *, account: str, host_ref: str) -> dict[str, Any]:
-        """Bring sharing up server-side for a leased host (``hosts enable-sharing``).
-
-        The connector creates/rotates the share record and injects the share
-        materials (owner granted, web chrome origin included) into the
-        container with the pool key. Idempotent; returns the connector's
-        ``{host_id, workspace_domain, region}`` body.
-        """
-        result = self._run(
-            ["hosts", "enable-sharing", host_ref, "--account", account],
-            cg_name="imbue-cloud-hosts-enable-sharing",
-        )
-        body = self._expect_success(result, "hosts enable-sharing")
-        return body if isinstance(body, dict) else {}
-
     def release_host(self, account: str, host_db_id: str) -> bool:
         result = self._run(
             ["hosts", "release", host_db_id, "--account", account],
@@ -630,8 +632,8 @@ class ImbueCloudCli(MutableModel):
             return None
         return ShareCliInfo.model_validate(body)
 
-    def list_share_relays(self, *, account: str) -> dict[str, str]:
-        """The relay fleet as ``{region: tunnel-control endpoint}`` (for latency-based region picking)."""
+    def list_share_relays(self, *, account: str) -> dict[str, tuple[str, ...]]:
+        """The relay fleet as ``{region: tunnel-control endpoints}`` (for latency-based region picking)."""
         result = self._run(
             ["shares", "relays", "--account", account],
             cg_name="imbue-cloud-shares-relays",
@@ -640,7 +642,9 @@ class ImbueCloudCli(MutableModel):
         relays = body.get("relays") if isinstance(body, dict) else None
         if not isinstance(relays, dict):
             raise ImbueCloudCliError("Malformed shares relays output: expected a relays map")
-        return {str(region): str(endpoint) for region, endpoint in relays.items()}
+        if not all(isinstance(endpoints, list) for endpoints in relays.values()):
+            raise ImbueCloudCliError("Malformed shares relays output: expected an endpoint list per region")
+        return {str(region): tuple(str(endpoint) for endpoint in endpoints) for region, endpoints in relays.items()}
 
     # ------------------------------------------------------------------
     # R2 buckets (one per workspace; used to back up the host_dir via restic)

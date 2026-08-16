@@ -56,7 +56,12 @@ def test_ensure_account_entitlements_raises_when_plan_not_seeded() -> None:
 def test_plans_migration_declares_all_quota_columns() -> None:
     """Guard against the plans/entitlements schema and QUOTA_ENTITLEMENT_NAMES drifting apart."""
     migrations_dir = Path(__file__).parent.parent.parent / "migrations"
-    migration_sql = (migrations_dir / "014_plans_entitlements.sql").read_text().lower()
+    # Quota columns are declared by 014 (the original tables) plus any later
+    # ALTERs that add entitlements (024 added max_total_workspaces); the drift
+    # guard checks their union.
+    migration_sql = (migrations_dir / "014_plans_entitlements.sql").read_text().lower() + (
+        migrations_dir / "024_workspace_stop_start.sql"
+    ).read_text().lower()
     rename_sql = (migrations_dir / "016_rename_username_prefix.sql").read_text().lower()
     assert "create table plans" in migration_sql
     assert "create table account_entitlements" in migration_sql
