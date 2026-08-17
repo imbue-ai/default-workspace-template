@@ -1,0 +1,1 @@
+The workspace's first chat is created as "Chat 1" -- the same series the New Tab launcher's Chat tile continues ("Chat 2", ...) -- instead of inheriting the workspace's name from the host. First boot only, so existing workspaces keep their current chat name.

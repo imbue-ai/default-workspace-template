@@ -193,7 +193,11 @@ def _build_create_chat_command(
     cmd: list[str] = [
         "mngr",
         "create",
-        host_name,
+        # Named explicitly so the first chat's tab reads "Chat 1" -- the same
+        # series the launcher's Chat tile continues ("Chat 2", ...) -- rather
+        # than inheriting the workspace's name from the host. First boot, so
+        # the name is always free.
+        f"Chat 1@{host_name}",
         # `--transfer none` matches what `AgentManager.create_chat_agent`
         # uses for the "New Chat" button (system/apps/system_interface/.../
         # agent_manager.py). Without it, mngr defaults to creating a
