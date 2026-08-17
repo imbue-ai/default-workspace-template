@@ -43,33 +43,6 @@ def turn_open(events: Sequence[dict[str, Any]]) -> bool:
     return False
 
 
-def has_pending_codex_tool_use(events: Sequence[dict[str, Any]]) -> bool:
-    """True iff a codex tool call has no matching ``tool_result`` yet (a tool is in flight).
-
-    Codex nests its tool calls inside ``assistant_message`` events (each ``tool_calls`` entry carries a
-    ``tool_call_id``) and emits ``tool_result`` events separately, keyed by the same ``tool_call_id``
-    (see :mod:`harnesses.codex.session_parser`). A call id with no matching result means the tool is
-    still running. Matching is order-independent, like the claude ``tool_use``/``tool_result`` matcher.
-    """
-    called: set[str] = set()
-    resulted: set[str] = set()
-    for event in events:
-        event_type = event.get("type")
-        if event_type == "assistant_message":
-            for tool_call in event.get("tool_calls") or ():
-                tool_call_id = tool_call.get("tool_call_id")
-                if tool_call_id:
-                    called.add(tool_call_id)
-        elif event_type == "tool_result":
-            tool_call_id = event.get("tool_call_id")
-            if tool_call_id:
-                resulted.add(tool_call_id)
-        else:
-            # Non-tool events (user_message, reasoning, turn markers) carry no tool-call state.
-            pass
-    return bool(called - resulted)
-
-
 @pure
 def derive(
     *,

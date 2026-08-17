@@ -1057,9 +1057,9 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
     # codex interrupts natively through its live ledger: one ``turn/interrupt`` on the running
     # turn, then an authoritative per-id settle -- every non-committed owned message (a parked
     # steer, or an in-flight Sending) returns to the composer in send order, while a message that
-    # committed before the interrupt stays Delivered (contract Interrupt + A4). The ledger clears
-    # ``active_turn_id`` at once, so the dot clears immediately (A6). With no live connection there
-    # is nothing running and nothing parked, so the returned block is empty.
+    # committed before the interrupt stays Delivered (contract Interrupt + A4). The dot itself is
+    # tracker-driven and clears when the rollout's turn_aborted marker lands. With no live
+    # connection there is nothing running and nothing parked, so the returned block is empty.
     if agent_info.harness == HarnessType.CODEX:
         ledger = agent_manager.get_codex_ledger(agent_info.id)
         block = ledger.interrupt() if ledger is not None else ""

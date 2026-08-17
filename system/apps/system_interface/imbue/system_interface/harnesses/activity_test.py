@@ -9,14 +9,20 @@ from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.registry import build_tracker
 from imbue.system_interface.harnesses.registry import get_harness_spec
 
-# Harnesses whose shared transcript-shape tests below assume claude's ``tool_use`` / ``tool_result``
-# event schema. Codex now has a tracker too, but its transcript nests tool calls inside
-# ``assistant_message`` (a different schema), so it is exercised by its own tests
-# (``harnesses/codex/activity_state_test.py``) rather than these shared ones.
-_TRACKER_HARNESSES = tuple(harness for harness in HarnessType if harness is not HarnessType.CODEX)
+# All three parsers emit the same common event schema (tool calls nested in
+# ``assistant_message``, results keyed by ``tool_call_id`` -- see ``harnesses/events.py``), so
+# every harness runs the shared tests. The fixtures open with a ``turn_started`` marker so
+# codex's turn latch engages; claude/pi read the tail and ignore the marker.
+_TRACKER_HARNESSES = tuple(HarnessType)
+
+
+def _turn_started_marker() -> dict[str, Any]:
+    return {"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}
 
 
 @pytest.mark.parametrize(
@@ -34,9 +40,10 @@ def test_build_tracker(harness: HarnessType, expected_type: type, expected_marke
     assert tracker.marker_filename == expected_marker
 
 
-def test_codex_builds_a_lifecycle_activity_tracker() -> None:
-    """Codex now registers a transcript-derived tracker like claude/pi: its dot follows mngr's live
-    RUNNING state, refined to a tool verb by the transcript (the ledger stays for the queue only)."""
+def test_codex_builds_a_turn_latch_activity_tracker() -> None:
+    """Codex registers a transcript-derived tracker like claude/pi. Its dot is a latch on the
+    transcript's turn markers (the mngr lifecycle is deliberately not consulted -- laggy for
+    codex); the ledger stays for the queue only."""
     assert get_harness_spec(HarnessType.CODEX).tracker_class is CodexActivityTracker
     tracker = build_tracker(HarnessType.CODEX)
     assert isinstance(tracker, CodexActivityTracker)
@@ -75,7 +82,7 @@ def test_fresh_tracker_is_idle(harness: HarnessType) -> None:
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
 def test_observe_reports_no_change_on_repeat(harness: HarnessType) -> None:
     """A repeated event list must short-circuit, so streamed lines stay cheap."""
-    events: list[dict[str, Any]] = [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"}]
+    events: list[dict[str, Any]] = [_turn_started_marker(), {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"}]
     tracker = build_tracker(harness)
     assert tracker.observe(events) is True, f"{harness} should register the first event"
     assert tracker.observe(events) is False, f"{harness} should short-circuit an unchanged list"
@@ -100,6 +107,7 @@ def test_stale_transcript_tail_reads_idle(harness: HarnessType) -> None:
     tracker = build_tracker(harness)
     tracker.observe(
         [
+            _turn_started_marker(),
             {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
         ]
     )
@@ -117,6 +125,7 @@ def test_reset_settles_on_idle(harness: HarnessType) -> None:
     tracker = build_tracker(harness)
     tracker.observe(
         [
+            _turn_started_marker(),
             {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
         ]
     )
@@ -130,6 +139,7 @@ def test_pending_tool_use_reads_tool_running(harness: HarnessType) -> None:
     tracker = build_tracker(harness)
     tracker.observe(
         [
+            _turn_started_marker(),
             {
                 "type": "assistant_message",
                 "timestamp": "2026-07-28T00:00:01Z",

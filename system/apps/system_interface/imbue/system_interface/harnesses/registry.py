@@ -58,11 +58,9 @@ class HarnessSpec(FrozenModel):
 
     name: HarnessType
     watcher_class: type[AgentSessionWatcher]
-    # The transcript-derived activity tracker. Optional: a harness whose activity is driven
-    # directly by its backend (codex, off the app-server's turn lifecycle) has NO tracker and
-    # leaves this None. Only the transcript-inferring harnesses (claude, pi -- no turn
-    # boundaries) register one. ``build_tracker`` is only called for a harness that has one.
-    tracker_class: type[HarnessActivityTracker] | None = None
+    # The transcript-derived activity tracker. Every harness has one -- claude/pi infer the
+    # turn from the transcript tail, codex latches its explicit turn markers.
+    tracker_class: type[HarnessActivityTracker]
     # The model resolver class -- a true peer of watcher_class/tracker_class, so it
     # sits flat here and AgentManager calls ``.build(agent_info)`` on it the same way.
     resolver_class: type[HarnessModelResolver]
@@ -104,11 +102,12 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
         watcher_class=CodexSessionWatcher,
-        # The dot follows mngr's live RUNNING state (thread/status-derived), defaulting to THINKING and
-        # refined to a tool verb by the transcript -- the same lifecycle+transcript path as claude/pi.
-        # (The old design drove it from the ledger's turn/started..turn/completed events, but codex no
-        # longer emits those on the app-server, only thread/status/changed, so the dot got stuck. The
-        # ledger stays as the queue/message-lifecycle authority; it no longer drives the dot.)
+        # The dot is a latch on the transcript's turn markers (task_started/task_complete in the
+        # rollout); the mngr lifecycle is deliberately NOT consulted -- it is polled, hence laggy
+        # and unreliable for codex (see harnesses/codex/activity.py). (The old design drove the dot
+        # from the ledger's turn/started..turn/completed app-server events, but codex no longer
+        # emits those, only thread/status/changed, so the dot got stuck. The ledger stays as the
+        # queue/message-lifecycle authority; it does not drive the dot.)
         tracker_class=CodexActivityTracker,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
@@ -153,20 +152,9 @@ def build_watcher(agent_info: AgentInfo, on_events: OnEventsCallback) -> AgentSe
     return get_harness_spec(agent_info.harness).watcher_class.build(agent_info, on_events)
 
 
-class HarnessHasNoTrackerError(RuntimeError):
-    """A transcript tracker was requested for a harness whose activity is backend-driven.
-
-    Codex has no tracker (its dot comes from the live ledger); asking for one is a caller bug --
-    ``agent_manager`` only builds trackers for the transcript-inferring harnesses.
-    """
-
-
 def build_tracker(harness: HarnessType) -> HarnessActivityTracker:
-    """Build the activity tracker for ``harness``. Only valid for a harness that has one."""
-    tracker_class = get_harness_spec(harness).tracker_class
-    if tracker_class is None:
-        raise HarnessHasNoTrackerError(f"harness {harness} has no activity tracker (its activity is backend-driven)")
-    return tracker_class.build()
+    """Build the activity tracker for ``harness``."""
+    return get_harness_spec(harness).tracker_class.build()
 
 
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:

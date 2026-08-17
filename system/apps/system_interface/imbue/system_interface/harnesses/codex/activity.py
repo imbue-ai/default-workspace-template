@@ -13,11 +13,11 @@ from typing import ClassVar
 
 from imbue.mngr_codex.codex_config import PROCESS_STARTED_MARKER_FILENAME
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import has_unmatched_tool_use
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.codex.activity_state import derive
-from imbue.system_interface.harnesses.codex.activity_state import has_pending_codex_tool_use
 from imbue.system_interface.harnesses.codex.activity_state import turn_open
 
 
@@ -37,7 +37,7 @@ class CodexActivityTracker(HarnessActivityTracker):
         self._turn_open = False
 
     def observe(self, events: Sequence[dict[str, Any]]) -> bool:
-        new_pending = has_pending_codex_tool_use(events)
+        new_pending = has_unmatched_tool_use(events)
         new_turn_open = turn_open(events)
         new_last_type = last_event_type(events)
         if (

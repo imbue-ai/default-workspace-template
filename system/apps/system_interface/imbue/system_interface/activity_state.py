@@ -35,12 +35,12 @@ class ActivityState(UpperCaseStrEnum):
 
 @pure
 def has_unmatched_tool_use(events: Sequence[dict[str, Any]]) -> bool:
-    """True iff the transcript has at least one ``tool_use`` without a matching ``tool_result``.
+    """True iff the transcript has at least one tool call without a matching ``tool_result``.
 
-    Walks every event so that an unmatched ``tool_use`` from any prior assistant
-    turn still counts -- in practice Claude only ever has outstanding tool calls
-    from its most recent assistant message, but the matching is order-independent
-    so we don't have to care.
+    Harness-neutral: every parser emits tool calls nested in ``assistant_message`` events
+    (each entry carrying a ``tool_call_id``) and matches results by that id -- the shared
+    contract in :mod:`harnesses.events`. Walks every event so an unmatched call from any
+    prior assistant turn still counts; matching is order-independent.
     """
     pending: set[str] = set()
     matched: set[str] = set()

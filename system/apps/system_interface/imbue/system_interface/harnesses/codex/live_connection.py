@@ -44,7 +44,6 @@ from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.mngr_codex.app_server_client import TransportClosedError
-from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
 from imbue.system_interface.harnesses.codex.ledger import write_codex_model_state
 from imbue.system_interface.harnesses.codex.model import FAST_SERVICE_TIER
@@ -109,7 +108,6 @@ class CodexLiveConnection:
         agent_state_dir: Path,
         *,
         on_queue_snapshot: Callable[[list[dict[str, Any]]], None],
-        on_activity: Callable[[ActivityState], None],
         on_user_turn: Callable[[dict[str, Any]], None],
         model_state_path: Path,
         open_client: Callable[[Path], CodexAppServerClient] = open_subscribed_codex_client,
@@ -145,7 +143,6 @@ class CodexLiveConnection:
         ledger = CodexMessageLedger.build(
             client,
             on_queue_snapshot=on_queue_snapshot,
-            on_activity=on_activity,
             on_user_turn=on_user_turn,
             model_state_path=model_state_path,
         )

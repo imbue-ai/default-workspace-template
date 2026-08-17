@@ -97,17 +97,12 @@ class _Sink:
 
     def __init__(self) -> None:
         self.queue_calls: list[list[dict[str, str]]] = []
-        self.activity_calls: list[ActivityState] = []
         self.user_turns: list[dict[str, Any]] = []
         self.channel_log: list[str] = []
 
     def on_queue(self, snapshot: list[dict[str, str]]) -> None:
         self.queue_calls.append(snapshot)
         self.channel_log.append("queue")
-
-    def on_activity(self, state: ActivityState) -> None:
-        self.activity_calls.append(state)
-        self.channel_log.append("activity")
 
     def on_user_turn(self, event: dict[str, Any]) -> None:
         self.user_turns.append(event)
@@ -131,7 +126,6 @@ def _build_ledger(
     ledger = CodexMessageLedger.build(
         client,
         on_queue_snapshot=sink.on_queue,
-        on_activity=sink.on_activity,
         on_user_turn=sink.on_user_turn,
         mint_client_id=mint,
         now=lambda: "2026-08-11T00:00:00Z",
@@ -592,23 +586,23 @@ def test_activity_running_until_turn_completed() -> None:
     transport = ScriptedTransport()
     sink = _Sink()
     ledger, client, _sink = _build_ledger(transport, sink=sink)
-    assert ledger.activity_state() == ActivityState.IDLE
+    assert ledger.turn_activity() == ActivityState.IDLE
 
     transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
     ledger.send("go")
-    assert ledger.activity_state() == ActivityState.THINKING
+    assert ledger.turn_activity() == ActivityState.THINKING
 
     # A tool starts -> TOOL_RUNNING; it completes -> THINKING. The turn is still open throughout.
     transport.push(
         {"jsonrpc": "2.0", "method": "item/started", "params": {"item": {"type": "commandExecution", "id": "t1"}}}
     )
     client.poll_notifications()
-    assert ledger.activity_state() == ActivityState.TOOL_RUNNING
+    assert ledger.turn_activity() == ActivityState.TOOL_RUNNING
     transport.push(
         {"jsonrpc": "2.0", "method": "item/completed", "params": {"item": {"type": "commandExecution", "id": "t1"}}}
     )
     client.poll_notifications()
-    assert ledger.activity_state() == ActivityState.THINKING
+    assert ledger.turn_activity() == ActivityState.THINKING
 
     # An assistant message completes (token generation stops) -- the turn is NOT done, so the dot
     # STAYS lit (the old codex idle-too-early bug).
@@ -616,12 +610,11 @@ def test_activity_running_until_turn_completed() -> None:
         {"jsonrpc": "2.0", "method": "item/completed", "params": {"item": {"type": "agentMessage", "id": "a1"}}}
     )
     client.poll_notifications()
-    assert ledger.activity_state() == ActivityState.THINKING
+    assert ledger.turn_activity() == ActivityState.THINKING
 
     # turn/completed is the only signal that clears the dot.
     _push_turn_completed(transport, client, "turn-1", items_view="full", items=[])
-    assert ledger.activity_state() == ActivityState.IDLE
-    assert sink.activity_calls[-1] == ActivityState.IDLE
+    assert ledger.turn_activity() == ActivityState.IDLE
 
 
 def test_callbacks_fire_only_on_change() -> None:
@@ -631,11 +624,9 @@ def test_callbacks_fire_only_on_change() -> None:
     transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
     ledger.send("go")
     # A no-op notification (an unrelated turn method) must not re-push identical state.
-    activity_before = list(sink.activity_calls)
     queue_before = list(sink.queue_calls)
     transport.push({"jsonrpc": "2.0", "method": "turn/started", "params": {"turn": {"id": "turn-1"}}})
     client.poll_notifications()
-    assert sink.activity_calls == activity_before
     assert sink.queue_calls == queue_before
 
 
@@ -707,12 +698,12 @@ def test_interrupt_clears_the_dot_immediately() -> None:
     transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
     first = ledger.send("first")
     _push_user_message_committed(transport, client, first)
-    assert ledger.activity_state() == ActivityState.THINKING
+    assert ledger.turn_activity() == ActivityState.THINKING
 
     transport.respond_result("turn/interrupt", {})
     transport.respond_result("thread/read", {"thread": {"id": "thread-1", "turns": []}})
     ledger.interrupt()
-    assert ledger.activity_state() == ActivityState.IDLE
+    assert ledger.turn_activity() == ActivityState.IDLE
     assert client.active_turn_id is None
 
 
