@@ -16,7 +16,9 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.primitives import HostId
 from imbue.mngr.providers.ssh_utils import add_host_to_known_hosts
+from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.errors import SliceCapacityError
+from imbue.mngr_imbue_cloud.slices.bare_metal import count_authorized_key_lines
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_instance_name
 from imbue.mngr_imbue_cloud.slices.lima_slice import CONTAINER_SSH_PORT_PLACEHOLDER
@@ -53,6 +55,9 @@ _LIMA_SHORT_TIMEOUT_SECONDS: Final[float] = 120.0
 # more room than a plain limactl call while keeping the lock hold bounded.
 _LIMA_RESERVE_TIMEOUT_SECONDS: Final[float] = 600.0
 _BOX_CONNECT_TIMEOUT_SECONDS: Final[int] = 30
+# Separator line between the /proc/mdstat and /proc/swaps halves of the
+# one-round-trip box-health read.
+_BOX_HEALTH_SPLIT_MARKER: Final[str] = "MNGR_BOX_HEALTH_SPLIT"
 
 
 def _is_already_absent_error(stderr: str) -> bool:
@@ -364,6 +369,44 @@ class LimaSliceVpsClient(VpsClientInterface):
             if name:
                 names.add(name)
         return names
+
+    def count_authorized_keys(self) -> int:
+        """Number of public keys authorized for the box's lima service user.
+
+        Reads the service user's ``authorized_keys`` and counts it with
+        :func:`count_authorized_key_lines`. ``build_box_prep_script`` writes that
+        file with a single-key overwrite (``cat > ``, never an append), so any count
+        other than 1 means a key was added out of band -- which is how a box ends up
+        reachable by a tier that does not own it.
+        """
+        read_rc, read_out, read_err = self.run_on_box(
+            "cat ~/.ssh/authorized_keys", timeout=_LIMA_SHORT_TIMEOUT_SECONDS, label="read-authorized-keys"
+        )
+        if read_rc != 0:
+            raise BareMetalProvisioningError(
+                f"could not read ~/.ssh/authorized_keys for {self.box_ssh_user} on {self.box_address} "
+                f"(exit {read_rc}): {read_err.strip()}"
+            )
+        return count_authorized_key_lines(read_out)
+
+    def read_box_health_texts(self) -> tuple[str, str]:
+        """Return the box's ``/proc/mdstat`` and ``/proc/swaps`` contents in one round-trip.
+
+        The audit's disk-health inputs: degraded md arrays and unmirrored
+        (raw-partition) swap devices are parsed from these by the pure helpers in
+        ``bare_metal``. Both files are world-readable, so this needs no root.
+        """
+        read_rc, read_out, read_err = self.run_on_box(
+            f"cat /proc/mdstat && echo {_BOX_HEALTH_SPLIT_MARKER} && cat /proc/swaps",
+            timeout=_LIMA_SHORT_TIMEOUT_SECONDS,
+            label="read-box-health",
+        )
+        if read_rc != 0:
+            raise BareMetalProvisioningError(
+                f"could not read /proc/mdstat + /proc/swaps on {self.box_address} (exit {read_rc}): {read_err.strip()}"
+            )
+        mdstat_text, _, proc_swaps_text = read_out.partition(f"{_BOX_HEALTH_SPLIT_MARKER}\n")
+        return mdstat_text, proc_swaps_text
 
     def destroy_disk(self, disk_name: str) -> None:
         """Delete a lima data disk on the box, unlocking it first so a leaked locked disk still goes.

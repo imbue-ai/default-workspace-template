@@ -29,9 +29,9 @@ from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.auth import AuthStoreInterface
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backup_trim import BackupTrimManager
-from imbue.minds.desktop_client.chrome_event_broadcast import ChromeEventBroadcaster
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
 from imbue.minds.desktop_client.forward_cli import EnvelopeStreamConsumer
+from imbue.minds.desktop_client.imbue_cloud_cli import ActiveShareCache
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.latchkey.permission_requests_consumer import PermissionRequestsConsumer
 from imbue.minds.desktop_client.minds_config import MindsConfig
@@ -40,8 +40,11 @@ from imbue.minds.desktop_client.region_preference import GeoLocationCache
 from imbue.minds.desktop_client.request_events import RequestInbox
 from imbue.minds.desktop_client.request_handler import RequestEventHandler
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
+from imbue.minds.desktop_client.share_materials_injection import MachineSharingLockRegistry
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.ui_channel import UiChannelBroadcaster
+from imbue.minds.desktop_client.ui_publisher import UiStatePublisher
 from imbue.minds.desktop_client.workspace_operations import InMemoryWorkspaceOperationRegistry
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRegistryInterface
 from imbue.minds.primitives import OutputFormat
@@ -89,9 +92,16 @@ class DesktopClientState(MutableModel):
     geo_location_cache: GeoLocationCache = Field(
         default_factory=GeoLocationCache, description="One-shot IP-geolocation cache for region defaults"
     )
-    chrome_event_broadcaster: ChromeEventBroadcaster = Field(
-        default_factory=ChromeEventBroadcaster,
-        description="Fans one-shot chrome-events SSE payloads (e.g. workspace_stopped, open_help) out to connections",
+    ui_channel_broadcaster: UiChannelBroadcaster = Field(
+        default_factory=UiChannelBroadcaster,
+        description="Fans serialized /ui/ws channel frames out to every connected SPA window",
+    )
+    ui_publisher: UiStatePublisher | None = Field(
+        default=None,
+        description=(
+            "Edge-driven publisher deriving+diffing chrome state onto the channel; wired by "
+            "create_desktop_client (None only for apps constructed without it, e.g. minimal tests)"
+        ),
     )
     client_env_config: ClientEnvConfig | None = Field(
         default=None, frozen=True, description="Loaded per-env client config (connector URL, etc.)"
@@ -125,6 +135,11 @@ class DesktopClientState(MutableModel):
     mngr_forward_port: int = Field(default=0, frozen=True, description="mngr forward plugin port")
     mngr_forward_preauth_cookie: str | None = Field(
         default=None, frozen=True, description="Preauth cookie accepted by the mngr forward plugin"
+    )
+    mngr_forward_browser_bridge_token: str | None = Field(
+        default=None,
+        frozen=True,
+        description="Spawn-time secret for the plugin's /_bridge route (browser twin of the preauth cookie)",
     )
     auth_output_format: OutputFormat = Field(
         default=OutputFormat.JSONL, frozen=True, description="Output format for emitted JSONL events"
@@ -173,6 +188,19 @@ class DesktopClientState(MutableModel):
         description=(
             "Reverse-SSH-tunnel manager owning hub-brokered tunnels into calling workspaces "
             "(local cross-workspace SSH access). Idle until first use; torn down on shutdown."
+        ),
+    )
+    machine_sharing_locks: MachineSharingLockRegistry = Field(
+        default_factory=MachineSharingLockRegistry,
+        frozen=True,
+        description="Per-machine locks serializing the machine-sharing PUT/DELETE handlers",
+    )
+    active_share_cache: ActiveShareCache = Field(
+        default_factory=ActiveShareCache,
+        frozen=True,
+        description=(
+            "Short-TTL cache of connector share lookups for the sharing readiness poll "
+            "(invalidated by the sharing PUT/DELETE handlers)"
         ),
     )
 

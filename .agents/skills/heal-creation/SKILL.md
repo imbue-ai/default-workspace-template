@@ -65,7 +65,6 @@ transcript.
 ```bash
 cat > data/.tasks/harden/heal-$TARGET/task.md << TASK_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/harden/heal-$TARGET/reports/report.md
 operation: heal
 type: skill
@@ -119,7 +118,7 @@ background worker.
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name heal-$TARGET \
-    --template subskill-worker \
+    --template worker \
     --runtime-dir data/.tasks/harden/heal-$TARGET/ \
     --task-file data/.tasks/harden/heal-$TARGET/task.md
 ```

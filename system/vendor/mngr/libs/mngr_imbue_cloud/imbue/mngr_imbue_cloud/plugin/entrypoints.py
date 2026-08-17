@@ -80,7 +80,8 @@ def _has_signed_in_accounts(default_host_dir: Any) -> bool:
         return False
     try:
         session_store = ImbueCloudSessionStore(sessions_dir=get_sessions_dir(profile_dir))
-        return bool(session_store.list_accounts())
+        sessions = (session_store.load_by_account(account) for account in session_store.list_accounts())
+        return any(session is not None for session in sessions)
     except OSError as exc:
         logger.debug("imbue_cloud on_load_config skipped session probe: {}", exc)
         return False

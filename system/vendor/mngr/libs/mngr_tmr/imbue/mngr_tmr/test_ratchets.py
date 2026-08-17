@@ -39,14 +39,20 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    # Two CLI utilities whose stdout *is* their output channel, so logger
+    # Three CLI utilities whose stdout *is* their output channel, so logger
     # framing isn't right and excluding them beats routing output through a
     # logger just to dodge the regex:
     #   * setup_tmr_ci_debug.py prints the modal SSH public key the user copies
     #     into .github/tmr-authorized-keys.
     #   * pr_summary.py prints the markdown the reducer agent captures and
     #     pastes into the run's pull request description.
-    rc.check_bare_print(_DIR, snapshot(0), excluded_patterns=("setup_tmr_ci_debug.py", "pr_summary.py"))
+    #   * escalation_coverage.py prints the escalation ids the reducer agent
+    #     reads back to fix its own grouping.
+    rc.check_bare_print(
+        _DIR,
+        snapshot(0),
+        excluded_patterns=("setup_tmr_ci_debug.py", "pr_summary.py", "escalation_coverage.py"),
+    )
 
 
 # --- Exception handling ---
@@ -288,3 +294,10 @@ def test_prevent_per_file_host_upload() -> None:
 
 def test_prevent_code_in_init_files() -> None:
     rc.check_code_in_init_files(_DIR, snapshot(0))
+
+
+# --- Modal images ---
+
+
+def test_prevent_unpinned_modal_pip_install() -> None:
+    rc.check_unpinned_modal_pip_install(_DIR, snapshot(0))

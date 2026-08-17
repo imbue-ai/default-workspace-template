@@ -18,11 +18,13 @@ agents (deny-all baseline) while still cookie-reachable by the UI.
 Agent identity, when a route needs it, comes from the URL path's
 ``<agent_id>`` parameter -- *not* from the bearer token. The gateway's
 per-host permissions file is what gates which agent ids a given caller
-can talk about: at agent-create time the desktop client narrows the
-host's permission rule to ``/minds-api-proxy/api/v1/agents/<agent_id>/...``,
-so a request that reaches a route with a given ``<agent_id>`` has
-already been authorized by the gateway as "this is an agent that lives
-on the caller's host".
+can talk about: the desktop client registers every agent discovery
+reports into its host's allowlist, which is what lifts
+``/minds-api-proxy/api/v1/agents/<agent_id>/...`` out of the baseline's
+reject shortcut for unregistered ids (see ``docs/latchkey-permissions.md``
+for the rule ordering that implements it). So a request that reaches a
+route with a given ``<agent_id>`` has already been authorized by the
+gateway as "this is an agent that lives on the caller's host".
 """
 
 import itertools
@@ -37,6 +39,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from typing import Final
+from typing import assert_never
 
 from flask import Blueprint
 from flask import Response
@@ -92,8 +95,9 @@ from imbue.minds.desktop_client.api_models import CreateOperationStatusResponse
 from imbue.minds.desktop_client.api_models import CreateWorkspaceRequest
 from imbue.minds.desktop_client.api_models import DestroyOperationStatusResponse
 from imbue.minds.desktop_client.api_models import EmptyResponse
-from imbue.minds.desktop_client.api_models import EnableSharingRequest
 from imbue.minds.desktop_client.api_models import EstablishSshRequest
+from imbue.minds.desktop_client.api_models import MachineSharingRequest
+from imbue.minds.desktop_client.api_models import MachineSharingResponse
 from imbue.minds.desktop_client.api_models import OkResponse
 from imbue.minds.desktop_client.api_models import OperationHandleResponse
 from imbue.minds.desktop_client.api_models import PatchWorkspaceRequest
@@ -101,8 +105,8 @@ from imbue.minds.desktop_client.api_models import ProviderToggleResponse
 from imbue.minds.desktop_client.api_models import RestartOperationStatusResponse
 from imbue.minds.desktop_client.api_models import RestartWorkspaceRequest
 from imbue.minds.desktop_client.api_models import SetProviderEnabledRequest
+from imbue.minds.desktop_client.api_models import SharingGrantsDocument
 from imbue.minds.desktop_client.api_models import SharingReadinessResponse
-from imbue.minds.desktop_client.api_models import SharingToggleResponse
 from imbue.minds.desktop_client.api_models import SshConnectionResponse
 from imbue.minds.desktop_client.api_models import StopStateContainerResponse
 from imbue.minds.desktop_client.api_models import TimezoneResponse
@@ -124,11 +128,13 @@ from imbue.minds.desktop_client.backup_export import export_snapshot_zip
 from imbue.minds.desktop_client.backup_reaper import make_quota_evictor
 from imbue.minds.desktop_client.backup_verification_store import is_backup_verification_enabled
 from imbue.minds.desktop_client.backup_verification_store import set_backup_verification_enabled
-from imbue.minds.desktop_client.chrome_event_broadcast import build_open_help_payload
 from imbue.minds.desktop_client.create_helpers import REMOTE_SIGNIN_REDIRECT_URL
 from imbue.minds.desktop_client.create_helpers import color_for_new_workspace
 from imbue.minds.desktop_client.create_helpers import existing_workspace_host_names
 from imbue.minds.desktop_client.create_helpers import taken_host_names_on_provider
+from imbue.minds.desktop_client.create_status import status_text_for
+from imbue.minds.desktop_client.host_names import normalize_host_name_slug
+from imbue.minds.desktop_client.host_names import resolve_create_host_name
 from imbue.minds.desktop_client.host_timezone import read_host_timezone
 from imbue.minds.desktop_client.labeled_hosts import WORKSPACE_ID_LABELED_PROVIDER_NAMES
 from imbue.minds.desktop_client.labeled_hosts import find_host_by_workspace_id_label
@@ -141,32 +147,33 @@ from imbue.minds.desktop_client.responses import make_file_response
 from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.responses import make_streaming_response
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
+from imbue.minds.desktop_client.sharing_handler import EmptyGrantsError
 from imbue.minds.desktop_client.sharing_handler import SharingError
 from imbue.minds.desktop_client.sharing_handler import disable_sharing
-from imbue.minds.desktop_client.sharing_handler import enable_sharing_via_cloudflare
-from imbue.minds.desktop_client.sharing_handler import get_sharing_status
-from imbue.minds.desktop_client.sharing_handler import is_probeable_share_url
-from imbue.minds.desktop_client.sharing_handler import probe_share_url_readiness
+from imbue.minds.desktop_client.sharing_handler import enable_sharing
+from imbue.minds.desktop_client.sharing_handler import get_active_share_cached
+from imbue.minds.desktop_client.sharing_handler import get_sharing
+from imbue.minds.desktop_client.sharing_handler import probe_share_readiness
+from imbue.minds.desktop_client.sharing_handler import resolve_share_probe_host
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forward_supervisor
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
-from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
-from imbue.minds.desktop_client.templates import default_workspace_template_ref
-from imbue.minds.desktop_client.templates import normalize_host_name_slug
-from imbue.minds.desktop_client.templates import resolve_create_host_name
-from imbue.minds.desktop_client.templates import status_text_for
+from imbue.minds.desktop_client.ui_models import UiOpenHelpMessage
+from imbue.minds.desktop_client.ui_models import UiWorkspaceRefreshMessage
 from imbue.minds.desktop_client.workspace_create import build_backup_request_or_error
 from imbue.minds.desktop_client.workspace_create import build_create_on_created_callback
 from imbue.minds.desktop_client.workspace_create import resolve_effective_region
+from imbue.minds.desktop_client.workspace_defaults import FALLBACK_BRANCH
+from imbue.minds.desktop_client.workspace_defaults import default_workspace_template_ref
 from imbue.minds.desktop_client.workspace_lifecycle import MindHostAction
 from imbue.minds.desktop_client.workspace_lifecycle import perform_mind_host_action
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationKind
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRecord
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationRegistryInterface
 from imbue.minds.desktop_client.workspace_operations import WorkspaceOperationStatus
-from imbue.minds.desktop_client.workspace_recovery import RestartWorkerFailureHandler
+from imbue.minds.desktop_client.workspace_recovery import RestartDispatchOutcome
+from imbue.minds.desktop_client.workspace_recovery import dispatch_host_restart
 from imbue.minds.desktop_client.workspace_recovery import probe_workspace_health
-from imbue.minds.desktop_client.workspace_recovery import run_restart_sequence
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.errors import BackupProvisioningError
 from imbue.minds.errors import MngrCommandError
@@ -183,7 +190,6 @@ from imbue.minds.primitives import CONFIGURED_GCP_MACHINE_TYPES
 from imbue.minds.primitives import CreateAttemptId
 from imbue.minds.primitives import DockerRuntime
 from imbue.minds.primitives import LaunchMode
-from imbue.minds.primitives import ServiceName
 from imbue.minds.primitives import default_docker_runtime
 from imbue.minds.utils.mngr_caller import get_default_mngr_caller
 from imbue.mngr.primitives import AgentId
@@ -194,7 +200,7 @@ from imbue.mngr.primitives import InvalidName
 # Cap for a short blocking ``mngr`` command run via ``_run_mngr_blocking``
 # (restart-services, git label read/write) -- quick operations, unlike the host
 # stop/start transition (that path uses ``perform_mind_host_action``'s much
-# larger ``_HOST_STOP_TIMEOUT_SECONDS``, sized for the slow first cloud stop).
+# larger ``HOST_STOP_TIMEOUT_SECONDS``, sized for the slow first cloud stop).
 _MNGR_BLOCKING_COMMAND_TIMEOUT_SECONDS: float = 300.0
 
 # SSE event-stream headers (disable proxy/browser buffering so events flush live).
@@ -937,13 +943,13 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
     ``host_name`` is auto-resolved to the next free ``workspace-N`` (the form no
     longer asks for a name).
 
-    Backup provisioning and Cloudflare tunnel injection match the desktop UI's
+    Backup provisioning and account association match the desktop UI's
     create flow: the optional ``backup_*`` fields (``backup_provider``,
     ``backup_api_key_env``) build the same restic
     setup request, and -- when an ``account_id`` is given -- the same
-    post-create-attempt callback associates the peer with the account and injects a
-    Cloudflare tunnel token. Both reuse the shared helpers in
-    ``workspace_create`` so the two front doors stay in lockstep.
+    post-create-attempt callback associates the peer with the account.
+    Both reuse the shared helpers in ``workspace_create`` so the two
+    front doors stay in lockstep.
     """
     agent_creator: AgentCreator | None = get_state().agent_creator
     if agent_creator is None:
@@ -975,6 +981,11 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
         return _json_error(f"Invalid backup_provider: {body.get('backup_provider')!r}", 400)
     backup_api_key_env = str(body.get("backup_api_key_env", ""))
     account_id = str(body.get("account_id", "")).strip()
+    is_web_access_enabled = bool(body.get("enable_web_access", False))
+    if is_web_access_enabled and not account_id:
+        # Web access is "shared with yourself": without an owning account there
+        # is nobody to grant, so fail fast instead of silently skipping later.
+        return _json_field_error("Web access requires a selected account.", "enable_web_access")
     submitted_region = str(body.get("region", "")).strip()
     instance_type = str(body.get("instance_type", "")).strip()
     if instance_type:
@@ -1077,8 +1088,8 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
 
     # Resolve the effective region (honoring a valid submitted value, else the
     # provider default) and, on a successful create, build the post-create-attempt
-    # callback that injects the Cloudflare tunnel token + associates the account
-    # and persists the chosen region -- exactly as the create form does.
+    # callback that associates the account and persists the chosen region --
+    # exactly as the create form does.
     minds_config = get_state().minds_config
     if matching is not None:
         # A BYOK account's placement (region, or GCE zone) is pinned per entry --
@@ -1090,7 +1101,13 @@ def _handle_create_workspace() -> tuple[OperationHandleResponse, int] | Response
     else:
         region = resolve_effective_region(launch_mode, submitted_region, minds_config, get_state().geo_location_cache)
     on_created = build_create_on_created_callback(
-        account_id, minds_config, launch_mode, region, display_name=host_name or resolved_host_name, color=color
+        account_id,
+        minds_config,
+        launch_mode,
+        region,
+        display_name=host_name or resolved_host_name,
+        color=color,
+        is_web_access_enabled=is_web_access_enabled,
     )
 
     try:
@@ -1144,6 +1161,18 @@ def _handle_destroy_workspace(agent_id: str) -> tuple[OperationHandleResponse, i
     except ValueError:
         return _json_error(f"Cannot resolve a host to destroy for {agent_id}", 409)
 
+    # A destroy makes the machine unreachable on purpose, exactly as a stop
+    # does: its interface dies within seconds and the probe loop reads that as a
+    # wedge, so without the mark the unattended dispatch runs ``mngr start``
+    # against a host that is being torn down. Marked as in flight, since the
+    # interface answers for the first seconds of a teardown and a 200 taken
+    # there must not clear it. Nothing reconciles it afterwards -- this returns
+    # 202 with the destroy still running -- which is the intent: a destroyed
+    # machine never answers again, and one whose destroy failed is the user's to
+    # deal with rather than something to cold-boot.
+    tracker = get_state().system_interface_health_tracker
+    if tracker is not None:
+        tracker.suppress_unattended_recovery(parsed_id, is_stop_in_flight=True)
     destroying.start_destroy(parsed_id, paths, host_id, mngr_binary=get_state().mngr_binary)
     return OperationHandleResponse(operation_id=str(parsed_id), kind="destroy"), 202
 
@@ -1235,7 +1264,8 @@ def _perform_workspace_lifecycle(agent_id: str, action: str) -> WorkspaceLifecyc
         get_state().mngr_binary,
         get_state().mngr_host_dir,
         parent_cg,
-        chrome_event_broadcaster=get_state().chrome_event_broadcaster,
+        ui_publisher=get_state().ui_publisher,
+        health_tracker=get_state().system_interface_health_tracker,
     )
     if not outcome.is_successful:
         reason = f": {outcome.failure_reason}" if outcome.failure_reason else ""
@@ -1395,8 +1425,8 @@ def _handle_workspace_restart(agent_id: str) -> tuple[OperationHandleResponse, i
 
     Body: ``{"scope": "host", "start_only"?: bool}``. The restart
     bounces the whole host; ``start_only`` skips the stop step and runs only
-    the idempotent ``mngr start`` (the recovery page's unconditional entry
-    dispatch). The former ``services`` scope (an in-place
+    the idempotent ``mngr start``, for callers dispatching with no knowledge of
+    the host's state. The former ``services`` scope (an in-place
     system-services restart) was removed and is rejected with a 400. Returns
     ``202`` with ``{operation_id, kind: "restart"}`` (the op id is the workspace
     agent id), followed via ``/api/v1/workspaces/operations/restart/<id>``
@@ -1424,80 +1454,48 @@ def _handle_workspace_restart(agent_id: str) -> tuple[OperationHandleResponse, i
         return _json_error("Machine restart is unavailable in this configuration", 503)
 
     handle = OperationHandleResponse(operation_id=str(parsed_id), kind="restart")
-    # The recovery page dispatches its restart unconditionally on entry, with
-    # no knowledge of the host's state, and it can race the workspace's own
-    # self-recovery -- but no guard is needed here: that dispatch runs only
-    # ``mngr start`` (``start_only`` skips the stop step), which checks ground
-    # truth at commit time, targets only STOPPED agents, and starts the host
-    # idempotently -- against a live or self-recovered workspace the whole
-    # restart degrades to a no-op. A veto keyed on tracker health would
-    # misfire here: the tracker reports default-HEALTHY for never-probed
-    # workspaces (e.g. a host offline since before this process started), so
-    # it would silently drop the cold-boot those workspaces need.
-    # Serialize with the backup operations: ``registry.start`` below replaces
-    # the workspace's record, so a RUNNING backup update/configure must be
-    # rejected here (its worker's terminal complete/fail would corrupt the
-    # restart's record, and restarting would bounce the host under an
-    # in-flight backup mutation). The backup dispatch routes reject in the
-    # other direction via their atomic ``start_if_idle``.
+    # A ``start_only`` caller can race the workspace's own self-recovery, and
+    # needs no guard: ``mngr start`` checks ground truth at commit time, targets
+    # only STOPPED agents, and degrades to a no-op against a live or
+    # self-recovered workspace. Do not add a veto keyed on tracker health -- the
+    # tracker reports default-HEALTHY for never-probed workspaces (a host
+    # offline since before this process started), so it would silently drop the
+    # cold-boot those workspaces need.
     registry = state.workspace_operation_registry
-    existing_operation = registry.get(parsed_id)
-    if (
-        existing_operation is not None
-        and existing_operation.status == WorkspaceOperationStatus.RUNNING
-        and existing_operation.kind != WorkspaceOperationKind.RESTART
-    ):
-        return _operation_conflict_error(existing_operation)
-    # start_only makes the restart a pure ``mngr start`` (the recovery page's
-    # unconditional entry dispatch, which must never bounce a live container);
-    # a manual restart keeps the stop step, since it may target a running but
-    # wedged container that only a bounce fixes. Resolved before the claim so
-    # the tracker can record the restart's flavor for the recovery page's copy.
+    # A manual restart keeps the stop step, since it may target a running but
+    # wedged container that only a bounce fixes.
     skip_stop = bool(body.get("start_only", False))
 
-    # A restart already in flight for this workspace -- don't stack a second
-    # worker racing the first's stop/start commands. mark_restarting decides the
-    # RESTARTING transition under its own lock and reports whether this caller won
-    # it, so this is an atomic check-and-claim against concurrent requests.
-    if not tracker.mark_restarting(parsed_id, start_only=skip_stop):
-        return handle, 202
-
-    registry.start(parsed_id, WorkspaceOperationKind.RESTART, datetime.now(timezone.utc))
-
-    # is_checked=False + on_failure: a crash of the one-shot worker transitions
-    # the tracker to RESTART_FAILED and the registry to FAILED (so neither the
-    # recovery page nor the operation poller hangs). The spawn itself can also
-    # raise when the group is shutting down; since we've already claimed
-    # RESTARTING, roll both into the failed state and report 503.
-    try:
-        parent_cg.start_new_thread(
-            target=run_restart_sequence,
-            kwargs={
-                "workspace_agent_id": parsed_id,
-                "tracker": tracker,
-                "backend_resolver": backend_resolver,
-                "mngr_binary": state.mngr_binary,
-                "mngr_host_dir": state.mngr_host_dir,
-                "concurrency_group": parent_cg,
-                "mngr_forward_port": state.mngr_forward_port or 0,
-                "mngr_forward_preauth_cookie": state.mngr_forward_preauth_cookie,
-                "registry": registry,
-                "skip_stop": skip_stop,
-            },
-            name=f"workspace-restart-{parsed_id}",
-            daemon=True,
-            is_checked=False,
-            on_failure=RestartWorkerFailureHandler(tracker=tracker, workspace_agent_id=parsed_id, registry=registry),
-        )
-    except (OSError, RuntimeError, ConcurrencyGroupError) as exc:
-        # Error level so the failure reaches Sentry (Principle 3: the recovery
-        # surface is quiet, so a restart that never even spawned must report).
-        logger.error("Failed to spawn restart worker for {}: {}", parsed_id, exc)
-        message = f"Could not start the restart worker: {exc}"
-        tracker.mark_restart_failed(parsed_id, message)
-        registry.fail(parsed_id, message)
-        return _json_error(message, 503)
-    return handle, 202
+    outcome = dispatch_host_restart(
+        workspace_agent_id=parsed_id,
+        tracker=tracker,
+        backend_resolver=backend_resolver,
+        registry=registry,
+        concurrency_group=parent_cg,
+        mngr_binary=state.mngr_binary,
+        mngr_host_dir=state.mngr_host_dir,
+        mngr_forward_port=state.mngr_forward_port or 0,
+        mngr_forward_preauth_cookie=state.mngr_forward_preauth_cookie,
+        skip_stop=skip_stop,
+    )
+    match outcome:
+        # A refused dispatch leaves the record untouched, so it still names the
+        # operation that blocked this one.
+        case RestartDispatchOutcome.OPERATION_CONFLICT:
+            return _operation_conflict_error(registry.get(parsed_id))
+        # The outcome cannot carry the cause, but the dispatch recorded it on
+        # the operation record before failing it -- and no worker ever ran, so
+        # there are no logs to look at either.
+        case RestartDispatchOutcome.SPAWN_FAILED:
+            failed_operation = registry.get(parsed_id)
+            reason = None if failed_operation is None else failed_operation.error
+            return _json_error(reason if reason is not None else "Could not start the restart worker", 503)
+        # A restart already in flight is deduped onto the same handle rather
+        # than stacking a second worker, so both read as accepted.
+        case RestartDispatchOutcome.DISPATCHED | RestartDispatchOutcome.ALREADY_RUNNING:
+            return handle, 202
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 # Operation polling is segmented by type -- ``/operations/<type>/<id>`` -- so the
@@ -1637,10 +1635,11 @@ def _dispatch_backup_worker(
     """Claim the workspace's single operation slot and spawn the worker that ends it.
 
     Shared by the update and restore routes, whose dispatch differs only in the
-    worker and its extra kwargs. The claim is atomic (``start_if_idle``, like
-    restart's ``mark_restarting``): two concurrent requests must not both spawn
-    workers mutating the same workspace, and a request that loses to a running
-    operation of any kind is rejected rather than stacked.
+    worker and its extra kwargs. The claim is atomic (``start_if_idle``, the
+    same primitive ``dispatch_host_restart`` claims with): two concurrent
+    requests must not both spawn workers mutating the same workspace, and a
+    request that loses to a running operation of any kind is rejected rather
+    than stacked.
 
     The kind's name is the single source of the wire kind, the thread name and
     the operator-facing label, so they cannot drift apart.
@@ -2340,11 +2339,42 @@ def _handle_bug_report(agent_id: str) -> OkResponse | Response:
     if not description:
         return _json_error("'description' field is required and must be a non-empty string", 400)
 
-    get_state().chrome_event_broadcaster.broadcast(
-        build_open_help_payload(description=description, workspace_agent_id=agent_id)
-    )
+    publisher = get_state().ui_publisher
+    if publisher is not None:
+        publisher.publish_one_shot(UiOpenHelpMessage(description=description, workspace_agent_id=agent_id))
     # The agent never submits to Sentry itself, so no report event is written here (the
     # response carries no ``event_id``); the human-reviewed send flows through ``/help/report``.
+    return OkResponse(ok=True)
+
+
+# -- Workspace view refresh route --
+
+
+@require_api_or_cookie_auth
+@API_SPEC.validate(resp=json_response_model(OkResponse))
+def _handle_workspace_refresh(agent_id: str) -> OkResponse:
+    """Rebuild the displayed view of a workspace, on behalf of an in-workspace agent.
+
+    An agent that changes the workspace's own interface -- typically followed by a
+    ``mngr start --restart system-services`` -- leaves any open view running the
+    pre-change frontend against the restarted backend. A restart that completes
+    quickly never trips the system-interface health tracker's STUCK threshold, so
+    the tracker's recovery edge -- the other producer of this frame -- never
+    fires and nothing rebuilds the view on the agent's behalf. This route is the
+    agent's explicit request for that reload.
+
+    Takes no body: the path ``agent_id`` (which the gateway has already authorized)
+    is the whole request. It names the *workspace*, so a sub-agent asking for a
+    refresh addresses its workspace's primary agent id rather than its own.
+
+    Fire-and-forget by design, mirroring the broadcaster's own contract: a
+    workspace with no window open has nothing to refresh, and the agent's caller
+    must not fail because the user happens to have the workspace closed. The
+    response is ``ok`` either way.
+    """
+    publisher = get_state().ui_publisher
+    if publisher is not None:
+        publisher.publish_one_shot(UiWorkspaceRefreshMessage(agent_id=agent_id))
     return OkResponse(ok=True)
 
 
@@ -2627,64 +2657,150 @@ def _handle_dismiss_create_attempt(create_attempt_id: str) -> EmptyResponse | Re
     return EmptyResponse()
 
 
-# -- Sharing sub-resource routes --
+# -- Machine sharing routes --
+
+
+def _grants_document_from_request(body: MachineSharingRequest) -> SharingGrantsDocument:
+    return SharingGrantsDocument(workspace=body.workspace, services=dict(body.services))
+
+
+def _grants_to_plain(
+    grants: SharingGrantsDocument,
+) -> tuple[dict[str, list[str]], dict[str, dict[str, list[str]]]]:
+    workspace = {"emails": list(grants.workspace.emails), "email_domains": list(grants.workspace.email_domains)}
+    services = {
+        name: {"emails": list(entry.emails), "email_domains": list(entry.email_domains)}
+        for name, entry in grants.services.items()
+    }
+    return workspace, services
+
+
+def _optional_str(document: dict[str, object], key: str) -> str | None:
+    value = document.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _sharing_document_to_response(document: dict[str, object]) -> MachineSharingResponse:
+    raw_grants = document.get("grants")
+    # None means the grants read did not land (unknown, NOT empty) -- pass it
+    # through so the client can refuse to edit an unseen policy.
+    grants: SharingGrantsDocument | None
+    if raw_grants is None:
+        grants = None
+    else:
+        grants = (
+            SharingGrantsDocument.model_validate(raw_grants)
+            if isinstance(raw_grants, dict)
+            else SharingGrantsDocument()
+        )
+    return MachineSharingResponse(
+        host_id=str(document.get("host_id", "")),
+        enabled=bool(document.get("enabled", False)),
+        workspace_domain=_optional_str(document, "workspace_domain"),
+        url=_optional_str(document, "url"),
+        region=_optional_str(document, "region"),
+        last_tunnel_login_at=_optional_str(document, "last_tunnel_login_at"),
+        cert_not_after=_optional_str(document, "cert_not_after"),
+        grants=grants,
+    )
 
 
 @require_api_or_cookie_auth
-def _handle_sharing_status(agent_id: str, service_name: str) -> Response:
-    """Return current sharing status for a service: ``{enabled, url, policy}``."""
+@API_SPEC.validate(resp=json_response_model(MachineSharingResponse))
+def _handle_machine_sharing_get(host_id: str) -> MachineSharingResponse:
+    """Return the machine's sharing document: status + the grants in force."""
     state = get_state()
-    status = get_sharing_status(
-        AgentId(agent_id), ServiceName(service_name), state.imbue_cloud_cli, state.session_store
-    )
-    return _json_response(status)
+    document = get_sharing(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
+    return _sharing_document_to_response(document)
+
+
+@require_api_or_cookie_auth
+@API_SPEC.validate(json=MachineSharingRequest, resp=json_response_model(MachineSharingResponse))
+def _handle_machine_sharing_put(host_id: str) -> MachineSharingResponse | Response:
+    """Enable sharing (or update the grants) for a machine. Body: the grants document."""
+    body = MachineSharingRequest.model_validate(request.get_json(silent=True, force=True) or {})
+    workspace_grants, service_grants = _grants_to_plain(_grants_document_from_request(body))
+    state = get_state()
+    try:
+        # Serialized per machine: the desktop-side JS only serializes writes
+        # within one pane, so two panes/windows editing one machine would
+        # otherwise interleave their full-document replaces.
+        with state.machine_sharing_locks.get_lock(host_id):
+            try:
+                document = enable_sharing(
+                    host_id=host_id,
+                    workspace_grants=workspace_grants,
+                    service_grants=service_grants,
+                    backend_resolver=state.backend_resolver,
+                )
+            finally:
+                # The share state may have changed even on failure (the
+                # connector create can succeed before the injection fails), so
+                # the readiness poll must not keep serving a stale lookup.
+                state.active_share_cache.invalidate(host_id)
+    except EmptyGrantsError as exc:
+        # A grants document naming nobody is a request-validation failure,
+        # not an upstream fault. 400 rather than 422: spectree reserves 422
+        # for its own request-schema validation errors.
+        return _json_error(str(exc), 400)
+    except SharingError as exc:
+        return _json_error(str(exc), 502)
+    return _sharing_document_to_response(document)
+
+
+@require_api_or_cookie_auth
+@API_SPEC.validate(resp=json_response_model(MachineSharingResponse))
+def _handle_machine_sharing_delete(host_id: str) -> MachineSharingResponse | Response:
+    """Disable sharing for a machine (revokes the relay token; live viewers are cut)."""
+    state = get_state()
+    try:
+        # Same per-machine serialization as the PUT: a disable racing a grants
+        # write must not interleave with its materials removal.
+        with state.machine_sharing_locks.get_lock(host_id):
+            try:
+                disable_sharing(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
+            finally:
+                state.active_share_cache.invalidate(host_id)
+    except SharingError as exc:
+        return _json_error(str(exc), 502)
+    return MachineSharingResponse(host_id=host_id, enabled=False)
 
 
 @require_api_or_cookie_auth
 @API_SPEC.validate(resp=json_response_model(SharingReadinessResponse))
-def _handle_sharing_readiness(agent_id: str, service_name: str) -> SharingReadinessResponse:
-    """Probe a shared service's hostname to see if Cloudflare Access is live yet.
+def _handle_machine_sharing_readiness(host_id: str) -> SharingReadinessResponse:
+    """Probe whether the machine's shared hostname is live end to end yet.
 
-    The hostname to probe comes from the ``url`` query param; restricted to
-    public ``https`` URLs to avoid an SSRF vector. Contract: ``{"ready": bool}``.
+    The domain to probe comes from the connector's share record for this
+    machine, never from caller input. Besides the end-to-end ``ready`` bit,
+    the response carries the connector's per-step provisioning signals
+    (certificate issuance, tunnel liveness stamp) so the UI can show which
+    step a still-provisioning share is on.
     """
-    probe_url = request.args.get("url", "")
-    http_client = get_state().http_client
-    if http_client is None or not is_probeable_share_url(probe_url):
-        return SharingReadinessResponse(ready=False)
-    return SharingReadinessResponse(ready=probe_share_url_readiness(http_client, probe_url))
-
-
-@require_api_or_cookie_auth
-@API_SPEC.validate(json=EnableSharingRequest, resp=json_response_model(SharingToggleResponse))
-def _handle_sharing_enable(agent_id: str, service_name: str) -> SharingToggleResponse | Response:
-    """Enable or update sharing for a service. Body: ``{"emails": [...]}``."""
-    parsed_id = AgentId(agent_id)
-    # The spectree model validates that ``emails`` (when present) is a list of strings.
-    body = request.get_json(silent=True, force=True) or {}
-    emails = [str(email) for email in body.get("emails", [])]
-    try:
-        _tunnel, share_url = enable_sharing_via_cloudflare(
-            agent_id=parsed_id,
-            service_name=ServiceName(service_name),
-            emails=emails,
-            backend_resolver=get_state().backend_resolver,
-        )
-    except SharingError as exc:
-        return _json_error(str(exc), 502)
-    return SharingToggleResponse(agent_id=str(parsed_id), service_name=service_name, enabled=True, url=share_url)
-
-
-@require_api_or_cookie_auth
-@API_SPEC.validate(resp=json_response_model(SharingToggleResponse))
-def _handle_sharing_disable(agent_id: str, service_name: str) -> SharingToggleResponse | Response:
-    """Disable sharing for a service (removes it from its tunnel; the tunnel persists)."""
     state = get_state()
-    try:
-        disable_sharing(AgentId(agent_id), ServiceName(service_name), state.imbue_cloud_cli, state.session_store)
-    except SharingError as exc:
-        return _json_error(str(exc), 502)
-    return SharingToggleResponse(agent_id=agent_id, service_name=service_name, enabled=False)
+    http_client = state.http_client
+    if http_client is None:
+        return SharingReadinessResponse(ready=False)
+    # Only the connector-side share status is needed here (the full sharing
+    # document would also exec into the workspace for grants each poll), and
+    # it rides the short-TTL cache: the poll fires every ~2 seconds while the
+    # only per-tick question -- is the hostname live yet? -- is answered by
+    # the TLS probe below, not by re-running a multi-second `shares status`
+    # subprocess for a domain that never changes.
+    share = get_active_share_cached(
+        host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store, state.active_share_cache
+    )
+    if share is None or not share.workspace_domain:
+        return SharingReadinessResponse(ready=False)
+    # Probe the shell's routable label origin, not the bare machine domain
+    # (which does not route on a share). Not-ready until the shell label is known.
+    probe_host = resolve_share_probe_host(state.backend_resolver, state.session_store, host_id, share.workspace_domain)
+    is_ready = probe_host is not None and probe_share_readiness(http_client, probe_host)
+    return SharingReadinessResponse(
+        ready=is_ready,
+        cert_not_after=share.cert_not_after,
+        last_tunnel_login_at=share.last_tunnel_login_at,
+    )
 
 
 # -- Desktop namespace routes (cookie-or-bearer; no agent verb) --
@@ -2937,7 +3053,12 @@ def _handle_stop_hosts() -> Response:
         return _json_error("Machine host control is unavailable in this configuration", 503)
     requested_ids = request.args.getlist("agent_id")
     still_running = desktop_control.stop_workspace_hosts(
-        requested_ids, state.backend_resolver, state.mngr_binary, state.mngr_host_dir, parent_cg
+        requested_ids,
+        state.backend_resolver,
+        state.mngr_binary,
+        state.mngr_host_dir,
+        parent_cg,
+        health_tracker=state.system_interface_health_tracker,
     )
     return _json_response({"still_running": still_running})
 
@@ -3149,28 +3270,29 @@ def create_api_v1_blueprint() -> Blueprint:
         methods=["DELETE"],
     )
 
-    # Sharing sub-resource. Gated by ``minds-workspaces-sharing`` at the gateway.
+    # Machine sharing. Desktop-only surface (cookie or API auth); agents get
+    # deny-all at the gateway (no latchkey verb maps the machines namespace).
     blueprint.add_url_rule(
-        "/workspaces/<agent_id>/sharing/<service_name>",
-        view_func=_handle_sharing_status,
-        endpoint="sharing_status",
+        "/machines/<host_id>/sharing",
+        view_func=_handle_machine_sharing_get,
+        endpoint="machine_sharing_get",
         methods=["GET"],
     )
     blueprint.add_url_rule(
-        "/workspaces/<agent_id>/sharing/<service_name>/readiness",
-        view_func=_handle_sharing_readiness,
+        "/machines/<host_id>/sharing/readiness",
+        view_func=_handle_machine_sharing_readiness,
         methods=["GET"],
     )
     blueprint.add_url_rule(
-        "/workspaces/<agent_id>/sharing/<service_name>",
-        view_func=_handle_sharing_enable,
-        endpoint="sharing_enable",
+        "/machines/<host_id>/sharing",
+        view_func=_handle_machine_sharing_put,
+        endpoint="machine_sharing_put",
         methods=["PUT"],
     )
     blueprint.add_url_rule(
-        "/workspaces/<agent_id>/sharing/<service_name>",
-        view_func=_handle_sharing_disable,
-        endpoint="sharing_disable",
+        "/machines/<host_id>/sharing",
+        view_func=_handle_machine_sharing_delete,
+        endpoint="machine_sharing_delete",
         methods=["DELETE"],
     )
 
@@ -3195,5 +3317,9 @@ def create_api_v1_blueprint() -> Blueprint:
     # Bug reports (per-agent for the same gateway-permission reason; the agent_id
     # also scopes the report's workspace context).
     blueprint.add_url_rule("/agents/<agent_id>/report", view_func=_handle_bug_report, methods=["POST"])
+
+    # Workspace view refresh (per-agent for the same gateway-permission reason; the
+    # agent_id identifies which workspace's view to rebuild).
+    blueprint.add_url_rule("/agents/<agent_id>/refresh", view_func=_handle_workspace_refresh, methods=["POST"])
 
     return blueprint

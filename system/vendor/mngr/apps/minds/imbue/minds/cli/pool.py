@@ -40,11 +40,13 @@ from loguru import logger
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.minds.bootstrap import resolve_effective_mngr_host_dir
 from imbue.minds.cli._activated_env import PRODUCTION_ENV_NAME
 from imbue.minds.cli._activated_env import STAGING_ENV_NAME
 from imbue.minds.cli._activated_env import require_activated_env_name
 from imbue.minds.cli._activated_env import tier_for_env_name
 from imbue.minds.config.loader import load_deploy_config
+from imbue.minds.desktop_client.laptop_agent_types_seed import seed_laptop_agent_types_for_minds
 from imbue.minds.envs.primitives import VaultReadError
 from imbue.minds.envs.vault_reader import VaultPath
 from imbue.minds.envs.vault_reader import read_vault_kv
@@ -179,12 +181,7 @@ def tear_down_env_pool_slices(env_name: str) -> None:
     silently leak the env's slice VMs; a genuine teardown failure (an unreachable
     box) likewise raises rather than leaking.
     """
-    try:
-        pool_private_key = read_pool_private_key_from_vault(env_name)
-    except VaultReadError as exc:
-        raise click.ClickException(
-            f"Could not read the pool SSH private key from Vault for env '{env_name}': {exc}"
-        ) from exc
+    pool_private_key = read_pool_private_key_from_vault_or_fail(env_name)
     database_url = resolve_host_pool_dsn(env_name, None)
     args = build_teardown_slices_admin_args(database_url=database_url)
     raise_on_admin_command_failure(
@@ -304,6 +301,20 @@ def read_pool_private_key_from_vault(
     return private_key
 
 
+def read_pool_private_key_from_vault_or_fail(env_name: str) -> str:
+    """Like :func:`read_pool_private_key_from_vault`, but any Vault read failure becomes a ``ClickException``.
+
+    The CLI-facing form shared by every command that injects the tier's pool
+    key into an admin subprocess.
+    """
+    try:
+        return read_pool_private_key_from_vault(env_name)
+    except VaultReadError as exc:
+        raise click.ClickException(
+            f"Could not read the pool SSH private key from Vault for env '{env_name}': {exc}"
+        ) from exc
+
+
 def resolve_host_pool_dsn(
     env_name: str,
     explicit_database_url: str | None,
@@ -383,6 +394,23 @@ def raise_on_admin_command_failure(subgroup: str, label: str, result: FinishedPr
         raise click.ClickException(f"mngr imbue_cloud admin {subgroup} {label} failed (exit {result.returncode}).")
 
 
+def seed_activated_env_agent_types() -> None:
+    """Run the laptop-side agent-type seed/migration against the activated env's mngr host dir.
+
+    The bake's inner ``mngr create`` cross-scope-merges the user-scope
+    ``[agent_types.X]`` blocks with the workspace template's, and a profile last
+    seeded by a pre-cutover minds build carries a claude-parented ``main`` that
+    makes every bake fail with ``Cannot merge AgentTypeConfig with
+    ClaudeAgentConfig`` until the current app's seed migration runs. minds.app
+    only runs that migration at desktop startup, which an operator machine used
+    purely for bakes may never do -- so run it here too, against the same host
+    dir the admin subprocess will read (the same
+    ``resolve_effective_mngr_host_dir`` derivation ``minds run`` uses).
+    Idempotent and cheap.
+    """
+    seed_laptop_agent_types_for_minds(resolve_effective_mngr_host_dir())
+
+
 def _run_slice_pool_create(
     *,
     env_name: str,
@@ -410,12 +438,10 @@ def _run_slice_pool_create(
         raise click.UsageError(
             "--server-id is required (the bare-metal box to bake onto; see `mngr imbue_cloud admin server list`)"
         )
-    try:
-        pool_private_key = read_pool_private_key_from_vault(env_name)
-    except VaultReadError as exc:
-        raise click.ClickException(
-            f"Could not read the pool SSH private key from Vault for env '{env_name}': {exc}"
-        ) from exc
+    # Migrate/seed the laptop-side agent types before the inner `mngr create`
+    # reads them, so a stale pre-cutover profile cannot fail the bake.
+    seed_activated_env_agent_types()
+    pool_private_key = read_pool_private_key_from_vault_or_fail(env_name)
     args = build_create_admin_args(
         env_name=env_name,
         count=count,
@@ -681,13 +707,7 @@ def pool_destroy(
     env_name = require_activated_env_name()
     extra_env: dict[str, str] | None = None
     if not is_row_drop_only:
-        try:
-            pool_private_key = read_pool_private_key_from_vault(env_name)
-        except VaultReadError as exc:
-            raise click.ClickException(
-                f"Could not read the pool SSH private key from Vault for env '{env_name}': {exc}"
-            ) from exc
-        extra_env = {POOL_PRIVATE_KEY_ENV_VAR: pool_private_key}
+        extra_env = {POOL_PRIVATE_KEY_ENV_VAR: read_pool_private_key_from_vault_or_fail(env_name)}
     args = build_destroy_admin_args(
         pool_host_ids=list(pool_host_ids),
         database_url=resolve_host_pool_dsn(env_name, database_url),

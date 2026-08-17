@@ -92,6 +92,7 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.git_utils import rsync_worktree_over_clone
 from imbue.mngr_latchkey.agent_setup import AgentLatchkeySetup
+from imbue.mngr_latchkey.agent_setup import LatchkeyGatewayLocation
 from imbue.mngr_latchkey.agent_setup import SECRET_LATCHKEY_ENV_VAR_NAMES
 from imbue.mngr_latchkey.agent_setup import finalize_host_permissions
 from imbue.mngr_latchkey.agent_setup import prepare_agent_latchkey
@@ -127,7 +128,7 @@ def make_workspace_probe_client(preauth_cookie: str, probe_timeout_seconds: floa
     of letting the helper construct a one-shot client per call.
 
     The proxy serves TLS (HTTP/2), so cert verification is disabled: these
-    probes dial ``127.0.0.1`` with a ``Host: agent-<hex>.localhost`` header, so
+    probes dial ``127.0.0.1`` with a ``Host: host-<hex>.localhost`` header, so
     hostname verification could never pass, and the cert is a self-signed
     ephemeral one the probe is not positioned to validate anyway. Loopback-only.
     """
@@ -143,7 +144,7 @@ def _probe_once(probe_client: httpx.Client, probe_url: str, host_header: str) ->
     """Issue a single GET through ``probe_client`` and return the status code.
 
     ``probe_url`` targets loopback directly; ``host_header`` carries the
-    ``agent-<hex>.localhost`` vhost the plugin routes on. Sending the subdomain
+    ``host-<hex>.localhost`` vhost the plugin routes on. Sending the subdomain
     as an explicit ``Host`` header rather than in the URL keeps the probe from
     depending on ``*.localhost`` name resolution, which is not available on a
     bare Linux host (only loopback ``localhost`` itself reliably resolves).
@@ -163,11 +164,11 @@ def _probe_once(probe_client: httpx.Client, probe_url: str, host_header: str) ->
 def probe_workspace_through_plugin(
     mngr_forward_port: int,
     preauth_cookie: str,
-    agent_id: AgentId,
+    workspace_host_id: str,
     probe_timeout_seconds: float,
     client: httpx.Client | None = None,
 ) -> int | None:
-    """Issue a single probe through the plugin to the agent's inner web server.
+    """Issue a single probe through the plugin to the workspace's inner web server.
 
     Probes ``/`` (see ``_WORKSPACE_PROBE_PATH``). Returns the HTTP status code
     observed (a 200 means some web server is up and answering on the inner
@@ -176,13 +177,16 @@ def probe_workspace_through_plugin(
     (create attempt flow) and the system-interface-health tracker's background
     probe loop so both paths agree on what "ready" means.
 
+    ``workspace_host_id`` is the mngr host id (``host-<hex>``) the plugin
+    routes workspace origins on.
+
     Pass a pre-constructed ``client`` (via ``make_workspace_probe_client``)
     to reuse the connection pool across a tight poll loop. When omitted, a
     one-shot client is constructed for this single probe -- fine for
     one-off / sporadic callers but wasteful in a loop.
     """
     probe_url = f"{_MNGR_FORWARD_SCHEME}://127.0.0.1:{mngr_forward_port}{_WORKSPACE_PROBE_PATH}"
-    host_header = f"{agent_id}.localhost"
+    host_header = f"{workspace_host_id}.localhost"
     if client is not None:
         return _probe_once(client, probe_url, host_header)
     with make_workspace_probe_client(
@@ -422,6 +426,59 @@ def extract_repo_name(git_url: str) -> str:
     cleaned = "".join(c if c.isalnum() or c in "-_" else "-" for c in name)
     cleaned = cleaned.strip("-")
     return cleaned if cleaned else "workspace"
+
+
+SCRATCH_CLONE_DIR_PREFIX: Final = "minds-clone-"
+ORPHANED_SCRATCH_CLONE_AGE_SECONDS: Final = 24 * 60 * 60
+
+
+def make_scratch_clone_root(repo_name: str, temp_dir: Path | None = None) -> Path:
+    """Create a private temp directory to clone one create attempt's source into.
+
+    Returns the *root*; the caller clones into ``<root>/<repo_name>`` (a fresh
+    subdirectory, because :func:`clone_git_repo` requires its target not to
+    exist) and removes the whole root when the attempt ends.
+
+    One directory per attempt is load-bearing. This used to be a single
+    ``<tmp>/minds-clone-<repo_name>`` shared by every attempt for a repo and
+    rmtree'd on the way in, so a second create deleted the directory an
+    in-flight create was using as its ``mngr create`` cwd. That cwd is what the
+    relative build context (``"."`` in every ``[create_templates.*]`` block)
+    resolves against, so the older attempt died minutes later inside
+    ``Path.resolve()`` with a bare ``FileNotFoundError`` from posixpath. Any two
+    overlapping creates from one repo collided, whatever their launch modes --
+    the path was keyed on the repo name alone.
+
+    The repo name stays in the prefix purely so ``ls`` on the temp dir is
+    readable; uniqueness comes from ``mkdtemp``. ``temp_dir`` defaults to the
+    system temp dir and is only passed explicitly by tests.
+    """
+    parent = None if temp_dir is None else str(temp_dir)
+    return Path(tempfile.mkdtemp(prefix="{}{}-".format(SCRATCH_CLONE_DIR_PREFIX, repo_name), dir=parent))
+
+
+def sweep_orphaned_scratch_clones(temp_dir: Path) -> None:
+    """Delete scratch clone roots left behind by a previous session.
+
+    Per-attempt roots are removed in the create attempt's ``finally``, which
+    does not run when the app is force-quit or killed (the create worker is a
+    daemon thread). A full default-workspace-template clone is ~240MB, so
+    without this sweep the shared-path fix above would trade a crash for a slow
+    disk leak -- the old shared path was accidentally self-reclaiming, since the
+    next create for that repo deleted it.
+
+    Only roots untouched for a day are removed, so a clone belonging to a
+    *concurrently running* second Minds instance is never deleted out from under
+    it, which is the exact failure this whole change is about.
+    """
+    cutoff = time.time() - ORPHANED_SCRATCH_CLONE_AGE_SECONDS
+    for path in temp_dir.glob(SCRATCH_CLONE_DIR_PREFIX + "*"):
+        try:
+            if path.is_dir() and path.stat().st_mtime < cutoff:
+                logger.info("Removing orphaned scratch clone {}", path)
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError as e:
+            logger.debug("Skipping orphaned scratch clone {}: {}", path, e)
 
 
 def _is_local_path(repo_source: str) -> bool:
@@ -820,6 +877,21 @@ _FAST_PATH_UNAVAILABLE_ERROR_CLASS: Final[str] = "FastPathUnavailableError"
 _PREBAKED_IMAGE_WAIT_TIMEOUT_SECONDS: Final[float] = 600.0
 _PREBAKED_IMAGE_POLL_INTERVAL_SECONDS: Final[float] = 1.0
 
+# How long a cold-booted workspace is given to answer its first HTTP 200 through
+# the plugin. First-boot provisioning (uv sync, npm ci + run build for the
+# system_interface frontend) regularly takes 90-180s on a fresh VM or Docker
+# host, so this is sized for the slow end of a cold boot rather than the typical
+# one; the earlier 60s left users staring at the recovery surface while the
+# workspace was still finishing provisioning. The probe is cheap, so a generous
+# ceiling costs nothing.
+#
+# Every wait for a cold-booted workspace's interface is sized from this one
+# number -- the create attempt's readiness wait (``workspace_ready_timeout_seconds``
+# below) and the restart worker's post-``mngr start`` wait in
+# :mod:`workspace_recovery` -- so the two can never drift into disagreeing about
+# how long a cold boot takes.
+WORKSPACE_READY_TIMEOUT_SECONDS: Final[float] = 300.0
+
 # Readiness window for a Lima create with no pre-baked image. Such a create
 # builds the whole workspace inside the VM (setup_system.sh +
 # install_dependencies.sh + build_workspace.sh, serially, at 2 vCPU / 4 GB)
@@ -923,6 +995,17 @@ def provider_instance_name_for_launch(
             # reachable only through a bring-your-own-key account block, which the
             # ``cloud_account`` short-circuit above already returned.
             raise MngrCommandError(f"{launch_mode.value} mode requires a cloud account")
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def latchkey_gateway_location_for_launch(launch_mode: LaunchMode) -> LatchkeyGatewayLocation:
+    """Select the intended gateway topology before the workspace host exists."""
+    match launch_mode:
+        case LaunchMode.DOCKER | LaunchMode.LIMA | LaunchMode.MODAL:
+            return LatchkeyGatewayLocation.DESKTOP
+        case LaunchMode.VULTR | LaunchMode.IMBUE_CLOUD | LaunchMode.AWS | LaunchMode.GCP | LaunchMode.AZURE:
+            return LatchkeyGatewayLocation.VPS
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -1747,7 +1830,7 @@ class AgentCreator(MutableModel):
         frozen=True,
         description=(
             "Dispatcher for surfacing failures from background tasks (e.g. the detached "
-            "Cloudflare tunnel setup task) to the user as OS notifications."
+            "backup-provisioning task) to the user as OS notifications."
         ),
     )
     lima_image_gate: LimaImageCreateGate | None = Field(
@@ -1802,15 +1885,13 @@ class AgentCreator(MutableModel):
         ),
     )
     workspace_ready_timeout_seconds: float = Field(
-        default=300.0,
+        default=WORKSPACE_READY_TIMEOUT_SECONDS,
         frozen=True,
         description=(
             "Maximum time to wait for the new agent's system_interface to return HTTP 200. "
-            "First-boot provisioning (uv sync, npm ci + run build for the system_interface "
-            "frontend) regularly takes 90-180s on a fresh VM or Docker host, so the previous "
-            "60s default left users on the recovery page while the agent was still finishing "
-            "provisioning. The probe is cheap so a generous cap is harmless; we still publish "
-            "the redirect anyway if it expires."
+            "Defaults to the shared cold-boot budget (``WORKSPACE_READY_TIMEOUT_SECONDS``); "
+            "see that constant for how it is sized. We still publish the redirect anyway "
+            "if it expires."
         ),
     )
     workspace_ready_poll_interval_seconds: float = Field(
@@ -2307,6 +2388,12 @@ class AgentCreator(MutableModel):
         cid_str = str(create_attempt_id)
         emit_log = make_log_callback(log_sink)
         workspace_dir: Path | None = None
+        # Bound the moment the scratch root is created, NOT alongside
+        # workspace_dir: in the worktree branch the clone and the rsync over it
+        # both happen before workspace_dir is assigned, so a failure in between
+        # would leak a full clone that nothing else will ever reclaim (the old
+        # shared path was reclaimed by the next create for that repo).
+        scratch_clone_root: Path | None = None
         try:
             with log_span(
                 "Creating agent for create attempt {} from {} (mode: {})",
@@ -2350,12 +2437,10 @@ class AgentCreator(MutableModel):
                         # container's bare receiver also rejects shallow source
                         # packs with "shallow update not allowed". Cloning
                         # deeply avoids both. Local file:// clones are cheap.
-                        # Use a stable path based on repo name so Docker layer caching works.
                         log_sink.put("[minds] Cloning local worktree: {}".format(resolved_path))
                         repo_name = extract_repo_name(repo_source)
-                        clone_target = Path(tempfile.gettempdir()) / "minds-clone-{}".format(repo_name)
-                        if clone_target.exists():
-                            shutil.rmtree(clone_target)
+                        scratch_clone_root = make_scratch_clone_root(repo_name)
+                        clone_target = scratch_clone_root / repo_name
                         file_url = GitUrl("file://{}".format(resolved_path))
                         # Pass the branch through (like the remote-URL case
                         # below) so that when one is requested the clone takes
@@ -2387,9 +2472,8 @@ class AgentCreator(MutableModel):
                         log_sink.put("[minds] Using local directory: {}".format(workspace_dir))
                 else:
                     repo_name = extract_repo_name(repo_source)
-                    clone_target = Path(tempfile.gettempdir()) / "minds-clone-{}".format(repo_name)
-                    if clone_target.exists():
-                        shutil.rmtree(clone_target)
+                    scratch_clone_root = make_scratch_clone_root(repo_name)
+                    clone_target = scratch_clone_root / repo_name
                     log_sink.put("[minds] Cloning {}...".format(_redact_url_credentials(repo_source)))
                     # Clone only the requested branch (non-shallow) when one is
                     # given: cheaper than a full clone, yet keeps the complete
@@ -2460,7 +2544,7 @@ class AgentCreator(MutableModel):
                 # won't have its own permissions file. The user can
                 # recover by fixing the latchkey installation and
                 # re-creating the agent.
-                latchkey_setup = self._prepare_latchkey_or_warn(log_sink)
+                latchkey_setup = self._prepare_latchkey_or_warn(log_sink, launch_mode)
 
                 # No prepare step here: a bring-your-own-key account's cloud
                 # scaffolding (AWS security group + state bucket, GCP/Azure
@@ -2556,6 +2640,15 @@ class AgentCreator(MutableModel):
                 # workspace (see the resolver sweep in ``cli/run.py``).
                 self._mark_pending_create_attempt_done(cid_str, str(canonical_id), str(canonical_host_id))
 
+                # Publish the canonical agent id now, not at DONE: discovery can
+                # see the workspace during the (for build-in-VM Lima, very long)
+                # ready wait below, and the create-attempt row is only suppressed
+                # once ``info.agent_id`` matches a discovered id -- without this,
+                # the workspace row and the "Creating..." row show side by side.
+                with self._lock:
+                    self._canonical_agent_ids[cid_str] = canonical_id
+                self._notify_create_attempts_changed()
+
                 # Now that we know the canonical host id, point the
                 # opaque permissions handle (which the JWT references)
                 # at the canonical host-keyed permissions file. After
@@ -2627,27 +2720,27 @@ class AgentCreator(MutableModel):
                     canonical_id, time.monotonic() + ready_timeout_seconds
                 )
                 try:
-                    self._wait_for_workspace_ready(canonical_id, log_sink, ready_timeout_seconds)
+                    self._wait_for_workspace_ready(canonical_id, canonical_host_id, log_sink, ready_timeout_seconds)
                 finally:
                     self.system_interface_health_tracker.end_create_attempt_grace(canonical_id)
 
                 # The redirect URL is *absolute* and points at the plugin's
-                # bare origin. ``creating.js`` does
+                # bare origin. The SPA creating page does
                 # ``window.location.href = data.redirect_url`` directly; a
                 # relative ``/goto/...`` would navigate to the minds origin
                 # (port :8420) where ``/goto/`` is unrouted -- the user
                 # would land on FastAPI's default ``{"detail":"Not Found"}``
                 # response instead of being bridged into the agent
                 # subdomain. The plugin owns ``/goto/<agent>/``.
-                redirect_url = self._build_redirect_url(canonical_id)
+                redirect_url = self._build_redirect_url(canonical_host_id)
 
-                # Publish the canonical id + DONE atomically so the UI sees
-                # both at once. ``on_created`` runs after publication so any
-                # downstream consumer (e.g. ``OnCreatedCallback``, which kicks
-                # off the Cloudflare tunnel + workspace association) can rely on
-                # the canonical id.
+                # Publish DONE + redirect_url atomically so the UI sees both
+                # at once (the canonical agent id was already published when
+                # ``mngr create`` returned, above). ``on_created`` runs after
+                # publication so any downstream consumer (e.g.
+                # ``OnCreatedCallback``, which records the workspace<->account
+                # association) can rely on the canonical id.
                 with self._lock:
-                    self._canonical_agent_ids[cid_str] = canonical_id
                     self._statuses[cid_str] = AgentCreateAttemptStatus.DONE
                     self._redirect_urls[cid_str] = redirect_url
                 self._notify_create_attempts_changed()
@@ -2656,7 +2749,7 @@ class AgentCreator(MutableModel):
                     on_created(canonical_id, canonical_host_id)
 
                 # Configure restic backups asynchronously on a detached
-                # thread (mirrors the Cloudflare tunnel-token path): bucket
+                # thread: bucket
                 # create attempt + injection is a multi-second round-trip we don't
                 # want to block the redirect on, and a failure here is
                 # non-fatal to the already-created workspace. Skipped (no
@@ -2697,6 +2790,8 @@ class AgentCreator(MutableModel):
                     self._error_kinds[cid_str] = error_kind
             self._notify_create_attempts_changed()
         finally:
+            if scratch_clone_root is not None:
+                shutil.rmtree(scratch_clone_root, ignore_errors=True)
             log_sink.put(LOG_SENTINEL)
 
     def _discard_dead_create_attempts_holding_name(
@@ -2817,6 +2912,7 @@ class AgentCreator(MutableModel):
     def _prepare_latchkey_or_warn(
         self,
         log_sink: CreateAttemptLogSink,
+        launch_mode: LaunchMode,
     ) -> AgentLatchkeySetup:
         """Run :func:`prepare_agent_latchkey` and downgrade its errors to warnings.
 
@@ -2826,7 +2922,11 @@ class AgentCreator(MutableModel):
         fix the latchkey installation and re-create the agent.
         """
         try:
-            return prepare_agent_latchkey(self.latchkey, is_tunneled=True)
+            return prepare_agent_latchkey(
+                self.latchkey,
+                is_tunneled=True,
+                gateway_location=latchkey_gateway_location_for_launch(launch_mode),
+            )
         except LatchkeyError as e:
             logger.warning("Failed to prepare latchkey wiring: {}", e)
             log_sink.put("[minds] Warning: latchkey wiring skipped: {}".format(e))
@@ -2900,22 +3000,23 @@ class AgentCreator(MutableModel):
                 agent_display_name=str(agent_id)[:8],
             )
 
-    def _build_redirect_url(self, agent_id: AgentId) -> str:
+    def _build_redirect_url(self, host_id: HostId) -> str:
         """Build the absolute URL the UI should navigate to after the create attempt.
 
-        Always points at the plugin's ``/goto/<agent>/`` route, never minds'
+        Always points at the plugin's ``/goto/<host-id>/`` route, never minds'
         bare origin -- minds doesn't serve ``/goto/`` and would 404. When
         ``mngr_forward_port`` isn't configured (test fixtures, etc.), falls
         back to the relative form so legacy callers that don't set the field
         keep working.
         """
         if self.mngr_forward_port == 0:
-            return f"/goto/{agent_id}/"
-        return f"{_MNGR_FORWARD_SCHEME}://localhost:{self.mngr_forward_port}/goto/{agent_id}/"
+            return f"/goto/{host_id}/"
+        return f"{_MNGR_FORWARD_SCHEME}://localhost:{self.mngr_forward_port}/goto/{host_id}/"
 
     def _wait_for_workspace_ready(
         self,
         agent_id: AgentId,
+        host_id: HostId,
         log_sink: CreateAttemptLogSink,
         # The readiness window for this create: ``workspace_ready_timeout_seconds``
         # normally, or the longer build-in-VM window for an imageless Lima create.
@@ -2923,7 +3024,7 @@ class AgentCreator(MutableModel):
     ) -> None:
         """Poll the agent's system_interface through the plugin until it responds 200.
 
-        Probes the plugin on loopback (with the agent's ``agent-<hex>.localhost``
+        Probes the plugin on loopback (with the workspace's ``host-<hex>.localhost``
         vhost in the ``Host`` header) and the preauth cookie set, treating any
         200 as ready. Other status codes (typically
         503 from the plugin's auto-refresh page when the system_interface
@@ -2953,7 +3054,7 @@ class AgentCreator(MutableModel):
                 status = probe_workspace_through_plugin(
                     mngr_forward_port=self.mngr_forward_port,
                     preauth_cookie=self.mngr_forward_preauth_cookie,
-                    agent_id=agent_id,
+                    workspace_host_id=str(host_id),
                     probe_timeout_seconds=self.workspace_ready_probe_timeout_seconds,
                     client=probe_client,
                 )

@@ -6,6 +6,7 @@ from abc import abstractmethod
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -72,6 +73,14 @@ class ServiceLogRecord(FrozenModel):
 
     service: ServiceName = Field(description="Name of the service (e.g., 'web')")
     url: str = Field(description="URL where the service is accessible (e.g., 'http://127.0.0.1:9100')")
+    label: str = Field(
+        default="",
+        description=(
+            "The service's public origin hostname label (``<name>-<rand>``, e.g. 'terminal-x7k9q2w1'). "
+            "Empty for legacy rows written before labels existed, in which case callers fall back to the "
+            "service name."
+        ),
+    )
 
 
 class BackendResolverInterface(MutableModel, ABC):
@@ -125,6 +134,25 @@ class BackendResolverInterface(MutableModel, ABC):
         known set (resolvers without a persisted topology have no extra knowledge).
         """
         return self.list_known_workspace_ids()
+
+    def list_restorable_workspace_host_ids(self) -> tuple[str, ...]:
+        """Host coordinates (``host-<hex>``) of the restorable workspaces.
+
+        Workspace content URLs -- and therefore the window URLs Electron
+        persists (``/goto/<host-id>/``) -- are keyed by host id, while
+        :meth:`list_restorable_workspace_ids` stays agent-keyed. The restore
+        filter needs both coordinates to recognize a persisted window.
+
+        Default: the display-info host ids of the restorable agents. Only
+        real ``host-`` coordinates are returned -- placeholder host ids (e.g.
+        the interface default's ``localhost``) are not URL coordinates.
+        """
+        host_ids: set[str] = set()
+        for agent_id in self.list_restorable_workspace_ids():
+            display_info = self.get_agent_display_info(agent_id)
+            if display_info is not None and display_info.host_id.startswith("host-"):
+                host_ids.add(display_info.host_id)
+        return tuple(sorted(host_ids))
 
     def get_host_state(self, host_id: HostId) -> HostState | None:
         """Return the last-known lifecycle state of a host, or None if unknown.
@@ -182,6 +210,18 @@ class BackendResolverInterface(MutableModel, ABC):
     @abstractmethod
     def list_services_for_agent(self, agent_id: AgentId) -> tuple[ServiceName, ...]:
         """Return all known service names for an agent, sorted alphabetically."""
+
+    def list_service_labels_for_agent(self, agent_id: AgentId) -> dict[ServiceName, str]:
+        """Return each known service's public origin label, keyed by service name.
+
+        Maps a service name to its persistent origin ``label`` (``<name>-<rand>``),
+        the hostname component of the service's public origin
+        (``<label>.<machine domain>``). Services with no known label (legacy
+        rows) are omitted; callers fall back to the service name. Used by the
+        Share tab to build each per-service share link. Default implementation
+        returns an empty mapping (resolvers that carry no labels).
+        """
+        return {}
 
     def get_ssh_info(self, agent_id: AgentId) -> RemoteSSHInfo | None:
         """Return SSH connection info for the agent's host, or None for local agents.
@@ -392,15 +432,19 @@ def parse_agents_from_json(json_output: str | None) -> ParsedAgentsResult:
         if ssh is None:
             continue
 
+        # known_hosts_path is optional: older mngr versions don't emit it, and the
+        # tunnel falls back to the key-sibling convention when it is absent.
+        raw_known_hosts = ssh.get("known_hosts_path")
         try:
             ssh_info = RemoteSSHInfo(
                 user=ssh["user"],
                 host=ssh["host"],
                 port=ssh["port"],
                 key_path=Path(ssh["key_path"]),
+                known_hosts_path=Path(raw_known_hosts) if raw_known_hosts else None,
             )
             ssh_info_by_id[agent_id_str] = ssh_info
-        except (KeyError, ValueError) as e:
+        except (KeyError, TypeError, ValueError) as e:
             logger.warning("Failed to parse SSH info for agent {}: {}", agent_id_str, e)
 
     return ParsedAgentsResult(
@@ -430,7 +474,8 @@ def parse_service_log_record(raw: dict[str, object]) -> ServiceLogRecord | Servi
 
     Extracts the 'service' field and checks the 'type' field.
     For 'service_deregistered' events, returns a ServiceDeregisteredRecord.
-    For all other events, returns a ServiceLogRecord with 'service' and 'url'.
+    For all other events, returns a ServiceLogRecord with 'service', 'url', and
+    an optional 'label' (the service's public origin hostname label).
     Raises ValueError if required fields are missing.
     """
     event_type = raw.get("type", "service_registered")
@@ -445,7 +490,8 @@ def parse_service_log_record(raw: dict[str, object]) -> ServiceLogRecord | Servi
     url = raw.get("url")
     if not url:
         raise ServiceLogParseError(f"Service log record missing required fields (service={service!r}, url={url!r})")
-    return ServiceLogRecord(service=ServiceName(str(service)), url=str(url))
+    label = raw.get("label")
+    return ServiceLogRecord(service=ServiceName(str(service)), url=str(url), label=str(label) if label else "")
 
 
 def parse_service_log_records(text: str) -> list[ServiceLogRecord | ServiceDeregisteredRecord]:
@@ -535,6 +581,25 @@ def _display_info_from_agent(agent: DiscoveredAgent) -> AgentDisplayInfo:
     )
 
 
+def _warn_if_agent_id_spans_machines(agent_id: AgentId, sorted_host_ids: Sequence[HostId]) -> None:
+    """Warn when a workspace agent id resolves to more than one machine.
+
+    Agent ids are unique per host, not globally, so an id can span machines
+    (e.g. mid-migration). minds has no workspace-level policy for that yet, so
+    callers pick the first machine of the sorted list deterministically and
+    this warns rather than silently first-matching. No-op for a single (or no)
+    machine.
+    """
+    if len(sorted_host_ids) <= 1:
+        return
+    logger.warning(
+        "Workspace agent id {} resolved to {} machines ({}); using the first",
+        agent_id,
+        len(sorted_host_ids),
+        ", ".join(str(host_id) for host_id in sorted_host_ids),
+    )
+
+
 def _find_system_services_agent(records: Iterable[_AgentRecord], workspace_agent_id: AgentId) -> AgentId | None:
     """Resolve the system-services agent that shares the workspace agent's host.
 
@@ -543,9 +608,9 @@ def _find_system_services_agent(records: Iterable[_AgentRecord], workspace_agent
     system-services agent on that same host. ``None`` if either is absent.
     """
     records = tuple(records)
-    host_id: HostId | None = next(
-        (record.host_id for record in records if record.agent_id == workspace_agent_id), None
-    )
+    matching_host_ids = sorted({record.host_id for record in records if record.agent_id == workspace_agent_id})
+    _warn_if_agent_id_spans_machines(workspace_agent_id, matching_host_ids)
+    host_id: HostId | None = matching_host_ids[0] if matching_host_ids else None
     if host_id is None:
         return None
     for record in records:
@@ -627,7 +692,7 @@ class _WorkspaceNameOverride(FrozenModel):
 
 
 # Sized for the slowest legitimate stop/start round-trip (a cloud VM's first stop
-# can run ~20 min; see workspace_lifecycle._HOST_STOP_TIMEOUT_SECONDS) plus
+# can run ~20 min; see workspace_lifecycle.HOST_STOP_TIMEOUT_SECONDS) plus
 # discovery reconcile headroom. Purely a backstop: a retention is normally dropped
 # the moment discovery re-lists the host, long before this.
 _HOST_TRANSITION_RETENTION_CAP_SECONDS: Final[float] = 1500.0
@@ -673,6 +738,10 @@ class MngrCliBackendResolver(BackendResolverInterface):
 
     _agents_result: ParsedAgentsResult = PrivateAttr(default_factory=ParsedAgentsResult)
     _services_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # agent_id_str -> {service_name: origin label}. Parallel to _services_by_agent,
+    # carrying each service's public origin hostname label (``<name>-<rand>``).
+    # A service missing here (a legacy row with no label) falls back to its name.
+    _labels_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
     _initial_discovery_done: bool = PrivateAttr(default=False)
     _provider_by_name: dict[ProviderInstanceName, DiscoveredProvider] = PrivateAttr(default_factory=dict)
     _error_by_provider_name: dict[ProviderInstanceName, DiscoveryError] = PrivateAttr(default_factory=dict)
@@ -919,6 +988,10 @@ class MngrCliBackendResolver(BackendResolverInterface):
         error: DiscoveryError | None,
         last_snapshot_at: datetime,
         clean_snapshot_host_ids: tuple[str, ...] | None = None,
+        # False when this snapshot tells us nothing current about the provider, so its
+        # time must not advance the provider's freshness. Only the pre-start replay
+        # passes False -- see the caller in ``forward_cli`` for why.
+        is_snapshot_state_current: bool = True,
     ) -> None:
         """Merge one provider's discovery snapshot into provider state. Thread-safe.
 
@@ -941,6 +1014,14 @@ class MngrCliBackendResolver(BackendResolverInterface):
         the set is positively gone and pruned (and the pruned topology
         persisted). Callers MUST pass None for an errored snapshot -- the
         provider's hosts are unreachable, not absent.
+
+        ``is_snapshot_state_current=False`` records everything except the
+        provider's freshness. ``last_snapshot_at`` answers "has discovery had
+        its chance to report this provider yet", and consumers read a recorded
+        time as proof that it has -- so a snapshot that carries no usable state
+        must not set it, or the provider reads as healthy-and-empty rather than
+        not-yet-known. It still bumps ``_last_event_at``, which only tracks that
+        *some* discovery traffic arrived.
         """
         path = self.last_good_agents_path
         topology_to_write: _LastGoodAgentTopology | None = None
@@ -951,7 +1032,8 @@ class MngrCliBackendResolver(BackendResolverInterface):
                 self._error_by_provider_name[provider_name] = error
             else:
                 self._error_by_provider_name.pop(provider_name, None)
-            self._last_snapshot_at_by_provider[provider_name] = last_snapshot_at
+            if is_snapshot_state_current:
+                self._last_snapshot_at_by_provider[provider_name] = last_snapshot_at
             if self._last_event_at is None or last_snapshot_at > self._last_event_at:
                 self._last_event_at = last_snapshot_at
             if (
@@ -1030,10 +1112,18 @@ class MngrCliBackendResolver(BackendResolverInterface):
         with self._lock:
             return self._last_snapshot_at_by_provider.get(provider_name)
 
-    def update_services(self, agent_id: AgentId, services: dict[str, str]) -> None:
-        """Replace the known services for a single agent. Thread-safe."""
+    def update_services(
+        self, agent_id: AgentId, services: dict[str, str], labels: dict[str, str] | None = None
+    ) -> None:
+        """Replace the known services (and their origin labels) for a single agent. Thread-safe.
+
+        ``labels`` maps each service name to its public origin hostname label
+        (``<name>-<rand>``). Services absent from it (legacy rows written before
+        labels existed) have no label, and callers fall back to the service name.
+        """
         with self._lock:
             self._services_by_agent[str(agent_id)] = services
+            self._labels_by_agent[str(agent_id)] = dict(labels or {})
         self._fire_on_change()
 
     def get_backend_url(self, agent_id: AgentId, service_name: ServiceName) -> str | None:
@@ -1045,6 +1135,11 @@ class MngrCliBackendResolver(BackendResolverInterface):
         with self._lock:
             services = self._services_by_agent.get(str(agent_id), {})
             return tuple(ServiceName(name) for name in sorted(services.keys()))
+
+    def list_service_labels_for_agent(self, agent_id: AgentId) -> dict[ServiceName, str]:
+        with self._lock:
+            labels = self._labels_by_agent.get(str(agent_id), {})
+            return {ServiceName(name): label for name, label in labels.items() if label}
 
     def list_known_agent_ids(self) -> tuple[AgentId, ...]:
         with self._lock:
@@ -1136,6 +1231,28 @@ class MngrCliBackendResolver(BackendResolverInterface):
                     if str(record.agent_name) == SYSTEM_SERVICES_AGENT_NAME:
                         ids.add(record.agent_id)
             return tuple(ids)
+
+    def list_restorable_workspace_host_ids(self) -> tuple[str, ...]:
+        """Host coordinates of the restorable workspaces (see :meth:`list_restorable_workspace_ids`).
+
+        Mirrors that method's union exactly, in host coordinates: the hosts of
+        live ``is_primary`` agents that are not observed DESTROYED, plus the
+        last-good topology's hosts whose records include the system-services
+        agent. Persisted window URLs are host-keyed (``/goto/<host-id>/``), so
+        the restore filter needs this set alongside the agent-keyed one.
+        """
+        with self._lock:
+            host_state_by_host_id = self._agents_result.host_state_by_host_id
+            host_ids: set[str] = {
+                str(agent.host_id)
+                for agent in self._agents_result.discovered_agents
+                if "is_primary" in agent.labels
+                and host_state_by_host_id.get(str(agent.host_id)) is not HostState.DESTROYED
+            }
+            for host_id_str, records in self._last_good_agents_by_host.items():
+                if any(str(record.agent_name) == SYSTEM_SERVICES_AGENT_NAME for record in records):
+                    host_ids.add(host_id_str)
+            return tuple(sorted(host_ids))
 
     def get_host_state(self, host_id: HostId) -> HostState | None:
         """Return the host's lifecycle state, preferring a fresh optimistic override.
@@ -1358,9 +1475,16 @@ class MngrCliBackendResolver(BackendResolverInterface):
         retained row still renders name/provider/host until discovery returns.
         """
         with self._lock:
-            for agent in self._agents_result.discovered_agents:
-                if agent.agent_id == agent_id:
-                    return _display_info_from_agent(agent)
+            # Sorted by host id so a duplicated agent id (unique per host, not
+            # globally, e.g. mid-migration) resolves to the same machine on
+            # every refresh rather than flapping with discovery order.
+            live_matches = sorted(
+                (agent for agent in self._agents_result.discovered_agents if agent.agent_id == agent_id),
+                key=lambda agent: str(agent.host_id),
+            )
+            _warn_if_agent_id_spans_machines(agent_id, [agent.host_id for agent in live_matches])
+            if live_matches:
+                return _display_info_from_agent(live_matches[0])
             for retention in self._transition_retention_by_host_id.values():
                 for agent in retention.agents:
                     if agent.agent_id == agent_id:

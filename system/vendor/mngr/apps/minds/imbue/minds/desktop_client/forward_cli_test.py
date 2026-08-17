@@ -111,10 +111,17 @@ def _replay_consumer() -> EnvelopeStreamConsumer:
     )
 
 
-def _stale_error(message: str = "Docker state container is stopped", provider_name: str = "local") -> DiscoveryError:
+def _stale_error(
+    message: str = "Docker state container is stopped",
+    provider_name: str = "local",
+    traceback_text: str | None = None,
+) -> DiscoveryError:
     """The kind of already-outdated provider error a pre-start snapshot carries."""
     return DiscoveryError(
-        type_name="ProviderUnavailableError", message=message, provider_name=ProviderInstanceName(provider_name)
+        type_name="ProviderUnavailableError",
+        message=message,
+        provider_name=ProviderInstanceName(provider_name),
+        traceback_text=traceback_text,
     )
 
 
@@ -428,6 +435,41 @@ def test_pre_start_snapshot_error_is_dropped_but_topology_merges() -> None:
     assert ProviderInstanceName("local") in consumer.resolver.get_provider_errors()
 
 
+def test_pre_start_snapshot_with_a_dropped_error_records_no_provider_freshness() -> None:
+    """Dropping a pre-start error must also withhold that snapshot's freshness.
+
+    Regression: the drop cleared the error but still recorded ``last_snapshot_at``, so
+    a provider that had been failing for the whole gap read as healthy-with-zero-hosts.
+    Consumers treat a recorded time plus no error as proof discovery reported the
+    provider, which turned "we do not know yet" into a positive "unreachable" verdict
+    for every workspace on it. A pre-start snapshot that was CLEAN is a real
+    observation and still records freshness.
+    """
+    consumer = _replay_consumer()
+    provider_name = ProviderInstanceName("local")
+
+    # Pre-start + errored -> error dropped AND freshness withheld.
+    _dispatch_replayed_snapshot(
+        consumer, _stale_error("provider was wedged all gap"), cycle=0, agents=(_make_agent(_AGENT_ID_1),)
+    )
+    assert consumer.resolver.get_provider_errors() == {}
+    assert consumer.resolver.get_last_snapshot_at_for_provider(provider_name) is None
+
+    # A genuine post-start snapshot does record freshness.
+    _dispatch_live_snapshot(consumer, agents=(_make_agent(_AGENT_ID_1),))
+    assert consumer.resolver.get_last_snapshot_at_for_provider(provider_name) == consumer.started_at + timedelta(
+        seconds=30
+    )
+
+
+def test_clean_pre_start_snapshot_still_records_provider_freshness() -> None:
+    """A pre-start snapshot with no error is a real observation, so it keeps its freshness."""
+    consumer = _replay_consumer()
+    provider_name = ProviderInstanceName("local")
+    _dispatch_replayed_clean_snapshot(consumer, cycle=0)
+    assert consumer.resolver.get_last_snapshot_at_for_provider(provider_name) == _DISCOVERY_FINISHED_AT
+
+
 def test_repeated_pre_start_error_drops_log_one_counted_line_when_replay_ends() -> None:
     """A long backlog of identical pre-start errors logs one counted line, and only once replay ends.
 
@@ -477,6 +519,25 @@ def test_clean_pre_start_snapshot_does_not_split_a_providers_tally() -> None:
     lines = [line for line in log_output.getvalue().splitlines() if "pre-start provider error" in line]
     assert len(lines) == 1
     assert "8x Could not connect to the endpoint URL" in lines[0]
+
+
+def test_pre_start_drops_of_one_error_collapse_even_when_their_tracebacks_differ() -> None:
+    """Differing captured tracebacks must not split one provider's tally.
+
+    A discovery error carries a captured traceback, which is diagnostic detail rather
+    than error identity: the logged line reports only the message, so tallying per
+    traceback would emit a run of identical-looking lines -- the very flood the
+    collapser exists to prevent.
+    """
+    consumer = _replay_consumer()
+    with capture_loguru(level="INFO") as log_output:
+        for cycle in range(6):
+            error = _stale_error("Could not connect to the endpoint URL", traceback_text=f"Traceback ... line {cycle}")
+            _dispatch_replayed_snapshot(consumer, error, cycle)
+        _dispatch_live_snapshot(consumer)
+    lines = [line for line in log_output.getvalue().splitlines() if "pre-start provider error" in line]
+    assert len(lines) == 1
+    assert "6x Could not connect to the endpoint URL" in lines[0]
 
 
 def test_alternating_pre_start_errors_are_tallied_separately() -> None:
@@ -580,6 +641,7 @@ def test_host_ssh_info_refires_discovery_with_ssh_info(consumer: EnvelopeStreamC
             host="1.2.3.4",
             port=22,
             key_path=Path("/tmp/k"),
+            known_hosts_path=Path("/tmp/pins/known_hosts"),
             command="ssh -i /tmp/k -p 22 root@1.2.3.4",
         ),
     )
@@ -593,6 +655,7 @@ def test_host_ssh_info_refires_discovery_with_ssh_info(consumer: EnvelopeStreamC
     assert second is not None
     assert second.user == "root"
     assert second.host == "1.2.3.4"
+    assert second.known_hosts_path == Path("/tmp/pins/known_hosts")
 
 
 # --- observe stream: agent / host destroyed -------------------------------
@@ -753,6 +816,39 @@ def test_event_services_envelope_updates_resolver_services(consumer: EnvelopeStr
     assert consumer.resolver.get_backend_url(_AGENT_ID_1, _SERVICE_WEB) is None
 
 
+def test_event_services_envelope_carries_the_origin_label_to_the_resolver(
+    consumer: EnvelopeStreamConsumer,
+) -> None:
+    # The services event now carries a per-service origin ``label``; it must reach
+    # the resolver so the Share tab can build the per-app link from it. A
+    # deregister clears both the url and the label.
+    _dispatch(consumer, _observe_envelope(_provider_snapshot((_make_agent(_AGENT_ID_1),))))
+
+    register_payload = {
+        "timestamp": _TIMESTAMP,
+        "event_id": "evt-" + "0" * 32,
+        "type": "service_registered",
+        "source": "services",
+        "service": "terminal",
+        "url": "http://127.0.0.1:9100",
+        "label": "terminal-x7k9q2w1",
+    }
+    _dispatch(consumer, _event_envelope(_AGENT_ID_1, register_payload))
+    assert consumer.resolver.list_service_labels_for_agent(_AGENT_ID_1) == {
+        ServiceName("terminal"): "terminal-x7k9q2w1"
+    }
+
+    deregister_payload = {
+        "timestamp": _TIMESTAMP,
+        "event_id": "evt-" + "0" * 31 + "1",
+        "type": "service_deregistered",
+        "source": "services",
+        "service": "terminal",
+    }
+    _dispatch(consumer, _event_envelope(_AGENT_ID_1, deregister_payload))
+    assert consumer.resolver.list_service_labels_for_agent(_AGENT_ID_1) == {}
+
+
 def test_event_requests_envelope_dispatches_to_request_callback(consumer: EnvelopeStreamConsumer) -> None:
     fired: list[tuple[str, str]] = []
     consumer.resolver.add_on_request_callback(lambda aid_str, raw: fired.append((aid_str, raw)))
@@ -825,6 +921,53 @@ def test_malformed_resolver_snapshot_envelope_is_dropped(consumer: EnvelopeStrea
     """A malformed ``resolver_snapshot`` payload doesn't crash dispatch and leaves the mirror empty."""
     _dispatch(consumer, _forward_envelope({"type": "resolver_snapshot", "services_by_agent": "not-a-dict"}))
     assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {}
+
+
+def test_resolver_snapshot_normalizes_instance_keyed_entries_to_bare_ids(
+    consumer: EnvelopeStreamConsumer,
+) -> None:
+    """Instance-keyed payload keys (``<agent_id>@<host_id>``) resolve by the bare agent id.
+
+    The plugin keys the map by agent instance (agent ids are unique per host, not
+    globally); minds' mirror stays bare-id keyed, tolerating both key forms in one
+    payload.
+    """
+    payload = {
+        "type": "resolver_snapshot",
+        "services_by_agent": {
+            f"{_AGENT_ID_1}@{_HOST_ID_1}": {"system_interface": "http://127.0.0.1:9100"},
+            str(_AGENT_ID_2): {"webdav": "http://127.0.0.1:9200"},
+        },
+    }
+    _dispatch(consumer, _forward_envelope(payload))
+    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {
+        "system_interface": "http://127.0.0.1:9100",
+    }
+    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_2) == {
+        "webdav": "http://127.0.0.1:9200",
+    }
+
+
+def test_resolver_snapshot_warns_and_keeps_last_when_id_spans_hosts(
+    consumer: EnvelopeStreamConsumer,
+) -> None:
+    """Two instances of one agent id (the migration-overlap case) collide loudly, last one wins."""
+    other_host_id = HostId("host-" + "0" * 31 + "2")
+    payload = {
+        "type": "resolver_snapshot",
+        "services_by_agent": {
+            f"{_AGENT_ID_1}@{_HOST_ID_1}": {"system_interface": "http://127.0.0.1:9100"},
+            f"{_AGENT_ID_1}@{other_host_id}": {"system_interface": "http://127.0.0.1:9300"},
+        },
+    }
+    with capture_loguru(level="WARNING") as log_output:
+        _dispatch(consumer, _forward_envelope(payload))
+    assert "multiple hosts" in log_output.getvalue()
+    assert str(_AGENT_ID_1) in log_output.getvalue()
+    # JSON object order is preserved through json.loads, so "last" is deterministic.
+    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {
+        "system_interface": "http://127.0.0.1:9300",
+    }
 
 
 # --- forward stream: listening --------------------------------------------
@@ -941,25 +1084,29 @@ def test_build_forward_command_includes_use_http2_flag() -> None:
     proxy.
     """
     config = ForwardSubprocessConfig(service="system_interface")
-    command = _build_forward_command(config, preauth_cookie="a-secret")
+    command = _build_forward_command(config, preauth_cookie="a-secret", browser_bridge_token="b-secret")
     assert "--use-http2" in command
     # Core flags are always present alongside the TLS flag.
     assert command[:2] == [config.mngr_binary, "forward"]
     assert "--observe-via-file" in command
     assert command[command.index("--service") + 1] == "system_interface"
     assert command[command.index("--preauth-cookie") + 1] == "a-secret"
+    assert command[command.index("--browser-bridge-token") + 1] == "b-secret"
 
 
 def test_build_forward_command_threads_includes_and_reverse_specs() -> None:
-    """Agent-include and reverse specs are expanded into repeated flags."""
+    """Agent-include, reverse specs, and embedder origins expand into repeated flags."""
     config = ForwardSubprocessConfig(
         agent_include=("has(agent.labels.is_primary)", "agent.name == 'x'"),
         reverse_specs=("8420:8420",),
+        embedder_origins=("http://localhost:8420", "http://127.0.0.1:8420"),
     )
-    command = _build_forward_command(config, preauth_cookie="s")
+    command = _build_forward_command(config, preauth_cookie="s", browser_bridge_token="b")
     includes = [command[i + 1] for i, tok in enumerate(command) if tok == "--agent-include"]
     assert includes == ["has(agent.labels.is_primary)", "agent.name == 'x'"]
     assert command[command.index("--reverse") + 1] == "8420:8420"
+    embedders = [command[i + 1] for i, tok in enumerate(command) if tok == "--embedder-origin"]
+    assert embedders == ["http://localhost:8420", "http://127.0.0.1:8420"]
 
 
 # --- _redact_secrets ------------------------------------------------------
@@ -989,6 +1136,14 @@ def test_redact_secrets_masks_preauth_cookie_value() -> None:
     # Other args must be untouched.
     assert "system_interface" in redacted
     assert "8421" in redacted
+
+
+def test_redact_secrets_masks_browser_bridge_token_value() -> None:
+    """The /forward-bridge secret is spawn-time argv too; it must never reach the log."""
+    command = ["/usr/bin/mngr", "forward", "--browser-bridge-token", "bridge-secret-value"]
+    redacted = _redact_secrets(command)
+    assert "bridge-secret-value" not in " ".join(redacted)
+    assert "--browser-bridge-token" in redacted
 
 
 def test_redact_secrets_is_a_no_op_when_flag_missing() -> None:

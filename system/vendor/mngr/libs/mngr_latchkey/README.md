@@ -262,7 +262,7 @@ and embedders. Most callers only need the CLI above.
 
 ## Gateway HTTP extensions
 
-`mngr latchkey forward` drops three `.mjs` extensions into
+`mngr latchkey forward` drops three desktop-only `.mjs` extensions into
 `<latchkey-directory>/extensions/`. All expose plain HTTP endpoints
 on the gateway's listen port and authenticate the caller via two
 headers:
@@ -377,6 +377,33 @@ check (against the synthetic `latchkey-self.invalid` URL). Restricting
 which paths an agent can reach through the proxy is therefore a job
 for the agent's `latchkey_permissions.json`.
 
+### Remote desktop-gateway proxy extension
+
+Remote workspaces expose the VPS-resident gateway at the same
+`http://127.0.0.1:1989` URL local workspaces use. Third-party requests terminate
+there so the VPS can inject its synchronized credential subset. The VPS gateway
+loads one dedicated `desktop_gateway_proxy.mjs` extension for the endpoint
+families whose state remains on the user's computer: `/permissions`,
+`/permission-requests`, and `/minds-api-proxy` (including all subpaths). It
+forwards those requests to the desktop gateway over a desktop-to-VPS reverse
+tunnel, preserving the gateway password and replacing any caller-supplied
+permissions override with a dedicated desktop-target JWT held by the proxy.
+Native VPS requests carry no override and are authorized by the gateway's
+synchronized default `~/.latchkey/permissions.json`.
+
+The workspace therefore always has one gateway URL and one agent-side skill.
+If the user's computer is offline, third-party calls through the VPS gateway
+continue to work, while desktop-owned extension routes fail with a clear HTTP
+502 response.
+
+Workspaces created *before* this one-gateway rollout still carry a
+permissions-override JWT in their host env file, naming a desktop-side opaque
+handle path. Upstream latchkey resolves that override before dispatching
+anything (including extension routes) and answers HTTP 400 when the named file
+is absent, so `remote_gateway._materialize_legacy_override_targets` symlinks
+those paths at the VPS `permissions.json`. That shim is temporary and can be
+deleted once no live workspace predates the rollout.
+
 ### `permissions` extension
 
 Reads and edits a detent permissions file at a caller-supplied path.
@@ -435,15 +462,37 @@ uv run python libs/mngr_latchkey/scripts/generate_services_json.py \
 Display names and the service ordering are editorial metadata detent does
 not carry; they live as curated constants in that script.
 
+Services hidden from agents (`core.HIDDEN_BUILTIN_SERVICES`, currently just
+`notion`) are left out of the catalog: latchkey never injects their
+credentials, so an entry for one would only offer grants that can never be
+used. The generator skips them, so the catalog and the gateway's
+`settings.hideBuiltinServices` cannot drift apart.
+
 `services.json` also carries minds' own *additional* (custom) services --
 ones detent has no schemas for, currently `claude.ai`. Their definitions are
 hand-maintained in `imbue/mngr_latchkey/additional_services.json` (a
-`display_name`, a `base_api_url`, the single Detent `scope` it exposes with
-an inline scope `schema`, and its grantable `permissions`, each with an
-inline `schema`), and the generator *folds their catalog entries into*
-`services.json`. That way every reader of the catalog -- `ServicesCatalog`
-and both gateway extensions -- works from one file in one shape and never
-has to know which of the two sources a service came from.
+`display_name`, a `registration`, the single Detent `scope` it exposes with an
+inline scope `schema`, and its grantable `permissions`, each with an inline
+`schema`), and the generator *folds their catalog entries into* `services.json`.
+That way every reader of the catalog -- `ServicesCatalog` and both gateway
+extensions -- works from one file in one shape and never has to know which of
+the two sources a service came from.
+
+`registration` is written in **latchkey's own shape**: it is the object that
+lands verbatim under `registeredServices.<name>` in latchkey's `config.json`,
+so a service is described here exactly as `latchkey services register` would
+persist it. Nothing on the Python side models or validates its contents --
+latchkey owns that schema and checks it when it loads the config -- so adding
+a service, or picking up a field a later latchkey adds, is a data-only change.
+
+For `claude-ai` that is a `baseApiUrl` plus a `loginUrl` and a `loginFlow`,
+which give it a `latchkey auth browser` sign-in (latchkey ships these generic
+flows so a service outside its builtin catalog can still be signed into).
+`claude-ai` uses `cookie-capture`, which finishes once the named cookies have
+been set and stores them as a `Cookie` header -- for claude.ai, the single
+`sessionKey` cookie, scoped by `cookieUrl` to claude.ai itself because sign-in
+may start on another host. A service registered with only a `baseApiUrl` can
+be authenticated by hand with `latchkey auth set` instead.
 
 Because a custom scope is not a detent builtin, its schemas have to reach the
 gateway's permission check. Rather than inlining them into every host file,
@@ -458,11 +507,21 @@ ships the shared file alongside the permissions file). Granting a custom scope
 is then a plain rule write -- no per-host schema inlining.
 
 `imbue.mngr_latchkey.additional_services` is the single Python chokepoint for
-the file. It exposes the registration list (each service is registered with the
-`latchkey` CLI at gateway bring-up), the merged schemas used to materialize the
-shared file, and the catalog projection the generator folds into
-`services.json`. No gateway extension reads it -- they only read
+the file. It exposes the registration entries, the merged schemas used to
+materialize the shared file, and the catalog projection the generator folds
+into `services.json`. No gateway extension reads it -- they only read
 `services.json`.
+
+The registration entries are minds' half of latchkey's own `config.json`:
+`core.merge_minds_latchkey_config` read-merges them into the file's
+`registeredServices` block (alongside `settings.hideBuiltinServices`) rather
+than shelling out to `latchkey services register`, which cannot update a
+registration that already exists. That merge runs for **every** gateway that
+serves minds agents -- the desktop one at `initialize()` and each gateway spawn,
+and a VPS one during remote provisioning. It has to: the registration is what
+lets a gateway resolve a request to a custom service at all, so a VPS holding
+the synchronized credentials but not the registration would silently never
+inject them.
 
 A typical end-to-end shell flow:
 
@@ -521,6 +580,7 @@ remains importable for embedders such as the minds desktop client.
 ```python
 from imbue.mngr_latchkey.core import Latchkey
 from imbue.mngr_latchkey.agent_setup import (
+    LatchkeyGatewayLocation,
     prepare_agent_latchkey,
     finalize_host_permissions,
 )
@@ -537,10 +597,15 @@ latchkey = Latchkey(
 latchkey.initialize()
 
 # (a) Pre-create env vars + opaque permissions handle for a new host.
-setup = prepare_agent_latchkey(latchkey, is_tunneled=True)
-# setup.env: LATCHKEY_GATEWAY[_SECONDARY,_PASSWORD,_PERMISSIONS_OVERRIDE,_DISABLE_COUNTING]
-#   LATCHKEY_GATEWAY_SECONDARY (tunneled mode only) is the agent's URL for the
-#   per-VPS gateway: http://127.0.0.1:<INNER_PORT>
+setup = prepare_agent_latchkey(
+    latchkey,
+    is_tunneled=True,
+    gateway_location=LatchkeyGatewayLocation.VPS,
+)
+# setup.env: LATCHKEY_GATEWAY[_PASSWORD,_DISABLE_COUNTING]
+# Desktop-gateway setups also include LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE.
+# LATCHKEY_GATEWAY is always http://127.0.0.1:1989 for tunneled workspaces.
+# Discovery realizes the desktop or VPS location selected before creation.
 # setup.opaque_permissions_path: pass to finalize_host_permissions later
 
 # ... mngr create returns the canonical host id ...
@@ -565,3 +630,39 @@ The `latchkey_directory` is used both as the upstream `LATCHKEY_DIRECTORY`
 for spawned `latchkey` subprocesses and as the root of this package's own
 metadata subdirectory (`<latchkey_directory>/mngr_latchkey/`, accessible
 via `Latchkey.plugin_data_dir`).
+
+### Storing user-supplied credentials
+
+Services with no browser sign-in report an example of the command that
+stores their credentials, each value the caller must supply written as an
+angle-bracketed placeholder (`LatchkeyServiceInfo.set_credentials_example`,
+e.g. `latchkey auth set-nocurl aws <access-key-id> <secret-access-key>`).
+`imbue.mngr_latchkey.credential_commands` turns such an example into a
+fillable form and back into a runnable command, so an embedder can collect
+the values in its own UI instead of sending the user to a terminal:
+
+```python
+from imbue.mngr_latchkey.credential_commands import (
+    build_credential_command_argv,
+    parse_credential_command_example,
+)
+
+# Raises CredentialCommandError when the example is not a latchkey command,
+# or has no placeholders (nothing to ask the user for).
+parsed = parse_credential_command_example(service_info.set_credentials_example)
+# parsed.parameters: one (name, label) pair per placeholder, to render as inputs
+
+argv = build_credential_command_argv(
+    parsed,
+    {"access-key-id": "...", "secret-access-key": "..."},
+    account,  # "" for latchkey's unnamed default account
+)
+is_success, detail = latchkey.auth_set_credentials("aws", argv)
+```
+
+The argv carries the user's secrets, so it is passed to the subprocess as a
+list (never a shell string) and is never logged. `--account` is a *global*
+latchkey option and is therefore placed before the subcommand rather than
+after the example's own arguments. `auth set` stores whatever it is handed,
+so callers should re-read `services_info` afterwards to find out whether
+the credentials are actually usable.

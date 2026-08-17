@@ -9,7 +9,7 @@ lives, its stack, its test entry points).
 ## Drive an isolated instance, never the live one
 
 Exercise the app **in-process** or against a **throwaway** instance on an
-alternate port -- never `:8000` (the system_interface proxy) and never the live
+alternate port -- never the app's registered live
 port. Drive the Flask app with its test client (`app.test_client()`), or launch a
 disposable threaded Werkzeug server (`run_simple(..., threaded=True)`). Never
 restart, curl, or "reveal" the live service; revealing the change is the lead's

@@ -42,10 +42,10 @@ from imbue.mngr.api.discovery_aggregator import DiscoveryStateAggregator
 from imbue.mngr.api.discovery_events import AgentDiscoveryEvent
 from imbue.mngr.api.discovery_events import DiscoveryErrorEvent
 from imbue.mngr.api.discovery_events import DiscoveryEvent
+from imbue.mngr.api.discovery_events import DiscoverySchemaMismatchWarner
 from imbue.mngr.api.discovery_events import HostDestroyedEvent
 from imbue.mngr.api.discovery_events import HostSSHInfoEvent
 from imbue.mngr.api.discovery_events import ProviderDiscoverySnapshotEvent
-from imbue.mngr.api.discovery_events import parse_discovery_event_line
 from imbue.mngr.api.discovery_log_suppression import DiscoveryErrorLogSuppressor
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import DiscoveredAgent
@@ -92,7 +92,7 @@ _OBSERVE_BOUNCE_ERRORS: Final = (
 # observed it yet), so the handler can tell a running agent apart from
 # a stopped/paused one without a second round-trip.
 OnAgentDiscoveredCallback = Callable[[AgentId, HostId, RemoteSSHInfo | None, str, HostState | None], None]
-OnAgentDestroyedCallback = Callable[[AgentId], None]
+OnAgentDestroyedCallback = Callable[[AgentId, HostId], None]
 
 
 def _convert_ssh_info(ssh: SSHInfo) -> RemoteSSHInfo:
@@ -107,6 +107,7 @@ def _convert_ssh_info(ssh: SSHInfo) -> RemoteSSHInfo:
         host=ssh.host,
         port=ssh.port,
         key_path=ssh.key_path,
+        known_hosts_path=ssh.known_hosts_path,
     )
 
 
@@ -143,6 +144,11 @@ class DiscoveryStreamConsumer(MutableModel):
     # the same failure (e.g. missing credentials) logs once per process, not once
     # per poll cycle. Clean snapshots feed it below to re-arm on recovery.
     _error_log_suppressor: DiscoveryErrorLogSuppressor = PrivateAttr(default_factory=DiscoveryErrorLogSuppressor)
+    # Deduplicates warnings for discovery lines that do not match this version's
+    # schema (the observe echo can carry lines written by other mngr versions).
+    _discovery_schema_warner: DiscoverySchemaMismatchWarner = PrivateAttr(
+        default_factory=lambda: DiscoverySchemaMismatchWarner(source_description="latchkey discovery stream")
+    )
 
     def add_on_agent_discovered_callback(self, callback: OnAgentDiscoveredCallback) -> None:
         """Register a callback fired for every agent discovered (or re-fired on late SSH info)."""
@@ -241,8 +247,8 @@ class DiscoveryStreamConsumer(MutableModel):
         if not stripped:
             return
         try:
-            event = parse_discovery_event_line(stripped)
-        except (ValueError, json.JSONDecodeError) as e:
+            event = self._discovery_schema_warner.parse(stripped)
+        except json.JSONDecodeError as e:
             logger.warning("Failed to parse discovery line {!r}: {}", stripped[:200], e)
             return
         if event is None:
@@ -257,8 +263,8 @@ class DiscoveryStreamConsumer(MutableModel):
         # delta into destruction callbacks and fire discovery callbacks for the
         # agents this event carries.
         delta = self._aggregator.apply_event(event)
-        for aid_str in delta.removed_agent_ids:
-            self._safely_call_destroyed(AgentId(aid_str))
+        for instance_key in delta.removed_agent_instances:
+            self._safely_call_destroyed(instance_key.agent_id, instance_key.host_id)
 
         if isinstance(event, ProviderDiscoverySnapshotEvent):
             # A clean snapshot re-arms the provider's error-log suppression (and
@@ -269,9 +275,9 @@ class DiscoveryStreamConsumer(MutableModel):
             # during this snapshot's discovery span is deliberately not re-added, so
             # firing discovered from the raw event.agents would re-establish a reverse
             # tunnel for an agent the aggregator already considers gone.
-            present_agent_ids = self._aggregator.get_agent_by_id()
+            present_agent_instances = self._aggregator.get_agent_by_instance()
             for agent in event.agents:
-                if str(agent.agent_id) in present_agent_ids:
+                if agent.instance_key in present_agent_instances:
                     self._fire_discovered(agent)
         elif isinstance(event, AgentDiscoveryEvent):
             self._fire_discovered(event.agent)
@@ -337,9 +343,9 @@ class DiscoveryStreamConsumer(MutableModel):
             except (OSError, RuntimeError, ValueError) as e:
                 logger.warning("on_agent_discovered callback failed for {}: {}", agent_id, e)
 
-    def _safely_call_destroyed(self, agent_id: AgentId) -> None:
+    def _safely_call_destroyed(self, agent_id: AgentId, host_id: HostId) -> None:
         for callback in self._on_agent_destroyed_callbacks:
             try:
-                callback(agent_id)
+                callback(agent_id, host_id)
             except (OSError, RuntimeError, ValueError) as e:
                 logger.warning("on_agent_destroyed callback failed for {}: {}", agent_id, e)

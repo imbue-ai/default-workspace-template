@@ -32,12 +32,23 @@ class SystemInterfaceBackendFailureReason(UpperCaseStrEnum):
       unchanged and does not interpret which codes matter -- the consumer
       decides whether (and how) to react to a given status.
     - ``UNRESOLVED``: the backend resolver had no entry for the agent.
+    - ``STALLED``: the plugin has waited on this request for its
+      stall-notice window without a response. The window starts when the
+      request is handed to the backend client, so it covers waiting for a
+      pooled slot and the dial -- the backend need not have accepted the
+      connection -- but not the routing and (for a remote agent) SSH tunnel
+      setup that precede it, which can add a comparable delay. Unlike every
+      other reason here the request has *not* failed -- it is still in
+      flight and may yet succeed. It is emitted purely so a consumer can
+      start probing a backend that may be wedged; a consumer must not treat
+      it as evidence that the request itself failed.
     """
 
     CONNECT_ERROR = auto()
     SSE_EOF = auto()
     ERROR_RESPONSE = auto()
     UNRESOLVED = auto()
+    STALLED = auto()
 
 
 class BackendUrl(NonEmptyStr):
@@ -84,17 +95,20 @@ class ReverseTunnelEstablishedPayload(FrozenModel):
 
 
 class SystemInterfaceBackendFailurePayload(FrozenModel):
-    """Emitted when the plugin observes a per-agent backend failure.
+    """Emitted when the plugin observes something notable about a per-agent backend.
 
-    The plugin's role is observation only: it surfaces the kind of failure
-    it saw (connection failure, mid-stream EOF, or a non-2xx response) so a
+    The plugin's role is observation only: it surfaces what it saw so a
     downstream consumer can apply its own policy (e.g. a health tracker's
-    HEALTHY -> STUCK transition).
+    HEALTHY -> STUCK transition). ``reason`` says what that was, and not all
+    of them report a request that failed -- ``STALLED`` reports one still in
+    flight.
     """
 
     type: Literal["system_interface_backend_failure"] = "system_interface_backend_failure"
-    agent_id: AgentId = Field(description="Agent whose backend failed")
-    reason: SystemInterfaceBackendFailureReason = Field(description="Why the forward attempt failed")
+    agent_id: AgentId = Field(description="Agent whose backend the observation is about")
+    reason: SystemInterfaceBackendFailureReason = Field(
+        description="What the plugin observed (see SystemInterfaceBackendFailureReason)"
+    )
     status_code: int | None = Field(
         default=None,
         description="HTTP status code returned by the backend (set when reason is ERROR_RESPONSE; None otherwise)",
@@ -102,21 +116,25 @@ class SystemInterfaceBackendFailurePayload(FrozenModel):
 
 
 class ResolverSnapshotPayload(FrozenModel):
-    """Emitted on every resolver mutation: full per-agent service map.
+    """Emitted on every resolver mutation: full per-instance service map.
 
-    Carries the full ``{agent_id: {service_name: url}}`` map held by the
-    plugin's ``ForwardResolver`` at the moment of mutation. A consumer can
-    keep the latest copy in process state to mirror which services the
-    plugin has resolved for a given agent (e.g. for diagnostics).
+    Carries the full ``{"<agent_id>@<host_id>": {service_name: url}}`` map held
+    by the plugin's ``ForwardResolver`` at the moment of mutation. Keys are
+    agent *instance* keys (agent ids are unique per host, not globally, so the
+    same id on two hosts keeps two independent entries). A consumer can keep
+    the latest copy in process state to mirror which services the plugin has
+    resolved for a given agent instance (e.g. for diagnostics).
 
-    The full map is sent on every change (no per-agent diff) so a consumer
+    The full map is sent on every change (no per-instance diff) so a consumer
     that connects late only needs the most recent envelope to be in sync.
     """
 
     type: Literal["resolver_snapshot"] = "resolver_snapshot"
+    # The wire field name stays ``services_by_agent`` for compatibility with
+    # existing consumers; only the key form changed to instance keys.
     services_by_agent: dict[str, dict[str, str]] = Field(
         default_factory=dict,
-        description="Full per-agent service map: {agent_id_str: {service_name: url}}",
+        description="Full per-instance service map: {'<agent_id>@<host_id>': {service_name: url}}",
     )
 
 

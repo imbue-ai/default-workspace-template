@@ -10,6 +10,7 @@ from typing import cast
 
 import pytest
 
+from imbue.imbue_common.event_envelope import EventEnvelope
 from imbue.imbue_common.event_envelope import EventId
 from imbue.imbue_common.event_envelope import IsoTimestamp
 from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
@@ -19,13 +20,16 @@ from imbue.mngr.api.discovery_aggregator import DiscoveryStateAggregator
 from imbue.mngr.api.discovery_events import AgentDestroyedEvent
 from imbue.mngr.api.discovery_events import AgentDiscoveryEvent
 from imbue.mngr.api.discovery_events import DISCOVERY_EVENT_SOURCE
+from imbue.mngr.api.discovery_events import DiscoveredProvider
 from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.api.discovery_events import DiscoveryErrorEvent
 from imbue.mngr.api.discovery_events import DiscoveryEventType
+from imbue.mngr.api.discovery_events import DiscoverySchemaMismatchWarner
 from imbue.mngr.api.discovery_events import FullDiscoverySnapshotEvent
 from imbue.mngr.api.discovery_events import HostDestroyedEvent
 from imbue.mngr.api.discovery_events import HostDiscoveryEvent
 from imbue.mngr.api.discovery_events import HostSSHInfoEvent
+from imbue.mngr.api.discovery_events import PersistedProviderInstanceConfig
 from imbue.mngr.api.discovery_events import ProviderDiscoverySnapshotEvent
 from imbue.mngr.api.discovery_events import ResolvedAgentHost
 from imbue.mngr.api.discovery_events import _DISCOVERY_MAX_FILE_SIZE_BYTES
@@ -62,7 +66,6 @@ from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import ProviderInstanceConfig
 from imbue.mngr.errors import AgentNotFoundError
-from imbue.mngr.errors import DiscoverySchemaChangedError
 from imbue.mngr.interfaces.host import OnlineHostInterface
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
@@ -301,6 +304,9 @@ class _FakeHostWithSSH:
     def get_ssh_connection_info(self) -> tuple[str, str, int, Path]:
         return ("root", "remote.example.com", 2222, Path("/tmp/key"))
 
+    def get_ssh_known_hosts_path(self) -> Path | None:
+        return Path("/tmp/pins/known_hosts")
+
 
 class _FakeLocalHost:
     """Minimal stub for testing _build_ssh_info_from_host without SSH info."""
@@ -316,7 +322,11 @@ def test_build_ssh_info_from_host_returns_ssh_info_for_remote_host() -> None:
     assert result.host == "remote.example.com"
     assert result.port == 2222
     assert result.key_path == Path("/tmp/key")
-    assert result.command == "ssh -i /tmp/key -p 2222 root@remote.example.com"
+    assert result.known_hosts_path == Path("/tmp/pins/known_hosts")
+    assert result.command == (
+        'ssh -i /tmp/key -o "UserKnownHostsFile=/tmp/pins/known_hosts" -o StrictHostKeyChecking=yes '
+        "-p 2222 root@remote.example.com"
+    )
 
 
 def test_build_ssh_info_from_host_returns_none_for_local_host() -> None:
@@ -515,14 +525,17 @@ def test_parse_invalid_json_raises() -> None:
         parse_discovery_event_line("{invalid json}")
 
 
-def test_parse_unknown_event_type_raises_schema_changed() -> None:
-    """A discovery line with a type that isn't in the discriminated union raises DiscoverySchemaChangedError."""
-    with pytest.raises(DiscoverySchemaChangedError):
-        parse_discovery_event_line('{"type": "unknown_event"}')
+def test_parse_unknown_event_type_skips_with_warning() -> None:
+    """A line with a type outside the discriminated union (a future event type) is skipped, not raised on."""
+    with capture_loguru("WARNING") as captured:
+        parsed = parse_discovery_event_line('{"type": "unknown_event"}')
+    assert parsed is None
+    assert "unknown_event" in captured.getvalue()
+    assert "Skipping discovery event line" in captured.getvalue()
 
 
-def test_parse_recognized_event_with_missing_field_raises_schema_changed() -> None:
-    """A line of a known event type that fails validation must raise DiscoverySchemaChangedError."""
+def test_parse_recognized_event_with_missing_field_skips_with_warning() -> None:
+    """A known-type line whose payload fails validation is skipped with a warning, not raised on."""
     # AGENT_DISCOVERED requires an "agent" field; omit it to simulate a schema mismatch.
     line = json.dumps(
         {
@@ -532,32 +545,217 @@ def test_parse_recognized_event_with_missing_field_raises_schema_changed() -> No
             "source": "mngr/discovery",
         }
     )
-    with pytest.raises(DiscoverySchemaChangedError) as exc_info:
-        parse_discovery_event_line(line)
-    assert exc_info.value.event_type == DiscoveryEventType.AGENT_DISCOVERED
+    with capture_loguru("WARNING") as captured:
+        parsed = parse_discovery_event_line(line)
+    assert parsed is None
+    assert str(DiscoveryEventType.AGENT_DISCOVERED) in captured.getvalue()
+    assert "Skipping discovery event line" in captured.getvalue()
 
 
-def test_parse_recognized_event_with_extra_field_raises_schema_changed() -> None:
-    """Discovery models use extra='forbid', so unexpected fields must raise DiscoverySchemaChangedError."""
+def test_parse_recognized_event_with_extra_field_parses_successfully() -> None:
+    """An additive field from a future schema is ignored: the event parses and the known fields survive."""
     agent = make_test_discovered_agent()
     event = make_agent_discovery_event(agent)
     data = event.model_dump(mode="json")
     data["unexpected_new_field"] = "value-from-future-schema"
-    with pytest.raises(DiscoverySchemaChangedError):
-        parse_discovery_event_line(json.dumps(data))
+    parsed = parse_discovery_event_line(json.dumps(data))
+    assert isinstance(parsed, AgentDiscoveryEvent)
+    assert parsed.agent.agent_id == agent.agent_id
 
 
-@pytest.mark.allow_warnings(match=r"Discovery event schema mismatch")
-def test_resolve_provider_names_recovers_after_schema_mismatch(temp_mngr_ctx: MngrContext) -> None:
-    """A stale-schema event must trigger a regenerate (full scan) and a parse retry.
+# Dict-valued event fields whose keys are dynamic data (e.g. provider names), not
+# schema field names. Injecting an "unknown field" into these would actually add a
+# new mapping entry whose value then fails to parse as the mapping's value model --
+# which is not the forward-compat scenario (a future version adds *fields*, and a
+# new mapping entry would carry a valid value). Their child dicts still get
+# injections through their own paths.
+_DYNAMIC_KEY_MAPPING_FIELDS: tuple[str, ...] = ("error_by_provider_name", "certified_data")
 
-    After the regenerate, the on-disk file has fresh per-provider DISCOVERY_PROVIDER
-    snapshots in the current schema; replaying from the new offset succeeds. The stub
-    local-only provider has no agents, so resolution returns None, but the key assertion
-    is that no exception escapes -- the recovery path ran and parsing succeeded on retry.
+
+def _dict_paths(data: object, path: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
+    """Return the paths of every fixed-schema dict node in a nested JSON structure (including the root)."""
+    paths: list[tuple[object, ...]] = []
+    if isinstance(data, dict):
+        if not (path and path[-1] in _DYNAMIC_KEY_MAPPING_FIELDS):
+            paths.append(path)
+        for key, value in data.items():
+            paths.extend(_dict_paths(value, path + (key,)))
+    elif isinstance(data, list):
+        for idx, value in enumerate(data):
+            paths.extend(_dict_paths(value, path + (idx,)))
+    else:
+        pass
+    return paths
+
+
+def _with_unknown_field_injected_at(data: dict[str, object], path: tuple[object, ...]) -> dict[str, object]:
+    """Deep-copy a JSON structure and inject an unknown field into the dict at ``path``."""
+    copied = json.loads(json.dumps(data))
+    node = copied
+    for step in path:
+        node = node[step]
+    node["field_from_a_future_version"] = "future-value-8461"
+    return copied
+
+
+def _make_every_discovery_event_type_with_populated_payloads() -> list[EventEnvelope]:
+    """Build one event of every discovery event type, with all nested payload models populated."""
+    agent = make_test_discovered_agent()
+    host = make_test_discovered_host()
+    now = datetime.now(timezone.utc)
+    timestamp, event_id = _make_envelope_fields()
+    provider = make_discovered_provider(
+        ProviderInstanceName("docker"),
+        ProviderInstanceConfig(backend=ProviderBackendName("docker")),
+    )
+    error = DiscoveryError(
+        type_name="RuntimeError",
+        message="boom",
+        provider_name=ProviderInstanceName("docker"),
+        traceback_text="Traceback...",
+    )
+    ssh_info = SSHInfo(user="u", host="h", port=22, key_path=Path("/tmp/key-8461"), command="ssh u@h")
+    return [
+        make_agent_discovery_event(agent),
+        make_host_discovery_event(host),
+        AgentDestroyedEvent(
+            timestamp=timestamp,
+            event_id=event_id,
+            source=DISCOVERY_EVENT_SOURCE,
+            agent_id=agent.agent_id,
+            host_id=host.host_id,
+        ),
+        HostDestroyedEvent(
+            timestamp=timestamp,
+            event_id=event_id,
+            source=DISCOVERY_EVENT_SOURCE,
+            host_id=host.host_id,
+            agent_ids=(agent.agent_id,),
+        ),
+        FullDiscoverySnapshotEvent(
+            timestamp=timestamp,
+            event_id=event_id,
+            source=DISCOVERY_EVENT_SOURCE,
+            agents=(agent,),
+            hosts=(host,),
+            providers=(provider,),
+            error_by_provider_name={ProviderInstanceName("docker"): error},
+        ),
+        make_provider_discovery_snapshot_event(
+            provider_name=ProviderInstanceName("docker"),
+            agents=(agent,),
+            hosts=(host,),
+            discovery_started_at=now,
+            discovery_finished_at=now,
+            provider=provider,
+            error=error,
+            unknown_host_ids=(host.host_id,),
+            unknown_agent_ids=(agent.agent_id,),
+        ),
+        HostSSHInfoEvent(
+            timestamp=timestamp,
+            event_id=event_id,
+            source=DISCOVERY_EVENT_SOURCE,
+            host_id=host.host_id,
+            ssh=ssh_info,
+        ),
+        DiscoveryErrorEvent(
+            timestamp=timestamp,
+            event_id=event_id,
+            source=DISCOVERY_EVENT_SOURCE,
+            error_type="RuntimeError",
+            error_message="boom",
+            source_name="docker",
+            provider_name="docker",
+        ),
+    ]
+
+
+def test_persisted_discovery_payload_models_keep_extra_ignore() -> None:
+    """The non-envelope models nested inside persisted discovery events must tolerate unknown fields.
+
+    Envelope-level tolerance comes from EventEnvelope; these payload models
+    need their own extra="ignore" (the incident field, DiscoveryError's
+    traceback_text, was two levels deep). Re-tightening any of them would
+    re-create the downgrade wedge (see mngr-internal#422).
+    """
+    for model_class in (
+        DiscoveredAgent,
+        DiscoveredHost,
+        SSHInfo,
+        DiscoveryError,
+        DiscoveredProvider,
+        PersistedProviderInstanceConfig,
+    ):
+        assert model_class.model_config.get("extra") == "ignore", model_class.__name__
+
+
+def test_provider_instance_config_stays_strict_for_user_config() -> None:
+    """ProviderInstanceConfig parses user-authored settings.toml, where an unknown field is a typo."""
+    assert ProviderInstanceConfig.model_config.get("extra") == "forbid"
+
+
+def test_parse_tolerates_unknown_fields_at_every_nesting_level() -> None:
+    """Golden forward-compat check: an additive field anywhere in any event type never breaks parsing.
+
+    This directly encodes "a future mngr version wrote to this shared log": for every
+    discovery event type, an unknown field is injected into every dict node of its
+    serialized form (envelope, nested agents/hosts/provider/config/error/ssh payloads),
+    and each variant must still parse to the same event type.
+    """
+    for event in _make_every_discovery_event_type_with_populated_payloads():
+        data = event.model_dump(mode="json")
+        injection_paths = _dict_paths(data)
+        assert injection_paths, f"no dict nodes found for {type(event).__name__}"
+        for path in injection_paths:
+            variant = _with_unknown_field_injected_at(data, path)
+            parsed = parse_discovery_event_line(json.dumps(variant))
+            assert type(parsed) is type(event), (
+                f"{type(event).__name__} failed to parse with an unknown field injected at {path!r}"
+            )
+
+
+def test_schema_mismatch_warner_deduplicates_and_summarizes() -> None:
+    """Identical mismatches warn once immediately, then only appear in the counted summary."""
+    unknown_line = json.dumps(
+        {
+            "timestamp": "2025-01-01T00:00:00.000000000+00:00",
+            "type": "EVENT_FROM_THE_FUTURE",
+            "event_id": "evt-future",
+            "source": "mngr/discovery",
+        }
+    )
+    warner = DiscoverySchemaMismatchWarner(source_description="test stream")
+    with capture_loguru("WARNING") as captured:
+        for _ in range(5):
+            assert warner.parse(unknown_line) is None
+    assert captured.getvalue().count("Skipping discovery event line") == 1
+
+    with capture_loguru("WARNING") as summary_captured:
+        warner.log_summary()
+    assert "Skipped 5 discovery event line(s)" in summary_captured.getvalue()
+
+
+def test_schema_mismatch_warner_summary_is_silent_for_single_occurrences() -> None:
+    """A mismatch seen exactly once was already warned about verbatim; the summary must not repeat it."""
+    warner = DiscoverySchemaMismatchWarner(source_description="test stream")
+    with capture_loguru("WARNING") as captured:
+        warner.parse('{"type": "one-off-future-event"}')
+        warner.log_summary()
+    assert captured.getvalue().count("Skipped") == 0
+    assert captured.getvalue().count("Skipping discovery event line") == 1
+
+
+@pytest.mark.allow_warnings(match=r"Skipping discovery event line")
+def test_resolve_provider_names_skips_foreign_schema_lines(temp_mngr_ctx: MngrContext) -> None:
+    """Newer-schema lines in the shared log are skipped; resolution still succeeds from the valid lines.
+
+    This is the v0.3.11 downgrade-wedge scenario: a shared, append-only discovery log
+    contains lines a newer mngr version wrote. Resolution must neither fail nor
+    trigger a regeneration -- the foreign lines are simply skipped.
     """
     config = temp_mngr_ctx.config
-    # Seed with a valid per-provider snapshot, then append a stale-schema agent-discovery event.
+    # Seed with a valid per-provider snapshot, then append newer-schema lines.
     agent = DiscoveredAgent(
         host_id=HostId.generate(),
         agent_id=AgentId.generate(),
@@ -568,30 +766,39 @@ def test_resolve_provider_names_recovers_after_schema_mismatch(temp_mngr_ctx: Mn
     _write_provider_snapshots(config, [agent], [])
 
     events_path = get_discovery_events_path(config)
-    pre_recovery_size = events_path.stat().st_size
     with open(events_path, "a") as f:
-        stale_line = json.dumps(
-            {
-                "timestamp": "2025-01-01T00:00:00.000000000+00:00",
-                "type": DiscoveryEventType.AGENT_DISCOVERED,
-                "event_id": "evt-stale",
-                "source": "mngr/discovery",
-                # Missing required "agent" field -- simulates schema evolution.
-            }
+        # A known type with a missing required field (a hypothetical breaking change).
+        f.write(
+            json.dumps(
+                {
+                    "timestamp": "2025-01-01T00:00:00.000000000+00:00",
+                    "type": DiscoveryEventType.AGENT_DISCOVERED,
+                    "event_id": "evt-stale",
+                    "source": "mngr/discovery",
+                }
+            )
+            + "\n"
         )
-        f.write(stale_line + "\n")
+        # A wholly unknown event type from a future version.
+        f.write(
+            json.dumps(
+                {
+                    "timestamp": "2025-01-01T00:00:00.000000000+00:00",
+                    "type": "EVENT_FROM_THE_FUTURE",
+                    "event_id": "evt-future",
+                    "source": "mngr/discovery",
+                }
+            )
+            + "\n"
+        )
+    pre_resolution_size = events_path.stat().st_size
 
     result = resolve_provider_names_for_identifiers(temp_mngr_ctx, ["known-agent"])
 
-    # The regenerate path appended fresh per-provider snapshots past the stale line.
-    final_lines = events_path.read_text().splitlines()
-    final_types = [json.loads(line)["type"] for line in final_lines if line.strip()]
-    assert DiscoveryEventType.DISCOVERY_PROVIDER in final_types
-    assert events_path.stat().st_size > pre_recovery_size
-    # The retry parsed against the fresh snapshot, which has no agents from the
-    # stub provider setup, so the seeded "known-agent" is not in the post-recovery
-    # state and resolution returns None.
-    assert result is None
+    # The valid snapshot resolved the agent, and no regeneration side-effect ran
+    # (the file is exactly as we left it).
+    assert result == ("local",)
+    assert events_path.stat().st_size == pre_resolution_size
 
 
 # === find_discovery_snapshot_replay_offset Tests ===
@@ -1727,10 +1934,10 @@ def _fold_into_aggregator(lines: Sequence[str]) -> DiscoveryStateAggregator:
 
 
 def _assert_same_aggregate_state(actual: DiscoveryStateAggregator, expected: DiscoveryStateAggregator) -> None:
-    assert actual.get_agent_by_id() == expected.get_agent_by_id()
+    assert actual.get_agent_by_instance() == expected.get_agent_by_instance()
     assert actual.get_host_by_id() == expected.get_host_by_id()
     assert actual.get_error_by_provider_name() == expected.get_error_by_provider_name()
-    assert actual.get_unknown_agent_ids() == expected.get_unknown_agent_ids()
+    assert actual.get_unknown_agent_instances() == expected.get_unknown_agent_instances()
     assert actual.get_unknown_host_ids() == expected.get_unknown_host_ids()
     actual_providers = {provider.provider_name: provider for provider in actual.get_providers()}
     expected_providers = {provider.provider_name: provider for provider in expected.get_providers()}
@@ -2062,3 +2269,81 @@ def test_rotate_discovery_events_cleans_up_old_rotated_files(tmp_path: Path) -> 
     rotated = sorted(f for f in tmp_path.iterdir() if f.name.startswith("events.jsonl."))
     # With max_rotated_count=1, only the newest file should remain
     assert len(rotated) == 1
+
+
+def _write_same_id_agent_on_two_hosts(
+    config: MngrConfig, local_provider: LocalProviderInstance
+) -> tuple[AgentId, HostId, HostId]:
+    """Seed snapshots with one shared agent id on the local host and a second host.
+
+    Returns ``(shared_agent_id, host_id_a, host_id_b)`` where host A is the local
+    provider's host -- the migration-overlap setup used by the duplicate-id tests.
+    """
+    shared_agent_id = AgentId.generate()
+    host_id_a = local_provider.host_id
+    host_id_b = HostId.generate()
+    agents = [
+        DiscoveredAgent(
+            host_id=host_id,
+            agent_id=shared_agent_id,
+            agent_name=AgentName("migrating-agent"),
+            provider_name=ProviderInstanceName("local"),
+            certified_data={},
+        )
+        for host_id in (host_id_a, host_id_b)
+    ]
+    hosts = [
+        DiscoveredHost(
+            host_id=host_id_a, host_name=HostName(LOCAL_HOST_NAME), provider_name=ProviderInstanceName("local")
+        ),
+        DiscoveredHost(
+            host_id=host_id_b, host_name=HostName("other-host"), provider_name=ProviderInstanceName("local")
+        ),
+    ]
+    _write_provider_snapshots(config, agents, hosts)
+    return shared_agent_id, host_id_a, host_id_b
+
+
+def test_resolve_hosts_raises_disambiguation_for_agent_id_on_multiple_hosts(
+    temp_mngr_ctx: MngrContext, local_provider: LocalProviderInstance
+) -> None:
+    """A bare agent id spanning two hosts must raise, not silently pick one.
+
+    Agent ids are unique per host, not globally (the migration-overlap case);
+    ``mngr stop --stop-host`` must never guess which host to stop.
+    """
+    shared_agent_id, _host_id_a, _host_id_b = _write_same_id_agent_on_two_hosts(temp_mngr_ctx.config, local_provider)
+
+    with pytest.raises(AgentNotFoundError, match="multiple hosts"):
+        resolve_hosts_for_identifiers(temp_mngr_ctx, [str(shared_agent_id)])
+
+
+def test_resolve_hosts_destroy_on_one_host_leaves_same_id_on_other_host_resolvable(
+    temp_mngr_ctx: MngrContext, local_provider: LocalProviderInstance
+) -> None:
+    """Destroying (host A, id X) must keep (host B, id X) resolvable -- destroys are host-scoped."""
+    shared_agent_id, host_id_a, host_id_b = _write_same_id_agent_on_two_hosts(temp_mngr_ctx.config, local_provider)
+
+    emit_agent_destroyed(temp_mngr_ctx.config, shared_agent_id, host_id_a)
+
+    resolved = resolve_hosts_for_identifiers(temp_mngr_ctx, [str(shared_agent_id)])
+    assert resolved[str(shared_agent_id)].host_id == host_id_b
+
+
+def test_resolve_provider_names_unions_providers_for_duplicated_agent_id(temp_mngr_ctx: MngrContext) -> None:
+    """An agent id with instances on two providers narrows discovery to BOTH providers."""
+    shared_agent_id = AgentId.generate()
+    agents = [
+        DiscoveredAgent(
+            host_id=HostId.generate(),
+            agent_id=shared_agent_id,
+            agent_name=AgentName("migrating-agent"),
+            provider_name=provider_name,
+            certified_data={},
+        )
+        for provider_name in (ProviderInstanceName("docker"), ProviderInstanceName("modal"))
+    ]
+    _write_provider_snapshots(temp_mngr_ctx.config, agents, [])
+
+    resolved = resolve_provider_names_for_identifiers(temp_mngr_ctx, [str(shared_agent_id)])
+    assert resolved == ("docker", "modal")

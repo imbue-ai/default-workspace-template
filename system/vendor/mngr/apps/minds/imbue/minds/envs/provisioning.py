@@ -53,10 +53,15 @@ from pydantic import SecretStr
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import info_span
+from imbue.imbue_common.pure import pure
+from imbue.minds.build_info import DEFAULT_WEB_TEMPLATE_REPO_KEY
+from imbue.minds.build_info import FALLBACK_BRANCH
 from imbue.minds.config.data_types import ClientEnvConfig
 from imbue.minds.config.data_types import DeployEnvConfig
 from imbue.minds.config.data_types import DeployLifecycleConfig
 from imbue.minds.config.data_types import ModalEnvStrategy
+from imbue.minds.config.data_types import OriginsConfig
+from imbue.minds.config.data_types import WebWorkspacesConfig
 from imbue.minds.config.loader import EnvConfigError
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.config.loader import repo_tier_client_config_path
@@ -90,6 +95,7 @@ from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.providers.neon_db import NeonProjectRecord
 from imbue.minds.envs.providers.supertokens_app import SuperTokensAppRecord
 from imbue.minds.envs.providers.supertokens_app import app_id_from_connection_uri
+from imbue.minds.envs.providers.workspace_storage import is_workspace_storage_configured
 from imbue.minds.envs.recover import RecoverTarget
 from imbue.minds.envs.recover import delete_recover_target
 from imbue.minds.envs.recover import find_monorepo_root
@@ -102,16 +108,53 @@ from imbue.minds.envs.secret_lifecycle import gc_old_per_tier_secrets
 from imbue.minds.envs.secret_lifecycle import make_deploy_id
 from imbue.minds.envs.secret_lifecycle import timestamped_secret_name
 from imbue.minds.errors import MindError
+from imbue.minds.errors import WebTemplateRefRequiredError
+from imbue.mngr_imbue_cloud.primitives import DEV_TIER
+
+
+def resolve_web_template_pin(web_workspaces: WebWorkspacesConfig, *, tier: str) -> tuple[str, str]:
+    """Resolve the (template_repo, template_ref) pin for a tier's web creates.
+
+    The repo resolves as: the ``MINDS_WEB_TEMPLATE_REPO`` env var > the
+    deploy.toml ``template_repo`` pin > the canonical
+    default-workspace-template repo key.
+
+    The ref is never committed (a committed ref silently goes stale when the
+    pool is re-baked at a newer version): shared tiers resolve
+    ``MINDS_WEB_TEMPLATE_REF`` env var > the app's pinned release tag
+    ``FALLBACK_BRANCH`` (the same tag their pool is re-baked from), while
+    dev-tier deploys must set ``MINDS_WEB_TEMPLATE_REF`` explicitly --
+    raises :class:`WebTemplateRefRequiredError` otherwise, so the operator
+    always states the ref their dev pool is actually baked at.
+    """
+    repo_override = os.environ.get("MINDS_WEB_TEMPLATE_REPO")
+    ref_override = os.environ.get("MINDS_WEB_TEMPLATE_REF")
+    template_repo = repo_override or (
+        str(web_workspaces.template_repo) if web_workspaces.template_repo else DEFAULT_WEB_TEMPLATE_REPO_KEY
+    )
+    if ref_override:
+        template_ref = ref_override
+    elif tier == DEV_TIER:
+        raise WebTemplateRefRequiredError(
+            "This dev-tier deploy enables web workspace creation ([web_workspaces] in the dev "
+            "deploy.toml), so the template ref must be stated explicitly -- web creates lease "
+            "only pool hosts whose baked repo_branch_or_tag matches it exactly. Re-run with "
+            "MINDS_WEB_TEMPLATE_REF=<branch-or-tag> set to the ref your dev pool is baked at "
+            "(see `just list-pool-hosts` for the rows' repo_branch_or_tag), e.g.: "
+            "MINDS_WEB_TEMPLATE_REF=minds-v0.3.16 uv run minds env deploy"
+        )
+    else:
+        template_ref = FALLBACK_BRANCH
+    return template_repo, template_ref
+
 
 # Env var the deployed connector reads at startup to identify which
 # minds env it belongs to. Pushed alongside ``MINDS_TIER_GENERATION_ID``
 # in the per-env ``litellm-connector-<tier>`` Modal Secret. For dev-tier
 # deploys this is the per-developer dev env name (e.g. ``dev-josh-3``); for
 # tier deploys it's the tier itself (``staging`` / ``production``).
-# Used by ``cf_create_tunnel`` to tag every Cloudflare tunnel the
-# connector creates with the owning env, so ``minds env destroy`` can
-# enumerate + delete only that env's tunnels (vs walking every tunnel
-# on the shared dev-tier CF account).
+# Used by the connector to scope env-owned resources (e.g. the pool-host
+# cleanup cron audits only this env's lima slices).
 MINDS_ENV_NAME_KEY: Final[str] = "MINDS_ENV_NAME"
 
 # Env-var name the deployed connector reads at request time to drive
@@ -235,6 +278,10 @@ PushPerEnvSecretFn = Callable[[str, dict[str, str], str, ConcurrencyGroup], None
 # the same way (see :class:`DeployStrategy`).
 # (modal_env, tier, min_containers, scaledown_window, deploy_id, strategy, cg) -> deployed URL.
 DeployModalAppFn = Callable[[str, str, int, int, str, DeployStrategy, ConcurrencyGroup], AnyUrl]
+# Same shape plus the connector-only ``custom_domains`` tuple (Modal custom
+# domain hosts from the tier's ``[origins]`` block; empty = none).
+# (modal_env, tier, min_containers, scaledown_window, deploy_id, custom_domains, strategy, cg) -> deployed URL.
+DeployConnectorAppFn = Callable[[str, str, int, int, str, tuple[str, ...], DeployStrategy, ConcurrencyGroup], AnyUrl]
 # (app_name, modal_env, cg) -> None. Used by tier destroys to ``modal
 # app stop`` each deployed app. Idempotent in the underlying call.
 StopModalAppFn = Callable[[str, str, ConcurrencyGroup], None]
@@ -294,15 +341,20 @@ EnsureGenerationIdFn = Callable[[str, ConcurrencyGroup], str]
 # (tier_vault_prefix, cg) -> None. Removes the generation Vault entry
 # so the next deploy mints a fresh one. Used by tier destroys.
 DeleteGenerationIdFn = Callable[[str, ConcurrencyGroup], None]
-# (name, account_id, api_token) -> tuple of tunnel uuids matching env.
-ListCloudflareTunnelsFn = Callable[[DevEnvName, str, SecretStr], tuple[str, ...]]
-# (tunnel_ids, account_id, api_token) -> None. Deletes the listed tunnels.
-DeleteCloudflareTunnelsFn = Callable[[tuple[str, ...], str, SecretStr], None]
-ReadPerEnvSecretValuesFn = Callable[[str, str, dict[str, str], ConcurrencyGroup], dict[str, str]]
+# (service, tier_vault_prefix, overrides, is_required, cg) -> merged values.
+# ``is_required`` marks services a shared tier's [secrets].services declares:
+# the implementation must fail (not degrade to a placeholder) when the Vault
+# entry is unreadable or misses template-declared keys.
+ReadPerEnvSecretValuesFn = Callable[[str, str, dict[str, str], bool, ConcurrencyGroup], dict[str, str]]
 # (name, cg) -> None. Removes the env's mngr Docker state container +
 # backing volume, targeting the one exact container by name. No-op when
 # there is no Docker daemon. Real impl lives in ``envs.docker_cleanup``.
 CleanupStateContainerFn = Callable[[DevEnvName, ConcurrencyGroup], None]
+# (storage_vault_values, prefix) -> deleted object count. Deletes every
+# workspace stop/start artifact under the env's key prefix in the tier's
+# storage bucket. Used by tier destroys; real impl lives in
+# ``envs.providers.workspace_storage``.
+DeleteWorkspaceStoragePrefixFn = Callable[[dict[str, str], str], int]
 
 
 class Providers(FrozenModel):
@@ -329,16 +381,22 @@ class Providers(FrozenModel):
     create_supertokens_app: CreateSuperTokensAppFn = Field(description="Create the per-dev-env SuperTokens app.")
     delete_supertokens_app: DeleteSuperTokensAppFn = Field(description="Delete the per-dev-env SuperTokens app.")
     read_per_env_secret_values: ReadPerEnvSecretValuesFn = Field(
-        description="(service, tier_vault_prefix, overrides, cg) -> merged values dict for one Modal Secret.",
+        description="(service, tier_vault_prefix, overrides, is_required, cg) -> merged values dict for one Modal Secret.",
     )
     push_per_env_modal_secret: PushPerEnvSecretFn = Field(
         description="(secret_name, values, modal_env, cg) -> upsert the Modal Secret in the named Modal env.",
     )
     deploy_litellm_proxy: DeployModalAppFn = Field(
-        description="(modal_env, tier, cg) -> `modal deploy` the llm app into ``modal_env``.",
+        description=(
+            "(modal_env, tier, min_containers, scaledown_window, deploy_id, strategy, cg) "
+            "-> `modal deploy` the llm app into ``modal_env``."
+        ),
     )
-    deploy_remote_service_connector: DeployModalAppFn = Field(
-        description="(modal_env, tier, cg) -> `modal deploy` the connector app into ``modal_env``.",
+    deploy_remote_service_connector: DeployConnectorAppFn = Field(
+        description=(
+            "(modal_env, tier, min_containers, scaledown_window, deploy_id, custom_domains, strategy, cg) "
+            "-> `modal deploy` the connector app into ``modal_env``."
+        ),
     )
     stop_modal_app: StopModalAppFn = Field(
         description="(app_name, modal_env, cg) -> `modal app stop` the named app. Idempotent.",
@@ -402,6 +460,12 @@ class Providers(FrozenModel):
             "agents stop cleanly before their resources go away."
         ),
     )
+    delete_workspace_storage_prefix: DeleteWorkspaceStoragePrefixFn = Field(
+        description=(
+            "(storage_vault_values, prefix) -> deleted object count. Deletes the env's "
+            "workspace stop/start artifacts from the tier's storage bucket at destroy."
+        ),
+    )
     cleanup_state_container: CleanupStateContainerFn = Field(
         description=(
             "(name, cg) -> remove the env's mngr Docker state container + backing volume. "
@@ -433,18 +497,6 @@ class Providers(FrozenModel):
         description=(
             "(tier_vault_prefix, cg) -> None. Removes secrets/minds/<tier>/generation so the "
             "next deploy mints a fresh id (triggers activate-time auto-wipe on every dev's machine)."
-        ),
-    )
-    list_cloudflare_tunnels_for_env: ListCloudflareTunnelsFn = Field(
-        description=(
-            "(name, account_id, api_token) -> tuple of cloudflare tunnel uuids whose metadata.env "
-            "equals the env name. Used by destroy to enumerate the env's tunnels."
-        ),
-    )
-    delete_cloudflare_tunnels: DeleteCloudflareTunnelsFn = Field(
-        description=(
-            "(tunnel_ids, account_id, api_token) -> None. Deletes the listed cloudflare tunnels. "
-            "Idempotent per-tunnel (404 -> success)."
         ),
     )
 
@@ -623,6 +675,14 @@ def _deploy_env_locked(
             "refusing to start a new deploy until the prior failed deploy is recovered. "
             "Run `minds env recover` first."
         )
+
+    # Resolve the web-create template pin up front so a dev-tier deploy
+    # missing its explicit MINDS_WEB_TEMPLATE_REF refuses here, before any
+    # cloud resource is touched -- not mid-deploy after the Modal env /
+    # Neon project steps have already run.
+    web_template_pin: tuple[str, str] | None = None
+    if deploy_config.web_workspaces is not None:
+        web_template_pin = resolve_web_template_pin(deploy_config.web_workspaces, tier=tier)
 
     # Mint a fresh deploy id (UTC ISO-compact timestamp). Used as the
     # suffix on every Modal Secret pushed below and threaded into the
@@ -845,26 +905,39 @@ def _deploy_env_locked(
     first_pass_overrides = _compute_secret_overrides(
         name=name,
         lifecycle=lifecycle,
+        cloudflare_domain=str(deploy_config.cloudflare_domain),
         neon_record=neon_record,
         supertokens_record=supertokens_record,
         expected_connector_url=expected_connector_url,
         expected_litellm_proxy_url=expected_litellm_proxy_url,
+        origins=deploy_config.origins,
     )
     litellm_master_key = _read_litellm_master_key(tier_vault_prefix, providers, parent_concurrency_group)
     with info_span("Pushing per-env Modal Secrets into env {!r}", modal_env):
         # Vault-backed services: one Modal Secret per entry in
         # ``[secrets].services``, base values from Vault + per-service
         # overrides from ``_compute_secret_overrides``.
+        # On shared tiers ([secrets].services with operator-managed Vault
+        # entries) every declared service is required: an unreadable or
+        # schema-incomplete entry aborts the deploy rather than shipping a
+        # placeholder secret. Dev/ci tiers (creates_resources=true) keep the
+        # bootstrap-friendly placeholder fallback. All reads (and thus all
+        # required-service validation) complete before the first push, so a
+        # bad entry aborts the deploy before any Modal Secret is written.
+        is_service_required = not lifecycle.creates_resources
+        values_by_secret_name: list[tuple[str, dict[str, str]]] = []
         for service in services:
             per_service_overrides = dict(first_pass_overrides.get(service, {}))
-            secret_name = timestamped_secret_name(service, tier, deploy_id)
-            with info_span("Pushing per-env Modal Secret {!r}", secret_name):
-                values = providers.read_per_env_secret_values(
-                    service,
-                    tier_vault_prefix,
-                    per_service_overrides,
-                    parent_concurrency_group,
-                )
+            values = providers.read_per_env_secret_values(
+                service,
+                tier_vault_prefix,
+                per_service_overrides,
+                is_service_required,
+                parent_concurrency_group,
+            )
+            values_by_secret_name.append((timestamped_secret_name(service, tier, deploy_id), values))
+        for secret_name, values in values_by_secret_name:
+            with info_span("Pushing per-env Modal Secret {!r} ({} values)", secret_name, len(values)):
                 providers.push_per_env_modal_secret(
                     secret_name,
                     values,
@@ -886,6 +959,23 @@ def _deploy_env_locked(
         if generation_id is not None:
             connector_secret_overrides.setdefault(GENERATION_ID_KEY, generation_id)
         connector_secret_overrides.setdefault(MINDS_ENV_NAME_KEY, str(name))
+        # The tier's pinned web-create template + blessed shape (deploy.toml
+        # [web_workspaces]) drive the connector's POST /hosts/claim; the chrome
+        # origin lets the hosted web chrome embed shared workspaces (the chrome
+        # is path-served on the connector origin, so the two are the same URL).
+        # Both are scoped to tiers that opt into web workspace creation.
+        if deploy_config.web_workspaces is not None and web_template_pin is not None:
+            web_workspaces = deploy_config.web_workspaces
+            web_template_repo, web_template_ref = web_template_pin
+            connector_secret_overrides.setdefault("MINDS_WEB_TEMPLATE_REPO", web_template_repo)
+            connector_secret_overrides.setdefault("MINDS_WEB_TEMPLATE_REF", web_template_ref)
+            if web_workspaces.cpus is not None:
+                connector_secret_overrides.setdefault("MINDS_WEB_SHAPE_CPUS", str(int(web_workspaces.cpus)))
+            if web_workspaces.memory_gb is not None:
+                connector_secret_overrides.setdefault("MINDS_WEB_SHAPE_MEMORY_GB", str(int(web_workspaces.memory_gb)))
+            if web_workspaces.gpu_count is not None:
+                connector_secret_overrides.setdefault("MINDS_WEB_SHAPE_GPU_COUNT", str(int(web_workspaces.gpu_count)))
+            connector_secret_overrides.setdefault("SHARE_CHROME_ORIGIN", _bare_origin(expected_connector_url))
         # When the operator sets MINDS_INJECT_BROKEN_HEALTHCHECK at deploy time,
         # propagate it into the deployed connector's Modal Secret so the
         # in-container healthcheck returns 500 and the auto-rollback path
@@ -949,6 +1039,7 @@ def _deploy_env_locked(
             connector_min_containers,
             connector_scaledown_window,
             deploy_id,
+            custom_domain_hosts_for_origins(deploy_config.origins),
             deploy_strategy,
             parent_concurrency_group,
         )
@@ -1086,6 +1177,7 @@ def _resolve_host_pool_dsn_for_migrations(
         "neon",
         tier_vault_prefix,
         {},
+        False,
         parent_concurrency_group,
     )
     database_url = neon_vault_values.get("DATABASE_URL", "")
@@ -1123,14 +1215,56 @@ def _expected_litellm_proxy_url(
             assert_never(unreachable)
 
 
+def _workspace_storage_key_prefix(name: DevEnvName, lifecycle: DeployLifecycleConfig) -> str:
+    """The env's keyspace inside its tier's workspace-storage bucket.
+
+    Per-env-Modal-env tiers (dev / ci) share their tier's bucket, so each env
+    owns the ``<env>/`` key prefix -- stamped into the ``storage`` secret at
+    deploy and reclaimed at destroy. Shared tiers (staging / production) have
+    a dedicated bucket and own the whole keyspace (empty prefix).
+    """
+    return f"{name}/" if lifecycle.modal_env_strategy == ModalEnvStrategy.PER_ENV else ""
+
+
+def relay_region_for_env(name: DevEnvName) -> str:
+    """The per-env relay region label: the env name as a DNS label.
+
+    Env names allow ``_`` (Modal/Neon accept it) but DNS labels do not, so
+    underscores map to hyphens. Collisions (``dev-a_b`` vs ``dev-a-b``) are
+    theoretically possible and acceptable on the dev/ci tiers this feeds.
+    """
+    return str(name).replace("_", "-").lower()
+
+
+@pure
+def _bare_origin(origin_url: AnyUrl) -> str:
+    """Serialize an origin URL without pydantic's trailing slash (origins are compared byte-exactly)."""
+    return str(origin_url).rstrip("/")
+
+
+@pure
+def custom_domain_hosts_for_origins(origins: OriginsConfig | None) -> tuple[str, ...]:
+    """The Modal custom-domain hosts a tier's connector must be deployed with (empty when no [origins] block)."""
+    if origins is None:
+        return ()
+    hosts: list[str] = []
+    for origin_url in (origins.accounts_origin, origins.chrome_origin):
+        host = origin_url.host or ""
+        if host and host not in hosts:
+            hosts.append(host)
+    return tuple(hosts)
+
+
 def _compute_secret_overrides(
     *,
     name: DevEnvName,
     lifecycle: DeployLifecycleConfig,
+    cloudflare_domain: str,
     neon_record: NeonProjectRecord | None,
     supertokens_record: SuperTokensAppRecord | None,
     expected_connector_url: AnyUrl,
     expected_litellm_proxy_url: AnyUrl,
+    origins: OriginsConfig | None,
 ) -> dict[str, dict[str, str]]:
     """Build the per-service Modal Secret override dict for one deploy.
 
@@ -1139,11 +1273,33 @@ def _compute_secret_overrides(
     from the computed-up-front values. For ``creates_resources=false``
     tiers the operator's Vault entries already hold the DSNs +
     connection URI -- we only inject the URL-dependent values.
+
+    A tier with an ``[origins]`` block gets its whole browser-facing origin
+    layout stamped from git: the accounts surface moves to ``accounts_origin``
+    (AUTH_WEBSITE_DOMAIN + ACCOUNTS_BASE_URL), the session cookie widens to the
+    shared apex (ACCOUNTS_COOKIE_DOMAIN), and the chrome embed origin becomes
+    ``chrome_origin`` (SHARE_CHROME_ORIGIN). These deploy-time overrides win
+    over any stale Vault values, so deploy.toml is the source of truth.
     """
+    auth_website_domain = _bare_origin(origins.accounts_origin) if origins is not None else str(expected_connector_url)
     overrides: dict[str, dict[str, str]] = {
-        "supertokens": {"AUTH_WEBSITE_DOMAIN": str(expected_connector_url)},
+        "supertokens": {"AUTH_WEBSITE_DOMAIN": auth_website_domain},
         "litellm-connector": {"LITELLM_PROXY_URL": str(expected_litellm_proxy_url)},
     }
+    if origins is not None:
+        overrides["sharing"] = {
+            "ACCOUNTS_BASE_URL": _bare_origin(origins.accounts_origin),
+            "ACCOUNTS_COOKIE_DOMAIN": str(origins.cookie_domain),
+        }
+        overrides["litellm-connector"]["SHARE_CHROME_ORIGIN"] = _bare_origin(origins.chrome_origin)
+    # The relay fleet is not env config: relays live in the connector's
+    # relays table, registered by `just provision-dev-relay` (dev/ci; the env
+    # name is the region label) or the staging/production runbook. Per-env
+    # Modal-env tiers still stamp the storage key prefix that keeps their
+    # stop/start artifacts (and their cleanup) disjoint within the shared
+    # tier bucket.
+    if lifecycle.modal_env_strategy == ModalEnvStrategy.PER_ENV:
+        overrides["storage"] = {"WORKSPACE_STORAGE_KEY_PREFIX": _workspace_storage_key_prefix(name, lifecycle)}
     if lifecycle.creates_resources:
         assert neon_record is not None
         assert supertokens_record is not None
@@ -1188,19 +1344,18 @@ def destroy_env(
     Steps, in order, for every env type:
 
     1. ``mngr destroy`` every agent under ``~/.minds-<name>/mngr/agents/``
-       so their cloud resources (Docker containers, pool hosts,
-       Cloudflare tunnels) stop cleanly before being torn down.
-       Skipped when ``keep_agents=True``.
-    2. Enumerate + delete every Cloudflare tunnel with
-       ``metadata.env=<name>`` (filtered by env name; the tag the
-       connector sets at create time encodes the owning env, not the
-       tier).
-    3. Clear SuperTokens app data (tier-dependent: delete the app
+       so their cloud resources (Docker containers, pool hosts) stop
+       cleanly before being torn down. Skipped when ``keep_agents=True``.
+    2. Clear SuperTokens app data (tier-dependent: delete the app
        outright for dev / wipe its users for shared tiers).
-    4. Clear Neon DB data (tier-dependent: delete the DB outright for
+    3. Clear Neon DB data (tier-dependent: delete the DB outright for
        dev / DROP SCHEMA for shared tiers).
-    5. Clear Modal infra (tier-dependent: delete the Modal env outright
+    4. Clear Modal infra (tier-dependent: delete the Modal env outright
        for dev / stop apps + delete secrets for shared tiers).
+    5. Delete the env's workspace stop/start artifacts from the tier's
+       storage bucket (the env's stamped key prefix for per-env tiers,
+       the whole bucket keyspace for shared tiers). Skipped when the
+       tier's ``storage`` Vault entry is not populated.
     6. For shared tiers only: delete the tier generation id from Vault
        so the next deploy mints a fresh one + every dev's next
        ``activate`` sees a mismatch and auto-wipes their local state.
@@ -1212,11 +1367,11 @@ def destroy_env(
 
     Proceeds even when the env root is missing on disk. The local env
     root is a convenience pointer; the cloud-side resources are keyed
-    off the env *name* (Modal env, Neon project, SuperTokens app,
-    Cloudflare tunnel tags), all of which we can clean
-    up by name without needing the local directory. This makes destroy
-    safe to re-run after an operator who manually ``rm -rf``'d the env
-    root would otherwise be locked out of the cloud cleanup.
+    off the env *name* (Modal env, Neon project, SuperTokens app), all
+    of which we can clean up by name without needing the local
+    directory. This makes destroy safe to re-run after an operator who
+    manually ``rm -rf``'d the env root would otherwise be locked out of
+    the cloud cleanup.
     """
     env_root_was_present = env_root_exists(name)
     if not env_root_was_present:
@@ -1234,7 +1389,7 @@ def destroy_env(
     modal_env_for_tier_ops = _resolve_modal_env(name=name, lifecycle=lifecycle, deploy_config=deploy_config)
 
     # Step 1: mngr agents first, so their docker containers / pool
-    # hosts / tunnels stop cleanly before we tear down the cloud
+    # hosts stop cleanly before we tear down the cloud
     # resources they reference.
     if keep_agents:
         logger.warning(
@@ -1261,23 +1416,7 @@ def destroy_env(
         with info_span("Cleaning up Docker state container for env {!r}", str(name)):
             providers.cleanup_state_container(name, parent_concurrency_group)
 
-    # Step 2: Cloudflare tunnels tagged with this env. Keyed off env
-    # NAME (not tier), since dev envs share the dev-tier CF account and
-    # we want to find only this specific env's tunnels.
-    with info_span("Cleaning up Cloudflare tunnels tagged for env {!r}", str(name)):
-        cf_vault_values = providers.read_per_env_secret_values(
-            "cloudflare",
-            tier_vault_prefix,
-            {},
-            parent_concurrency_group,
-        )
-        deleted_tunnels = _cleanup_cloudflare_tunnels_for_env(
-            name, cloudflare_vault_values=cf_vault_values, providers=providers
-        )
-        if deleted_tunnels:
-            logger.info("Deleted {} Cloudflare tunnel(s) for env {!r}", deleted_tunnels, str(name))
-
-    # Step 3: SuperTokens (dev deletes the per-env app outright; shared
+    # Step 2: SuperTokens (dev deletes the per-env app outright; shared
     # tiers wipe users via delete + recreate of the same app id).
     if lifecycle.creates_resources:
         with info_span("Deleting SuperTokens app for env {!r}", str(name)):
@@ -1292,11 +1431,12 @@ def destroy_env(
                 "supertokens",
                 tier_vault_prefix,
                 {},
+                False,
                 parent_concurrency_group,
             )
             _wipe_supertokens_for_tier(supertokens_values, providers=providers, tier=tier)
 
-    # Step 4: Neon (dev deletes the per-env *project* outright -- atomic
+    # Step 3: Neon (dev deletes the per-env *project* outright -- atomic
     # teardown of both DBs + roles + endpoints; shared tiers DROP SCHEMA
     # on the operator-managed DB they keep across destroy/redeploy).
     if lifecycle.creates_resources:
@@ -1308,11 +1448,12 @@ def destroy_env(
                 "neon",
                 tier_vault_prefix,
                 {},
+                False,
                 parent_concurrency_group,
             )
             _wipe_neon_for_tier(neon_values, providers=providers, tier=tier, parent_cg=parent_concurrency_group)
 
-    # Step 5: Modal (dev deletes the per-env Modal env outright which
+    # Step 4: Modal (dev deletes the per-env Modal env outright which
     # cascade-deletes its apps / secrets / volumes; shared tiers stop
     # the deployed apps + delete per-tier Modal Secrets so the next
     # deploy re-pushes fresh values from Vault).
@@ -1335,6 +1476,29 @@ def destroy_env(
                 keep_last=0,
                 parent_cg=parent_concurrency_group,
             )
+
+    # Step 5: workspace stop/start artifacts. The env's connector writes
+    # stopped-workspace disks into the tier's storage bucket under exactly
+    # the key prefix the deploy stamped (``<env>/`` for per-env-Modal-env
+    # tiers, the bucket root for shared tiers), so delete that keyspace.
+    # Normally the agent teardown in step 1 already released every pool
+    # host (which deletes its own artifacts); this is the catch-all for
+    # leases that never had a local agent. Skipped -- storage is an
+    # optional feature -- when the tier's ``storage`` Vault entry is not
+    # populated (the placeholder-secret tiers).
+    storage_values = providers.read_per_env_secret_values(
+        "storage",
+        tier_vault_prefix,
+        {},
+        False,
+        parent_concurrency_group,
+    )
+    if is_workspace_storage_configured(storage_values):
+        storage_prefix = _workspace_storage_key_prefix(name, lifecycle)
+        with info_span("Deleting workspace-storage artifacts for env {!r}", str(name)):
+            providers.delete_workspace_storage_prefix(storage_values, storage_prefix)
+    else:
+        logger.debug("Skipping workspace-storage cleanup for env {!r}: storage is not configured", str(name))
 
     # Step 6: generation id removal -- ONLY for tiers that use generation
     # tracking (driven by ``deploy_config.lifecycle.tracks_generation``).
@@ -1377,32 +1541,6 @@ def _wipe_supertokens_for_tier(
     providers.wipe_supertokens_app_data(app_id, core_base_url, SecretStr(api_key_str))
 
 
-def _cleanup_cloudflare_tunnels_for_env(
-    name: DevEnvName,
-    *,
-    cloudflare_vault_values: dict[str, str],
-    providers: Providers,
-) -> int:
-    """List + delete every Cloudflare tunnel whose metadata.env equals ``name``.
-
-    Returns the count of tunnels deleted. Raises :class:`MindError`
-    when the cloudflare Vault entry is missing the keys we need; the
-    caller propagates so destroy aborts and the operator can fix
-    Vault rather than silently leaking tunnels.
-    """
-    account_id = cloudflare_vault_values.get("CLOUDFLARE_ACCOUNT_ID", "")
-    api_token = cloudflare_vault_values.get("CLOUDFLARE_API_TOKEN", "")
-    if not account_id or not api_token:
-        raise MindError(
-            f"Cannot enumerate Cloudflare tunnels for env {str(name)!r}: cloudflare Vault entry "
-            "is missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN."
-        )
-    tunnel_ids = providers.list_cloudflare_tunnels_for_env(name, account_id, SecretStr(api_token))
-    if tunnel_ids:
-        providers.delete_cloudflare_tunnels(tunnel_ids, account_id, SecretStr(api_token))
-    return len(tunnel_ids)
-
-
 def _wipe_neon_for_tier(
     neon_vault_values: dict[str, str],
     *,
@@ -1434,7 +1572,7 @@ def _read_litellm_master_key(
     string when the Vault entry isn't populated lets the caller skip the
     override instead of writing an empty value.
     """
-    values = providers.read_per_env_secret_values("litellm", tier_vault_prefix, {}, parent_concurrency_group)
+    values = providers.read_per_env_secret_values("litellm", tier_vault_prefix, {}, False, parent_concurrency_group)
     return values.get("LITELLM_MASTER_KEY", "")
 
 

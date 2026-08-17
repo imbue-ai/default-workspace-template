@@ -27,6 +27,7 @@ from contextlib import nullcontext
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from typing import AbstractSet
 from typing import Any
 from typing import Final
 from typing import TypeVar
@@ -60,15 +61,19 @@ from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.cli._common import resolve_pool_database_url
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.data_types import BareMetalServerCapacity
+from imbue.mngr_imbue_cloud.data_types import BoxTierAudit
+from imbue.mngr_imbue_cloud.data_types import BoxTierAuditReport
 from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyOutcome
 from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyReport
 from imbue.mngr_imbue_cloud.data_types import SliceBakeOutcome
 from imbue.mngr_imbue_cloud.data_types import SliceBakeReport
 from imbue.mngr_imbue_cloud.data_types import SlicePricingRow
+from imbue.mngr_imbue_cloud.data_types import UnauditedBox
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.errors import SliceBakeTerminatedError
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerStatus
+from imbue.mngr_imbue_cloud.primitives import EXPECTED_AUTHORIZED_KEY_COUNT
 from imbue.mngr_imbue_cloud.primitives import OVH_US_DATACENTER_CODES
 from imbue.mngr_imbue_cloud.primitives import PoolHostDestroyOutcomeStatus
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DELIVERED
@@ -76,10 +81,16 @@ from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_ORDERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 from imbue.mngr_imbue_cloud.primitives import SliceBakeOutcomeStatus
+from imbue.mngr_imbue_cloud.primitives import is_box_exclusive_to_tier
+from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
+from imbue.mngr_imbue_cloud.slices.autostart_backfill import SliceAutostartBackfillOutcome
+from imbue.mngr_imbue_cloud.slices.autostart_backfill import backfill_box_autostart
+from imbue.mngr_imbue_cloud.slices.autostart_backfill import build_autostart_backfill_report
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_MEMORY_PER_SLICE_GB
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_CPU_OVERCOMMIT_RATIO
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_PORT_RANGE_END
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_PORT_RANGE_START
+from imbue.mngr_imbue_cloud.slices.bare_metal import box_default_workspace_template_cache_dir
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_disk_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_instance_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_disk_gib
@@ -88,6 +99,9 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_vcpus
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slot_count
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_slice_resource_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import find_server_capacity_by_id
+from imbue.mngr_imbue_cloud.slices.bare_metal import foreign_tier_slice_names
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_degraded_md_arrays
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_raw_swap_devices
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_instance_name
 from imbue.mngr_imbue_cloud.slices.bare_metal_db import POOL_HOST_STATUS_LEASED
@@ -107,6 +121,7 @@ from imbue.mngr_imbue_cloud.slices.bare_metal_db import insert_slice_pool_host
 from imbue.mngr_imbue_cloud.slices.bare_metal_db import update_server
 from imbue.mngr_imbue_cloud.slices.bare_metal_prep import DEFAULT_LIMA_VERSION
 from imbue.mngr_imbue_cloud.slices.bare_metal_prep import build_box_prep_script
+from imbue.mngr_imbue_cloud.slices.lima_box_image_cache import LimaBoxImageCache
 from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
 from imbue.mngr_imbue_cloud.slices.ordering import DEFAULT_REINSTALL_OS_TEMPLATE
 from imbue.mngr_imbue_cloud.slices.ordering import build_and_assign_eco_cart
@@ -120,6 +135,7 @@ from imbue.mngr_imbue_cloud.slices.ordering import wait_for_order_service_name
 from imbue.mngr_imbue_cloud.slices.ordering import wait_for_os_reinstall
 from imbue.mngr_imbue_cloud.slices.pricing import compute_slice_pricing_rows
 from imbue.mngr_lima.constants import DEFAULT_IMAGE_URL_X86_64
+from imbue.mngr_lima.errors import LimaCommandError
 from imbue.mngr_ovh.client import build_ovh_client
 from imbue.mngr_ovh.config import OvhProviderConfig
 from imbue.mngr_vps.primitives import VpsInstanceId
@@ -152,7 +168,7 @@ def server() -> None:
 
 
 @contextmanager
-def _pool_private_key_path() -> Iterator[Path]:
+def pool_private_key_path() -> Iterator[Path]:
     """Yield a 0600 temp file holding the pool management private key (from POOL_SSH_PRIVATE_KEY).
 
     The temp directory is removed on exit so the sensitive private key never
@@ -296,7 +312,7 @@ def prep_box(
             "with our injected key) or the one-time `admin pool backfill-host-keys` before prepping"
         )
     server_address = server.public_address
-    with _pool_private_key_path() as private_key_path:
+    with pool_private_key_path() as private_key_path:
         pool_public_key = _derive_public_key(private_key_path)
         script = build_box_prep_script(
             pool_public_key=pool_public_key,
@@ -311,9 +327,134 @@ def prep_box(
     logger.info("Box {} prepped: qemu+lima installed, {} ready, OS image staged", server_address, lima_service_user)
 
 
+def audit_box_against_tier(
+    *,
+    server_to_audit: BareMetalServer,
+    env_name: str | None,
+    private_key_path: Path,
+) -> BoxTierAudit:
+    """Report a box's REAL occupancy plus any cross-tier contamination on it.
+
+    The DB-derived slot accounting in ``list`` counts only the querying env's own
+    rows, so a slice belonging to another env -- and in particular another *tier* --
+    is invisible to it. This SSHes the box and reports what is actually there, which
+    is the only way to see a foreign-tier slice or a hand-added SSH key short of a
+    bake refusing to run.
+    """
+    client = LimaSliceVpsClient(
+        box_address=str(server_to_audit.public_address),
+        box_ssh_user=server_to_audit.lima_service_user or "limahost",
+        private_key_path=str(private_key_path),
+        box_host_public_key=server_to_audit.box_host_public_key,
+    )
+    disk_names = client.list_disk_names()
+    mdstat_text, proc_swaps_text = client.read_box_health_texts()
+    return BoxTierAudit(
+        server_id=str(server_to_audit.id),
+        public_address=str(server_to_audit.public_address),
+        slot_count=server_to_audit.slot_count,
+        box_used_slots=count_slice_resource_names(disk_names),
+        authorized_key_count=client.count_authorized_keys(),
+        foreign_tier_slices=tuple(sorted(foreign_tier_slice_names(disk_names, env_name)))
+        if env_name is not None
+        else (),
+        degraded_md_arrays=tuple(parse_degraded_md_arrays(mdstat_text)),
+        raw_swap_devices=tuple(parse_raw_swap_devices(proc_swaps_text)),
+    )
+
+
+def audit_fleet_against_tier(
+    *,
+    capacities: Sequence[BareMetalServerCapacity],
+    env_name: str | None,
+    private_key_path: Path,
+) -> BoxTierAuditReport:
+    """Audit every box in the fleet, reporting -- never raising on -- the ones that cannot be read.
+
+    A box that is down, mid-reinstall, or has no pinned host key must not cost the
+    operator every other box's verdict: this command exists precisely to find boxes
+    in a bad state, so an unreadable one is an entry in the report (and a logged
+    warning), not an abort.
+    """
+    audits: list[BoxTierAudit] = []
+    unaudited: list[UnauditedBox] = []
+    for capacity in capacities:
+        server_to_audit = capacity.server
+        if not server_to_audit.public_address:
+            unaudited.append(
+                UnauditedBox(
+                    server_id=str(server_to_audit.id),
+                    public_address=None,
+                    reason="the row has no public_address, so the box cannot be reached",
+                )
+            )
+            continue
+        try:
+            audits.append(
+                audit_box_against_tier(
+                    server_to_audit=server_to_audit, env_name=env_name, private_key_path=private_key_path
+                )
+            )
+        # ``OSError`` too: auditing a box is not purely a remote call. It writes the
+        # box's pinned host key to a known_hosts file and spawns ``ssh``, so a local
+        # I/O failure on one box would otherwise cost every other box its verdict --
+        # which is precisely what this command promises never to do. (The same
+        # reason ``LimaSliceVpsClient._best_effort_destroy`` catches it.)
+        except (LimaCommandError, BareMetalProvisioningError, OSError) as exc:
+            logger.warning("Could not audit box {} ({}): {}", server_to_audit.id, server_to_audit.public_address, exc)
+            unaudited.append(
+                UnauditedBox(
+                    server_id=str(server_to_audit.id),
+                    public_address=server_to_audit.public_address,
+                    reason=str(exc),
+                )
+            )
+    return build_box_tier_audit_report(env_name=env_name, audits=audits, unaudited=unaudited)
+
+
+def build_box_tier_audit_report(
+    *,
+    env_name: str | None,
+    audits: Sequence[BoxTierAudit],
+    unaudited: Sequence[UnauditedBox],
+) -> BoxTierAuditReport:
+    """Aggregate per-box audits into the summary ``list --verify-occupancy`` emits."""
+    contaminated_count = sum(1 for audit in audits if not audit.is_exclusive_to_tier)
+    return BoxTierAuditReport(
+        env_name=env_name,
+        is_foreign_tier_checked=env_name is not None,
+        exclusive=len(audits) - contaminated_count,
+        contaminated=contaminated_count,
+        unaudited=len(unaudited),
+        boxes=tuple(audits),
+        unaudited_boxes=tuple(unaudited),
+    )
+
+
 @server.command(name="list")
 @click.option("--database-url", default=None, help="Pool DSN (else resolved from env/activated minds env).")
-def list_servers(database_url: str | None) -> None:
+@click.option(
+    "--verify-occupancy",
+    "is_occupancy_verified",
+    is_flag=True,
+    default=False,
+    help=(
+        "SSH each box and report its REAL occupancy plus any cross-tier contamination "
+        "(foreign-tier slices, extra authorized SSH keys). The plain table counts only "
+        "this env's own DB rows, so it undercounts a shared box. Needs POOL_SSH_PRIVATE_KEY."
+    ),
+)
+@click.option(
+    "--env-name",
+    "env_name",
+    default=None,
+    help=(
+        "[--verify-occupancy] Activated env name, used to decide which slices are foreign-tier. "
+        "Without it there is no tier to compare against, so only the authorized-key half of the "
+        "audit runs (`minds server list --verify-occupancy` always passes it)."
+    ),
+)
+def list_servers(database_url: str | None, is_occupancy_verified: bool, env_name: str | None) -> None:
     """List bare-metal servers with per-server and fleet slot accounting (from the DB)."""
     conn = psycopg2.connect(resolve_pool_database_url(database_url))
     try:
@@ -321,6 +462,97 @@ def list_servers(database_url: str | None) -> None:
     finally:
         conn.close()
     logger.info("\n{}", _format_capacity_table(capacities))
+    if not is_occupancy_verified:
+        return
+    with pool_private_key_path() as private_key_path:
+        report = audit_fleet_against_tier(capacities=capacities, env_name=env_name, private_key_path=private_key_path)
+    emit_json(report.model_dump(mode="json"))
+    if not report.is_foreign_tier_checked:
+        logger.warning(
+            "No --env-name given, so only the authorized-key half of the audit ran: an empty "
+            "foreign_tier_slices above means NOT CHECKED, not clean."
+        )
+    if report.contaminated:
+        logger.warning(
+            "{} of {} audited box(es) are NOT exclusive to this tier -- a bake onto them will refuse. "
+            "See the JSON above.",
+            report.contaminated,
+            len(report.boxes),
+        )
+    if report.unaudited:
+        logger.warning(
+            "{} box(es) could not be read, so their occupancy and tier state are UNKNOWN (not clean). "
+            "See unaudited_boxes in the JSON above.",
+            report.unaudited,
+        )
+
+
+@server.command(name="backfill-autostart")
+@click.option("--database-url", default=None, help="Pool DSN (else resolved from env/activated minds env).")
+@click.option(
+    "--server-id",
+    "server_ids",
+    multiple=True,
+    help="Restrict the sweep to these bare_metal_servers row ids (repeatable; default: every box).",
+)
+@click.option(
+    "--dry-run",
+    "is_dry_run",
+    is_flag=True,
+    default=False,
+    help="List the slice VMs that would be backfilled (probing each VM's reachability) without applying.",
+)
+def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is_dry_run: bool) -> None:
+    """Backfill the volume-gated minds-autostart units onto existing slice VMs.
+
+    The fleet half of the reboot-resilience rollout (minds
+    docs/reboot-resilience-rollout.md Step 2): slices baked before the merged
+    installer keep the old racy oneshot until this sweep re-applies it. The
+    installer is idempotent and safe on running workspaces, fires the
+    workspace start immediately, and the sweep only reports a VM as
+    backfilled after observing that fired run succeed; a VM whose data volume
+    is not mounted is refused by the installer itself and reported as a
+    per-VM failure to investigate. Needs POOL_SSH_PRIVATE_KEY (injected by
+    `minds server backfill-autostart`).
+    """
+    conn = psycopg2.connect(resolve_pool_database_url(database_url))
+    try:
+        capacities = fetch_server_capacities(conn)
+    finally:
+        conn.close()
+    selected = [c.server for c in capacities if not server_ids or str(c.server.id) in set(server_ids)]
+    if server_ids:
+        unknown_ids = set(server_ids) - {str(s.id) for s in selected}
+        if unknown_ids:
+            raise click.ClickException(f"Unknown --server-id value(s): {sorted(unknown_ids)}")
+    outcomes: list[SliceAutostartBackfillOutcome] = []
+    unreadable_boxes: list[str] = []
+    with pool_private_key_path() as private_key_path:
+        for box_server in selected:
+            if not box_server.public_address:
+                logger.warning("Box {} has no public_address; skipping (state unknown)", box_server.id)
+                unreadable_boxes.append(str(box_server.id))
+                continue
+            client = LimaSliceVpsClient(
+                box_address=str(box_server.public_address),
+                box_ssh_user=box_server.lima_service_user or "limahost",
+                private_key_path=str(private_key_path),
+                box_host_public_key=box_server.box_host_public_key,
+            )
+            # One unreachable box must not cost the rest of the fleet its
+            # sweep (the same resilience rule as the occupancy audit).
+            try:
+                outcomes.extend(backfill_box_autostart(client, str(box_server.id), is_dry_run=is_dry_run))
+            except (LimaCommandError, BareMetalProvisioningError, OSError) as exc:
+                logger.warning("Could not sweep box {} ({}): {}", box_server.id, box_server.public_address, exc)
+                unreadable_boxes.append(str(box_server.id))
+    report = build_autostart_backfill_report(outcomes, unreadable_boxes)
+    emit_json(report.model_dump(mode="json"))
+    if report.failed or report.unreadable_boxes:
+        raise click.ClickException(
+            f"{report.failed} VM(s) failed to backfill and {len(report.unreadable_boxes)} box(es) were "
+            "unreachable; see the JSON above and re-run against them once fixed."
+        )
 
 
 @server.command(name="register")
@@ -485,6 +717,13 @@ _SLICE_MNGR_CREATE_TIMEOUT_SECONDS: Final[int] = 2700
 # --max-concurrency). Bounds box CPU/IO/network contention so each create finishes
 # within its timeout; the rest queue and start as slots free.
 DEFAULT_SLICE_BAKE_CONCURRENCY: Final[int] = 4
+
+# How many times one requested slice is baked before its failure is recorded. A
+# failed bake destroys its VM and writes no pool row, so each retry is a clean fresh
+# slice -- transient failures (an SSH reset, a flaky image build) self-heal instead
+# of permanently consuming one of the requested slices. Production seed builds have
+# been observed failing 2-3 times in a row before succeeding, so allow 3 attempts.
+_SLICE_BAKE_ATTEMPT_COUNT: Final[int] = 3
 
 
 def _build_slice_create_args(
@@ -782,6 +1021,65 @@ def _bake_one_slice(
         )
 
 
+def _run_bake_attempts(
+    bake_once: Callable[[], SliceBakeOutcome],
+    attempt_count: int,
+    *,
+    termination_event: threading.Event,
+) -> SliceBakeOutcome:
+    """Run bake_once up to attempt_count times, returning the first success (else the last failure).
+
+    A failed bake destroys its VM and writes no pool row, so each attempt is a
+    clean fresh slice: a transient failure (an SSH reset, a flaky image build)
+    self-heals instead of permanently consuming one of the requested slices.
+
+    ``termination_event`` stops the retries: a terminated bake's kill sweep makes
+    every in-flight attempt fail, and retrying those would spawn replacement
+    ``mngr create`` workers (new VMs) after the operator killed the bake.
+    """
+    last_outcome: SliceBakeOutcome | None = None
+    for attempt_idx in range(attempt_count):
+        outcome = bake_once()
+        if outcome.status == SliceBakeOutcomeStatus.SUCCEEDED:
+            return outcome
+        last_outcome = outcome
+        if termination_event.is_set():
+            logger.info("Slice bake {} failed after the bake was terminated; not retrying", outcome.host_name)
+            return outcome
+        if attempt_idx < attempt_count - 1:
+            logger.warning(
+                "Slice bake {} failed (attempt {}/{}); retrying with a fresh slice: {}",
+                outcome.host_name,
+                attempt_idx + 1,
+                attempt_count,
+                outcome.error,
+            )
+    if last_outcome is None:
+        raise BareMetalProvisioningError(f"attempt_count must be positive, got {attempt_count}")
+    return last_outcome
+
+
+def _bake_one_slice_with_retry(*, termination_event: threading.Event, **worker_kwargs: Any) -> SliceBakeOutcome:
+    """The bake fan-out worker: one requested slice, baked with bounded retries."""
+    if termination_event.is_set():
+        # A worker still queued on the concurrency semaphore when the bake was
+        # terminated: its ``mngr create`` never started, and starting it now would
+        # carve a brand-new VM after the kill sweep (and stall the fan-out's
+        # post-interruption re-join for the create's full timeout).
+        logger.info("Slice bake terminated before this queued slice started; not baking it")
+        return SliceBakeOutcome(
+            host_name="slice-never-started",
+            server_id=str(worker_kwargs["server"].id),
+            status=SliceBakeOutcomeStatus.FAILED,
+            error="the bake was terminated before this slice's first attempt started",
+        )
+    return _run_bake_attempts(
+        lambda: _bake_one_slice(**worker_kwargs),
+        _SLICE_BAKE_ATTEMPT_COUNT,
+        termination_event=termination_event,
+    )
+
+
 # The per-item result type produced by a bounded fan-out's workers (bake and
 # destroy outcomes today).
 OutcomeT = TypeVar("OutcomeT")
@@ -878,14 +1176,39 @@ def _describe_bake_outcome(outcome: SliceBakeOutcome) -> str:
     return f"{outcome.host_name} {outcome.status}"
 
 
-def _handle_bake_join_interruption(is_main_thread: bool) -> None:
+def _run_bake_fan_out(
+    *,
+    bake_worker_kwargs: Mapping[str, Any],
+    slice_count: int,
+    max_concurrency: int,
+    progress_noun: str,
+    is_main_thread: bool,
+    termination_event: threading.Event,
+) -> list[SliceBakeOutcome]:
+    """Run one phase of the slice bake fan-out (the seed phase or the fill phase)."""
+    worker_kwargs = {**bake_worker_kwargs, "termination_event": termination_event}
+    return run_outcome_workers_in_bounded_threads(
+        worker=_bake_one_slice_with_retry,
+        worker_kwargs_list=[worker_kwargs for _ in range(slice_count)],
+        max_concurrency=max_concurrency,
+        thread_name_prefix="bake",
+        progress_noun=progress_noun,
+        describe_outcome=_describe_bake_outcome,
+        interruption_exception_types=(SliceBakeTerminatedError,),
+        on_join_interrupted=lambda: _handle_bake_join_interruption(is_main_thread, termination_event),
+    )
+
+
+def _handle_bake_join_interruption(is_main_thread: bool, termination_event: threading.Event) -> None:
     """React to the bake fan-out's join loop being interrupted (a SIGTERM/SIGINT-raised error).
 
     Without this, the in-flight ``mngr create`` workers would be reparented and keep
-    carving VMs after we exit. Ignore further signals, then kill the workers so no
-    new VM appears; the fan-out re-joins the worker threads afterward and the bake's
-    ``finally`` reaps the orphans.
+    carving VMs after we exit. Set the termination event first (so a killed worker's
+    per-slice retry loop returns its failure instead of spawning a replacement bake),
+    ignore further signals, then kill the workers so no new VM appears; the fan-out
+    re-joins the worker threads afterward and the bake's ``finally`` reaps the orphans.
     """
+    termination_event.set()
     if is_main_thread:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -1188,7 +1511,7 @@ def destroy_pool_hosts_in_parallel(
     unique_ids = list(dict.fromkeys(pool_host_ids))
     logger.info("Destroying {} pool host(s) ({} at a time)", len(unique_ids), max_concurrency)
     # A row-only drop never SSHes a box, so it must not require POOL_SSH_PRIVATE_KEY.
-    key_path_context = nullcontext(None) if is_row_drop_only else _pool_private_key_path()
+    key_path_context = nullcontext(None) if is_row_drop_only else pool_private_key_path()
     with key_path_context as private_key_path:
         outcomes = run_outcome_workers_in_bounded_threads(
             worker=_destroy_one_pool_host,
@@ -1289,6 +1612,82 @@ def _resolve_vendored_mngr_source(*, mngr_source: str | None, repo_root: Path, i
     return repo_root
 
 
+def assert_box_is_exclusive_to_tier(
+    *,
+    server: BareMetalServer,
+    env_name: str | None,
+    box_disk_names: AbstractSet[str],
+    authorized_key_count: int,
+) -> None:
+    """Refuse to bake unless this box belongs solely to the activated env's tier.
+
+    Tier isolation is a stated invariant (``apps/minds/docs/environments.md``:
+    "There is zero cross-tier reach"), but nothing used to enforce it at the moment
+    it matters. Two independent ways a box drifts across tiers, both caught here
+    before a single slice is carved:
+
+    * a **foreign-tier slice** already on the box -- the box is then reachable by
+      both tiers' pool keys, which is the "zero cross-tier reach" boundary itself:
+      each tier's operators and connector gain ``limactl``, and so root, over the
+      other's workspaces (and neither tier's env-scoped reap reclaims the other's
+      leaks); and
+    * a **foreign key** in the lima service user's ``authorized_keys`` -- prep
+      writes that file with a single-key overwrite, so a second key can only have
+      been added out of band, and it hands another tier SSH access to this box (and
+      thus, via ``limactl``, to every workspace running on it).
+
+    The key check needs no comparison against our own public key: reaching this
+    point means we already authenticated with *this* tier's pool key, so if exactly
+    one key is authorized, that key is necessarily ours.
+
+    ``env_name`` is None only for a legacy un-stamped bake, whose tier is
+    unknowable; the slice check is skipped in that case, but the key check -- which
+    does not depend on our tier -- still applies.
+    """
+    if authorized_key_count != EXPECTED_AUTHORIZED_KEY_COUNT:
+        # Both directions refuse the bake, but they mean opposite things and have
+        # opposite remedies, so say which one happened. Re-prepping is safe when the
+        # file is empty (there is no other key to destroy) and destructive when it
+        # holds someone else's key: prep writes authorized_keys with a single-key
+        # OVERWRITE, so it would revoke that holder's access to a box whose slices --
+        # which this branch raises before ever looking at -- are still running.
+        if authorized_key_count < EXPECTED_AUTHORIZED_KEY_COUNT:
+            reason = (
+                "that file is empty, so the box was never prepped (or its authorized_keys was clobbered). "
+                f"Run `just prep-server {server.id}` (idempotent) to write this tier's key."
+            )
+        else:
+            reason = (
+                "`admin server prep` writes that file with a single-key overwrite, so the extra key(s) were "
+                "added out of band and give another tier SSH access to this box. Inspect them with "
+                "`ssh-keygen -lf ~/.ssh/authorized_keys` on the box. Do NOT re-prep before checking the box "
+                "for another tier's slices (`just audit-boxes`): prep overwrites authorized_keys, which would "
+                "cut the other key's owner off from slices that are still running here."
+            )
+        raise click.UsageError(
+            f"server {server.id} ({server.public_address}) authorizes {authorized_key_count} SSH keys for "
+            f"user {server.lima_service_user or 'limahost'}, expected exactly "
+            f"{EXPECTED_AUTHORIZED_KEY_COUNT} (this tier's pool key). {reason}"
+        )
+    if env_name is None:
+        return
+    foreign_names = foreign_tier_slice_names(box_disk_names, env_name)
+    if is_box_exclusive_to_tier(
+        authorized_key_count=authorized_key_count, foreign_tier_slice_count=len(foreign_names)
+    ):
+        return
+    foreign_list = ", ".join(sorted(foreign_names))
+    raise click.UsageError(
+        f"server {server.id} ({server.public_address}) already carries slices from another tier, so it "
+        f"cannot also host '{env_name}' (tier '{tier_for_env_name(env_name)}') slices: {foreign_list}. "
+        "Tiers are isolated by construction -- each has its own pool keypair, and there is meant to be zero "
+        "cross-tier reach -- so a box serving both is a box each tier's operators can SSH (and via limactl "
+        "control) the other's workspaces on, and neither tier's reap will ever reclaim the other's slices. "
+        "Retire the foreign slices from their OWN env (`just destroy-pool-hosts <row-id>` with that env "
+        "activated) or bake onto a box belonging to this tier."
+    )
+
+
 def allocate_slices(
     *,
     count: int,
@@ -1318,6 +1717,13 @@ def allocate_slices(
     ``lease_attributes`` (the operator's lease metadata) with the derived per-box
     size stamped on top, and records ``region`` (the lease-region label, not the
     box's raw datacenter code) so the connector's region-filtered lease matches.
+
+    A cache-tag (``--from-tag``) bake onto a box with no tar for the tag yet runs a
+    seed phase first: one slice baked alone builds + publishes the box image tar, so
+    the fan-out only ever takes the warm docker-load path. Every requested slice
+    (seeder included) is baked with bounded retries -- a failed bake destroys its VM
+    and writes no row, so a retry is a clean fresh slice -- and a seed that fails all
+    its attempts aborts the whole bake up front with one clear error.
 
     ``env_name`` (the activated minds env) is stamped into every slice's lima names
     so envs can share a box: free-slot capacity is read from the box's REAL
@@ -1352,7 +1758,7 @@ def allocate_slices(
     sizing = compute_server_slice_sizing(server)
 
     ssh_user = server.lima_service_user or "limahost"
-    with _pool_private_key_path() as private_key_path:
+    with pool_private_key_path() as private_key_path:
         # Free slots come from the box's REAL occupancy (every env's slices plus any
         # legacy un-stamped ones), NOT this env's DB row count -- so independent envs
         # sharing the box cannot collectively over-subscribe it. This is a fast
@@ -1363,7 +1769,17 @@ def allocate_slices(
             private_key_path=str(private_key_path),
             box_host_public_key=server.box_host_public_key,
         )
-        box_used_slots = count_slice_resource_names(occupancy_client.list_disk_names())
+        box_disk_names = occupancy_client.list_disk_names()
+        # Enforce tier isolation before anything is carved: a box shared across tiers
+        # is reachable by both tiers' pool keys, so each tier's operators and connector
+        # get limactl -- and so root -- over the other's workspaces.
+        assert_box_is_exclusive_to_tier(
+            server=server,
+            env_name=env_name,
+            box_disk_names=box_disk_names,
+            authorized_key_count=occupancy_client.count_authorized_keys(),
+        )
+        box_used_slots = count_slice_resource_names(box_disk_names)
         free_slots = max(0, server.slot_count - box_used_slots)
         if free_slots < count:
             raise click.UsageError(
@@ -1409,6 +1825,16 @@ def allocate_slices(
         default_workspace_template_cache_tag = (
             f"default-workspace-template:{repo_branch_or_tag}" if (is_from_tag and repo_branch_or_tag) else None
         )
+        # Seed-first: a cache-tag bake onto a box that does not hold this tag's tar
+        # yet runs a seed phase -- one slice baked alone -- before the fan-out. The
+        # seeder builds + publishes the box tar (its bounded retries absorb transient
+        # build failures), every later slice takes the warm docker-load path, and a
+        # build that keeps failing aborts the whole bake up front with one clear
+        # error instead of consuming one requested slice per failed build.
+        is_seed_phase_needed = default_workspace_template_cache_tag is not None and not LimaBoxImageCache(
+            slice_client=occupancy_client,
+            cache_dir=box_default_workspace_template_cache_dir(ssh_user),
+        ).has_tar(default_workspace_template_cache_tag)
         # One worker per slice, capped at ``max_concurrency`` at once by the shared
         # fan-out: each bake blocks on the semaphore before its ``mngr create``, so
         # the box is never contended by more than K simultaneous carves+builds
@@ -1436,19 +1862,52 @@ def allocate_slices(
         # allocate_slices there, but guard so an off-main-thread caller falls back to
         # the finally reap rather than crashing on install.
         is_main_thread = threading.current_thread() is threading.main_thread()
+        # Set by the join-interruption handler so the per-slice retry loops return
+        # their (kill-induced) failures instead of spawning replacement bakes.
+        bake_termination_event = threading.Event()
         previous_sigterm = signal.signal(signal.SIGTERM, _raise_on_bake_termination_signal) if is_main_thread else None
         previous_sigint = signal.signal(signal.SIGINT, _raise_on_bake_termination_signal) if is_main_thread else None
         try:
-            outcomes = run_outcome_workers_in_bounded_threads(
-                worker=_bake_one_slice,
-                worker_kwargs_list=[bake_worker_kwargs for _ in range(count)],
-                max_concurrency=max_concurrency,
-                thread_name_prefix="bake",
-                progress_noun="Slice bake",
-                describe_outcome=_describe_bake_outcome,
-                interruption_exception_types=(SliceBakeTerminatedError,),
-                on_join_interrupted=lambda: _handle_bake_join_interruption(is_main_thread),
+            if is_seed_phase_needed:
+                logger.info(
+                    "Box {} has no cached image tar for {}; seeding it with one slice before the fan-out",
+                    server.public_address,
+                    default_workspace_template_cache_tag,
+                )
+            seed_outcomes = (
+                _run_bake_fan_out(
+                    bake_worker_kwargs=bake_worker_kwargs,
+                    slice_count=1,
+                    max_concurrency=1,
+                    progress_noun="Seed slice bake",
+                    is_main_thread=is_main_thread,
+                    termination_event=bake_termination_event,
+                )
+                if is_seed_phase_needed
+                else []
             )
+            is_seed_failed = any(outcome.status == SliceBakeOutcomeStatus.FAILED for outcome in seed_outcomes)
+            if is_seed_failed:
+                logger.error(
+                    "Aborting the bake: the seed slice failed all {} attempts (its error is in the report); "
+                    "not attempting the remaining {} slice(s)",
+                    _SLICE_BAKE_ATTEMPT_COUNT,
+                    count - 1,
+                )
+            fill_count = 0 if is_seed_failed else count - len(seed_outcomes)
+            fill_outcomes = (
+                _run_bake_fan_out(
+                    bake_worker_kwargs=bake_worker_kwargs,
+                    slice_count=fill_count,
+                    max_concurrency=max_concurrency,
+                    progress_noun="Slice bake",
+                    is_main_thread=is_main_thread,
+                    termination_event=bake_termination_event,
+                )
+                if fill_count > 0
+                else []
+            )
+            outcomes = seed_outcomes + fill_outcomes
         except SliceBakeTerminatedError:
             # Top-level kill (e.g. the minds wrapper's subprocess timeout SIGTERMs us).
             # The fan-out's on_join_interrupted hook has already ignored further
@@ -1908,7 +2367,7 @@ def setup(
         raise BareMetalProvisioningError(f"server {server_id} has no serviceName/address; re-run await-delivery")
 
     client = build_ovh_client(_require_ovh_config())
-    with _pool_private_key_path() as private_key_path:
+    with pool_private_key_path() as private_key_path:
         pool_public_key = _derive_public_key(private_key_path)
         # Reinstall only from 'delivered'; re-running from 'installing' assumes the reinstall completed and
         # resumes at SSH-wait + prep. No DB connection is held across the (long) reinstall/prep waits.

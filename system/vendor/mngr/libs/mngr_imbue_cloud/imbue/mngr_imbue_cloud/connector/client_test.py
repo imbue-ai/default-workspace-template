@@ -14,10 +14,7 @@ from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
-from imbue.mngr_imbue_cloud.connector.client import _auth_policy_to_connector_body
-from imbue.mngr_imbue_cloud.connector.client import _parse_auth_policy
 from imbue.mngr_imbue_cloud.connector.client import create_litellm_key_rotating_on_exists
-from imbue.mngr_imbue_cloud.data_types import AuthPolicy
 from imbue.mngr_imbue_cloud.data_types import LeaseAttributes
 from imbue.mngr_imbue_cloud.data_types import LiteLLMKeyInfo
 from imbue.mngr_imbue_cloud.data_types import LiteLLMKeyMaterial
@@ -31,11 +28,14 @@ from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketNotEmptyError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketNotFoundError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudCleanupGrantBudgetError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudEmailNotVerifiedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudKeyError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudLeaseUnavailableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudQuotaExceededError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudShareError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncConflictError
-from imbue.mngr_imbue_cloud.errors import ImbueCloudTunnelError
+from imbue.mngr_imbue_cloud.errors import WorkspacesEndpointUnavailableError
+from imbue.mngr_imbue_cloud.primitives import WorkspaceStatus
 
 
 def _make_client(handler) -> tuple[ImbueCloudConnectorClient, httpx.MockTransport]:
@@ -46,6 +46,16 @@ def _make_client(handler) -> tuple[ImbueCloudConnectorClient, httpx.MockTranspor
     return ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com")), transport
 
 
+def _install_fake_transport(monkeypatch: pytest.MonkeyPatch, handler) -> None:
+    """Route the client's module-level httpx.* calls through a MockTransport.
+
+    Thin alias over ``_install_mock_httpx`` (defined below) for call sites
+    that construct their own client; sharing the one patch loop keeps the
+    test-patching ratchet count minimal.
+    """
+    _install_mock_httpx(monkeypatch, handler)
+
+
 def test_lease_host_503_raises_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         # An absent region must not be sent so the connector treats the lease as
@@ -54,13 +64,7 @@ def test_lease_host_503_raises_unavailable(monkeypatch: pytest.MonkeyPatch) -> N
         assert "region" not in body
         return httpx.Response(503, json={"detail": "no match"})
 
-    transport = httpx.MockTransport(handler)
-
-    def fake_post(*args, **kwargs):
-        with httpx.Client(transport=transport) as inner:
-            return inner.post(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "post", fake_post)
+    _install_fake_transport(monkeypatch, handler)
     client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
     with pytest.raises(ImbueCloudLeaseUnavailableError):
         client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=2), "ssh-ed25519 AAAA", "my-host")
@@ -89,13 +93,7 @@ def test_lease_host_success_parses_response(monkeypatch: pytest.MonkeyPatch) -> 
             },
         )
 
-    transport = httpx.MockTransport(handler)
-
-    def fake_post(*args, **kwargs):
-        with httpx.Client(transport=transport) as inner:
-            return inner.post(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "post", fake_post)
+    _install_fake_transport(monkeypatch, handler)
     client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
     result = client.lease_host(
         SecretStr("tok"),
@@ -121,13 +119,7 @@ def test_rename_host_success_posts_new_name(monkeypatch: pytest.MonkeyPatch) -> 
             json={"host_db_id": "00000000-0000-0000-0000-000000000009", "host_name": "new-name"},
         )
 
-    transport = httpx.MockTransport(handler)
-
-    def fake_post(*args, **kwargs):
-        with httpx.Client(transport=transport) as inner:
-            return inner.post(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "post", fake_post)
+    _install_fake_transport(monkeypatch, handler)
     client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
     client.rename_host(SecretStr("tok"), "00000000-0000-0000-0000-000000000009", "new-name")
 
@@ -139,13 +131,7 @@ def test_rename_host_error_raises_connector_error(monkeypatch: pytest.MonkeyPatc
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
 
-    transport = httpx.MockTransport(handler)
-
-    def fake_post(*args, **kwargs):
-        with httpx.Client(transport=transport) as inner:
-            return inner.post(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "post", fake_post)
+    _install_fake_transport(monkeypatch, handler)
     client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
     with pytest.raises(ImbueCloudConnectorError):
         client.rename_host(SecretStr("tok"), "00000000-0000-0000-0000-000000000009", "new-name")
@@ -155,13 +141,7 @@ def test_unauthenticated_responses_raise_auth_error(monkeypatch: pytest.MonkeyPa
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"detail": "no token"})
 
-    transport = httpx.MockTransport(handler)
-
-    def fake_get(*args, **kwargs):
-        with httpx.Client(transport=transport) as inner:
-            return inner.get(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "get", fake_get)
+    _install_fake_transport(monkeypatch, handler)
     client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
     with pytest.raises(ImbueCloudAuthError):
         client.list_hosts(SecretStr("tok"))
@@ -171,86 +151,66 @@ def test_500_lease_raises_connector_error(monkeypatch: pytest.MonkeyPatch) -> No
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
 
-    transport = httpx.MockTransport(handler)
-
-    def fake_post(*args, **kwargs):
-        with httpx.Client(transport=transport) as inner:
-            return inner.post(*args, **kwargs)
-
-    monkeypatch.setattr(httpx, "post", fake_post)
+    _install_fake_transport(monkeypatch, handler)
     client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
     with pytest.raises(ImbueCloudConnectorError):
         client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=1), "ssh-ed25519 X", "my-host")
 
 
-# -- AuthPolicy translation --
-#
-# The connector's API takes/returns the Cloudflare-native ``{"rules": [...]}``
-# shape; the plugin's ``AuthPolicy`` is the high-level ``emails / email_domains
-# / require_idp`` shape. The client translates at every wire boundary so the
-# plugin CLI's user-facing surface stays high-level. These tests pin the
-# translation -- before they existed, the bug went unnoticed and ``set
-# service auth`` failed at runtime with a 422 from the connector.
+# -- Auth email verification --
 
 
-def test_auth_policy_to_connector_body_translates_emails_domains_idps() -> None:
-    body = _auth_policy_to_connector_body(
-        AuthPolicy(
-            emails=("a@b.com", "c@d.com"),
-            email_domains=("e.com",),
-            require_idp=("idp1",),
-        )
-    )
-    assert body == {
-        "rules": [
-            {
-                "action": "allow",
-                "include": [
-                    {"email": {"email": "a@b.com"}},
-                    {"email": {"email": "c@d.com"}},
-                    {"email_domain": {"domain": "e.com"}},
-                    {"login_method": {"id": "idp1"}},
-                ],
-            }
-        ]
-    }
+def test_auth_is_email_verified_sends_bearer_token_and_parses_verified() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/auth/email/is-verified"
+        assert request.headers["Authorization"] == "Bearer at-secret"
+        assert _json.loads(request.content) == {"email": "alice@imbue.com"}
+        return httpx.Response(200, json={"verified": True})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    assert client.auth_is_email_verified(SecretStr("at-secret"), "alice@imbue.com") is True
 
 
-def test_auth_policy_to_connector_body_emits_empty_rules_for_empty_policy() -> None:
-    """An empty policy must serialize to ``{"rules": []}`` rather than a rule with an empty include."""
-    assert _auth_policy_to_connector_body(AuthPolicy()) == {"rules": []}
+def test_auth_send_verification_email_reports_cooldown_suppression() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/auth/email/send-verification"
+        assert request.headers["Authorization"] == "Bearer at-secret"
+        assert _json.loads(request.content) == {"email": "alice@imbue.com"}
+        return httpx.Response(200, json={"status": "OK", "sent": False})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    assert client.auth_send_verification_email(SecretStr("at-secret"), "alice@imbue.com") is False
 
 
-def test_parse_auth_policy_round_trips_emails_domains_idps() -> None:
-    original = AuthPolicy(
-        emails=("a@b.com", "c@d.com"),
-        email_domains=("e.com",),
-        require_idp=("idp1",),
-    )
-    assert _parse_auth_policy(_auth_policy_to_connector_body(original)) == original
+def test_auth_send_verification_email_raises_on_missing_sent() -> None:
+    """A 2xx body without a 'sent' bool is a broken contract, not a cooldown suppression."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "OK"})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudAuthError, match="Malformed send-verification response"):
+        client.auth_send_verification_email(SecretStr("at-secret"), "alice@imbue.com")
 
 
-def test_parse_auth_policy_handles_empty_response() -> None:
-    """``GET ... /auth`` returns ``{"rules": []}`` when no policy is configured."""
-    assert _parse_auth_policy({"rules": []}) == AuthPolicy()
+def test_auth_is_email_verified_raises_on_missing_verified() -> None:
+    """A 2xx body without a 'verified' bool is a broken contract, not "not verified"."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "OK"})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudAuthError, match="Malformed is-verified response"):
+        client.auth_is_email_verified(SecretStr("at-secret"), "alice@imbue.com")
 
 
-def test_parse_auth_policy_ignores_unknown_include_types() -> None:
-    """A future Cloudflare include shape (e.g. ``{"github": ...}``) must not break older clients."""
-    parsed = _parse_auth_policy(
-        {
-            "rules": [
-                {
-                    "action": "allow",
-                    "include": [
-                        {"email": {"email": "a@b.com"}},
-                        {"github": {"team": "secret"}},
-                    ],
-                }
-            ]
-        }
-    )
-    assert parsed == AuthPolicy(emails=("a@b.com",))
+def test_auth_is_email_verified_raises_auth_error_on_401() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "Invalid token"})
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudAuthError):
+        client.auth_is_email_verified(SecretStr("stale"), "alice@imbue.com")
 
 
 # -- R2 buckets --
@@ -447,21 +407,25 @@ def test_get_account_parses(monkeypatch: pytest.MonkeyPatch) -> None:
                 "plan_name": "ally",
                 "entitlements": {
                     "max_remote_workspaces": 10,
-                    "max_tunnels": 50,
-                    "max_services_per_tunnel": 10,
+                    "max_total_workspaces": 50,
                     "max_buckets": 20,
                     "max_total_bucket_bytes": 536870912000,
                     "monthly_llm_spend_usd": 1000.0,
                     "max_active_synced_workspaces": 200,
+                    # The connector serves these tunnel-era compat zeros for
+                    # v0.3.11 clients; this client must tolerate them.
+                    "max_tunnels": 0,
+                    "max_services_per_tunnel": 0,
                 },
                 "usage": {
                     "remote_workspaces": 2,
-                    "tunnels": 3,
+                    "total_workspaces": 3,
                     "buckets": 1,
                     "total_bucket_bytes": 12345,
                     "llm_spend_usd_this_period": 42.5,
                     "llm_budget_resets_at": "2026-08-01T00:00:00Z",
                     "active_synced_workspaces": 4,
+                    "tunnels": 0,
                 },
                 "available_plans": ["ally", "explorer"],
             },
@@ -471,7 +435,9 @@ def test_get_account_parses(monkeypatch: pytest.MonkeyPatch) -> None:
     info = client.get_account(SecretStr("tok"))
     assert info.plan_name == "ally"
     assert info.entitlements.max_remote_workspaces == 10
+    assert info.entitlements.max_total_workspaces == 50
     assert info.usage.llm_spend_usd_this_period == 42.5
+    assert info.usage.total_workspaces == 3
     assert info.available_plans == ("ally", "explorer")
 
 
@@ -617,8 +583,8 @@ def test_admin_account_endpoints_use_admin_paths(monkeypatch: pytest.MonkeyPatch
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
         if request.url.path.endswith("/quota"):
-            assert _json.loads(request.content) == {"entitlement": "max_tunnels", "value": 60.0}
-            return httpx.Response(200, json={"status": "updated", "entitlement": "max_tunnels", "value": 60})
+            assert _json.loads(request.content) == {"entitlement": "max_buckets", "value": 60.0}
+            return httpx.Response(200, json={"status": "updated", "entitlement": "max_buckets", "value": 60})
         if request.url.path.endswith("/plan"):
             return httpx.Response(200, json={"plan_name": "ally", "entitlements": {}})
         return httpx.Response(
@@ -629,8 +595,7 @@ def test_admin_account_endpoints_use_admin_paths(monkeypatch: pytest.MonkeyPatch
                 "plan_name": "explorer",
                 "entitlements": {
                     "max_remote_workspaces": 2,
-                    "max_tunnels": 50,
-                    "max_services_per_tunnel": 10,
+                    "max_total_workspaces": 6,
                     "max_buckets": 5,
                     "max_total_bucket_bytes": 53687091200,
                     "monthly_llm_spend_usd": 0.0,
@@ -638,7 +603,7 @@ def test_admin_account_endpoints_use_admin_paths(monkeypatch: pytest.MonkeyPatch
                 },
                 "usage": {
                     "remote_workspaces": 0,
-                    "tunnels": 0,
+                    "total_workspaces": 0,
                     "buckets": 0,
                     "total_bucket_bytes": 0,
                     "llm_spend_usd_this_period": 0.0,
@@ -652,7 +617,7 @@ def test_admin_account_endpoints_use_admin_paths(monkeypatch: pytest.MonkeyPatch
     info = client.admin_get_account(SecretStr("adm"), "alice@imbue.com")
     assert info.plan_name == "explorer"
     client.admin_set_account_plan(SecretStr("adm"), "alice@imbue.com", "ally")
-    client.admin_set_account_quota(SecretStr("adm"), "alice@imbue.com", "max_tunnels", 60)
+    client.admin_set_account_quota(SecretStr("adm"), "alice@imbue.com", "max_buckets", 60)
     assert seen == [
         "/admin/accounts/alice@imbue.com",
         "/admin/accounts/alice@imbue.com/plan",
@@ -785,23 +750,23 @@ def _install_flaky_httpx_get(
 
 def test_send_retries_transient_transport_error_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[])
+        return httpx.Response(200, json={"shares": []})
 
     client, state = _install_flaky_httpx_get(monkeypatch, fail_times=1, handler=handler)
     # One transport failure then a success: the retry rides it out and the call
     # returns normally rather than surfacing the blip.
-    assert client.list_tunnels(SecretStr("tok")) == []
+    assert client.list_shares(SecretStr("tok")) == []
     assert state["calls"] == 2
 
 
 def test_send_wraps_terminal_transport_error_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
     # The handler is never reached: every attempt fails at the transport layer.
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[])
+        return httpx.Response(200, json={"shares": []})
 
     client, state = _install_flaky_httpx_get(monkeypatch, fail_times=99, handler=handler)
-    with pytest.raises(ImbueCloudTunnelError) as exc_info:
-        client.list_tunnels(SecretStr("tok"))
+    with pytest.raises(ImbueCloudShareError) as exc_info:
+        client.list_shares(SecretStr("tok"))
     # Retried up to the cap, then a clean domain error -- no raw traceback leaks
     # into the message that routes surface to API callers.
     assert state["calls"] == 3
@@ -817,9 +782,23 @@ def test_send_does_not_retry_http_status_errors(monkeypatch: pytest.MonkeyPatch)
     client, state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
     # A 5xx is a response, not a transport error: it surfaces immediately via
     # ``_check`` without any retry.
-    with pytest.raises(ImbueCloudTunnelError):
-        client.list_tunnels(SecretStr("tok"))
+    with pytest.raises(ImbueCloudShareError):
+        client.list_shares(SecretStr("tok"))
     assert state["calls"] == 1
+
+
+def test_get_workspace_retries_transient_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_workspace is the start-poll target (one GET every few seconds for up
+    to 20 minutes): one transport blip must be retried, not abort the wait."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/workspaces/00000000-0000-0000-0000-000000000042"
+        return httpx.Response(200, json=_workspace_entry("running"))
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=1, handler=handler)
+    workspace = client.get_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
+    assert workspace.status == WorkspaceStatus.RUNNING
+    assert state["calls"] == 2
 
 
 # -- Workspace sync methods --
@@ -960,121 +939,6 @@ def test_sync_records_auth_error_raises(monkeypatch: pytest.MonkeyPatch) -> None
         client.list_sync_records(SecretStr("bad"))
 
 
-def test_find_tunnel_for_agent_parses_tunnel(monkeypatch: pytest.MonkeyPatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/tunnels/by-agent/agent-abc123"
-        return httpx.Response(200, json={"tunnel_name": "owner--abc123", "tunnel_id": "t-1", "services": ["web"]})
-
-    client, _state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
-    tunnel = client.find_tunnel_for_agent(SecretStr("tok"), "agent-abc123")
-    assert tunnel is not None
-    assert tunnel.tunnel_name == "owner--abc123"
-    assert tunnel.services == ("web",)
-
-
-def test_find_tunnel_for_agent_returns_none_on_200_null(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The up-to-date connector answers "no tunnel" with 200 + null; no O(n)
-    # enumeration fallback is triggered.
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/tunnels/by-agent/agent-abc123"
-        return httpx.Response(200, json=None)
-
-    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
-    assert client.find_tunnel_for_agent(SecretStr("tok"), "agent-abc123") is None
-    assert state["calls"] == 1
-
-
-def test_find_tunnel_for_agent_falls_back_to_list_on_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A connector that predates the by-agent endpoint 404s the unknown route;
-    # the client transparently falls back to enumerating GET /tunnels and
-    # matches on the trailing --<agent-prefix> slug.
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/tunnels/by-agent/agent-abc123":
-            return httpx.Response(404, json={"detail": "Not Found"})
-        assert request.url.path == "/tunnels"
-        return httpx.Response(
-            200,
-            json=[
-                {"tunnel_name": "owner--deadbeef", "tunnel_id": "t-0", "services": []},
-                {"tunnel_name": "owner--abc123", "tunnel_id": "t-1", "services": ["web"]},
-            ],
-        )
-
-    client, _state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
-    tunnel = client.find_tunnel_for_agent(SecretStr("tok"), "agent-abc123")
-    assert tunnel is not None
-    assert tunnel.tunnel_name == "owner--abc123"
-    assert tunnel.services == ("web",)
-
-
-def test_find_tunnel_for_agent_fallback_returns_none_when_no_match(monkeypatch: pytest.MonkeyPatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/tunnels/by-agent/agent-abc123":
-            return httpx.Response(404, json={"detail": "Not Found"})
-        return httpx.Response(200, json=[])
-
-    client, _state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
-    assert client.find_tunnel_for_agent(SecretStr("tok"), "agent-abc123") is None
-
-
-def test_enable_sharing_posts_combined_body_and_parses_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/sharing/enable"
-        body = _json.loads(request.content)
-        assert body["agent_id"] == "agent-abc123"
-        assert body["service_name"] == "web"
-        assert body["service_url"] == "http://localhost:8080"
-        assert body["auth_policy"]["rules"][0]["include"] == [{"email": {"email": "guest@y.com"}}]
-        return httpx.Response(
-            200,
-            json={
-                "tunnel": {"tunnel_name": "owner--abc123", "tunnel_id": "t-1", "token": "tok-1", "services": ["web"]},
-                "service": {
-                    "service_name": "web",
-                    "hostname": "web--abc123--owner.example.com",
-                    "service_url": "http://localhost:8080",
-                },
-            },
-        )
-
-    client = _install_mock_httpx(monkeypatch, handler)
-    tunnel, service = client.enable_sharing(
-        SecretStr("tok"),
-        "agent-abc123",
-        "web",
-        "http://localhost:8080",
-        AuthPolicy(emails=("guest@y.com",)),
-    )
-    assert tunnel.tunnel_name == "owner--abc123"
-    assert tunnel.token is not None
-    assert tunnel.token.get_secret_value() == "tok-1"
-    assert service.hostname == "web--abc123--owner.example.com"
-
-
-def test_enable_sharing_raises_on_malformed_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The well-formed "tunnel" half carries the cloudflared token, so the
-    # malformed-response error must describe the body's shape without leaking
-    # its contents (the message ends up in CLI stderr and client logs).
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "tunnel": {"tunnel_name": "owner--abc123", "tunnel_id": "t-1", "token": "SECRET-TUNNEL-TOKEN"},
-                "service": "nope",
-            },
-        )
-
-    client = _install_mock_httpx(monkeypatch, handler)
-    with pytest.raises(ImbueCloudTunnelError) as exc_info:
-        client.enable_sharing(
-            SecretStr("tok"), "agent-abc123", "web", "http://localhost:8080", AuthPolicy(emails=("a@b.com",))
-        )
-    message = str(exc_info.value)
-    assert "SECRET-TUNNEL-TOKEN" not in message
-    assert "tunnel" in message
-    assert "service" in message
-
-
 # ---------------------------------------------------------------------------
 # create_litellm_key_rotating_on_exists
 # ---------------------------------------------------------------------------
@@ -1211,3 +1075,509 @@ def test_rotating_create_errors_when_no_listable_key_matches_the_alias() -> None
 
     assert client.deleted_key_ids == []
     assert client.create_call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Shares (self-hosted relays)
+# ---------------------------------------------------------------------------
+
+_SHARE_HOST_ID = "host-" + "a" * 32
+_SHARE_DOMAIN = _SHARE_HOST_ID + "." + "b" * 32 + ".us1.imbueminds.com"
+
+
+def test_create_share_parses_token_and_domain(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shares"
+        assert _json.loads(request.content) == {"host_id": _SHARE_HOST_ID}
+        assert request.headers["authorization"] == "Bearer tok"
+        return httpx.Response(
+            200,
+            json={
+                "host_id": _SHARE_HOST_ID,
+                "workspace_domain": _SHARE_DOMAIN,
+                "region": "us1",
+                "relay_endpoints": [{"relay_id": "relay-" + "1" * 16, "endpoint": "relay-us1.infra.imbue.com:7000"}],
+                "relay_token": "secret-relay-token",
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    info = client.create_share(SecretStr("tok"), _SHARE_HOST_ID)
+
+    assert info.workspace_domain == _SHARE_DOMAIN
+    assert info.region == "us1"
+    assert info.state == "active"
+    assert [entry.endpoint for entry in info.relay_endpoints] == ["relay-us1.infra.imbue.com:7000"]
+    assert info.relay_endpoints[0].relay_id == "relay-" + "1" * 16
+    assert info.relay_token is not None
+    assert info.relay_token.get_secret_value() == "secret-relay-token"
+
+
+def test_create_share_sends_preferred_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shares"
+        assert _json.loads(request.content) == {"host_id": _SHARE_HOST_ID, "preferred_region": "us2"}
+        return httpx.Response(
+            200,
+            json={
+                "host_id": _SHARE_HOST_ID,
+                "workspace_domain": _SHARE_DOMAIN,
+                "region": "us2",
+                "relay_endpoints": [{"relay_id": "relay-" + "2" * 16, "endpoint": "relay-us2.infra.imbue.com:7000"}],
+                "relay_token": "secret-relay-token",
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    info = client.create_share(SecretStr("tok"), _SHARE_HOST_ID, preferred_region="us2")
+
+    assert info.region == "us2"
+
+
+def test_list_share_relays_parses(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shares/relays"
+        assert request.method == "GET"
+        assert request.headers["authorization"] == "Bearer tok"
+        return httpx.Response(
+            200,
+            json={
+                "relays": {
+                    "us1": ["relay-us1.infra.imbue.com:7000", "relay-us1b.infra.imbue.com:7000"],
+                    "us2": ["relay-us2.infra.imbue.com:7000"],
+                },
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    relay_map = client.list_share_relays(SecretStr("tok"))
+
+    assert relay_map.relay_endpoints_by_region == {
+        "us1": ("relay-us1.infra.imbue.com:7000", "relay-us1b.infra.imbue.com:7000"),
+        "us2": ("relay-us2.infra.imbue.com:7000",),
+    }
+
+
+@pytest.mark.parametrize(
+    "malformed_body",
+    [
+        {"unexpected": True},
+        # The old region -> single-endpoint shape: a non-list per-region value.
+        {"relays": {"us1": "relay-us1.infra.imbue.com:7000"}},
+    ],
+)
+def test_list_share_relays_raises_on_a_malformed_body(
+    monkeypatch: pytest.MonkeyPatch, malformed_body: dict[str, object]
+) -> None:
+    # A malformed body must raise rather than degrade to an empty or partial
+    # map (which would silently disable latency-based region picking).
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=malformed_body)
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    with pytest.raises(ImbueCloudShareError, match="malformed relays response"):
+        client.list_share_relays(SecretStr("tok"))
+
+
+def test_admin_relay_endpoints_use_admin_paths_and_parse_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    _relay_id = "relay-" + "1" * 16
+    relay_row = {
+        "relay_id": _relay_id,
+        "region": "us1",
+        "tunnel_endpoint": "198.51.100.7:7000",
+        "ip_address": "198.51.100.7",
+        "instance_name": "share-relay-staging-us1-1",
+        "is_active": True,
+        "health": "healthy",
+        "consecutive_probe_failures": 0,
+    }
+    seen: list[tuple[str, str]] = []
+    posted_bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        assert request.headers["Authorization"] == "Bearer adm"
+        if request.method == "GET":
+            return httpx.Response(200, json={"relays": [relay_row]})
+        if request.method == "POST":
+            posted_bodies.append(_json.loads(request.content))
+            return httpx.Response(200, json=relay_row)
+        return httpx.Response(200, json={"relay_id": _relay_id, "is_active": False})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    listed = client.admin_list_relays(SecretStr("adm"))
+    assert [row.relay_id for row in listed] == [_relay_id]
+    assert listed[0].health == "healthy"
+
+    # Without a relay id, the body omits the key (the connector mints one);
+    # with an id, it re-registers/revives that relay in place.
+    registered = client.admin_register_relay(
+        SecretStr("adm"),
+        relay_id=None,
+        region="us1",
+        tunnel_endpoint="198.51.100.7:7000",
+        ip_address="198.51.100.7",
+        instance_name="share-relay-staging-us1-1",
+    )
+    assert registered.relay_id == _relay_id
+    client.admin_register_relay(
+        SecretStr("adm"),
+        relay_id=_relay_id,
+        region="us1",
+        tunnel_endpoint="198.51.100.7:7000",
+        ip_address="198.51.100.7",
+        instance_name="share-relay-staging-us1-1",
+    )
+    assert "relay_id" not in posted_bodies[0]
+    assert posted_bodies[1]["relay_id"] == _relay_id
+
+    retired = client.admin_retire_relay(SecretStr("adm"), _relay_id)
+    assert retired == {"relay_id": _relay_id, "is_active": False}
+
+    assert seen == [
+        ("GET", "/admin/relays"),
+        ("POST", "/admin/relays"),
+        ("POST", "/admin/relays"),
+        ("DELETE", f"/admin/relays/{_relay_id}"),
+    ]
+
+
+def test_create_share_quota_surfaces_as_quota_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "detail": {
+                    "code": "quota_exceeded",
+                    "entitlement": "max_shared_workspaces",
+                    "limit": 50,
+                    "current": 50,
+                    "message": "too many",
+                }
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    with pytest.raises(ImbueCloudQuotaExceededError):
+        client.create_share(SecretStr("tok"), _SHARE_HOST_ID)
+
+
+def test_create_share_server_error_raises_share_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"detail": "sharing not configured"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    with pytest.raises(ImbueCloudShareError):
+        client.create_share(SecretStr("tok"), _SHARE_HOST_ID)
+
+
+def test_get_share_status_returns_none_on_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "No share found"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    assert client.get_share_status(SecretStr("tok"), _SHARE_HOST_ID) is None
+
+
+def test_get_share_status_parses_status_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/shares/{_SHARE_HOST_ID}/status"
+        return httpx.Response(
+            200,
+            json={
+                "host_id": _SHARE_HOST_ID,
+                "workspace_domain": _SHARE_DOMAIN,
+                "region": "us1",
+                "state": "active",
+                "relay_endpoints": [{"relay_id": "relay-" + "1" * 16, "endpoint": "relay-us1.infra.imbue.com:7000"}],
+                "relays": [{"relay_id": "relay-" + "1" * 16, "last_login_at": "2026-07-29 01:02:03+00:00"}],
+                "last_tunnel_login_at": "2026-07-29 01:02:03+00:00",
+                "cert_not_after": "2026-10-01 00:00:00+00:00",
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    info = client.get_share_status(SecretStr("tok"), _SHARE_HOST_ID)
+
+    assert info is not None
+    assert info.state == "active"
+    assert info.last_tunnel_login_at == "2026-07-29 01:02:03+00:00"
+    # The per-relay login stamps identify WHICH relay the tunnel reached.
+    assert [(entry.relay_id, entry.last_login_at) for entry in info.relays] == [
+        ("relay-" + "1" * 16, "2026-07-29 01:02:03+00:00")
+    ]
+    assert info.cert_not_after == "2026-10-01 00:00:00+00:00"
+    assert info.relay_token is None
+
+
+def test_delete_share_hits_the_share_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        return httpx.Response(200, json={"host_id": _SHARE_HOST_ID, "state": "inactive"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    client.delete_share(SecretStr("tok"), _SHARE_HOST_ID)
+
+    assert seen_paths == [f"/shares/{_SHARE_HOST_ID}"]
+
+
+def test_list_shares_parses_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shares"
+        return httpx.Response(
+            200,
+            json={
+                "shares": [
+                    {
+                        "host_id": _SHARE_HOST_ID,
+                        "workspace_domain": _SHARE_DOMAIN,
+                        "region": "us1",
+                        "state": "inactive",
+                    }
+                ]
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    items = client.list_shares(SecretStr("tok"))
+
+    assert len(items) == 1
+    assert items[0].host_id == _SHARE_HOST_ID
+    assert items[0].state == "inactive"
+
+
+# ----------------------------------------------------------------------
+# Browser-login support probe + device-token exchange
+# ----------------------------------------------------------------------
+
+
+def _make_transport_client(handler) -> ImbueCloudConnectorClient:
+    """Client using the injected-transport seam (no module-level httpx patching)."""
+    return ImbueCloudConnectorClient(
+        base_url=AnyUrl("https://example.com"),
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_supports_browser_login_true_when_accounts_config_is_served() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/accounts/api/config"
+        return httpx.Response(200, json={"turnstile_site_key": "", "google_enabled": False})
+
+    assert _make_transport_client(handler).supports_browser_login() is True
+
+
+def test_supports_browser_login_false_when_the_connector_is_too_old() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    assert _make_transport_client(handler).supports_browser_login() is False
+
+
+def test_auth_device_token_maps_404_to_a_too_old_connector_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    client = _make_transport_client(handler)
+    with pytest.raises(ImbueCloudAuthError, match="minds env deploy"):
+        client.auth_device_token(code="c", code_verifier="v", redirect_uri="http://127.0.0.1:1/callback")
+
+
+def test_auth_device_token_parses_a_successful_exchange() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _json.loads(request.content)
+        assert body == {"code": "c", "code_verifier": "v", "redirect_uri": "http://127.0.0.1:1/callback"}
+        return httpx.Response(
+            200,
+            json={
+                "status": "OK",
+                "user": {"user_id": "u-1", "email": "a@example.com", "display_name": None},
+                "tokens": {"access_token": "at", "refresh_token": "rt"},
+            },
+        )
+
+    response = _make_transport_client(handler).auth_device_token(
+        code="c", code_verifier="v", redirect_uri="http://127.0.0.1:1/callback"
+    )
+    assert response.status == "OK"
+    assert response.tokens == {"access_token": "at", "refresh_token": "rt"}
+
+
+def test_auth_revoke_current_session_treats_success_and_401_as_revoked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """200/204/401 all count as revoked (401 = already revoked); no fallback call is made."""
+    for status_code in (200, 204, 401):
+        calls: list[str] = []
+
+        def handler(request: httpx.Request, calls: list[str] = calls, status_code: int = status_code):
+            calls.append(request.url.path)
+            return httpx.Response(status_code)
+
+        client = _install_mock_httpx(monkeypatch, handler)
+        client.auth_revoke_current_session(SecretStr("tok"))
+        assert calls == ["/auth/session/revoke-current"]
+
+
+def test_auth_revoke_current_session_falls_back_to_revoke_all_on_an_old_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connector without the device-scoped route (404) gets the revoke-all fallback, so the token never stays live."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/auth/session/revoke-current":
+            return httpx.Response(404, json={"detail": "Not Found"})
+        return httpx.Response(204)
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    client.auth_revoke_current_session(SecretStr("tok"))
+    assert calls == ["/auth/session/revoke-current", "/auth/session/revoke"]
+
+
+def test_auth_revoke_current_session_raises_on_server_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudAuthError, match="Revoke failed"):
+        client.auth_revoke_current_session(SecretStr("tok"))
+
+
+def test_set_account_plan_maps_structured_verification_403_to_typed_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/account/plan"
+        return httpx.Response(
+            403,
+            json={
+                "detail": {
+                    "code": "email_not_verified",
+                    "email": "alice@example.com",
+                    "message": "This action requires a verified email address (alice@example.com).",
+                }
+            },
+        )
+
+    client = _make_transport_client(handler)
+    with pytest.raises(ImbueCloudEmailNotVerifiedError) as exc_info:
+        client.set_account_plan(SecretStr("tok"), "ally")
+    assert exc_info.value.email == "alice@example.com"
+
+
+def _workspace_entry(status: str = "stopped") -> dict:
+    return {
+        "host_db_id": "00000000-0000-0000-0000-000000000042",
+        "status": status,
+        "vps_address": None if status == "stopped" else "10.0.0.9",
+        "ssh_port": None if status == "stopped" else 22000,
+        "ssh_user": "root",
+        "container_ssh_port": None if status == "stopped" else 22001,
+        "agent_id": "agent-abc",
+        "host_id": "host-" + "a" * 32,
+        "host_name": "my-workspace",
+        "attributes": {"cpus": 2},
+        "leased_at": "2026-01-01T00:00:00+00:00",
+        "stop_requested_at": "2026-01-02T00:00:00+00:00",
+        "stopped_at": "2026-01-02T00:20:00+00:00" if status == "stopped" else None,
+        "transition_error": None,
+    }
+
+
+def test_list_workspaces_parses_all_lifecycle_states(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/workspaces"
+        return httpx.Response(200, json=[_workspace_entry("running"), _workspace_entry("stopped")])
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    workspaces = client.list_workspaces(SecretStr("tok"))
+
+    assert [w.status for w in workspaces] == [WorkspaceStatus.RUNNING, WorkspaceStatus.STOPPED]
+    assert workspaces[0].vps_address == "10.0.0.9"
+    assert workspaces[1].vps_address is None
+    assert workspaces[1].container_ssh_port is None
+
+
+def test_list_workspaces_raises_unavailable_on_old_connector(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(WorkspacesEndpointUnavailableError):
+        client.list_workspaces(SecretStr("tok"))
+
+
+def test_stop_workspace_404_with_specific_detail_is_not_the_old_connector_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A modern connector's own 404 (e.g. the row was released concurrently)
+    carries a specific detail and must surface as a real error, not be
+    misdiagnosed as a connector without the /workspaces endpoints."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "No such workspace"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudConnectorError) as excinfo:
+        client.stop_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
+    assert not isinstance(excinfo.value, WorkspacesEndpointUnavailableError)
+    assert "No such workspace" in str(excinfo.value)
+
+
+def test_stop_workspace_returns_wire_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/workspaces/00000000-0000-0000-0000-000000000042/stop"
+        return httpx.Response(202, json={"host_db_id": "00000000-0000-0000-0000-000000000042", "status": "stopping"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    status = client.stop_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
+
+    assert status == WorkspaceStatus.STOPPING
+
+
+def test_start_workspace_surfaces_quota_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "detail": {
+                    "code": "quota_exceeded",
+                    "entitlement": "max_remote_workspaces",
+                    "limit": 2,
+                    "current": 2,
+                    "message": "over quota",
+                }
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudQuotaExceededError):
+        client.start_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
+
+
+def test_admin_abandon_workspace_posts_reason_with_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("authorization")
+        seen["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"host_db_id": "00000000-0000-0000-0000-000000000042", "status": "crashed"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    client.admin_abandon_workspace(SecretStr("adminkey"), "00000000-0000-0000-0000-000000000042", "box died")
+
+    assert seen["path"] == "/admin/workspaces/00000000-0000-0000-0000-000000000042/abandon"
+    assert seen["auth"] == "Bearer adminkey"
+    assert seen["body"] == {"reason": "box died"}

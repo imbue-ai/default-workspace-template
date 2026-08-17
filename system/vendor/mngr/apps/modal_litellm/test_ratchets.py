@@ -122,7 +122,7 @@ def test_prevent_yaml_usage() -> None:
     # local-dev litellm_proxy/config.yaml (yaml.safe_load) to assert it stays
     # in sync with app.py. These are references to litellm's externally-required
     # format, not new YAML config of our own.
-    rc.check_yaml_usage(_DIR, snapshot(10))
+    rc.check_yaml_usage(_DIR, snapshot(9))
 
 
 def test_prevent_functools_partial() -> None:
@@ -298,3 +298,10 @@ def test_prevent_per_file_host_upload() -> None:
 
 def test_prevent_code_in_init_files() -> None:
     rc.check_code_in_init_files(_DIR, snapshot(0))
+
+
+# --- Modal images ---
+
+
+def test_prevent_unpinned_modal_pip_install() -> None:
+    rc.check_unpinned_modal_pip_install(_DIR, snapshot(0))

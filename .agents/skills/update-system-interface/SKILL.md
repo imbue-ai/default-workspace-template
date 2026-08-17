@@ -81,7 +81,7 @@ specifics:
   `update-$SLUG` / `mngr/update-$SLUG`; the runtime dir is
   `data/.tasks/harden/update-$SLUG/`.
 - **Task-file frontmatter:** `operation: update`, `type: system-interface`,
-  plus the standard `lead_agent` / `finish_report_path`
+  plus the standard `finish_report_path`
   (`data/.tasks/harden/update-$SLUG/reports/report.md`). Per the system-interface
   exception in `op-update.md`, there is **no `## Change origin` marker** -- the
   body is a plain change brief, not an absorb/verify incident.
@@ -121,7 +121,7 @@ specifics:
   A change can be partly both -- anchored in a real conversation but adding
   something new -- in which case name the real anchor and call out the new part.
   Use your judgment.
-- **Launch** with `--template subskill-worker` (installs the generic
+- **Launch** with `--template worker` (installs the generic
   `harden-worker`) per `update-creation` Step 3, then background-poll per
   `.agents/shared/references/lead-proxy.md`.
 - **Terminal handling differs:** the system interface emits no gate, and on
@@ -272,10 +272,12 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Pre-flights a backend change** by booting the merged code on a throwaway port
   before touching the live service. If it can't boot, the live service is never
   restarted -- the UI never goes down.
-- **Reveals**: rebuilds the gitignored `static/` bundle and broadcasts a
-  `reload_system_interface` op so open browsers reload into the new assets
-  (frontend); restarts the services agent so the editable backend re-imports the
-  merged `.py` (backend).
+- **Reveals**: rebuilds the gitignored `static/` bundle (frontend); restarts the
+  services agent so the editable backend re-imports the merged `.py` (backend).
+- **Rebuilds the user's view** afterwards, via
+  `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
+  since the restart leaves the open page rendering what it had already fetched.
+  Best-effort: it never fails a reveal that landed.
 - **Verifies** the live service is healthy by polling its loopback endpoint.
 - **Auto-rolls-back on any failure**: restores the tree to `--rollback-to` as a
   forward revert commit, rebuilds/restarts from it, and re-confirms the UI is

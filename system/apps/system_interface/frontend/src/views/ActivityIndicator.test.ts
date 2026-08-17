@@ -6,7 +6,7 @@ function userMsg(ts: string): TranscriptEvent {
   return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content: "hi" };
 }
 
-function toolUse(ts: string, toolName: string, callId: string, input: string): TranscriptEvent {
+function toolUse(ts: string, toolName: string, callId: string, input: string, caption?: string): TranscriptEvent {
   return {
     timestamp: ts,
     type: "assistant_message",
@@ -14,10 +14,13 @@ function toolUse(ts: string, toolName: string, callId: string, input: string): T
     source: "test",
     model: "test-model",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_preview: input }],
+    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_preview: input, caption_label: caption }],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -56,146 +59,45 @@ describe("labelForActivityState — fixed-label states", () => {
   });
 });
 
-describe("labelForActivityState — TOOL_RUNNING transcript enrichment", () => {
-  it("labels Read with the file basename", () => {
+describe("labelForActivityState — TOOL_RUNNING caption", () => {
+  // The caption is whatever the harness's parser put on the call, so this view
+  // renders the same way for every harness -- these two cases differ only in the
+  // label the backend supplied.
+  it("renders the caption the parser attached to a claude tool call", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"src/themes/midnight.ts"}'),
+      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"src/midnight.ts"}', "Reading midnight.ts"),
     ];
     expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Reading midnight.ts");
   });
 
-  it("labels Edit / MultiEdit with file basename", () => {
+  it("renders the caption the parser attached to a codex code-mode exec", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Edit", "tc1", '{"file_path":"server/routes/reports.ts"}'),
+      toolUse("2026-04-28T01:00:01Z", "exec", "tc1", 'await tools.exec_command({"cmd":"ls -la"})', "Running ls -la"),
     ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Editing reports.ts");
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running ls -la");
   });
 
-  it("labels Bash with the agent-supplied description, not the raw command", () => {
+  it("picks the most recent unmatched tool call, skipping resolved ones", () => {
     const events = [
       userMsg("2026-04-28T01:00:00Z"),
-      toolUse(
-        "2026-04-28T01:00:01Z",
-        "Bash",
-        "tc1",
-        '{"command":"git status -uno --porcelain","description":"Check working tree status"}',
-      ),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running Check working tree status");
-  });
-
-  it("falls back to the raw command when Bash has no description", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Bash", "tc1", '{"command":"npm test"}'),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running npm test");
-  });
-
-  it("falls back to the raw command when Bash description is empty/whitespace", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Bash", "tc1", '{"command":"npm test","description":"   "}'),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running npm test");
-  });
-
-  it("labels Grep with the pattern in quotes", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Grep", "tc1", '{"pattern":"registerTheme"}'),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe('Searching "registerTheme"');
-  });
-
-  it("labels Skill with 'Loading skill…' when no target", () => {
-    const events = [userMsg("2026-04-28T01:00:00Z"), toolUse("2026-04-28T01:00:01Z", "Skill", "tc1", "{}")];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Loading skill…");
-  });
-
-  it("labels Skill with the skill name from the input", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Skill", "tc1", '{"skill":"autofix"}'),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Loading skill autofix");
-  });
-
-  it("labels WebSearch with the search query", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "WebSearch", "tc1", '{"query":"playwright MCP setup"}'),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe('Searching the web "playwright MCP setup"');
-  });
-
-  it("labels WebFetch with the URL from the input", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "WebFetch", "tc1", '{"url":"https://example.com/docs","prompt":"summarize"}'),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Fetching page https://example.com/docs");
-  });
-
-  it("labels WebFetch with 'Fetching page…' when no target", () => {
-    const events = [userMsg("2026-04-28T01:00:00Z"), toolUse("2026-04-28T01:00:01Z", "WebFetch", "tc1", "{}")];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Fetching page…");
-  });
-
-  it("labels MCP tools by parsing the tool name", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "mcp__plugin_playwright_playwright__browser_click", "tc1", "{}"),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running browser click");
-  });
-
-  it("labels MCP tools with simple namespace", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "mcp__sculptor__ask_user_question", "tc1", "{}"),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running ask user question");
-  });
-
-  it("falls back to target from input params for unknown non-MCP tools", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "SomeNewTool", "tc1", '{"description":"doing something useful"}'),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running doing something useful");
-  });
-
-  it("falls back to 'Running tool…' for unknown tools with no parseable input", () => {
-    const events = [userMsg("2026-04-28T01:00:00Z"), toolUse("2026-04-28T01:00:01Z", "SomeNewTool", "tc1", "{}")];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running tool…");
-  });
-
-  it("returns 'Delegating to sub-agent…' for Agent / Task tools", () => {
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Agent", "tc1", '{"description":"do it"}'),
-    ];
-    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Delegating to sub-agent…");
-  });
-
-  it("ignores tool calls that already have a matching tool_result when picking the pending one", () => {
-    // First tool already resolved, second tool is the active one.
-    const events = [
-      userMsg("2026-04-28T01:00:00Z"),
-      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"old.ts"}'),
+      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"old.ts"}', "Reading old.ts"),
       toolResult("2026-04-28T01:00:02Z", "tc1"),
-      toolUse("2026-04-28T01:00:03Z", "Read", "tc2", '{"file_path":"new.ts"}'),
+      toolUse("2026-04-28T01:00:03Z", "Read", "tc2", '{"file_path":"new.ts"}', "Reading new.ts"),
     ];
     expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Reading new.ts");
   });
 
-  it("falls back to 'Running tool…' when state is TOOL_RUNNING but no pending tool call is visible yet (timing race)", () => {
-    // Backend already detected a tool_use, but the frontend's transcript
-    // stream hasn't surfaced it yet, or every visible tool_use has been
-    // matched by a tool_result on the frontend's side.
+  it("falls back to 'Running tool…' for a call parsed before labels existed", () => {
+    const events = [
+      userMsg("2026-04-28T01:00:00Z"),
+      toolUse("2026-04-28T01:00:01Z", "Read", "tc1", '{"file_path":"old.ts"}'),
+    ];
+    expect(labelForActivityState("TOOL_RUNNING", events)).toBe("Running tool…");
+  });
+
+  it("falls back to 'Running tool…' when no pending tool call is visible yet (timing race)", () => {
     expect(labelForActivityState("TOOL_RUNNING", [userMsg("2026-04-28T01:00:00Z")])).toBe("Running tool…");
   });
 });

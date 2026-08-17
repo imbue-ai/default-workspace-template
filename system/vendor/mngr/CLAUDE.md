@@ -61,6 +61,7 @@ Only after doing all of the above should you begin writing code.
 - Do NOT create tests that code raises NotImplementedError.
 - If you see a flaky test, YOU MUST HIGHLIGHT THIS IN YOUR RESPONSE. Mark it with `@pytest.mark.flaky` so offload retries it automatically. Then try to fix the underlying flakiness in a separate commit. First investigate *why* the test is flaky. If it can be made more robust, do so. If the test is correct but it fundamentally requires additional time, increase the timeout for that individual test (but do NOT allow unreasonably long timeouts--in such a case, prefer to leave the test marked as flaky instead, eg, if this happened because of a weird infrastructure level fluke that sometimes makes an operation take *much* longer).
 - Do not add TODO or FIXME unless explicitly asked to do so
+- Mark rollout-bridging code (compat shims, migration guards) with a `# CLEANUP:` comment stating what can be removed and when (see style_guide.md); after a deploy, grep for `CLEANUP:` and remove entries whose time has come.
 - Code must work on both macOS and Linux. It's ok if it doesn't work on Windows.
 - `mngr` is installed by end users from PyPI, so the built wheel must be self-contained: it only packages the `imbue` package (`packages = ["imbue"]`), so production code must not read files outside it at runtime unless they're shipped into the package (e.g. via wheel `force-include`, as the help-topic docs are).
 - To reiterate: code correctness and quality is the most important concern when writing code.

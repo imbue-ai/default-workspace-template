@@ -96,7 +96,10 @@ class EnvelopeWriter(MutableModel):
         )
 
     def emit_resolver_snapshot(self, services_by_agent: dict[str, dict[str, str]]) -> None:
-        """Emit a ``resolver_snapshot`` plugin event with the current per-agent service map.
+        """Emit a ``resolver_snapshot`` plugin event with the current per-instance service map.
+
+        The map is keyed by agent instance key (``<agent_id>@<host_id>``; see
+        :class:`~imbue.mngr_forward.data_types.ResolverSnapshotPayload`).
 
         Sent on every resolver mutation. Carries the full map so a
         late-attaching consumer only needs the latest envelope to be in sync.
@@ -107,10 +110,14 @@ class EnvelopeWriter(MutableModel):
     def emit_system_interface_backend_failure(self, payload: SystemInterfaceBackendFailurePayload) -> None:
         """Emit a ``system_interface_backend_failure`` plugin event.
 
-        Surfaces a per-agent backend failure observed in the forwarding
-        path so a downstream consumer can apply its own restart-recovery
-        policy. The plugin remains a dumb reverse proxy -- this is the
-        only forwarding-failure signal it exposes outside its own logs.
+        Surfaces a per-agent observation from the forwarding path so a
+        downstream consumer can apply its own restart-recovery policy. The
+        plugin remains a dumb reverse proxy -- this is the only per-agent
+        backend signal it exposes outside its own logs.
+
+        ``payload.reason`` says what was observed, and not every reason
+        reports a failed request: ``STALLED`` reports one still in flight
+        that may yet succeed. See ``SystemInterfaceBackendFailureReason``.
         """
         self._write_envelope(
             {

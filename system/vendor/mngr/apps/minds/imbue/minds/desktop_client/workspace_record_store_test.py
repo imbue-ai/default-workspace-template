@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from imbue.imbue_common.model_update import to_update
 from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backup_env_store import write_canonical_env
 from imbue.minds.desktop_client.conftest import FakeImbueCloudCli
 from imbue.minds.desktop_client.conftest import make_agents_json
@@ -18,17 +19,21 @@ from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
 from imbue.minds.desktop_client.conftest import make_resolver_with_data
 from imbue.minds.desktop_client.conftest import seed_provider_snapshots
 from imbue.minds.desktop_client.dek_store import ensure_dek
+from imbue.minds.desktop_client.testing import device_id_for_test
 from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_ACTIVE
 from imbue.minds.desktop_client.workspace_record_store import RECORD_STATE_DESTROYED
 from imbue.minds.desktop_client.workspace_record_store import ReplicaRecord
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
+from imbue.minds.desktop_client.workspace_record_store import WorkspaceSecretsPayload
 from imbue.minds.desktop_client.workspace_record_store import collect_ssh_key_material
 from imbue.minds.desktop_client.workspace_record_store import derive_openssh_public_key_line
-from imbue.minds.desktop_client.workspace_record_store import merge_known_hosts_text
 from imbue.minds.errors import WorkspaceSyncError
 from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.providers.host_key_store import HostKeyOrigin
+from imbue.mngr.providers.host_key_store import pin_host_key
 
 _EMAIL = "alice@example.com"
 
@@ -42,7 +47,7 @@ def _make_store(paths: WorkspacePaths, cli: FakeImbueCloudCli | None = None) -> 
     return WorkspaceRecordStore(
         paths=paths,
         cli=cli if cli is not None else make_fake_imbue_cloud_cli(),
-        device_id="device-test-1",
+        device_id=device_id_for_test("store-test-1"),
         device_label="test-laptop",
     )
 
@@ -452,7 +457,7 @@ def test_reconcile_tombstones_definitively_absent_local_rows(paths: WorkspacePat
             host_id="host-gone",
             agent_id=gone_agent,
             provider_kind="local",
-            hosting_device_id="device-test-1",
+            hosting_device_id=device_id_for_test("store-test-1"),
         ),
     )
     # Discovery completed and knows about a different workspace only.
@@ -516,7 +521,7 @@ def test_reconcile_does_not_tombstone_unenriched_create_seed_rows(paths: Workspa
         agent_id=_agent_id(),
         display_name="brand new",
         provider_kind="",
-        hosting_device_id="device-test-1",
+        hosting_device_id=device_id_for_test("store-test-1"),
         device_label="test-laptop",
     )
     store.upsert_local_record(user_id, _EMAIL, seed)
@@ -530,12 +535,12 @@ def test_reconcile_does_not_tombstone_unenriched_create_seed_rows(paths: Workspa
     assert records[0].state == RECORD_STATE_ACTIVE
 
 
-def test_reconcile_without_a_device_id_never_tombstones(paths: WorkspacePaths) -> None:
-    """An install with no device id (missing mngr host_id file) cannot tell its
-    own hosted rows apart from another id-less install's, so it must not
-    tombstone anything -- an empty-id row may be hosted live elsewhere."""
+def test_reconcile_never_tombstones_rows_with_empty_provenance(paths: WorkspacePaths) -> None:
+    """Bug-era rows pushed with ``hosting_device_id=""`` (an install whose first
+    session predated the minds-owned device id) attribute to no install, so
+    absent-host tombstoning must leave them alone."""
     cli = make_fake_imbue_cloud_cli()
-    store = WorkspaceRecordStore(paths=paths, cli=cli, device_id="", device_label="test-laptop")
+    store = _make_store(paths, cli)
     user_id = _user_id()
     remote = ReplicaRecord(
         host_id="host-idless",
@@ -575,48 +580,77 @@ def test_reconcile_does_not_tombstone_other_device_rows(paths: WorkspacePaths) -
     assert records[0].state == RECORD_STATE_ACTIVE
 
 
-def test_collect_ssh_key_material_finds_per_host_keys(tmp_path: Path) -> None:
+def _make_mngr_profile_dir(tmp_path: Path) -> tuple[Path, Path]:
+    """A minimal mngr host dir with one active profile; returns (mngr_host_dir, profile_dir)."""
     mngr_dir = tmp_path / "mngr"
     profile_dir = mngr_dir / "profiles" / "profile1"
-    (mngr_dir / "config.toml").parent.mkdir(parents=True, exist_ok=True)
+    profile_dir.mkdir(parents=True)
     (mngr_dir / "config.toml").write_text('profile = "profile1"\n')
-    host_dir = profile_dir / "providers" / "imbue_cloud_alice" / "imbue_cloud_alice" / "hosts" / "host-abc"
+    return mngr_dir, profile_dir
+
+
+def _make_per_host_key_dir(profile_dir: Path, host_id: str) -> Path:
+    host_dir = profile_dir / "providers" / "imbue_cloud_alice" / "imbue_cloud_alice" / "hosts" / host_id
     host_dir.mkdir(parents=True)
+    return host_dir
+
+
+def test_collect_ssh_key_material_finds_per_host_keys(tmp_path: Path) -> None:
+    mngr_dir, profile_dir = _make_mngr_profile_dir(tmp_path)
+    host_dir = _make_per_host_key_dir(profile_dir, "host-abc")
     (host_dir / "ssh_key").write_text("PRIVATE-KEY-BYTES")
     (host_dir / "known_hosts").write_text("[1.2.3.4]:2222 ssh-ed25519 AAAA")
 
-    private_key, known_hosts = collect_ssh_key_material(mngr_dir, "imbue_cloud_alice", "host-abc")
+    private_key, known_hosts = collect_ssh_key_material(mngr_dir, "host-abc")
 
     assert private_key == "PRIVATE-KEY-BYTES"
-    assert known_hosts is not None and "ssh-ed25519" in known_hosts
+    assert known_hosts == "[1.2.3.4]:2222 ssh-ed25519 AAAA\n"
+
+
+def test_collect_ssh_key_material_renders_clean_pins_from_the_store(tmp_path: Path) -> None:
+    """The record carries the store's current pins -- one per (endpoint, keytype) --
+    not the file's raw lines: a stale duplicate an old append-only writer left in
+    the file collapses to the live pin instead of entering the record."""
+    mngr_dir, profile_dir = _make_mngr_profile_dir(tmp_path)
+    host_id = HostId.generate()
+    host_dir = _make_per_host_key_dir(profile_dir, str(host_id))
+    (host_dir / "ssh_key").write_text("PRIVATE-KEY-BYTES")
+    (host_dir / "known_hosts").write_text(
+        "[1.2.3.4]:22001 ssh-ed25519 AAAA-stale\n[1.2.3.4]:22001 ssh-ed25519 AAAA-live\n"
+    )
+    pin_host_key(host_dir / "known_hosts", "1.2.3.4", 23001, "ssh-ed25519 AAAA-vm", host_id, HostKeyOrigin.USER)
+
+    _, known_hosts = collect_ssh_key_material(mngr_dir, str(host_id))
+
+    assert known_hosts == "[1.2.3.4]:22001 ssh-ed25519 AAAA-live\n[1.2.3.4]:23001 ssh-ed25519 AAAA-vm\n"
+
+
+def test_collect_ssh_key_material_never_collects_provider_wide_keys(tmp_path: Path) -> None:
+    """A synced record may only ever carry a key that opens its one host -- the lima
+    provider-wide root key (which opens ALL of the user's lima VMs) must not be
+    collected even for lima-hosted workspaces."""
+    mngr_dir, profile_dir = _make_mngr_profile_dir(tmp_path)
+    lima_keys_dir = profile_dir / "providers" / "lima" / "lima" / "keys"
+    lima_keys_dir.mkdir(parents=True)
+    (lima_keys_dir / "root_ssh_key").write_text("PROVIDER-WIDE-KEY")
+    (lima_keys_dir / "hosts").write_text("[127.0.0.1]:60022 ssh-ed25519 AAAA")
+
+    assert collect_ssh_key_material(mngr_dir, "host-lima-1") == (None, None)
 
 
 def test_collect_ssh_key_material_returns_none_when_uninitialized(tmp_path: Path) -> None:
-    assert collect_ssh_key_material(tmp_path / "missing", "lima", "host-x") == (None, None)
+    assert collect_ssh_key_material(tmp_path / "missing", "host-x") == (None, None)
 
 
-def test_merge_known_hosts_text_appends_only_missing_lines() -> None:
-    existing = "[1.2.3.4]:22 ssh-ed25519 AAAA-pinned\n"
-    synced = "[1.2.3.4]:22 ssh-ed25519 AAAA-pinned\n[1.2.3.4]:2222 ssh-ed25519 AAAA-outer\n"
+def test_workspace_secrets_payload_tolerates_unknown_fields() -> None:
+    """A payload written by a future minds version must still parse here -- rejecting
+    the whole blob would cost this install everything in it, including restic_env."""
+    payload = WorkspaceSecretsPayload.model_validate_json(
+        '{"restic_env": "RESTIC_REPOSITORY=s3:bucket", "future_field": {"nested": 1}}'
+    )
 
-    merged = merge_known_hosts_text(existing, synced)
-
-    assert merged == "[1.2.3.4]:22 ssh-ed25519 AAAA-pinned\n[1.2.3.4]:2222 ssh-ed25519 AAAA-outer\n"
-
-
-def test_merge_known_hosts_text_returns_none_when_nothing_new() -> None:
-    existing = "[1.2.3.4]:22 ssh-ed25519 AAAA-pinned\n"
-
-    assert merge_known_hosts_text(existing, existing) is None
-    assert merge_known_hosts_text(existing, None) is None
-    assert merge_known_hosts_text(existing, "\n   \n") is None
-
-
-def test_merge_known_hosts_text_writes_synced_entries_into_an_empty_file() -> None:
-    synced = "[9.9.9.9]:22 ssh-ed25519 AAAA-new\n"
-
-    assert merge_known_hosts_text(None, synced) == synced
-    assert merge_known_hosts_text("", synced) == synced
+    assert payload.restic_env == "RESTIC_REPOSITORY=s3:bucket"
+    assert payload.ssh_private_key is None
 
 
 def test_derive_openssh_public_key_line_roundtrips_an_openssh_format_key() -> None:
@@ -636,9 +670,10 @@ def test_derive_openssh_public_key_line_roundtrips_an_openssh_format_key() -> No
 
 
 def test_derive_openssh_public_key_line_roundtrips_mngrs_traditional_pem_rsa_key() -> None:
-    # The exact flavor mngr's generate_ssh_keypair writes for client keys:
-    # RSA in traditional PEM ("-----BEGIN RSA PRIVATE KEY-----"), which needs
-    # the PEM loader, not the OpenSSH one.
+    # The legacy flavor older mngr installs wrote for client keys (mngr now
+    # generates Ed25519): RSA in traditional PEM ("-----BEGIN RSA PRIVATE
+    # KEY-----"), which needs the PEM loader, not the OpenSSH one. Records
+    # synced from those installs still carry these keys.
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private_text = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -672,7 +707,7 @@ def test_reconcile_resurrects_a_locally_hosted_tombstone_whose_workspace_is_live
         agent_id=str(live_agent),
         display_name="docker-2",
         provider_kind="local",
-        hosting_device_id="device-test-1",
+        hosting_device_id=device_id_for_test("store-test-1"),
         state=RECORD_STATE_DESTROYED,
     )
     cli.sync_records_by_email[_EMAIL] = {"host-back": tombstoned.to_wire(4)}
@@ -697,7 +732,7 @@ def test_reconcile_never_resurrects_while_a_destroy_is_in_flight(paths: Workspac
         host_id="host-doomed",
         agent_id=str(doomed_agent),
         provider_kind="local",
-        hosting_device_id="device-test-1",
+        hosting_device_id=device_id_for_test("store-test-1"),
         state=RECORD_STATE_DESTROYED,
     )
     cli.sync_records_by_email[_EMAIL] = {"host-doomed": tombstoned.to_wire(2)}
@@ -727,3 +762,74 @@ def test_reconcile_never_resurrects_other_device_tombstones(paths: WorkspacePath
     store.reconcile({user_id: _EMAIL}, resolver)
 
     assert store.list_records(user_id)[0].state == RECORD_STATE_DESTROYED
+
+
+def _empty_complete_resolver(provider_names: tuple[str, ...]) -> MngrCliBackendResolver:
+    """A resolver whose discovery completed cleanly and lists no workspaces at all."""
+    resolver = make_resolver_with_data(agents_json=json.dumps({"agents": []}))
+    seed_provider_snapshots(
+        resolver,
+        error_by_provider_name={},
+    )
+    for provider_name in provider_names:
+        resolver.update_providers(
+            provider_name=ProviderInstanceName(provider_name),
+            provider=None,
+            error=None,
+            last_snapshot_at=datetime.now(timezone.utc),
+        )
+    return resolver
+
+
+def test_cloud_rows_are_never_tombstoned_as_definitively_absent(paths: WorkspacePaths) -> None:
+    """The tombstone-safety invariant for web-created / cloud workspaces.
+
+    A cloud (imbue_cloud) row may be created by a device that never
+    materializes its SSH key here, and its lease can be live while a listing
+    pass transiently misses it -- so "absent from this device's discovery"
+    must never tombstone it. Only the lease going away (server-driven) ends a
+    cloud row's life.
+    """
+    cli = make_fake_imbue_cloud_cli()
+    user_id = _user_id()
+    cli.add_account(user_id=user_id, email=_EMAIL)
+    store = _make_store(paths, cli)
+
+    cloud_host_id = f"host-{uuid4().hex}"
+    cloud_record = ReplicaRecord(
+        host_id=cloud_host_id,
+        agent_id=_agent_id(),
+        display_name="web-created",
+        provider_kind="imbue_cloud_alice",
+        hosting_device_id=None,
+        device_label="web",
+        state=RECORD_STATE_ACTIVE,
+        revision=0,
+        is_dirty=True,
+    )
+    local_host_id = f"host-{uuid4().hex}"
+    local_record = ReplicaRecord(
+        host_id=local_host_id,
+        agent_id=_agent_id(),
+        display_name="local-docker",
+        provider_kind="docker",
+        hosting_device_id=store.device_id,
+        device_label="test-laptop",
+        state=RECORD_STATE_ACTIVE,
+        revision=0,
+        is_dirty=True,
+    )
+    store.upsert_local_record(user_id, _EMAIL, cloud_record)
+    store.upsert_local_record(user_id, _EMAIL, local_record)
+
+    # Discovery completed cleanly for both providers and lists nothing.
+    resolver = _empty_complete_resolver(("imbue_cloud_alice", "docker"))
+    store.reconcile({user_id: _EMAIL}, resolver)
+
+    pushed = cli.sync_records_by_email[_EMAIL]
+    # The locally-hosted row IS tombstoned (the absent pass works)...
+    assert pushed[local_host_id]["state"] == RECORD_STATE_DESTROYED
+    # ...but the cloud row survives untouched: never "definitively absent".
+    assert pushed[cloud_host_id]["state"] == RECORD_STATE_ACTIVE
+    replica_states = {record.host_id: record.state for record in store.list_records(user_id)}
+    assert replica_states[cloud_host_id] == RECORD_STATE_ACTIVE

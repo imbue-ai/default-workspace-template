@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 from flask.testing import FlaskClient
 from pydantic import Field
 
@@ -23,6 +24,7 @@ from imbue.minds.desktop_client.request_events import RequestInbox
 from imbue.minds.desktop_client.request_events import RequestType
 from imbue.minds.desktop_client.request_events import create_latchkey_accounts_permission_request_event
 from imbue.minds.desktop_client.request_events import load_response_events
+from imbue.minds.desktop_client.request_handler import UiAccountsPermissionDetail
 from imbue.mngr.primitives import AgentId
 
 _HttpxHandler: Final = Callable[[httpx.Request], httpx.Response]
@@ -89,24 +91,6 @@ def test_handler_claims_accounts_request_type(tmp_path: Path) -> None:
     assert handler.handles_request_type() == str(RequestType.ACCOUNTS_PERMISSION)
 
 
-def test_render_request_detail_fragment_shows_rationale_and_hidden_permission(tmp_path: Path) -> None:
-    handler, _sender = _make_accounts_handler(tmp_path, lambda _req: httpx.Response(200))
-    event = create_latchkey_accounts_permission_request_event(
-        agent_id=str(AgentId()),
-        rationale="needs to find the right account",
-    )
-    body = handler.render_request_detail_fragment(
-        event,
-        StaticBackendResolver(url_by_agent_and_service={}),
-        mngr_forward_origin="http://forward.invalid",
-    )
-    assert "needs to find the right account" in body
-    # All-or-nothing grant: a single hidden ``permissions`` input so the inbox
-    # shell's Approve button enables (no per-permission choice).
-    assert 'name="permissions"' in body
-    assert 'value="accounts"' in body
-
-
 def test_grant_calls_gateway_approve_writes_response_notifies_agent(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
@@ -161,3 +145,21 @@ def test_deny_deletes_request_writes_response_notifies_agent(tmp_path: Path) -> 
     assert len(response_events) == 1
     assert response_events[0].status == "DENIED"
     assert sender.sent_messages == [(str(agent_id), response.get_json()["message"])]
+
+
+def test_build_request_detail_payload_carries_the_rationale(tmp_path: Path) -> None:
+    handler, _sender = _make_accounts_handler(tmp_path, lambda _req: httpx.Response(200))
+    event = create_latchkey_accounts_permission_request_event(
+        agent_id=str(AgentId()),
+        rationale="needs to find the right account",
+    )
+
+    payload = handler.build_request_detail_payload(
+        req_event=event,
+        backend_resolver=StaticBackendResolver(url_by_agent_and_service={}),
+    )
+
+    if not isinstance(payload, UiAccountsPermissionDetail):
+        pytest.fail(f"expected a accounts detail payload, got {payload!r}")
+    assert payload.request_id == str(event.event_id)
+    assert payload.rationale == "needs to find the right account"

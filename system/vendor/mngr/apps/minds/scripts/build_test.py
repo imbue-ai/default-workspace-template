@@ -18,6 +18,10 @@ wheel, they are marked ``@pytest.mark.acceptance``.
 ``test_workspace_package_lists_are_consistent`` is a fast, pure file-parsing
 drift guard (no toolchain, no network) and stays an unmarked integration
 test so it runs on every branch.
+
+``test_ui_schema_generator_is_scoped_to_the_minds_package`` is a second such
+guard, over the other half of the minds wheel build: the frontend hook shells
+out to a schema generator that must resolve its own Python environment.
 """
 
 import json
@@ -31,6 +35,8 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+
+from imbue.mngr_latchkey.remote_gateway import DATALIB_CURL_VERSION as GATEWAY_DATALIB_CURL_VERSION
 
 # The full set of workspace packages bundled into the standalone app. This
 # same set is hand-maintained in three other places:
@@ -46,12 +52,14 @@ WORKSPACE_PACKAGES = [
     "imbue-mngr",
     "imbue-mngr-aws",
     "imbue-mngr-claude",
+    "imbue-mngr-codex",
     "imbue-mngr-forward",
     "imbue-mngr-imbue-cloud",
     "imbue-mngr-latchkey",
     "imbue-mngr-lima",
     "imbue-mngr-modal",
     "imbue-mngr-ovh",
+    "imbue-mngr-pi-coding",
     "imbue-mngr-vps",
     "imbue-common",
     "concurrency-group",
@@ -63,6 +71,11 @@ WORKSPACE_PACKAGES = [
 APP_ROOT = Path(__file__).resolve().parents[1]
 MONOREPO_ROOT = Path(__file__).resolve().parents[3]
 TEST_PATTERN = re.compile(r"(^|/)(test_[^/]*\.py|[^/]+_test\.py|conftest\.py)$")
+_DOWNLOAD_BINARIES_PATH: Final[Path] = APP_ROOT / "scripts" / "download-binaries.js"
+_ENSURE_BINARIES_PATH: Final[Path] = APP_ROOT / "scripts" / "ensure-binaries.js"
+_GENERATE_TYPES_PATH: Final[Path] = APP_ROOT / "frontend" / "scripts" / "generate-types.mjs"
+_GENERATE_UI_SCHEMA_PATH: Final[Path] = APP_ROOT / "scripts" / "generate_ui_schema.py"
+_UV_SCHEMA_ARGV_PATTERN: Final[re.Pattern[str]] = re.compile(r'execFileSync\("uv",\s*\[(?P<args>[^\]]*)\]')
 
 
 @pytest.fixture(scope="module")
@@ -72,11 +85,17 @@ def built_wheels(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     wheels: dict[str, Path] = {}
     for name in WORKSPACE_PACKAGES:
         before = set(out_dir.iterdir())
+        # These tests assert packaging metadata (purity, test-file exclusion),
+        # not bundle contents; skip the SPA build so they run in sandboxes
+        # without node/pnpm.
+        build_env = dict(os.environ)
+        build_env["MINDS_SKIP_FRONTEND_BUNDLE"] = "1"
         subprocess.run(
             ["uv", "build", "--package", name, "--wheel", "--out-dir", str(out_dir)],
             cwd=MONOREPO_ROOT,
             check=True,
             capture_output=True,
+            env=build_env,
         )
         produced = [p for p in out_dir.iterdir() if p not in before and p.suffix == ".whl"]
         assert len(produced) == 1, f"Expected exactly one wheel for {name}, got {produced}"
@@ -118,6 +137,51 @@ def test_workspace_wheel_excludes_test_files(built_wheels: dict[str, Path], pack
         f"{built_wheels[package_name].name} contains test files that should be excluded: {leaks}. "
         'Add `exclude = ["*_test.py", "test_*.py", "**/conftest.py"]` to '
         "[tool.hatch.build.targets.wheel] in the package's pyproject.toml."
+    )
+
+
+def _uv_schema_argv() -> list[str]:
+    """The uv command generate-types.mjs runs to dump the wire schema.
+
+    Read out of the .mjs rather than restated here, so the test exercises the
+    invocation the frontend build actually performs.
+    """
+    match = _UV_SCHEMA_ARGV_PATTERN.search(_GENERATE_TYPES_PATH.read_text())
+    assert match is not None, f'no `execFileSync("uv", [...])` call found in {_GENERATE_TYPES_PATH}'
+    argv = ["uv"]
+    for token in (t.strip() for t in match.group("args").split(",")):
+        if token == "schemaScript":
+            argv.append(str(_GENERATE_UI_SCHEMA_PATH))
+        else:
+            assert token.startswith('"') and token.endswith('"'), (
+                f"{_GENERATE_TYPES_PATH} passes a non-literal uv argument {token!r}; "
+                "this test can only reconstruct string literals and `schemaScript`."
+            )
+            argv.append(token[1:-1])
+    return argv
+
+
+def test_ui_schema_generator_is_scoped_to_the_minds_package() -> None:
+    """The schema dump must name the workspace package whose models it imports.
+
+    The minds wheel's frontend hook runs this command from inside hatchling's
+    isolated build environment, on checkouts nobody synced first (the
+    launch-to-msg mac runner git-cleans before every build). The workspace root
+    project does not depend on minds, so an unscoped `uv run` creates an
+    environment without ``imbue.minds`` and the wheel build dies partway
+    through on a ModuleNotFoundError.
+    """
+    argv = _uv_schema_argv()
+    assert argv[:2] == ["uv", "run"], f"expected {_GENERATE_TYPES_PATH} to shell out to `uv run`, got {argv}"
+    assert "python" in argv, f"expected {_GENERATE_TYPES_PATH} to run the generator under `python`, got {argv}"
+    # `uv run` is trailing_var_arg: everything from the command word on is handed
+    # to the command, so a --package sitting after `python` reaches the generator
+    # script's own argv and leaves the run unscoped.
+    uv_flags = argv[2 : argv.index("python")]
+    assert any(uv_flags[i : i + 2] == ["--package", "minds"] for i in range(len(uv_flags))), (
+        f"{_GENERATE_TYPES_PATH} must run the schema generator as `uv run --package minds`, got {argv}. "
+        "Without the scope, uv resolves the workspace root project, which does not depend on minds, "
+        "so imbue.minds is not importable in an unsynced checkout."
     )
 
 
@@ -218,21 +282,16 @@ def _load_todesktop_config() -> dict:
 
 
 def test_bundled_limactl_is_signed_with_virtualization_entitlement() -> None:
-    """Guard: the ToDesktop signing config must give bundled limactl the
-    virtualization entitlement.
+    """Guard: the ToDesktop entitlements plist must grant virtualization.
 
     limactl needs ``com.apple.security.virtualization`` to use Apple's
-    Virtualization.framework. ToDesktop deep-signs every nested binary with
-    the app's ``mac.entitlements`` plist; if that plist omits the
-    entitlement, the re-signed limactl cannot start Lima VMs (VZ exits
-    instantly with empty errors) and agent creation fails. limactl must
-    also be in ``mac.additionalBinariesToSign`` so ToDesktop signs it
-    explicitly with that plist.
+    Virtualization.framework. ToDesktop deep-signs every Mach-O under
+    ``Contents/Resources`` with the app's ``mac.entitlements`` plist; if that
+    plist omits the entitlement, the re-signed limactl cannot start Lima VMs
+    (VZ exits instantly with empty errors) and agent creation fails.
     """
     todesktop = _load_todesktop_config()
-    mac = todesktop.get("mac", {})
-
-    entitlements_rel = mac.get("entitlements")
+    entitlements_rel = todesktop.get("mac", {}).get("entitlements")
     assert entitlements_rel, "todesktop.js must set mac.entitlements"
     entitlements = plistlib.loads((APP_ROOT / entitlements_rel).read_bytes())
     assert entitlements.get("com.apple.security.virtualization") is True, (
@@ -240,27 +299,41 @@ def test_bundled_limactl_is_signed_with_virtualization_entitlement() -> None:
         "without it the bundled limactl cannot start Lima VMs."
     )
 
-    additional = mac.get("additionalBinariesToSign", [])
-    assert any("limactl" in path for path in additional), (
-        "todesktop.js mac.additionalBinariesToSign must include the bundled "
-        f"limactl so it is signed with mac.entitlements; got {additional}."
+
+def test_todesktop_config_declares_no_signing_list() -> None:
+    """Guard: ``mac.additionalBinariesToSign`` must stay absent.
+
+    ToDesktop deep-signs every Mach-O under ``Contents/Resources`` with
+    ``mac.entitlements`` whether or not it is listed.
+
+    The list is not merely redundant. Every path in it must exist in the
+    uploaded app-files tree or the builder's signing preflight fails, which
+    is what forced ``appFiles`` to enumerate its exclusions instead of
+    excluding ``resources/`` wholesale -- and that enumeration is what put a
+    duplicate copy of the listed subtrees into ``app.asar``.
+    """
+    todesktop = _load_todesktop_config()
+    additional = todesktop.get("mac", {}).get("additionalBinariesToSign")
+    assert not additional, (
+        "todesktop.js must not set mac.additionalBinariesToSign; ToDesktop signs "
+        "Contents/Resources regardless, and each entry forces its subtree back "
+        f"into the appFiles upload and thus into app.asar. Got {additional}."
     )
 
 
-def test_bundled_desync_is_in_signing_list() -> None:
-    """Guard: the bundled desync must be signed by ToDesktop.
+def test_todesktop_before_install_hook_is_not_wired() -> None:
+    """Guard: ``todesktop:beforeInstall`` must stay out of package.json.
 
-    It is a Mach-O binary that ``build.js`` stages into ``resources/`` and
-    ToDesktop packages into ``Contents/Resources``. Under the hardened runtime
-    every shipped Mach-O must be code-signed with the app's Developer ID or
-    notarization rejects the build -- and notarization only runs in the release
-    pipeline, so a missing entry surfaces there rather than in PR CI.
+    ToDesktop runs that hook against ``app-wrapper/app/``, so whatever it
+    downloads is folded into ``app.asar`` -- which nothing reads, since
+    ``paths.getResourcesDir()`` resolves ``process.resourcesPath``. Worse, the
+    hook runs on ToDesktop's x86_64 mac agent, so its copies are Intel
+    binaries inside an arm64 app -- unreachable and unrunnable both.
     """
-    todesktop = _load_todesktop_config()
-    additional = todesktop.get("mac", {}).get("additionalBinariesToSign", [])
-    assert "resources/desync/desync" in additional, (
-        "todesktop.js mac.additionalBinariesToSign must include the bundled desync "
-        f"so ToDesktop signs it under the hardened runtime; got {additional}."
+    scripts = json.loads((APP_ROOT / "package.json").read_text()).get("scripts", {})
+    assert "todesktop:beforeInstall" not in scripts, (
+        "package.json must not wire todesktop:beforeInstall -- its output lands in "
+        "app.asar, is never read, and is built for the wrong architecture."
     )
 
 
@@ -270,34 +343,25 @@ def test_build_js_stages_every_runtime_binary() -> None:
 
     ``build.js`` is the only stage whose output reaches the app: ToDesktop maps the
     uploaded ``resources/`` into ``Contents/Resources`` via ``extraResources``, which
-    is what ``paths.getResourcesDir()`` reads. The ``todesktop:beforeInstall`` hook
-    also downloads binaries, but it runs against ``app-wrapper/app/``, so its output
-    is folded into ``app.asar`` and never read at runtime.
+    is what ``paths.getResourcesDir()`` reads.
 
-    A binary fetched only by the hook therefore ships dead. That already happened:
-    ``desync`` was staged by the hook alone, so no packaged release ever carried a
-    usable copy and the pre-baked-image download was broken in every build, silently
-    -- dev is unaffected, because ``ensure-binaries.js`` populates ``resources/``
-    there. This guard fails if a downloader is dropped from ``main()``.
+    A binary that build.js does not stage therefore ships dead, and that happened
+    twice while the staging list was written out by hand here: ``desync``, then the
+    latchkey ``curl``. Both were fetched only by the ToDesktop ``beforeInstall``
+    hook, whose output lands in ``app.asar`` where nothing reads it. Staging is now
+    driven by the BINARIES table instead, and this guard keeps it that way.
     """
     text = (APP_ROOT / "scripts" / "build.js").read_text()
     match = re.search(r"async function main\(\) \{(.*?)\n\}\n", text, re.DOTALL)
     assert match is not None, "Could not locate main() in build.js"
     body = match.group(1)
 
-    for downloader in (
-        "downloadUv",
-        "downloadLima",
-        "downloadGit",
-        "downloadRestic",
-        "downloadDesync",
-    ):
-        assert f"{downloader}(" in body, (
-            f"build.js main() must call {downloader}(). build.js is the only stage "
-            "whose resources/ reaches the packaged app -- a binary fetched solely by "
-            "the todesktop:beforeInstall hook lands in app.asar and is unreachable at "
-            "runtime."
-        )
+    assert "downloadBinaries(RESOURCES_DIR)" in body, (
+        "build.js main() must stage binaries via downloadBinaries(RESOURCES_DIR), which "
+        "iterates download-binaries.js's BINARIES table. Naming individual downloaders "
+        "here is what let desync -- and later the latchkey curl -- ship staged by "
+        "nothing that reaches the app, landing in app.asar where nothing reads them."
+    )
 
 
 def test_bundle_latchkey_uses_pnpm_deploy_against_lockfile() -> None:
@@ -519,7 +583,7 @@ def _parse_git_manifest_target_by_platform_arch() -> set[str]:
     -- we slice out that block and pull every quoted map value (the manifest
     target key on the right-hand side of each ``:``).
     """
-    text = (APP_ROOT / "scripts" / "download-binaries.js").read_text()
+    text = _DOWNLOAD_BINARIES_PATH.read_text()
     match = re.search(r"const GIT_MANIFEST_TARGET_BY_PLATFORM_ARCH\s*=\s*\{(.*?)\};", text, re.DOTALL)
     assert match is not None, "Could not locate GIT_MANIFEST_TARGET_BY_PLATFORM_ARCH object in download-binaries.js"
     return set(re.findall(r""":\s*['"]([^'"]+)['"]""", match.group(1)))
@@ -559,27 +623,209 @@ def test_download_binaries_git_map_agrees_with_manifest() -> None:
     )
 
 
-def test_ensure_binaries_guards_stale_git_payload() -> None:
-    """Guard: ensure-binaries.js must keep its dugite-native staleness check.
+def test_ensure_binaries_derives_its_required_set_from_the_binaries_table() -> None:
+    """Guard: the dev required-set must be derived, never restated.
 
-    A dev machine carrying an old (pre-manifest or wrong-tag) git payload passes
-    the plain existence check, so ensure-binaries.js reads the pinned tag from
-    git-manifest.json and treats a missing/mismatched ``.dugite-tag`` marker as a
-    missing binary, forcing a re-download. This cheap textual check trips if
-    someone deletes that staleness logic. See specs/minds-managed-git/concise.md.
+    ensure-binaries.js used to hand-maintain a list of paths parallel to what
+    download-binaries.js actually produces, and it drifted twice. The second time
+    was lima, which download-binaries.js never provisioned at all: the path could
+    never be satisfied, so every ``pnpm start`` re-ran the full downloader and
+    re-fetched every binary. Deriving the set from BINARIES makes that unrepresentable.
     """
     text = (APP_ROOT / "scripts" / "ensure-binaries.js").read_text()
-    assert ".dugite-tag" in text, (
-        "ensure-binaries.js must reference the '.dugite-tag' marker so a stale "
-        "bundled git payload is re-downloaded (spec: minds-managed-git)."
+    assert "getProvisionedBinaries(" in text, (
+        "ensure-binaries.js must derive its required set from "
+        "getProvisionedBinaries() in download-binaries.js, so it can never require "
+        "a path the downloader does not produce."
     )
-    assert "git-manifest.json" in text, (
-        "ensure-binaries.js must read 'git-manifest.json' to compare the on-disk "
-        ".dugite-tag against the pinned dugiteNativeTag (spec: minds-managed-git)."
+    assert "usedInDev" in text, (
+        "ensure-binaries.js must filter the provisioned set by BINARIES[].usedInDev, "
+        "so dev does not download binaries it never resolves (e.g. uv, which dev "
+        "deliberately takes from the developer's PATH)."
     )
 
 
-_DOWNLOAD_BINARIES_PATH: Final[Path] = APP_ROOT / "scripts" / "download-binaries.js"
+def test_dev_mode_puts_bundled_lima_on_path() -> None:
+    """Guard: dev must resolve the pinned limactl, not the developer's own.
+
+    ``mngr_lima`` resolves ``limactl`` via ``shutil.which``, and lima is pinned
+    (see download-binaries.js) because 2.1.x's usernet forwarder wedges fresh ssh
+    connections and hangs agent creation forever. ``check_lima_version`` only
+    enforces a *minimum*, so a newer system lima passes and then hangs. Dev
+    therefore has to prepend the bundled lima bin dir like packaged mode does.
+    """
+    text = (APP_ROOT / "electron" / "backend.js").read_text()
+    match = re.search(r"if \(paths\.isDev\(\)\) \{(.*?)\n      \} else \{", text, re.DOTALL)
+    assert match is not None, "Could not locate the dev-mode branch in backend.js"
+    assert "getLimaBinDir()" in match.group(1), (
+        "backend.js's dev branch must prepend paths.getLimaBinDir() to PATH so agent "
+        "creation uses the pinned limactl; mngr_lima resolves it from PATH and only "
+        "checks a minimum version, so a newer system lima silently hangs creation."
+    )
+
+
+def _run_cache_harness(tmp_path: Path, concurrency: int) -> dict:
+    """Exercise ensureCachedBinary under contention, with a stubbed download."""
+    assert _NODE_BINARY is not None
+    result = subprocess.run(
+        [
+            _NODE_BINARY,
+            str(APP_ROOT / "test" / "binary_cache_harness.js"),
+            str(tmp_path / "cache"),
+            str(concurrency),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return json.loads(result.stdout)
+
+
+def test_binary_cache_survives_concurrent_provisioners(tmp_path: Path) -> None:
+    """Parallel provisioners must converge on one complete entry.
+
+    Many worktrees and many agents share one machine and one cache, so several
+    processes routinely provision the same binary at the same moment. Each
+    stages its download and renames it into place, so the losers of the race
+    find a complete entry rather than clobbering a directory another process is
+    already reading from -- and no caller ever observes a half-extracted one.
+    """
+    outcome = _run_cache_harness(tmp_path, concurrency=8)
+    assert outcome["distinctEntriesFromRace"] == 1, (
+        "concurrent provisioners must all resolve to the same cache entry; got "
+        f"{outcome['distinctEntriesFromRace']} distinct paths"
+    )
+    assert outcome["racedContent"] == "v1", "the surviving entry must hold complete content"
+    assert outcome["stagingLeftBehind"] == 0, (
+        "staging directories must be cleaned up even when a provisioner loses the race, "
+        "or the cache accumulates partial downloads forever"
+    )
+
+
+def test_binary_cache_provisions_a_bumped_version_without_disturbing_the_old(tmp_path: Path) -> None:
+    """Bumping a pinned version must fetch the new one and leave the old alone.
+
+    Cache entries are keyed by version, so a bump is a cache miss that fetches
+    fresh rather than silently reusing the previous bytes. The old entry stays
+    intact because checkouts still pinned to it -- other branches, other agents
+    mid-run -- are reading from it through their symlinks.
+    """
+    outcome = _run_cache_harness(tmp_path, concurrency=8)
+    assert outcome["bumpDownloadCount"] == 1, (
+        "a version bump must be a cache miss that downloads exactly once; got "
+        f"{outcome['bumpDownloadCount']} downloads"
+    )
+    assert outcome["bumpedContent"] == "v2", "the bumped entry must hold the new version's content"
+    assert outcome["oldVersionStillIntact"], (
+        "the previous version's entry must survive a bump -- other checkouts still "
+        "symlink at it and would break mid-run"
+    )
+
+
+def test_binary_cache_repairs_an_entry_whose_files_were_pruned(tmp_path: Path) -> None:
+    """A partially-pruned cache entry must be repaired, not wedge the cache.
+
+    Cache cleaners delete files but leave directories, so an entry can survive
+    with its completion marker gone. Such an entry can satisfy nothing, and
+    renaming a fresh download onto it fails with ENOTEMPTY -- so without an
+    explicit repair the failure is permanent and every later launch dies on it,
+    with nothing pointing at the cache as the cause.
+    """
+    outcome = _run_cache_harness(tmp_path, concurrency=8)
+    assert outcome["repairDownloadCount"] == 1, (
+        f"a pruned entry must be re-provisioned exactly once; got {outcome['repairDownloadCount']} downloads"
+    )
+    assert outcome["repairedContent"] == "v2", "the repaired entry must hold complete content"
+
+
+def _parse_binaries_table() -> dict[str, dict]:
+    """Return download-binaries.js's BINARIES table, evaluated by node.
+
+    Read from the module itself rather than regex-parsed, so the guards below
+    assert against the table the scripts actually use.
+    """
+    assert _NODE_BINARY is not None
+    result = subprocess.run(
+        [
+            _NODE_BINARY,
+            "-e",
+            "const {BINARIES} = require(process.argv[1]);"
+            "console.log(JSON.stringify(Object.fromEntries(Object.entries(BINARIES).map("
+            "([k, v]) => [k, {requiredPath: v.requiredPath, usedInDev: v.usedInDev,"
+            "}]))))",
+            str(_DOWNLOAD_BINARIES_PATH),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def _parse_binaries_table_names() -> set[str]:
+    """Names of the binaries download-binaries.js provisions."""
+    return set(_parse_binaries_table())
+
+
+def test_binaries_required_paths_match_what_the_runtime_resolves() -> None:
+    """Guard: each BINARIES entry's completion path must be the path the app runs.
+
+    ``requiredPath`` is what decides an install is complete -- in the shared cache
+    and in ``resources/``. If it names a file the app never resolves, a broken
+    install passes the check; if it names the wrong one, a good install is
+    re-fetched forever. Both are silent, so tie the table to electron/paths.js.
+    """
+    paths_text = (APP_ROOT / "electron" / "paths.js").read_text()
+    resolved = {
+        tuple(re.findall(r"'([^']+)'", components))
+        for components in re.findall(r"path\.join\(getResourcesDir\(\),\s*([^)]+)\)", paths_text)
+    }
+    for name, entry in _parse_binaries_table().items():
+        expected = (name, *entry["requiredPath"].split(os.sep))
+        assert expected in resolved, (
+            f"BINARIES.{name}.requiredPath is {entry['requiredPath']!r}, so the install is "
+            f"considered complete at resources/{'/'.join(expected)} -- but electron/paths.js "
+            f"resolves no such path. Bring the table and the runtime back in agreement."
+        )
+
+
+def test_ensure_binaries_replaces_anything_but_the_current_cache_entry() -> None:
+    """Guard: resources/<name> is re-provisioned unless it resolves to the current entry.
+
+    The pinned version is a path segment of the cache entry, so "resolves to the
+    current entry" IS the version check. That one comparison covers a link to a
+    superseded entry, a real directory staged by ``pnpm build``, and a checkout
+    provisioned before the cache existed -- cases that otherwise need a
+    per-payload version marker each. Losing it silently serves old bytes.
+    """
+    text = _ENSURE_BINARIES_PATH.read_text()
+    assert "getCacheEntryPath" in text and "realpathSync(cacheEntry)" in text, (
+        "ensure-binaries.js must compare resources/<name> against the CURRENT cache "
+        "entry (which carries the pinned version in its path); without it a bumped "
+        "version keeps serving the old payload."
+    )
+
+
+def test_datalib_curl_pin_agrees_with_the_latchkey_gateway() -> None:
+    """Drift guard: the two datalib curl pins must name the same release.
+
+    The dispatch curl is fetched from two independent places -- minds bundles
+    it for the desktop app (``download-binaries.js``) and the latchkey gateway
+    installs it on the VPS (``mngr_latchkey.remote_gateway``) -- and the pin is
+    duplicated because the mngr wheel must not read files outside the ``imbue``
+    package, so a shared manifest is not available across the two projects.
+    Bumping one and not the other would leave a desktop client impersonating
+    with a different curl than the gateway it talks to.
+    """
+    download_text = _DOWNLOAD_BINARIES_PATH.read_text()
+    match = re.search(r"^const DATALIB_CURL_VERSION = '([^']+)';", download_text, re.MULTILINE)
+    assert match is not None, "Could not find DATALIB_CURL_VERSION in download-binaries.js"
+    assert match.group(1) == GATEWAY_DATALIB_CURL_VERSION, (
+        f"download-binaries.js pins datalib curl {match.group(1)} but "
+        f"mngr_latchkey.remote_gateway pins {GATEWAY_DATALIB_CURL_VERSION}; "
+        "bump both together."
+    )
 
 
 def _run_download_binaries_function(expression: str, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -747,20 +993,13 @@ def test_assert_tree_fits_upload_budget_fails_on_symlink_inflation(tmp_path: Pat
 def test_build_pipeline_keeps_payload_shim_and_budget_guards() -> None:
     """Drift guard: the shim conversion and upload-budget guard must stay wired in.
 
-    ``downloadGit`` must convert payload symlinks BEFORE writing the
-    ``.dugite-tag`` marker (a payload that failed conversion must never be
-    tagged complete, or ensure-binaries.js would skip re-downloading it), and
-    ``build.js`` must run the upload-budget assertion so a symlink regression
-    fails the local build instead of the ToDesktop upload.
+    ``downloadGit`` must convert payload symlinks to shims, and ``build.js``
+        must run the upload-budget assertion so a symlink regression fails the local
+        build instead of the ToDesktop upload.
     """
     download_binaries_text = _DOWNLOAD_BINARIES_PATH.read_text()
-    conversion_call_index = download_binaries_text.find("convertGitPayloadSymlinksToShims(gitDir)")
-    tag_write_index = download_binaries_text.find("'.dugite-tag'")
-    assert conversion_call_index != -1, "downloadGit must call convertGitPayloadSymlinksToShims on the payload"
-    assert tag_write_index != -1, "downloadGit must write the .dugite-tag marker"
-    assert conversion_call_index < tag_write_index, (
-        "downloadGit must convert payload symlinks BEFORE writing .dugite-tag, so a "
-        "failed conversion is never tagged as a complete payload"
+    assert "convertGitPayloadSymlinksToShims(gitDir)" in download_binaries_text, (
+        "downloadGit must call convertGitPayloadSymlinksToShims on the payload"
     )
     build_text = (APP_ROOT / "scripts" / "build.js").read_text()
     assert "assertUploadFitsToDesktopLimit(ROOT" in build_text, (
@@ -871,40 +1110,26 @@ def test_assert_upload_fits_todesktop_limit_enforces_the_limit(tmp_path: Path) -
     assert under.returncode == 0, f"700MB of app files must pass an 800MB limit:\nstderr:\n{under.stderr}"
 
 
-def test_todesktop_config_balances_app_files_exclusions_and_sign_paths() -> None:
-    """Drift guard: the appFiles exclusions must keep both failure modes impossible.
+def test_todesktop_config_excludes_resources_from_app_files() -> None:
+    """Drift guard: resources/ must reach the app only through extraResources.
 
-    Two constraints pull in opposite directions and both broke a cloud build
-    in 2026-07: (1) the heavy resources subtrees must be EXCLUDED from the
-    app-files upload or the tree uploads twice (extraResources uploads it
-    whole regardless; 701MB against the 600MB limit); (2) every
-    ``mac.additionalBinariesToSign`` path must remain INCLUDED, because the
-    builder's signing preflight fails with "The following
-    additionalBinariesToSign are missing" when its path is excluded, and
-    nothing recreates lima cloud-side.
+    ``extraResources`` uploads the tree whole regardless of the appFiles
+    globs, and it is the only channel that fills ``Contents/Resources`` --
+    what ``paths.getResourcesDir()`` reads. Anything appFiles also matches is
+    packed into ``app.asar``, where nothing reads it -- and it is charged to
+    the upload twice, which is what breached ``uploadSizeLimit`` in 2026-07.
     """
     config = _load_todesktop_config()
     app_files = config.get("appFiles")
     assert app_files is not None and "**" in app_files, "todesktop.js appFiles must include '**' for the app code"
-    excluded_prefixes = []
-    for glob in app_files:
-        if glob.startswith("!"):
-            assert glob.endswith("/**"), f"unexpected appFiles exclusion shape: {glob}"
-            excluded_prefixes.append(glob[1:].removesuffix("**"))
-    for heavy_subtree in ("resources/git/", "resources/latchkey/"):
-        assert any(heavy_subtree.startswith(prefix) for prefix in excluded_prefixes), (
-            f"todesktop.js appFiles must exclude {heavy_subtree} -- it already uploads whole "
-            "via extraResources, and double-uploading it is what hit 701MB in 2026-07"
-        )
-    for sign_path in config["mac"]["additionalBinariesToSign"]:
-        covering = [prefix for prefix in excluded_prefixes if sign_path.startswith(prefix)]
-        assert not covering, (
-            f"todesktop.js appFiles exclusions {covering} cover the additionalBinariesToSign "
-            f"path {sign_path}; the builder's signing preflight requires that file in the "
-            "app-files upload and fails the build without it"
-        )
+    exclusions = [glob for glob in app_files if glob.startswith("!")]
+    assert "!resources/**" in exclusions, (
+        "todesktop.js appFiles must exclude resources/ wholesale; extraResources already "
+        f"delivers it, and anything left in appFiles ships a dead copy in app.asar. Got {exclusions}."
+    )
     extra_resource_sources = [entry["from"] for entry in config.get("extraResources", [])]
     assert "resources/" in extra_resource_sources, (
-        "todesktop.js must keep uploading resources/ via extraResources; the appFiles "
-        "exclusions assume that channel delivers the staged binaries to the builder"
+        "todesktop.js must keep uploading resources/ via extraResources; it is the only "
+        "channel that reaches Contents/Resources, so excluding it from appFiles without "
+        "this entry would ship an app with no bundled binaries at all"
     )

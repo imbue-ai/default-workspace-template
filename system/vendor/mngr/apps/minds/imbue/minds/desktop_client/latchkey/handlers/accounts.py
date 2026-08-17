@@ -31,7 +31,6 @@ from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClient
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClientError
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
-from imbue.minds.desktop_client.latchkey.handlers.templates import render_accounts_permission_dialog
 from imbue.minds.desktop_client.request_events import LatchkeyAccountsPermissionRequestEvent
 from imbue.minds.desktop_client.request_events import RequestEvent
 from imbue.minds.desktop_client.request_events import RequestInbox
@@ -40,7 +39,10 @@ from imbue.minds.desktop_client.request_events import RequestStatus
 from imbue.minds.desktop_client.request_events import RequestType
 from imbue.minds.desktop_client.request_events import append_response_event
 from imbue.minds.desktop_client.request_events import create_request_response_event
+from imbue.minds.desktop_client.request_handler import RequestDetailPayload
 from imbue.minds.desktop_client.request_handler import RequestEventHandler
+from imbue.minds.desktop_client.request_handler import UiAccountsPermissionDetail
+from imbue.minds.desktop_client.request_handler import UiUnsupportedDetail
 from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.state import get_state
 from imbue.mngr.primitives import AgentId
@@ -111,22 +113,20 @@ class AccountsPermissionGrantHandler(RequestEventHandler):
             return ""
         return "Account access"
 
-    def render_request_detail_fragment(
+    def build_request_detail_payload(
         self,
         req_event: RequestEvent,
         backend_resolver: BackendResolverInterface,
-        mngr_forward_origin: str,
-    ) -> str:
+    ) -> RequestDetailPayload:
         if not isinstance(req_event, LatchkeyAccountsPermissionRequestEvent):
-            return "<p>Unsupported request type</p>"
+            return UiUnsupportedDetail(message="Unsupported request type")
         parsed_agent_id = AgentId(req_event.agent_id)
         ws_name = _resolve_workspace_name(backend_resolver, parsed_agent_id, fallback=req_event.agent_id)
-        return render_accounts_permission_dialog(
-            agent_id=req_event.agent_id,
+        return UiAccountsPermissionDetail(
             request_id=str(req_event.event_id),
+            agent_id=req_event.agent_id,
             ws_name=ws_name,
             rationale=req_event.rationale,
-            mngr_forward_origin=mngr_forward_origin,
         )
 
     def apply_grant_request(

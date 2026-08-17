@@ -1,4 +1,5 @@
 import ast
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -11,6 +12,10 @@ _REPO_ROOT = Path(__file__).parents[1]
 
 # Directories excluded from scanning (vendored code)
 _VENDORED_DIR = _REPO_ROOT / "system" / "vendor"
+
+# Directory names pruned during filesystem walks: non-source trees (venvs,
+# node_modules, git internals) that can hold tens of thousands of files.
+_PRUNED_DIR_NAMES = frozenset({".git", ".venv", "node_modules"})
 
 _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
 
@@ -123,17 +128,28 @@ def test_all_test_ratchets_files_have_same_tests() -> None:
 
 
 def _find_bash_scripts_without_strict_mode() -> list[str]:
-    """Find bash scripts missing 'set -euo pipefail', excluding vendored and venv code."""
+    """Find bash scripts missing 'set -euo pipefail', excluding vendored and venv code.
+
+    Walks with os.walk and prunes excluded directories in place (the vendored
+    tree, .git, virtualenvs, node_modules) rather than rglob-ing the whole
+    tree: the vendored mngr checkout alone carries a ~30k-file .venv that a
+    full recursive glob would traverse on every run.
+    """
     violations: list[str] = []
-    vendored_prefix = str(_VENDORED_DIR)
-    for script in _REPO_ROOT.rglob("*.sh"):
-        if str(script).startswith(vendored_prefix):
-            continue
-        if ".venv" in script.parts:
-            continue
-        content = script.read_text(errors="replace")
-        if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
-            violations.append(str(script.relative_to(_REPO_ROOT)))
+    for dirpath, dirnames, filenames in os.walk(_REPO_ROOT):
+        current_dir = Path(dirpath)
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in _PRUNED_DIR_NAMES and current_dir / d != _VENDORED_DIR
+        ]
+        for filename in filenames:
+            if not filename.endswith(".sh"):
+                continue
+            script = current_dir / filename
+            content = script.read_text(errors="replace")
+            if re.search(r"^#!/.*bash", content) and "set -euo pipefail" not in content:
+                violations.append(str(script.relative_to(_REPO_ROOT)))
     return sorted(violations)
 
 
@@ -302,9 +318,16 @@ def _live_prose_files() -> list[Path]:
         path = _REPO_ROOT / rel
         if _LIVE_PROSE_EXEMPT_PARTS.intersection(Path(rel).parts):
             continue
-        # Skip symlinks whose targets live outside the live tree (e.g. the
-        # docs/system/style_guide.md link into system/vendor/).
         if not path.is_file():
+            continue
+        # Skip symlinks whose targets live outside the live tree (e.g. the
+        # docs/system/style_guide.md link into system/vendor/). Vendored prose
+        # is already exempt by path via _LIVE_PROSE_EXEMPT_PARTS; reaching the
+        # same bytes through a link does not make them this template's prose to
+        # govern. Resolved rather than inferred from is_file(), which only
+        # excluded this link back when its target path was stale and it
+        # resolved to nothing.
+        if _VENDORED_DIR in path.resolve().parents:
             continue
         files.append(path)
     return files

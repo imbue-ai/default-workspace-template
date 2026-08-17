@@ -13,14 +13,17 @@ from imbue.mngr_tmr.report import ChangeKind
 from imbue.mngr_tmr.report import ChangeStatus
 from imbue.mngr_tmr.report import Escalation
 from imbue.mngr_tmr.report import EscalationKind
+from imbue.mngr_tmr.report import EscalationLocation
 from imbue.mngr_tmr.report import IntegratorResult
 from imbue.mngr_tmr.report import ReportSection
+from imbue.mngr_tmr.report import SECTION_LABELS
 from imbue.mngr_tmr.report import TestMapReduceResult
 from imbue.mngr_tmr.report import TestResult
-from imbue.mngr_tmr.report import _merged_status_html
 from imbue.mngr_tmr.report import _render_markdown
 from imbue.mngr_tmr.report import generate_html_report
+from imbue.mngr_tmr.report import load_integrator_outcome_file
 from imbue.mngr_tmr.report import load_testing_agent_outcome
+from imbue.mngr_tmr.report import merged_status_html
 from imbue.mngr_tmr.report import report_section_of
 from imbue.mngr_tmr.report import synthesize_missing_mapper_outcomes
 
@@ -61,7 +64,12 @@ def _serialize_outcome(outcome: TestResult) -> dict[str, object]:
             {"run_name": r.run_name, "description_markdown": r.description_markdown} for r in outcome.test_runs
         ],
         "escalations": [
-            {"kind": e.kind.value, "title": e.title, "detail_markdown": e.detail_markdown} for e in outcome.escalations
+            {
+                "kind": e.kind.value,
+                "description_markdown": e.description_markdown,
+                "locations": [{"path": loc.path, "line": loc.line} for loc in e.locations],
+            }
+            for e in outcome.escalations
         ],
     }
 
@@ -137,9 +145,10 @@ def test_change_status_values() -> None:
 
 
 def test_report_section_values() -> None:
-    assert ReportSection.NON_IMPL_FIXES == "NON_IMPL_FIXES"
+    assert ReportSection.TEST_AND_DOC_FIXES == "TEST_AND_DOC_FIXES"
     assert ReportSection.IMPL_FIXES == "IMPL_FIXES"
-    assert ReportSection.UNRESOLVED == "UNRESOLVED"
+    assert ReportSection.FIX_FAILED == "FIX_FAILED"
+    assert ReportSection.INDETERMINATE == "INDETERMINATE"
     assert ReportSection.CLEAN_PASS == "CLEAN_PASS"
     assert ReportSection.RUNNING == "RUNNING"
 
@@ -197,11 +206,20 @@ def test_report_section_clean_pass() -> None:
     assert report_section_of(make_test_result(before=True, after=True)) == ReportSection.CLEAN_PASS
 
 
-def test_report_section_non_impl_fixes() -> None:
+def test_report_section_test_and_doc_fixes() -> None:
     assert (
         report_section_of(make_test_result(changes=SUCCEEDED_FIX, before=False, after=True))
-        == ReportSection.NON_IMPL_FIXES
+        == ReportSection.TEST_AND_DOC_FIXES
     )
+
+
+def test_report_section_impl_fix_wins_over_a_test_fix() -> None:
+    """An agent that fixed both made an implementation fix, and that is what a reviewer needs."""
+    both = {
+        ChangeKind.FIX_TEST: Change(status=ChangeStatus.SUCCEEDED, summary_markdown="fixed the test"),
+        ChangeKind.FIX_IMPL: Change(status=ChangeStatus.SUCCEEDED, summary_markdown="fixed the impl"),
+    }
+    assert report_section_of(make_test_result(changes=both, before=False, after=True)) == ReportSection.IMPL_FIXES
 
 
 def test_report_section_impl_fixes() -> None:
@@ -209,10 +227,10 @@ def test_report_section_impl_fixes() -> None:
     assert report_section_of(make_test_result(changes=impl_fix, before=False, after=True)) == ReportSection.IMPL_FIXES
 
 
-def test_report_section_all_changes_failed_is_unresolved() -> None:
+def test_report_section_all_changes_failed_is_fix_failed() -> None:
     """Every attempted change having failed means the agent landed nothing."""
     assert (
-        report_section_of(make_test_result(changes=FAILED_FIX, before=False, after=False)) == ReportSection.UNRESOLVED
+        report_section_of(make_test_result(changes=FAILED_FIX, before=False, after=False)) == ReportSection.FIX_FAILED
     )
 
 
@@ -222,11 +240,15 @@ def test_report_section_partial_failure_keeps_fix_section() -> None:
         ChangeKind.FIX_TEST: Change(status=ChangeStatus.SUCCEEDED, summary_markdown="fixed"),
         ChangeKind.IMPROVE_TEST: Change(status=ChangeStatus.FAILED, summary_markdown="could not"),
     }
-    assert report_section_of(make_test_result(changes=mixed, before=False, after=True)) == ReportSection.NON_IMPL_FIXES
+    assert (
+        report_section_of(make_test_result(changes=mixed, before=False, after=True))
+        == ReportSection.TEST_AND_DOC_FIXES
+    )
 
 
-def test_report_section_no_changes_tests_failing_is_unresolved() -> None:
-    assert report_section_of(make_test_result(before=False, after=False)) == ReportSection.UNRESOLVED
+def test_report_section_no_changes_tests_failing_is_indeterminate() -> None:
+    """The catch-all is its own section, so it stops masquerading as a failed fix."""
+    assert report_section_of(make_test_result(before=False, after=False)) == ReportSection.INDETERMINATE
 
 
 def test_report_section_ignores_escalations() -> None:
@@ -234,7 +256,7 @@ def test_report_section_ignores_escalations() -> None:
     escalated = make_test_result(
         before=True,
         after=True,
-        escalations=(Escalation(title="t", detail_markdown="d", kind=EscalationKind.SHARED_PATTERN),),
+        escalations=(Escalation(description_markdown="Siblings carry it.", kind=EscalationKind.SUITE_DUPLICATION),),
     )
     assert report_section_of(escalated) == ReportSection.CLEAN_PASS
 
@@ -257,13 +279,13 @@ def test_render_markdown_plain_text() -> None:
 
 def test_merged_status_no_integrator() -> None:
     r = make_test_result(before=True, after=True)
-    assert _merged_status_html(r, None) == ""
+    assert merged_status_html(r.branch_name, None) == ""
 
 
 def test_merged_status_no_branch() -> None:
     r = make_test_result(before=True, after=True)
     integrator = IntegratorResult(squashed_branches=("mngr-tmr/a",))
-    assert _merged_status_html(r, integrator) == ""
+    assert merged_status_html(r.branch_name, integrator) == ""
 
 
 def test_merged_status_squashed() -> None:
@@ -276,7 +298,7 @@ def test_merged_status_squashed() -> None:
         changes=SUCCEEDED_FIX,
     )
     integrator = IntegratorResult(squashed_branches=("mngr-tmr/a",))
-    assert "10003" in _merged_status_html(r, integrator)
+    assert "10003" in merged_status_html(r.branch_name, integrator)
 
 
 def test_merged_status_impl_priority() -> None:
@@ -289,7 +311,7 @@ def test_merged_status_impl_priority() -> None:
         changes={ChangeKind.FIX_IMPL: Change(status=ChangeStatus.SUCCEEDED, summary_markdown="fixed")},
     )
     integrator = IntegratorResult(impl_priority=("mngr-tmr/b",), impl_commit_hashes={"mngr-tmr/b": "abc123def"})
-    status = _merged_status_html(r, integrator)
+    status = merged_status_html(r.branch_name, integrator)
     assert "abc123def" in status
     assert "<code>" in status
 
@@ -304,7 +326,7 @@ def test_merged_status_failed() -> None:
         changes=SUCCEEDED_FIX,
     )
     integrator = IntegratorResult(failed=("mngr-tmr/c",))
-    assert "10007" in _merged_status_html(r, integrator)
+    assert "10007" in merged_status_html(r.branch_name, integrator)
 
 
 def test_merged_status_not_in_integrator() -> None:
@@ -317,7 +339,7 @@ def test_merged_status_not_in_integrator() -> None:
         changes=SUCCEEDED_FIX,
     )
     integrator = IntegratorResult(squashed_branches=("mngr-tmr/other",))
-    assert _merged_status_html(r, integrator) == ""
+    assert merged_status_html(r.branch_name, integrator) == ""
 
 
 # --- HTML report tests ---
@@ -351,7 +373,7 @@ def test_generate_html_report(tmp_path: Path) -> None:
     content = result_path.read_text()
     assert "Test Map-Reduce Report" in content
     assert "Clean pass" in content
-    assert "Non-implementation fixes" in content
+    assert "Test and doc fixes" in content
     assert 'class="toc-sidebar"' in content
 
 
@@ -369,29 +391,23 @@ def test_generate_html_report_all_report_sections(tmp_path: Path) -> None:
     agents = [
         make_metadata_and_outcome(output_dir, "running-agent", write_outcome=False),
         make_metadata_and_outcome(
-            output_dir, "non-impl", changes=SUCCEEDED_FIX, tests_passing_before=False, tests_passing_after=True
+            output_dir, "test-and-doc", changes=SUCCEEDED_FIX, tests_passing_before=False, tests_passing_after=True
         ),
         make_metadata_and_outcome(
             output_dir, "impl-fix", changes=impl_fix, tests_passing_before=False, tests_passing_after=True
         ),
         make_metadata_and_outcome(
-            output_dir, "unresolved", changes=unresolved_changes, tests_passing_before=False, tests_passing_after=False
+            output_dir, "fix-failed", changes=unresolved_changes, tests_passing_before=False, tests_passing_after=False
         ),
+        # No changes attempted and the test is not passing: fits no other section.
+        make_metadata_and_outcome(output_dir, "indeterminate", tests_passing_before=False, tests_passing_after=False),
         make_metadata_and_outcome(output_dir, "failed", error_summary="boom"),
         make_metadata_and_outcome(output_dir, "clean", tests_passing_before=True, tests_passing_after=True),
     ]
     result_path = generate_html_report(agents, output_dir)
     content = result_path.read_text()
     for sec in ReportSection:
-        label = {
-            ReportSection.NON_IMPL_FIXES: "Non-implementation fixes",
-            ReportSection.IMPL_FIXES: "Implementation fixes",
-            ReportSection.UNRESOLVED: "Unresolved",
-            ReportSection.FAILED: "Failed",
-            ReportSection.CLEAN_PASS: "Clean pass",
-            ReportSection.RUNNING: "Running",
-        }[sec]
-        assert label in content
+        assert SECTION_LABELS[sec] in content
 
 
 def test_generate_html_report_empty_agents(tmp_path: Path) -> None:
@@ -453,7 +469,7 @@ def test_generate_html_report_without_integrator(tmp_path: Path) -> None:
     assert "Test Map-Reduce Report" in result_path.read_text()
 
 
-def test_generate_html_report_renders_escalations_and_normalizations(tmp_path: Path) -> None:
+def test_generate_html_report_splits_resolved_from_unresolved_escalations(tmp_path: Path) -> None:
     output_dir = tmp_path / "out"
     agents = [make_metadata_and_outcome(output_dir, "a", tests_passing_before=True, tests_passing_after=True)]
     integrator_meta = AgentMetadata(
@@ -466,21 +482,30 @@ def test_generate_html_report_renders_escalations_and_normalizations(tmp_path: P
         integrator_meta.agent_name,
         {
             "squashed_branches": ["mngr-tmr/a"],
-            "normalizations": [{"summary_markdown": "Extracted **assert_agent_running** helper"}],
-            "escalations": [{"title": "codex needs OpenAI creds", "detail_markdown": "Provide a fake-codex fixture"}],
+            "escalations": [
+                {
+                    "kind": "HARNESS_DEFECT",
+                    "description_markdown": "codex needs OpenAI creds\n\nProvide a **fake-codex** fixture",
+                },
+                {
+                    "kind": "SUITE_DUPLICATION",
+                    "description_markdown": "Extracted assert_agent_running helper",
+                    "resolved_in_commit_hash": "abc1234def5",
+                },
+            ],
         },
     )
-    result_path = generate_html_report(agents, output_dir, integrator_metadata=integrator_meta)
-    content = result_path.read_text()
-    assert "Escalations (1)" in content
+    content = generate_html_report(agents, output_dir, integrator_metadata=integrator_meta).read_text()
+    assert "Unresolved escalations (1)" in content
+    assert "Resolved escalations (1)" in content
     assert "codex needs OpenAI creds" in content
-    assert "Provide a fake-codex fixture" in content
-    assert "Suite normalizations (1)" in content
-    # Markdown in the normalization summary is rendered to HTML.
-    assert "<strong>assert_agent_running</strong>" in content
+    # The unresolved one carries its whole description, rendered as markdown.
+    assert "<strong>fake-codex</strong>" in content
+    # The resolved one is a row naming its commit.
+    assert "abc1234def" in content
 
 
-def test_generate_html_report_no_escalations_section_when_empty(tmp_path: Path) -> None:
+def test_generate_html_report_no_escalation_sections_when_empty(tmp_path: Path) -> None:
     output_dir = tmp_path / "out"
     agents = [make_metadata_and_outcome(output_dir, "a", tests_passing_before=True, tests_passing_after=True)]
     integrator_meta = AgentMetadata(
@@ -490,11 +515,11 @@ def test_generate_html_report_no_escalations_section_when_empty(tmp_path: Path) 
     )
     write_integrator_outcome(output_dir, integrator_meta.agent_name, {"squashed_branches": ["mngr-tmr/a"]})
     content = generate_html_report(agents, output_dir, integrator_metadata=integrator_meta).read_text()
-    assert "Escalations" not in content
-    assert "Suite normalizations" not in content
+    assert "Unresolved escalations" not in content
+    assert "Resolved escalations" not in content
 
 
-def test_generate_html_report_escalation_title_escaped(tmp_path: Path) -> None:
+def test_generate_html_report_escalation_summary_escaped(tmp_path: Path) -> None:
     output_dir = tmp_path / "out"
     agents = [make_metadata_and_outcome(output_dir, "a", tests_passing_before=True, tests_passing_after=True)]
     integrator_meta = AgentMetadata(
@@ -505,7 +530,15 @@ def test_generate_html_report_escalation_title_escaped(tmp_path: Path) -> None:
     write_integrator_outcome(
         output_dir,
         integrator_meta.agent_name,
-        {"escalations": [{"title": "<script>alert('xss')</script>", "detail_markdown": "x"}]},
+        {
+            "escalations": [
+                {
+                    "kind": "HARNESS_DEFECT",
+                    "description_markdown": "<script>alert('xss')</script>",
+                    "resolved_in_commit_hash": "abc1234",
+                }
+            ]
+        },
     )
     content = generate_html_report(agents, output_dir, integrator_metadata=integrator_meta).read_text()
     assert "<script>alert" not in content
@@ -548,42 +581,92 @@ def test_report_includes_mapper_escalations(tmp_path: Path) -> None:
             tests_passing_after=True,
             escalations=(
                 Escalation(
-                    title="rsync mark superfluous suite-wide",
-                    detail_markdown="Six siblings carry it.",
-                    kind=EscalationKind.SHARED_PATTERN,
+                    description_markdown="rsync mark superfluous suite-wide\n\nSix siblings carry it.",
+                    kind=EscalationKind.SUITE_DUPLICATION,
+                    locations=(EscalationLocation(path="libs/mngr/conftest.py", line=12),),
                 ),
             ),
         )
     ]
     content = generate_html_report(agents, output_dir).read_text()
     assert "rsync mark superfluous suite-wide" in content
-    assert "Shared pattern" in content
-    assert "tests/test_a.py::test_a" in content
+    assert "Suite duplication" in content
+    # It renders inside its own test's row rather than in a separate list.
+    # The node id carries a <wbr> soft-wrap hint after each "::".
+    assert content.index("tests/test_a.py::<wbr>test_a") < content.index("rsync mark superfluous suite-wide")
+    # The location is what lets a reader jump to the code rather than the reporter.
+    assert "libs/mngr/conftest.py:12" in content
 
 
-def test_report_sorts_blockers_before_shared_patterns(tmp_path: Path) -> None:
+def test_escalations_render_on_their_row_without_an_integrator(tmp_path: Path) -> None:
+    """The report is regenerated on every poll, long before the integrator exists."""
     output_dir = tmp_path / "out"
     agents = [
         make_metadata_and_outcome(
             output_dir,
-            "pattern-agent",
+            "escalating",
             tests_passing_before=True,
             tests_passing_after=True,
-            escalations=(Escalation(title="PATTERN-ONE", detail_markdown="d", kind=EscalationKind.SHARED_PATTERN),),
-        ),
-        make_metadata_and_outcome(
-            output_dir,
-            "blocker-agent",
-            tests_passing_before=True,
-            tests_passing_after=True,
-            escalations=(Escalation(title="BLOCKER-ONE", detail_markdown="d", kind=EscalationKind.BLOCKER),),
-        ),
+            escalations=(Escalation(description_markdown="Seen everywhere.", kind=EscalationKind.HARNESS_DEFECT),),
+        )
     ]
     content = generate_html_report(agents, output_dir).read_text()
-    assert content.index("BLOCKER-ONE") < content.index("PATTERN-ONE")
+    assert "Escalations (1)" in content
+    assert "Seen everywhere." in content
+    # No integrator yet, so there is no grouped view and no Integration heading.
+    assert ">Integration<" not in content
+    # The per-test sections still group under Tests.
+    assert ">Tests<" in content
 
 
-def test_report_labels_integrator_escalations_by_source(tmp_path: Path) -> None:
+def test_report_carries_every_mapper_escalation_id(tmp_path: Path) -> None:
+    """Ids are derived, so an agent's Nth escalation is addressable without the agent naming it."""
+    output_dir = tmp_path / "out"
+    agents = [
+        make_metadata_and_outcome(
+            output_dir,
+            "two-escalations",
+            tests_passing_before=True,
+            tests_passing_after=True,
+            escalations=(
+                Escalation(description_markdown="First.", kind=EscalationKind.UNCAUGHT_BUG),
+                Escalation(description_markdown="Second.", kind=EscalationKind.HARNESS_DEFECT),
+            ),
+        )
+    ]
+    content = generate_html_report(agents, output_dir).read_text()
+    assert "two-escalations#0" in content
+    assert "two-escalations#1" in content
+
+
+def test_report_warns_when_a_mapper_escalation_is_in_no_group(tmp_path: Path) -> None:
+    """An ungrouped escalation is missing from the grouped view, which must not be silent."""
+    output_dir = tmp_path / "out"
+    agents = [
+        make_metadata_and_outcome(
+            output_dir,
+            "ungrouped",
+            tests_passing_before=True,
+            tests_passing_after=True,
+            escalations=(Escalation(description_markdown="Nobody grouped me.", kind=EscalationKind.UNCAUGHT_BUG),),
+        )
+    ]
+    integrator = AgentMetadata(
+        kind=AgentKind.REDUCER, agent_name=AgentName("red"), task_id=None, branch_name="b", error_summary=None
+    )
+    write_integrator_outcome(
+        output_dir,
+        AgentName("red"),
+        {"escalations": [{"kind": "HARNESS_DEFECT", "description_markdown": "Unrelated group.", "member_ids": []}]},
+    )
+    content = generate_html_report(agents, output_dir, integrator_metadata=integrator).read_text()
+    assert "belong to no group" in content
+    # And the escalation itself is still shown in full.
+    assert "Nobody grouped me." in content
+
+
+def test_report_orders_integrator_originated_escalations_first(tmp_path: Path) -> None:
+    """A plain member-count sort would bury the findings no mapper could produce."""
     output_dir = tmp_path / "out"
     agents = [make_metadata_and_outcome(output_dir, "m", tests_passing_before=True, tests_passing_after=True)]
     integrator = AgentMetadata(
@@ -592,11 +675,160 @@ def test_report_labels_integrator_escalations_by_source(tmp_path: Path) -> None:
     write_integrator_outcome(
         output_dir,
         AgentName("red"),
-        {"escalations": [{"kind": "SHARED_PATTERN", "title": "REDUCER-FOUND", "detail_markdown": "d"}]},
+        {
+            "escalations": [
+                {
+                    "kind": "SUITE_DUPLICATION",
+                    "description_markdown": "MANY-REPORTED",
+                    "member_ids": ["m#0", "m#1", "m#2"],
+                },
+                {"kind": "UNCAUGHT_BUG", "description_markdown": "INTEGRATOR-FOUND", "member_ids": []},
+                {"kind": "HARNESS_DEFECT", "description_markdown": "ONE-REPORTED", "member_ids": ["m#3"]},
+            ]
+        },
     )
     content = generate_html_report(agents, output_dir, integrator_metadata=integrator).read_text()
-    assert "REDUCER-FOUND" in content
-    assert "integrator" in content
+    assert content.index("INTEGRATOR-FOUND") < content.index("MANY-REPORTED")
+    assert content.index("MANY-REPORTED") < content.index("ONE-REPORTED")
+
+
+def test_outcome_with_a_missing_escalation_kind_is_dropped(tmp_path: Path) -> None:
+    """kind is required now; a missing one must not silently become some default."""
+    output_dir = tmp_path / "out"
+    target = output_dir / "no-kind" / "test_output" / TESTING_AGENT_OUTCOME_FILENAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"changes": {}, "escalations": [{"description_markdown": "No kind here."}]}))
+    assert load_testing_agent_outcome(AgentName("no-kind"), output_dir) is None
+
+
+def test_outcome_with_an_unknown_escalation_kind_is_dropped(tmp_path: Path) -> None:
+    """An outcome written against the old vocabulary parses to nothing rather than crashing."""
+    output_dir = tmp_path / "out"
+    target = output_dir / "old-kind" / "test_output" / TESTING_AGENT_OUTCOME_FILENAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps({"changes": {}, "escalations": [{"kind": "BLOCKER", "description_markdown": "Old vocabulary."}]})
+    )
+    assert load_testing_agent_outcome(AgentName("old-kind"), output_dir) is None
+
+
+def test_malformed_integrator_escalations_yield_no_outcome(tmp_path: Path) -> None:
+    """The integrator loader must warn and return None rather than raise on every poll tick."""
+    outcome_path = tmp_path / "integrator_outcome.json"
+    outcome_path.write_text(json.dumps({"escalations": [{"description_markdown": "No kind."}]}))
+    assert load_integrator_outcome_file(outcome_path) is None
+
+    outcome_path.write_text(
+        json.dumps({"escalations": [{"kind": "NOT_A_KIND", "description_markdown": "Unknown kind."}]})
+    )
+    assert load_integrator_outcome_file(outcome_path) is None
+
+
+def test_a_report_renders_when_the_integrator_outcome_is_malformed(tmp_path: Path) -> None:
+    """A bad integrator outcome must not take the whole report down mid-run."""
+    output_dir = tmp_path / "out"
+    agents = [make_metadata_and_outcome(output_dir, "a", tests_passing_before=True, tests_passing_after=True)]
+    integrator = AgentMetadata(
+        kind=AgentKind.REDUCER, agent_name=AgentName("red"), task_id=None, branch_name="b", error_summary=None
+    )
+    write_integrator_outcome(output_dir, AgentName("red"), {"escalations": [{"description_markdown": "No kind."}]})
+    content = generate_html_report(agents, output_dir, integrator_metadata=integrator).read_text()
+    assert "Test Map-Reduce Report" in content
+
+
+def test_escalation_locations_render_without_a_line(tmp_path: Path) -> None:
+    """Agents are told line may be omitted, so the path alone has to render."""
+    output_dir = tmp_path / "out"
+    agents = [
+        make_metadata_and_outcome(
+            output_dir,
+            "no-line",
+            tests_passing_before=True,
+            tests_passing_after=True,
+            escalations=(
+                Escalation(
+                    description_markdown="Whole file is the problem.",
+                    kind=EscalationKind.HARNESS_DEFECT,
+                    locations=(EscalationLocation(path="apps/minds/conftest.py"),),
+                ),
+            ),
+        )
+    ]
+    content = generate_html_report(agents, output_dir).read_text()
+    assert "apps/minds/conftest.py" in content
+    assert "apps/minds/conftest.py:" not in content
+
+
+def test_escalation_markdown_cannot_inject_raw_html(tmp_path: Path) -> None:
+    """Descriptions are agent-authored and render through |safe, so raw HTML must not pass."""
+    output_dir = tmp_path / "out"
+    agents = [
+        make_metadata_and_outcome(
+            output_dir,
+            "injecting",
+            tests_passing_before=True,
+            tests_passing_after=True,
+            escalations=(
+                Escalation(
+                    description_markdown="<script>alert('xss')</script>",
+                    kind=EscalationKind.UNCAUGHT_BUG,
+                ),
+            ),
+        )
+    ]
+    content = generate_html_report(agents, output_dir).read_text()
+    assert "<script>alert" not in content
+    assert "&lt;script&gt;" in content
+
+
+def test_malformed_escalation_locations_drop_the_outcome(tmp_path: Path) -> None:
+    """locations is nested agent-written JSON; its parse errors must be caught like the rest."""
+    output_dir = tmp_path / "out"
+    for agent, locations in [
+        ("string-locations", ["libs/mngr/conftest.py"]),
+        ("no-path", [{"line": 3}]),
+        ("bad-line", [{"path": "libs/mngr/conftest.py", "line": "twelve"}]),
+    ]:
+        target = output_dir / agent / "test_output" / TESTING_AGENT_OUTCOME_FILENAME
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(
+                {
+                    "changes": {},
+                    "escalations": [
+                        {
+                            "kind": "HARNESS_DEFECT",
+                            "description_markdown": "Somewhere.",
+                            "locations": locations,
+                        }
+                    ],
+                }
+            )
+        )
+        assert load_testing_agent_outcome(AgentName(agent), output_dir) is None, agent
+
+
+def test_no_integration_report_when_the_integrator_has_not_published(tmp_path: Path) -> None:
+    """A reducer that exists but has not reported must not be blamed for an incomplete grouping."""
+    output_dir = tmp_path / "out"
+    agents = [
+        make_metadata_and_outcome(
+            output_dir,
+            "escalating",
+            tests_passing_before=True,
+            tests_passing_after=True,
+            escalations=(Escalation(description_markdown="Seen everywhere.", kind=EscalationKind.HARNESS_DEFECT),),
+        )
+    ]
+    # Metadata for a reducer that has written no outcome file at all.
+    integrator = AgentMetadata(
+        kind=AgentKind.REDUCER, agent_name=AgentName("red"), task_id=None, branch_name="b", error_summary=None
+    )
+    content = generate_html_report(agents, output_dir, integrator_metadata=integrator).read_text()
+    assert "Integration report" not in content
+    assert "belong to no group" not in content
+    # The raw escalation is still shown; only the grouped view is absent.
+    assert "Seen everywhere." in content
 
 
 def test_outcome_without_escalations_still_parses(tmp_path: Path) -> None:

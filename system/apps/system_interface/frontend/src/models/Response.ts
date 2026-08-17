@@ -7,7 +7,7 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import { reportMessaged } from "./activityReporter";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
-import { reconcilePendingMessages } from "./PendingMessages";
+import { noteBackendArrivals } from "./OutgoingMessages";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -19,6 +19,14 @@ export interface ToolCall {
   tool_call_id: string;
   tool_name: string;
   input_preview: string;
+  // Human labels, computed by the harness's own parser: the tool's identity for
+  // the transcript block header, and verb + target for the live activity strip.
+  // They differ for claude ("Tool: Read" / "Reading foo.py") and are usually equal
+  // for codex, whose header would otherwise read a useless "Tool: exec". Rendering
+  // these is why no view needs to know which harness produced the event. Optional
+  // only for events parsed before the labels existed.
+  header_label?: string;
+  caption_label?: string;
   // For Agent tool calls: the description and subagent_type from the tool input, present
   // as soon as the call appears so the rich card can render before the subagent session is
   // linked. subagent_metadata (with the session_id for the click-through) is filled in once
@@ -26,6 +34,10 @@ export interface ToolCall {
   description?: string;
   subagent_type?: string;
   subagent_metadata?: SubagentMetadata;
+  // The backend's render decision for this call: "hidden" (a tk lifecycle call --
+  // a structural marker consumed by the step timeline, not work to render) or
+  // "permission_request" (render the rich permission card). Absent = normal row.
+  display?: "hidden" | "permission_request";
 }
 
 /**
@@ -55,12 +67,21 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   type: "user_message";
   role: string;
   content: string;
-  // Claude Code's `isMeta`: a framework-injected, model-only message (the
-  // resume-continuation marker, the image coordinate note, MCP-resource dumps,
-  // hook context, etc.). The classifier hides these (UserMessageKind.Hidden)
-  // unless an explicit detector surfaces one, e.g. Stop-hook feedback, which is
-  // isMeta yet shown as a chip. Absent/false for a genuine human turn.
-  is_meta?: boolean;
+  // The backend's render decision (harnesses/events.DisplayKind, stamped by every
+  // harness's parser off the shared detector table): how this message renders.
+  // Absent = the baseline user bubble. The raw harness markers (claude's isMeta /
+  // isCompactSummary, sentinel tags) never reach the wire -- the decision does.
+  display?: "hidden" | "chip" | "skill_expansion" | "permission_resolution";
+  // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
+  display_label?: string;
+  // The body to display when a wrapper sentinel was stripped (a fleet nudge).
+  display_body?: string;
+  // permission_resolution only: the verdict written onto the earlier card.
+  resolution?: "granted" | "denied" | "error";
+  // The activity path's signal that no model reply follows this message (model-bar
+  // traffic, framework injections). Read by the backend's own activity derivation;
+  // carried on the wire for completeness.
+  non_turn_tail?: boolean;
 }
 
 /**
@@ -83,6 +104,16 @@ export interface AssistantMessageEvent extends BaseTranscriptEvent {
   } | null;
   // True when the text matches a known Claude auth-error pattern.
   is_auth_error: boolean;
+  // True when the text is a model API error (e.g. "API Error: 529 Overloaded"),
+  // stamped by the backend so the frontend can style it as an error. Harness-
+  // agnostic: any harness that surfaces a provider error stamps these same fields.
+  is_api_error: boolean;
+  // The normalized error kind ("overloaded", "rate_limit", "api_error", ...), or
+  // null when this is not an API error. Carried for wording; not required to render.
+  api_error_kind: string | null;
+  // True when the API error is the model provider's fault (a 5xx / overloaded)
+  // rather than our request -- these get the "not Minds' fault" note.
+  is_provider_fault: boolean;
 }
 
 /**
@@ -96,13 +127,45 @@ export interface ToolResultEvent extends BaseTranscriptEvent {
   tool_name: string;
   output: string;
   is_error: boolean;
+  // The permission request a latchkey creation POST echoed on stdout, parsed by
+  // the backend BEFORE it truncated `output` (see session_parser's
+  // `_find_permission_request`). The response routinely runs past the per-result
+  // output limit, so scanning the truncated `output` for it can come up empty or
+  // partial; the permission card reads this field in preference to that scan.
+  // Present only for a tool result that carried such a response.
+  permission_request?: Record<string, unknown>;
+}
+
+/**
+ * Every non-message marker a harness may emit. Mirrors the backend's
+ * `SpecialEventKind` (harnesses/events.py); the two must be kept in step, which is what
+ * turns an undeclared kind into a type error here rather than an event silently dropped.
+ *
+ * Turn boundaries come from codex, which records them in its rollout in real time.
+ * Claude's transcript has no equivalent and emits none.
+ */
+export type SpecialEventKind = "turn_started" | "turn_completed" | "turn_aborted";
+
+/**
+ * A harness marker that is not a message. Nothing renders these -- they exist so the
+ * event stream reflects the true transcript, and so the backend's activity derivation
+ * has an authoritative signal. Declared here so the union stays exhaustive.
+ */
+export interface SpecialTranscriptEvent extends BaseTranscriptEvent {
+  type: "special";
+  kind: SpecialEventKind;
 }
 
 /**
  * A single entry in the transcript event stream, discriminated by `type`.
  * Narrow on `event.type` before touching variant-specific fields.
+ *
+ * The first three types are the core contract: every harness emits them with the same
+ * fields, which is why no view needs to know which harness produced an event. `special`
+ * is the declared extension point -- a harness may emit the kinds it registers, and
+ * renderers ignore them.
  */
-export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent;
+export type TranscriptEvent = UserMessageEvent | AssistantMessageEvent | ToolResultEvent | SpecialTranscriptEvent;
 
 // For hook compatibility
 export interface ResponseItem {
@@ -129,6 +192,18 @@ interface EventsResponse {
 }
 
 const BACKFILL_PAGE_SIZE = 50;
+
+// Hard cap on every transcript fetch. A request that never settles (e.g. a
+// proxy holding the connection through a tunnel outage) would otherwise pin
+// the panel's single-fetch-at-a-time guard forever, freezing all paging until
+// a full page reload. Matches the forwarding proxy's own 30s timeout.
+const EVENTS_REQUEST_TIMEOUT_MS = 30_000;
+
+/** m.request config hook applying the transcript-fetch timeout. */
+function applyEventsRequestTimeout(xhr: XMLHttpRequest): XMLHttpRequest {
+  xhr.timeout = EVENTS_REQUEST_TIMEOUT_MS;
+  return xhr;
+}
 
 // Upper bound on events held client-side per agent. Far above any viewport
 // window; bounds JS memory for an arbitrarily long conversation while leaving
@@ -245,7 +320,18 @@ class TranscriptStore {
             added = true;
           }
         } else if (mergeLateSubagentMetadata(prior, event)) {
+          // The narrow claude case: late subagent linkage merges onto the held call.
           merged = true;
+        } else if (JSON.stringify(prior) !== JSON.stringify(event)) {
+          // A general supersession: the backend re-broadcast an already-held event with
+          // updated content (codex re-serialises an event under the same id). Replace it
+          // in place -- position unchanged -- so the held view reflects the latest.
+          const index = this.#events.indexOf(prior);
+          if (index !== -1) {
+            this.#events[index] = event;
+            this.#byId.set(event.event_id, event);
+            merged = true;
+          }
         }
       }
       if (added) {
@@ -264,6 +350,16 @@ class TranscriptStore {
    */
   prepend(olderEvents: TranscriptEvent[], offset?: number, total?: number): boolean {
     return this.#commit(() => {
+      // Contiguity guard: a server page carries the global index of its first
+      // event, and a *current* backfill response always ends exactly where the
+      // window starts (it was fetched with before=<window's first event>). A
+      // page that does not reach the window start is stale -- issued against a
+      // window that has since been replaced (e.g. a reconnect snapshot landed
+      // while it was in flight). Gluing it on would corrupt the window's
+      // offset arithmetic permanently, so discard it instead.
+      if (offset !== undefined && (offset > this.#firstOffset || offset + olderEvents.length < this.#firstOffset)) {
+        return false;
+      }
       const deduped = olderEvents.filter((e) => !this.#byId.has(e.event_id));
       if (deduped.length === 0) {
         return false;
@@ -351,6 +447,15 @@ class TranscriptStore {
   reconcileTotalAtTail(total: number): void {
     this.#commit(() => {
       this.#total = total;
+      // The server just said "nothing exists after your last event": the held
+      // window IS the live tail. If the bookkeeping still thinks the window
+      // falls short of `total` (events were missed during an outage, so the
+      // held count undercounts the range), shift the believed window start so
+      // the end lines up with the tail. The discrepancy moves above the
+      // window, where backfill can genuinely re-fetch it. Without this,
+      // hasMoreAfter sticks true forever: forward paging refires with no
+      // possible progress and append() drops every future live event.
+      this.#firstOffset = Math.max(0, total - this.#events.length);
       return true;
     });
   }
@@ -447,10 +552,16 @@ function mergeLateSubagentMetadata(prior: TranscriptEvent, incoming: TranscriptE
 
 export function appendEvents(agentId: string, newEvents: TranscriptEvent[]): void {
   if (storeFor(agentId).append(newEvents)) {
-    // A live transcript event may be the real counterpart of an optimistic
-    // message the user just sent; drop any such bubble now that it has landed.
-    reconcilePendingMessages(agentId, getEventsForAgent(agentId));
     m.redraw();
+  }
+  // Route live user-message arrivals through the optimistic-send layer so a
+  // "Sending…" bubble drops the instant its real message lands in the transcript
+  // (no overlap). Deduped by event_id in noteBackendArrivals, so a re-streamed
+  // event is harmless. Only the live tail feeds this -- paging/backfill of old
+  // history goes through the other append paths and must not drop live bubbles.
+  const userEventIds = newEvents.filter((event) => event.type === "user_message").map((event) => event.event_id);
+  if (userEventIds.length > 0) {
+    noteBackendArrivals(agentId, userEventIds);
   }
 }
 
@@ -485,11 +596,9 @@ export async function fetchEvents(agentId: string): Promise<TranscriptEvent[]> {
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId },
+      config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
-    // A snapshot reload (initial load or reconnect) may already contain the
-    // real counterpart of an optimistic message; reconcile against it too.
-    reconcilePendingMessages(agentId, result.events);
     return result.events;
   } catch (error) {
     const requestError = error as { code?: number; message?: string };
@@ -508,6 +617,7 @@ export async function fetchWindowAtOffset(agentId: string, offset: number): Prom
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId, offset: String(Math.max(0, offset)), limit: String(BACKFILL_PAGE_SIZE) },
+      config: applyEventsRequestTimeout,
     });
     placeWindow(agentId, result);
   } catch (error) {
@@ -529,7 +639,17 @@ export async function fetchBackfillEvents(agentId: string): Promise<void> {
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId, before: firstEventId, limit: String(BACKFILL_PAGE_SIZE) },
+      config: applyEventsRequestTimeout,
     });
+    // Staleness fence: if the window changed while this page was in flight
+    // (a reconnect snapshot or a jump replaced it), the response was issued
+    // against coordinates that no longer exist -- applying it would corrupt
+    // the window arithmetic. Discard; the next scroll retries with a
+    // current cursor.
+    if (getFirstEventId(agentId) !== firstEventId) {
+      console.warn(`[si-transcript] discarding stale backfill page for agent ${agentId} (window changed)`);
+      return;
+    }
     if (result.events.length > 0) {
       prependEvents(agentId, result.events, result.offset, result.total);
     } else {
@@ -558,7 +678,15 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
       method: "GET",
       url: apiUrl("/api/agents/:agentId/events"),
       params: { agentId, after: lastEventId, limit: String(BACKFILL_PAGE_SIZE) },
+      config: applyEventsRequestTimeout,
     });
+    // Staleness fence, mirroring fetchBackfillEvents: discard the page if the
+    // window's tail moved while it was in flight (live append or a snapshot
+    // reset) -- the next maybePage refires against the current cursor.
+    if (getLastEventId(agentId) !== lastEventId) {
+      console.warn(`[si-transcript] discarding stale forward page for agent ${agentId} (window changed)`);
+      return;
+    }
     if (result.events.length > 0) {
       appendForwardEvents(agentId, result.events, result.total);
     } else if (result.total !== undefined) {
@@ -570,20 +698,34 @@ export async function fetchForwardEvents(agentId: string): Promise<void> {
   }
 }
 
-export async function sendMessage(agentId: string, message: string): Promise<void> {
-  if (!message.trim()) {
-    return;
+/** Mint a stable per-message id at send time (contract A4). The backend keys its
+ *  'Sending' record on it so an interrupt can reconcile the message per id and
+ *  return it to the composer if it never committed. Returned to the caller so a
+ *  later optimistic "Sending..." paint can carry the same id. */
+export function mintMessageId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export async function sendMessage(agentId: string, message: string, messageId?: string): Promise<string> {
+  const trimmed = message.trim();
+  const id = messageId ?? mintMessageId();
+  if (!trimmed) {
+    return id;
   }
 
   // The client identity rides along so the server can record which browser
   // (and which named layout) the message came from -- that is how agents
-  // attribute a request to a client via `layout.py context`.
+  // attribute a request to a client via `layout.py context`. The message_id is
+  // the stable send-time id the backend reconciles delivery against (A4).
   await m.request({
     method: "POST",
     url: apiUrl("/api/agents/:agentId/message"),
     params: { agentId },
     body: {
-      message: message.trim(),
+      message: trimmed,
+      message_id: id,
       client_id: getClientId(),
       active_layout: getActiveLayoutSlug(),
       device_kind: getDeviceKind(),
@@ -592,12 +734,42 @@ export async function sendMessage(agentId: string, message: string): Promise<voi
   // Bump this chat's OOM recency now that a message was accepted, so an actively
   // messaged chat is more protected from a memory shed than idler ones.
   reportMessaged(agentId);
+  return id;
 }
 
 export async function interruptAgent(agentId: string): Promise<void> {
   await m.request({
     method: "POST",
     url: apiUrl("/api/agents/:agentId/interrupt"),
+    params: { agentId },
+  });
+}
+
+/** Shoulder tap: deliver the queued messages to the agent now. ONE harness-agnostic call --
+ *  the backend dispatches per harness (pi inbox sentinel, codex ledger gate, claude cancel
+ *  chord) behind this single endpoint, so the frontend never branches on harness. Fire-and-
+ *  forget: the next WS snapshot (empty group) plus the committed turn reflect the result and
+ *  nothing is painted locally. Whether the tap is available at all is the backend's
+ *  ``shoulder_tap_available`` flag, which greys the button -- so this is never called when the
+ *  backend would refuse it, and a benign no-op status is returned rather than an error. */
+export async function shoulderTap(agentId: string): Promise<{ status: string; block: string }> {
+  const result = await m.request<{ status: string; block?: string }>({
+    method: "POST",
+    url: apiUrl("/api/agents/:agentId/shoulder-tap-atomic"),
+    params: { agentId },
+  });
+  // ``block`` is non-empty only when a native (codex) tap's combined resend failed to submit: the
+  // parked text is handed back for the composer so it is never swallowed (contract A1a). Default to
+  // "" for the harnesses/paths that never return one.
+  return { status: result.status, block: result.block ?? "" };
+}
+
+/** Interrupt to composer: restart the agent and get the queued messages back as
+ *  one concatenated block to drop into the composer, unsent. */
+export async function drainToComposer(agentId: string): Promise<{ block: string }> {
+  return await m.request<{ block: string }>({
+    method: "POST",
+    url: apiUrl("/api/agents/:agentId/drain-to-composer"),
     params: { agentId },
   });
 }

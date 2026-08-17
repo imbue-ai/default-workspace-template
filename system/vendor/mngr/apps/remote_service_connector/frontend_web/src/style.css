@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+body {
+  @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+}

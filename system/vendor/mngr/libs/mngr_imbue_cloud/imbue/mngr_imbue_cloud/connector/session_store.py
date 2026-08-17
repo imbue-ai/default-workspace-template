@@ -8,7 +8,7 @@ session without calling the connector. The active-account marker
 ``active_account`` (a single line of plain text) records which account
 the default ``[providers.imbue_cloud]`` instance should use when its
 ``account`` field is unset; ``mngr imbue_cloud auth use --account
-<email>`` writes it, and ``auth signin``/``auth signup``/``auth oauth``
+<email>`` writes it, and ``auth login``/``auth signin``/``auth signup``
 update it implicitly so the most recently signed-in account becomes
 active.
 """
@@ -166,31 +166,30 @@ class ImbueCloudSessionStore(MutableModel):
         permissions are 0600 so this is no worse than other secret files.
         """
         with self._lock:
-            self._ensure_dir()
-            session_path = self._session_path(session.user_id)
-            payload = {
-                "user_id": str(session.user_id),
-                "email": str(session.email),
-                "display_name": session.display_name,
-                "access_token": session.access_token.get_secret_value(),
-                "refresh_token": (
-                    session.refresh_token.get_secret_value() if session.refresh_token is not None else None
-                ),
-                "access_token_expires_at": (
-                    session.access_token_expires_at.isoformat()
-                    if session.access_token_expires_at is not None
-                    else None
-                ),
-            }
-            atomic_write(session_path, json.dumps(payload, indent=2))
-            try:
-                session_path.chmod(0o600)
-            except OSError:
-                # Best-effort; on systems where chmod isn't supported we still wrote the file.
-                pass
-            index = self._load_index()
-            index[session.email] = session.user_id
-            self._save_index(index)
+            self._save_unlocked(session)
+
+    def _save_unlocked(self, session: AuthSession) -> None:
+        self._ensure_dir()
+        session_path = self._session_path(session.user_id)
+        payload = {
+            "user_id": str(session.user_id),
+            "email": str(session.email),
+            "display_name": session.display_name,
+            "access_token": session.access_token.get_secret_value(),
+            "refresh_token": (session.refresh_token.get_secret_value() if session.refresh_token is not None else None),
+            "access_token_expires_at": (
+                session.access_token_expires_at.isoformat() if session.access_token_expires_at is not None else None
+            ),
+        }
+        atomic_write(session_path, json.dumps(payload, indent=2))
+        try:
+            session_path.chmod(0o600)
+        except OSError:
+            # Best-effort; on systems where chmod isn't supported we still wrote the file.
+            pass
+        index = self._load_index()
+        index[session.email] = session.user_id
+        self._save_index(index)
 
     def delete_by_account(self, account: ImbueCloudAccount) -> None:
         """Remove the session and email index entry for an account.
@@ -272,7 +271,9 @@ class ImbueCloudSessionStore(MutableModel):
         invariant ``active_account names a valid session`` holds.
         """
         with self._lock:
-            if account not in self._load_index():
+            index = self._load_index()
+            user_id = index.get(account)
+            if user_id is None:
                 raise ImbueCloudAuthError(
                     f"Cannot mark {account!s} active: no session on disk. "
                     f"Run `mngr imbue_cloud auth signin --account {account}` first."
@@ -308,7 +309,7 @@ def make_session_from_tokens(
     access_token: str,
     refresh_token: str | None,
 ) -> AuthSession:
-    """Build an AuthSession from raw signin/oauth response tokens."""
+    """Build an AuthSession from raw signin/login response tokens."""
     return AuthSession(
         user_id=user_id,
         email=email,

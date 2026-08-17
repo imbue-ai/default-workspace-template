@@ -1,17 +1,24 @@
-"""SuperTokens authentication routes for the minds desktop client.
+"""Account sign-in plumbing for the minds desktop client.
 
-These routes render the sign-in / sign-up / password-reset / settings pages
-and provide JSON APIs consumed by those pages' vanilla JS. All actual
-SuperTokens operations now go through ``mngr imbue_cloud auth ...`` via the
-``ImbueCloudCli`` wrapper -- the four-client HTTP layer minds used to
-maintain has been deleted. The route handlers below speak through a thin
-``_AuthBackendShim`` that adapts the plugin CLI to the shape they expect.
+Sign-up/sign-in itself happens on the connector's hosted accounts pages in
+the system browser: the desktop client just launches ``mngr imbue_cloud auth
+login`` (which opens the browser and receives the session via a localhost
+loopback + PKCE code exchange) and mirrors the resulting account into its own
+state -- default-account selection, ``[providers.imbue_cloud_<slug>]``
+registration, and the observer bounce. The Mithril UI drives the flow through
+the small JSON surface here (`/auth/api/web-login/*`) and renders the
+waiting/copy-link modal itself.
+
+The legacy server-rendered auth pages (sign-up/sign-in forms, the check-email
+poll, the sign-in modal) are gone with the rest of the JinjaX surface.
 """
 
 import json
 import secrets
+import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Final
 from urllib.parse import urlencode
 
@@ -19,31 +26,20 @@ from flask import Blueprint
 from flask import Response
 from flask import request
 from loguru import logger
-from pydantic import ConfigDict
-from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.bootstrap import MindsRoot
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthFailedCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthSession
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.minds_config import MindsConfig
-from imbue.minds.desktop_client.responses import make_html_response
 from imbue.minds.desktop_client.responses import make_redirect_response
 from imbue.minds.desktop_client.responses import make_response
-from imbue.minds.desktop_client.responses import safe_local_redirect_path
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
-from imbue.minds.desktop_client.session_store import UserInfo
 from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
-from imbue.minds.desktop_client.templates_auth import render_auth_page
-from imbue.minds.desktop_client.templates_auth import render_check_email_page
-from imbue.minds.desktop_client.templates_auth import render_forgot_password_page
-from imbue.minds.desktop_client.templates_auth import render_settings_page
-from imbue.minds.desktop_client.templates_auth import render_signin_modal_page
 from imbue.minds.mngr_settings.imbue_cloud_accounts import set_imbue_cloud_provider_for_account
 from imbue.minds.mngr_settings.imbue_cloud_accounts import unset_imbue_cloud_provider_for_account
 from imbue.minds.primitives import OutputFormat
@@ -51,148 +47,22 @@ from imbue.minds.utils.output import emit_event
 from imbue.mngr_latchkey.core import LatchkeyError
 from imbue.mngr_latchkey.forward_supervisor import LatchkeyForwardSupervisor
 
-
-class AuthBackendError(RuntimeError):
-    """Raised when the auth backend (mngr imbue_cloud auth ...) fails unexpectedly."""
-
-
-class AuthUser(FrozenModel):
-    """User information returned by the auth backend."""
-
-    user_id: str
-    email: str
-    display_name: str | None = None
-
-
-class AuthResult(FrozenModel):
-    """Normalized result of a sign-in / sign-up / OAuth callback.
-
-    Note: tokens are NOT carried back through this struct. The plugin owns
-    the SuperTokens session on disk; minds only needs to know the user
-    identity (rendered in the UI) and whether email verification is pending.
-    """
-
-    status: str = Field(description="OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, FIELD_ERROR, or ERROR")
-    message: str | None = Field(default=None)
-    user: AuthUser | None = Field(default=None)
-    needs_email_verification: bool = Field(default=False)
-
-
-# Shown when an auth call fails for a reason the connector never got to judge
+# Shown when a login fails for a reason the connector never got to judge
 # (subprocess crash, connector unreachable, malformed response). ``str(exc)``
-# for those is the traceback-free "auth signin failed (exit 1); see the desktop
-# client logs for details" -- the right thing in a log, unusable in a sign-in
-# form -- and the full detail is already logged by ``_expect_success``.
+# for those is the traceback-free "auth login failed (exit 1); see the desktop
+# client logs for details" -- the right thing in a log, unusable in the UI --
+# and the full detail is already logged by ``_expect_success``.
 _UNAVAILABLE_AUTH_SERVICE_MESSAGE: Final[str] = (
     "We could not reach the Imbue sign-in service. Check your internet connection and try again."
 )
 
 
 def _user_facing_auth_message(exc: ImbueCloudCliError) -> str:
-    """Return copy safe to render in the auth UI for a failed plugin auth call."""
+    """Return copy safe to render in the UI for a failed plugin auth call."""
     if isinstance(exc, ImbueCloudAuthFailedCliError):
         return exc.auth_message
     logger.warning("Auth call failed without a structured connector verdict: {}", exc)
     return _UNAVAILABLE_AUTH_SERVICE_MESSAGE
-
-
-def _auth_result_from_cli_error(exc: ImbueCloudCliError) -> AuthResult:
-    """Translate a failed ``mngr imbue_cloud auth ...`` call into a UI-ready result.
-
-    A structured rejection carries the connector's own verdict (status +
-    message), which the sign-in page keys off to show real copy -- notably its
-    ``WRONG_CREDENTIALS`` branch. Anything else is an infrastructure failure and
-    gets generic, actionable copy instead of the raw CLI failure string.
-    """
-    status = exc.auth_status if isinstance(exc, ImbueCloudAuthFailedCliError) else "ERROR"
-    return AuthResult(status=status, message=_user_facing_auth_message(exc))
-
-
-class _AuthBackendShim(MutableModel):
-    """Adapt ``ImbueCloudCli`` to the API shape the route handlers expect.
-
-    The route handlers were originally written against ``AuthBackendClient``;
-    rather than rewrite them all in this commit, we expose the same method
-    surface and translate ImbueCloudCli responses into ``AuthResult`` objects.
-    The plugin owns the actual session state on disk; this shim never reads
-    or writes session files, it only maps response shapes.
-    """
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    cli: ImbueCloudCli = Field(frozen=True, description="Subprocess wrapper around the imbue_cloud plugin CLI")
-
-    @property
-    def _cli(self) -> ImbueCloudCli:
-        return self.cli
-
-    def signup(self, email: str, password: str) -> AuthResult:
-        try:
-            session_obj = self._cli.auth_signup(email, password)
-        except ImbueCloudCliError as exc:
-            return _auth_result_from_cli_error(exc)
-        return AuthResult(
-            status="OK",
-            user=AuthUser(
-                user_id=str(session_obj.user_id),
-                email=str(session_obj.email),
-                display_name=session_obj.display_name,
-            ),
-            needs_email_verification=session_obj.needs_email_verification,
-        )
-
-    def signin(self, email: str, password: str) -> AuthResult:
-        try:
-            session_obj = self._cli.auth_signin(email, password)
-        except ImbueCloudCliError as exc:
-            return _auth_result_from_cli_error(exc)
-        return AuthResult(
-            status="OK",
-            user=AuthUser(
-                user_id=str(session_obj.user_id),
-                email=str(session_obj.email),
-                display_name=session_obj.display_name,
-            ),
-            needs_email_verification=session_obj.needs_email_verification,
-        )
-
-    def signout_account(self, account_email: str) -> None:
-        try:
-            self._cli.auth_signout(account_email)
-        except ImbueCloudCliError as exc:
-            logger.warning("`mngr imbue_cloud auth signout` failed for {}: {}", account_email, exc)
-
-    def is_email_verified(self, _user_id: str, _email: str) -> bool:
-        # The plugin doesn't currently expose this. Treat as verified to
-        # avoid spurious "please verify" prompts; the real check happens
-        # connector-side at next signin.
-        return True
-
-    def send_verification_email(self, _user_id: str, email: str) -> bool:
-        try:
-            # Touch the session as a smoke check.
-            self._cli.auth_status(email)
-            return True
-        except ImbueCloudCliError as exc:
-            logger.warning("Could not invoke auth status for {}: {}", email, exc)
-            return False
-
-    def forgot_password(self, email: str) -> None:
-        try:
-            # Plugin doesn't currently expose forgot-password.
-            self._cli.auth_status(email)
-        except ImbueCloudCliError as exc:
-            logger.warning("Forgot-password (placeholder) call failed for {}: {}", email, exc)
-
-    def get_user_provider(self, _user_id: str) -> str:
-        return "email"
-
-    @property
-    def base_url(self) -> str:
-        # No external base URL anymore -- the desktop UI's reset link
-        # redirect should be reworked to point at a fixed connector URL via
-        # MindsConfig instead.
-        return ""
 
 
 def _json_response(data: dict[str, object], status_code: int = 200) -> Response:
@@ -209,21 +79,6 @@ def _get_session_store() -> MultiAccountSessionStore:
     return session_store
 
 
-def _get_auth_backend() -> _AuthBackendShim:
-    """Return the request-scoped auth-backend shim wrapping the plugin CLI."""
-    cli: ImbueCloudCli | None = get_state().imbue_cloud_cli
-    if cli is None:
-        raise AuthBackendError("imbue_cloud_cli is not configured on this app")
-    return _AuthBackendShim(cli=cli)
-
-
-def _get_latest_user_info(session_store: MultiAccountSessionStore) -> UserInfo | None:
-    accounts = session_store.list_accounts()
-    if not accounts:
-        return None
-    return session_store.get_user_info(str(accounts[-1].user_id))
-
-
 def _get_output_format() -> OutputFormat:
     return get_state().auth_output_format
 
@@ -238,47 +93,6 @@ def _get_connector_url() -> str:
     client_env_config = get_state().client_env_config
     assert client_env_config is not None, "create_desktop_client() was constructed without a client_env_config"
     return str(client_env_config.connector_url).rstrip("/")
-
-
-def _store_session_from_auth_result(
-    session_store: MultiAccountSessionStore,
-    result: AuthResult,
-) -> None:
-    """Drop cached identity so the new account shows up, and configure defaults.
-
-    Tokens and identity (email, display_name) are persisted by the
-    mngr_imbue_cloud plugin -- minds doesn't mirror them. We only
-    invalidate our identity cache so the next ``auth list`` reflects the
-    just-signed-in account.
-
-    On first login (no default account set), this account becomes the default.
-
-    Also registers a ``[providers.imbue_cloud_<slug>]`` entry in mngr's
-    settings.toml and bounces ``mngr observe`` so the new provider instance
-    becomes immediately usable by ``mngr create``/``list``/etc.
-    """
-    assert result.user is not None, "AuthResult missing user"
-    session_store.invalidate_identity_cache()
-    scheduler = get_state().sync_scheduler
-    if scheduler is not None:
-        scheduler.note_account_signin(str(result.user.user_id), str(result.user.email))
-    minds_config: MindsConfig | None = get_state().minds_config
-    if minds_config is not None and minds_config.get_default_account_id() is None:
-        minds_config.set_default_account_id(result.user.user_id)
-    # Woken after the default-account write, so a re-derive picks up the whole
-    # new identity rather than racing the account this signin just defaulted to.
-    wake_chrome_event_streams()
-
-    # Explicit signin -- always re-enable the provider entry, even if the
-    # user previously clicked Disable on it in the providers panel.
-    connector_url = _get_connector_url()
-    if set_imbue_cloud_provider_for_account(
-        result.user.email,
-        connector_url=connector_url,
-        root=MindsRoot.from_environment(),
-        force_enable=True,
-    ):
-        _bounce_forward_observe()
 
 
 def _bounce_forward_observe() -> None:
@@ -308,282 +122,98 @@ def bounce_latchkey_forward_supervisor(supervisor: LatchkeyForwardSupervisor | N
         logger.warning("Failed to bounce mngr latchkey forward: {}", e)
 
 
-def _auth_error_response(exc: AuthBackendError | ImbueCloudCliError) -> Response:
-    logger.warning("Auth backend unavailable: {}", exc)
-    return _json_response(
-        {"status": "ERROR", "message": "Authentication service is unavailable"},
-        502,
-    )
-
-
-# Default banner shown when the create page sends a signed-out user here to
-# enable the remote (Imbue Cloud) compute preset. Used when no explicit
-# ``?message=`` is supplied alongside a ``return_to``.
-_REMOTE_SIGNIN_EXPLAINER: Final[str] = (
-    "Sign in or create an Imbue account to run your machine on Imbue Cloud. "
-    "You can also go back and run it directly on your computer."
-)
-
-
-def _handle_auth_page() -> Response:
-    """Render the sign-up or sign-in page.
-
-    Which tab leads is decided by the route alone: ``/auth/signup`` leads
-    with sign-up, ``/auth/login`` with sign-in. Every caller of
-    ``/auth/login`` is an affordance the user pressed that says "sign in"
-    ("Log in", "Sign in again", "Back to sign in"), so that request is
-    honored verbatim -- guessing from local state would hand the sign-up
-    form to a returning user signing in on a new machine, which is exactly
-    the population that has no local state. Entry points that mean
-    "get me an account" link to ``/auth/signup``; the tabs still flip
-    client-side either way.
-
-    An optional ``?message=`` query parameter is rendered as a banner on
-    the page (e.g. the Electron shell appends one explaining why the user
-    was redirected here to sign in).
-
-    An optional ``?return_to=`` query parameter (a same-origin path, e.g.
-    ``/create``) adds a back link to the page and is forwarded to
-    ``/post-login`` so a successful sign-in returns there. When it is
-    present without an explicit message, a default explainer banner about
-    the remote compute path is shown.
-    """
-    default_to_signup = request.path.rstrip("/").endswith("/signup")
-    return_to = safe_local_redirect_path(request.args.get("return_to"))
-    message = request.args.get("message")
-    if message is None and return_to is not None:
-        message = _REMOTE_SIGNIN_EXPLAINER
-    return make_html_response(
-        render_auth_page(
-            default_to_signup=default_to_signup,
-            message=message,
-            return_to=return_to,
-        )
-    )
-
-
-def _handle_signup_api() -> Response:
-    """Handle email/password sign-up (JSON API)."""
-    session_store = _get_session_store()
-    backend = _get_auth_backend()
-    body = request.get_json(silent=True, force=True) or {}
-    email = body.get("email", "").strip()
-    password = body.get("password", "")
-
-    if not email or not password:
-        return _json_response({"status": "FIELD_ERROR", "message": "Email and password are required"}, 400)
-
-    try:
-        result = backend.signup(email=email, password=password)
-    except (ImbueCloudCliError, AuthBackendError) as exc:
-        return _auth_error_response(exc)
-
-    if result.status != "OK":
-        return _json_response({"status": result.status, "message": result.message or ""})
-
-    _store_session_from_auth_result(session_store, result)
-    assert result.user is not None
-    return _json_response(
-        {"status": "OK", "userId": result.user.user_id, "needsEmailVerification": result.needs_email_verification}
-    )
-
-
-def _handle_signin_api() -> Response:
-    """Handle email/password sign-in (JSON API)."""
-    session_store = _get_session_store()
-    backend = _get_auth_backend()
-    body = request.get_json(silent=True, force=True) or {}
-    email = body.get("email", "").strip()
-    password = body.get("password", "")
-
-    if not email or not password:
-        return _json_response({"status": "FIELD_ERROR", "message": "Email and password are required"}, 400)
-
-    try:
-        result = backend.signin(email=email, password=password)
-    except (ImbueCloudCliError, AuthBackendError) as exc:
-        return _auth_error_response(exc)
-
-    if result.status != "OK":
-        return _json_response({"status": result.status, "message": result.message or ""})
-
-    _store_session_from_auth_result(session_store, result)
-    assert result.user is not None
-    return _json_response(
-        {
-            "status": "OK",
-            "userId": result.user.user_id,
-            "needsEmailVerification": result.needs_email_verification,
-        }
-    )
-
-
 def signout_user_via_plugin(user_id: str) -> None:
     """Sign ``user_id`` out via the mngr_imbue_cloud plugin and clear local state.
 
     Resolves the email for ``user_id`` against the cached ``auth list``,
     runs ``mngr imbue_cloud auth signout --account <email>`` (plugin owns
-    the SuperTokens session), invalidates the local identity cache, and
-    tears down the matching ``[providers.imbue_cloud_<slug>]`` block /
-    bounces ``mngr observe`` so ``mngr create``/``list`` reflect the new
-    state immediately.
+    the SuperTokens session; only this device's session is revoked),
+    invalidates the local identity cache, and tears down the matching
+    ``[providers.imbue_cloud_<slug>]`` block / bounces ``mngr observe`` so
+    ``mngr create``/``list`` reflect the new state immediately.
 
     No-ops gracefully when the user isn't currently visible to the
     plugin -- the cache is still invalidated so a stale entry can't
     survive.
     """
     session_store = _get_session_store()
-    backend = _get_auth_backend()
+    cli = get_state().imbue_cloud_cli
     session = session_store.get_session(user_id)
     signed_out_email: str | None = None
-    if session is not None:
-        signed_out_email = str(session.email)
-        backend.signout_account(signed_out_email)
-    else:
+    if session is None:
         logger.warning("No mirrored account for user {}; skipping plugin signout", user_id[:8])
+    elif cli is None:
+        logger.warning("imbue_cloud_cli is not configured; skipping plugin signout for user {}", user_id[:8])
+    else:
+        signed_out_email = str(session.email)
+        try:
+            cli.auth_signout(signed_out_email)
+        except ImbueCloudCliError as exc:
+            logger.warning("`mngr imbue_cloud auth signout` failed for {}: {}", signed_out_email, exc)
     session_store.invalidate_identity_cache()
     _kick_sync_scheduler()
-    wake_chrome_event_streams()
+    wake_ui_state_publisher()
     if signed_out_email and unset_imbue_cloud_provider_for_account(
         signed_out_email, root=MindsRoot.from_environment()
     ):
         _bounce_forward_observe()
 
 
-def _handle_signout_api() -> Response:
-    """Handle sign-out for a specific account.
+def _kick_sync_scheduler() -> None:
+    """Request an immediate workspace-record sync pass after an auth change."""
+    scheduler = get_state().sync_scheduler
+    if scheduler is not None:
+        scheduler.kick()
 
-    Expects a JSON body with a ``user_id`` field identifying which account to
-    sign out. If no user_id is provided, returns an error.
 
-    Delegates the actual SuperTokens revocation to ``mngr imbue_cloud auth
-    signout --account <email>``: the plugin owns the session and is the only
-    component that knows the access token. A failed backend revoke is
-    logged; we still drop the local mirror so the user's intent is honored
-    even when the connector is unreachable.
+def wake_ui_state_publisher() -> None:
+    """Make every open window re-read the account state after an auth change.
+
+    The ``/ui/ws`` channel carries the signed-in identity on its ``accounts``
+    frames, but the publisher only re-derives when a producer signals a
+    change. Auth changes originate on a Flask request thread and move nothing
+    the resolver watches, so without this nudge the home screen's account
+    launcher would keep the signed-out account's label indefinitely.
     """
-    body = request.get_json(silent=True, force=True)
-    user_id = body.get("user_id") if isinstance(body, dict) else None
-
-    if not user_id:
-        return _json_response({"status": "ERROR", "message": "user_id is required"}, 400)
-
-    signout_user_via_plugin(str(user_id))
-    return _json_response({"status": "OK"})
+    publisher = get_state().ui_publisher
+    if publisher is not None:
+        publisher.notify_change()
 
 
-def _handle_status_api() -> Response:
-    """Return current auth status and user info."""
-    session_store = _get_session_store()
-    user_info = _get_latest_user_info(session_store)
-    if user_info is None:
-        return _json_response({"signedIn": False})
-    return _json_response(
-        {
-            "signedIn": True,
-            "userId": str(user_info.user_id),
-            "email": user_info.email,
-            "displayName": user_info.display_name,
-            "userIdPrefix": str(user_info.user_id_prefix),
-        }
-    )
+# ---------------------------------------------------------------------------
+# The web-login flow: launch the plugin's browser login and track it.
+#
+# Each in-progress flow is tracked by a server-generated key the frontend
+# polls so it can render the "waiting for the browser" modal (with the
+# copy-the-link fallback) without blocking on the subprocess.
+# ---------------------------------------------------------------------------
 
+_WEB_LOGIN_FLOW_TTL_SECONDS = 10 * 60
 
-def _handle_email_verified_api() -> Response:
-    """Check if the current user's email is verified."""
-    session_store = _get_session_store()
-    backend = _get_auth_backend()
-    user_info = _get_latest_user_info(session_store)
-    if user_info is None:
-        return _json_response({"verified": False, "signedIn": False})
-    try:
-        verified = backend.is_email_verified(str(user_info.user_id), user_info.email)
-    except ImbueCloudCliError as exc:
-        logger.warning("Auth backend unreachable during is-email-verified: {}", exc)
-        return _json_response({"verified": False, "signedIn": True, "error": "backend_unavailable"}, 502)
-    return _json_response({"verified": verified, "signedIn": True})
-
-
-def _handle_resend_verification_api() -> Response:
-    """Resend the email verification email."""
-    session_store = _get_session_store()
-    backend = _get_auth_backend()
-    user_info = _get_latest_user_info(session_store)
-    if user_info is None:
-        return _json_response({"status": "ERROR", "message": "Not signed in"}, 401)
-    try:
-        ok = backend.send_verification_email(str(user_info.user_id), user_info.email)
-    except ImbueCloudCliError as exc:
-        logger.warning("Auth backend unreachable during resend-verification: {}", exc)
-        return _json_response({"status": "ERROR", "message": "Authentication service is unavailable"}, 502)
-    if not ok:
-        return _json_response({"status": "ERROR", "message": "Failed to send verification email"}, 502)
-    return _json_response({"status": "OK"})
-
-
-def _handle_signin_modal_page() -> Response:
-    """Render the sign-in modal page (``GET /auth/signin-modal``).
-
-    Served into the desktop client's shared modal WebContentsView so the
-    sign-in prompt covers the whole window, including the title bar. The
-    optional ``?return_to=`` (validated as a safe local path) is where a
-    successful sign-in lands the content view; it defaults to the create
-    screen, the modal's original caller. The optional ``?mode=signin``
-    leads with the sign-in tab, for the callers whose label promises exactly
-    that (the home screen's "Log in" launcher, the welcome splash's "Already
-    have an account? Sign in"). Every other caller -- the create flow, "Add
-    account" -- has no such promise to keep and gets the sign-up default.
-    """
-    return_to = safe_local_redirect_path(request.args.get("return_to")) or "/create"
-    default_to_signup = request.args.get("mode") != "signin"
-    # ``?restore=1`` means this sign-in displaced another modal (the workspace
-    # options panel), which the shell will put back. Handing back is only safe
-    # once the one-time error-reporting consent has been answered: while it is
-    # outstanding /post-login forces every destination to "/" so the gate is
-    # answered first, and a restored panel would cover it.
-    minds_config = get_state().minds_config
-    can_restore = request.args.get("restore") == "1" and (
-        minds_config is None or minds_config.get_error_reporting_consent_given()
-    )
-    return make_html_response(
-        render_signin_modal_page(return_to=return_to, default_to_signup=default_to_signup, can_restore=can_restore)
-    )
-
-
-def _handle_check_email_page() -> Response:
-    """Render the 'check your email' page."""
-    session_store = _get_session_store()
-    user_info = _get_latest_user_info(session_store)
-    email = user_info.email if user_info else "your email"
-    return make_html_response(render_check_email_page(email=email))
-
-
-# OAuth tracking. The plugin's ``mngr imbue_cloud auth oauth ...`` subprocess
-# is what actually drives an OAuth signin (it spins up a localhost listener,
-# launches the browser, exchanges the code, and writes the session). Each
-# in-progress flow is tracked here by a server-generated key the frontend
-# polls so it can show a "waiting for browser" state without blocking on the
-# subprocess.
-_OAUTH_FLOW_TTL_SECONDS = 10 * 60
-
-# Passed to the plugin's oauth subcommand so its browser success page bounces
+# Passed to the plugin's login subcommand so its browser success page bounces
 # straight back to the desktop app: a bare minds:// deeplink focuses the app
 # without navigating (see the Electron main process's handleDeeplink).
 _MINDS_FOCUS_DEEPLINK = "minds://"
 
 
-class _OAuthFlowStatus(FrozenModel):
-    """Status snapshot for a single in-flight OAuth subprocess.
+class _WebLoginFlowStatus(FrozenModel):
+    """Status snapshot for a single in-flight browser-login subprocess.
 
     ``state`` is one of ``"running"``, ``"finishing"``, ``"done"``, or
     ``"error"``. ``"finishing"`` means the sign-in was written to disk but the
-    desktop client is still mirroring it (registering the provider, bouncing the
-    latchkey-forward supervisor); the frontend brings the app to the front and
-    shows "Finishing up..." during it, then navigates once the state is
-    ``"done"``.
+    desktop client is still mirroring it (registering the provider, bouncing
+    the latchkey-forward supervisor); the frontend brings the app to the front
+    and shows "Finishing up..." during it, then refreshes once ``"done"``.
+    ``login_url_file`` is where the plugin writes the sign-in URL once its
+    loopback listener is live; the status endpoint reads it lazily for the
+    copy-the-link fallback while the flow is running. Once the subprocess
+    exits the temp file is deleted and the URL (dead, but still rendered by
+    the modal) is carried in ``login_url`` instead.
     """
 
     state: str
+    login_url_file: str | None = None
+    login_url: str | None = None
     user_id: str | None = None
     email: str | None = None
     display_name: str | None = None
@@ -591,32 +221,36 @@ class _OAuthFlowStatus(FrozenModel):
     deadline: float | None = None
 
 
-_oauth_flows: dict[str, _OAuthFlowStatus] = {}
-_oauth_flows_lock = threading.Lock()
+_web_login_flows: dict[str, _WebLoginFlowStatus] = {}
+_web_login_flows_lock = threading.Lock()
 
 
-def _record_oauth_status(flow_id: str, status: _OAuthFlowStatus) -> None:
-    with _oauth_flows_lock:
-        _prune_expired_oauth_flows_locked()
-        _oauth_flows[flow_id] = status
+def _record_web_login_status(flow_id: str, status: _WebLoginFlowStatus) -> None:
+    with _web_login_flows_lock:
+        _prune_expired_web_login_flows_locked()
+        _web_login_flows[flow_id] = status
 
 
-def _read_oauth_status(flow_id: str) -> _OAuthFlowStatus | None:
-    with _oauth_flows_lock:
-        _prune_expired_oauth_flows_locked()
-        return _oauth_flows.get(flow_id)
+def _read_web_login_status(flow_id: str) -> _WebLoginFlowStatus | None:
+    with _web_login_flows_lock:
+        _prune_expired_web_login_flows_locked()
+        return _web_login_flows.get(flow_id)
 
 
-def _prune_expired_oauth_flows_locked() -> None:
+def _prune_expired_web_login_flows_locked() -> None:
     now = time.monotonic()
-    expired = [flow_id for flow_id, st in _oauth_flows.items() if st.deadline is not None and st.deadline <= now]
+    expired = [flow_id for flow_id, st in _web_login_flows.items() if st.deadline is not None and st.deadline <= now]
     for flow_id in expired:
-        _oauth_flows.pop(flow_id, None)
+        _web_login_flows.pop(flow_id, None)
 
 
-def _run_oauth_subprocess(
-    provider_id: str,
+def _flow_deadline() -> float:
+    return time.monotonic() + _WEB_LOGIN_FLOW_TTL_SECONDS
+
+
+def _run_web_login_subprocess(
     flow_id: str,
+    url_file: Path,
     imbue_cloud_cli: ImbueCloudCli,
     session_store: MultiAccountSessionStore,
     sync_scheduler: WorkspaceSyncScheduler | None,
@@ -625,34 +259,36 @@ def _run_oauth_subprocess(
     latchkey_forward_supervisor: LatchkeyForwardSupervisor | None,
     connector_url: str,
 ) -> None:
-    """Run ``mngr imbue_cloud auth oauth <provider>`` in a background thread.
+    """Run ``mngr imbue_cloud auth login`` in a background thread.
 
-    The plugin opens the system browser, listens on its own localhost port for
-    the OAuth callback, exchanges the code, and writes the session to its own
-    state directory. We then mirror the resulting account identity into
-    ``MultiAccountSessionStore`` so the desktop UI can render it, register
-    a ``[providers.imbue_cloud_<slug>]`` entry (force-enabled, even if the
-    user previously clicked Disable on it in the providers panel), and bounce
-    the detached ``mngr latchkey forward`` supervisor (the single discovery
-    observer) so the new provider config is picked up immediately -- mirroring
-    what the email/password ``_store_session_from_auth_result`` path does for
-    non-OAuth signins.
+    The plugin opens the system browser onto the hosted accounts page,
+    listens on its own localhost port for the one-time code, exchanges it,
+    and writes the session to its own state directory. We then mirror the
+    resulting account identity into ``MultiAccountSessionStore`` so the
+    desktop UI can render it, register a ``[providers.imbue_cloud_<slug>]``
+    entry (force-enabled, even if the user previously clicked Disable on it
+    in the providers panel), and bounce the detached ``mngr latchkey
+    forward`` supervisor (the single discovery observer) so the new provider
+    config is picked up immediately.
     """
     try:
-        result = imbue_cloud_cli.auth_oauth(
-            account="", provider_id=provider_id, success_redirect_url=_MINDS_FOCUS_DEEPLINK
-        )
+        try:
+            result = imbue_cloud_cli.auth_login(success_redirect_url=_MINDS_FOCUS_DEEPLINK, url_file=url_file)
+        finally:
+            # The URL is dead once the subprocess exits (its loopback listener
+            # is gone): capture it for the final status records and delete the
+            # temp file so login attempts do not accumulate files.
+            login_url = _consume_login_url_file(url_file)
     except ImbueCloudCliError as exc:
-        logger.warning("Plugin OAuth subprocess failed for {}: {}", provider_id, exc)
-        _record_oauth_status(
+        logger.warning("Plugin web-login subprocess failed: {}", exc)
+        _record_web_login_status(
             flow_id,
-            _OAuthFlowStatus(
+            _WebLoginFlowStatus(
                 state="error",
-                # The frontend renders this verbatim in the auth page's error
-                # box, so it gets the same treatment as an email/password
-                # failure rather than the raw CLI failure string.
+                login_url=login_url,
+                # The frontend renders this verbatim in the modal's error box.
                 error=_user_facing_auth_message(exc),
-                deadline=time.monotonic() + _OAUTH_FLOW_TTL_SECONDS,
+                deadline=_flow_deadline(),
             ),
         )
         return
@@ -661,26 +297,26 @@ def _run_oauth_subprocess(
     # the session to disk), so mark the flow "finishing": the frontend brings
     # the app to the front and shows "Finishing up..." while we mirror the
     # session below, rather than leaving the user on the "waiting for the
-    # browser" page until the provider registration + supervisor bounce finish.
-    _record_oauth_status(
+    # browser" state until the provider registration + supervisor bounce finish.
+    _record_web_login_status(
         flow_id,
-        _OAuthFlowStatus(
+        _WebLoginFlowStatus(
             state="finishing",
+            login_url=login_url,
             user_id=str(result.user_id),
             email=str(result.email),
             display_name=result.display_name,
-            deadline=time.monotonic() + _OAUTH_FLOW_TTL_SECONDS,
+            deadline=_flow_deadline(),
         ),
     )
 
     # Anything that goes wrong while mirroring the signin into the desktop
-    # client must still resolve the flow status -- the frontend long-polls it,
-    # so an unresolved crash here would leave the user stuck. Nothing is caught:
-    # a mirroring crash propagates to the CG's ObservableThread (which logs it),
-    # while the finally block flips a still-unresolved ("running"/"finishing")
-    # status to "error".
+    # client must still resolve the flow status -- the frontend polls it, so an
+    # unresolved crash here would leave the user stuck. Nothing is caught: a
+    # mirroring crash propagates to the CG's ObservableThread (which logs it),
+    # while the finally block flips a still-unresolved status to "error".
     try:
-        _mirror_oauth_signin_result(
+        _mirror_signin_result(
             result=result,
             session_store=session_store,
             sync_scheduler=sync_scheduler,
@@ -689,33 +325,35 @@ def _run_oauth_subprocess(
             latchkey_forward_supervisor=latchkey_forward_supervisor,
             connector_url=connector_url,
         )
-        _record_oauth_status(
+        _record_web_login_status(
             flow_id,
-            _OAuthFlowStatus(
+            _WebLoginFlowStatus(
                 state="done",
+                login_url=login_url,
                 user_id=str(result.user_id),
                 email=str(result.email),
                 display_name=result.display_name,
-                deadline=time.monotonic() + _OAUTH_FLOW_TTL_SECONDS,
+                deadline=_flow_deadline(),
             ),
         )
     finally:
-        latest_status = _read_oauth_status(flow_id)
+        latest_status = _read_web_login_status(flow_id)
         if latest_status is not None and latest_status.state in ("running", "finishing"):
-            _record_oauth_status(
+            _record_web_login_status(
                 flow_id,
-                _OAuthFlowStatus(
+                _WebLoginFlowStatus(
                     state="error",
+                    login_url=login_url,
                     error=(
                         f"Signed in as {result.email}, but applying the signin locally failed; "
                         "see the desktop client logs for details."
                     ),
-                    deadline=time.monotonic() + _OAUTH_FLOW_TTL_SECONDS,
+                    deadline=_flow_deadline(),
                 ),
             )
 
 
-def _mirror_oauth_signin_result(
+def _mirror_signin_result(
     result: ImbueCloudAuthSession,
     session_store: MultiAccountSessionStore,
     sync_scheduler: WorkspaceSyncScheduler | None,
@@ -724,12 +362,10 @@ def _mirror_oauth_signin_result(
     latchkey_forward_supervisor: LatchkeyForwardSupervisor | None,
     connector_url: str,
 ) -> None:
-    """Mirror a completed plugin OAuth signin into the desktop client.
+    """Mirror a completed plugin signin into the desktop client.
 
-    Runs on the OAuth background thread, so every dependency is passed in
-    explicitly -- there is no Flask app context to resolve state from (that
-    is why this kicks the scheduler directly instead of going through
-    ``_kick_sync_scheduler``, whose ``get_state()`` needs an app context).
+    Runs on the web-login background thread, so every dependency is passed in
+    explicitly -- there is no Flask app context to resolve state from.
     """
     session_store.invalidate_identity_cache()
     if sync_scheduler is not None:
@@ -737,6 +373,8 @@ def _mirror_oauth_signin_result(
     if minds_config is not None and minds_config.get_default_account_id() is None:
         minds_config.set_default_account_id(str(result.user_id))
 
+    # Explicit signin -- always re-enable the provider entry, even if the
+    # user previously clicked Disable on it in the providers panel.
     if set_imbue_cloud_provider_for_account(
         str(result.email),
         connector_url=connector_url,
@@ -755,20 +393,13 @@ def _mirror_oauth_signin_result(
     )
 
 
-def _handle_oauth_redirect(provider_id: str) -> Response:
-    """Kick off the plugin's OAuth flow in a background thread.
+def _handle_web_login_start() -> Response:
+    """Kick off the plugin's browser login in a background thread (POST).
 
-    Returns immediately with a flow id the frontend can poll. The plugin
-    subprocess opens the system browser, captures the callback, and writes
-    the session itself; this route then mirrors the account identity into
-    ``MultiAccountSessionStore`` once the subprocess finishes.
-
-    The thread is started via ``root_concurrency_group.start_new_thread``
-    rather than a bare ``threading.Thread`` so that any unhandled
-    exception inside ``_run_oauth_subprocess`` (e.g. a slow
-    ``restart_observe`` raising ``TimeoutExpired``) is logged via the CG's
-    ``ObservableThread`` instead of disappearing silently and stalling
-    the user on a "Waiting..." page.
+    Returns immediately with a flow id the frontend polls. The plugin
+    subprocess opens the system browser, captures the loopback callback, and
+    writes the session itself; the background thread then mirrors the account
+    identity into ``MultiAccountSessionStore`` once the subprocess finishes.
     """
     state = get_state()
     imbue_cloud_cli: ImbueCloudCli | None = state.imbue_cloud_cli
@@ -782,19 +413,18 @@ def _handle_oauth_redirect(provider_id: str) -> Response:
         return _json_response({"status": "ERROR", "error": "imbue_cloud_cli is not configured"}, 503)
     if root_cg is None:
         return _json_response({"status": "ERROR", "error": "root_concurrency_group is not configured"}, 503)
-    if provider_id.lower() not in ("google", "github"):
-        return _json_response({"status": "ERROR", "error": f"Unknown provider: {provider_id}"}, 404)
 
     flow_id = secrets.token_urlsafe(16)
-    _record_oauth_status(
+    url_file = Path(tempfile.gettempdir()) / f"minds-web-login-{flow_id}.url"
+    _record_web_login_status(
         flow_id,
-        _OAuthFlowStatus(state="running", deadline=time.monotonic() + _OAUTH_FLOW_TTL_SECONDS),
+        _WebLoginFlowStatus(state="running", login_url_file=str(url_file), deadline=_flow_deadline()),
     )
     root_cg.start_new_thread(
-        target=_run_oauth_subprocess,
+        target=_run_web_login_subprocess,
         kwargs={
-            "provider_id": provider_id.lower(),
             "flow_id": flow_id,
+            "url_file": url_file,
             "imbue_cloud_cli": imbue_cloud_cli,
             "session_store": session_store,
             "sync_scheduler": sync_scheduler,
@@ -803,30 +433,50 @@ def _handle_oauth_redirect(provider_id: str) -> Response:
             "latchkey_forward_supervisor": latchkey_forward_supervisor,
             "connector_url": _get_connector_url(),
         },
-        name=f"imbue-cloud-oauth-{provider_id}",
+        name="imbue-cloud-web-login",
         is_checked=False,
     )
-    return _json_response(
-        {
-            "status": "OK",
-            "flow_id": flow_id,
-            "message": f"Opening {provider_id} sign-in in your browser. Complete the flow there.",
-        }
-    )
+    return _json_response({"status": "OK", "flow_id": flow_id})
 
 
-def _handle_oauth_status(flow_id: str) -> Response:
-    """Poll-friendly status for an in-flight OAuth flow.
+def _consume_login_url_file(url_file: Path) -> str | None:
+    """Read the plugin's sign-in URL (best effort) and delete the temp file."""
+    try:
+        raw = url_file.read_text().strip()
+    except OSError:
+        raw = ""
+    url_file.unlink(missing_ok=True)
+    return raw or None
 
-    The frontend long-polls this until ``state`` is ``"done"`` or ``"error"``.
+
+def _read_login_url(status: _WebLoginFlowStatus) -> str | None:
+    """The sign-in URL for the copy-the-link fallback, once the plugin has written it."""
+    if status.login_url is not None:
+        return status.login_url
+    if status.login_url_file is None:
+        return None
+    url_path = Path(status.login_url_file)
+    try:
+        raw = url_path.read_text().strip()
+    except OSError:
+        return None
+    return raw or None
+
+
+def _handle_web_login_status(flow_id: str) -> Response:
+    """Poll-friendly status for an in-flight web login (GET).
+
+    The frontend polls this until ``state`` is ``"done"`` or ``"error"``;
+    ``login_url`` appears as soon as the plugin's loopback listener is live.
     """
-    status = _read_oauth_status(flow_id)
+    status = _read_web_login_status(flow_id)
     if status is None:
         return _json_response({"status": "ERROR", "error": "Unknown flow id"}, 404)
     return _json_response(
         {
             "status": "OK",
             "state": status.state,
+            "login_url": _read_login_url(status),
             "user_id": status.user_id,
             "email": status.email,
             "display_name": status.display_name,
@@ -835,107 +485,42 @@ def _handle_oauth_status(flow_id: str) -> Response:
     )
 
 
-def _handle_forgot_password_page() -> Response:
-    """Render the forgot password page."""
-    return make_html_response(render_forgot_password_page())
+def _handle_legacy_auth_page_redirect() -> Response:
+    """Redirect the retired /auth/login and /auth/signup page URLs into the SPA.
 
-
-def _handle_forgot_password_api() -> Response:
-    """Send a password reset email.
-
-    This endpoint always returns a generic success response regardless of
-    whether the email exists or whether the backend call succeeds. Leaking
-    backend errors would enable email enumeration.
+    Sign-in now happens on the hosted browser page; ``?web-login=1`` makes the
+    SPA start that flow on load. Kept because legacy surfaces (older static
+    JS, stale bookmarks) still navigate here.
     """
-    backend = _get_auth_backend()
-    body = request.get_json(silent=True, force=True) or {}
-    email = body.get("email", "").strip()
-    if not email:
-        return _json_response({"status": "FIELD_ERROR", "message": "Email is required"}, 400)
-    try:
-        backend.forgot_password(email)
-    except (ImbueCloudCliError, AuthBackendError) as exc:
-        logger.warning("Auth backend unavailable during forgot-password; returning generic success: {}", exc)
-    return _json_response({"status": "OK", "message": "If an account exists, a reset email has been sent"})
+    params: dict[str, str] = {"web-login": "1"}
+    message = request.args.get("message")
+    if message:
+        params["web-login-message"] = message
+    return make_redirect_response(f"/?{urlencode(params)}", status_code=302)
 
 
 def _handle_reset_password_redirect() -> Response:
-    """Redirect legacy in-app reset links to the auth backend's reset page.
+    """Redirect legacy in-app reset links to the connector's reset page.
 
-    The reset link embedded in the reset email now points at the backend
-    directly; this redirect keeps any older links working.
+    The reset link embedded in current reset emails points at the connector
+    directly (its ``/auth/reset-password`` page); this redirect keeps any
+    older in-app links working.
     """
-    backend = _get_auth_backend()
     token = request.args.get("token", "")
-    target = str(backend.base_url).rstrip("/") + "/auth/reset-password"
+    target = _get_connector_url() + "/auth/reset-password"
     if token:
         target = f"{target}?{urlencode({'token': token})}"
     return make_redirect_response(target, status_code=302)
 
 
-def _handle_settings_page() -> Response:
-    """Render the account settings page."""
-    session_store = _get_session_store()
-    backend = _get_auth_backend()
-    user_info = _get_latest_user_info(session_store)
-    if user_info is None:
-        return make_redirect_response("/auth/login", status_code=302)
-
-    try:
-        provider = backend.get_user_provider(str(user_info.user_id))
-    except ImbueCloudCliError as exc:
-        logger.warning("Auth backend unreachable during settings page load: {}", exc)
-        provider = "email"
-
-    return make_html_response(
-        render_settings_page(
-            email=user_info.email,
-            display_name=user_info.display_name,
-            user_id=str(user_info.user_id),
-            provider=provider,
-            user_id_prefix=str(user_info.user_id_prefix),
-        )
-    )
-
-
-def _kick_sync_scheduler() -> None:
-    """Request an immediate workspace-record sync pass after an auth change."""
-    scheduler = get_state().sync_scheduler
-    if scheduler is not None:
-        scheduler.kick()
-
-
-def wake_chrome_event_streams() -> None:
-    """Make every open window re-read the account state after an auth change.
-
-    The chrome-events stream carries the signed-in identity on each
-    ``workspaces`` frame, but only re-derives it when its loop wakes. Auth
-    changes originate on a Flask request thread and move nothing the resolver
-    watches, so without this nudge the home screen's account launcher would
-    keep the signed-out account's label until the loop's next idle timeout.
-    """
-    get_state().chrome_event_broadcaster.wake_subscribers()
-
-
 def create_supertokens_blueprint() -> Blueprint:
-    """Create a Flask blueprint with the auth routes (mounted under /auth)."""
+    """Create a Flask blueprint with the account-auth routes (mounted under /auth)."""
     blueprint = Blueprint("supertokens", __name__, url_prefix="/auth")
 
-    blueprint.add_url_rule("/login", view_func=_handle_auth_page, methods=["GET"], endpoint="login_page")
-    blueprint.add_url_rule("/signup", view_func=_handle_auth_page, methods=["GET"], endpoint="signup_page")
-    blueprint.add_url_rule("/api/signup", view_func=_handle_signup_api, methods=["POST"])
-    blueprint.add_url_rule("/api/signin", view_func=_handle_signin_api, methods=["POST"])
-    blueprint.add_url_rule("/api/signout", view_func=_handle_signout_api, methods=["POST"])
-    blueprint.add_url_rule("/api/status", view_func=_handle_status_api, methods=["GET"])
-    blueprint.add_url_rule("/api/email-verified", view_func=_handle_email_verified_api, methods=["GET"])
-    blueprint.add_url_rule("/api/resend-verification", view_func=_handle_resend_verification_api, methods=["POST"])
-    blueprint.add_url_rule("/signin-modal", view_func=_handle_signin_modal_page, methods=["GET"])
-    blueprint.add_url_rule("/check-email", view_func=_handle_check_email_page, methods=["GET"])
-    blueprint.add_url_rule("/oauth/<provider_id>", view_func=_handle_oauth_redirect, methods=["GET"])
-    blueprint.add_url_rule("/oauth/status/<flow_id>", view_func=_handle_oauth_status, methods=["GET"])
-    blueprint.add_url_rule("/forgot-password", view_func=_handle_forgot_password_page, methods=["GET"])
-    blueprint.add_url_rule("/api/forgot-password", view_func=_handle_forgot_password_api, methods=["POST"])
+    blueprint.add_url_rule("/api/web-login/start", view_func=_handle_web_login_start, methods=["POST"])
+    blueprint.add_url_rule("/api/web-login/status/<flow_id>", view_func=_handle_web_login_status, methods=["GET"])
+    blueprint.add_url_rule("/login", view_func=_handle_legacy_auth_page_redirect, methods=["GET"], endpoint="login")
+    blueprint.add_url_rule("/signup", view_func=_handle_legacy_auth_page_redirect, methods=["GET"], endpoint="signup")
     blueprint.add_url_rule("/reset-password", view_func=_handle_reset_password_redirect, methods=["GET"])
-    blueprint.add_url_rule("/settings", view_func=_handle_settings_page, methods=["GET"])
 
     return blueprint

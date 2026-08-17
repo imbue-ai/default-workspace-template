@@ -95,10 +95,11 @@ become Vault entries in step 4.
   - Account ID
   - Zone ID
   - Base domain (e.g. `staging.minds.example.com`)
-  - API token with **Tunnel Write** and **DNS Write** scoped to the
-    zone (`https://dash.cloudflare.com/profile/api-tokens`).
-  - Optional: comma-separated list of identity-provider UUIDs to
-    allowlist on Cloudflare Access apps (`CLOUDFLARE_ALLOWED_IDPS`).
+  - Account-owned API token (`cfat_`, not `cfut_`) with **DNS: Edit**
+    (ACME DNS-01 challenge TXT records), **Workers R2 Storage: Edit**,
+    **Account API Tokens: Edit**, and **Account Analytics: Read**
+    (`https://dash.cloudflare.com/profile/api-tokens`); see
+    `.minds/template/cloudflare.sh` for the canonical scope list.
 
 - [ ] **Google OAuth client** for staging. Create a new client at
   <https://console.cloud.google.com/apis/credentials>. Redirect URI:
@@ -147,8 +148,9 @@ become Vault entries in step 4.
 one known placeholder -- update it in this branch and commit:
 
 - [ ] `cloudflare_domain = "CHANGE_ME.example.com"` -> the real staging
-  zone (e.g. `"staging.minds.example.com"`). Read by the connector at
-  runtime and used by tunnel creation.
+  zone (e.g. `"staging.minds.example.com"`). Read by the tier setup
+  scripts; the connector's ACME DNS-01 challenge records go into the
+  zone identified by `CLOUDFLARE_ZONE_ID`.
 
 The other fields (`modal_workspace`, `vault_path_prefix`, the
 `[secrets]` services list, `[lifecycle]`, `[min_containers]`) are
@@ -201,8 +203,13 @@ Modal-pushed entries (consumed by the deployed apps at runtime):
 
 - [ ] **`secrets/minds/staging/cloudflare`** -- `CLOUDFLARE_API_TOKEN`,
   `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`,
-  `CLOUDFLARE_DOMAIN` (same as `deploy.toml`'s `cloudflare_domain`),
-  optionally `CLOUDFLARE_ALLOWED_IDPS`.
+  `CLOUDFLARE_DOMAIN` (same as `deploy.toml`'s `cloudflare_domain`).
+
+- [ ] **`secrets/minds/staging/sharing`** -- the self-hosted sharing
+  config (see `.minds/template/sharing.sh` for the canonical key list
+  and per-key docs): `SHARE_CONTENT_DOMAIN`, `FRPS_AUTH_SECRET`, `ACME_CA_LIST`,
+  `ACME_EAB_KID_ZEROSSL` / `ACME_EAB_HMAC_ZEROSSL`,
+  `BROKER_JWT_SIGNING_KEY_PEM`, `ACCOUNTS_BASE_URL`.
 
 - [ ] **`secrets/minds/staging/litellm`** -- `ANTHROPIC_API_KEY`,
   `DATABASE_URL` (pooled DSN for the `litellm_cost` DB),
@@ -316,6 +323,50 @@ state.
 
 ---
 
+## 6b. Stand up the staging share relays
+
+Workspace sharing needs the relay fleet registered in the connector's
+`relays` table -- **two relays per region** (`us1`, `us2`) in the multi-relay
+design (blueprint/multi-relay): every shared workspace tunnels to all of its
+region's relays, and the region wildcard DNS carries every relay IP. Each
+relay is one OVH Public Cloud instance; see `apps/share_relay/README.md` for
+what runs on it.
+
+- [ ] Mint the tier's relay SSH keypair and push it to Vault (schema:
+  `.minds/template/relay-ssh.sh`) so any operator can redeploy later:
+  ```bash
+  ssh-keygen -t ed25519 -f /tmp/relay_key -N ""
+  vault kv put -mount=secrets minds/staging/relay-ssh/RELAY_SSH_PRIVATE_KEY value=@/tmp/relay_key
+  vault kv put -mount=secrets minds/staging/relay-ssh/RELAY_SSH_PUBLIC_KEY value=@/tmp/relay_key.pub
+  ```
+- [ ] For each region (`us1`, `us2`) and each ordinal (`1`, `2`), with the
+  tier's OVH creds + `OVH_CLOUD_PROJECT_ID` (Vault `secrets/minds/staging/ovh`)
+  and `MINDS_ADMIN_KEY` (Vault `secrets/minds/staging/supertokens`) exported:
+  ```bash
+  just provision-share-relay staging <region> <ordinal> <ovh-region> /tmp/relay_key.pub
+  # wait for cloud-init: ssh debian@<ip> cloud-init status --wait
+  just register-share-relay https://<connector> <region> <ip>:7000 <ip> share-relay-staging-<region>-<ordinal>
+  # note the relay_id the registration prints
+  just deploy-share-relay <ip> <relay_id> <region> <SHARE_CONTENT_DOMAIN> \
+      "https://<connector>/frps/auth/<FRPS_AUTH_SECRET>"
+  ```
+  (`FRPS_AUTH_SECRET` and `SHARE_CONTENT_DOMAIN` come from the tier's
+  `sharing` Vault entry pushed in step 4; the connector must already be
+  deployed -- step 6 -- because the relay's plugin-auth URL points at it and
+  registration writes its `relays` table.)
+- [ ] Seed the region DNS record sets once per region (the connector's
+  per-minute health sweep maintains them from then on):
+  ```bash
+  just dns-share-relay <region> <SHARE_CONTENT_DOMAIN> "<ip-1> <ip-2>"
+  ```
+- [ ] `rm /tmp/relay_key /tmp/relay_key.pub` once provisioned.
+- [ ] Verify: `relay.<region>.<domain>` + a wildcard name resolve to BOTH
+  instances; `curl http://<each-ip>:8080/healthz` returns `ok`;
+  `curl -sI http://relay.<region>.<domain>/` is a 301 to https;
+  `mngr imbue_cloud admin relays list` shows every relay healthy.
+
+---
+
 ## 7. (Optional) bake one staging pool host
 
 Only needed if you want the staging desktop client to use IMBUE_CLOUD
@@ -377,10 +428,11 @@ The terminal should print a `login_url`. Open it in a browser.
   `/creating/<agent-id>` page; expect it to flip to `DONE` and
   redirect to the agent.
 - [ ] The agent's dockview UI loads and the `web` service is
-  reachable through `<agent-id>.localhost:<port>/service/web/`.
-- [ ] Open the Share modal on a service and verify the global
-  Cloudflare URL is generated and reachable (gated on the email you
-  signed in with).
+  reachable through its own origin, `web.host-<hex>.localhost:<port>/`.
+- [ ] Open the workspace options panel's Share tab, enable sharing for
+  the email you signed in with, and verify the share URL (on the
+  self-hosted relay under `SHARE_CONTENT_DOMAIN`) is generated and
+  reachable.
 
 Tear-down (only if you want to start over -- staging destroy wipes
 the SuperTokens users + the Neon DB schema, NOT the underlying

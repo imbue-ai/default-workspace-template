@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import AnyUrl
 from pydantic import Field
 from pydantic import SecretStr
+from pydantic import computed_field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr_imbue_cloud.errors import InvalidBuildArgError
@@ -21,6 +22,8 @@ from imbue.mngr_imbue_cloud.primitives import R2AccessKeyId
 from imbue.mngr_imbue_cloud.primitives import R2BucketAccess
 from imbue.mngr_imbue_cloud.primitives import SliceBakeOutcomeStatus
 from imbue.mngr_imbue_cloud.primitives import SuperTokensUserId
+from imbue.mngr_imbue_cloud.primitives import WorkspaceStatus
+from imbue.mngr_imbue_cloud.primitives import is_box_exclusive_to_tier
 
 
 class PoolHostDestroyTarget(FrozenModel):
@@ -79,6 +82,74 @@ class SliceBakeReport(FrozenModel):
     succeeded: int = Field(description="Slices baked and inserted into the pool")
     failed: int = Field(description="Slices that failed to bake (their VMs are rolled back/reaped)")
     slices: tuple[SliceBakeOutcome, ...] = Field(description="Per-slice outcomes, in completion order")
+
+
+class BoxTierAudit(FrozenModel):
+    """What one bare-metal box actually carries, read over SSH rather than from the DB.
+
+    The slot accounting in ``admin server list`` counts only the querying env's own
+    ``pool_hosts`` rows, so another env's slices -- and in particular another
+    *tier's* -- are invisible to it. This is the on-box truth: every env's slices,
+    plus the two ways a box drifts across tiers.
+    """
+
+    server_id: str = Field(description="The bare_metal_servers row id of the audited box")
+    public_address: str = Field(description="SSH-reachable public address the audit reached the box at")
+    slot_count: int = Field(description="Slices the box holds when full")
+    box_used_slots: int = Field(description="Slice resources actually on the box, across every env (plus legacy)")
+    authorized_key_count: int = Field(description="Public keys authorized for the box's lima service user")
+    foreign_tier_slices: tuple[str, ...] = Field(
+        description="Slice resources on the box stamped for an env belonging to another tier, sorted"
+    )
+    degraded_md_arrays: tuple[str, ...] = Field(
+        description="md RAID arrays on the box running with a failed member (from /proc/mdstat)"
+    )
+    raw_swap_devices: tuple[str, ...] = Field(
+        description=(
+            "Swap devices that are raw (non-md) partitions, i.e. unmirrored -- a disk death loses "
+            "their pages and SIGBUS-kills processes; fixed by a prep re-run (from /proc/swaps)"
+        )
+    )
+
+    @computed_field
+    @property
+    def is_exclusive_to_tier(self) -> bool:
+        """Whether a bake onto this box would pass the tier-exclusivity guard."""
+        return is_box_exclusive_to_tier(
+            authorized_key_count=self.authorized_key_count,
+            foreign_tier_slice_count=len(self.foreign_tier_slices),
+        )
+
+
+class UnauditedBox(FrozenModel):
+    """A box the audit could not read, and why.
+
+    Reported rather than raised: a fleet audit exists to find boxes in a bad
+    state, so one unreachable box must not cost the operator every other box's
+    verdict. An unaudited box is explicitly NOT a clean one.
+    """
+
+    server_id: str = Field(description="The bare_metal_servers row id of the box that could not be read")
+    public_address: str | None = Field(description="The box's recorded address (None when the row has none)")
+    reason: str = Field(description="Why the audit could not read the box")
+
+
+class BoxTierAuditReport(FrozenModel):
+    """The summary ``admin server list --verify-occupancy`` emits: per-box audits plus counts."""
+
+    env_name: str | None = Field(description="Env whose tier the boxes were audited against (None when not given)")
+    is_foreign_tier_checked: bool = Field(
+        description=(
+            "Whether the foreign-tier-slice half of the audit ran. False without an env name: "
+            "the tier to compare against is then unknown, so an empty foreign_tier_slices means "
+            "'not checked', NOT 'clean'."
+        )
+    )
+    exclusive: int = Field(description="Boxes that belong solely to this tier")
+    contaminated: int = Field(description="Boxes a bake would now refuse (foreign-tier slice or extra key)")
+    unaudited: int = Field(description="Boxes that could not be read, so their state is unknown")
+    boxes: tuple[BoxTierAudit, ...] = Field(description="Per-box audits, in fleet-table order")
+    unaudited_boxes: tuple[UnauditedBox, ...] = Field(description="Boxes that could not be read, in fleet-table order")
 
 
 class PaidListEntry(FrozenModel):
@@ -260,6 +331,33 @@ class LeaseResult(FrozenModel):
     )
 
 
+class WorkspaceInfo(FrozenModel):
+    """One entry from GET /workspaces: a workspace in any lifecycle state.
+
+    Placement fields (``vps_address`` and the two ports) are None while the
+    workspace is stopped -- its VM then exists only as encrypted objects in
+    the tier's storage bucket. ``status`` uses the wire lifecycle vocabulary
+    (:class:`~imbue.mngr_imbue_cloud.primitives.WorkspaceStatus`).
+    """
+
+    host_db_id: LeaseDbId = Field(description="Durable workspace identity (the connector row id)")
+    status: WorkspaceStatus = Field(description="Lifecycle status: running/stopping/stopped/starting/crashed")
+    vps_address: str | None = Field(default=None, description="Box address (None while stopped)")
+    ssh_port: int | None = Field(default=None, description="VM-root forwarded port (None while stopped)")
+    ssh_user: str = Field(default="root", description="SSH user on the VM")
+    container_ssh_port: int | None = Field(default=None, description="Container forwarded port (None while stopped)")
+    agent_id: str = Field(description="Pre-baked mngr agent id")
+    host_id: str = Field(description="mngr host id")
+    host_name: str = Field(description="User-chosen friendly name")
+    attributes: dict[str, Any] = Field(default_factory=dict, description="Lease attributes")
+    leased_at: str = Field(default="", description="ISO-8601 lease timestamp")
+    stop_requested_at: str | None = Field(default=None, description="When the current/last stop was requested")
+    stopped_at: str | None = Field(default=None, description="When the workspace reached stopped")
+    transition_error: str | None = Field(default=None, description="Last stop/start failure, if any")
+    outer_host_public_key: str | None = Field(default=None, description="Pinned VM-root sshd host key")
+    container_host_public_key: str | None = Field(default=None, description="Pinned container sshd host key")
+
+
 class LeasedHostInfo(FrozenModel):
     """One entry from GET /hosts."""
 
@@ -303,6 +401,14 @@ class AuthSession(FrozenModel):
         default=None,
         description="UTC datetime at which the access token expires (decoded from JWT exp)",
     )
+    is_pending_verification: bool = Field(
+        default=False,
+        description=(
+            "Legacy field, no longer consumed: email verification is non-blocking, so every "
+            "session counts as signed in. Kept so session files written by older plugin "
+            "versions still parse; new writes omit it."
+        ),
+    )
 
 
 class LiteLLMKeyMaterial(FrozenModel):
@@ -324,29 +430,59 @@ class LiteLLMKeyInfo(FrozenModel):
     user_id: str | None = None
 
 
-class TunnelInfo(FrozenModel):
-    """A Cloudflare tunnel record."""
+class ShareRelayEndpoint(FrozenModel):
+    """One relay a shared workspace tunnels to: its registered id and tunnel-control endpoint."""
 
-    tunnel_name: str
-    tunnel_id: str
-    token: SecretStr | None = None
-    services: tuple[str, ...] = ()
+    relay_id: str = Field(description="The relay's registered id (relay-<hex>)")
+    endpoint: str = Field(description="host:port the workspace's frpc dials")
 
 
-class ServiceInfo(FrozenModel):
-    """A service forwarded over a Cloudflare tunnel."""
+class ShareRelayLogin(FrozenModel):
+    """One relay's last tunnel Login stamp for a share (from the status document)."""
 
-    service_name: str
-    service_url: str
-    hostname: str
+    relay_id: str = Field(description="The relay's registered id (relay-<hex>)")
+    last_login_at: str | None = Field(default=None, description="When the share's tunnel last logged into this relay")
 
 
-class AuthPolicy(FrozenModel):
-    """Cloudflare Access policy expressed as allowed emails / IDPs."""
+class ShareInfo(FrozenModel):
+    """One workspace's self-hosted share record (the relay-based sharing model)."""
 
-    emails: tuple[str, ...] = ()
-    email_domains: tuple[str, ...] = ()
-    require_idp: tuple[str, ...] = ()
+    host_id: str = Field(description="The workspace's host coordinate (host-<32hex>)")
+    workspace_domain: str = Field(description="The share's registrable base, host-<hex>.<user>.<region>.<domain>")
+    region: str = Field(description="Relay region code the share is served from")
+    state: str = Field(description="'active' while shared; 'inactive' after unshare")
+    relay_endpoints: tuple[ShareRelayEndpoint, ...] = Field(
+        default=(), description="Every relay of the share's region the workspace tunnels to"
+    )
+    relays: tuple[ShareRelayLogin, ...] = Field(
+        default=(), description="Per-relay tunnel login stamps (status documents only; empty elsewhere)"
+    )
+    relay_token: SecretStr | None = Field(
+        default=None, description="Opaque per-share relay token; returned once at share-enable"
+    )
+    last_tunnel_login_at: str | None = Field(default=None, description="Last relay tunnel Login stamp (any relay)")
+    cert_not_after: str | None = Field(default=None, description="Expiry of the newest issued certificate")
+
+
+class ShareRelayMap(FrozenModel):
+    """The relay fleet as reported by the connector: region -> tunnel-control endpoints."""
+
+    relay_endpoints_by_region: dict[str, tuple[str, ...]] = Field(
+        description="Relay tunnel-control endpoints (host:port) per region code"
+    )
+
+
+class RelayAdminInfo(FrozenModel):
+    """One relay row from the connector's fleet inventory (admin API)."""
+
+    relay_id: str = Field(description="The relay's registered id (relay-<hex>)")
+    region: str = Field(description="Region code the relay serves")
+    tunnel_endpoint: str = Field(description="host:port the workspaces' frpc dials")
+    ip_address: str = Field(description="Public IPv4 (DNS answer + healthz probe target)")
+    instance_name: str = Field(description="Human-readable OVH instance name")
+    is_active: bool = Field(description="False once retired")
+    health: str = Field(description="'healthy' / 'unhealthy' per the connector's sweep")
+    consecutive_probe_failures: int = Field(description="Failed healthz probes since the last success")
 
 
 class R2BucketInfo(FrozenModel):
@@ -413,25 +549,34 @@ class StorageRecheckResult(FrozenModel):
 class AccountEntitlementValues(FrozenModel):
     """The quota values an account currently holds (mirrors the connector's PlanEntitlements)."""
 
-    max_remote_workspaces: int = Field(description="Max concurrent pool-host leases (running or stopped)")
-    max_tunnels: int = Field(description="Max Cloudflare tunnels")
-    max_services_per_tunnel: int = Field(description="Max forwarded services per tunnel")
+    max_remote_workspaces: int = Field(description="Max running remote workspaces (leased/stopping/starting)")
+    max_total_workspaces: int = Field(description="Max total remote workspaces, running + stopped")
     max_buckets: int = Field(description="Max R2 buckets")
     max_total_bucket_bytes: int = Field(description="Max total bytes across all the account's buckets")
     monthly_llm_spend_usd: float = Field(description="Monthly LLM spend cap in USD (rolling)")
     max_active_synced_workspaces: int = Field(description="Max ACTIVE synced workspace records")
+    # CLEANUP: drop the two tunnel-era compat fields below once the connector
+    # stops serving them (the connector hardcodes them to 0 for v0.3.11
+    # clients and removes them once the desktop fleet is on the first
+    # post-v0.3.11 minds release; see _DEPRECATED_TUNNEL_ENTITLEMENT_FIELDS in
+    # the connector's accounts.py). They exist here only so extra="forbid"
+    # does not reject the compat payload.
+    max_tunnels: int = Field(default=0, description="Deprecated tunnel-era compat field; always 0")
+    max_services_per_tunnel: int = Field(default=0, description="Deprecated tunnel-era compat field; always 0")
 
 
 class AccountUsageInfo(FrozenModel):
     """Live usage numbers for an account (mirrors the connector's AccountUsage)."""
 
-    remote_workspaces: int = Field(description="Current pool-host leases")
-    tunnels: int = Field(description="Current Cloudflare tunnels")
+    remote_workspaces: int = Field(description="Current running pool-host leases")
+    total_workspaces: int = Field(description="Current total remote workspaces, running + stopped")
     buckets: int = Field(description="Current R2 buckets")
     total_bucket_bytes: int = Field(description="Total bytes across the account's buckets")
     llm_spend_usd_this_period: float = Field(description="LiteLLM aggregate spend in the current budget period")
     llm_budget_resets_at: str | None = Field(default=None, description="When the rolling LLM budget period resets")
     active_synced_workspaces: int = Field(description="Current ACTIVE synced workspace records")
+    # CLEANUP: drop alongside the tunnel-era compat entitlement fields above.
+    tunnels: int = Field(default=0, description="Deprecated tunnel-era compat field; always 0")
 
 
 class AccountInfo(FrozenModel):

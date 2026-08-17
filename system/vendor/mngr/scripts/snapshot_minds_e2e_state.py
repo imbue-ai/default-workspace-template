@@ -152,6 +152,18 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     # stacked template's docker_runtime outranks it.) Mirrors the pytest path in
     # apps/minds/test_snapshot_resume.py.
     _write_to_os_environ("MINDS_DOCKER_RUNTIME_DEFAULT", "RUNC")
+    # The snapshot-resume suite never exercises the browser stack, so the
+    # workspace skips its env.d browser unit -- most importantly the
+    # hundreds-of-MB Fortress engine download -- making this build faster and
+    # deterministic by construction (no deferred install left to race). The
+    # switch rides MINDS_EXTRA_PASS_HOST_ENV -> `mngr create --pass-host-env`
+    # -> the host env file on the workspace's persistent volume, so it is in
+    # the agent environment on EVERY boot: the unit re-evaluates it each boot,
+    # which also keeps resumed test sandboxes from starting the download
+    # mid-suite. Xvfb itself is baked into the DEFAULT_WORKSPACE_TEMPLATE
+    # image, so no supervisord service depends on the skipped unit.
+    _write_to_os_environ("DWT_SKIP_BROWSER_UNIT", "1")
+    _write_to_os_environ("MINDS_EXTRA_PASS_HOST_ENV", "DWT_SKIP_BROWSER_UNIT")
     # The paired DEFAULT_WORKSPACE_TEMPLATE worktree was materialized on the runner and baked into the
     # image at ``.external_worktrees/default-workspace-template``; resolve it
     # (errors loudly if the bake did not stage it).
@@ -160,6 +172,11 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     debug_port = find_free_port()
     print(f"[snapshot] workspace={workspace_name} debug_port={debug_port}", flush=True)
     create_workspace_via_electron(default_workspace_template_path, workspace_name, debug_port)
+    # No deferred-install wait here: DWT_SKIP_BROWSER_UNIT (set above) turns
+    # the env.d browser unit off entirely, and Xvfb is baked into the image,
+    # so there is nothing racing this snapshot -- the bounded wait that used
+    # to sit here guarded a snapshot-without-Xvfb failure mode that can no
+    # longer occur.
     # IMPORTANT: do NOT call destroy_agent_best_effort here. The whole
     # point of this script is to leave the workspace agent + Docker
     # container's on-disk state (volumes, /home/user/workspace, the
@@ -223,6 +240,11 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
 _STAGING_RSYNC_EXCLUDES: Final[tuple[str, ...]] = (
     ".venv",
     "node_modules",
+    # Host-built bundled binaries, re-provisioned in-image by ensure-binaries.js
+    # below. Excluding them keeps the largest single item out of the upload, and
+    # keeps a macOS host's arm64 binaries from landing in this Linux image, where
+    # ensure-binaries would see them as present and skip.
+    "/apps/minds/resources",
     "test-results",
     ".test_output",
     "__pycache__",
@@ -253,6 +275,11 @@ _PNPM_MANIFEST_RELATIVE_PATHS: Final[tuple[str, ...]] = (
     "apps/minds/pnpm-lock.yaml",
     "apps/minds/pnpm-workspace.yaml",
     "apps/minds/.npmrc",
+    # The desktop client's Mithril frontend is its own pnpm workspace root
+    # (separate lockfile); its manifests ride in the same cacheable layer.
+    "apps/minds/frontend/package.json",
+    "apps/minds/frontend/pnpm-lock.yaml",
+    "apps/minds/frontend/pnpm-workspace.yaml",
 )
 
 
@@ -486,7 +513,10 @@ def _build_snapshot_image(
             'if [ $attempt -ge 3 ]; then echo "pnpm install: all 3 attempts failed" >&2; exit 1; fi; '
             'echo "pnpm install attempt $attempt failed; retrying in $((attempt * 10))s..." >&2; '
             "sleep $((attempt * 10)); "
-            "done",
+            "done && "
+            # The frontend workspace's deps warm the same cacheable layer; no
+            # retry loop needed (its only postinstall is esbuild's tiny check).
+            "cd /code/mngr/apps/minds/frontend && pnpm install --frozen-lockfile",
         )
         # Third-party Python deps layer: only the uv manifests. `--no-install-workspace`
         # installs just the locked third-party deps (uv constructs the
@@ -520,27 +550,26 @@ def _build_snapshot_image(
         # venv / node_modules with the actual checkout (e.g. a member
         # pyproject.toml whose metadata changed).
         #
-        # ensure-binaries + build:css then run (both need what pnpm install
-        # provides), mirroring `pnpm start`'s prestart hook, which the e2e
-        # runner never triggers because it runs the app straight from source.
+        # ensure-binaries then runs (it needs what pnpm install provides),
+        # mirroring `pnpm start`'s prestart hook, which the e2e runner never
+        # triggers because it runs the app straight from source.
         # ensure-binaries downloads the bundled binaries (restic, uv, git,
         # limactl, desync) into apps/minds/resources/ -- without restic there,
         # the sync-e2e backup flows fail with "restic binary not found".
-        # build:css produces the gitignored Tailwind stylesheet app.min.css:
-        # without it app.min.css 404s in the renderer -- and since the
-        # onboarding driver detects a screen advancing via
-        # `wait_for_selector(state="hidden")` and the `.hidden` rule lives in
-        # that stylesheet, a missing stylesheet makes every onboarding screen
-        # look stuck. Mirrors the Electron e2e test setup.
         #
         # The /app -> /code/mngr symlink (independent) works around offload
         # v0.9.7's create_from_image hardcoding workdir="/app": our project is at
         # /code/mngr, so the symlink lets `uv run pytest` find the project venv
         # from offload's chosen workdir.
+        # The SPA bundle build produces the Mithril UI: static/ui/ is
+        # gitignored build output, and without it every hub route serves the
+        # "frontend not built" page, so the e2e onboarding driver never sees
+        # the create form.
         .run_commands(
             "( cd /code/mngr && uv sync --all-packages ) && "
             "( cd /code/mngr/apps/minds && pnpm install --frozen-lockfile ) && "
-            "( cd /code/mngr/apps/minds && node scripts/ensure-binaries.js && pnpm run build:css ) && "
+            "( cd /code/mngr/apps/minds && node scripts/ensure-binaries.js ) && "
+            "( cd /code/mngr/apps/minds/frontend && pnpm install --frozen-lockfile && pnpm generate && pnpm build ) && "
             "ln -s /code/mngr /app",
         )
     )
@@ -631,6 +660,13 @@ def _create_workspace_in_sandbox(sandbox: modal.Sandbox) -> None:
     because Electron needs an X display.
     """
     command = "cd /code/mngr && xvfb-run -a uv run python -c {}".format(shlex.quote(_IN_SANDBOX_RUNNER_PROGRAM))
+    # Budget: 1500s. The wrapped runner budgets 900s for the post-submit create
+    # phase alone (its headline cost is the in-sandbox DEFAULT_WORKSPACE_TEMPLATE
+    # container build, legitimately ~8-10.5 minutes in CI), plus the Electron
+    # launch/attach and system-interface phases. Keeping this exec timeout above
+    # any realistic run total means a stall hits the runner's own per-phase
+    # deadline (which names the stuck phase) rather than this generic exec
+    # timeout.
     returncode = _exec_in_sandbox(
         sandbox,
         command,

@@ -28,11 +28,15 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_disk_gib
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_memory_mib
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_vcpus
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slot_count
+from imbue.mngr_imbue_cloud.slices.bare_metal import count_authorized_key_lines
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_slice_resource_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import find_server_capacity_by_id
+from imbue.mngr_imbue_cloud.slices.bare_metal import foreign_tier_slice_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import is_slice_owned_by_env
 from imbue.mngr_imbue_cloud.slices.bare_metal import is_valid_status_transition
 from imbue.mngr_imbue_cloud.slices.bare_metal import next_server_status
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_degraded_md_arrays
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_raw_swap_devices
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_instance_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_name_env_owner
@@ -329,3 +333,113 @@ def test_build_slice_container_memory_start_args_pins_swap_to_the_memory_cap() -
     # --memory-swap equals --memory so the container can never swap (it must be
     # shed under pressure, not thrash).
     assert build_slice_container_memory_start_args(8192) == ("--memory=7168m", "--memory-swap=7168m")
+
+
+def test_foreign_tier_slice_names_flags_a_dev_slice_on_a_staging_box() -> None:
+    # The exact shape of the incident this guard exists for: a dev env's slice
+    # carved onto a box the staging tier owns.
+    theirs = slice_lima_disk_name(HostId.generate(), "dev-xiaq")
+    mine = slice_lima_disk_name(HostId.generate(), "staging")
+    assert foreign_tier_slice_names({theirs, mine}, "staging") == {theirs}
+
+
+def test_foreign_tier_slice_names_allows_box_sharing_within_the_dev_tier() -> None:
+    # Several dev envs on one dev box is documented, routine, and must stay allowed.
+    josh = slice_lima_disk_name(HostId.generate(), "dev-josh")
+    alice = slice_lima_disk_name(HostId.generate(), "dev-alice")
+    assert foreign_tier_slice_names({josh, alice}, "dev-josh") == set()
+
+
+def test_foreign_tier_slice_names_flags_staging_slices_from_a_dev_env() -> None:
+    # Symmetric: the guard fires from whichever side bakes second.
+    staging_slice = slice_lima_disk_name(HostId.generate(), "staging")
+    assert foreign_tier_slice_names({staging_slice}, "dev-josh") == {staging_slice}
+
+
+def test_foreign_tier_slice_names_separates_production_from_staging() -> None:
+    production_slice = slice_lima_disk_name(HostId.generate(), "production")
+    assert foreign_tier_slice_names({production_slice}, "staging") == {production_slice}
+    assert foreign_tier_slice_names({production_slice}, "production") == set()
+
+
+def test_foreign_tier_slice_names_ignores_legacy_unstamped_and_non_slice_names() -> None:
+    # A legacy name carries no env, so its tier is unknowable -- it counts toward
+    # occupancy but must never be reported as a cross-tier violation. Non-slice
+    # lima resources are not ours to judge at all.
+    legacy = slice_lima_disk_name(HostId.generate())
+    assert foreign_tier_slice_names({legacy, "some-unrelated-disk"}, "staging") == set()
+
+
+def test_foreign_tier_slice_names_is_empty_for_an_empty_box() -> None:
+    assert foreign_tier_slice_names(set(), "staging") == set()
+
+
+def test_count_authorized_key_lines_counts_only_key_bearing_lines() -> None:
+    # A correctly prepped box holds exactly this: one pool key, nothing else.
+    assert count_authorized_key_lines("ssh-ed25519 AAAApool pool-management\n") == 1
+    # Blank lines, whitespace-only lines, and comments carry no key.
+    assert count_authorized_key_lines("") == 0
+    assert count_authorized_key_lines("\n\n   \n") == 0
+    assert count_authorized_key_lines("# only a comment\nssh-ed25519 AAAApool\n") == 1
+    assert count_authorized_key_lines("\t# indented comment\n  ssh-ed25519 AAAApool\n") == 1
+    # The condition the tier guard refuses on: a second key added out of band.
+    assert count_authorized_key_lines("ssh-ed25519 AAAApool\nssh-ed25519 AAAAother dev-tier\n") == 2
+    # A file with no trailing newline must not lose its last key.
+    assert count_authorized_key_lines("ssh-ed25519 AAAApool\nssh-ed25519 AAAAother") == 2
+
+
+# Verbatim from the 2026-08-07 production incident box (51.81.185.229): nvme0
+# dropped off the bus, both RAID1 arrays run degraded on nvme1, and the dead
+# disk's raw swap partition lingers as a "(deleted)" entry.
+_DEGRADED_MDSTAT = """\
+Personalities : [raid1] [linear] [multipath] [raid0] [raid6] [raid5] [raid4] [raid10]
+md2 : active raid1 nvme1n1p2[1]
+      1046528 blocks super 1.2 [2/1] [_U]
+      bitmap: 1/1 pages [4KB], 65536KB chunk
+
+md3 : active raid1 nvme1n1p3[1]
+      936244224 blocks super 1.2 [2/1] [_U]
+      bitmap: 7/7 pages [28KB], 65536KB chunk
+
+unused devices: <none>
+"""
+
+_HEALTHY_MDSTAT = """\
+Personalities : [raid1]
+md3 : active raid1 nvme0n1p3[0] nvme1n1p3[1]
+      935460864 blocks super 1.2 [2/2] [UU]
+md2 : active raid1 nvme0n1p2[0] nvme1n1p2[1]
+      1046528 blocks super 1.2 [2/2] [UU]
+unused devices: <none>
+"""
+
+_INCIDENT_PROC_SWAPS = """\
+Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
+/dev/nvme1n1p4                          partition\t524284\t\t220932\t\t-2
+/dev/nvme0n1p4\\040(deleted)             partition\t524284\t\t346108\t\t-3
+/swapfile                               file\t\t33554428\t1426020\t\t-4
+"""
+
+
+def test_parse_degraded_md_arrays_reports_arrays_missing_a_member() -> None:
+    assert parse_degraded_md_arrays(_DEGRADED_MDSTAT) == ["md2", "md3"]
+
+
+def test_parse_degraded_md_arrays_reports_nothing_for_healthy_arrays() -> None:
+    assert parse_degraded_md_arrays(_HEALTHY_MDSTAT) == []
+    assert parse_degraded_md_arrays("") == []
+
+
+def test_parse_raw_swap_devices_flags_partitions_but_not_the_swapfile() -> None:
+    # Both raw partitions are flagged -- including the dead disk's lingering
+    # "(deleted)" entry -- while the mirrored swapfile is not.
+    assert parse_raw_swap_devices(_INCIDENT_PROC_SWAPS) == [
+        "/dev/nvme1n1p4",
+        "/dev/nvme0n1p4\\040(deleted)",
+    ]
+
+
+def test_parse_raw_swap_devices_ignores_md_backed_swap_and_empty_input() -> None:
+    md_swap = "Filename\tType\tSize\tUsed\tPriority\n/dev/md1 partition 524284 0 -2\n"
+    assert parse_raw_swap_devices(md_swap) == []
+    assert parse_raw_swap_devices("") == []

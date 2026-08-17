@@ -1,19 +1,25 @@
 # remote_service_connector
 
-A lightweight service deployed as a Modal Function that connects minds clients to the remote services they need: Cloudflare tunnels, SuperTokens authentication, pool-host leasing, LiteLLM keys, R2 buckets, and per-account plans/quotas. All endpoints are authenticated, and every resource grant is checked against the account's entitlements (see "Plans and entitlements" below).
+A lightweight service deployed as a Modal Function that connects minds clients to the remote services they need: SuperTokens authentication, pool-host leasing, LiteLLM keys, R2 buckets, self-hosted workspace sharing, and per-account plans/quotas. All endpoints are authenticated, and every resource grant is checked against the account's entitlements (see "Plans and entitlements" below).
 
 ## What it does
 
 Allows authenticated users to:
-- Create Cloudflare tunnels (one per host running `cloudflared`)
-- Add/remove forwarding rules (ingress + DNS) on those tunnels
-- List their tunnels and configured services
-- Delete tunnels (cascading cleanup of DNS and ingress)
 - Lease pre-provisioned pool hosts, mint LiteLLM keys, and create R2 buckets
+- Share workspaces via the self-hosted relay design (`/shares/*`): share records + relay tokens, frps plugin authorization, ACME DNS-01 certificate issuance, and the accounts broker for share login handoff
 - See their plan, quotas, and live usage (and switch plans)
 - Sign in / sign up via SuperTokens (proxying the SuperTokens core so clients never need its API key)
 
-After creating a tunnel, users receive a token to run `cloudflared tunnel run --token <TOKEN>` on their host.
+## Code layout
+
+The service lives in `imbue/remote_service_connector/`:
+
+- `app.py` -- the Modal deployment entrypoint, and nothing else: image, `modal.App`, secrets, function definitions (web app + crons). Deployed by file path; the shipped modules may never import it.
+- `web.py` -- FastAPI assembly (mounts every feature router) plus the unauthenticated system endpoints (`/health/liveness`, `/generation`, `/version`).
+- Feature modules, each an `APIRouter`: `shares.py` (share records, relay tokens, frps plugin auth), `share_certs.py` (ACME DNS-01 issuance), `share_broker.py` (the accounts broker), `hosts.py`, `llm_keys.py`, `accounts.py`, `sync.py`, `retention.py`, `auth_proxy.py`, and the `r2/` subpackage (`naming`, `stores`, `buckets`, `grants`, `sweep`).
+- Foundation modules: `auth.py`, `entitlements.py`, `litellm_client.py`, `cloudflare.py` (raw R2 API client + the shared `CloudflareCtx`), `http_api.py`, `db.py`, `errors.py`, `attribution.py` (the `imbue_attribution` marketing-cookie parser plus the fail-open signup-attribution and download-event writers; see "Download redirect and marketing attribution"), `deploy_constants.py` (the image's pip set).
+
+The container receives only these modules plus `imbue.modal_app_kit` -- nothing else from the monorepo exists at runtime, so shipped modules must not import anything else from it. The rules (and why they exist) are documented in [libs/modal_app_kit/README.md](../../libs/modal_app_kit/README.md) and enforced by `test_project_ratchets.py`.
 
 ## Deployment
 
@@ -54,22 +60,21 @@ connector and the LiteLLM proxy. The push aborts with a diagnostic if
 any Vault entry is missing a key declared by the template (empty
 values are fine -- the deploy skips them when pushing to Modal).
 
-**cloudflare.sh** holds the Cloudflare API credentials:
+**cloudflare.sh** holds the Cloudflare API credentials (R2 buckets + ACME DNS-01 TXT records; the tunnel/Access stack is gone):
 
-- `CLOUDFLARE_API_TOKEN` (required): API token with Tunnel Write and DNS Write permissions.
+- `CLOUDFLARE_API_TOKEN` (required): account-owned API token; see "Cloudflare token requirements for R2" below.
 - `CLOUDFLARE_ACCOUNT_ID` (required): Cloudflare account ID.
-- `CLOUDFLARE_ZONE_ID` (required): Cloudflare zone ID for DNS records.
-- `CLOUDFLARE_DOMAIN` (required): Base domain for service subdomains (e.g. `example.com`).
-- `CLOUDFLARE_ALLOWED_IDPS` (optional): Comma-separated list of Cloudflare identity provider UUIDs allowed on Access Applications (e.g. Google OAuth, one-time PIN). When unset, Cloudflare uses the account default.
+- `CLOUDFLARE_ZONE_ID` (required): Cloudflare zone ID (used for the ACME DNS-01 challenge TXT records).
+- `CLOUDFLARE_DOMAIN` (required): Base domain for the tier's DNS records (read by the tier setup scripts, not by the connector).
 
 **supertokens.sh** holds the SuperTokens + OAuth credentials:
 
 - `SUPERTOKENS_CONNECTION_URI` (required): URL of the SuperTokens core.
 - `SUPERTOKENS_API_KEY` (required for most deployments): SuperTokens core API key.
-- `AUTH_WEBSITE_DOMAIN` (optional): Public base URL embedded in password-reset and email-verification links. Must match the URL Modal assigns to the deployed function. If unset, the app derives `https://{workspace}--remote-service-connector-<env>-fastapi-app.modal.run` (using the hardcoded default workspace in `app.py`), which is only correct for that specific Modal workspace -- set this explicitly for every deploy.
+- `AUTH_WEBSITE_DOMAIN` (required whenever `SUPERTOKENS_CONNECTION_URI` is set): Public base URL embedded in password-reset and email-verification links. Must match the URL Modal assigns to the deployed function. There is no derived fallback: if unset, `init_supertokens()` raises `MissingAuthWebsiteDomainError` at container startup, so populate it in the per-tier `supertokens-<env>-<deploy-id>` Modal secret (the deploy script pushes it from the tier's Vault entry).
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (optional): override Google OAuth client credentials. Leave blank to inherit from the SuperTokens core's dashboard.
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` (optional): override GitHub OAuth client credentials. Leave blank to inherit from the SuperTokens core's dashboard.
-- `MINDS_ADMIN_KEY` (optional): fixed API key authenticating the operator admin endpoints -- the paid-list CRUD (`/paid/*`), the account admin API (`/admin/accounts/*`), and the on-demand sweeps (`/admin/sweep/*`). Distinct from every other auth path -- the connector accepts it ONLY on those routes and rejects SuperTokens / tunnel tokens there, and rejects this key on every other route. Leave empty to disable the admin API. The `mngr imbue_cloud admin ...` CLI reads the same value from `$MINDS_ADMIN_KEY`. The deprecated `MINDS_PAID_ADMIN_KEY` spelling is still accepted (with a warning) while Vault entries and operator environments migrate.
+- `MINDS_ADMIN_KEY` (optional): fixed API key authenticating the operator admin endpoints -- the paid-list CRUD (`/paid/*`), the account admin API (`/admin/accounts/*`), and the on-demand sweeps (`/admin/sweep/*`). Distinct from every other auth path -- the connector accepts it ONLY on those routes and rejects SuperTokens tokens there, and rejects this key on every other route. Leave empty to disable the admin API. The `mngr imbue_cloud admin ...` CLI reads the same value from `$MINDS_ADMIN_KEY`. The deprecated `MINDS_PAID_ADMIN_KEY` spelling is still accepted (with a warning) while Vault entries and operator environments migrate.
 - `MINDS_PAID_LIST_CACHE_TTL_SECONDS` (optional): how long (seconds) the connector caches a per-email paid-status lookup before re-querying the tables. Unset uses the built-in default (60s); `0` disables caching. Each container caches independently, so a paid-list change propagates within this window.
 
 ### Plans and entitlements (quotas)
@@ -80,9 +85,9 @@ Resource access is governed by per-account quotas ("entitlements"), not by a pai
 - The `account_entitlements` table holds one row per account, created lazily on the account's first quota-relevant request. The row's values are copied wholesale from the plan at assignment and are the adjustable source of truth thereafter -- changing a plan's defaults never retroactively changes existing rows.
 - Lazy-creation backfill rule: accounts whose SuperTokens `time_joined` predates the feature-ship cutoff get "ally" when their email is paid-listed; every newer account starts as "explorer".
 - Quota rejections are HTTP 403 with structured detail: `{"code": "quota_exceeded", "entitlement": "<name>", "limit": N, "current": N, "message": "..."}`.
-- Quotas are checked when a resource is *granted* (lease, tunnel, service, bucket, sync record, key). Lowering a quota below current usage never revokes existing resources; the two continuous exceptions are the monthly LLM budget (enforced per-request by LiteLLM user budgets) and R2 storage (enforced by the hourly sweep, see "R2 storage-quota sweep" below).
+- Quotas are checked when a resource is *granted* (lease, bucket, sync record, key, share). Lowering a quota below current usage never revokes existing resources; the two continuous exceptions are the monthly LLM budget (enforced per-request by LiteLLM user budgets) and R2 storage (enforced by the hourly sweep, see "R2 storage-quota sweep" below).
 
-The quota entitlements: `max_remote_workspaces`, `max_tunnels`, `max_services_per_tunnel`, `max_buckets`, `max_total_bucket_bytes`, `monthly_llm_spend_usd`, `max_active_synced_workspaces`.
+The quota entitlements: `max_remote_workspaces`, `max_buckets`, `max_total_bucket_bytes`, `monthly_llm_spend_usd`, `max_active_synced_workspaces`.
 
 ### Paid lists (ally-plan eligibility)
 
@@ -99,16 +104,12 @@ On deploy, `minds env deploy` seeds each tier's configured default entries (the 
 
 The R2 bucket routes require `CLOUDFLARE_API_TOKEN` to be an **account-owned** token (`cfat_`) -- not a user-owned token (`cfut_`) -- because the connector mints account-owned per-bucket R2 tokens on the user's behalf. The token needs these permissions:
 
-- `Cloudflare Tunnel: Edit`
-- `DNS: Edit` (on the tier zone)
-- `Access: Apps and Policies: Edit`
-- `Access: Service Tokens: Edit`
-- `Workers KV Storage: Edit`
+- `DNS: Edit` (on the tier zone; ACME DNS-01 challenge TXT records for shared-workspace certificates)
 - `Workers R2 Storage: Edit` (R2 buckets)
 - `Account API Tokens: Edit` (mint/revoke/roll per-bucket R2 keys)
 - `Account Analytics: Read` (the storage-quota sweep's GraphQL usage query)
 
-**R2 must also be enabled on the Cloudflare account** (a one-time dashboard action; until then the API returns `code 10042 "Please enable R2 through the Cloudflare Dashboard"`). Existing tiers shipped with a user-owned tunnel/DNS token and must be migrated (create the account-owned token with the permissions above, replace `CLOUDFLARE_API_TOKEN` in Vault, then redeploy) before the bucket routes work.
+**R2 must also be enabled on the Cloudflare account** (a one-time dashboard action; until then the API returns `code 10042 "Please enable R2 through the Cloudflare Dashboard"`). Existing tiers shipped with a user-owned DNS token and must be migrated (create the account-owned token with the permissions above, replace `CLOUDFLARE_API_TOKEN` in Vault, then redeploy) before the bucket routes work.
 
 ### 2. Deploy the Modal app
 
@@ -130,10 +131,14 @@ Running `modal deploy` directly without the wrapper defaults to
 
 ## Authentication
 
-All non-`/auth/*` endpoints require a Bearer token:
+All non-`/auth/*` endpoints require a Bearer token, with the exceptions noted below:
 
-- **Agent (tunnel token)**: `Authorization: Bearer <tunnel_token>` — scoped to a single tunnel. Can add/remove/list services on that tunnel only; cannot create/delete tunnels or manage auth policies.
-- **User (SuperTokens JWT)**: `Authorization: Bearer <access_token>` — the signed-in user's SuperTokens session. A signed-in user has full authority over their own resources; their user-id prefix (the first 16 hex chars of their SuperTokens user ID) namespaces their tunnels, leases, and buckets.
+- **User (SuperTokens JWT)**: `Authorization: Bearer <access_token>` — the signed-in user's SuperTokens session. A signed-in user has full authority over their own resources; their user-id prefix (the first 16 hex chars of their SuperTokens user ID) namespaces their leases and buckets.
+- **Email verification is non-blocking**: an unverified account authenticates like any other. A verified email is required only for the actions where the email is an authorization identity (the `require_verified_email` guard: satisfying a share grant as a visitor via the accounts broker, and ally-plan eligibility -- the explicit plan switch and the lazy pre-cutoff backfill) plus, as a spam/abuse mitigation, creating a remote workspace (`POST /hosts/lease` and `POST /hosts/claim`). Gated endpoints return a structured 403 `{"code": "email_not_verified", ...}` so clients can prompt verification contextually; the workspace-creation gate additionally sends the verification email itself (cooldown-limited) and reports that in the detail's `sent` field. Nothing ever auto-marks an email verified (the old paid-list auto-verification is gone); the admin-key test-signup endpoint is the sole, operator-trust exception.
+- The share-certificate endpoint (`POST /shares/cert`) is instead authenticated by the share's relay token (see `share_certs.py`), and the frps plugin callback by its shared secret (see `shares.py`).
+- **Browser sessions (the hosted accounts surface)**: the `/login` / `/signup` / `/manage` pages and their `/accounts/api/*` JSON API use SuperTokens' native cookie-based sessions (the SDK middleware serves refresh under `/accounts/auth/`). Sessions roll via refresh but are capped at ~30 days from creation: a creation-time stamp in the access token payload (which survives refreshes) is checked on every resolution, and a session past the cap -- or without a readable stamp -- is revoked on sight. The cap lives in the connector because the SDK cannot configure the SuperTokens core's refresh-token validity. The device handoff (`GET /accounts/authorize` + `POST /auth/device/token`) mints independent bearer-token sessions for the desktop app / CLI; those are not subject to the browser-session cap (clients hold a refresh token and rotate it).
+- The share-authorization route (`GET /share/authorize`) resolves the same browser session; `GET /share/jwks.json` is public (it serves only the broker's verification keys).
+- The download redirect (`GET /download`) is public -- it serves the marketing site's download buttons (see "Download redirect and marketing attribution" below).
 
 The `/auth/*` endpoints are themselves the authentication flow, so they do not require a token.
 
@@ -141,54 +146,33 @@ The `/auth/*` endpoints are themselves the authentication flow, so they do not r
 
 Every resource-granting endpoint checks the caller's entitlements (see "Plans and entitlements" above) on top of user auth:
 
-- `POST /hosts/lease` -- `max_remote_workspaces` (strict: a per-user advisory lock serializes concurrent leases; stopped workspaces still hold their lease and count).
-- `POST /tunnels` -- `max_tunnels` (idempotent re-creates of an existing tunnel are always allowed).
-- `POST /tunnels/{name}/services` -- `max_services_per_tunnel` (re-adding an existing service is always allowed; enforced under both user and tunnel-token auth).
+- `POST /hosts/lease` -- `max_remote_workspaces` (strict: a per-user advisory lock serializes concurrent leases; stopped workspaces still hold their lease and count). Also requires a verified email, like `POST /hosts/claim` (see "Email verification is non-blocking" above).
 - `POST /buckets` -- `max_buckets`, plus `max_total_bucket_bytes` against live REST-measured usage (an account already over its storage quota cannot create new buckets; an unreadable usage number fails open). New keys minted while the owner is enforced-over-quota (bucket creation and roll-key's fresh mint) come out read-only with the downgrade recorded, so a fresh mint can never bypass the sweep.
 - `POST /keys/create` -- refused outright when `monthly_llm_spend_usd` is 0 (e.g. the explorer plan); otherwise the account's LiteLLM user-level budget is upserted before minting, so LiteLLM caps aggregate spend across all the account's keys.
 - `PUT /sync/records/{host_id}` -- `max_active_synced_workspaces` when the push would create a new ACTIVE record.
 
 ### Paid-list admin API (`/paid/*`)
 
-The paid lists are managed by a separate set of endpoints authenticated by the fixed `MINDS_ADMIN_KEY` (passed as `Authorization: Bearer <key>`). This key is rejected on all other routes, and SuperTokens / tunnel tokens are rejected here. All operations are idempotent; `list` returns every row with its `is_paid` status by default (`?paid_only=true` filters to active rows):
+The paid lists are managed by a separate set of endpoints authenticated by the fixed `MINDS_ADMIN_KEY` (passed as `Authorization: Bearer <key>`). This key is rejected on all other routes, and SuperTokens tokens are rejected here. All operations are idempotent; `list` returns every row with its `is_paid` status by default (`?paid_only=true` filters to active rows):
 
 - `GET /paid/domains` / `GET /paid/emails` -- list rows.
 - `POST /paid/domains/add` / `POST /paid/emails/add` -- body `{"value": "..."}`; add or reactivate.
 - `POST /paid/domains/remove` / `POST /paid/emails/remove` -- body `{"value": "..."}`; soft-delete (`is_paid = false`).
 
-## Identity providers for Access Applications
-
-When `CLOUDFLARE_ALLOWED_IDPS` is set, Access Applications created for forwarded services will restrict authentication to the specified identity providers (e.g. Google OAuth, one-time PIN). This controls how end users authenticate when visiting a tunneled service URL. Set it to a comma-separated list of Cloudflare identity provider UUIDs. You can find these UUIDs in the Cloudflare Zero Trust dashboard under Settings > Authentication.
-
 ## API
 
-### Tunnels (signed-in user only)
+### Shares (signed-in user; self-hosted workspace sharing)
 
-- `POST /tunnels` -- Create a tunnel. Body: `{"agent_id": "...", "default_auth_policy": ...}`. Returns tunnel info with token.
-- `GET /tunnels` -- List your tunnels with their configured services.
-- `GET /tunnels/by-agent/{agent_id}` -- Resolve your tunnel for a single agent (O(1)): looks the tunnel up by its exact name (`<user_id_prefix>--<agent-prefix>`) via Cloudflare's server-side name filter plus one config fetch, instead of enumerating every tunnel like `GET /tunnels`. Returns the tunnel info (no token), or HTTP 200 with `null` when no tunnel exists for that agent yet. 404 is reserved for "this connector predates the endpoint" (an unknown route), which lets clients that are newer than the connector fall back to enumerating `GET /tunnels`.
-- `DELETE /tunnels/{tunnel_name}` -- Delete a tunnel and all its DNS records, Access Applications, ingress rules, and KV entries.
-- `POST /sharing/enable` -- Enable (or update) sharing for one service in a single call. Body: `{"agent_id": "...", "service_name": "...", "service_url": "...", "auth_policy": {...}}`. Ensures the tunnel (idempotent), adds the service, and applies the Access policy directly to its Access Application (replacing a pre-existing app's policies on re-enable). Returns `{"tunnel": {...with token}, "service": {...}}` so the caller needs no follow-up reads. Enforces the same `max_tunnels` / `max_services_per_tunnel` quotas as the individual endpoints.
+A shared workspace lives at `<service>.<host-id>.<user-label>.<region>.<content-domain>` behind a self-hosted frps relay; the connector owns the share records, relay tokens, and certificate issuance:
 
-### Services (user or tunnel token)
-
-- `POST /tunnels/{tunnel_name}/services` -- Add a service. Body: `{"service_name": "...", "service_url": "http://localhost:8080"}`.
-- `GET /tunnels/{tunnel_name}/services` -- List services on a tunnel.
-- `DELETE /tunnels/{tunnel_name}/services/{service_name}` -- Remove a service, its DNS record, and its Access Application.
-
-### Auth policies (signed-in user only)
-
-- `GET /tunnels/{tunnel_name}/auth` -- Get the default auth policy for a tunnel (stored in Workers KV).
-- `PUT /tunnels/{tunnel_name}/auth` -- Set the default auth policy for a tunnel. New services inherit this policy.
-- `GET /tunnels/{tunnel_name}/services/{service_name}/auth` -- Get the auth policy for a specific service.
-- `PUT /tunnels/{tunnel_name}/services/{service_name}/auth` -- Set/override the auth policy for a specific service.
-
-Every forwarded service gets a Cloudflare Access Application, unconditionally:
-
-- A tunnel created without an explicit default auth policy gets an allow-only-the-owner's-verified-email default.
-- Adding a service creates its Access Application (with the tunnel default, or the owner-email fallback) *before* any DNS/ingress exists; if the Access step fails, the add is aborted and rolled back rather than leaving the service publicly reachable.
-- Auth-policy writes reject policies with no identity constraint (every rule must name emails, email domains, an IdP login method, or a group). Access service tokens remain supported via the dedicated service-token endpoints.
-- Per-service overrides replace the inherited policy entirely.
+- `POST /shares` -- Enable sharing for one workspace. Body: `{"host_id": "host-<32hex>"}`, plus an optional `preferred_region` (honored only for hosts the connector has no datacenter record of, e.g. local workspaces; a re-share always keeps the share's existing region). Returns the workspace domain, the relay endpoint the workspace's frpc should dial, and the plaintext relay token (returned exactly once; only its hash is stored). Re-sharing rotates the token.
+- `GET /shares` -- List the caller's share records (active and inactive).
+- `GET /shares/relays` -- The region -> relay tunnel-control endpoint map plus the default region, so clients can pick a `preferred_region` by measuring their own latency.
+- `DELETE /shares/{host_id}` -- Disable sharing (share goes `inactive`, relay token deleted).
+- `GET /shares/{host_id}/status` -- One share's domain, tunnel-liveness signal, certificate expiry, and the chrome's entry label.
+- `POST /shares/cert` -- Sign the workspace's CSR via ACME DNS-01 (authenticated by the share's relay token; the workspace keeps its private key).
+- `POST /frps/auth/{plugin_secret}` -- The frps server-plugin callback authorizing relay `Login` / `NewProxy` operations. An allowed `NewProxy` also records the workspace's shell-service label as the share's chrome entry origin (the connector never reads anything from inside the workspace).
+- `GET /share/authorize`, `GET /share/jwks.json` -- the accounts broker: authorizes a visit to a shared workspace against the hosted accounts surface's browser session and mints the short-lived handoff JWT (`GET /share/login` survives only as a permanent redirect to the merged `/login` page).
 
 ### Buckets (signed-in user only)
 
@@ -248,20 +232,48 @@ Email-addressed operator management of per-account entitlements, authenticated b
 - `POST /admin/accounts/{email}/plan` -- Body `{"plan": "..."}`; always resets to the plan's defaults (the operator's way to wipe manual bumps; skips the ally eligibility check).
 - `POST /admin/accounts/{email}/quota` -- Body `{"entitlement": "...", "value": N}`; bump a single entitlement.
 
+There is deliberately **no account-deletion endpoint** here: fully removing a user (its SuperTokens identity plus every connector-DB row keyed to it) is a destructive operator action done out-of-band, not something the connected clients need. Use the local operator tool `scripts/delete_accounts.py` (repo root) for that -- see "Fully deleting accounts" below.
+
+### Fully deleting accounts (`scripts/delete_accounts.py`)
+
+`scripts/delete_accounts.py` is a **local** operator tool (private -- not in the public-mirror allowlist, and it lives at the repo root, not in this app) that fully deletes accounts by talking directly to a tier's live backends, so it needs **no connector deploy**. For each account in a CSV it removes the connector-DB rows keyed to the user (`account_entitlements`, `workspace_records`, `account_key_bundles`, `r2_cleanup_grants`, and `shares` / `relay_tokens` keyed by the account's 32-hex share label), best-effort-deletes the LiteLLM internal user, and deletes the SuperTokens identity itself last (so a partial run is safe to re-run).
+
+It is **dry-run by default** (prints the plan, changes nothing until `--execute`), refuses any account still holding a leased pool host (release those via `mngr pool destroy` first), tolerates target tables absent from a tier's DB, and leaves each account's `host-<hex>` R2 backup buckets to the backup-retention reaper (deleting the workspace records orphans them). Credentials resolve per value from an explicit flag, else an environment variable, else the tier's HCP Vault entries.
+
+```bash
+export VAULT_TOKEN=...   # or a prior `vault login`
+# Dry run (default): show exactly what would be deleted for every account in the CSV.
+uv run python scripts/delete_accounts.py --tier production --accounts-file accounts.csv
+# Actually delete:
+uv run python scripts/delete_accounts.py --tier production --accounts-file accounts.csv --execute
+```
+
+The accounts file is a CSV with a header row containing a `user_id` column (an `email` column, when present, is used only for reporting).
+
+### Download redirect and marketing attribution (unauthenticated)
+
+- `GET /download?platform=...` -- Public redirect the imbue.com marketing site's download buttons point at: records a campaign-tagged `download_events` row and 302s to the platform's stable installer link (`mac-arm64`, alias `mac` -> the ToDesktop macOS arm64 build; `source` -> the public GitHub repo; unknown or missing platforms 404). The event is tagged by the usual merge rule: the `imbue_attribution` cookie supplies the visitor id and first touch, and campaign params on the `/download` URL itself overwrite the last touch (or synthesize the sole touch when the cookie is absent); the redirect always happens even when the event write fails.
+
+New accounts are additionally stamped with marketing attribution at creation time (never on sign-in), on both browser signup paths (email-password and Google OAuth): one write-once `account_attribution` row per account, built from the `imbue_attribution` cookie (set server-side by imbue.com's edge function on `.imbue.com`) merged with the signup page's own campaign params. Capture fails open, so it can never break a signup. The cookie's schema, set/update rules, and the download/signup link formats are pinned in [docs/attribution-cookie-contract.md](docs/attribution-cookie-contract.md); the connector-side logic lives in `attribution.py`, the tables come from `migrations/026_account_attribution.sql`, and reporting is plain SQL against Neon (no admin surface).
+
 ### Auth
 
-These endpoints front the SuperTokens core so that clients (e.g. the `minds` desktop client) never need the SuperTokens API key. They require `SUPERTOKENS_CONNECTION_URI` (and usually `SUPERTOKENS_API_KEY`) to be configured on the server; otherwise they return 503. All of them are unauthenticated *except* `/auth/session/revoke`, which must be called with the caller's own access token (see below).
+These endpoints front the SuperTokens core so that clients (e.g. the `minds` desktop client) never need the SuperTokens API key. They require `SUPERTOKENS_CONNECTION_URI` (and usually `SUPERTOKENS_API_KEY`) to be configured on the server; otherwise they return 503. All of them are unauthenticated *except* `/auth/session/revoke`, `/auth/session/revoke-current`, `/auth/email/send-verification`, and `/auth/email/is-verified`, which must be called with the caller's own access token (see below); those deliberately accept a session whose email is not yet verified.
 
-- `POST /auth/signup` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending.
-- `POST /auth/signin` -- Body: `{email, password}`. Returns status, user info, session tokens, and whether email verification is pending.
+#### Deprecated JSON auth endpoints
+
+`POST /auth/signup` and `POST /auth/signin` are **deprecated** in favor of the browser-based accounts surface (consumed by `mngr imbue_cloud auth login`). Account **creation** through the JSON API is disabled on production and staging: `POST /auth/signup` there answers status `SIGNUP_DISABLED` with a message pointing at the browser flow, so every new account goes through the Turnstile-gated web signup (or Google). Dev/CI tiers keep the headless JSON signup because it makes testing easy, and the admin-key `POST /admin/test-signup` endpoint covers deployment tests everywhere. Sign-in stays available on every tier. The old JSON OAuth pair (`/auth/oauth/authorize` + `/auth/oauth/callback`) is **removed** -- Google sign-in exists only as the accounts surface's browser flow. The `needs_email_verification` response field is pinned `false` for wire compat -- verification is non-blocking, and old clients treat `true` as "blocked pending verification".
+
+- `POST /auth/signup` (deprecated; disabled on production/staging, see above) -- Body: `{email, password}`. Returns status, user info, and session tokens. No verification email is sent at signup (the first verification-gated action triggers a contextual send). Refused with status `ACCOUNT_EXISTS_WITH_OTHER_METHOD` when the email is already registered under a different login method (e.g. Google), and with status `SIGNUP_DISABLED` on the restricted tiers.
+- `POST /auth/signin` (deprecated, see above) -- Body: `{email, password}`. Returns status, user info, and session tokens; an unverified email does not block sign-in.
 - `POST /auth/session/refresh` -- Body: `{refresh_token}`. Returns a new access/refresh token pair.
-- `POST /auth/session/revoke` -- Header: `Authorization: Bearer <access_token>`. Revokes every SuperTokens session for the caller's user. The user_id is derived from the access token, so an anonymous caller cannot revoke another user's sessions. Called on sign-out so that access/refresh tokens stored on the client's machine become useless even if copied off-box.
-- `POST /auth/email/send-verification` -- Body: `{user_id, email}`. Resends the verification email.
-- `POST /auth/email/is-verified` -- Body: `{user_id, email}`. Returns `{verified: bool}`.
-- `GET /auth/verify-email?token=...` -- Renders an HTML result page. Used by the link inside verification emails.
+- `POST /auth/session/revoke` -- Header: `Authorization: Bearer <access_token>`. Revokes every SuperTokens session for the caller's user. The user_id is derived from the access token, so an anonymous caller cannot revoke another user's sessions. The hosted account page's "sign out of all devices" action.
+- `POST /auth/session/revoke-current` -- Header: `Authorization: Bearer <access_token>`. Revokes only the presented session. Called on desktop sign-out so signing out of one install does not kill the user's browser session or other devices.
+- `POST /admin/test-signup` -- Admin-key authenticated (like `/admin/accounts/*`). Body: `{email, password, verified}`. Creates a test account, optionally pre-verified (the only path that marks an email verified without a clicked link); used by the deployment tests.
+- `POST /auth/email/send-verification` -- Header: `Authorization: Bearer <access_token>`. Body: `{email}`; the email must belong to the authenticated caller (403 otherwise). Sends the verification email; returns `{status, sent}` where `sent` is false when the per-user cooldown suppressed the send.
+- `POST /auth/email/is-verified` -- Header: `Authorization: Bearer <access_token>`. Body: `{email}`; the email must belong to the authenticated caller (403 otherwise). Returns `{verified: bool}`.
+- `GET /auth/verify-email?token=...` -- Serves the hosted accounts bundle's verify-email result page (the page consumes the token via `POST /accounts/api/verify-email`). Used by the link inside verification emails.
 - `POST /auth/password/forgot` -- Body: `{email}`. Always returns OK (to avoid account enumeration).
 - `POST /auth/password/reset` -- Body: `{token, new_password}`. Consumes a reset token and sets a new password.
-- `GET /auth/reset-password?token=...` -- Renders an HTML form. Used by the link inside password-reset emails.
-- `POST /auth/oauth/authorize` -- Body: `{provider_id, callback_url}`. Returns the URL to redirect the user to.
-- `POST /auth/oauth/callback` -- Body: `{provider_id, callback_url, query_params}`. Exchanges OAuth params for a session.
+- `GET /auth/reset-password?token=...` -- Serves the hosted accounts bundle's password-reset form (the form posts to `POST /auth/password/reset`). Used by the link inside password-reset emails.
 - `GET /auth/users/{user_id}` -- Returns basic info about a user (email, login provider).
