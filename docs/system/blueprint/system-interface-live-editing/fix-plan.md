@@ -295,6 +295,14 @@ is validated by the next scenario-style live test.
   filter (`f'name == "{name}"'`); validate the name against the same character
   set mngr accepts before interpolating, so a quote cannot silently malform the
   filter (which today surfaces as "no agent named ..." and destroys the worker).
+- `read_worker_branch` treats a non-zero `mngr ls` exit as "could not look up
+  the branch", but listing runs under CONTINUE semantics: the full payload is
+  printed and the exit code is then set from the errors channel, so one
+  unreachable or unauthenticated provider anywhere in the config fails the
+  lookup -- and destroys a healthy worker sitting in the printed payload. Read
+  the answer from the payload; use its `errors` channel to distinguish "the
+  agent is gone" from "the provider holding it could not be reached" when the
+  listing is empty.
 
 Deliberately not changed: the plain-`launch` path does not read the branch back
 (only `launch_sync` does), and `update-system-interface` Step 4 hardcodes

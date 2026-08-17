@@ -146,6 +146,20 @@ class WorkerBranchUnknownError(ValueError):
 _MNGR_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$")
 
 
+def _describe_list_errors(payload: object) -> str:
+    """Render an ``mngr ls`` payload's ``errors`` channel as a trailing clause.
+
+    Empty when the listing reported none, so the caller's message reads as a
+    plain sentence in the ordinary case.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    errors = payload.get("errors")
+    if not isinstance(errors, list) or not errors:
+        return ""
+    return f" (the listing also reported provider errors: {errors!r})"
+
+
 def read_worker_branch(name: str, runner: Runner) -> str:
     """Ask mngr which branch the worker's work_dir is actually on.
 
@@ -182,18 +196,31 @@ def read_worker_branch(name: str, runner: Runner) -> str:
         text=True,
         check=False,
     )
-    if getattr(result, "returncode", 0) != 0:
-        raise WorkerBranchUnknownError(
-            f"could not list agent {name!r} to learn its branch: {getattr(result, 'stderr', '')!r}"
-        )
+    # Deliberately not gated on the exit code. `mngr ls` writes the whole
+    # ``{"agents": [...], "errors": [...]}`` payload to stdout and only then exits
+    # non-zero if *any* configured provider was unreachable or unauthenticated
+    # (see ``_exit_code_for_list_errors`` in mngr's cli/list.py; listing runs under
+    # ErrorBehavior.CONTINUE). A modal provider with no credentials, or an SSH host
+    # that is down, has nothing to do with the local worker -- but it would make a
+    # return-code check destroy a worker that is sitting in the payload it just
+    # printed. The answer is in the payload; the errors channel is what says
+    # whether an empty one means "gone" or "could not look".
+    payload_text = getattr(result, "stdout", "") or ""
     try:
-        agents = json.loads(getattr(result, "stdout", "") or "")["agents"]
+        payload = json.loads(payload_text)
+        agents = payload["agents"]
     except (ValueError, KeyError, TypeError) as e:
+        # A genuinely failed `mngr ls` lands here rather than above: it leaves
+        # stdout empty, so this is where its exit code and stderr are the evidence.
         raise WorkerBranchUnknownError(
-            f"could not parse `mngr ls` output for {name!r}: {e}"
+            f"could not parse `mngr ls` output for {name!r} "
+            f"(exit {getattr(result, 'returncode', 0)}): {e}; "
+            f"stderr: {getattr(result, 'stderr', '')!r}"
         ) from e
     if not agents:
-        raise WorkerBranchUnknownError(f"mngr reports no agent named {name!r}")
+        raise WorkerBranchUnknownError(
+            f"mngr reports no agent named {name!r}{_describe_list_errors(payload)}"
+        )
     branch = agents[0].get("initial_branch")
     if not branch:
         raise WorkerBranchUnknownError(

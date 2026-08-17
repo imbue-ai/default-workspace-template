@@ -65,8 +65,15 @@ preview tab.
   is validated against mngr's own name rules before being interpolated into the
   `mngr ls --include` filter -- a quote there reshapes the CEL expression rather
   than failing, and the empty listing that comes back is indistinguishable from
-  "no such agent", which is the branch that destroys the worker. The `launch-task`
-  skill documents the flag.
+  "no such agent", which is the branch that destroys the worker. The lookup also
+  stopped treating `mngr ls`'s exit code as the verdict: listing continues past
+  provider failures and only then exits non-zero, so one unreachable or
+  unauthenticated provider anywhere in the config used to read as "could not
+  look" -- destroying a healthy worker that was sitting in the payload the
+  command had just printed. The branch is now read from the payload itself, and
+  an empty listing quotes the payload's errors channel, so "the agent is gone"
+  and "the provider holding it could not be reached" no longer look alike. The
+  `launch-task` skill documents the flag.
 
 - `op-update.md`'s system-interface exception was retargeted at the new handoff:
   the worker's branch already carries the user-approved change, and the task says
