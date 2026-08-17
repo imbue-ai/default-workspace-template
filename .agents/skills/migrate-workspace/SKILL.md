@@ -136,10 +136,12 @@ like a broken source. The wrapper rebuilds the agent environment from the files
 mngr maintains and execs from the repo root (so it replaces the `cd` too).
 
 **Probe for it; do not hardcode one path.** This command runs on the *source*,
-so what matters is where that source's generation keeps the wrapper -- and it
-has moved twice (`system/scripts/` before 2026-07-28, `system/libs/automations/`
-until 2026-08-17, `system/scripts/` since). Naming a single path fails with 127
-on every source outside that one window. The same candidate-list shape is used
+so what matters is where that source's generation keeps the wrapper -- and it has
+moved three times: added at the repo root's `scripts/` on 2026-07-07, carried to
+`system/scripts/` by the 2026-07-27 restructure, to `system/libs/automations/` on
+2026-07-28, and back to `system/scripts/` on 2026-08-17. The third candidate is
+that first home on a pre-declutter source, whose repo root is `/mngr/code`.
+Naming a single path fails with 127 on every source outside that one window. The same candidate-list shape is used
 for `minds_start_services_agent.sh` in `.mngr/settings.toml`. Exit 127 means the
 source predates the wrapper entirely; fall back to the explicit events-log paths
 in [references/pre-declutter-layout.md](references/pre-declutter-layout.md).
