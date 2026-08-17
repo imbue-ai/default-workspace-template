@@ -898,8 +898,10 @@ def _recover_running_state(
     working registry, so a broken build environment -- the class of failure that
     motivates the snapshot -- cannot take the UI down with it, whereas recovering
     by rebuilding just re-runs the command that has already failed once. A
-    rebuild is only attempted when there is no snapshot, i.e. when there was no
-    bundle to lose in the first place.
+    rebuild is only attempted when there is no snapshot -- either because there
+    was no bundle to lose, or because the copy could not be taken (see
+    :func:`snapshot_bundle`, which degrades to this rather than refusing to
+    reveal).
 
     ``npm ci`` runs here only on the rebuild branch, and only for a manifest
     change. Restoring a snapshot needs no dependencies at all, so refusing to run
