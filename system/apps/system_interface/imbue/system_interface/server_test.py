@@ -5,8 +5,10 @@ import io
 import json
 import os
 import queue
+import threading
 import time
 from collections.abc import Generator
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -231,6 +233,51 @@ def test_starting_a_rebuild_without_sources_is_refused(tmp_path: Path) -> None:
 
     assert response.status_code == 409
     assert "cannot rebuild itself" in response.get_json()["detail"]
+
+
+def test_starting_a_rebuild_answers_with_the_running_status(tmp_path: Path) -> None:
+    """The POST must hand back a status the placeholder page can render.
+
+    Its click handler feeds this body straight into the same render() that the
+    polls use, so a response that does not report a rebuild in flight leaves the
+    page stranded on "Starting..." -- a dead end on the one surface whose whole
+    job is to get the user out of one.
+    """
+    frontend_dir = tmp_path / "frontend"
+    frontend_dir.mkdir()
+    (frontend_dir / "package.json").write_text("{}")
+    # Present so the rebuild skips `npm ci` and goes straight to the build.
+    (frontend_dir / "node_modules").mkdir()
+
+    is_released = threading.Event()
+
+    def blocking_runner(command: Sequence[str], cwd: Path, timeout: float) -> FinishedProcess:
+        # Holds the rebuild in flight so the response is asserted against a
+        # running build rather than racing one that already finished.
+        is_released.wait(timeout=10.0)
+        return FinishedProcess(
+            returncode=1, stdout="", stderr="", command=tuple(command), is_output_already_logged=False
+        )
+
+    service = FrontendBuildService(
+        static_directory=tmp_path / "static", frontend_directory=frontend_dir, command_runner=blocking_runner
+    )
+    test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
+
+    try:
+        response = test_client.post("/api/frontend-build")
+
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["phase"] in ("installing", "building")
+        assert body["is_built"] is False
+        assert body["error"] is None
+    finally:
+        is_released.set()
+        thread = service._build_thread
+        assert thread is not None
+        thread.join(timeout=10.0)
+        assert not thread.is_alive()
 
 
 def test_list_agents_endpoint(client: FlaskClient) -> None:
