@@ -282,13 +282,22 @@ tk start <ticket-id>
 ```
 
 Write the task file. Use the two-heredoc form the other worker skills use: an
-**unquoted** frontmatter block so `$REF` expands, then a **quoted** body so its
-backticks stay literal:
+**unquoted** frontmatter block so `$MNGR_AGENT_NAME` and `$REF` expand, then a
+**quoted** body so its backticks stay literal.
+
+Unlike every other worker skill, this template DOES set `lead_agent`, and the
+line must stay: this SKILL.md is executed cross-version -- an older workspace's
+lead follows this staged prose (via the `differs` branch of §2a) but launches
+with its *own* `launch-task/create_worker.py`, which may predate launch-time
+`lead_agent` stamping. Under a current launcher the line is harmless (launch
+overwrites it from the environment); under an old launcher it is the only thing
+that gives the worker a report address.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
+lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
