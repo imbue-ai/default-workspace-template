@@ -1,13 +1,16 @@
-"""frpc.toml rendering: the workspace's outbound tunnel to its region's relay.
+"""frpc.toml rendering: one workspace tunnel to ONE relay of its region.
 
-One ``https``-type proxy claims an EXPLICIT list of ``<label>.<ws-domain>``
-hostnames -- one per registered service plus the dedicated ``auth`` label --
-never the wildcard and never the bare domain. The relay routes by SNI and
-drops any hostname it was not told about, so a scanner that learns the bare
-domain from Certificate Transparency reaches nothing. The relay only ever sees
-ciphertext; the per-share relay token rides in the client metadata map, and
-the connector's frps plugin validates it on Login and checks that every
-claimed domain is a single label under this share's domain on NewProxy.
+The runner renders (and runs) one of these per relay in the workspace's
+assignment -- the multi-relay design tunnels to every relay of the region, so
+any relay can serve any visitor. One ``https``-type proxy claims an EXPLICIT
+list of ``<label>.<ws-domain>`` hostnames -- one per registered service plus
+the dedicated ``auth`` label -- never the wildcard and never the bare domain.
+The relay routes by SNI and drops any hostname it was not told about, so a
+scanner that learns the bare domain from Certificate Transparency reaches
+nothing. The relay only ever sees ciphertext; the per-share relay token rides
+in the client metadata map, and the connector's frps plugin validates it on
+Login and checks that every claimed domain is a single label under this
+share's domain on NewProxy.
 """
 
 
@@ -31,6 +34,16 @@ def render_frpc_toml(
 # Rendered by share-gateway -- do not edit; re-rendered on every share change.
 serverAddr = "{relay_host}"
 serverPort = {relay_port}
+
+# Keep retrying when this relay is down at start: with several relays per
+# region, one being unreachable must not kill its tunnel process for good
+# (frp's default exits on a failed FIRST login).
+loginFailExit = false
+
+# Tight heartbeats bound the window in which a wedged relay still "holds" this
+# tunnel (visitors spliced there would hang until eviction).
+transport.heartbeatInterval = 10
+transport.heartbeatTimeout = 30
 
 # Encrypt the frpc<->frps control channel (the relay token travels over it).
 transport.tls.enable = true

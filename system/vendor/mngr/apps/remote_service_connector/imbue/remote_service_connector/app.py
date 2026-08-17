@@ -36,8 +36,10 @@ from supertokens_python.framework.fastapi import get_middleware as get_supertoke
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.r2.stores as r2_stores_module
+import imbue.remote_service_connector.stop_start as stop_start_module
 import imbue.remote_service_connector.sync as sync_module
 from imbue.modal_app_kit.deploy import deploy_metadata_secret
+from imbue.modal_app_kit.deploy import read_custom_domains
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import read_min_containers
@@ -45,15 +47,23 @@ from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import locate_image_requirements
 from imbue.modal_app_kit.image import pinned_image
+from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
 from imbue.modal_app_kit.source_mount import shipped_python_source_ignore
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth_proxy import EnsureAsgiRootPathMiddleware
 from imbue.remote_service_connector.auth_proxy import PartitionedCookieMiddleware
 from imbue.remote_service_connector.auth_proxy import init_supertokens
 from imbue.remote_service_connector.cloudflare import current_minds_env_name
+from imbue.remote_service_connector.errors import MissingShareConfigError
 from imbue.remote_service_connector.hosts import reconcile_slice_boxes
 from imbue.remote_service_connector.r2.sweep import run_r2_quota_sweep
+from imbue.remote_service_connector.relay_health import get_dns_record_set_ops
+from imbue.remote_service_connector.relay_health import probe_relay_healthz
+from imbue.remote_service_connector.relay_health import run_relay_health_sweep
+from imbue.remote_service_connector.relays import get_relay_store
 from imbue.remote_service_connector.retention import run_backup_retention_reap
+from imbue.remote_service_connector.stop_start import run_transition_supervisor
+from imbue.remote_service_connector.stop_start import run_transition_watchdog
 from imbue.remote_service_connector.web import web_app
 
 logger = logging.getLogger(__name__)
@@ -85,6 +95,15 @@ _MIN_CONTAINERS = read_min_containers("MINDS_CONNECTOR_MIN_CONTAINERS")
 # ci/test tier) means "don't pin it" -- the function falls back to Modal's
 # own default scaledown window.
 _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
+
+# Modal custom domains for the web function (the tier's user-facing accounts +
+# web-chrome hosts). ``minds env deploy`` threads the tier's ``[origins]``
+# hosts from its committed ``deploy.toml`` here at ``modal deploy`` time.
+# Every named domain must already be registered and verified in the deploying
+# Modal workspace (dashboard -> Domains) or the deploy fails. None (the
+# default) deploys with only the ``*.modal.run`` URL -- dev/ci tiers and any
+# deploy outside the wrapper.
+_CUSTOM_DOMAINS = read_custom_domains("MINDS_CONNECTOR_CUSTOM_DOMAINS")
 
 # All build steps (the hash-locked pip install onto the digest-pinned base --
 # see ``imbue.modal_app_kit.image``) come first and are cached; local source is
@@ -124,6 +143,7 @@ def _connector_secrets() -> list[modal.Secret]:
         stamped_secret("pool-ssh", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("litellm-connector", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("sharing", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        stamped_secret("storage", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         deploy_metadata_secret(_DEPLOY_ENV, _MINDS_DEPLOY_ID),
     ]
 
@@ -155,7 +175,7 @@ def _connector_secrets() -> list[modal.Secret]:
 # because each concurrent request holds one direct Neon connection and one
 # threadpool thread for its duration.
 @modal.concurrent(max_inputs=8)
-@modal.asgi_app()
+@modal.asgi_app(custom_domains=_CUSTOM_DOMAINS)
 def fastapi_app() -> FastAPI:
     init_supertokens()
     # The SuperTokens middleware serves the accounts surface's browser-session
@@ -178,6 +198,10 @@ def fastapi_app() -> FastAPI:
         # SuperTokens middleware has attached its SameSite=None session cookies,
         # appending the CHIPS Partitioned attribute the SDK cannot emit itself.
         web_app.add_middleware(PartitionedCookieMiddleware)
+    # Outermost of all: one structured access-log line per request (client IP,
+    # method, path, status, duration -- no query strings or bodies), so abuse
+    # investigations have a per-request record in the Modal function logs.
+    web_app.add_middleware(RequestLoggingMiddleware)
     return web_app
 
 
@@ -251,3 +275,73 @@ def backup_retention_reap() -> dict[str, int]:
     )
     logger.info("Backup retention reap done: %s", counters)
     return counters
+
+
+@app.function(
+    name="relay_health_sweep",
+    secrets=_connector_secrets(),
+    # Every-minute relay liveness sweep: probes each active relay's /healthz
+    # and keeps the region DNS record sets in step (2 consecutive failures pull
+    # an IP, 1 success restores, never below the full active set). Health only
+    # steers visitors -- tunnels keep connecting to unhealthy relays so they
+    # serve again the moment they recover. Cheap: a handful of HTTP probes and
+    # (only on drift) a few Cloudflare record edits.
+    schedule=modal.Cron("* * * * *"),
+    cpu=0.25,
+    memory=512,
+    timeout=120,
+)
+def relay_health_sweep() -> dict[str, int]:
+    # A tier with relays registered but no sharing config is a deploy mistake;
+    # skip (visibly) rather than crash-loop the cron every minute.
+    try:
+        counters = run_relay_health_sweep(get_relay_store(), get_dns_record_set_ops, probe_relay_healthz)
+    except MissingShareConfigError as exc:
+        logger.warning("Skipping relay health sweep (sharing not configured): %s", exc)
+        return {"skipped": 1}
+    logger.info("Relay health sweep done: %s", counters)
+    return counters
+
+
+@app.function(
+    name="workspace_transition_supervisor",
+    secrets=_connector_secrets(),
+    # One supervisor drives one workspace's stop/start transition end to end.
+    # It only SSH-polls a box status file every ~15s and finalizes DB state,
+    # so it runs on the smallest resource footprint Modal offers; the 2h
+    # timeout bounds even a badly throttled upload, after which the hourly
+    # watchdog re-drives the row.
+    cpu=0.25,
+    memory=512,
+    timeout=7200,
+)
+def workspace_transition_supervisor(host_db_id: str) -> str:
+    outcome = run_transition_supervisor(host_db_id)
+    logger.info("Transition supervisor for %s finished: %s", host_db_id, outcome)
+    return outcome
+
+
+# The stop/start endpoints (and the watchdog) spawn supervisors through this
+# hook. Wired here because only the entrypoint may import ``modal``: the
+# shipped modules hold the seam, the entrypoint provides the implementation.
+def _spawn_transition_supervisor(host_db_id: str) -> None:
+    workspace_transition_supervisor.spawn(host_db_id)
+
+
+stop_start_module.spawner.hook = _spawn_transition_supervisor
+
+
+@app.function(
+    name="workspace_transition_watchdog",
+    secrets=_connector_secrets(),
+    # Hourly watchdog for orphaned transitions: rows stuck in stopping/starting
+    # (or stopped-with-a-leftover-VM) whose supervisor heartbeat went stale
+    # (connector redeploy, Modal eviction, supervisor timeout) get a fresh
+    # supervisor. Every step is idempotent, so re-driving always converges.
+    schedule=modal.Cron("45 * * * *"),
+    timeout=900,
+)
+def workspace_transition_watchdog() -> dict[str, int]:
+    redriven_count = run_transition_watchdog()
+    logger.info("Transition watchdog done: redriven=%d", redriven_count)
+    return {"redriven": redriven_count}

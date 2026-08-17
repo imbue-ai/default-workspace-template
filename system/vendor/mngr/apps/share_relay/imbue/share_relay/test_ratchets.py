@@ -30,7 +30,11 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    rc.check_time_sleep(_DIR, snapshot(0))
+    # Justified match: ``frp_verification.py::_wait_for_tunnel`` (the manual
+    # frp harness) paces its deadline-bounded tunnel-up poll -- a refused
+    # connection fails instantly, so only the sleep paces that retry path;
+    # the success path is paced by a real blocking condition wait instead.
+    rc.check_time_sleep(_DIR, snapshot(1))
 
 
 def test_prevent_global_keyword() -> None:
@@ -38,7 +42,7 @@ def test_prevent_global_keyword() -> None:
 
 
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(2))
+    rc.check_bare_print(_DIR, snapshot(1))
 
 
 # --- Exception handling ---

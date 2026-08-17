@@ -25,6 +25,14 @@ _FRP_SHA256_BY_GOARCH: Final[dict[str, str]] = {
     "arm64": "3990f396a9a490ee7f0e5f355287750ed41520064ed999eab443b5e9a78d773d",
 }
 
+
+def pinned_frp_release(goarch: str) -> tuple[str, str]:
+    """The pinned frp release download URL and its sha256 for one Go architecture."""
+    sha256 = _FRP_SHA256_BY_GOARCH[goarch]
+    url = f"https://github.com/fatedier/frp/releases/download/v{FRP_VERSION}/frp_{FRP_VERSION}_linux_{goarch}.tar.gz"
+    return (url, sha256)
+
+
 _SSH_TIMEOUT_SECONDS: Final[float] = 300.0
 _SSH_BASE_OPTIONS: Final[tuple[str, ...]] = ("-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes")
 

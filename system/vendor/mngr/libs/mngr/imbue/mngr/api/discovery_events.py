@@ -15,6 +15,7 @@ from typing import Final
 from typing import Literal
 
 from loguru import logger
+from pydantic import ConfigDict
 from pydantic import Discriminator
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -42,19 +43,19 @@ from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import ProviderInstanceConfig
 from imbue.mngr.errors import AgentNotFoundError
-from imbue.mngr.errors import DiscoverySchemaChangedError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.interfaces.host import OnlineHostInterface
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentInstanceKey
 from imbue.mngr.primitives import DiscoveredAgent
 from imbue.mngr.primitives import DiscoveredHost
-from imbue.mngr.primitives import ErrorBehavior
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import SSHInfo
+from imbue.mngr.primitives import build_ssh_connect_command
 from imbue.mngr.utils.jsonl_warn import MalformedJsonLineWarner
 from imbue.mngr.utils.jsonl_warn import split_complete_lines
 
@@ -72,9 +73,9 @@ class DiscoveryEventType(UpperCaseStrEnum):
     # all-providers discovery scan", emitted by the now-removed run_discovery_stream
     # and mngr list side-effect. Superseded by DISCOVERY_PROVIDER. No longer
     # produced, but kept (do not delete) so historical on-disk discovery logs that
-    # contain DISCOVERY_FULL lines still parse -- the discovery models use
-    # extra="forbid" + a discriminated union, so removing this constant would make
-    # parse_discovery_event_line raise on those old lines.
+    # contain DISCOVERY_FULL lines still parse into the legacy reset semantics
+    # (_replay_discovery_events_into_maps treats them as a back-compat reset)
+    # instead of being skipped as unknown-type lines with a warning.
     DISCOVERY_FULL = auto()
     # A snapshot of a single provider's agents/hosts. Each provider is discovered on
     # its own decoupled loop and emits its own snapshot, so a slow/hung provider
@@ -117,6 +118,20 @@ class HostDestroyedEvent(EventEnvelope):
     agent_ids: tuple[AgentId, ...] = Field(description="IDs of agents that were on the host")
 
 
+class PersistedProviderInstanceConfig(ProviderInstanceConfig):
+    """The provider configuration fields carried inside persisted discovery events.
+
+    ``ProviderInstanceConfig`` itself must stay strict (``extra="forbid"``): it
+    also parses user-authored settings.toml, where an unknown field is a typo
+    that must surface. This subclass carries the identical fields but tolerates
+    unknown (future, additive) fields, because discovery events are re-read
+    from a shared on-disk log that newer program versions also write -- see
+    EventEnvelope for the full rationale.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class DiscoveredProvider(FrozenModel):
     """A provider instance that successfully loaded during discovery.
 
@@ -127,15 +142,28 @@ class DiscoveredProvider(FrozenModel):
     ``FullDiscoverySnapshotEvent.error_by_provider_name`` instead.
     """
 
+    # Parsed from persisted discovery event streams that newer program versions
+    # also write, so unknown (future, additive) fields are ignored rather than
+    # rejected -- see EventEnvelope for the full rationale.
+    model_config = ConfigDict(extra="ignore")
+
     provider_name: ProviderInstanceName = Field(description="Name of the provider instance")
-    # Typed as the base class so subclass-specific fields are dropped on
-    # serialization. Consumers (e.g. minds' providers panel) only need the
-    # base fields and shouldn't see plugin-internal config details.
-    config: ProviderInstanceConfig = Field(description="The provider's base configuration data")
+    # Typed as the persisted (base-fields-only, forward-tolerant) config class
+    # so subclass-specific fields are dropped on serialization. Consumers
+    # (e.g. minds' providers panel) only need the base fields and shouldn't
+    # see plugin-internal config details.
+    config: PersistedProviderInstanceConfig = Field(description="The provider's base configuration data")
 
 
 class DiscoveryError(FrozenModel):
     """An error encountered during discovery, attributed to a provider."""
+
+    # Parsed from persisted discovery event streams that newer program versions
+    # also write, so unknown (future, additive) fields are ignored rather than
+    # rejected -- see EventEnvelope for the full rationale. (The addition of
+    # traceback_text below is precisely what wedged v0.3.11 clients before
+    # this tolerance existed.)
+    model_config = ConfigDict(extra="ignore")
 
     type_name: str = Field(description="The type name of the exception (e.g. 'RuntimeError')")
     message: str = Field(description="The error message")
@@ -160,9 +188,9 @@ class FullDiscoverySnapshotEvent(EventEnvelope):
     whole-world snapshot, which is exactly what per-provider discovery fixes.
 
     No longer produced. Kept (do NOT delete) only so historical on-disk discovery
-    logs that still contain ``DISCOVERY_FULL`` lines continue to parse -- the
-    discovery models use ``extra="forbid"`` + a discriminated union, so removing this
-    class would make :func:`parse_discovery_event_line` raise on those old lines.
+    logs that still contain ``DISCOVERY_FULL`` lines continue to parse into the
+    legacy reset semantics -- without this class, those lines would be skipped as
+    unknown-type lines (with a warning) by :func:`parse_discovery_event_line`.
     The shared :class:`DiscoveryStateAggregator` ignores this event type, and
     :func:`_replay_discovery_events_into_maps` tolerates it as a back-compat reset.
     """
@@ -334,12 +362,14 @@ def _build_ssh_info_from_host(host: OnlineHostInterface) -> SSHInfo | None:
     if ssh_connection is None:
         return None
     user, hostname, port, key_path = ssh_connection
+    known_hosts_path = host.get_ssh_known_hosts_path()
     return SSHInfo(
         user=user,
         host=hostname,
         port=port,
         key_path=key_path,
-        command=f"ssh -i {key_path} -p {port} {user}@{hostname}",
+        known_hosts_path=known_hosts_path,
+        command=build_ssh_connect_command(user, hostname, port, key_path, known_hosts_path),
     )
 
 
@@ -425,15 +455,16 @@ def make_discovered_provider(
 ) -> DiscoveredProvider:
     """Build a DiscoveredProvider with only the base ProviderInstanceConfig fields.
 
-    Constructs a fresh base-class config so that any subclass-specific fields
-    on the input (e.g. plugin-defined credentials, workspace IDs) are dropped.
+    Constructs a fresh persisted-config object (base fields only) so that any
+    subclass-specific fields on the input (e.g. plugin-defined credentials,
+    workspace IDs) are dropped.
     Pydantic's serialization would also drop them when typed as the base, but
     constructing explicitly here makes the intent obvious and avoids relying
     on serialization-time behavior at every call site.
     """
     return DiscoveredProvider(
         provider_name=provider_name,
-        config=ProviderInstanceConfig(
+        config=PersistedProviderInstanceConfig(
             backend=config.backend,
             plugin=config.plugin,
             is_enabled=config.is_enabled,
@@ -660,30 +691,149 @@ def write_provider_discovery_snapshot(
 # === Event Parsing ===
 
 
-def parse_discovery_event_line(line: str) -> DiscoveryEvent | None:
-    """Parse a single JSONL line into the appropriate discovery event type.
+_SCHEMA_MISMATCH_DETAIL_TRUNCATION: Final[int] = 500
 
-    Returns None only for fully empty / whitespace-only lines (these are a
-    routine artifact of trailing newlines and EOF; not an error).
 
-    Raises ``json.JSONDecodeError`` for malformed JSON and
-    ``DiscoverySchemaChangedError`` for any structurally-valid JSON line that
-    does not match a known discovery event type or whose fields have evolved
-    out of sync with the current schema. Both conditions represent something
-    upstream that has gone wrong and need to surface; silently dropping such
-    lines would just mask the underlying problem.
+class _DiscoveryLineParseFailure(FrozenModel):
+    """Why one discovery event line failed schema validation, in both keyed and readable form."""
+
+    event_type: str = Field(
+        description=(
+            "The line's declared event type, '<missing>' when the object has no type, "
+            "or '<non-object>' for non-object JSON"
+        )
+    )
+    # A compact, stable identity for the failure (sorted "loc: error-type" pairs),
+    # used to deduplicate warnings: every line written by the same foreign program
+    # version fails identically, and must not warn 1000 times.
+    signature: str = Field(description="Stable identity of the validation failure, for warning deduplication")
+    detail: str = Field(description="Truncated human-readable validation error text")
+
+
+@pure
+def _validation_failure_signature(error: ValidationError) -> str:
+    location_and_type_pairs = {
+        "{}: {}".format(".".join(str(part) for part in single_error["loc"]) or "(root)", single_error["type"])
+        for single_error in error.errors()
+    }
+    return "; ".join(sorted(location_and_type_pairs))
+
+
+def _try_parse_discovery_event_line(
+    line: str,
+) -> tuple[DiscoveryEvent | None, _DiscoveryLineParseFailure | None]:
+    """Parse one JSONL line, returning ``(event, None)``, ``(None, failure)``, or ``(None, None)`` for blank lines.
+
+    Raises ``json.JSONDecodeError`` for malformed JSON; every structurally-valid
+    JSON line that does not match the current schema is reported as a failure
+    value instead of an exception (see :func:`parse_discovery_event_line`).
     """
     stripped = line.strip()
     if not stripped:
-        return None
+        return None, None
 
     data = json.loads(stripped)
 
-    event_type = data.get("type")
+    if not isinstance(data, dict):
+        event_type = "<non-object>"
+    elif data.get("type") is None:
+        event_type = "<missing>"
+    else:
+        event_type = str(data["type"])
     try:
-        return _DISCOVERY_EVENT_ADAPTER.validate_python(data)
+        return _DISCOVERY_EVENT_ADAPTER.validate_python(data), None
     except ValidationError as e:
-        raise DiscoverySchemaChangedError(str(event_type), str(e)) from e
+        failure = _DiscoveryLineParseFailure(
+            event_type=event_type,
+            signature=_validation_failure_signature(e),
+            detail=str(e)[:_SCHEMA_MISMATCH_DETAIL_TRUNCATION],
+        )
+        return None, failure
+
+
+def parse_discovery_event_line(line: str) -> DiscoveryEvent | None:
+    """Parse a single JSONL line into the appropriate discovery event type.
+
+    Returns None for fully empty / whitespace-only lines (a routine artifact of
+    trailing newlines and EOF) and for structurally-valid JSON lines that do
+    not match the current schema -- an unknown event type, or a payload whose
+    fields have evolved past what this version knows. Mismatching lines are
+    skipped with a warning rather than raised on: the discovery log is shared,
+    append-only, and written concurrently by other (possibly newer or older)
+    mngr versions, so a per-line schema mismatch is an expected cross-version
+    condition, and failing the whole read on one line is exactly the
+    downgrade/rollback wedge this tolerance exists to prevent. Callers that
+    read many lines (replays, tails) should prefer
+    :class:`DiscoverySchemaMismatchWarner`, which deduplicates the warnings.
+
+    Raises ``json.JSONDecodeError`` for malformed JSON; callers reading streams
+    where partial writes are expected should pre-filter lines with
+    ``MalformedJsonLineWarner``.
+    """
+    event, failure = _try_parse_discovery_event_line(line)
+    if failure is not None:
+        logger.warning(
+            "Skipping discovery event line of type {!r} that does not match the current schema "
+            "(written by a different mngr version?): {}",
+            failure.event_type,
+            failure.detail,
+        )
+    return event
+
+
+class DiscoverySchemaMismatchWarner(MutableModel):
+    """Parses discovery event lines, skipping schema mismatches with deduplicated warnings.
+
+    Use one instance per logical reading session (a replay, or a long-lived
+    stream). The first line exhibiting each distinct failure (same event type
+    and validation-failure signature) logs a warning immediately; identical
+    repeats are only counted, so a log poisoned by thousands of foreign-version
+    lines surfaces as a handful of warnings instead of one per line. Bounded
+    reads (e.g. an attach-time replay) should call :meth:`log_summary` at the
+    end to report the repeat counts.
+
+    parse() is safe to call from multiple threads concurrently.
+    """
+
+    source_description: str = Field(
+        frozen=True, description="Human-readable source used in warning messages, e.g. a file path"
+    )
+
+    _count_by_failure_key: dict[tuple[str, str], int] = PrivateAttr(default_factory=dict)
+    _lock: Lock = PrivateAttr(default_factory=Lock)
+
+    def parse(self, line: str) -> DiscoveryEvent | None:
+        """Parse one line like :func:`parse_discovery_event_line`, deduplicating mismatch warnings."""
+        event, failure = _try_parse_discovery_event_line(line)
+        if failure is None:
+            return event
+        failure_key = (failure.event_type, failure.signature)
+        with self._lock:
+            prior_count = self._count_by_failure_key.get(failure_key, 0)
+            self._count_by_failure_key[failure_key] = prior_count + 1
+        if prior_count == 0:
+            logger.warning(
+                "Skipping discovery event line of type {!r} in {} that does not match the current schema "
+                "(written by a different mngr version?); identical mismatches will be counted, not re-warned: {}",
+                failure.event_type,
+                self.source_description,
+                failure.detail,
+            )
+        return None
+
+    def log_summary(self) -> None:
+        """Log one counted warning per distinct failure that repeated (the first occurrence already warned)."""
+        with self._lock:
+            count_by_failure_key = dict(self._count_by_failure_key)
+        for (event_type, signature), count in count_by_failure_key.items():
+            if count > 1:
+                logger.warning(
+                    "Skipped {} discovery event line(s) of type {!r} in {} not matching the current schema ({})",
+                    count,
+                    event_type,
+                    self.source_description,
+                    signature,
+                )
 
 
 class _DiscoverySnapshotScan(FrozenModel):
@@ -860,45 +1010,45 @@ class ResolvedAgentHost(FrozenModel):
 
 
 class _ResolutionMaps(MutableModel):
-    """Bundle of the maps built (and mutated in place) while replaying discovery events."""
+    """Bundle of the maps built (and mutated in place) while replaying discovery events.
 
-    # agent_id -> provider_name
-    provider_by_agent_id: dict[str, str] = Field(default_factory=dict)
-    # agent_id -> agent_name
-    name_by_agent_id: dict[str, str] = Field(default_factory=dict)
-    # agent_id -> host_id
-    host_id_by_agent_id: dict[str, str] = Field(default_factory=dict)
-    # agent ids known to be destroyed
-    destroyed_agent_ids: set[str] = Field(default_factory=set)
+    Keyed by :class:`AgentInstanceKey` (the ``(host, agent)`` pair), never by
+    the bare agent id: the same agent id may exist on multiple hosts at once
+    (e.g. mid-migration), and each instance resolves independently.
+    """
+
+    # agent instance -> provider_name
+    provider_by_agent_instance: dict[AgentInstanceKey, str] = Field(default_factory=dict)
+    # agent instance -> agent_name
+    name_by_agent_instance: dict[AgentInstanceKey, str] = Field(default_factory=dict)
+    # agent instances known to be destroyed
+    destroyed_agent_instances: set[AgentInstanceKey] = Field(default_factory=set)
 
     def reset(self) -> None:
         """Clear every map -- used when a full snapshot supersedes prior state."""
-        self.provider_by_agent_id.clear()
-        self.name_by_agent_id.clear()
-        self.host_id_by_agent_id.clear()
-        self.destroyed_agent_ids.clear()
+        self.provider_by_agent_instance.clear()
+        self.name_by_agent_instance.clear()
+        self.destroyed_agent_instances.clear()
 
-    def forget_agent(self, agent_id: str) -> None:
-        """Drop a single agent from every map (it is confirmed gone)."""
-        self.provider_by_agent_id.pop(agent_id, None)
-        self.name_by_agent_id.pop(agent_id, None)
-        self.host_id_by_agent_id.pop(agent_id, None)
-        self.destroyed_agent_ids.discard(agent_id)
+    def forget_agent(self, instance_key: AgentInstanceKey) -> None:
+        """Drop a single agent instance from every map (it is confirmed gone)."""
+        self.provider_by_agent_instance.pop(instance_key, None)
+        self.name_by_agent_instance.pop(instance_key, None)
+        self.destroyed_agent_instances.discard(instance_key)
 
 
 def _record_agent(maps: _ResolutionMaps, agent: DiscoveredAgent) -> None:
     """Record a single discovered agent into the resolution maps."""
-    id_str = str(agent.agent_id)
-    maps.provider_by_agent_id[id_str] = str(agent.provider_name)
-    maps.name_by_agent_id[id_str] = str(agent.agent_name)
-    maps.host_id_by_agent_id[id_str] = str(agent.host_id)
-    maps.destroyed_agent_ids.discard(id_str)
+    instance_key = agent.instance_key
+    maps.provider_by_agent_instance[instance_key] = str(agent.provider_name)
+    maps.name_by_agent_instance[instance_key] = str(agent.agent_name)
+    maps.destroyed_agent_instances.discard(instance_key)
 
 
 def _apply_provider_snapshot_to_maps(
     maps: _ResolutionMaps,
     event: ProviderDiscoverySnapshotEvent,
-    last_event_time_by_agent_id: Mapping[str, datetime],
+    last_event_time_by_agent_instance: Mapping[AgentInstanceKey, datetime],
 ) -> None:
     """Fold one per-provider snapshot into the resolution maps, span-aware.
 
@@ -914,23 +1064,25 @@ def _apply_provider_snapshot_to_maps(
     span_start = event.discovery_started_at
     provider_str = str(event.provider_name)
     is_errored = event.error is not None
-    snapshot_agent_ids = {str(agent.agent_id) for agent in event.agents}
+    snapshot_agent_instances = {agent.instance_key for agent in event.agents}
 
     # Reconcile agents previously attributed to this provider but absent from the
     # snapshot: forget them only when the omission is a confirmed removal (the
     # provider's read succeeded and no newer in-span event contradicts it).
-    prior_provider_agent_ids = [aid for aid, name in maps.provider_by_agent_id.items() if name == provider_str]
-    for agent_id in prior_provider_agent_ids:
-        if agent_id in snapshot_agent_ids:
+    prior_provider_instances = [
+        instance_key for instance_key, name in maps.provider_by_agent_instance.items() if name == provider_str
+    ]
+    for instance_key in prior_provider_instances:
+        if instance_key in snapshot_agent_instances:
             continue
-        has_intervening = is_intervening_event(last_event_time_by_agent_id.get(agent_id), span_start)
+        has_intervening = is_intervening_event(last_event_time_by_agent_instance.get(instance_key), span_start)
         if classify_removed_item(is_errored, has_intervening) is RemovedItemDecision.DROP:
-            maps.forget_agent(agent_id)
+            maps.forget_agent(instance_key)
 
     # Apply each snapshot agent unless a newer in-span event already superseded it
     # (e.g. a destroy during the span must not be undone by this stale snapshot).
     for agent in event.agents:
-        if is_intervening_event(last_event_time_by_agent_id.get(str(agent.agent_id)), span_start):
+        if is_intervening_event(last_event_time_by_agent_instance.get(agent.instance_key), span_start):
             continue
         _record_agent(maps, agent)
 
@@ -943,18 +1095,19 @@ def _replay_discovery_events_into_maps(events_path: Path) -> _ResolutionMaps:
     snapshot's discovery span -- then folds events in order, applying the same span rule
     the shared aggregator uses so an in-flight snapshot never clobbers newer events.
 
-    Raises DiscoverySchemaChangedError if any event line in the file fails schema
-    validation (the caller is responsible for regenerating and retrying). Raises OSError
-    on file I/O failure.
+    Lines that do not match the current event schema (e.g. written by a newer or
+    older mngr version sharing this log) are skipped with deduplicated warnings
+    rather than failing the replay. Raises OSError on file I/O failure.
     """
     offset = find_discovery_snapshot_replay_offset(events_path)
     maps = _ResolutionMaps()
-    # Most recent incremental-event time per agent, used to refuse clobbering by an
-    # in-flight snapshot whose span the event falls within. Snapshots do not update it
-    # (only AGENT_DISCOVERED / AGENT_DESTROYED do), matching the aggregator.
-    last_event_time_by_agent_id: dict[str, datetime] = {}
+    # Most recent incremental-event time per agent instance, used to refuse clobbering
+    # by an in-flight snapshot whose span the event falls within. Snapshots do not
+    # update it (only AGENT_DISCOVERED / AGENT_DESTROYED do), matching the aggregator.
+    last_event_time_by_agent_instance: dict[AgentInstanceKey, datetime] = {}
 
     warner = MalformedJsonLineWarner(source_description=f"discovery events file '{events_path}'")
+    schema_warner = DiscoverySchemaMismatchWarner(source_description=f"discovery events file '{events_path}'")
     with open(events_path) as f:
         f.seek(offset)
         for line in f:
@@ -962,42 +1115,58 @@ def _replay_discovery_events_into_maps(events_path: Path) -> _ResolutionMaps:
             if parsed is None:
                 continue
             _data, stripped_line = parsed
-            event = parse_discovery_event_line(stripped_line)
+            event = schema_warner.parse(stripped_line)
+            if event is None:
+                continue
             if isinstance(event, FullDiscoverySnapshotEvent):
                 # Legacy global snapshot: supersedes everything before it.
                 maps.reset()
-                last_event_time_by_agent_id.clear()
+                last_event_time_by_agent_instance.clear()
                 for agent in event.agents:
                     _record_agent(maps, agent)
             elif isinstance(event, ProviderDiscoverySnapshotEvent):
-                _apply_provider_snapshot_to_maps(maps, event, last_event_time_by_agent_id)
+                _apply_provider_snapshot_to_maps(maps, event, last_event_time_by_agent_instance)
             elif isinstance(event, AgentDiscoveryEvent):
                 _record_agent(maps, event.agent)
-                last_event_time_by_agent_id[str(event.agent.agent_id)] = parse_event_timestamp(event.timestamp)
+                last_event_time_by_agent_instance[event.agent.instance_key] = parse_event_timestamp(event.timestamp)
             elif isinstance(event, AgentDestroyedEvent):
-                maps.destroyed_agent_ids.add(str(event.agent_id))
-                last_event_time_by_agent_id[str(event.agent_id)] = parse_event_timestamp(event.timestamp)
+                # Host-scoped: destroying (host A, id X) must not make a same-id
+                # agent on another host unresolvable.
+                instance_key = AgentInstanceKey.build(event.agent_id, event.host_id)
+                maps.destroyed_agent_instances.add(instance_key)
+                last_event_time_by_agent_instance[instance_key] = parse_event_timestamp(event.timestamp)
             else:
                 # Host, SSH info, and error events are not relevant for resolution. A
                 # host's continued existence (and its name) come from provider.get_host
                 # when the caller fetches the host to stop it, so host events are skipped.
                 pass
+    schema_warner.log_summary()
 
     return maps
 
 
-def _replay_discovery_events_for_resolution(
-    events_path: Path,
-) -> tuple[dict[str, str], dict[str, str], set[str]]:
-    """Replay events from the latest full snapshot into provider-resolution maps.
+def _drop_destroyed_instances(maps: _ResolutionMaps) -> None:
+    """Drop every destroyed instance from the replayed maps (in place) so it cannot resolve."""
+    for destroyed_instance in tuple(maps.destroyed_agent_instances):
+        maps.provider_by_agent_instance.pop(destroyed_instance, None)
+        maps.name_by_agent_instance.pop(destroyed_instance, None)
 
-    Returns ``(provider_by_agent_id, name_by_agent_id, destroyed_agent_ids)``.
-    Raises DiscoverySchemaChangedError if any event line in the file fails
-    schema validation (the caller is responsible for regenerating and retrying).
-    Raises OSError on file I/O failure.
+
+def _build_instance_lookup_maps(
+    maps: _ResolutionMaps,
+) -> tuple[dict[str, set[AgentInstanceKey]], dict[str, set[AgentInstanceKey]]]:
+    """Build id- and name-based lookup maps over the surviving instances.
+
+    Returns ``(instances_by_agent_id, instances_by_name)``. An identifier of
+    either kind can match instances on multiple hosts, so both map to instance
+    sets; the caller enforces any single-host requirement.
     """
-    maps = _replay_discovery_events_into_maps(events_path)
-    return maps.provider_by_agent_id, maps.name_by_agent_id, maps.destroyed_agent_ids
+    instances_by_agent_id: dict[str, set[AgentInstanceKey]] = {}
+    instances_by_name: dict[str, set[AgentInstanceKey]] = {}
+    for instance_key, name_str in maps.name_by_agent_instance.items():
+        instances_by_agent_id.setdefault(str(instance_key.agent_id), set()).add(instance_key)
+        instances_by_name.setdefault(name_str, set()).add(instance_key)
+    return instances_by_agent_id, instances_by_name
 
 
 def resolve_provider_names_for_identifiers(
@@ -1007,46 +1176,32 @@ def resolve_provider_names_for_identifiers(
     """Resolve agent identifiers to the provider names that own them using the event stream.
 
     Reads the latest DISCOVERY_FULL snapshot and replays incremental events to build
-    agent_name -> set[provider_name] and agent_id -> provider_name mappings.
+    agent_name -> set[provider_name] and agent_id -> set[provider_name] mappings.
+    An agent id can match instances on multiple hosts (and thus multiple providers),
+    so ids resolve to the union of their instances' providers, exactly like names.
 
     Returns the deduplicated union of provider names for all identifiers, or None if
     any identifier cannot be resolved (meaning a full scan is needed).
 
-    If the on-disk events are stale relative to the current model schema, this triggers
-    a full discovery scan (which appends fresh events in the current schema), then
-    retries parsing once. If parsing still fails, the schema mismatch reflects a real
-    bug rather than stale data, so DiscoverySchemaChangedError is re-raised.
+    Event lines that do not match the current schema (e.g. written by a different
+    mngr version sharing the log) are skipped during the replay; an identifier
+    whose events were all skipped simply fails to resolve, and the caller falls
+    back to a full scan.
     """
     events_path = get_discovery_events_path(mngr_ctx.config)
     if not events_path.exists():
         return None
 
-    try:
-        provider_by_agent_id, name_by_agent_id, destroyed_agent_ids = _replay_discovery_events_for_resolution(
-            events_path
-        )
-    except DiscoverySchemaChangedError as e:
-        logger.warning("Discovery event schema mismatch; regenerating snapshot and retrying ({})", e)
-        # _regenerate_discovery_events uses ErrorBehavior.CONTINUE, so a
-        # provider that raises during this regen still produces a fresh
-        # snapshot (with the failure surfaced via error_by_provider_name).
-        # Transient retries are the providers' responsibility, not this
-        # layer's, so a hard failure inside list_agents itself will bubble.
-        _regenerate_discovery_events(mngr_ctx)
-        # after we've regenerated the list, we should no longer get the DiscoverySchemaChangedError anymore
-        provider_by_agent_id, name_by_agent_id, destroyed_agent_ids = _replay_discovery_events_for_resolution(
-            events_path
-        )
+    maps = _replay_discovery_events_into_maps(events_path)
 
-    # Remove destroyed agents from both maps
-    for destroyed_id in destroyed_agent_ids:
-        provider_by_agent_id.pop(destroyed_id, None)
-        name_by_agent_id.pop(destroyed_id, None)
+    _drop_destroyed_instances(maps)
 
-    # Build the name -> providers map from surviving agents
+    # Build the id -> providers and name -> providers maps from surviving instances.
+    providers_by_agent_id: dict[str, set[str]] = {}
     providers_by_agent_name: dict[str, set[str]] = {}
-    for id_str, prov in provider_by_agent_id.items():
-        name_str = name_by_agent_id.get(id_str)
+    for instance_key, prov in maps.provider_by_agent_instance.items():
+        providers_by_agent_id.setdefault(str(instance_key.agent_id), set()).add(prov)
+        name_str = maps.name_by_agent_instance.get(instance_key)
         if name_str is not None:
             providers_by_agent_name.setdefault(name_str, set()).add(prov)
 
@@ -1054,8 +1209,8 @@ def resolve_provider_names_for_identifiers(
     resolved_providers: set[str] = set()
     for identifier in identifiers:
         # Try as agent ID first
-        if identifier in provider_by_agent_id:
-            resolved_providers.add(provider_by_agent_id[identifier])
+        if identifier in providers_by_agent_id:
+            resolved_providers.update(providers_by_agent_id[identifier])
         # Then try as agent name
         elif identifier in providers_by_agent_name:
             resolved_providers.update(providers_by_agent_name[identifier])
@@ -1101,9 +1256,9 @@ def resolve_hosts_for_identifiers(
     stream and the live fallback, has been destroyed, or maps to agents on more than one
     host (which must be disambiguated with ``NAME@HOST.PROVIDER``).
 
-    If the on-disk events are stale relative to the current model schema, this
-    regenerates the snapshot once and retries, mirroring
-    :func:`resolve_provider_names_for_identifiers`.
+    Event lines that do not match the current schema (e.g. written by a different
+    mngr version sharing the log) are skipped during the replay; an identifier
+    whose events were all skipped resolves through the live fallback instead.
     """
     events_path = get_discovery_events_path(mngr_ctx.config)
     if not events_path.exists():
@@ -1111,23 +1266,14 @@ def resolve_hosts_for_identifiers(
         # from empty maps and rely entirely on the live fallback below.
         maps = _ResolutionMaps()
     else:
-        try:
-            maps = _replay_discovery_events_into_maps(events_path)
-        except DiscoverySchemaChangedError as e:
-            logger.warning("Discovery event schema mismatch; regenerating snapshot and retrying ({})", e)
-            _regenerate_discovery_events(mngr_ctx)
-            maps = _replay_discovery_events_into_maps(events_path)
+        maps = _replay_discovery_events_into_maps(events_path)
 
-    # Drop destroyed agents so they cannot resolve.
-    for destroyed_id in maps.destroyed_agent_ids:
-        maps.provider_by_agent_id.pop(destroyed_id, None)
-        maps.name_by_agent_id.pop(destroyed_id, None)
-        maps.host_id_by_agent_id.pop(destroyed_id, None)
+    # Drop destroyed instances so they cannot resolve.
+    _drop_destroyed_instances(maps)
 
-    # Build agent_name -> set of agent_ids for name-based lookup.
-    agent_ids_by_name: dict[str, set[str]] = {}
-    for agent_id_str, name_str in maps.name_by_agent_id.items():
-        agent_ids_by_name.setdefault(name_str, set()).add(agent_id_str)
+    # Build id- and name-based lookup maps over the surviving instances; the
+    # single-host requirement is checked below.
+    instances_by_agent_id, instances_by_name = _build_instance_lookup_maps(maps)
 
     # Read-after-write fallback: an agent created during an in-flight discovery span may
     # be absent from the latest on-disk snapshot, so the stream alone can miss it. For any
@@ -1138,37 +1284,34 @@ def resolve_hosts_for_identifiers(
         unresolved_identifiers = [
             identifier
             for identifier in identifiers
-            if identifier not in maps.provider_by_agent_id and identifier not in agent_ids_by_name
+            if identifier not in instances_by_agent_id and identifier not in instances_by_name
         ]
         if unresolved_identifiers:
             for agent in live_discovery_fallback(unresolved_identifiers):
                 _record_agent(maps, agent)
-            agent_ids_by_name = {}
-            for agent_id_str, name_str in maps.name_by_agent_id.items():
-                agent_ids_by_name.setdefault(name_str, set()).add(agent_id_str)
+            instances_by_agent_id, instances_by_name = _build_instance_lookup_maps(maps)
 
     resolved: dict[str, ResolvedAgentHost] = {}
     for identifier in identifiers:
-        if identifier in maps.provider_by_agent_id:
-            candidate_agent_ids = {identifier}
-        elif identifier in agent_ids_by_name:
-            candidate_agent_ids = agent_ids_by_name[identifier]
+        if identifier in instances_by_agent_id:
+            candidate_instances = instances_by_agent_id[identifier]
+        elif identifier in instances_by_name:
+            candidate_instances = instances_by_name[identifier]
         else:
             raise AgentNotFoundError(
                 f"Could not resolve a host for agent '{identifier}' from the discovery event stream"
             )
 
-        # Collect the distinct hosts the candidate agent(s) run on. An agent
-        # name spanning more than one host_id is ambiguous and must be
-        # disambiguated explicitly.
+        # Collect the distinct hosts the candidate instance(s) run on. An
+        # identifier (name or id) spanning more than one host is ambiguous and
+        # must be disambiguated explicitly.
         candidate_hosts: dict[str, ResolvedAgentHost] = {}
-        for agent_id_str in candidate_agent_ids:
-            host_id_str = maps.host_id_by_agent_id.get(agent_id_str)
-            provider_str = maps.provider_by_agent_id.get(agent_id_str)
-            if host_id_str is None or provider_str is None:
+        for instance_key in candidate_instances:
+            provider_str = maps.provider_by_agent_instance.get(instance_key)
+            if provider_str is None:
                 continue
-            candidate_hosts[host_id_str] = ResolvedAgentHost(
-                host_id=HostId(host_id_str),
+            candidate_hosts[str(instance_key.host_id)] = ResolvedAgentHost(
+                host_id=instance_key.host_id,
                 provider_name=ProviderInstanceName(provider_str),
             )
 
@@ -1180,7 +1323,7 @@ def resolve_hosts_for_identifiers(
             host_ids = ", ".join(sorted(candidate_hosts))
             raise AgentNotFoundError(
                 f"Agent identifier '{identifier}' matches agents on multiple hosts ({host_ids}); "
-                "disambiguate using NAME@HOST.PROVIDER"
+                "disambiguate using NAME@HOST.PROVIDER (or ID@HOST)"
             )
         resolved[identifier] = next(iter(candidate_hosts.values()))
 
@@ -1448,25 +1591,4 @@ def tail_discovery_events_file(
         initial_offset = 0
     tail_discovery_events_from_offset(
         events_path, initial_offset, stop_event, emitted_event_ids, emit_lock, warner, on_line
-    )
-
-
-def _regenerate_discovery_events(mngr_ctx: MngrContext) -> None:
-    """Run an unfiltered list to regenerate the discovery event stream (per-provider snapshots).
-
-    The per-provider snapshots are written as a side effect of ``list_agents`` when the
-    listing is unfiltered. Uses ``ErrorBehavior.CONTINUE`` so a provider that fails is
-    surfaced via its own per-provider snapshot's ``error`` field rather than blocking
-    emission for the other providers. The contract is that each provider is responsible
-    for retrying its own transient failures before raising; no retry layer is applied
-    here. Used to refresh on-disk events when a stale schema is detected during
-    name/host resolution.
-    """
-    from imbue.mngr.api.list import list_agents
-
-    list_agents(
-        mngr_ctx=mngr_ctx,
-        is_streaming=False,
-        error_behavior=ErrorBehavior.CONTINUE,
-        reset_caches=True,
     )

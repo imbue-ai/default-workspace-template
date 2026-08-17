@@ -20,8 +20,9 @@ _REPO_ROOT = Path(__file__).parents[4]
 _PACKAGE_NAME = "remote-service-connector"
 
 # Import roots provided transitively by the image group rather than by a
-# group entry of their own: pydantic is a hard dependency of fastapi.
-_TRANSITIVELY_PROVIDED_ROOTS = frozenset({"pydantic"})
+# group entry of their own: pydantic is a hard dependency of fastapi, and
+# botocore of boto3.
+_TRANSITIVELY_PROVIDED_ROOTS = frozenset({"pydantic", "botocore"})
 
 # Import roots whose distribution name differs beyond the usual dash ->
 # underscore normalization.

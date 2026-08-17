@@ -45,6 +45,7 @@ from imbue.remote_service_connector.entitlements import QUOTA_ENTITLEMENT_NAMES
 from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import InvalidPaidListEntryError
 from imbue.remote_service_connector.hosts import count_leased_hosts
+from imbue.remote_service_connector.hosts import count_total_workspaces
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.buckets import list_owned_buckets
 from imbue.remote_service_connector.r2.buckets import read_bucket_usage_bytes_concurrently
@@ -58,7 +59,8 @@ router = APIRouter()
 class AccountUsage(BaseModel):
     """Live usage numbers for the account, one per quota entitlement."""
 
-    remote_workspaces: int = Field(description="Current pool-host leases")
+    remote_workspaces: int = Field(description="Current running workspaces (leased/stopping/starting rows)")
+    total_workspaces: int = Field(default=0, description="Current running + stopped workspaces")
     buckets: int = Field(description="Current R2 buckets")
     total_bucket_bytes: int = Field(description="Total bytes across the account's buckets (live REST usage)")
     llm_spend_usd_this_period: float = Field(description="LiteLLM aggregate spend in the current budget period")
@@ -287,11 +289,13 @@ def compute_account_usage(ops: CloudflareOps, user_id_prefix: str, user_id: str)
         bucket_summary_future = pool.submit(summarize_owner_bucket_usage, ops, user_id_prefix)
         llm_spend_future = pool.submit(litellm_client.get_litellm_user_spend, user_id)
         leased_host_count = count_leased_hosts(user_id_prefix)
+        total_workspace_count = count_total_workspaces(user_id_prefix)
         active_sync_count = _count_active_sync_records(user_id)
         bucket_count, total_bucket_bytes = bucket_summary_future.result()
         spend, reset_at = llm_spend_future.result()
     return AccountUsage(
         remote_workspaces=leased_host_count,
+        total_workspaces=total_workspace_count,
         buckets=bucket_count,
         total_bucket_bytes=total_bucket_bytes,
         llm_spend_usd_this_period=spend,

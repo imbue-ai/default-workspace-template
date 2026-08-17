@@ -79,6 +79,22 @@ def _is_bucket_not_empty_error(exc: CloudflareApiError) -> bool:
     return False
 
 
+def _is_bucket_not_found_error(exc: CloudflareApiError) -> bool:
+    """Detect Cloudflare's 'bucket does not exist' rejection from a bucket-op error.
+
+    R2 reports a missing bucket either as a plain HTTP 404 or as error code
+    10007 ("The specified key does not exist.") carried on a non-404 status,
+    so a status check alone misses the latter -- which made the backup reap
+    sweep hard-fail on a bucket another pass had already deleted.
+    """
+    if exc.status_code == 404:
+        return True
+    for err in exc.cf_errors:
+        if err.get("code") == 10007:
+            return True
+    return False
+
+
 def cf_create_bucket(client: httpx.Client, account_id: str, name: str) -> dict[str, Any]:
     response = client.post(f"/accounts/{account_id}/r2/buckets", json={"name": name})
     return cf_check(response)["result"]
@@ -111,7 +127,7 @@ def cf_delete_bucket(client: httpx.Client, account_id: str, name: str) -> None:
     try:
         cf_check(response)
     except CloudflareApiError as exc:
-        if exc.status_code == 404:
+        if _is_bucket_not_found_error(exc):
             raise R2BucketNotFoundError(name) from exc
         if _is_bucket_not_empty_error(exc):
             raise R2BucketNotEmptyError(name) from exc
@@ -127,7 +143,7 @@ def cf_list_bucket_object_keys(client: httpx.Client, account_id: str, bucket_nam
     try:
         result = cf_check(response)["result"]
     except CloudflareApiError as exc:
-        if exc.status_code == 404:
+        if _is_bucket_not_found_error(exc):
             raise R2BucketNotFoundError(bucket_name) from exc
         raise
     return [str(obj["key"]) for obj in result if isinstance(obj, dict) and "key" in obj]
@@ -139,7 +155,7 @@ def cf_delete_bucket_object(client: httpx.Client, account_id: str, bucket_name: 
     try:
         cf_check(response)
     except CloudflareApiError as exc:
-        if exc.status_code == 404:
+        if _is_bucket_not_found_error(exc):
             return
         raise
 

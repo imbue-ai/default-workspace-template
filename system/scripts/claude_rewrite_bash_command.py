@@ -45,6 +45,18 @@ Output contract (Claude Code hooks): for a Bash call, print a JSON object with
 ``hookSpecificOutput.updatedInput.command`` set to the rewritten command. For any
 other tool, or a malformed payload, print nothing and exit 0 (pass through).
 
+Codex speaks the same PreToolUse protocol but tightened it in newer releases
+(verified against codex-cli 0.146.0): a hook that returns ``updatedInput`` MUST
+also carry an explicit ``permissionDecision: "allow"`` in the same
+``hookSpecificOutput``, or codex rejects the hook ("PreToolUse hook returned
+updatedInput without permissionDecision:allow") and runs nothing. Claude has no
+such requirement, and in claude a PreToolUse ``permissionDecision: "allow"`` would
+auto-approve the tool and bypass the permission prompt -- so the decision is
+emitted ONLY when invoked with ``--codex``. codex wires this hook with that flag
+(see ``mngr_codex.codex_config``); claude runs it without. The ``allow`` never
+weakens the block guards: they run as separate earlier PreToolUse hooks and codex
+honors a block over a later allow (verified live).
+
 Self-contained beyond the stdlib-only ``oom_priority`` package (imported via a
 ``sys.path`` insert), since claude runs PreToolUse hooks under a plain
 ``python3``.
@@ -151,7 +163,26 @@ def build_rewritten_command(command: str) -> str:
     return prefix + command
 
 
+def build_hook_output(tool_input: dict, command: str, *, emit_allow_decision: bool) -> dict:
+    """Build the PreToolUse ``hookSpecificOutput`` object for a rewritten Bash command.
+
+    When ``emit_allow_decision`` is True the object also carries
+    ``permissionDecision: "allow"`` -- required by codex alongside ``updatedInput``
+    (see the module docstring), omitted for claude where it would auto-approve.
+    """
+    hook_output: dict = {
+        "hookEventName": "PreToolUse",
+        "updatedInput": {**tool_input, "command": build_rewritten_command(command)},
+    }
+    if emit_allow_decision:
+        hook_output["permissionDecision"] = "allow"
+    return {"hookSpecificOutput": hook_output}
+
+
 def main() -> None:
+    # ``--codex`` makes the output carry ``permissionDecision: "allow"`` alongside
+    # ``updatedInput`` -- codex requires it, claude must not have it.
+    emit_allow_decision = "--codex" in sys.argv[1:]
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
@@ -166,13 +197,7 @@ def main() -> None:
     command = tool_input.get("command")
     if not isinstance(command, str) or not command:
         return
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "updatedInput": {**tool_input, "command": build_rewritten_command(command)},
-        }
-    }
-    json.dump(output, sys.stdout)
+    json.dump(build_hook_output(tool_input, command, emit_allow_decision=emit_allow_decision), sys.stdout)
 
 
 if __name__ == "__main__":

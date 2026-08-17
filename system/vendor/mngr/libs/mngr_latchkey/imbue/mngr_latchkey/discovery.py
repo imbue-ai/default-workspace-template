@@ -60,6 +60,7 @@ from imbue.mngr.errors import HostNotFoundError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.provider_instance import ProviderInstanceInterface
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentInstanceKey
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
@@ -179,6 +180,12 @@ class LatchkeyDiscoveryHandler(MutableModel):
     restarts; the shared desktop gateway is still ensured up (it is shared
     across all agents). A ``None`` host state is treated as unknown and stays
     on the normal path.
+
+    ``UNAUTHENTICATED`` is handled separately: the host is up and its container
+    is probably serving the workspace fine, but the outer sshd rejected our key,
+    so provisioning has no usable door. That is also skipped, but with a warning
+    (once per host) -- otherwise the only symptom is every latchkey call from
+    that host's agents failing while the workspace looks perfectly healthy.
     """
 
     latchkey: Latchkey = Field(description="Latchkey wrapper that owns the shared gateway subprocess")
@@ -217,6 +224,8 @@ class LatchkeyDiscoveryHandler(MutableModel):
     # host_ids already warned about an unresolvable gateway route, so the warning
     # is emitted once per host rather than on every discovery cycle.
     _unresolved_route_hosts: set[str] = PrivateAttr(default_factory=set)
+    # Same, for hosts whose outer sshd rejected this machine's key.
+    _unauthenticated_hosts: set[str] = PrivateAttr(default_factory=set)
 
     def __call__(
         self,
@@ -230,6 +239,18 @@ class LatchkeyDiscoveryHandler(MutableModel):
             host_side_port = self.latchkey.start_gateway(self.concurrency_group)
         except LatchkeyError as e:
             logger.opt(exception=e).error("Failed to start shared Latchkey gateway for agent {}: {}", agent_id, e)
+            return
+
+        # UNAUTHENTICATED is not "the machine is down" -- the host is reachable
+        # and its container is very likely serving the workspace normally; what
+        # failed is our key on the *outer* sshd, which is the only door
+        # provisioning can use. So the skip below is right, but it must not be
+        # silent: nothing else reports it, and the user just sees every latchkey
+        # call from their agents fail with connection-refused while the
+        # workspace itself looks healthy.
+        if host_state is HostState.UNAUTHENTICATED:
+            self._warn_unauthenticated_host(host_id)
+            self._tear_down_stopped_agent(agent_id, host_id)
             return
 
         # A host that discovery reports as explicitly not-running (stopped,
@@ -246,6 +267,14 @@ class LatchkeyDiscoveryHandler(MutableModel):
             self._tear_down_stopped_agent(agent_id, host_id)
             return
 
+        if host_state is HostState.RUNNING:
+            # Outer auth demonstrably works again (for imbue_cloud, RUNNING is
+            # only reachable by running the listing script over outer SSH), so
+            # the next rejection is a new episode and warns afresh rather than
+            # being deduplicated against the last one.
+            with self._remote_hosts_lock:
+                self._unauthenticated_hosts.discard(str(host_id))
+
         if ssh_info is None:
             # No SSH info for this agent (e.g. local-provider agent in tests,
             # or a discovery event that fired before the host SSH event); we
@@ -253,24 +282,24 @@ class LatchkeyDiscoveryHandler(MutableModel):
             # and let the agent reach it via whatever direct route exists.
             return
 
-        agent_id_str = str(agent_id)
+        instance_key_str = str(AgentInstanceKey.build(agent_id, host_id))
         with self._pending_lock:
-            if agent_id_str in self._pending_remote_agents:
+            if instance_key_str in self._pending_remote_agents:
                 # Latchkey tunnel setup already in flight; skipping duplicate fire.
                 return
-            self._pending_remote_agents.add(agent_id_str)
+            self._pending_remote_agents.add(instance_key_str)
         try:
             self.concurrency_group.start_new_thread(
                 target=self._run_remote_setup,
                 args=(agent_id, host_id, ssh_info, provider_name, host_side_port),
-                name=f"latchkey-discovery-setup-{agent_id_str}",
+                name=f"latchkey-discovery-setup-{instance_key_str}",
                 is_checked=False,
             )
         except (ConcurrencyExceptionGroup, InvalidConcurrencyGroupStateError, RuntimeError):
             # Roll back the pending flag so a later fire (after the CG
             # is healthy again) isn't permanently coalesced away.
             with self._pending_lock:
-                self._pending_remote_agents.discard(agent_id_str)
+                self._pending_remote_agents.discard(instance_key_str)
             raise
 
     def _run_remote_setup(
@@ -282,6 +311,7 @@ class LatchkeyDiscoveryHandler(MutableModel):
         host_side_port: int,
     ) -> None:
         """Worker-thread entry point that chooses and wires one workspace gateway."""
+        instance_key = AgentInstanceKey.build(agent_id, host_id)
         is_pending_handed_off = False
         try:
             route = self._resolve_gateway_route(host_id, provider_name)
@@ -295,12 +325,12 @@ class LatchkeyDiscoveryHandler(MutableModel):
             elif route.outer_ssh_info is None:
                 # Confirmed desktop workspace (the provider has no outer host,
                 # or its outer is this very machine): the normal local path.
-                self._setup_desktop_gateway_reachability(agent_id, ssh_info, host_side_port)
+                self._setup_desktop_gateway_reachability(agent_id, host_id, ssh_info, host_side_port)
             else:
                 # Drop a desktop->container tunnel opened by an earlier cycle
                 # before the outer host was resolvable; otherwise it holds 1989
                 # and the VPS->container tunnel cannot bind there.
-                self.tunnel_manager.remove_reverse_tunnels_for_agent(str(agent_id))
+                self.tunnel_manager.remove_reverse_tunnels_for_agent(instance_key)
                 self._setup_desktop_gateway_reachability_on_vps(
                     agent_id,
                     host_id,
@@ -316,7 +346,7 @@ class LatchkeyDiscoveryHandler(MutableModel):
             # not dispatched) clear it here.
             if not is_pending_handed_off:
                 with self._pending_lock:
-                    self._pending_remote_agents.discard(str(agent_id))
+                    self._pending_remote_agents.discard(str(instance_key))
 
     def _tear_down_stopped_agent(self, agent_id: AgentId, host_id: HostId) -> None:
         """Drop a stopped agent's reverse tunnel and mark its host for re-provisioning.
@@ -328,18 +358,21 @@ class LatchkeyDiscoveryHandler(MutableModel):
         re-runs the idempotent VPS-resident gateway provisioning, since a stopped
         container may be recreated before it comes back.
         """
-        removed_tunnel_count = self.tunnel_manager.remove_reverse_tunnels_for_agent(str(agent_id))
+        removed_tunnel_count = self.tunnel_manager.remove_reverse_tunnels_for_agent(
+            AgentInstanceKey.build(agent_id, host_id)
+        )
         if removed_tunnel_count:
             logger.debug("Removed {} reverse tunnel(s) for stopped agent {}", removed_tunnel_count, agent_id)
         with self._remote_hosts_lock:
             self._provisioned_hosts.discard(str(host_id))
 
     def _setup_desktop_gateway_reachability(
-        self, agent_id: AgentId, ssh_info: RemoteSSHInfo, host_side_port: int
+        self, agent_id: AgentId, host_id: HostId, ssh_info: RemoteSSHInfo, host_side_port: int
     ) -> None:
         """Reverse-tunnel the desktop-side gateway onto the agent's ``127.0.0.1:AGENT_SIDE_LATCHKEY_PORT``.
 
-        The ``agent_id`` tag lets the destruction handler drop this tunnel via
+        The instance tag (``<agent_id>@<host_id>``; agent ids are unique per
+        host, not globally) lets the destruction handler drop this tunnel via
         ``remove_reverse_tunnels_for_agent``; without it the registry leaks
         across destroyed agents and the 30s health-check loop spins paramiko
         transports against ports that no longer exist. Failures are logged
@@ -351,7 +384,7 @@ class LatchkeyDiscoveryHandler(MutableModel):
                 ssh_info=ssh_info,
                 local_port=host_side_port,
                 remote_port=AGENT_SIDE_LATCHKEY_PORT,
-                agent_id=str(agent_id),
+                agent_id=AgentInstanceKey.build(agent_id, host_id),
             )
         except (SSHTunnelError, OSError, paramiko.SSHException) as e:
             logger.opt(exception=e).error(
@@ -371,16 +404,16 @@ class LatchkeyDiscoveryHandler(MutableModel):
         """Expose the desktop gateway on the VPS loopback for the proxy extension.
 
         The VPS currently has a one-to-one relationship with its workspace and
-        main agent. Tagging the tunnel with that agent id preserves the normal
-        destruction behavior: stopping or destroying the agent tears down the
-        now-unused desktop-to-VPS tunnel.
+        main agent. Tagging the tunnel with that agent instance preserves the
+        normal destruction behavior: stopping or destroying the agent tears
+        down the now-unused desktop-to-VPS tunnel.
         """
         try:
             self.tunnel_manager.setup_reverse_tunnel(
                 ssh_info=outer_ssh_info,
                 local_port=host_side_port,
                 remote_port=DESKTOP_GATEWAY_VPS_PORT,
-                agent_id=str(agent_id),
+                agent_id=AgentInstanceKey.build(agent_id, host_id),
             )
         except (SSHTunnelError, OSError, paramiko.SSHException) as e:
             logger.opt(exception=e).error(
@@ -534,7 +567,15 @@ class LatchkeyDiscoveryHandler(MutableModel):
             if connection_info is None:
                 return None
             user, hostname, port, key_path = connection_info
-            return _GatewayRoute(outer_ssh_info=RemoteSSHInfo(user=user, host=hostname, port=port, key_path=key_path))
+            return _GatewayRoute(
+                outer_ssh_info=RemoteSSHInfo(
+                    user=user,
+                    host=hostname,
+                    port=port,
+                    key_path=key_path,
+                    known_hosts_path=outer.get_ssh_known_hosts_path(),
+                )
+            )
 
     def reload_provider_config(self) -> None:
         """Re-read the provider set from settings and forget cached route resolutions.
@@ -581,6 +622,37 @@ class LatchkeyDiscoveryHandler(MutableModel):
             )
             return None
         return dict(reloaded.config.providers)
+
+    def _warn_unauthenticated_host(self, host_id: HostId) -> None:
+        """Surface a host whose outer sshd rejected our key, once per host, loudly.
+
+        Provisioning reaches the workspace's gateway over the outer host, so an
+        outer key rejection means nothing can be wired: the in-container gateway
+        port stays unbound and every latchkey call from that host's agents fails
+        with connection-refused. Falling back to the desktop gateway is not an
+        option for the same reasons spelled out in
+        ``_warn_unresolved_gateway_route``.
+
+        This is worth its own warning because the failure is otherwise invisible:
+        the container's sshd is untouched, so the workspace keeps loading and
+        chatting normally and nothing connects the dead latchkey calls to the
+        host's SSH state.
+        """
+        host_id_str = str(host_id)
+        with self._remote_hosts_lock:
+            is_first = host_id_str not in self._unauthenticated_hosts
+            self._unauthenticated_hosts.add(host_id_str)
+        message = (
+            "Host {} rejected this machine's SSH key (host state UNAUTHENTICATED), so its latchkey "
+            "gateway cannot be provisioned: its in-container gateway port stays closed and latchkey "
+            "calls from its agents will fail with connection-refused. The workspace itself is "
+            "unaffected (it reaches the container over a different sshd), so nothing else will report "
+            "this. The host's outer authorized_keys has most likely lost this machine's key."
+        )
+        if is_first:
+            logger.warning(message, host_id)
+        else:
+            logger.debug(message, host_id)
 
     def _warn_unresolved_gateway_route(self, host_id: HostId, provider_name: str) -> None:
         """Surface an unresolvable gateway route once per host, loudly.
@@ -703,7 +775,7 @@ class LatchkeyDiscoveryHandler(MutableModel):
             with self._remote_hosts_lock:
                 self._provisioning_hosts.discard(str(host_id))
             with self._pending_lock:
-                self._pending_remote_agents.discard(str(agent_id))
+                self._pending_remote_agents.discard(str(AgentInstanceKey.build(agent_id, host_id)))
 
     # -- Remote credential/permission sync ----------------------------------
 
@@ -865,7 +937,7 @@ class LatchkeyDestructionHandler(FrozenModel):
         description="Manager whose reverse tunnels for the destroyed agent must be torn down"
     )
 
-    def __call__(self, agent_id: AgentId) -> None:
-        removed = self.tunnel_manager.remove_reverse_tunnels_for_agent(str(agent_id))
+    def __call__(self, agent_id: AgentId, host_id: HostId) -> None:
+        removed = self.tunnel_manager.remove_reverse_tunnels_for_agent(AgentInstanceKey.build(agent_id, host_id))
         if removed:
-            logger.debug("Removed {} reverse tunnel(s) for destroyed agent {}", removed, agent_id)
+            logger.debug("Removed {} reverse tunnel(s) for destroyed agent {} on host {}", removed, agent_id, host_id)

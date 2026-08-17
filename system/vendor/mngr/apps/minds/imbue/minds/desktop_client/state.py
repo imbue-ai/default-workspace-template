@@ -31,6 +31,7 @@ from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backup_trim import BackupTrimManager
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
 from imbue.minds.desktop_client.forward_cli import EnvelopeStreamConsumer
+from imbue.minds.desktop_client.imbue_cloud_cli import ActiveShareCache
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.latchkey.permission_requests_consumer import PermissionRequestsConsumer
 from imbue.minds.desktop_client.minds_config import MindsConfig
@@ -40,7 +41,6 @@ from imbue.minds.desktop_client.request_events import RequestInbox
 from imbue.minds.desktop_client.request_handler import RequestEventHandler
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.share_materials_injection import MachineSharingLockRegistry
-from imbue.minds.desktop_client.ssh_key_migration import SshKeyMigrationScheduler
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.ui_channel import UiChannelBroadcaster
@@ -114,9 +114,6 @@ class DesktopClientState(MutableModel):
     )
     sync_scheduler: WorkspaceSyncScheduler | None = Field(
         default=None, frozen=True, description="Background workspace-record sync loop (kicked on auth changes)"
-    )
-    ssh_key_migration_scheduler: SshKeyMigrationScheduler | None = Field(
-        default=None, frozen=True, description="Background one-off RSA -> Ed25519 client-key migration loop"
     )
     request_inbox: RequestInbox | None = Field(
         default=None, description="Immutable pending-request inbox (reassigned)"
@@ -197,6 +194,14 @@ class DesktopClientState(MutableModel):
         default_factory=MachineSharingLockRegistry,
         frozen=True,
         description="Per-machine locks serializing the machine-sharing PUT/DELETE handlers",
+    )
+    active_share_cache: ActiveShareCache = Field(
+        default_factory=ActiveShareCache,
+        frozen=True,
+        description=(
+            "Short-TTL cache of connector share lookups for the sharing readiness poll "
+            "(invalidated by the sharing PUT/DELETE handlers)"
+        ),
     )
 
 

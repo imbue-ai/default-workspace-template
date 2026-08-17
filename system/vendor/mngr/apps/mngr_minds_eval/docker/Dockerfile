@@ -34,14 +34,16 @@ COPY app/pyproject.toml app/README.md /work/mngr/apps/mngr_minds_eval/
 WORKDIR /work/mngr
 RUN uv sync --all-packages
 
-# node deps (electron binary via the allowlisted postinstall, latchkey) + compiled CSS; pin pnpm
-# from the branch's manifest. ensure-binaries downloads the bundled binaries (restic/git/lima/uv)
-# that the app's dev mode expects present.
+# node deps (electron binary via the allowlisted postinstall, latchkey) + the built SPA bundle;
+# pin pnpm from the branch's manifest. ensure-binaries downloads the bundled binaries
+# (restic/git/lima/uv) that the app's dev mode expects present.
+# build:ui must run here: entrypoint.sh execs electron directly, so `prestart` never fires, and
+# the bundle it emits (desktop_client/static/ui) is gitignored.
 RUN cd apps/minds \
  && PNPM_VER="$(node -p "let p=require('./package.json'); (p.packageManager&&p.packageManager.split('@')[1])||(p.engines&&p.engines.pnpm)||'10.33.4'")" \
  && corepack prepare "pnpm@${PNPM_VER}" --activate \
  && pnpm install \
- && (pnpm run build:css || echo "build:css failed (non-fatal)") \
+ && (pnpm run build:ui || echo "build:ui failed -- the desktop will show the 'frontend not built' page") \
  && (node scripts/ensure-binaries.js || echo "ensure-binaries failed (non-fatal)")
 
 COPY app/docker/entrypoint.sh /usr/local/bin/entrypoint.sh

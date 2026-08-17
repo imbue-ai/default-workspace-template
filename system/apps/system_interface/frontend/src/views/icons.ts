@@ -37,13 +37,20 @@ const STROKE_PATHS = {
   // The single canonical checkmark, shared by the login "success" state and the
   // permission "granted" verdict.
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
-  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  // The key that heads a permission request, and the cube that stands in for a
+  // service with no bundled brand mark. Both are lucide (`key-round`, `box`) --
+  // the same two glyphs the minds app draws on its own permission surfaces, so
+  // the in-chat card and the review popup agree.
+  key: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
+  box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
   // Exclamation mark used for the permission "couldn't complete" verdict.
   alert: '<path d="M12 6v7"/><path d="M12 17.5h0"/>',
   "chevron-down": '<path d="M6 9l6 6 6-6"/>',
   "chevron-right": '<path d="M9 6l6 6-6 6"/>',
   // Lightning bolt for the composer fast-mode toggle.
   zap: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>',
+  // Magnifying glass for the model-search box.
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   "external-link":
     '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
 } as const;

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentInstanceKey
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CertifiedDataError
@@ -14,9 +15,11 @@ from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import InvalidAgentInstanceKey
 from imbue.mngr.primitives import InvalidName
 from imbue.mngr.primitives import MAX_HOST_NAME_LENGTH
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.primitives import build_ssh_connect_command
 from imbue.mngr.primitives import default_branch_name
 
 
@@ -218,3 +221,64 @@ def test_discovered_agent_created_branch_name_raises_on_unexpected_type() -> Non
     ref = _make_discovered_agent({"created_branch_name": 42})
     with pytest.raises(CertifiedDataError, match="Expected str or None"):
         _ = ref.created_branch_name
+
+
+def test_build_ssh_connect_command_includes_pin_options_when_known_hosts_is_known() -> None:
+    command = build_ssh_connect_command("root", "203.0.113.5", 2222, Path("/keys/id"), Path("/keys/known_hosts"))
+    assert command == (
+        'ssh -i /keys/id -o "UserKnownHostsFile=/keys/known_hosts" -o StrictHostKeyChecking=yes '
+        "-p 2222 root@203.0.113.5"
+    )
+
+
+def test_build_ssh_connect_command_omits_pin_options_when_no_known_hosts() -> None:
+    command = build_ssh_connect_command("root", "203.0.113.5", 2222, Path("/keys/id"), None)
+    assert command == "ssh -i /keys/id -p 2222 root@203.0.113.5"
+
+
+# === AgentInstanceKey ===
+
+
+def test_agent_instance_key_round_trips_agent_and_host_ids() -> None:
+    agent_id = AgentId.generate()
+    host_id = HostId.generate()
+    instance_key = AgentInstanceKey.build(agent_id, host_id)
+    assert instance_key == f"{agent_id}@{host_id}"
+    assert instance_key.agent_id == agent_id
+    assert instance_key.host_id == host_id
+
+
+def test_agent_instance_key_rejects_values_without_both_components() -> None:
+    for bad_value in ("", "agent-abc", "@host-abc", "agent-abc@", "@"):
+        with pytest.raises(InvalidAgentInstanceKey):
+            AgentInstanceKey(bad_value)
+
+
+def test_agent_instance_key_rejects_values_whose_parts_are_not_valid_ids() -> None:
+    # Both parts are validated eagerly, so a constructed key can never fail
+    # later on its agent_id / host_id property accesses.
+    agent_id = AgentId.generate()
+    host_id = HostId.generate()
+    for bad_value in (
+        f"not-an-id@{host_id}",
+        f"{agent_id}@not-a-host",
+        # Right prefixes, but the hex parts are too short.
+        "agent-abc@host-abc",
+    ):
+        with pytest.raises(InvalidAgentInstanceKey):
+            AgentInstanceKey(bad_value)
+
+
+def test_agent_instance_key_distinguishes_same_agent_id_on_different_hosts() -> None:
+    # The whole point of the type: the same agent id on two hosts yields two
+    # distinct instance keys (e.g. while an agent is migrated between hosts).
+    agent_id = AgentId.generate()
+    key_on_host_a = AgentInstanceKey.build(agent_id, HostId.generate())
+    key_on_host_b = AgentInstanceKey.build(agent_id, HostId.generate())
+    assert key_on_host_a != key_on_host_b
+    assert key_on_host_a.agent_id == key_on_host_b.agent_id
+
+
+def test_discovered_agent_instance_key_matches_its_ids() -> None:
+    ref = _make_discovered_agent({})
+    assert ref.instance_key == AgentInstanceKey.build(ref.agent_id, ref.host_id)

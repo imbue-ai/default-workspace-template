@@ -155,7 +155,13 @@ def test_hosted_pages_signup_via_playwright(shared_env: Callable[[str], SharedEn
             page = browser.new_page()
             # No ?next=: a signup with no pending handoff lands on /manage.
             page.goto(f"{connector_url}/signup")
-            # The built bundle must actually be deployed (not the 503 placeholder).
+            # The built bundle must actually be deployed (not the 503
+            # placeholder). With Google configured on the tier, the signup tab
+            # leads with the Google button and keeps the email/password fields
+            # collapsed behind a reveal link; click it when present.
+            page.wait_for_selector("#auth-submit-btn,#reveal-email-form-btn", timeout=30_000)
+            if page.locator("#reveal-email-form-btn").count() > 0:
+                page.click("#reveal-email-form-btn")
             page.wait_for_selector("#auth-submit-btn", timeout=30_000)
             page.fill("#email", email)
             page.fill("#password", password)

@@ -15,7 +15,7 @@
 #     context even though it's never committed.
 [private]
 _generate-dockerignore:
-    grep -vE '^/?\.dockerignore$|^/libs/mngr/imbue/mngr/resources/Dockerfile\.release$' .gitignore > .dockerignore
+    bash scripts/generate_dockerignore.sh
 
 # Generate Dockerfile.release from Dockerfile + Dockerfile.release.extras so the
 # two Dockerfiles stay in sync without duplicating the base layers. Strips the
@@ -292,6 +292,52 @@ minds-test-electron *args:
 minds-test-electron-flow *args:
   xvfb-run -a uv run --package minds python apps/minds/scripts/electron_full_flow_e2e.py {{args}}
 
+# Generate a harbor task dataset from a minds eval config (one task per persona
+# case). Datasets default OUTSIDE the repo tree: each generated task embeds a
+# full mngr-internal clone, which must not sit under the repo's apps/ scan (it
+# would trip the snapshot-resume marked-test discovery). They are regenerable
+# from the checked-in config, so a scratch dir is fine; pass a unique <output>
+# per dataset.
+[group("minds evals")]
+minds-evals-generate config output="/tmp/minds-evals/datasets/generated":
+    uv run minds-evals-harbor generate --config "{{config}}" --output "{{output}}"
+
+# Run a generated dataset on Modal with the persona driver. Requires
+# ANTHROPIC_API_KEY (decider + judge) and ~/.modal.toml. Each trial boots its
+# own 6-CPU/16-GB box, so this is a scheduled/nightly regression job, not a
+# per-PR gate. `concurrency` bounds simultaneous boxes -- set it to the case
+# count so all cases run in one wave (cost = concurrency * box size). push_r2
+# defaults false everywhere, including CI. Extra harbor args pass through last;
+# --ak snapshot_mode=per-turn overrides the default of final.
+[group("minds evals")]
+minds-evals-run dataset job_name concurrency="4" push_r2="false" *harbor_args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY -- the decider and judge call the Anthropic API}"
+    cmd=(uv run harbor run
+        -p "{{dataset}}"
+        -a imbue.minds_evals.driver:MindsPersonaDriver
+        -e modal
+        -n "{{concurrency}}"
+        -y
+        --job-name "{{job_name}}"
+        -o apps/minds_evals/jobs
+        --agent-setup-timeout-multiplier 3
+        --ak snapshot_mode=final
+        --ek sandbox_timeout_secs=14400
+        {{harbor_args}})
+    echo ">> ${cmd[*]}"
+    "${cmd[@]}"
+    if [ "{{push_r2}}" = "true" ] || [ "${MINDS_EVALS_PUSH_R2:-0}" = "1" ]; then
+        # Reuse the old harness's scoped R2 creds file when present.
+        if [ -f "$HOME/.minds-eval/r2.env" ]; then set -a; . "$HOME/.minds-eval/r2.env"; set +a; fi
+        : "${MINDS_EVAL_BUCKET:?R2 push needs MINDS_EVAL_BUCKET (see apps/minds_evals/README.md)}"
+        : "${MINDS_EVAL_S3_ENDPOINT:?R2 push needs MINDS_EVAL_S3_ENDPOINT}"
+        aws s3 sync "apps/minds_evals/jobs/{{job_name}}" \
+            "s3://${MINDS_EVAL_BUCKET}/harbor-jobs/{{job_name}}" \
+            --endpoint-url "${MINDS_EVAL_S3_ENDPOINT}"
+    fi
+
 # Create an independent default-workspace-template checkout nested in the
 # current mngr checkout at .external_worktrees/default-workspace-template -- the
 # CLAUDE.md convention for developing default_workspace_template alongside mngr. Defaults the default_workspace_template branch
@@ -387,19 +433,19 @@ deploy *args:
     uv run minds env deploy {{args}}
 
 # Stand up the activated dev/ci env's OWN share relay in one shot:
-# provision an OVH instance, install frps + config pointed at THIS env's
-# connector, and upsert the region DNS records. The region label is the
-# env name (underscores mapped to hyphens), matching what `minds env
-# deploy` now pins into the env's sharing secret (SHARE_DEFAULT_REGION /
-# SHARE_RELAY_ENDPOINTS) -- so each dev env gets its own relay instead
-# of competing for one shared dev relay whose frps plugin-auth URL can
-# only serve a single env's connector. Reads the relay SSH key, frps
-# auth secret, OVH + Cloudflare creds from the tier's Vault entries
-# (requires a vault login). Idempotent-ish: re-running provisions a NEW
-# instance; use `just list-share-relays` / `just destroy-share-relay` to
-# clean up an old one, and re-run `just dns-share-relay` to repoint DNS.
+# provision an OVH instance, register it in THIS env's connector fleet
+# inventory (relays table), install frps + config pointed at the env's
+# connector, and reconcile the region DNS records. The region label is
+# the env name (underscores mapped to hyphens) -- each dev env gets its
+# own relay instead of competing for one shared dev relay whose frps
+# plugin-auth URL can only serve a single env's connector. Reads the
+# relay SSH key, frps auth secret, admin key, OVH + Cloudflare creds
+# from the tier's Vault entries (requires a vault login). Idempotent-ish:
+# re-running provisions a NEW instance; use `just list-share-relays` /
+# `just destroy-share-relay` + `just deregister-share-relay` to clean up
+# an old one (DNS self-heals via the connector's health sweep).
 [group("minds ops")]
-provision-dev-relay ovh_region="US-EAST-VA-1":
+provision-dev-relay ovh_region="US-EAST-VA-1" ordinal="1":
     #!/bin/bash
     set -ueo pipefail
     root_name="${MINDS_ROOT_NAME:?activate a dev env first: eval \"\$(uv run minds env activate <env>)\"}"
@@ -413,7 +459,7 @@ provision-dev-relay ovh_region="US-EAST-VA-1":
 
     # Everything derived: region label from the env name, content domain from
     # the tier deploy config, connector URL from the activated client.toml,
-    # creds + relay SSH key from the tier's Vault entries.
+    # creds + relay SSH key + admin key from the tier's Vault entries.
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     uv run python scripts/provision_dev_relay_config.py "$env_name" "$tier" "$config_path" "$tmp"
@@ -421,25 +467,35 @@ provision-dev-relay ovh_region="US-EAST-VA-1":
     region="$(jq -r .region "$tmp/params.json")"
     content_domain="$(jq -r .content_domain "$tmp/params.json")"
     plugin_auth_url="$(jq -r .plugin_auth_url "$tmp/params.json")"
+    connector_url="$(jq -r .connector_url "$tmp/params.json")"
     set -a; . "$tmp/relay.env"; set +a
 
     echo "Provisioning relay for env '$env_name' (region '$region', domain '$content_domain', OVH {{ovh_region}})"
     provision_json="$(uv run share-relay provision --env-name "$env_name" --region "$region" \
-        --ovh-region "{{ovh_region}}" --ssh-public-key-file "$tmp/relay_key.pub" | tail -n 1)"
+        --ordinal "{{ordinal}}" --ovh-region "{{ovh_region}}" --ssh-public-key-file "$tmp/relay_key.pub" | tail -n 1)"
     ip="$(jq -r .ip <<<"$provision_json")"
-    echo "Instance up at $ip; installing frps + config"
+    instance_name="$(jq -r .name <<<"$provision_json")"
+
+    echo "Registering relay in the connector fleet inventory"
+    register_json="$(uv run share-relay register --connector-url "$connector_url" --region "$region" \
+        --tunnel-endpoint "$ip:7000" --ip "$ip" --instance-name "$instance_name" | tail -n 1)"
+    relay_id="$(jq -r .relay_id <<<"$register_json")"
+
+    echo "Instance up at $ip (relay_id $relay_id); installing frps + config"
     ssh-agent bash -c "ssh-add '$tmp/relay_key' 2>/dev/null && \
-        uv run share-relay deploy --host '$ip' --region '$region' \
+        uv run share-relay deploy --host '$ip' --relay-id '$relay_id' --region '$region' \
             --content-domain '$content_domain' --plugin-auth-url '$plugin_auth_url'"
+    # Seed DNS with THIS relay's IP only. `share-relay dns` reconciles the
+    # record set, so on a second relay (ordinal >= 2) this transiently drops
+    # the sibling's IP -- the connector's per-minute health sweep restores the
+    # full region set from the relays table right after.
     uv run share-relay dns --region "$region" --content-domain "$content_domain" --ip "$ip"
 
     echo
     echo "Relay ready for env '$env_name':"
-    echo "  endpoint:  relay.$region.$content_domain:7000 (what the env's sharing secret pins)"
+    echo "  relay_id:  $relay_id (registered; workspaces learn the endpoint via GET /shares/assignment)"
     echo "  wildcard:  *.$region.$content_domain -> $ip"
-    echo "If the env was deployed before this relay existed, no redeploy is needed --"
-    echo "the sharing secret already points here. Re-enable sharing on any workspace"
-    echo "whose share was created against another region."
+    echo "Re-enable sharing on any workspace whose share was created against another region."
 
 # Start the minds desktop client (electron) in dev mode against the
 # activated env. Sources .env if present, scrubs any ambient
@@ -636,6 +692,11 @@ minds-start branch="" default_workspace_template="" debug_port="":
     # Put the Node version apps/minds pins (.nvmrc) first on PATH so pnpm's
     # engine-strict check passes regardless of the shell's default node.
     . apps/minds/scripts/select_node_version.sh || exit 2
+    # Build the SPA the app server actually serves. `pnpm start` only builds
+    # the legacy JinjaX stylesheet; static/ui/ is produced at wheel-build time
+    # and is gitignored, so without this a dev run serves whatever bundle
+    # happened to be built last -- or 404s on a fresh worktree.
+    (cd apps/minds/frontend && pnpm install --silent && pnpm run generate && pnpm run build) || exit 2
     cd apps/minds && pnpm start
 
 # Launch the minds desktop client (electron) in dev mode against the

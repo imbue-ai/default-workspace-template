@@ -5,6 +5,7 @@ import pytest
 
 import imbue.remote_service_connector.cloudflare as cloudflare_mod
 from imbue.remote_service_connector.cloudflare import _is_bucket_not_empty_error
+from imbue.remote_service_connector.cloudflare import _is_bucket_not_found_error
 from imbue.remote_service_connector.cloudflare import cf_check
 from imbue.remote_service_connector.cloudflare import cf_create_bucket
 from imbue.remote_service_connector.cloudflare import cf_delete_bucket
@@ -26,6 +27,15 @@ def test_cf_check_returns_data_on_success() -> None:
     response = httpx.Response(200, json={"success": True, "result": {"id": "123"}})
     data = cf_check(response)
     assert data["result"]["id"] == "123"
+
+
+def test_is_bucket_not_found_error_matches_status_and_code() -> None:
+    by_status = CloudflareApiError(404, [{"message": "anything"}])
+    by_code = CloudflareApiError(400, [{"code": 10007, "message": "The specified key does not exist."}])
+    unrelated = CloudflareApiError(400, [{"code": 7003, "message": "no such account"}])
+    assert _is_bucket_not_found_error(by_status) is True
+    assert _is_bucket_not_found_error(by_code) is True
+    assert _is_bucket_not_found_error(unrelated) is False
 
 
 def test_is_bucket_not_empty_error_matches_message_and_code() -> None:

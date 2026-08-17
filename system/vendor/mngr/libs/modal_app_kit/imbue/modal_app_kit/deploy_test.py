@@ -3,6 +3,7 @@ import pytest
 from imbue.modal_app_kit.deploy import DEPLOY_ENV_VAR
 from imbue.modal_app_kit.deploy import DEPLOY_ID_ENV_VAR
 from imbue.modal_app_kit.deploy import DEPLOY_ID_UNSET_SENTINEL
+from imbue.modal_app_kit.deploy import read_custom_domains
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import read_min_containers
@@ -60,3 +61,24 @@ def test_read_scaledown_window_reads_positive_value(monkeypatch: pytest.MonkeyPa
 
 def test_stamped_secret_name_joins_service_tier_and_deploy_id() -> None:
     assert stamped_secret_name("cloudflare", "staging", "20260801t000000z") == "cloudflare-staging-20260801t000000z"
+
+
+def test_read_custom_domains_returns_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MODAL_APP_KIT_TEST_CUSTOM_DOMAINS_73519", raising=False)
+
+    assert read_custom_domains("MODAL_APP_KIT_TEST_CUSTOM_DOMAINS_73519") is None
+
+
+def test_read_custom_domains_splits_comma_separated_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MODAL_APP_KIT_TEST_CUSTOM_DOMAINS_73519", "accounts.example.com, minds.example.com")
+
+    assert read_custom_domains("MODAL_APP_KIT_TEST_CUSTOM_DOMAINS_73519") == [
+        "accounts.example.com",
+        "minds.example.com",
+    ]
+
+
+def test_read_custom_domains_returns_none_for_an_empty_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MODAL_APP_KIT_TEST_CUSTOM_DOMAINS_73519", " , ")
+
+    assert read_custom_domains("MODAL_APP_KIT_TEST_CUSTOM_DOMAINS_73519") is None

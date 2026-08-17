@@ -15,9 +15,9 @@
  */
 
 import type { TranscriptEvent } from "../models/Response";
-import { getModelSettings } from "../models/ModelSettings";
+import { getAgentFastMode } from "../models/ModelSettings";
 import { getWorkspaceFastMode, openFastModePrompt } from "../models/WorkspaceFastMode";
-import { isNonBoundaryUserMessage, parsePermissionResolution } from "./message-classification";
+import { isNonBoundaryUserMessage, resolutionOf } from "./message-classification";
 
 /** How many user turns a chat runs with fast mode on before it asks whether to
  *  keep it. The one knob for the grace period. */
@@ -30,11 +30,10 @@ export function countUserTurns(events: TranscriptEvent[]): number {
     if (event.type !== "user_message") {
       continue;
     }
-    const content = event.content ?? "";
-    if (isNonBoundaryUserMessage(content, event.is_meta)) {
+    if (isNonBoundaryUserMessage(event)) {
       continue;
     }
-    if (parsePermissionResolution(content) !== null) {
+    if (resolutionOf(event) !== null) {
       continue;
     }
     count = count + 1;
@@ -58,8 +57,7 @@ export function isFastModePromptOwed(agentId: string, events: TranscriptEvent[],
   if (!isAgentIdle) {
     return false;
   }
-  const settings = getModelSettings(agentId);
-  if (settings === null || !settings.fast_mode) {
+  if (!getAgentFastMode(agentId)) {
     return false;
   }
   return countUserTurns(events) >= FAST_MODE_GRACE_TURN_COUNT;

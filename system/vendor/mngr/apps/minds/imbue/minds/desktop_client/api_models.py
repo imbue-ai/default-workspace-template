@@ -283,9 +283,8 @@ class CreateWorkspaceRequest(ApiRequestModel):
         default=None,
         description=(
             "Bring sharing up post-create so the workspace is reachable from the hosted web "
-            "client (default off). Requires an account: imbue_cloud rows use the connector's "
-            "server-side enable-sharing; local docker/lima rows use the desktop share flow "
-            "with the owner granted."
+            "client (default off). Requires an account: every row -- imbue_cloud and local "
+            "docker/lima alike -- runs the desktop share flow with the owner granted."
         ),
     )
 
@@ -590,9 +589,21 @@ class WorkspaceBackupCheckResponse(FrozenModel):
 
 
 class SharingReadinessResponse(FrozenModel):
-    """Whether a shared machine's hostname is live yet end to end."""
+    """Whether a shared machine's hostname is live yet end to end, plus per-step provisioning signals."""
 
     ready: bool = Field(description="Whether the shared hostname answers over the relay yet")
+    cert_not_after: str | None = Field(
+        default=None,
+        description="Expiry of the newest issued certificate; None until one has been issued",
+    )
+    last_tunnel_login_at: str | None = Field(
+        default=None,
+        description=(
+            "The share's last relay tunnel Login stamp; None until the tunnel has ever connected. "
+            "Clients detect the tunnel step by this value changing during a provisioning wait "
+            "(it persists across re-shares, so its mere presence is not enough)."
+        ),
+    )
 
 
 class MachineSharingResponse(FrozenModel):

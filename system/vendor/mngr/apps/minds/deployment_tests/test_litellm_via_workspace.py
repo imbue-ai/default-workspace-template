@@ -27,6 +27,7 @@ enable Docker-in-Docker (mirroring ``offload-modal-acceptance.toml``).
 """
 
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -39,16 +40,17 @@ import psycopg2
 import pytest
 import tomlkit
 from loguru import logger
+from pydantic import SecretStr
 
+from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.minds.deployment_tests.data_types import DefaultWorkspaceTemplateRef
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
-from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
 from imbue.minds.deployment_tests.helpers import signin_and_mint_litellm_key
 from imbue.minds.deployment_tests.helpers import wait_for_env_ready
 from imbue.minds.desktop_client.ai_keys import build_credential_blob
 from imbue.mngr.utils.testing import get_short_random_string
 
-pytestmark = [pytest.mark.release, pytest.mark.minds_services]
+pytestmark = [pytest.mark.release, pytest.mark.minds_services, pytest.mark.docker, pytest.mark.rsync]
 
 _CREATE_TIMEOUT_SECONDS = 1200
 _IN_CONTAINER_TIMEOUT_SECONDS = 120
@@ -59,11 +61,16 @@ _SPEND_POLL_INTERVAL_SECONDS = 10
 
 
 def _run(
-    command: list[str], *, cwd: Path | None = None, timeout: int, logged_command: str | None = None
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int,
+    logged_command: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``command``; ``logged_command`` (when given) is logged in its place so secrets stay out of the logs."""
     logger.info("Running: {}", " ".join(command) if logged_command is None else logged_command)
-    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
+    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False, env=env)
 
 
 def _exec_in_container(
@@ -98,6 +105,12 @@ def _prepare_template_clone(source_worktree: Path) -> Path:
 
 def _create_docker_workspace(template_path: Path, host_name: str) -> tuple[str, str]:
     """Run the real ``mngr create`` the desktop client runs; return (agent_id, host_id)."""
+    # The pytest isolation fixture sets MNGR_ROOT_NAME to a per-test value, which
+    # makes mngr resolve project config at .<root_name>/ instead of the template's
+    # .mngr/ -- so the create would see no templates at all. Point the project
+    # config dir at the clone's .mngr explicitly.
+    create_env = dict(os.environ)
+    create_env["MNGR_PROJECT_CONFIG_DIR"] = str(template_path / ".mngr")
     create = _run(
         [
             "mngr",
@@ -116,6 +129,7 @@ def _create_docker_workspace(template_path: Path, host_name: str) -> tuple[str, 
         ],
         cwd=template_path,
         timeout=_CREATE_TIMEOUT_SECONDS,
+        env=create_env,
     )
     assert create.returncode == 0, f"mngr create failed: {create.stderr[-2000:]}"
     agent_id, host_id = "", ""
@@ -229,7 +243,7 @@ def _await_key_spend(neon_litellm_dsn: str, key_alias: str) -> float:
 @pytest.mark.timeout(2700)
 def test_litellm_spend_tracking_via_local_workspace(
     shared_env: Callable[[str], SharedEnvHandle],
-    verified_user: VerifiedUserHandle,
+    ci_test_user: tuple[NonEmptyStr, SecretStr],
     default_workspace_template_ref: DefaultWorkspaceTemplateRef,
 ) -> None:
     """Drive a real local DEFAULT_WORKSPACE_TEMPLATE workspace + assert spend lands in litellm's ledger.
@@ -238,7 +252,8 @@ def test_litellm_spend_tracking_via_local_workspace(
 
     0. Wait for the env to be reachable (defensive preamble for every test
        in this suite).
-    1. Sign in as the pre-verified user and mint a LiteLLM key through the
+    1. Sign in as the fixed CI test user (paid-listed, so it can switch to
+       the ally plan key minting needs) and mint a LiteLLM key through the
        connector, with the workspace-keyed alias the desktop app's
        ``/settings/ai-keys`` mint page uses.
     2. Create a real local Docker workspace from the template checkout (the
@@ -263,12 +278,13 @@ def test_litellm_spend_tracking_via_local_workspace(
 
     # 1. Mint a key for the signed-in user, aliased to the workspace like the
     #    desktop app's mint page does, and render the same paste-ready blob.
+    ci_user_email, ci_user_password = ci_test_user
     host_name = f"litellm-e2e-{get_short_random_string()}"
     key_alias = f"workspace-{host_name}"
     minted = signin_and_mint_litellm_key(
         connector_url=str(env.urls.connector_url),
-        email=str(verified_user.email),
-        password=verified_user.password.get_secret_value(),
+        email=str(ci_user_email),
+        password=ci_user_password.get_secret_value(),
         key_alias=key_alias,
         max_budget=100.0,
         budget_duration="1d",

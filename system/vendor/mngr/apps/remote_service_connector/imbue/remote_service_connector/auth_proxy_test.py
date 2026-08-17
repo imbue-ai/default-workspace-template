@@ -100,6 +100,7 @@ def test_auth_signup_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["user"]["email"] == "new@example.com"
     assert body["tokens"]["access_token"].startswith("at-")
     assert body["needs_email_verification"] is False
+    assert body["is_new_account"] is True
     assert backend.sent_verification_emails == []
     assert "new@example.com" in backend.accounts_by_email
     assert backend.accounts_by_email["new@example.com"].is_verified is False
@@ -135,6 +136,72 @@ def test_auth_signup_field_error_on_weak_password_or_malformed_email(monkeypatch
     assert backend.accounts_by_email == {}
 
 
+def test_auth_signup_is_disabled_on_production_and_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On the restricted tiers the JSON signup refuses to create accounts (browser flow only)."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    for tier in ("production", "staging"):
+        monkeypatch.setenv("MNGR_DEPLOY_ENV", tier)
+        resp = client.post("/auth/signup", json={"email": "blocked@example.com", "password": "password123"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "SIGNUP_DISABLED"
+        assert body["tokens"] is None
+        assert "mngr imbue_cloud auth login" in body["message"]
+    assert backend.accounts_by_email == {}
+
+
+def test_auth_signup_fails_closed_when_the_deploy_env_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset MNGR_DEPLOY_ENV means a bare production deploy, so signup is refused."""
+    backend = _install_fake_supertokens(monkeypatch)
+    monkeypatch.delenv("MNGR_DEPLOY_ENV", raising=False)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    resp = client.post("/auth/signup", json={"email": "blocked@example.com", "password": "password123"})
+    assert resp.json()["status"] == "SIGNUP_DISABLED"
+    assert backend.accounts_by_email == {}
+
+
+def test_auth_signup_stays_available_on_ci_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI (and dev) env names keep the headless signup so tests can mint accounts."""
+    backend = _install_fake_supertokens(monkeypatch)
+    monkeypatch.setenv("MNGR_DEPLOY_ENV", "ci-orchestrator-3")
+    client = TestClient(web_app, raise_server_exceptions=False)
+    resp = client.post("/auth/signup", json={"email": "ci@example.com", "password": "password123"})
+    assert resp.json()["status"] == "OK"
+    assert "ci@example.com" in backend.accounts_by_email
+
+
+def test_auth_signin_still_works_on_restricted_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disabling signup must not touch sign-in: existing accounts keep working on production."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    signup = client.post("/auth/signup", json={"email": "existing@example.com", "password": "password123"})
+    assert signup.json()["status"] == "OK"
+    monkeypatch.setenv("MNGR_DEPLOY_ENV", "production")
+
+    resp = client.post("/auth/signin", json={"email": "existing@example.com", "password": "password123"})
+
+    assert resp.json()["status"] == "OK"
+    assert "existing@example.com" in backend.accounts_by_email
+
+
+def test_admin_test_signup_still_works_on_restricted_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The admin-key test-signup path is unaffected by the tier restriction (deployment tests rely on it)."""
+    backend = _install_fake_supertokens(monkeypatch)
+    monkeypatch.setenv("MNGR_DEPLOY_ENV", "production")
+    monkeypatch.setenv("MINDS_ADMIN_KEY", "admin-key-7712")
+    client = TestClient(web_app, raise_server_exceptions=False)
+
+    resp = client.post(
+        "/admin/test-signup",
+        headers={"Authorization": "Bearer admin-key-7712"},
+        json={"email": "tester@example.com", "password": "password123", "verified": True},
+    )
+
+    assert resp.json()["status"] == "OK"
+    assert backend.accounts_by_email["tester@example.com"].is_verified is True
+
+
 def test_auth_signup_duplicate_email_returns_status(monkeypatch: pytest.MonkeyPatch) -> None:
     """Signing up with an email that already exists returns EMAIL_ALREADY_EXISTS."""
     backend = _install_fake_supertokens(monkeypatch)
@@ -146,21 +213,29 @@ def test_auth_signup_duplicate_email_returns_status(monkeypatch: pytest.MonkeyPa
     assert len(backend.accounts_by_email) == 1
 
 
-def _oauth_callback_payload(provider_id: str) -> dict[str, object]:
-    return {
-        "provider_id": provider_id,
-        "callback_url": "http://127.0.0.1:9999/cb",
-        "query_params": {"code": "abc", "state": "xyz"},
-    }
+def _exchange_google_code(backend: FakeSuperTokensBackend) -> Any:
+    """Run the shared OAuth code exchange directly, as the browser callback does.
+
+    The old JSON ``/auth/oauth/*`` routes are gone, so the exchange (and the
+    one-account-per-email guard inside it) is exercised as a function against
+    the fake backend's registered Google provider. The fake provider is not an
+    SDK ``Provider`` subclass (it only implements the async surface the
+    exchange calls), hence the Any-typed handoff.
+    """
+    fake_google_provider: Any = backend.registered_providers["google"]
+    return auth_proxy_mod.complete_oauth_code_exchange(
+        provider=fake_google_provider,
+        provider_id="google",
+        callback_url="http://127.0.0.1:9999/cb",
+        query_params={"code": "abc", "state": "xyz"},
+    )
 
 
 def test_auth_signup_rejected_when_email_has_oauth_account(monkeypatch: pytest.MonkeyPatch) -> None:
     """A password signup for an email that already has a Google account is refused before touching the recipe."""
     backend = _install_fake_supertokens(monkeypatch)
-    backend.register_provider("google", email="both@example.com", third_party_user_id="tp-both")
+    backend.add_third_party_account(provider_id="google", email="both@example.com", third_party_user_id="tp-both")
     client = TestClient(web_app, raise_server_exceptions=False)
-    oauth_resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
-    assert oauth_resp.json()["status"] == "OK"
     account_count_before = len(backend.accounts_by_id)
 
     resp = client.post("/auth/signup", json={"email": "both@example.com", "password": "password123"})
@@ -178,10 +253,8 @@ def test_auth_signup_rejected_when_email_has_oauth_account(monkeypatch: pytest.M
 def test_auth_signup_rejected_case_insensitively_when_email_has_oauth_account(monkeypatch: pytest.MonkeyPatch) -> None:
     """The cross-method guard matches emails case-insensitively (and ignores surrounding whitespace)."""
     backend = _install_fake_supertokens(monkeypatch)
-    backend.register_provider("google", email="case@example.com", third_party_user_id="tp-case")
+    backend.add_third_party_account(provider_id="google", email="case@example.com", third_party_user_id="tp-case")
     client = TestClient(web_app, raise_server_exceptions=False)
-    oauth_resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
-    assert oauth_resp.json()["status"] == "OK"
     account_count_before = len(backend.accounts_by_id)
 
     resp = client.post("/auth/signup", json={"email": "  Case@Example.COM  ", "password": "password123"})
@@ -196,8 +269,8 @@ def test_auth_signup_rejected_case_insensitively_when_email_has_oauth_account(mo
     assert backend.sent_verification_emails == []
 
 
-def test_auth_oauth_callback_rejected_when_email_has_password_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An OAuth callback for an email that already has a password account is refused before creating a user."""
+def test_oauth_code_exchange_rejected_when_email_has_password_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OAuth exchange for an email that already has a password account is refused before creating a user."""
     backend = _install_fake_supertokens(monkeypatch)
     client = TestClient(web_app, raise_server_exceptions=False)
     signup_resp = client.post("/auth/signup", json={"email": "both@example.com", "password": "password123"})
@@ -205,32 +278,27 @@ def test_auth_oauth_callback_rejected_when_email_has_password_account(monkeypatc
     backend.register_provider("google", email="both@example.com", third_party_user_id="tp-both")
     account_count_before = len(backend.accounts_by_id)
 
-    resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+    result = _exchange_google_code(backend)
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
-    assert "password" in body["message"]
-    assert body["tokens"] is None
+    assert result.status == "ACCOUNT_EXISTS_WITH_OTHER_METHOD"
+    assert result.message is not None and "password" in result.message
+    assert result.tokens is None
     # The existing password account is untouched and no thirdparty user appeared.
     assert len(backend.accounts_by_id) == account_count_before
     assert backend.accounts_by_email["both@example.com"].provider_id == "emailpassword"
 
 
-def test_auth_oauth_callback_allows_returning_oauth_user(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_oauth_code_exchange_allows_returning_oauth_user(monkeypatch: pytest.MonkeyPatch) -> None:
     """A repeat OAuth sign-in for an email whose account uses that same provider still succeeds."""
     backend = _install_fake_supertokens(monkeypatch)
     backend.register_provider("google", email="repeat@example.com", third_party_user_id="tp-repeat")
-    client = TestClient(web_app, raise_server_exceptions=False)
-    first = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
-    assert first.json()["status"] == "OK"
+    first = _exchange_google_code(backend)
+    assert first.status == "OK"
 
-    second = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+    second = _exchange_google_code(backend)
 
-    assert second.status_code == 200
-    body = second.json()
-    assert body["status"] == "OK"
-    assert body["user"]["email"] == "repeat@example.com"
+    assert second.status == "OK"
+    assert second.user is not None and second.user.email == "repeat@example.com"
     assert len(backend.accounts_by_id) == 1
 
 
@@ -246,14 +314,13 @@ def test_preexisting_cross_method_duplicate_keeps_both_sign_ins_working(monkeypa
     )
     backend.register_provider("google", email="dup@example.com", third_party_user_id="tp-dup")
 
-    oauth_resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+    oauth_result = _exchange_google_code(backend)
     signin_resp = client.post("/auth/signin", json={"email": "dup@example.com", "password": "password123"})
     resignup_resp = client.post("/auth/signup", json={"email": "dup@example.com", "password": "password123"})
 
     # The OAuth sign-in resolves to the google account, not the password one.
-    oauth_body = oauth_resp.json()
-    assert oauth_body["status"] == "OK"
-    assert oauth_body["user"]["user_id"] == google_user_id
+    assert oauth_result.status == "OK"
+    assert oauth_result.user is not None and oauth_result.user.user_id == google_user_id
     # The password sign-in keeps working too.
     assert signin_resp.json()["status"] == "OK"
     # A password re-signup gets the recipe's own answer, not the cross-method status.
@@ -262,21 +329,18 @@ def test_preexisting_cross_method_duplicate_keeps_both_sign_ins_working(monkeypa
     assert len(backend.accounts_by_id) == 2
 
 
-def test_auth_oauth_callback_returns_error_when_account_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_oauth_code_exchange_returns_error_when_account_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """A SuperTokens outage during the one-account-per-email lookup surfaces as AuthResponse(status='ERROR')."""
     backend = _install_fake_supertokens(monkeypatch)
     backend.register_provider("google", email="down@example.com", third_party_user_id="tp-down")
     backend.raise_on("list_users_by_account_info", SuperTokensGeneralError("core down"))
-    client = TestClient(web_app, raise_server_exceptions=False)
 
-    resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
+    result = _exchange_google_code(backend)
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ERROR"
-    assert body["message"] == "Auth backend unavailable"
-    assert body["tokens"] is None
-    # The refused callback wrote nothing to the backend.
+    assert result.status == "ERROR"
+    assert result.message == "Auth backend unavailable"
+    assert result.tokens is None
+    # The refused exchange wrote nothing to the backend.
     assert len(backend.accounts_by_id) == 0
 
 
@@ -293,6 +357,7 @@ def test_auth_signup_returns_error_on_sdk_outage(monkeypatch: pytest.MonkeyPatch
         "user": None,
         "tokens": None,
         "needs_email_verification": False,
+        "is_new_account": False,
     }
 
 
@@ -706,35 +771,28 @@ def test_auth_reset_password_rejects_missing_fields(monkeypatch: pytest.MonkeyPa
     assert resp.status_code == 400
 
 
-def test_auth_oauth_authorize_returns_redirect_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """/auth/oauth/authorize asks the provider for a redirect URL."""
-    backend = _install_fake_supertokens(monkeypatch)
-    backend.register_provider("google", email="oa@e.com")
+def test_legacy_json_oauth_routes_are_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deprecated JSON OAuth pair is removed: Google sign-in goes through the browser flow only."""
+    _install_fake_supertokens(monkeypatch)
     client = TestClient(web_app, raise_server_exceptions=False)
-    resp = client.post(
+    authorize = client.post(
         "/auth/oauth/authorize",
         json={"provider_id": "google", "callback_url": "http://127.0.0.1:9999/cb"},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "OK"
-    assert body["url"].startswith("https://google.example.com/auth")
-
-
-def test_auth_oauth_authorize_unknown_provider_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """/auth/oauth/authorize returns status=ERROR for a provider that isn't registered."""
-    _install_fake_supertokens(monkeypatch)
-    client = TestClient(web_app, raise_server_exceptions=False)
-    resp = client.post(
-        "/auth/oauth/authorize",
-        json={"provider_id": "unknown", "callback_url": "http://127.0.0.1/cb"},
+    callback = client.post(
+        "/auth/oauth/callback",
+        json={"provider_id": "google", "callback_url": "http://127.0.0.1:9999/cb", "query_params": {}},
     )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ERROR"
+    assert authorize.status_code == 404
+    assert callback.status_code == 404
 
 
-def test_auth_oauth_callback_creates_user_and_returns_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    """/auth/oauth/callback links the provider user, creates an account, and returns tokens."""
+def test_oauth_code_exchange_creates_user_without_bearer_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exchange links the provider user and creates the account; no bearer session is minted.
+
+    The browser callback creates its own cookie session on the response, so a
+    bearer session minted here would be orphaned in the core.
+    """
     backend = _install_fake_supertokens(monkeypatch)
     backend.register_provider(
         "google",
@@ -742,31 +800,16 @@ def test_auth_oauth_callback_creates_user_and_returns_session(monkeypatch: pytes
         third_party_user_id="tp-1",
         display_name="Callback User",
     )
-    client = TestClient(web_app, raise_server_exceptions=False)
-    resp = client.post("/auth/oauth/callback", json=_oauth_callback_payload("google"))
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "OK"
-    assert body["user"]["email"] == "cb@e.com"
-    assert body["user"]["display_name"] == "Callback User"
-    assert body["tokens"]["access_token"].startswith("at-")
+
+    result = _exchange_google_code(backend)
+
+    assert result.status == "OK"
+    assert result.user is not None
+    assert result.user.email == "cb@e.com"
+    assert result.user.display_name == "Callback User"
+    assert result.tokens is None
     assert "cb@e.com" in backend.accounts_by_email
-
-
-def test_auth_oauth_callback_unknown_provider_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """/auth/oauth/callback returns status=ERROR for a provider that isn't registered."""
-    _install_fake_supertokens(monkeypatch)
-    client = TestClient(web_app, raise_server_exceptions=False)
-    resp = client.post(
-        "/auth/oauth/callback",
-        json={
-            "provider_id": "missing",
-            "callback_url": "http://127.0.0.1/cb",
-            "query_params": {},
-        },
-    )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ERROR"
+    assert backend.sessions_by_access_token == {}
 
 
 def test_auth_get_user_returns_provider_email_login(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -785,16 +828,8 @@ def test_auth_get_user_returns_provider_email_login(monkeypatch: pytest.MonkeyPa
 def test_auth_get_user_reports_third_party_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """/auth/users/{user_id} reports the OAuth provider ID for OAuth accounts."""
     backend = _install_fake_supertokens(monkeypatch)
-    backend.register_provider("google", email="oauth-user@e.com")
+    backend.add_third_party_account(provider_id="google", email="oauth-user@e.com", third_party_user_id="tp-gu")
     client = TestClient(web_app, raise_server_exceptions=False)
-    client.post(
-        "/auth/oauth/callback",
-        json={
-            "provider_id": "google",
-            "callback_url": "http://127.0.0.1/cb",
-            "query_params": {"code": "a"},
-        },
-    )
     user_id = backend.accounts_by_email["oauth-user@e.com"].user_id
     resp = client.get(f"/auth/users/{user_id}")
     assert resp.status_code == 200
@@ -853,6 +888,30 @@ def test_sdk_middleware_default_recipe_apis_are_all_disabled() -> None:
         disable_flags = {name: value for name, value in vars(api).items() if name.startswith("disable_")}
         assert disable_flags, "expected the SDK APIInterface to expose disable_* flags"
         assert all(disable_flags.values()), disable_flags
+
+
+def test_append_next_to_email_verify_link_handles_both_query_shapes() -> None:
+    appended = auth_proxy_mod.append_next_to_email_verify_link(
+        "https://accounts.example/auth/verify-email?token=t1&tenantId=public",
+        "/share/authorize?machine_domain=d&state=s",
+    )
+    assert appended == (
+        "https://accounts.example/auth/verify-email?token=t1&tenantId=public"
+        "&next=%2Fshare%2Fauthorize%3Fmachine_domain%3Dd%26state%3Ds"
+    )
+    bare = auth_proxy_mod.append_next_to_email_verify_link("https://accounts.example/verify", "/x")
+    assert bare == "https://accounts.example/verify?next=%2Fx"
+
+
+def test_continue_path_from_send_user_context_accepts_only_root_relative_paths() -> None:
+    key = "verification_email_next_path"
+    accepted = auth_proxy_mod.continue_path_from_send_user_context({key: "/share/authorize?a=1"})
+    assert accepted == "/share/authorize?a=1"
+    # Absent, foreign-host, scheme-relative, and non-string values are all refused.
+    assert auth_proxy_mod.continue_path_from_send_user_context({}) is None
+    assert auth_proxy_mod.continue_path_from_send_user_context({key: "https://evil.example/x"}) is None
+    assert auth_proxy_mod.continue_path_from_send_user_context({key: "//evil.example/x"}) is None
+    assert auth_proxy_mod.continue_path_from_send_user_context({key: 7}) is None
 
 
 def test_ensure_asgi_root_path_middleware_defaults_a_missing_root_path() -> None:

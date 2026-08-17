@@ -12,6 +12,8 @@ def test_render_writes_all_three_artifacts(tmp_path: Path) -> None:
         main,
         [
             "render",
+            "--relay-id",
+            "relay-" + "e" * 16,
             "--region",
             "us1",
             "--content-domain",
@@ -37,6 +39,8 @@ def test_render_rejects_a_non_dns_region(tmp_path: Path) -> None:
         main,
         [
             "render",
+            "--relay-id",
+            "relay-" + "e" * 16,
             "--region",
             "US_1",
             "--content-domain",

@@ -100,6 +100,8 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slot_count
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_slice_resource_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import find_server_capacity_by_id
 from imbue.mngr_imbue_cloud.slices.bare_metal import foreign_tier_slice_names
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_degraded_md_arrays
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_raw_swap_devices
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_instance_name
 from imbue.mngr_imbue_cloud.slices.bare_metal_db import POOL_HOST_STATUS_LEASED
@@ -166,7 +168,7 @@ def server() -> None:
 
 
 @contextmanager
-def _pool_private_key_path() -> Iterator[Path]:
+def pool_private_key_path() -> Iterator[Path]:
     """Yield a 0600 temp file holding the pool management private key (from POOL_SSH_PRIVATE_KEY).
 
     The temp directory is removed on exit so the sensitive private key never
@@ -310,7 +312,7 @@ def prep_box(
             "with our injected key) or the one-time `admin pool backfill-host-keys` before prepping"
         )
     server_address = server.public_address
-    with _pool_private_key_path() as private_key_path:
+    with pool_private_key_path() as private_key_path:
         pool_public_key = _derive_public_key(private_key_path)
         script = build_box_prep_script(
             pool_public_key=pool_public_key,
@@ -346,6 +348,7 @@ def audit_box_against_tier(
         box_host_public_key=server_to_audit.box_host_public_key,
     )
     disk_names = client.list_disk_names()
+    mdstat_text, proc_swaps_text = client.read_box_health_texts()
     return BoxTierAudit(
         server_id=str(server_to_audit.id),
         public_address=str(server_to_audit.public_address),
@@ -355,6 +358,8 @@ def audit_box_against_tier(
         foreign_tier_slices=tuple(sorted(foreign_tier_slice_names(disk_names, env_name)))
         if env_name is not None
         else (),
+        degraded_md_arrays=tuple(parse_degraded_md_arrays(mdstat_text)),
+        raw_swap_devices=tuple(parse_raw_swap_devices(proc_swaps_text)),
     )
 
 
@@ -459,7 +464,7 @@ def list_servers(database_url: str | None, is_occupancy_verified: bool, env_name
     logger.info("\n{}", _format_capacity_table(capacities))
     if not is_occupancy_verified:
         return
-    with _pool_private_key_path() as private_key_path:
+    with pool_private_key_path() as private_key_path:
         report = audit_fleet_against_tier(capacities=capacities, env_name=env_name, private_key_path=private_key_path)
     emit_json(report.model_dump(mode="json"))
     if not report.is_foreign_tier_checked:
@@ -495,7 +500,7 @@ def list_servers(database_url: str | None, is_occupancy_verified: bool, env_name
     "is_dry_run",
     is_flag=True,
     default=False,
-    help="List the slice VMs that would be backfilled (with the per-VM start-script path) without applying.",
+    help="List the slice VMs that would be backfilled (probing each VM's reachability) without applying.",
 )
 def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is_dry_run: bool) -> None:
     """Backfill the volume-gated minds-autostart units onto existing slice VMs.
@@ -503,8 +508,10 @@ def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is
     The fleet half of the reboot-resilience rollout (minds
     docs/reboot-resilience-rollout.md Step 2): slices baked before the merged
     installer keep the old racy oneshot until this sweep re-applies it. The
-    installer is idempotent and safe on running workspaces; a VM whose data
-    volume is not mounted is refused by the installer itself and reported as a
+    installer is idempotent and safe on running workspaces, fires the
+    workspace start immediately, and the sweep only reports a VM as
+    backfilled after observing that fired run succeed; a VM whose data volume
+    is not mounted is refused by the installer itself and reported as a
     per-VM failure to investigate. Needs POOL_SSH_PRIVATE_KEY (injected by
     `minds server backfill-autostart`).
     """
@@ -520,7 +527,7 @@ def backfill_autostart(database_url: str | None, server_ids: tuple[str, ...], is
             raise click.ClickException(f"Unknown --server-id value(s): {sorted(unknown_ids)}")
     outcomes: list[SliceAutostartBackfillOutcome] = []
     unreadable_boxes: list[str] = []
-    with _pool_private_key_path() as private_key_path:
+    with pool_private_key_path() as private_key_path:
         for box_server in selected:
             if not box_server.public_address:
                 logger.warning("Box {} has no public_address; skipping (state unknown)", box_server.id)
@@ -1504,7 +1511,7 @@ def destroy_pool_hosts_in_parallel(
     unique_ids = list(dict.fromkeys(pool_host_ids))
     logger.info("Destroying {} pool host(s) ({} at a time)", len(unique_ids), max_concurrency)
     # A row-only drop never SSHes a box, so it must not require POOL_SSH_PRIVATE_KEY.
-    key_path_context = nullcontext(None) if is_row_drop_only else _pool_private_key_path()
+    key_path_context = nullcontext(None) if is_row_drop_only else pool_private_key_path()
     with key_path_context as private_key_path:
         outcomes = run_outcome_workers_in_bounded_threads(
             worker=_destroy_one_pool_host,
@@ -1751,7 +1758,7 @@ def allocate_slices(
     sizing = compute_server_slice_sizing(server)
 
     ssh_user = server.lima_service_user or "limahost"
-    with _pool_private_key_path() as private_key_path:
+    with pool_private_key_path() as private_key_path:
         # Free slots come from the box's REAL occupancy (every env's slices plus any
         # legacy un-stamped ones), NOT this env's DB row count -- so independent envs
         # sharing the box cannot collectively over-subscribe it. This is a fast
@@ -2360,7 +2367,7 @@ def setup(
         raise BareMetalProvisioningError(f"server {server_id} has no serviceName/address; re-run await-delivery")
 
     client = build_ovh_client(_require_ovh_config())
-    with _pool_private_key_path() as private_key_path:
+    with pool_private_key_path() as private_key_path:
         pool_public_key = _derive_public_key(private_key_path)
         # Reinstall only from 'delivered'; re-running from 'installing' assumes the reinstall completed and
         # resumes at SSH-wait + prep. No DB connection is held across the (long) reinstall/prep waits.
