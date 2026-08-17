@@ -62,28 +62,6 @@ INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
 _AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
 _HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
 
-# Where PAM reads session environment from; applied to every SSH session,
-# including the non-login/non-interactive `ssh <host> '<command>'`.
-ETC_ENVIRONMENT = Path("/etc/environment")
-# The agent env vars an SSH session gets, by exact name. These are identity and
-# location -- who the services agent is and where its state lives -- which is
-# what in-workspace tooling resolves itself from. Deliberately an allowlist and
-# not a `MNGR_*` glob: see _publish_agent_env_for_ssh.
-#
-# `MNGR_AGENT_OWNER` must never appear here. mngr's teardown treats it as the
-# claim "this agent may kill this process", so publishing it would put every
-# ssh session back in the blast radius of `mngr stop` -- which is the whole
-# reason mngr keeps it separate from the identity var below.
-SSH_PUBLISHED_ENV_VARS: tuple[str, ...] = (
-    "MNGR_HOST_DIR",
-    "MNGR_AGENT_ID",
-    "MNGR_AGENT_NAME",
-    "MNGR_AGENT_STATE_DIR",
-    "MNGR_AGENT_WORK_DIR",
-    "MNGR_PRIMARY_WINDOW_NAME",
-    "LLM_USER_PATH",
-)
-
 # Global git config applied on every boot: rewrite git@ / ssh:// GitHub
 # remotes to https (there are no SSH credentials in the container). Note that
 # git applies at most one insteadOf rewrite per URL, so this rewrite's output
@@ -611,54 +589,6 @@ def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> Non
         logger.info("Installed cron entry {} into {}", entry.name, target_dir)
 
 
-def _publish_agent_env_for_ssh(target: Path = ETC_ENVIRONMENT) -> None:
-    """Publish the services agent's identity vars where an SSH session will see them.
-
-    sshd builds a fresh environment for every session and drops its own, so none
-    of the agent environment reaches `ssh <host> '<command>'` -- and tools that
-    resolve their state from it (``host-backup-now`` needs ``MNGR_HOST_DIR`` or
-    ``MNGR_AGENT_STATE_DIR``) fail there while working everywhere else. bootstrap
-    already runs with that environment sourced, so it can hand it straight over.
-
-    ``/etc/environment`` rather than a ``/etc/profile.d`` drop-in: PAM applies it
-    to every session regardless of shell type, whereas a profile script is
-    sourced only by *login* shells. ``ssh <host> '<command>'`` is neither login
-    nor interactive, so a profile drop-in would appear to work when tested by
-    hand and still miss the case this exists to fix.
-
-    Only :data:`SSH_PUBLISHED_ENV_VARS` are written, by exact name. The file is
-    world-readable, and the agent environment also carries credentials
-    (``LATCHKEY_ENCRYPTION_KEY``, ``LATCHKEY_EXTENSION_MINDS_API_KEY``); an
-    allowlist of names cannot start leaking one because someone later adds a
-    secret to the agent env.
-    """
-    lines: list[str] = []
-    for name in SSH_PUBLISHED_ENV_VARS:
-        value = os.environ.get(name)
-        if not value:
-            continue
-        if "\n" in value or "\r" in value:
-            # pam_env parses one KEY=value per line, so an embedded newline would
-            # silently truncate this var and turn the remainder into a bogus one.
-            logger.warning("Not publishing {} for ssh: value contains a newline", name)
-            continue
-        lines.append(f"{name}={value}")
-
-    if not lines:
-        logger.warning(
-            "No agent env vars to publish for ssh; "
-            "ssh sessions will not see the agent environment"
-        )
-        return
-
-    # Write-and-rename so a login reading the file never sees a partial one.
-    scratch = target.with_suffix(".bootstrap-tmp")
-    scratch.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    scratch.chmod(0o644)
-    scratch.replace(target)
-    logger.info("Published {} agent env vars for ssh sessions", len(lines))
-
-
 def _ensure_supervisor_log_dir() -> None:
     """Create supervisord's log directory if missing.
 
@@ -859,11 +789,6 @@ def main() -> None:
     # the Caretaker's schedule) so they survive container recreation. Must
     # precede _exec_supervisord so entries exist before cron starts.
     _install_runtime_cron_entries()
-
-    # Hand this shell's agent environment to sshd sessions, which otherwise get
-    # none of it. Done here because bootstrap is the last point that still has
-    # the environment in hand before it exec's away.
-    _publish_agent_env_for_ssh()
 
     # Make sure supervisord's log directory exists, then hand off: replace this
     # process with supervisord in the foreground. supervisord owns every

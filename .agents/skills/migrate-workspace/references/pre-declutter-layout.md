@@ -243,9 +243,16 @@ So pass a short `--timeout`, and when it expires read the tick's real outcome of
 the events log rather than believing the silence:
 
 ```bash
-ssh ... 'cat "$MNGR_HOST_DIR/host_backup/service_events_dir"'
+ssh ... 'cat /home/user/.mngr/host_backup/service_events_dir'
 ssh ... 'tail -n 5 <that-dir>/events.jsonl'
 ```
+
+Spell the host dir out rather than writing `$MNGR_HOST_DIR`: an SSH session has
+none of the agent environment, so the variable expands to nothing and the `cat`
+reads the wrong path. `/home/user/.mngr` is the default and what a pre-declutter
+source uses. (On a current source, prefix the command with
+`/home/user/workspace/system/scripts/with_agent_env.sh` instead and the variable
+resolves -- but a pre-declutter source has no such wrapper.)
 
 That pointer file exists only on a source running the `minds-v0.3.9` backup
 service or newer. Before that, the events sit under the *primary* agent's state

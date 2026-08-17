@@ -120,8 +120,18 @@ anything.
 ```bash
 uv run host-backup-now --timeout 600
 ssh -i /tmp/mind_key -p <port> <user>@<host> \
-    'cd <source-repo-root> && uv run host-backup-now --timeout 600'
+    '/home/user/workspace/system/scripts/with_agent_env.sh uv run host-backup-now --timeout 600'
 ```
+
+**Send it through `with_agent_env.sh`.** sshd builds a fresh environment per
+session, so a bare `ssh <host> 'uv run host-backup-now'` has no
+`MNGR_AGENT_STATE_DIR` or `MNGR_HOST_DIR` and cannot locate the events log to
+wait on -- it exits 2 immediately having printed nothing, which reads exactly
+like a broken source. The wrapper rebuilds the agent environment from the files
+mngr maintains and execs from the repo root (so it replaces the `cd` too). A
+**pre-declutter** source has no wrapper at that path; there, fall back to the
+explicit events-log paths in
+[references/pre-declutter-layout.md](references/pre-declutter-layout.md).
 
 **Bound both waits explicitly.** An older `host-backup-now` ends its wait only on
 a restic outcome, so a tick that never reaches restic -- most likely one skipped
