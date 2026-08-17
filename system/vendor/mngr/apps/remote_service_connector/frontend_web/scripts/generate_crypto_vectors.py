@@ -2,10 +2,13 @@
 
 The web chrome's crypto must be wire-compatible with
 ``imbue.imbue_common.secret_wrapping`` (argon2id KEK derivation, AES-256-GCM
-nonce||ciphertext blobs, the key-bundle JSON shape) and with the dwt
-owner-exec signed envelope (``owner_exec.signing.build_signing_string``).
-This script produces ``src/crypto/test_vectors.json`` (committed) from the
-Python implementations; the vitest suite asserts the TypeScript side matches.
+nonce||ciphertext blobs, the key-bundle JSON shape). This script produces
+``src/crypto/test_vectors.json`` (committed) from the Python implementations;
+the vitest suite asserts the TypeScript side matches.
+
+The owner-exec signed-envelope vectors are NOT produced here: they are owned
+by the ``imbue-ai/owner-exec`` repo (its RFC 9421/9530 strict profile) and
+vendored into ``src/crypto/owner_exec_vectors.json``. See ``crypto/ed25519.test.ts``.
 
 Run from the repo root:
 
@@ -13,13 +16,9 @@ Run from the repo root:
 """
 
 import base64
-import hashlib
 import json
 from pathlib import Path
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding
-from cryptography.hazmat.primitives.serialization import PublicFormat
 from loguru import logger
 from pydantic import SecretStr
 
@@ -43,24 +42,9 @@ _SECRETS_PLAINTEXT = (
     '"ssh_known_hosts":null}'
 )
 
-# Ed25519 exec-envelope vector (signatures are deterministic per RFC 8032).
-_ED25519_SEED = bytes(range(32, 64))
-_ENVELOPE = {
-    "method": "POST",
-    "path": "/run",
-    "body": '{"command":["printf","hello"]}',
-    "audience": "host-abc123.ownerlabel.us1.example.com",
-    "timestamp": "1723150000",
-    "nonce": "nonce-vector-1",
-}
-
 
 def _b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
-
-
-def _openssh_public_key_line(private_key: Ed25519PrivateKey) -> str:
-    return private_key.public_key().public_bytes(Encoding.OpenSSH, PublicFormat.OpenSSH).decode("ascii")
 
 
 def main() -> None:
@@ -70,21 +54,6 @@ def main() -> None:
     assert unwrap_dek(kek, wrapped) == _DEK
     blob = encrypt_secrets(_DEK, _SECRETS_PLAINTEXT.encode("utf-8"))
     assert decrypt_secrets(_DEK, blob) == _SECRETS_PLAINTEXT.encode("utf-8")
-
-    private_key = Ed25519PrivateKey.from_private_bytes(_ED25519_SEED)
-    body_digest = hashlib.sha256(_ENVELOPE["body"].encode("utf-8")).hexdigest()
-    signing_string = "\n".join(
-        [
-            "v1",
-            _ENVELOPE["method"],
-            _ENVELOPE["path"],
-            body_digest,
-            _ENVELOPE["audience"],
-            _ENVELOPE["timestamp"],
-            _ENVELOPE["nonce"],
-        ]
-    )
-    signature = private_key.sign(signing_string.encode("utf-8"))
 
     vectors = {
         "kdf": {
@@ -102,13 +71,6 @@ def main() -> None:
         "secrets": {
             "plaintext": _SECRETS_PLAINTEXT,
             "blob_b64": _b64(blob),
-        },
-        "exec_envelope": {
-            **_ENVELOPE,
-            "seed_b64": _b64(_ED25519_SEED),
-            "public_key_openssh": _openssh_public_key_line(private_key),
-            "signing_string": signing_string,
-            "signature_b64": _b64(signature),
         },
     }
     _OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)

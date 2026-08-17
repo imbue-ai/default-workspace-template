@@ -85,6 +85,9 @@ from supertokens_python.types import RecipeUserId
 import imbue.remote_service_connector.auth as auth_module
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 from imbue.remote_service_connector import db
+from imbue.remote_service_connector.attribution import ATTRIBUTION_COOKIE_NAME
+from imbue.remote_service_connector.attribution import record_account_attribution
+from imbue.remote_service_connector.attribution import record_download_event
 from imbue.remote_service_connector.auth_proxy import ACCOUNT_EXISTS_WITH_OTHER_METHOD_STATUS
 from imbue.remote_service_connector.auth_proxy import AUTH_TENANT_ID
 from imbue.remote_service_connector.auth_proxy import AuthUser
@@ -142,6 +145,24 @@ _OAUTH_NONCE_COOKIE_NAME: Final[str] = "imbue_oauth_nonce"
 # the redirect URI registered on every tier's Web-application OAuth client;
 # renaming it would require re-registering every tier.
 OAUTH_GOOGLE_CALLBACK_PATH: Final[str] = "/share/oauth/google/callback"
+
+# Stable per-platform installer links for GET /download. ToDesktop's channel
+# URLs always resolve to the latest published build, so nothing here changes
+# per release; "source" is the escape hatch for platforms without builds.
+_DOWNLOAD_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
+    "mac-arm64": "https://dl.todesktop.com/26032588hqdzk/mac/dmg/arm64",
+    "source": "https://github.com/imbue-ai/mngr",
+}
+# Friendly aliases resolve server-side so marketing links stay stable if a
+# platform's default target ever changes (e.g. "mac" moving off arm64).
+_DOWNLOAD_PLATFORM_BY_ALIAS: Final[dict[str, str]] = {
+    "mac": "mac-arm64",
+}
+
+# Caps on the campaign context carried through the OAuth state JWT: the whole
+# state rides Google's authorize URL, so keep it comfortably small.
+_OAUTH_STATE_MAX_PAGE_QUERY_CHARS: Final[int] = 512
+_OAUTH_STATE_MAX_PAGE_PATH_CHARS: Final[int] = 256
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +522,15 @@ class BrowserSignupRequest(BaseModel):
     email: str = Field(description="Email address to register")
     password: str = Field(description="Password for the new account")
     turnstile_token: str = Field(default="", description="Cloudflare Turnstile response token")
+    # Marketing-attribution context from the signup page itself (all
+    # optional; released frontends that predate attribution omit them).
+    attribution_page_query: str = Field(
+        default="", description="The signup page's own query string (campaign params are extracted server-side)"
+    )
+    attribution_page_path: str = Field(default="", description="The signup page's path (e.g. /signup)")
+    attribution_next: str = Field(
+        default="", description="The page's next= target, classifying which surface sent the user here"
+    )
 
 
 class BrowserSigninRequest(BaseModel):
@@ -549,6 +579,17 @@ def accounts_signup(request: Request, body: BrowserSignupRequest) -> BrowserAuth
         except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
             logger.error("SuperTokens SDK error during browser signup", exc_info=exc)
             return BrowserAuthResponse(status="ERROR", message="Auth backend unavailable")
+        # Stamp marketing attribution for the just-created account (creation
+        # only -- sign-in never records anything). Fails open inside.
+        record_account_attribution(
+            user_id=result.user.id,
+            email=email,
+            cookie_value=request.cookies.get(ATTRIBUTION_COOKIE_NAME),
+            page_query=body.attribution_page_query,
+            page_path=body.attribution_page_path,
+            next_path=body.attribution_next,
+            signup_method="password",
+        )
         return BrowserAuthResponse(status="OK", user=AuthUser(user_id=result.user.id, email=email))
 
 
@@ -935,13 +976,23 @@ def _oauth_redirect_uri(request: Request) -> str:
     return accounts_public_base_url(request) + OAUTH_GOOGLE_CALLBACK_PATH
 
 
-def mint_oauth_state(signing_key: rsa.RSAPrivateKey, nonce: str, next_path: str, callback_url: str) -> str:
+def mint_oauth_state(
+    signing_key: rsa.RSAPrivateKey,
+    nonce: str,
+    next_path: str,
+    callback_url: str,
+    page_query: str,
+    page_path: str,
+) -> str:
     """Mint the self-contained OAuth state: browser nonce + post-login path + our callback URL.
 
     Self-contained (signed, never stored) because the connector runs as
     multiple concurrent containers. The ``cb`` claim is what the per-tier
     OAuth redirector reads (unverified -- it validates the host pattern
-    instead) to know which env's connector to forward the callback to.
+    instead) to know which env's connector to forward the callback to. The
+    ``pq``/``pp`` claims carry the login page's own query string and path
+    across the provider round-trip so a Google *signup* can be attributed to
+    the campaign params the page was opened with.
     """
     now = datetime.now(timezone.utc)
     payload = {
@@ -952,11 +1003,24 @@ def mint_oauth_state(signing_key: rsa.RSAPrivateKey, nonce: str, next_path: str,
         "iat": now,
         "exp": now + timedelta(seconds=_OAUTH_STATE_TTL_SECONDS),
     }
+    if page_query:
+        payload["pq"] = page_query[:_OAUTH_STATE_MAX_PAGE_QUERY_CHARS]
+    if page_path:
+        payload["pp"] = page_path[:_OAUTH_STATE_MAX_PAGE_PATH_CHARS]
     return pyjwt.encode(payload, signing_key, algorithm=_OAUTH_STATE_ALGORITHM)
 
 
-def verify_oauth_state(public_key: rsa.RSAPublicKey, state: str) -> tuple[str, str] | None:
-    """Return ``(nonce, next_path)`` from a valid OAuth state token, or None when invalid/expired."""
+class VerifiedOAuthState(BaseModel):
+    """The claims recovered from a valid browser OAuth state JWT."""
+
+    nonce: str = Field(description="The browser-binding nonce (matched against the nonce cookie)")
+    next_path: str = Field(description="The sanitized post-login path")
+    page_query: str = Field(default="", description="The login page's query string at OAuth start")
+    page_path: str = Field(default="", description="The login page's path at OAuth start")
+
+
+def verify_oauth_state(public_key: rsa.RSAPublicKey, state: str) -> VerifiedOAuthState | None:
+    """Return the verified claims from an OAuth state token, or None when invalid/expired."""
     try:
         claims = pyjwt.decode(state, public_key, algorithms=[_OAUTH_STATE_ALGORITHM])
     except pyjwt.InvalidTokenError:
@@ -967,7 +1031,14 @@ def verify_oauth_state(public_key: rsa.RSAPublicKey, state: str) -> tuple[str, s
     next_path = claims.get("next")
     if not isinstance(nonce, str) or not nonce or not isinstance(next_path, str):
         return None
-    return nonce, sanitize_local_next_path(next_path)
+    page_query = claims.get("pq")
+    page_path = claims.get("pp")
+    return VerifiedOAuthState(
+        nonce=nonce,
+        next_path=sanitize_local_next_path(next_path),
+        page_query=page_query if isinstance(page_query, str) else "",
+        page_path=page_path if isinstance(page_path, str) else "",
+    )
 
 
 def _login_redirect(next_path: str, error_code: str = "") -> RedirectResponse:
@@ -998,7 +1069,17 @@ def accounts_oauth_start(request: Request) -> RedirectResponse:
         nonce = secrets.token_urlsafe(16)
         redirect_uri = _oauth_redirect_uri(request)
         callback_url = accounts_public_base_url(request) + OAUTH_GOOGLE_CALLBACK_PATH
-        state = mint_oauth_state(accounts_signing_key(), nonce, next_path, callback_url)
+        state = mint_oauth_state(
+            accounts_signing_key(),
+            nonce,
+            next_path,
+            callback_url,
+            # The login page's own query/path, so a signup completed via
+            # Google can still be attributed to the campaign params the page
+            # was opened with.
+            page_query=request.query_params.get("pq", ""),
+            page_path=request.query_params.get("pp", ""),
+        )
         redirect = _supertokens_sync_run(
             provider.get_authorisation_redirect_url(
                 redirect_uri_on_provider_dashboard=redirect_uri,
@@ -1039,7 +1120,8 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
         verified_state = verify_oauth_state(accounts_signing_key().public_key(), state_param)
         if verified_state is None:
             return _login_redirect("/", "invalid_state")
-        nonce, next_path = verified_state
+        nonce = verified_state.nonce
+        next_path = verified_state.next_path
         if request.query_params.get("error"):
             # The provider reported a failure (most commonly a cancelled consent screen).
             return _login_redirect(next_path, "provider_cancelled")
@@ -1065,12 +1147,56 @@ def accounts_oauth_callback(request: Request) -> RedirectResponse:
             return _login_redirect(next_path, "oauth_failed")
 
         _sdk_create_browser_session(request, auth_result.user.user_id)
+        if auth_result.is_new_account:
+            # This OAuth exchange created the account (a returning Google
+            # sign-in never records anything). Fails open inside.
+            record_account_attribution(
+                user_id=auth_result.user.user_id,
+                email=auth_result.user.email,
+                cookie_value=request.cookies.get(ATTRIBUTION_COOKIE_NAME),
+                page_query=verified_state.page_query,
+                page_path=verified_state.page_path,
+                next_path=next_path,
+                signup_method="google",
+            )
         # This login IS the account confirmation, so the handoff proceeds
         # without a second interstitial.
         resume_path = _mark_next_confirmed(next_path)
         response = RedirectResponse(url=resume_path, status_code=303)
         response.delete_cookie(key=_OAUTH_NONCE_COOKIE_NAME, path="/")
         return response
+
+
+# ---------------------------------------------------------------------------
+# Download redirect (the campaign -> download funnel denominator)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/download")
+def download_redirect(request: Request) -> RedirectResponse:
+    """Record a campaign-tagged download event and bounce to the platform's installer.
+
+    The marketing site's download buttons point here so campaign -> download
+    conversion is measurable independent of signup. The event is tagged by the
+    usual merge rule: the imbue_attribution cookie supplies the visitor id and
+    first touch, and campaign params on this URL itself overwrite the last
+    touch -- or synthesize the sole touch when the cookie is absent, so
+    consent-declined downloads still count per-campaign. Fails open: the
+    redirect always happens, a failed write loses one row.
+    """
+    with handle_endpoint_errors():
+        raw_platform = request.query_params.get("platform", "")
+        platform = _DOWNLOAD_PLATFORM_BY_ALIAS.get(raw_platform, raw_platform)
+        target_url = _DOWNLOAD_TARGET_BY_PLATFORM.get(platform)
+        if target_url is None:
+            raise HTTPException(status_code=404, detail="Unknown platform")
+        record_download_event(
+            cookie_value=request.cookies.get(ATTRIBUTION_COOKIE_NAME),
+            request_query=request.url.query,
+            platform=platform,
+            user_agent=request.headers.get("user-agent", ""),
+        )
+        return RedirectResponse(url=target_url, status_code=302)
 
 
 def _mark_next_confirmed(next_path: str) -> str:

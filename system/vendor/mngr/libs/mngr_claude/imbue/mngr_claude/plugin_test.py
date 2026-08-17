@@ -30,6 +30,7 @@ from imbue.mngr.agents.tui_utils import SubmissionConfirmationPolicy
 from imbue.mngr.agents.tui_utils import SubmissionEvidenceProbe
 from imbue.mngr.agents.update_policy import AgentUpdatePolicy
 from imbue.mngr.api.message import MessageResult
+from imbue.mngr.api.message import _deliver_text
 from imbue.mngr.api.message import _send_message_to_agent
 from imbue.mngr.api.preservation import get_local_preserved_agent_dir
 from imbue.mngr.api.preservation import preserve_agent_data
@@ -70,6 +71,7 @@ from imbue.mngr.primitives import ErrorBehavior
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import TransferMode
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.providers.docker.host_store import HostRecord
@@ -96,6 +98,7 @@ from imbue.mngr_claude.plugin import DialogDetectedError
 from imbue.mngr_claude.plugin import MANAGED_SETTINGS_LAUNCH_ARG
 from imbue.mngr_claude.plugin import NumberedSelectorDialogIndicator
 from imbue.mngr_claude.plugin import ProvisioningContext
+from imbue.mngr_claude.plugin import ShellCommandPendingError
 from imbue.mngr_claude.plugin import _build_claude_install_command
 from imbue.mngr_claude.plugin import _build_install_command_hint
 from imbue.mngr_claude.plugin import _build_settings_json
@@ -124,6 +127,9 @@ from imbue.mngr_claude.plugin import compute_settings_json_flags
 from imbue.mngr_claude.plugin import extract_blocking_selector_block
 from imbue.mngr_claude.plugin import get_files_for_deploy
 from imbue.mngr_claude.plugin import has_input_prompt_line
+from imbue.mngr_claude.plugin import is_pending_shell_command
+from imbue.mngr_claude.plugin import is_shell_command_message
+from imbue.mngr_claude.plugin import is_stranded_in_empty_shell_mode
 from imbue.mngr_claude.plugin import on_before_create
 from imbue.mngr_claude.plugin import on_before_host_destroy
 from imbue.mngr_claude.plugin import should_trust_work_dir
@@ -1242,11 +1248,15 @@ def test_build_readiness_hooks_config_has_hook(hook_name: str, expected_substrin
 
     assert hook_name in config["hooks"]
     assert len(config["hooks"][hook_name]) == 1
-    hook = config["hooks"][hook_name][0]["hooks"][0]
-    assert hook["type"] == "command"
-    assert "MNGR_AGENT_STATE_DIR" in hook["command"]
+    # Several events now carry more than one hook (e.g. the model-state snapshot runs first at
+    # Stop, before wait_for_stop_hook.sh blocks), so look for the expected command across all of
+    # them rather than assuming it is the first.
+    commands = [h["command"] for h in config["hooks"][hook_name][0]["hooks"] if h["type"] == "command"]
+    assert any("MNGR_AGENT_STATE_DIR" in command for command in commands)
     for substring in expected_substrings:
-        assert substring in hook["command"], f"Expected '{substring}' in {hook_name} hook command"
+        assert any(substring in command for command in commands), (
+            f"Expected '{substring}' in a {hook_name} hook command"
+        )
 
 
 def test_build_readiness_hooks_config_has_notification_idle_hook() -> None:
@@ -1888,6 +1898,44 @@ def test_has_input_prompt_line_matches_only_column_zero_glyph() -> None:
     assert has_input_prompt_line("just some text") is False
 
 
+def test_is_shell_command_message_detects_leading_bang() -> None:
+    """A leading `!` (after any leading whitespace) selects shell mode; nothing else does."""
+    assert is_shell_command_message("!") is True
+    assert is_shell_command_message("!echo mngr-behaviors-probe") is True
+    assert is_shell_command_message("   !ls") is True
+    assert is_shell_command_message("/clear") is False
+    assert is_shell_command_message("hello") is False
+    assert is_shell_command_message("echo !bang-in-the-middle") is False
+
+
+# The empty shell-mode input row Claude renders after a bare `!` (column-0 `!` plus the
+# non-breaking space U+00A0 it pads the empty box with), the footer it shows in shell mode,
+# and the rule lines that frame the input box.
+_EMPTY_SHELL_MODE_PANE = "────────\n!\xa0\n────────\n  ! for shell mode"
+_COMMAND_SHELL_MODE_PANE = "────────\n! echo mngr-behaviors-probe\n────────\n  ! for shell mode"
+_NORMAL_READY_PANE = "────────\n❯ \n────────\n  ⏵⏵ bypass permissions on"
+
+
+def test_is_stranded_in_empty_shell_mode_detects_bare_bang_strand() -> None:
+    """Only an EMPTY shell line under the shell-mode footer counts as a strand needing recovery."""
+    assert is_stranded_in_empty_shell_mode(_EMPTY_SHELL_MODE_PANE) is True
+    # A pending command must never be mistaken for a strand: recovery would delete it.
+    assert is_stranded_in_empty_shell_mode(_COMMAND_SHELL_MODE_PANE) is False
+    assert is_stranded_in_empty_shell_mode(_NORMAL_READY_PANE) is False
+    assert is_stranded_in_empty_shell_mode("❯ \n  ! for shell mode") is False
+    assert is_stranded_in_empty_shell_mode("! \n❯ ") is False
+
+
+def test_is_pending_shell_command_detects_unsubmitted_command() -> None:
+    """A non-empty shell line under the shell-mode footer is a pending command; empty and normal are not."""
+    assert is_pending_shell_command(_COMMAND_SHELL_MODE_PANE) is True
+    # The bare-`!` strand is empty, not pending -- the two are complementary.
+    assert is_pending_shell_command(_EMPTY_SHELL_MODE_PANE) is False
+    assert is_pending_shell_command(_NORMAL_READY_PANE) is False
+    # The shell footer with the `❯` prompt showing is normal mode, not a pending command.
+    assert is_pending_shell_command("❯ \n  ! for shell mode") is False
+
+
 def test_detect_preexisting_input_text_ignores_selector_option_line(
     local_provider: LocalProviderInstance, tmp_path: Path, temp_mngr_ctx: MngrContext
 ) -> None:
@@ -2109,6 +2157,30 @@ def test_preflight_permissions_marker_is_hard_raise_never_auto_accepted(
     assert agent.enter_press_count == 0
 
 
+@pytest.mark.witnesses(
+    "message-delivery.pending-shell-command-blocks",
+    partial="drives the send preflight directly; does not also assert delivery resumes once the command is resolved",
+)
+def test_preflight_refuses_a_pending_shell_command(
+    local_provider: LocalProviderInstance, tmp_path: Path, temp_mngr_ctx: MngrContext
+) -> None:
+    """A human's unsubmitted `!<command>` is refused at the send preflight with an actionable error.
+
+    Witnesses message-delivery.pending-shell-command-blocks: delivery is blocked by design and
+    surfaced immediately -- the send raises ShellCommandPendingError (naming the recovery) rather
+    than proceeding into the readiness timeout it would otherwise hit while shell mode hides `❯`.
+    """
+    agent = _make_scripted_agent(local_provider, tmp_path, temp_mngr_ctx, [_COMMAND_SHELL_MODE_PANE])
+    with pytest.raises(ShellCommandPendingError) as exc_info:
+        agent._preflight_send_message(_TARGET)
+    message = str(exc_info.value)
+    assert "mngr connect" in message and "Enter" in message and "Escape" in message
+
+    # A bare-`!` empty strand is auto-recovered after submit, not refused here, so preflight passes.
+    empty_agent = _make_scripted_agent(local_provider, tmp_path, temp_mngr_ctx, [_EMPTY_SHELL_MODE_PANE])
+    empty_agent._preflight_send_message(_TARGET)
+
+
 class _BlockedAfterDeliveryClaudeAgent(ClaudeAgent):
     """Test double whose send_message reports the message was delivered but a dialog now blocks."""
 
@@ -2143,6 +2215,7 @@ def test_send_message_routes_delivered_but_blocked_to_blocked_agents(
         agent=agent,
         host=host,
         message_content="/model fable",
+        deliver=_deliver_text,
         result=result,
         result_lock=Lock(),
         error_behavior=ErrorBehavior.CONTINUE,
@@ -2312,6 +2385,47 @@ def test_configure_agent_hooks_applies_settings_overrides_in_managed_file(
     assert settings["permissions"]["allow"] == ["Bash(npm *)"]
     assert "SessionStart" in settings["hooks"]
     assert "__extend" not in content
+
+
+def test_seed_model_state_writes_launch_selection(
+    local_provider: LocalProviderInstance, tmp_path: Path, temp_mngr_ctx: MngrContext
+) -> None:
+    """The provision-time seed puts the configured model on disk in the statusline's
+    schema, so the chat model bar is populatable the moment readiness fires."""
+    host = local_provider.create_host(HostName(LOCAL_HOST_NAME))
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    agent = _make_hooks_test_agent(
+        host,
+        temp_mngr_ctx,
+        work_dir,
+        ClaudeAgentConfig(
+            check_installation=False,
+            settings_overrides={"model": "opus[1m]", "fastMode": False},
+        ),
+    )
+
+    agent._seed_model_state(host)
+
+    state = json.loads((agent._get_agent_dir() / "model_state.json").read_text())
+    assert state == {"model": "opus[1m]", "effort": None, "fast": False}
+
+
+def test_seed_model_state_skips_when_no_model_pinned(
+    local_provider: LocalProviderInstance, tmp_path: Path, temp_mngr_ctx: MngrContext
+) -> None:
+    host = local_provider.create_host(HostName(LOCAL_HOST_NAME))
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    agent = _make_hooks_test_agent(
+        host, temp_mngr_ctx, work_dir, ClaudeAgentConfig(check_installation=False, settings_overrides={})
+    )
+
+    agent._seed_model_state(host)
+
+    assert not (agent._get_agent_dir() / "model_state.json").exists()
 
 
 def test_configure_agent_hooks_does_not_touch_existing_settings_local(
@@ -7012,3 +7126,30 @@ def test_approve_api_key_no_host_argument_falls_back_to_process_env(monkeypatch:
     approve_api_key_for_claude(data)
     approved = cast(dict[str, list[str]], data["customApiKeyResponses"])["approved"]
     assert key[-20:] in approved
+
+
+def test_stacked_role_prompts_reach_claude_as_one_flag_carrying_every_block() -> None:
+    """Claude gets ONE --append-system-prompt whose value holds every stacked role's block.
+
+    One flag rather than one per block because claude's flag is last-wins (verified against
+    claude 2.1.220): repeating it would deliver only the final block and silently drop every
+    role stacked before it. The sentinels make both blocks' presence checkable.
+    """
+    agent = ClaudeAgent.model_construct(
+        agent_config=ClaudeAgentConfig(
+            append_system_prompt=(SystemPromptText("SENTINEL_A"), SystemPromptText("SENTINEL_B")),
+            check_installation=False,
+        )
+    )
+    args = agent._build_append_system_prompt_args()
+    assert len(args) == 2, f"expected exactly one flag and one value, got {args!r}"
+    flag, value = args
+    assert flag == "--append-system-prompt"
+    assert "SENTINEL_A" in value
+    assert "SENTINEL_B" in value
+    assert value.index("SENTINEL_A") < value.index("SENTINEL_B"), "blocks must keep stack order"
+
+
+def test_claude_emits_no_prompt_flag_when_no_role_contributed_one() -> None:
+    agent = ClaudeAgent.model_construct(agent_config=ClaudeAgentConfig(check_installation=False))
+    assert agent._build_append_system_prompt_args() == ()

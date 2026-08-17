@@ -293,7 +293,7 @@ specifics:
 
   ```bash
   uv run .agents/skills/launch-task/scripts/create_worker.py launch \
-      --name "update-$SLUG" --template subskill-worker \
+      --name "update-$SLUG" --template worker \
       --runtime-dir "data/.tasks/harden/update-$SLUG/" \
       --task-file "data/.tasks/harden/update-$SLUG/task.md" \
       --branch "mngr/update-$SLUG"

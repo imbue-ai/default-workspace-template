@@ -1,13 +1,36 @@
 // The owner-exec client: SSH-equivalent authority over a workspace from the
-// browser. Every request is Ed25519-signed (see crypto/ed25519.ts) and rides
-// the share stack cross-origin with the workspace session cookie attached
-// (credentials: include; the gateway's forward_auth checks the owner session
-// and the service verifies the signature).
+// browser. Every request is signed per the RFC 9421/9530 strict profile (see
+// crypto/ed25519.ts) and rides the share stack cross-origin with the workspace
+// session cookie attached (credentials: include; the gateway's forward_auth
+// checks the owner session and the service verifies the signature). Every
+// response (and the /run stream trailer) is verified against the endpoint's
+// pinned SSH host key, bound to the request -- so a compromised container
+// cannot tamper with results either.
 
-import { type Ed25519Keypair, signExecEnvelope } from "./crypto/ed25519";
+import {
+  type Ed25519Keypair,
+  type ExecStreamTrailer,
+  type PinnedHostKey,
+  signExecRequest,
+  verifyExecResponse,
+  verifyExecStreamTrailer,
+} from "./crypto/ed25519";
 import { bytesToBase64, randomBytes } from "./crypto/secretbox";
 
 const textEncoder = new TextEncoder();
+
+function nowUnix(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+// The signed request context needed to verify the response it produced.
+interface SignedFetch {
+  response: Response;
+  method: string;
+  path: string;
+  signatureHeader: string;
+  signatureB64: string;
+}
 
 export interface ExecRunEvent {
   type: "stdout" | "stderr" | "exit";
@@ -25,33 +48,68 @@ export class ExecClient {
   constructor(
     // e.g. https://owner-exec-ab12cd34.<workspace_domain>
     private readonly baseUrl: string,
-    // The workspace's share domain -- the envelope's audience binding.
+    // The endpoint's audience binding: "container:<host-id>" (inner) or
+    // "vm:<host-id>" (vm). The inner daemon also accepts the workspace share
+    // domain, but container:<host-id> is the going-forward default.
     private readonly audience: string,
     private readonly keypair: Ed25519Keypair,
+    // The endpoint's pinned SSH host key (from the claim response / synced
+    // record). When set, every response and stream trailer is verified against
+    // it and the client fails closed on a bad signature. When omitted,
+    // verification is skipped -- a transitional affordance until the connector
+    // threads the VM host key through claim; production must supply it.
+    private readonly hostKey?: PinnedHostKey,
   ) {}
 
   private async signedFetch(
     method: string,
     path: string,
     body: Uint8Array,
-  ): Promise<Response> {
-    const timestamp = String(Math.floor(Date.now() / 1000));
+  ): Promise<SignedFetch> {
     const nonce = bytesToBase64(randomBytes(18));
-    const headers = await signExecEnvelope(
+    const { headers, signatureB64 } = await signExecRequest(
       this.keypair,
       method,
       path,
       body,
       this.audience,
-      timestamp,
+      nowUnix(),
       nonce,
     );
-    return fetch(`${this.baseUrl}${path}`, {
+    const response = await fetch(`${this.baseUrl}${path}`, {
       method,
       credentials: "include",
       headers: { ...headers, "Content-Type": "application/json" },
       body: method === "GET" ? undefined : (body as BodyInit),
     });
+    return {
+      response,
+      method,
+      path,
+      signatureHeader: headers.Signature,
+      signatureB64,
+    };
+  }
+
+  // Verify a completed response against the pinned host key (no-op when no host
+  // key is configured). Returns the response body bytes.
+  private async verifiedBody(signed: SignedFetch): Promise<Uint8Array> {
+    const bodyBytes = new Uint8Array(await signed.response.arrayBuffer());
+    if (this.hostKey) {
+      await verifyExecResponse(
+        signed.response.status,
+        signed.response.headers,
+        bodyBytes,
+        {
+          method: signed.method,
+          path: signed.path,
+          signatureHeader: signed.signatureHeader,
+        },
+        this.hostKey,
+        nowUnix(),
+      );
+    }
+    return bodyBytes;
   }
 
   async isAlive(): Promise<boolean> {
@@ -59,14 +117,16 @@ export class ExecClient {
       const resp = await fetch(`${this.baseUrl}/_alive`, {
         credentials: "include",
       });
-      return resp.status === 204;
+      return resp.status === 200;
     } catch {
       return false;
     }
   }
 
   // Run a command, collecting the NDJSON stream into one result. `onEvent`
-  // (when given) sees each event as it arrives, for progress display.
+  // (when given) sees each event as it arrives, for progress display. Output
+  // is unverified until the signed trailer is checked against the host key at
+  // the end; a missing or bad trailer throws (when a host key is configured).
   async run(
     command: string[],
     options: {
@@ -81,7 +141,8 @@ export class ExecClient {
       payload.timeout_seconds = options.timeoutSeconds;
     }
     const body = textEncoder.encode(JSON.stringify(payload));
-    const resp = await this.signedFetch("POST", "/run", body);
+    const signed = await this.signedFetch("POST", "/run", body);
+    const resp = signed.response;
     if (!resp.ok || resp.body === null) {
       throw new Error(`exec run failed: HTTP ${resp.status}`);
     }
@@ -89,13 +150,23 @@ export class ExecClient {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffered = "";
+    // The trailer signs the exact stream bytes (each non-trailer event line
+    // plus its newline), so accumulate them as the server hashed them.
+    let streamText = "";
+    let trailer: ExecStreamTrailer | null = null;
     const consume = (line: string) => {
       if (!line.trim()) return;
-      const event = JSON.parse(line) as ExecRunEvent;
-      options.onEvent?.(event);
-      if (event.type === "stdout") result.stdout += event.data ?? "";
-      if (event.type === "stderr") result.stderr += event.data ?? "";
-      if (event.type === "exit") result.exitCode = event.code ?? null;
+      const event = JSON.parse(line) as ExecRunEvent | ExecStreamTrailer;
+      if ((event as ExecStreamTrailer).type === "signature") {
+        trailer = event as ExecStreamTrailer;
+        return;
+      }
+      streamText += `${line}\n`;
+      const runEvent = event as ExecRunEvent;
+      options.onEvent?.(runEvent);
+      if (runEvent.type === "stdout") result.stdout += runEvent.data ?? "";
+      if (runEvent.type === "stderr") result.stderr += runEvent.data ?? "";
+      if (runEvent.type === "exit") result.exitCode = runEvent.code ?? null;
     };
     for (;;) {
       const { done, value } = await reader.read();
@@ -106,6 +177,18 @@ export class ExecClient {
       for (const line of lines) consume(line);
     }
     if (buffered) consume(buffered);
+    if (this.hostKey) {
+      if (trailer === null) {
+        throw new Error("exec run ended without a signed trailer");
+      }
+      await verifyExecStreamTrailer(
+        textEncoder.encode(streamText),
+        signed.signatureB64,
+        trailer,
+        this.hostKey,
+        nowUnix(),
+      );
+    }
     return result;
   }
 
@@ -113,10 +196,13 @@ export class ExecClient {
     path: string,
   ): Promise<{ exists: boolean; contentB64: string }> {
     const body = textEncoder.encode(JSON.stringify({ path }));
-    const resp = await this.signedFetch("POST", "/read-file", body);
-    if (resp.status === 404) return { exists: false, contentB64: "" };
-    if (!resp.ok) throw new Error(`exec read-file failed: HTTP ${resp.status}`);
-    const parsed = (await resp.json()) as {
+    const signed = await this.signedFetch("POST", "/read-file", body);
+    const bodyBytes = await this.verifiedBody(signed);
+    if (signed.response.status === 404) return { exists: false, contentB64: "" };
+    if (!signed.response.ok) {
+      throw new Error(`exec read-file failed: HTTP ${signed.response.status}`);
+    }
+    const parsed = JSON.parse(new TextDecoder().decode(bodyBytes)) as {
       exists: boolean;
       content_b64: string;
     };
@@ -129,18 +215,25 @@ export class ExecClient {
     mode?: number,
   ): Promise<void> {
     const payload: Record<string, unknown> = { path, content_b64: contentB64 };
-    if (mode !== undefined) payload.mode = mode;
+    // The service's wire contract carries mode as an octal STRING (parsed with
+    // base 8), matching the Python client; serialize the numeric mode as octal
+    // rather than sending a JSON number (which the daemon would reject).
+    if (mode !== undefined) payload.mode = mode.toString(8);
     const body = textEncoder.encode(JSON.stringify(payload));
-    const resp = await this.signedFetch("POST", "/write-file", body);
-    if (!resp.ok)
-      throw new Error(`exec write-file failed: HTTP ${resp.status}`);
+    const signed = await this.signedFetch("POST", "/write-file", body);
+    await this.verifiedBody(signed);
+    if (!signed.response.ok) {
+      throw new Error(`exec write-file failed: HTTP ${signed.response.status}`);
+    }
   }
 
   async getGrants(): Promise<GrantsDocument> {
-    const resp = await this.signedFetch("GET", "/grants", new Uint8Array(0));
-    if (!resp.ok)
-      throw new Error(`exec get-grants failed: HTTP ${resp.status}`);
-    const parsed = (await resp.json()) as {
+    const signed = await this.signedFetch("GET", "/grants", new Uint8Array(0));
+    const bodyBytes = await this.verifiedBody(signed);
+    if (!signed.response.ok) {
+      throw new Error(`exec get-grants failed: HTTP ${signed.response.status}`);
+    }
+    const parsed = JSON.parse(new TextDecoder().decode(bodyBytes)) as {
       grants_toml: string;
       revision: string;
     };
@@ -158,9 +251,10 @@ export class ExecClient {
     const payload: Record<string, unknown> = { grants_toml: grantsToml };
     if (baseRevision !== undefined) payload.base_revision = baseRevision;
     const body = textEncoder.encode(JSON.stringify(payload));
-    const resp = await this.signedFetch("PUT", "/grants", body);
-    if (resp.status === 409) {
-      const conflict = (await resp.json()) as {
+    const signed = await this.signedFetch("PUT", "/grants", body);
+    const bodyBytes = await this.verifiedBody(signed);
+    if (signed.response.status === 409) {
+      const conflict = JSON.parse(new TextDecoder().decode(bodyBytes)) as {
         revision: string;
         grants_toml: string;
       };
@@ -169,9 +263,12 @@ export class ExecClient {
         revision: conflict.revision,
       });
     }
-    if (!resp.ok)
-      throw new Error(`exec put-grants failed: HTTP ${resp.status}`);
-    const parsed = (await resp.json()) as { revision: string };
+    if (!signed.response.ok) {
+      throw new Error(`exec put-grants failed: HTTP ${signed.response.status}`);
+    }
+    const parsed = JSON.parse(new TextDecoder().decode(bodyBytes)) as {
+      revision: string;
+    };
     return { revision: parsed.revision };
   }
 }

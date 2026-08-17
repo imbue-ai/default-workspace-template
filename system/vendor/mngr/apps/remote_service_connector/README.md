@@ -17,7 +17,7 @@ The service lives in `imbue/remote_service_connector/`:
 - `app.py` -- the Modal deployment entrypoint, and nothing else: image, `modal.App`, secrets, function definitions (web app + crons). Deployed by file path; the shipped modules may never import it.
 - `web.py` -- FastAPI assembly (mounts every feature router) plus the unauthenticated system endpoints (`/health/liveness`, `/generation`, `/version`).
 - Feature modules, each an `APIRouter`: `shares.py` (share records, relay tokens, frps plugin auth), `share_certs.py` (ACME DNS-01 issuance), `share_broker.py` (the accounts broker), `hosts.py`, `llm_keys.py`, `accounts.py`, `sync.py`, `retention.py`, `auth_proxy.py`, and the `r2/` subpackage (`naming`, `stores`, `buckets`, `grants`, `sweep`).
-- Foundation modules: `auth.py`, `entitlements.py`, `litellm_client.py`, `cloudflare.py` (raw R2 API client + the shared `CloudflareCtx`), `http_api.py`, `db.py`, `errors.py`, `deploy_constants.py` (the image's pip set).
+- Foundation modules: `auth.py`, `entitlements.py`, `litellm_client.py`, `cloudflare.py` (raw R2 API client + the shared `CloudflareCtx`), `http_api.py`, `db.py`, `errors.py`, `attribution.py` (the `imbue_attribution` marketing-cookie parser plus the fail-open signup-attribution and download-event writers; see "Download redirect and marketing attribution"), `deploy_constants.py` (the image's pip set).
 
 The container receives only these modules plus `imbue.modal_app_kit` -- nothing else from the monorepo exists at runtime, so shipped modules must not import anything else from it. The rules (and why they exist) are documented in [libs/modal_app_kit/README.md](../../libs/modal_app_kit/README.md) and enforced by `test_project_ratchets.py`.
 
@@ -138,6 +138,7 @@ All non-`/auth/*` endpoints require a Bearer token, with the exceptions noted be
 - The share-certificate endpoint (`POST /shares/cert`) is instead authenticated by the share's relay token (see `share_certs.py`), and the frps plugin callback by its shared secret (see `shares.py`).
 - **Browser sessions (the hosted accounts surface)**: the `/login` / `/signup` / `/manage` pages and their `/accounts/api/*` JSON API use SuperTokens' native cookie-based sessions (the SDK middleware serves refresh under `/accounts/auth/`). Sessions roll via refresh but are capped at ~30 days from creation: a creation-time stamp in the access token payload (which survives refreshes) is checked on every resolution, and a session past the cap -- or without a readable stamp -- is revoked on sight. The cap lives in the connector because the SDK cannot configure the SuperTokens core's refresh-token validity. The device handoff (`GET /accounts/authorize` + `POST /auth/device/token`) mints independent bearer-token sessions for the desktop app / CLI; those are not subject to the browser-session cap (clients hold a refresh token and rotate it).
 - The share-authorization route (`GET /share/authorize`) resolves the same browser session; `GET /share/jwks.json` is public (it serves only the broker's verification keys).
+- The download redirect (`GET /download`) is public -- it serves the marketing site's download buttons (see "Download redirect and marketing attribution" below).
 
 The `/auth/*` endpoints are themselves the authentication flow, so they do not require a token.
 
@@ -230,6 +231,30 @@ Email-addressed operator management of per-account entitlements, authenticated b
 - `GET /admin/accounts/{email}` -- One account's plan, entitlements, and live usage (lazily creates the row).
 - `POST /admin/accounts/{email}/plan` -- Body `{"plan": "..."}`; always resets to the plan's defaults (the operator's way to wipe manual bumps; skips the ally eligibility check).
 - `POST /admin/accounts/{email}/quota` -- Body `{"entitlement": "...", "value": N}`; bump a single entitlement.
+
+There is deliberately **no account-deletion endpoint** here: fully removing a user (its SuperTokens identity plus every connector-DB row keyed to it) is a destructive operator action done out-of-band, not something the connected clients need. Use the local operator tool `scripts/delete_accounts.py` (repo root) for that -- see "Fully deleting accounts" below.
+
+### Fully deleting accounts (`scripts/delete_accounts.py`)
+
+`scripts/delete_accounts.py` is a **local** operator tool (private -- not in the public-mirror allowlist, and it lives at the repo root, not in this app) that fully deletes accounts by talking directly to a tier's live backends, so it needs **no connector deploy**. For each account in a CSV it removes the connector-DB rows keyed to the user (`account_entitlements`, `workspace_records`, `account_key_bundles`, `r2_cleanup_grants`, and `shares` / `relay_tokens` keyed by the account's 32-hex share label), best-effort-deletes the LiteLLM internal user, and deletes the SuperTokens identity itself last (so a partial run is safe to re-run).
+
+It is **dry-run by default** (prints the plan, changes nothing until `--execute`), refuses any account still holding a leased pool host (release those via `mngr pool destroy` first), tolerates target tables absent from a tier's DB, and leaves each account's `host-<hex>` R2 backup buckets to the backup-retention reaper (deleting the workspace records orphans them). Credentials resolve per value from an explicit flag, else an environment variable, else the tier's HCP Vault entries.
+
+```bash
+export VAULT_TOKEN=...   # or a prior `vault login`
+# Dry run (default): show exactly what would be deleted for every account in the CSV.
+uv run python scripts/delete_accounts.py --tier production --accounts-file accounts.csv
+# Actually delete:
+uv run python scripts/delete_accounts.py --tier production --accounts-file accounts.csv --execute
+```
+
+The accounts file is a CSV with a header row containing a `user_id` column (an `email` column, when present, is used only for reporting).
+
+### Download redirect and marketing attribution (unauthenticated)
+
+- `GET /download?platform=...` -- Public redirect the imbue.com marketing site's download buttons point at: records a campaign-tagged `download_events` row and 302s to the platform's stable installer link (`mac-arm64`, alias `mac` -> the ToDesktop macOS arm64 build; `source` -> the public GitHub repo; unknown or missing platforms 404). The event is tagged by the usual merge rule: the `imbue_attribution` cookie supplies the visitor id and first touch, and campaign params on the `/download` URL itself overwrite the last touch (or synthesize the sole touch when the cookie is absent); the redirect always happens even when the event write fails.
+
+New accounts are additionally stamped with marketing attribution at creation time (never on sign-in), on both browser signup paths (email-password and Google OAuth): one write-once `account_attribution` row per account, built from the `imbue_attribution` cookie (set server-side by imbue.com's edge function on `.imbue.com`) merged with the signup page's own campaign params. Capture fails open, so it can never break a signup. The cookie's schema, set/update rules, and the download/signup link formats are pinned in [docs/attribution-cookie-contract.md](docs/attribution-cookie-contract.md); the connector-side logic lives in `attribution.py`, the tables come from `migrations/026_account_attribution.sql`, and reporting is plain SQL against Neon (no admin surface).
 
 ### Auth
 

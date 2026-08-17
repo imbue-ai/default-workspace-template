@@ -192,6 +192,10 @@ class AuthResponse(BaseModel):
         default=False,
         description="True when the account's email has not yet been verified",
     )
+    is_new_account: bool = Field(
+        default=False,
+        description="True when this OK response created the account (vs. signing in an existing one)",
+    )
 
 
 class RefreshSessionRequest(BaseModel):
@@ -623,6 +627,8 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
             user=AuthUser(user_id=user.id, email=email),
             tokens=tokens,
             needs_email_verification=False,
+            # A successful signup by definition just created the account.
+            is_new_account=True,
         )
 
 
@@ -791,6 +797,8 @@ def admin_test_signup(request: Request, body: TestSignupRequest) -> AuthResponse
             user=AuthUser(user_id=user.id, email=email),
             tokens=tokens,
             needs_email_verification=not body.verified,
+            # A successful signup by definition just created the account.
+            is_new_account=True,
         )
 
 
@@ -992,6 +1000,10 @@ def complete_oauth_code_exchange(
         user=AuthUser(user_id=result.user.id, email=email, display_name=display_name),
         tokens=None,
         needs_email_verification=not oauth_user.email.is_verified,
+        # The one-account-per-email guard above runs before any user is
+        # written, so a new recipe user here is reliably a brand-new account
+        # (this is what gates attribution capture in the browser callback).
+        is_new_account=result.created_new_recipe_user,
     )
 
 

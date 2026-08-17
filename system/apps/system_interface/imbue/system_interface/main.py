@@ -10,10 +10,10 @@ from flask import Flask
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.claude_auth import ClaudeAuthService
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.server import create_application
 from imbue.system_interface.welcome_resend import WelcomeResender
@@ -55,6 +55,11 @@ def build_production_state(
     """
     broadcaster = WebSocketBroadcaster()
     agent_manager = AgentManager.build(broadcaster, events_mode=config.system_interface_agent_events_mode)
+    # The codex ledger owns live user-turns (Fix 1); route each committed user-turn it emits onto
+    # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
+    # because the manager is constructed before its event-queue collaborator.
+    event_queues = AgentEventQueues()
+    agent_manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
     welcome_resender = WelcomeResender(
         resolve_agent=agent_manager.get_agent_info_by_id,
         send_message_fn=agent_manager.send_message_to_agent,
@@ -65,7 +70,7 @@ def build_production_state(
         include_filters=include_filters,
         exclude_filters=exclude_filters,
         agent_manager=agent_manager,
-        event_queues=AgentEventQueues(),
+        event_queues=event_queues,
         # Advisory in-process mutex serializing layout-mutating ops. The agent
         # script never auto-retries on contention -- it surfaces the 409 to the
         # agent along with the in-flight holder's metadata.

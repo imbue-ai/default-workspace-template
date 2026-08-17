@@ -29,7 +29,10 @@ describe("ExecClient grants", () => {
     const seen: { url: string; method?: string }[] = [];
     vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
       seen.push({ url, method: init?.method });
-      return jsonResponse(200, { grants_toml: "[workspace]\n", revision: "r1" });
+      return jsonResponse(200, {
+        grants_toml: "[workspace]\n",
+        revision: "r1",
+      });
     });
 
     const doc = await (await makeClient()).getGrants();
@@ -74,7 +77,7 @@ describe("ExecClient grants", () => {
     vi.stubGlobal("fetch", async () =>
       jsonResponse(409, {
         error: "stale base_revision",
-        grants_toml: "[workspace]\nemails = [\"other@example.com\"]\n",
+        grants_toml: '[workspace]\nemails = ["other@example.com"]\n',
         revision: "r9",
       }),
     );
@@ -88,5 +91,39 @@ describe("ExecClient grants", () => {
         revision: "r9",
       },
     });
+  });
+});
+
+describe("ExecClient writeFile", () => {
+  it("serializes mode as an octal string (the daemon parses it base 8)", async () => {
+    let sentBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      sentBody = JSON.parse(
+        new TextDecoder().decode(init?.body as Uint8Array),
+      ) as Record<string, unknown>;
+      return jsonResponse(200, {});
+    });
+
+    await (await makeClient()).writeFile("/etc/restic.env", "Zm9v", 0o600);
+
+    expect(sentBody).toEqual({
+      path: "/etc/restic.env",
+      content_b64: "Zm9v",
+      mode: "600",
+    });
+  });
+
+  it("omits mode when none is given", async () => {
+    let sentBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      sentBody = JSON.parse(
+        new TextDecoder().decode(init?.body as Uint8Array),
+      ) as Record<string, unknown>;
+      return jsonResponse(200, {});
+    });
+
+    await (await makeClient()).writeFile("/etc/restic.env", "Zm9v");
+
+    expect(sentBody).toEqual({ path: "/etc/restic.env", content_b64: "Zm9v" });
   });
 });

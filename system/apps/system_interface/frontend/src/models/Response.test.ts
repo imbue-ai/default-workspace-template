@@ -70,6 +70,9 @@ function assistantWithAgentToolCall(
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -154,6 +157,33 @@ describe("dedup", () => {
     appendEvents(agent, [makeEvent("c"), makeEvent("d")]);
     prependEvents(agent, [makeEvent("a"), makeEvent("b"), makeEvent("c")]);
     expect(ids(agent)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("replaces an already-held event in place when a re-broadcast changes its content", () => {
+    // The spine's supersession path: the backend re-broadcasts a held event (same id)
+    // with updated content; the store upgrades it in place rather than dropping it as a
+    // duplicate or appending a second copy.
+    const agent = freshAgent();
+    const userEvent = (id: string, content: string): TranscriptEvent => ({
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: id,
+      source: "test",
+      message_uuid: id,
+      role: "user",
+      content,
+    });
+    const contentOf = (id: string) =>
+      getEventsForAgent(agent)
+        .filter((e) => e.event_id === id)
+        .map((e) => (e as { content?: string }).content);
+    appendEvents(agent, [userEvent("a", "first"), makeEvent("b")]);
+    expect(contentOf("a")).toEqual(["first"]);
+
+    appendEvents(agent, [userEvent("a", "first, corrected")]);
+    // Still two events, same order; "a" upgraded in place.
+    expect(ids(agent)).toEqual(["a", "b"]);
+    expect(contentOf("a")).toEqual(["first, corrected"]);
   });
 });
 
