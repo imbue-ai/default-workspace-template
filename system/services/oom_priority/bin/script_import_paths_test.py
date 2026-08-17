@@ -14,7 +14,13 @@ from pathlib import Path
 
 _BIN_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _BIN_DIR.parents[3]
-_SCANNED_DIRS = (_BIN_DIR, _REPO_ROOT / "system" / "scripts")
+_SCANNED_DIRS = (
+    _BIN_DIR,
+    _REPO_ROOT / "system" / "scripts",
+    # Skill scripts run under a bare python3 for the same reason, and the reveal
+    # one bands itself out of the agent-subprocess range before it starts.
+    _REPO_ROOT / ".agents" / "skills" / "update-system-interface" / "scripts",
+)
 
 # Matches the argument of the conventional insert:
 #   sys.path.insert(0, str(Path(__file__).resolve().parents[N] / "a" / "b"))
