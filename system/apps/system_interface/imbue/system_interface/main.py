@@ -13,10 +13,8 @@ from imbue.system_interface.app_context import get_state
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.frontend_build import FrontendBuildService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.server import STATIC_DIRECTORY
 from imbue.system_interface.server import create_application
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -85,11 +83,6 @@ def build_production_state(
         claude_auth_service=ClaudeAuthService(
             resolve_never_welcomed_agent_name=welcome_resender.never_welcomed_agent_name,
         ),
-        # Lets the not-built placeholder rebuild the bundle in place. The bundle
-        # is gitignored build output that nothing else regenerates outside a
-        # workspace create, so without this a workspace whose tree was replaced
-        # under it has no way back to a working UI.
-        frontend_build_service=FrontendBuildService(static_directory=STATIC_DIRECTORY),
         welcome_resender=welcome_resender,
         # Single shared synchronous httpx client for server-side API calls to
         # local services (e.g. the /api/browsers passthrough to the browser

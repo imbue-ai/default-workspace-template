@@ -104,12 +104,25 @@ iframe/panel for arranging the workspace.
 `static/` is gitignored build output, produced at workspace creation
 (`system/scripts/build_workspace.sh`) and by the reveal above. Nothing rebuilds
 it at service start, so a code refresh that replaces the tree can leave the
-backend with nothing to serve. In that state `/` serves a placeholder page that
-offers to rebuild the bundle in place -- `POST /api/frontend-build` starts the
-rebuild on a background thread and `GET /api/frontend-build` reports its
-progress, which is what the page polls before reloading itself. Every app-shell
-response carries an `X-Frontend-Built` header so the placeholder is
-distinguishable from the real app without pattern-matching its markup.
+backend with nothing to serve. In that state `/` serves a placeholder naming the
+one repair that works from there -- build in a checkout of this app and copy the
+bundle in -- and refreshing itself, so a bundle restored by anything else (most
+often the reveal's rollback) brings an open tab back on its own. The placeholder
+deliberately does not offer to run the build: the states that strand a workspace
+here are dominated by the ones where a build would fail too, and a build the
+server dispatched would inherit the server's memory band and be protected ahead
+of the user's chats and agents.
+
+Two things make that state recoverable rather than terminal. Every app-shell
+response carries an `X-Frontend-Built` header, so the placeholder is
+distinguishable from the real app without pattern-matching its markup -- that is
+what the reveal's frontend probe reads. And `/assets/<path>` is registered
+unconditionally rather than only when the bundle exists at startup: a route
+decided at construction time can never notice a bundle that appears later, and
+without it asset requests fall through to the SPA catch-all and come back as
+`index.html` with a `text/html` type, which the browser refuses as a module
+script -- a blank screen instead of the placeholder. A genuinely missing asset
+gets a plain 404.
 
 ## Named layouts
 

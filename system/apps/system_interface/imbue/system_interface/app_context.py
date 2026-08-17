@@ -12,7 +12,6 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.frontend_build import FrontendBuildService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.registry import build_watcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
@@ -50,7 +49,6 @@ class SystemInterfaceState(MutableModel):
     event_queues: AgentEventQueues
     layout_mutex: LayoutMutex
     claude_auth_service: ClaudeAuthService
-    frontend_build_service: FrontendBuildService
     welcome_resender: WelcomeResender
     http_client: httpx.Client
     latchkey_http_client: httpx.Client

@@ -39,12 +39,10 @@ from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.frontend_build import FrontendBuildService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.claude.auth import RestartProgress
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.server import STATIC_DIRECTORY
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -126,7 +124,6 @@ def build_test_state(
     config: Config | None = None,
     agent_manager: AgentManager | None = None,
     claude_auth_service: ClaudeAuthService | None = None,
-    frontend_build_service: FrontendBuildService | None = None,
     welcome_resender: WelcomeResender | None = None,
     latchkey_http_client: httpx.Client | None = None,
 ) -> SystemInterfaceState:
@@ -155,9 +152,6 @@ def build_test_state(
         event_queues=event_queues,
         layout_mutex=LayoutMutex(),
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        frontend_build_service=frontend_build_service
-        if frontend_build_service is not None
-        else FrontendBuildService(static_directory=STATIC_DIRECTORY),
         welcome_resender=welcome_resender
         if welcome_resender is not None
         else WelcomeResender(

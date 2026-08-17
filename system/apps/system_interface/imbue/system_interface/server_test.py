@@ -5,10 +5,8 @@ import io
 import json
 import os
 import queue
-import threading
 import time
 from collections.abc import Generator
-from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,7 +33,6 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.frontend_build import FrontendBuildService
 from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.system_interface.harnesses.codex.ledger import ShoulderTapResult
 from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
@@ -126,45 +123,22 @@ def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> Non
         assert response.headers["Cache-Control"] == "no-store"
 
 
-def test_index_offers_a_rebuild_when_the_bundle_is_missing(tmp_path: Path) -> None:
-    """The placeholder must let the user recover, not just describe the problem.
+def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) -> None:
+    """The placeholder and the real app are both HTTP 200 HTML.
 
-    A workspace whose bundle was wiped cannot run a build command itself, so a
-    page that only names the fix strands it.
+    Only the header tells them apart, and the reveal flow's frontend probe
+    decides whether to roll back on it -- a placeholder that claimed to be the
+    app would let a reveal sign off on a UI the user cannot see.
     """
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
-    # Both directories are the test's own, so what is asserted follows from the
-    # setup rather than from this checkout happening to carry frontend sources.
-    frontend_dir = tmp_path / "frontend"
-    frontend_dir.mkdir()
-    (frontend_dir / "package.json").write_text("{}")
-    service = FrontendBuildService(static_directory=empty_dir, frontend_directory=frontend_dir)
 
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
+        test_client = create_application(build_test_state()).test_client()
         response = test_client.get("/")
 
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "false"
-    assert "/api/frontend-build" in response.text
-
-
-def test_index_does_not_offer_a_rebuild_without_frontend_sources(tmp_path: Path) -> None:
-    """An install with no frontend/ cannot rebuild, so it must not pretend to."""
-    empty_dir = tmp_path / "static"
-    empty_dir.mkdir()
-    service = FrontendBuildService(static_directory=empty_dir, frontend_directory=tmp_path / "absent")
-
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
-        response = test_client.get("/")
-
-    assert response.status_code == 200
-    assert response.headers[FRONTEND_BUILT_HEADER] == "false"
-    assert "/api/frontend-build" not in response.text
-    # The manual fallback is still named, since it is all this install can do.
-    assert "npm run build" in response.text
 
 
 def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:
@@ -205,79 +179,6 @@ def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> No
 
     assert response.status_code == 200
     assert "javascript" in response.headers["Content-Type"]
-
-
-def test_frontend_build_endpoint_reports_whether_the_bundle_exists(tmp_path: Path) -> None:
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    service = FrontendBuildService(static_directory=static_dir, frontend_directory=tmp_path / "absent")
-    test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
-
-    response = test_client.get("/api/frontend-build")
-
-    assert response.status_code == 200
-    assert response.get_json() == {
-        "is_built": False,
-        "is_repairable": False,
-        "phase": None,
-        "detail": None,
-        "error": None,
-    }
-
-
-def test_starting_a_rebuild_without_sources_is_refused(tmp_path: Path) -> None:
-    service = FrontendBuildService(static_directory=tmp_path / "static", frontend_directory=tmp_path / "absent")
-    test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
-
-    response = test_client.post("/api/frontend-build")
-
-    assert response.status_code == 409
-    assert "cannot rebuild itself" in response.get_json()["detail"]
-
-
-def test_starting_a_rebuild_answers_with_the_running_status(tmp_path: Path) -> None:
-    """The POST must hand back a status the placeholder page can render.
-
-    Its click handler feeds this body straight into the same render() that the
-    polls use, so a response that does not report a rebuild in flight leaves the
-    page stranded on "Starting..." -- a dead end on the one surface whose whole
-    job is to get the user out of one.
-    """
-    frontend_dir = tmp_path / "frontend"
-    frontend_dir.mkdir()
-    (frontend_dir / "package.json").write_text("{}")
-    # Present so the rebuild skips `npm ci` and goes straight to the build.
-    (frontend_dir / "node_modules").mkdir()
-
-    is_released = threading.Event()
-
-    def blocking_runner(command: Sequence[str], cwd: Path, timeout: float) -> FinishedProcess:
-        # Holds the rebuild in flight so the response is asserted against a
-        # running build rather than racing one that already finished.
-        is_released.wait(timeout=10.0)
-        return FinishedProcess(
-            returncode=1, stdout="", stderr="", command=tuple(command), is_output_already_logged=False
-        )
-
-    service = FrontendBuildService(
-        static_directory=tmp_path / "static", frontend_directory=frontend_dir, command_runner=blocking_runner
-    )
-    test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
-
-    try:
-        response = test_client.post("/api/frontend-build")
-
-        assert response.status_code == 202
-        body = response.get_json()
-        assert body["phase"] in ("installing", "building")
-        assert body["is_built"] is False
-        assert body["error"] is None
-    finally:
-        is_released.set()
-        thread = service._build_thread
-        assert thread is not None
-        thread.join(timeout=10.0)
-        assert not thread.is_alive()
 
 
 def test_list_agents_endpoint(client: FlaskClient) -> None:
