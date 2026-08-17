@@ -93,10 +93,12 @@ Exit codes (``reveal``):
        0, a workspace whose frontend was already broken when the reveal started
        gets a closing line that says so instead, since the rollback was never
        held to a standard it could not have met.
-    3  EMERGENCY: even rollback could not restore a healthy UI. The pre-reveal
-       bundle copy is kept rather than discarded, and its path printed: putting
-       it back needs neither npm nor a registry, so it is the way out of exactly
-       the failure that gets here.
+    3  EMERGENCY: even rollback could not restore a healthy UI. After a reveal
+       that touched the frontend, the pre-reveal bundle copy is kept rather than
+       discarded and its path printed: putting it back needs neither npm nor a
+       registry, so it is the way out of exactly the failure that gets here. A
+       backend-only reveal never wrote the bundle directory, so there is nothing
+       to hand over and no such line.
 
 Exit codes (``preview`` / ``unpreview``):
     0  Success (preview is up / torn down).
@@ -1093,7 +1095,15 @@ def reveal(
             # is the last known-good bundle anywhere: the tree's was destroyed
             # before the failed build, and rebuilding is what just failed.
             # Discarding it here would take the operator's only way back with it.
-            if saved_bundle is not None:
+            #
+            # Only when the reveal touched the frontend, though. Nothing else
+            # here writes the bundle directory -- the build is the one step that
+            # empties it, and the rollback restores tracked files while it is
+            # untracked output -- so after a backend-only reveal the copy is
+            # byte-identical to what is already being served. Offering it there
+            # would send someone whose UI is down for a backend reason to copy a
+            # bundle over itself.
+            if saved_bundle is not None and changes.frontend:
                 is_snapshot_left_for_operator = True
                 sys.stderr.write(
                     f"the pre-reveal frontend bundle was kept at {saved_bundle} -- copying it over "

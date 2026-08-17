@@ -862,6 +862,46 @@ def test_an_emergency_hands_the_bundle_snapshot_to_the_operator(
     assert (kept / "index.html").exists()
 
 
+def test_a_backend_only_emergency_is_not_pointed_at_the_bundle_snapshot(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same exit 3, but nothing here ever wrote the bundle directory: the build is
+    # the only step that empties it, and the rollback restores tracked files
+    # while it is untracked output. So the copy is byte-identical to what is
+    # already being served, and offering it would send someone whose UI is down
+    # for a backend reason off to copy a bundle over itself.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n",
+        repo_root=repo,
+    )
+    http = _FakeHttp(
+        _all_healthy,
+        page_responder=_breaks_after_the_restart(runner, _placeholder_page),
+    )
+
+    assert _reveal(runner, http, _FakeSpawner(), repo) == 3
+
+    assert "bundle was kept" not in capsys.readouterr().err
+
+
+def _breaks_after_the_restart(
+    runner: _RecordingRunner, broken: Callable[[str], reveal_mod.FetchedPage]
+) -> Callable[[str], reveal_mod.FetchedPage]:
+    """The backend-change counterpart to :func:`_breaks_after_the_build`.
+
+    A backend-only reveal never builds, so the frontend it regresses can only
+    turn broken at the restart.
+    """
+
+    def responder(url: str) -> reveal_mod.FetchedPage:
+        has_restarted = any(
+            c[:3] == ["mngr", "start", "--restart"] for c in runner.calls
+        )
+        return broken(url) if has_restarted else _built_app_page(url)
+
+    return responder
+
+
 def _kept_snapshot_path(stderr: str) -> Path:
     """Where the emergency path told the operator the bundle copy is."""
     match = re.search(r"bundle was kept at (\S+) --", stderr)
