@@ -22,24 +22,17 @@ from imbue.system_interface.harnesses.claude.auth_patterns import is_auth_error_
 from imbue.system_interface.harnesses.claude.error_patterns import classify_api_error
 from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
+from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
-from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
+from imbue.system_interface.harnesses.message_display import classify_user_message
+from imbue.system_interface.harnesses.message_display import is_non_turn_tail
+from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
+from imbue.system_interface.harnesses.tool_output import find_permission_request
+from imbue.system_interface.harnesses.tool_output import is_permission_request_call
+from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
+from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
 logger = _loguru_logger
-
-# tk lifecycle commands print machine-readable decoration on stdout that the
-# chat progress view reads back from the transcript: `Updated <id> -> <status>`
-# on every transition (positions a step's open/close) and, for steps,
-# `tk-step <id> title:`/`summary:` lines (carry the title and close summary).
-# The format is defined in `system/vendor/tk/ticket` (cmd_create/start/close) and also
-# parsed by the frontend (`turn-grouping.ts`); keep all three in sync.
-# These must survive output truncation (e.g. when a tk command is batched after
-# a verbose one whose output pushes the line past the limit), so a step's
-# structure and decoration are never lost to truncation -- see
-# `_truncate_tool_output`.
-_TK_OUTPUT_DECORATION_PATTERN = re.compile(
-    r"Updated \S+ -> (?:open|in_progress|closed)|tk-step \S+ (?:title|summary): .*"
-)
 
 # The tk subcommands whose Bash calls carry the step titles/summaries that the
 # chat progress view's historical input-preview fallback reads -- a command
@@ -48,41 +41,6 @@ _TK_OUTPUT_DECORATION_PATTERN = re.compile(
 # calls survive intact. Recognition is delegated to the shared
 # `tk_command_parsing` parser (see `_is_tk_lifecycle_call`).
 _TK_LIFECYCLE_VERBS = frozenset({"create", "start", "close"})
-
-# A latchkey permission request is created by POSTing to the reserved
-# `latchkey-self.invalid/permission-requests` host (see the latchkey skill), and
-# the gateway echoes the created request back on stdout as a JSON object. The
-# chat's permission card reads that object for everything it shows: the title,
-# the agent's rationale, and the request id its "Review & respond" button hands
-# to the Minds app. The object routinely runs past `_MAX_OUTPUT_LENGTH` -- the
-# gateway pretty-prints it and echoes the request's `target` and precomputed
-# `effect` alongside the fields the card wants, and curl writes a progress meter
-# ahead of it -- so head truncation cuts it mid-object and the card can read
-# nothing at all. It is therefore located and parsed BEFORE truncation, carried
-# on the event as `permission_request`, and kept whole in `output`.
-_PERMISSION_REQUEST_ID_KEY = '"request_id"'
-
-# Ceiling on a preserved permission-request object. Preservation rescues the
-# handful of fields the card renders; it is not licence to open an unbounded
-# hole in the output limit, and the object is carried twice (parsed on the event
-# and verbatim in `output`). A body past this size is left to ordinary head
-# truncation and is not treated as a request at all.
-_MAX_PERMISSION_REQUEST_LENGTH = 8000
-
-# Cap on the candidate `{`s probed in one tool result. Failing probes are not
-# constant-time: each one constructs a JSONDecodeError whose line/column
-# bookkeeping rescans the document up to the error position, so output that is
-# mostly braces costs O(braces x length) -- measured at 35 ms for a wall of
-# 10_000 braces, 3.0 s for 100_000 (quadratic growth), versus 3 ms for the
-# same 100KB wall once capped at 1000 probes. Legitimate output has only a
-# handful of braces at or before the object's `request_id` key (curl's progress
-# meter has none; the pretty-printed object contributes its own opening brace
-# plus a few from any JSON a batched command printed earlier), so 1000 is two
-# to three orders of magnitude of headroom.
-_MAX_PERMISSION_REQUEST_PROBES = 1000
-
-# Stateless and reused across candidate offsets rather than rebuilt per probe.
-_JSON_DECODER = json.JSONDecoder()
 
 _SOURCE = "claude/common_transcript"
 
@@ -262,109 +220,6 @@ def _is_tk_lifecycle_call(tool_name: str, tool_input: Any) -> bool:
     return any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments)
 
 
-class _PermissionRequest(FrozenModel):
-    """A permission-request object found in a tool result."""
-
-    details: dict[str, Any] = Field(description="The parsed permission-request object the gateway echoed")
-    body: str = Field(description="The object's verbatim JSON text, exactly as it appeared in the tool output")
-
-
-def _is_permission_request(parsed: dict[str, Any]) -> bool:
-    """True for the shape the gateway echoes when it creates a request: a
-    non-empty string `request_id` alongside a `payload` object. Every request
-    type carries both (the gateway rejects a create without a payload), and
-    demanding the pair keeps unrelated tool output that merely mentions a
-    request id from being mistaken for a permission request."""
-    request_id = parsed.get("request_id")
-    if not isinstance(request_id, str) or not request_id:
-        return False
-    return isinstance(parsed.get("payload"), dict)
-
-
-def _find_permission_request(content: str) -> _PermissionRequest | None:
-    """Locate the permission-request object a creation POST echoed in `content`.
-
-    Returns the first such object, or None -- which is the case for essentially
-    every tool result, so the cheap substring guard runs first and the JSON work
-    happens only for output that could plausibly be a request.
-
-    Candidate starts are the `{`s at or before the `request_id` key (the object
-    encloses it, which also bounds the scan), and each is decoded with
-    `JSONDecoder.raw_decode`, which parses one JSON value and reports where it
-    ended. Taking the end from the decoder -- instead of assuming the object runs
-    to the end of stdout -- is what makes this robust to anything the command
-    printed after the response. The number of candidates tried is capped at
-    `_MAX_PERMISSION_REQUEST_PROBES` so a pathological brace-heavy output cannot
-    stall parsing; past the cap the result is treated like any other output.
-    """
-    marker = content.find(_PERMISSION_REQUEST_ID_KEY)
-    if marker < 0:
-        return None
-    probes = 0
-    start = content.find("{")
-    while 0 <= start <= marker:
-        probes += 1
-        if probes > _MAX_PERMISSION_REQUEST_PROBES:
-            return None
-        try:
-            parsed, end = _JSON_DECODER.raw_decode(content, start)
-        except json.JSONDecodeError:
-            # Not a decode failure worth reporting: this is a probe asking
-            # whether a JSON value begins at this `{` at all, and "no" is the
-            # ordinary answer for a brace in prose or shell output.
-            parsed, end = None, start
-        except RecursionError:
-            # The C scanner recurses per nesting level and raises this -- NOT a
-            # JSONDecodeError -- on absurdly deep input like `{"a": ` repeated.
-            # Letting it escape would crash the whole parse, and every later
-            # candidate inside the same nest would just recurse again, so give
-            # up on the result: no gateway echo nests thousands deep.
-            return None
-        if isinstance(parsed, dict) and _is_permission_request(parsed):
-            body = content[start:end]
-            if len(body) > _MAX_PERMISSION_REQUEST_LENGTH:
-                return None
-            return _PermissionRequest(details=parsed, body=body)
-        start = content.find("{", start + 1)
-    return None
-
-
-def _tk_decoration_after(content: str, cut: int) -> list[str]:
-    """The tk decoration lines in `content` that end past `cut`."""
-    return [m.group(0) for m in _TK_OUTPUT_DECORATION_PATTERN.finditer(content) if m.end() > cut]
-
-
-def _rebuild_around_permission_request(content: str, request: _PermissionRequest) -> str:
-    """Replace an over-long tool output with only what the chat reads out of it:
-    every tk decoration line, then the permission-request object, whole and last.
-
-    The object has to be the last JSON object in the result -- and the only one --
-    because the card's raw-output fallback reads from the first `{` to the end of
-    the string. That rules out the tk-style append (the head's own chopped copy of
-    the object would be found first), so the head is replaced rather than kept, and
-    the tk lines sit ahead of the object so both guarantees hold at once. What is
-    dropped is curl's progress meter and anything the command printed around the
-    response, none of which the chat reads."""
-    return "...\n" + "\n".join([*_tk_decoration_after(content, 0), request.body])
-
-
-def _truncate_tool_output(content: str, permission_request: _PermissionRequest | None = None) -> str:
-    """Truncate a tool result to the head limit, but keep what the chat reads out
-    of the part past the cut: the tk decoration lines (`Updated <id> -> <status>`
-    and `tk-step <id> title|summary: ...`), appended after the truncation marker so
-    a step's structure is never lost, and a permission-request object, preserved
-    whole in place of the head (see `_rebuild_around_permission_request`)."""
-    if len(content) <= MAX_TOOL_OUTPUT_LENGTH:
-        return content
-    if permission_request is not None:
-        return _rebuild_around_permission_request(content, permission_request)
-    head = content[:MAX_TOOL_OUTPUT_LENGTH]
-    preserved = _tk_decoration_after(content, MAX_TOOL_OUTPUT_LENGTH)
-    if preserved:
-        return head + "...\n" + "\n".join(preserved)
-    return head + "..."
-
-
 def _is_resume_no_response_reply(message: dict[str, Any]) -> bool:
     """True if ``message`` is the synthetic reply half of the resume turn-pair.
 
@@ -488,6 +343,8 @@ def _parse_assistant_message(
             input_preview = json.dumps(tool_input, separators=(",", ":"))
             if len(input_preview) > MAX_TOOL_INPUT_PREVIEW_LENGTH and not _is_tk_lifecycle_call(tool_name, tool_input):
                 input_preview = input_preview[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
+            command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+            is_hidden_tk = tool_name == "Bash" and isinstance(command, str) and is_pure_tk_lifecycle_command(command)
 
             if call_id and tool_name:
                 tool_name_by_call_id[call_id] = tool_name
@@ -502,6 +359,12 @@ def _parse_assistant_message(
                 "header_label": header_label,
                 "caption_label": caption_label,
             }
+            # The render decision ships with the call (a hidden tk marker, or the
+            # permission card), recognised from the UNTRUNCATED input backend-side; the
+            # frontend never re-derives it from the command text.
+            display = classify_tool_call_display(is_pure_tk=is_hidden_tk, raw_input=json.dumps(tool_input))
+            if display is not None:
+                tool_call["display"] = display.value
             # For Agent tool calls, surface the description and subagent_type from the
             # tool input directly. These let the frontend render the rich subagent card
             # (label + agent-type badge) the instant the call appears, before the subagent
@@ -596,23 +459,23 @@ def _parse_user_message(
                     "content": text,
                     "message_uuid": uuid,
                 }
-                # Claude Code marks framework-injected, model-only user messages
-                # with ``isMeta`` -- the resume-continuation marker, the image
-                # coordinate note, MCP-resource dumps, hook context, etc. We pass
-                # the flag through rather than special-casing each: the frontend
-                # classifier hides an ``is_meta`` message (unless an explicit
-                # detector surfaces it, e.g. Stop-hook feedback). This subsumes the
-                # former resume-continuation drop. (The interrupt sentinel above is
-                # NOT isMeta, so it still needs its own guard.)
-                if raw.get("isMeta"):
-                    event["is_meta"] = True
-                # Claude Code stamps ``isCompactSummary`` on the record it injects
-                # after auto-compaction -- a normal (non-``isMeta``) user record whose
-                # text is the carried-over summary ("This session is being continued
-                # ..."). Passed through so the frontend can collapse it into a chip
-                # instead of showing the whole summary as a bare user bubble.
-                if raw.get("isCompactSummary"):
-                    event["is_compact_summary"] = True
+                # Claude Code's own markers (``isMeta`` for framework-injected,
+                # model-only messages; ``isCompactSummary`` for the post-compaction
+                # summary record) are read HERE and become the shared render decision
+                # -- the raw flags never cross the wire. Explicit detectors win over
+                # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
+                # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
+                decision = classify_user_message(
+                    text,
+                    is_meta=bool(raw.get("isMeta")),
+                    is_compact_summary=bool(raw.get("isCompactSummary")),
+                )
+                if decision is not None:
+                    decision.apply_to(event)
+                # The activity path's separate question -- "is a reply coming for
+                # this tail?" -- decided here too, so it never re-sniffs content.
+                if is_non_turn_tail(text, is_meta=bool(raw.get("isMeta"))):
+                    event["non_turn_tail"] = True
                 if session_id is not None:
                     event["session_id"] = session_id
                 existing_event_ids.add(event_id)
@@ -658,9 +521,9 @@ def _parse_user_message(
             # and parsed while it is still intact. The card then reads the
             # request off the event instead of re-parsing a string that
             # truncation may have cut mid-object.
-            permission_request = _find_permission_request(result_content)
+            permission_request = find_permission_request(result_content)
 
-            result_content = _truncate_tool_output(result_content, permission_request)
+            result_content = truncate_tool_output(result_content, permission_request)
 
             event = {
                 "timestamp": timestamp,

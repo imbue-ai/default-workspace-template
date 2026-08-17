@@ -14,8 +14,6 @@ current process is left over from a turn this process never ran and must not sho
 "Thinking..." indefinitely after a mid-turn restart.
 """
 
-import re
-from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
 from enum import auto
@@ -61,57 +59,16 @@ def has_unmatched_tool_use(events: Sequence[dict[str, Any]]) -> bool:
     return bool(pending - matched)
 
 
-# A model bar drives its harness by sending model/effort/fast slash commands (see
-# server.py). The harness handles each locally -- recording a normalized command line
-# plus a raw `<local-command-stdout>` confirmation, and NEVER a model reply -- so a
-# transcript ending on one is not "the user spoke and the agent is thinking". The
-# regexes below recognise a claude harness's form (`/model`, `/effort`, `/fast` and
-# their "Set model to ..." / "Set effort level to ..." / "Fast mode ..." confirmations);
-# they mirror the frontend detectors in message-classification.ts so the two agree.
-_COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
-_LOCAL_COMMAND_STDOUT_MARKER = "<local-command-stdout>"
-_COMPOSER_STDOUT_RE = re.compile(r"Set model to|Set effort level to|Fast mode")
-
-
-def _is_framework_injected(event: dict[str, Any]) -> bool:
-    """A message the harness itself flags as framework-injected and model-only (a
-    resume-continuation marker, a ``<local-command-caveat>`` wrapper, an image
-    coordinate note, ...). A harness stamps ``is_meta`` on these in its parser; a
-    harness that has no such concept simply never sets it."""
-    return bool(event.get("is_meta"))
-
-
-def _is_model_bar_command(event: dict[str, Any]) -> bool:
-    """A model-bar slash command or its ``<local-command-stdout>`` confirmation. Not
-    flagged ``is_meta`` by the harness, so matched by content."""
-    if event.get("type") != "user_message":
-        return False
-    content = event.get("content")
-    text = content.strip() if isinstance(content, str) else ""
-    if _COMPOSER_COMMAND_RE.match(text):
-        return True
-    return text.startswith(_LOCAL_COMMAND_STDOUT_MARKER) and _COMPOSER_STDOUT_RE.search(text) is not None
-
-
-# The one shared list of "this tail is not a real turn" signals. Any harness's
-# markers slot in here; nothing gates on which harness produced the event (the
-# markers are distinctive enough not to collide), mirroring the frontend's shared
-# detector list. A signal only some harnesses emit simply never fires for the rest.
-_NON_TURN_TAIL_SIGNALS: tuple[Callable[[dict[str, Any]], bool], ...] = (
-    _is_framework_injected,
-    _is_model_bar_command,
-)
-
-
 @pure
 def is_non_turn_tail_event(event: dict[str, Any]) -> bool:
     """True for a trailing transcript event that is NOT a genuine turn awaiting a reply.
 
-    A tail matching any :data:`_NON_TURN_TAIL_SIGNALS` (a framework injection, a
-    model-bar command / confirmation, ...) must not pin the indicator on
-    "Thinking...", since no model reply is coming for it.
+    The PARSER decides (``harnesses/message_display.is_non_turn_tail``, stamped as the
+    event's ``non_turn_tail`` field); this just reads the decision. One implementation --
+    the detector table that also drives rendering -- instead of the hand-mirrored copy of
+    the frontend's regexes that used to live here.
     """
-    return any(signal(event) for signal in _NON_TURN_TAIL_SIGNALS)
+    return bool(event.get("non_turn_tail"))
 
 
 @pure

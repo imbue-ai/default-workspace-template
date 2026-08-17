@@ -55,12 +55,19 @@ from typing import Any
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.harnesses.codex.tool_labels import is_tk_lifecycle
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
+from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
-from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
+from imbue.system_interface.harnesses.message_display import classify_user_message
+from imbue.system_interface.harnesses.message_display import is_non_turn_tail
+from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
+from imbue.system_interface.harnesses.tool_output import find_permission_request
+from imbue.system_interface.harnesses.tool_output import is_permission_request_call
+from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
 logger = _loguru_logger
 
@@ -86,12 +93,13 @@ def _join_output_text(content: Any) -> str:
     )
 
 
-def _stringify_output(output: Any) -> str:
-    """A ``*_output.output`` is either a string or a list of content items; flatten
-    to a truncated string."""
+def _output_text(output: Any) -> str:
+    """A ``*_output.output`` is either a string or a list of content items; flatten to the
+    UNTRUNCATED text (truncation happens at the emit site, after the structured facts the
+    chat needs are lifted out whole -- see ``harnesses/tool_output``)."""
     if isinstance(output, str):
-        text = output
-    elif isinstance(output, list):
+        return output
+    if isinstance(output, list):
         parts: list[str] = []
         for item in output:
             if isinstance(item, dict):
@@ -101,12 +109,8 @@ def _stringify_output(output: Any) -> str:
             else:
                 # other item shapes carry no text
                 continue
-        text = "".join(parts)
-    else:
-        text = "" if output is None else str(output)
-    if len(text) > MAX_TOOL_OUTPUT_LENGTH:
-        return text[:MAX_TOOL_OUTPUT_LENGTH] + "..."
-    return text
+        return "".join(parts)
+    return "" if output is None else str(output)
 
 
 def _tool_call_raw_input(payload: dict[str, Any]) -> str:
@@ -134,13 +138,19 @@ def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[st
     bodies the timeline/diff view need whole (see :func:`_input_preview`).
     """
     header_label, caption_label = tool_labels(tool_name, raw_input)
-    return {
+    tool_call = {
         "tool_call_id": call_id,
         "tool_name": tool_name,
         "input_preview": _input_preview(tool_name, raw_input),
         "header_label": header_label,
         "caption_label": caption_label,
     }
+    # The render decision ships with the call (a hidden tk marker, or the permission
+    # card), recognised from the UNTRUNCATED input backend-side.
+    display = classify_tool_call_display(is_pure_tk=is_tk_lifecycle(tool_name, raw_input), raw_input=raw_input)
+    if display is not None:
+        tool_call["display"] = display.value
+    return tool_call
 
 
 def _input_preview(tool_name: str, raw_input: str) -> str:
@@ -177,6 +187,11 @@ def _assistant_event(
         "message_uuid": event_id,
         # deferred (codex auth errors live in logs_2.sqlite)
         "is_auth_error": False,
+        # Required by the shared contract (Response.ts). Detection deferred: codex's
+        # provider-error record shape is undocumented; False/None is the honest fill.
+        "is_api_error": False,
+        "api_error_kind": None,
+        "is_provider_fault": False,
     }
 
 
@@ -225,7 +240,7 @@ def build_user_turn_event(timestamp: str, content: str, event_id: str) -> dict[s
     The rollout file reader builds it on hydration; the live ledger builds an identical one at
     commit. Keeping one builder guarantees the two are byte-identical apart from the (matching)
     ``event_id``, so the frontend renders and dedups them as one message."""
-    return {
+    event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "user_message",
         "event_id": event_id,
@@ -234,6 +249,14 @@ def build_user_turn_event(timestamp: str, content: str, event_id: str) -> dict[s
         "content": content,
         "message_uuid": event_id,
     }
+    # The shared render decision (fleet nudges, task notifications, latchkey verdicts,
+    # model-bar traffic) -- codex gets the same detector table as claude and pi.
+    decision = classify_user_message(content)
+    if decision is not None:
+        decision.apply_to(event)
+    if is_non_turn_tail(content):
+        event["non_turn_tail"] = True
+    return event
 
 
 def _item_content_text(content: Any) -> str | None:
@@ -462,21 +485,28 @@ def parse_lines(
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
         event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
-        output = _stringify_output(payload.get("output"))
-        return [
-            {
-                "timestamp": timestamp,
-                "type": "tool_result",
-                "event_id": event_id,
-                "source": SOURCE,
-                "tool_call_id": call_id,
-                "tool_name": tool_name_by_call_id.get(call_id, ""),
-                "output": output,
-                # A failed code-mode script writes output starting with "Script failed";
-                # flag it so the UI renders the result as an error, not a clean success.
-                "is_error": output.startswith("Script failed"),
-                "message_uuid": event_id,
-            }
-        ]
+        raw_output = _output_text(payload.get("output"))
+        # Lift the permission-request object and preserve tk step decoration BEFORE
+        # truncation (shared with the claude/pi parsers): both routinely land past the
+        # output cap, and a mid-object/mid-decoration cut loses data the chat cannot
+        # recover frontend-side.
+        permission_request = find_permission_request(raw_output)
+        output = truncate_tool_output(raw_output, permission_request)
+        event: dict[str, Any] = {
+            "timestamp": timestamp,
+            "type": "tool_result",
+            "event_id": event_id,
+            "source": SOURCE,
+            "tool_call_id": call_id,
+            "tool_name": tool_name_by_call_id.get(call_id, ""),
+            "output": output,
+            # A failed code-mode script writes output starting with "Script failed";
+            # flag it so the UI renders the result as an error, not a clean success.
+            "is_error": output.startswith("Script failed"),
+            "message_uuid": event_id,
+        }
+        if permission_request is not None:
+            event["permission_request"] = permission_request.details
+        return [event]
 
     return []

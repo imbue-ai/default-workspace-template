@@ -55,7 +55,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       // on the text before the block so an appended attachment never changes the
       // kind.
       const { visibleText, attachmentBlock } = parseMessageAttachments(content);
-      const cls = classifyUserMessage(visibleText, event.is_meta, event.is_compact_summary);
+      const cls = classifyUserMessage(event);
 
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body);
@@ -80,9 +80,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
  * prompt gets the user-bubble class.
  */
 export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
-  const content = event.content || "";
-  const { visibleText } = parseMessageAttachments(content);
-  const kind = classifyUserMessage(visibleText, event.is_meta, event.is_compact_summary).kind;
+  const kind = classifyUserMessage(event).kind;
   // A kind that does not render on the User rail (hidden /welcome + is_meta, or a
   // skill expansion relocated to the assistant rail) produces no row here.
   if (KIND_SPEC[kind].rail !== Rail.User) {

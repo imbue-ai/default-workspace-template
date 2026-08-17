@@ -7,7 +7,7 @@ import {
   renderSubagentCard,
   renderToolCallBlock,
 } from "./message-renderers";
-import { isSkillExpansionUserMessage, parsePermissionResolution } from "./message-classification";
+import { isSkillExpansionUserMessage } from "./message-classification";
 
 // Avoid importing the heavy/DOM-dependent module graph (dockview, dompurify) at test time;
 // renderSubagentCard only needs openSubagentTab, and the card path never calls MarkdownContent.
@@ -53,6 +53,8 @@ function skillExpansion(ts: string, skillName: string, eventId: string): Transcr
     source: "test",
     role: "user",
     content: `Base directory for this skill: /home/.claude/skills/${skillName}/\n\n# ${skillName}\n\nBody of ${skillName}.`,
+    display: "skill_expansion",
+    display_label: skillName,
   };
 }
 
@@ -111,60 +113,10 @@ describe("renderAssistantMessageChildren API errors", () => {
 });
 
 describe("isSkillExpansionUserMessage", () => {
-  it("matches user_messages whose content starts with the skill-expansion preamble", () => {
-    expect(isSkillExpansionUserMessage("Base directory for this skill: /x")).toBe(true);
-    expect(isSkillExpansionUserMessage("hello")).toBe(false);
-    expect(isSkillExpansionUserMessage("Stop hook feedback:\n...")).toBe(false);
-  });
-});
-
-describe("parsePermissionResolution", () => {
-  it("reads the verdict from the injected granted/denied notifications", () => {
-    expect(
-      parsePermissionResolution(
-        "Your permission request for Slack was granted with the following permissions: slack-read-all. Please retry the call that was blocked.",
-      ),
-    ).toBe("granted");
-    expect(
-      parsePermissionResolution("Your permission request for Slack was denied. Do not retry the blocked call."),
-    ).toBe("denied");
-    expect(
-      parsePermissionResolution(
-        "Your read & write file-sharing permission request for '/Users/you/Documents/report' was granted. Please retry the call that was blocked.",
-      ),
-    ).toBe("granted");
-    // A request that could not be completed is an "error", not a deny decision.
-    expect(
-      parsePermissionResolution(
-        "Your permission request for Google Drive could not be completed because the user's sign-in flow did not finish. Do not retry yet; report this to the user.",
-      ),
-    ).toBe("error");
-  });
-
-  it("reads the verdict from workspace and accounts notifications (phrased without 'permission request for')", () => {
-    // The workspace handler says "permission request was granted (...) for <target>"
-    // -- 'for' comes after the verdict -- and the accounts handler says
-    // "request to list ..." with no 'permission' at all. Both must still
-    // resolve, or they poison the order-based correlation queue and every
-    // later verdict lands on the wrong card.
-    expect(
-      parsePermissionResolution(
-        "Your cross-workspace permission request was granted (minds-workspaces-backups-export) for workspace old-mind.",
-      ),
-    ).toBe("granted");
-    expect(parsePermissionResolution("Your cross-workspace permission request was denied.")).toBe("denied");
-    expect(parsePermissionResolution("Your request to list this device's signed-in accounts was granted.")).toBe(
-      "granted",
-    );
-    expect(parsePermissionResolution("Your request to list this device's signed-in accounts was denied.")).toBe(
-      "denied",
-    );
-  });
-
-  it("ignores ordinary user messages", () => {
-    expect(parsePermissionResolution("can you grant me access to slack?")).toBeNull();
-    expect(parsePermissionResolution("Your permission request looks good")).toBeNull();
-    expect(parsePermissionResolution("")).toBeNull();
+  it("reads the backend's display decision, with zero content sniffing", () => {
+    expect(isSkillExpansionUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
+    expect(isSkillExpansionUserMessage({ content: "Base directory for this skill: /x" })).toBe(false);
+    expect(isSkillExpansionUserMessage({ content: "hello" })).toBe(false);
   });
 });
 
