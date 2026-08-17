@@ -2295,16 +2295,20 @@ def test_layout_broadcast_open_emits_targeted_ws_message(app: Flask) -> None:
     assert other_queue.empty()
 
 
-def test_layout_broadcast_mutating_op_requires_layout(app: Flask) -> None:
-    """A mutating op without a target layout is a 400."""
+def test_layout_broadcast_mutating_op_defaults_to_the_single_clients_view(app: Flask) -> None:
+    """A mutating op without a target goes to the one connected client's view.
+
+    Naming no view means "the view the user is looking at". This used to be a
+    400 demanding --layout, which made every agent spell out a view it had no
+    way to know; now the single connected client's own view is the default.
+    """
     _register_fake_client(app, "client-1", "desktop")
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
         json={"op": "open", "args": {"ref": "service:web"}, "agent_id": "agent-42"},
     )
-    assert response.status_code == 400
-    assert "requires a target layout" in response.get_json()["detail"]
+    assert response.status_code == 200
 
 
 def test_layout_broadcast_mutating_op_without_matching_client_is_412(app: Flask) -> None:
@@ -2705,6 +2709,55 @@ def test_ws_client_state_registration_enables_targeted_ops(app: Flask) -> None:
     assert msg["type"] == "layout_op"
     assert msg["op"] == "focus"
     assert msg["args"] == {"ref": "chat:someone"}
+
+
+def test_layout_op_with_no_target_defaults_to_the_connected_clients_view(app: Flask) -> None:
+    """An op naming no ``--layout`` goes to the view the connected client is on.
+
+    Clients report their VIEW id (a project id, or ``everything``) as their
+    active layout. The default used to resolve through the old named-layout
+    store's last-active -- which rejected view ids and stayed pinned at
+    ``desktop`` forever -- so every defaulted op 412'd against a view no client
+    was ever on. Now the single connected client's own view is the default, so
+    "the view the user is looking at" is what an agent gets when it names none.
+    """
+    client = app.test_client()
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+
+            ws.send(
+                json.dumps(
+                    {
+                        "type": "client_state",
+                        "client_id": "client-14",
+                        "active_layout": "project-1",
+                        "device_kind": "desktop",
+                    }
+                )
+            )
+            deadline = time.monotonic() + 10.0
+            status_code = 0
+            while time.monotonic() < deadline:
+                response = client.post(
+                    "/api/layout/broadcast",
+                    json={"op": "focus", "args": {"ref": "chat:someone"}, "agent_id": "agent-42"},
+                )
+                status_code = response.status_code
+                if status_code == 200:
+                    break
+                assert status_code == 412
+                ws.receive(timeout=0.05)
+            assert status_code == 200
+
+            msg = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+        finally:
+            close_ws(ws)
+
+    assert msg["type"] == "layout_op"
+    assert msg["op"] == "focus"
 
 
 def test_layout_broadcast_rejects_non_loopback(client: FlaskClient) -> None:
