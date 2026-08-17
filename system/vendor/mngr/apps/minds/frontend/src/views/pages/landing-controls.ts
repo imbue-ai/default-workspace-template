@@ -33,3 +33,25 @@ export function mindControlsFor(
     isStopShown: isShutdownSupported && liveness === "RUNNING",
   };
 }
+
+/** What clicking a machines-list row should do, as a testable pure decision. */
+export type RowClickAction = "enter" | "recover" | "recover-start";
+
+// ``liveness`` is a plain string (only the "STOPPED" comparison matters) so
+// callers without a MindLivenessTracker (e.g. CreateTemplatePage) can pass
+// the entry's raw liveness field directly.
+export function rowClickActionFor(
+  entry: Pick<UiWorkspaceEntry, "supports_shutdown">,
+  liveness: string,
+  isHealthy: boolean,
+): RowClickAction {
+  if (!isHealthy) return "recover";
+  if ((entry.supports_shutdown ?? false) && liveness === "STOPPED") {
+    // A stopped container cannot be entered: go straight to Recovery, which
+    // dispatches the idempotent start (with progress + logs) for every
+    // backend -- its stop/start budgets are shared with the Start/Stop
+    // buttons, so even a cloud restore taking minutes reports honestly.
+    return "recover-start";
+  }
+  return "enter";
+}

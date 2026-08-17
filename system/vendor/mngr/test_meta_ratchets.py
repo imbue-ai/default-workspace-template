@@ -57,8 +57,13 @@ def _get_all_project_dirs() -> list[Path]:
 
 
 def _find_test_ratchets_file(project_dir: Path) -> Path | None:
-    """Find the test_ratchets.py file within a project directory."""
-    matches = list(project_dir.rglob("test_ratchets.py"))
+    """Find the test_ratchets.py file within a project directory.
+
+    Only non-gitignored files count: generated artifacts a project keeps in a
+    gitignored directory (e.g. apps/minds_evals/datasets/, whose harbor tasks
+    embed a full mngr-internal clone) must not be mistaken for project code.
+    """
+    matches = [f for f in _get_all_files_with_extension(project_dir, ".py") if f.name == "test_ratchets.py"]
     if len(matches) == 1:
         return matches[0]
     elif len(matches) == 0:
@@ -285,8 +290,17 @@ def test_prevent_bash_without_strict_mode() -> None:
     paths; the snapshot is pinned to the highest observed count. Adding
     ``sigwinch_panes.sh`` alongside the per-session SIGWINCH client-attached hook
     raised that count from 11 to 12.
+
+    The helper scans the whole git repository containing ``_REPO_ROOT``. When
+    this checkout is vendored inside another git repository (e.g. as a subtree
+    under ``system/vendor/mngr``), that repository is the outer one, so scope
+    the result to scripts under the mngr checkout itself; in a standalone
+    checkout the filter is a no-op.
     """
-    violations = find_bash_scripts_without_strict_mode(_REPO_ROOT)
+    checkout_root = _REPO_ROOT.resolve()
+    violations = [
+        v for v in find_bash_scripts_without_strict_mode(_REPO_ROOT) if Path(v).resolve().is_relative_to(checkout_root)
+    ]
     assert len(violations) <= snapshot(12), "Bash scripts missing 'set -euo pipefail':\n" + "\n".join(
         f"  - {v}" for v in violations
     )
@@ -477,13 +491,13 @@ def _has_test_files(project_dir: Path) -> bool:
     return False
 
 
-def _find_tracked_gitignored_files() -> list[str]:
-    """Return tracked files that match .gitignore patterns.
+def _tracked_present_files() -> list[str]:
+    """Return git-tracked paths that exist in the working tree.
 
     Files that are deleted in the working tree are excluded: they are on their
     way out of the repo, and offload sandboxes reconstruct branch state as a
-    base commit plus an unstaged diff, which would otherwise flag files that a
-    commit deletes at the same time as gitignoring their path.
+    base commit plus an unstaged diff, which leaves files that a commit deletes
+    in `git ls-files` output even though they are absent.
     """
     tracked = subprocess.run(
         ["git", "ls-files"],
@@ -492,7 +506,12 @@ def _find_tracked_gitignored_files() -> list[str]:
         check=True,
         cwd=_REPO_ROOT,
     )
-    present = [line for line in tracked.stdout.splitlines() if line.strip() and (_REPO_ROOT / line).exists()]
+    return [line for line in tracked.stdout.splitlines() if line.strip() and (_REPO_ROOT / line).exists()]
+
+
+def _find_tracked_gitignored_files() -> list[str]:
+    """Return tracked, working-tree-present files that match .gitignore patterns."""
+    present = _tracked_present_files()
     ignored = subprocess.run(
         ["git", "check-ignore", "--no-index", "--stdin"],
         input="\n".join(present) + "\n",
@@ -526,7 +545,9 @@ def test_gitignore_patterns_use_double_star() -> None:
     .dockerignore is generated from .gitignore by the _generate-dockerignore
     justfile recipe before each offload run, so the two files must use patterns
     valid in both syntaxes. Enforcing **/ on the .gitignore side keeps the
-    generator a trivial passthrough.
+    generator close to a plain passthrough -- its only semantic patch-up is
+    re-appending the .minds/template negations in the docker-honored form
+    (see test_generated_dockerignore_ships_all_committed_files).
     """
     gitignore = (_REPO_ROOT / ".gitignore").read_text()
     violations: list[str] = []
@@ -545,6 +566,61 @@ def test_gitignore_patterns_use_double_star() -> None:
     assert len(violations) == 0, (
         "The following .gitignore patterns need a **/ prefix.\n"
         "This keeps .gitignore directly compatible with .dockerignore:\n" + "\n".join(violations)
+    )
+
+
+_GENERATE_DOCKERIGNORE_SCRIPT = "scripts/generate_dockerignore.sh"
+
+
+def _generated_dockerignore_patterns(tmp_path: Path) -> list[str]:
+    """Run the real generation script into ``tmp_path`` and return its patterns.
+
+    Also asserts the _generate-dockerignore recipe (private.just) still routes
+    through the script, so what this test evaluates is what offload uses.
+    """
+    recipe_text = (_REPO_ROOT / "private.just").read_text()
+    assert f"bash {_GENERATE_DOCKERIGNORE_SCRIPT}" in recipe_text, (
+        f"private.just's _generate-dockerignore recipe no longer invokes {_GENERATE_DOCKERIGNORE_SCRIPT}; "
+        "update test_generated_dockerignore_ships_all_committed_files to exercise whatever replaced it."
+    )
+    output_path = tmp_path / "dockerignore.generated"
+    # Streams are inherited (not captured) so that if the script fails, its
+    # stderr lands in pytest's captured output next to the CalledProcessError.
+    subprocess.run(
+        ["bash", _GENERATE_DOCKERIGNORE_SCRIPT, str(output_path)],
+        cwd=_REPO_ROOT,
+        check=True,
+    )
+    return output_path.read_text().splitlines()
+
+
+@pytest.mark.skipif(not _IS_SOURCE_OF_TRUTH, reason="the _generate-dockerignore recipe is absent on the public mirror")
+def test_generated_dockerignore_ships_all_committed_files(tmp_path: Path) -> None:
+    """No git-committed file may be excluded by the generated .dockerignore.
+
+    Offload builds its sandbox images from the .dockerignore that
+    scripts/generate_dockerignore.sh derives from .gitignore, and Modal
+    evaluates it with its docker-style matcher. That matcher does not
+    honor .gitignore's anchored `!/...` negation form, so a committed file can
+    silently vanish from sandbox images even though git tracks it (this
+    happened to the committed .minds/template schemas). Run the real script
+    and evaluate its output with Modal's real matcher against every committed
+    path to catch any such exclusion at test time instead of as a missing
+    file in CI.
+    """
+    file_pattern_matcher = pytest.importorskip("modal.file_pattern_matcher")
+    # Blank and `#`-comment lines carry no patterns in dockerignore syntax.
+    patterns = [
+        pattern.strip()
+        for pattern in _generated_dockerignore_patterns(tmp_path)
+        if pattern.strip() and not pattern.strip().startswith("#")
+    ]
+    matcher = file_pattern_matcher.FilePatternMatcher(*patterns)
+    excluded = [path for path in _tracked_present_files() if matcher(Path(path))]
+    assert len(excluded) == 0, (
+        "The following committed files would be excluded from offload sandbox images by the\n"
+        "generated .dockerignore (see scripts/generate_dockerignore.sh):\n"
+        + "\n".join(f"  - {path}" for path in excluded)
     )
 
 
@@ -829,4 +905,115 @@ def test_offload_version_pinned_consistently() -> None:
     assert action_match.group(1) == dockerfile_match.group(1), (
         f"offload version mismatch: the setup-offload composite action pins {action_match.group(1)} "
         f"but the mngr Dockerfile pins {dockerfile_match.group(1)}. Bump both together."
+    )
+
+
+def _collect_class_defs_for_event_envelope_check() -> tuple[dict[str, set[str]], dict[str, list[str]]]:
+    """Collect, repo-wide, each class's base names and any extra="forbid" declarations in its body.
+
+    Returns ``(base_names_by_class, forbid_locations_by_class)``. Classes are keyed
+    by bare name; two same-named classes in different files have their bases merged,
+    which can only over-approximate the EventEnvelope subclass set (acceptable for a
+    guard that should match nothing).
+    """
+    base_names_by_class: dict[str, set[str]] = {}
+    forbid_locations_by_class: dict[str, list[str]] = {}
+    for py_path in _get_all_files_with_extension(_REPO_ROOT, ".py"):
+        try:
+            tree = ast.parse(py_path.read_text())
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            base_names = {
+                base.id if isinstance(base, ast.Name) else base.attr
+                for base in node.bases
+                if isinstance(base, (ast.Name, ast.Attribute))
+            }
+            base_names_by_class.setdefault(node.name, set()).update(base_names)
+            if _class_body_sets_extra_forbid(node):
+                forbid_locations_by_class.setdefault(node.name, []).append(
+                    f"{py_path.relative_to(_REPO_ROOT)}:{node.lineno}"
+                )
+    return base_names_by_class, forbid_locations_by_class
+
+
+def _class_body_sets_extra_forbid(class_def: ast.ClassDef) -> bool:
+    """Whether the class body assigns a model_config containing extra="forbid".
+
+    Handles all three spellings: ``model_config = ConfigDict(extra="forbid")``,
+    the plain-dict form ``model_config = {"extra": "forbid"}``, and the annotated
+    form ``model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")``.
+    """
+    for statement in class_def.body:
+        if isinstance(statement, ast.Assign):
+            if not any(isinstance(t, ast.Name) and t.id == "model_config" for t in statement.targets):
+                continue
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            if not (isinstance(statement.target, ast.Name) and statement.target.id == "model_config"):
+                continue
+            if statement.value is None:
+                continue
+            value = statement.value
+        else:
+            continue
+        if _config_value_sets_extra_forbid(value):
+            return True
+    return False
+
+
+def _config_value_sets_extra_forbid(value: ast.expr) -> bool:
+    """Whether a model_config value expression contains extra="forbid"."""
+    if isinstance(value, ast.Call):
+        for keyword in value.keywords:
+            if keyword.arg == "extra" and isinstance(keyword.value, ast.Constant):
+                if keyword.value.value == "forbid":
+                    return True
+    elif isinstance(value, ast.Dict):
+        for key, dict_value in zip(value.keys, value.values, strict=True):
+            if isinstance(key, ast.Constant) and key.value == "extra":
+                if isinstance(dict_value, ast.Constant) and dict_value.value == "forbid":
+                    return True
+    else:
+        pass
+    return False
+
+
+def test_event_envelope_subclasses_never_re_forbid_extra() -> None:
+    """No EventEnvelope subclass anywhere in the repo may set extra="forbid".
+
+    EventEnvelope models are persisted, cross-process, cross-version event
+    records (events.jsonl streams). The base class deliberately ignores unknown
+    fields so that an additive schema change never makes an already-released
+    reader reject a shared append-only log -- the downgrade wedge of
+    mngr-internal#422. A subclass re-tightening ``extra`` to ``"forbid"``
+    silently reintroduces that wedge for its stream, so it is banned outright.
+    Subclass membership is computed transitively by class name across the whole
+    repo (an over-approximation, which for this guard can only catch more).
+    """
+    base_names_by_class, forbid_locations_by_class = _collect_class_defs_for_event_envelope_check()
+
+    # Transitive closure of subclasses, seeded from EventEnvelope itself.
+    envelope_class_names = {"EventEnvelope"}
+    is_growing = True
+    while is_growing:
+        newly_found = {
+            class_name
+            for class_name, base_names in base_names_by_class.items()
+            if class_name not in envelope_class_names and base_names & envelope_class_names
+        }
+        is_growing = bool(newly_found)
+        envelope_class_names.update(newly_found)
+
+    violations = [
+        f"{class_name} at {location}"
+        for class_name in sorted(envelope_class_names)
+        for location in forbid_locations_by_class.get(class_name, [])
+    ]
+    assert len(violations) == 0, (
+        'EventEnvelope subclasses must not set extra="forbid" (persisted event records must tolerate '
+        "additive fields from other program versions; see mngr-internal#422):\n"
+        + "\n".join(f"  - {v}" for v in violations)
     )

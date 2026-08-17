@@ -651,9 +651,9 @@ def build_recreate_argv(
         "create",
         name,
         "--template",
+        "claude",
+        "--template",
         "chat",
-        "--transfer",
-        "none",
         "--no-connect",
     ]
     for session_file in session_files:

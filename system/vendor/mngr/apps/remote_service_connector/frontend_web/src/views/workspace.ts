@@ -18,6 +18,7 @@ import { MintModal } from "./mint";
 
 const OWNER_SESSION_POLL_MS = 2000;
 const OWNER_SESSION_POLL_LIMIT = 60;
+const ENTRY_LABEL_RETRY_MS = 3000;
 
 export function WorkspaceView(): m.Component<{ hostId: string }> {
   let workspaceDomain: string | null = null;
@@ -31,6 +32,8 @@ export function WorkspaceView(): m.Component<{ hostId: string }> {
   let embedder: EmbedderEndpoint | null = null;
   let frame: HTMLIFrameElement | null = null;
   let hostId = "";
+  let isDisposed = false;
+  let entryLabelRetryTimer: number | null = null;
 
   // The workspace domain family: the iframe's own document lives on the bare
   // share domain (that is where the embed-contract messages come from) and
@@ -69,10 +72,22 @@ export function WorkspaceView(): m.Component<{ hostId: string }> {
   }
 
   async function load(): Promise<void> {
+    entryLabelRetryTimer = null;
     const status = await shareStatus(hostId).catch(() => null);
+    if (isDisposed) return;
     if (status === null || status.state !== "active") {
       error = "This workspace is not shared (no web access).";
       m.redraw();
+      return;
+    }
+    // The entry label is recorded once the workspace's tunnel claims its
+    // service labels; until then there is no routable origin to frame, so
+    // keep re-reading the status (the view stays on "Loading workspace...").
+    if (status.entry_label == null) {
+      entryLabelRetryTimer = window.setTimeout(
+        () => void load(),
+        ENTRY_LABEL_RETRY_MS,
+      );
       return;
     }
     workspaceDomain = status.workspace_domain;
@@ -91,6 +106,11 @@ export function WorkspaceView(): m.Component<{ hostId: string }> {
       void load();
     },
     onremove() {
+      isDisposed = true;
+      if (entryLabelRetryTimer !== null) {
+        window.clearTimeout(entryLabelRetryTimer);
+        entryLabelRetryTimer = null;
+      }
       embedder?.dispose();
       embedder = null;
     },

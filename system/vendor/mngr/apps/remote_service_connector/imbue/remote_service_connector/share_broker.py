@@ -195,12 +195,14 @@ def broker_login_redirect(request: Request) -> RedirectResponse:
     return RedirectResponse(url=f"/login{suffix}", status_code=308)
 
 
-def _send_visitor_verification_email(user_id: str, email: str) -> None:
+def _send_visitor_verification_email(user_id: str, email: str, continue_next_path: str) -> None:
     """Contextually send the verification email to an unverified share visitor.
 
     The share visit is the verification-gated action, so it is also the
-    trigger for the send (server cooldown bounds repeats). Best-effort: the
-    check-inbox page it accompanies already tells the visitor what to do.
+    trigger for the send (server cooldown bounds repeats).
+    ``continue_next_path`` is the local ``/share/authorize`` path the emailed
+    link should route the visitor back through after verifying. Best-effort:
+    the check-inbox page it accompanies already tells the visitor what to do.
     """
     try:
         recipe_user_id = auth_proxy_module.recipe_user_id_for_callers_email(user_id, email)
@@ -209,7 +211,10 @@ def _send_visitor_verification_email(user_id: str, email: str) -> None:
         return
     try:
         auth_proxy_module.send_verification_email_with_cooldown(
-            user_id=user_id, recipe_user_id=recipe_user_id, email=email
+            user_id=user_id,
+            recipe_user_id=recipe_user_id,
+            email=email,
+            continue_next_path=continue_next_path,
         )
     except (SuperTokensSessionError, SuperTokensGeneralError) as exc:
         # A failed send must not fail the visit: the visitor still lands on
@@ -270,9 +275,19 @@ def broker_authorize(request: Request) -> RedirectResponse:
         # The visitor's email IS the authorization identity for a non-owner
         # share grant, so this is one of the two places verification is required.
         if not is_owner and not is_email_verified:
-            _send_visitor_verification_email(user_id, session_email)
+            # The path that re-enters this authorization once the email is
+            # verified: carried into the verification email's link AND to the
+            # check-inbox page, so neither tab is a dead end. confirmed=1
+            # because the visitor already passed the "Continue as ..."
+            # interstitial to get here (and confirmed is a UX property only;
+            # the token still goes solely to a validated same-share callback).
+            authorize_next_path = (
+                f"/share/authorize?{_authorize_self_query(machine_domain, next_url, callback_origin, state)}"
+                "&confirmed=1"
+            )
+            _send_visitor_verification_email(user_id, session_email, authorize_next_path)
             # The check-your-inbox page lives in the hosted accounts bundle.
-            return RedirectResponse(url="/check-inbox", status_code=303)
+            return RedirectResponse(url=f"/check-inbox?next={quote(authorize_next_path, safe='')}", status_code=303)
         handoff_token = mint_share_handoff_token(
             signing_key=_broker_signing_key(),
             user_id=user_id,

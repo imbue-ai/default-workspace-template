@@ -13,7 +13,6 @@ import logging
 import os
 import re
 import shlex
-import tomllib
 from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
 from typing import Any
@@ -31,8 +30,11 @@ from pydantic import Field
 from pydantic import field_validator
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
+import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.entitlements as entitlements_module
+import imbue.remote_service_connector.relays as relays_module
 import imbue.remote_service_connector.shares as shares_module
+import imbue.remote_service_connector.storage as storage_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.entitlements import AccountEntitlements
@@ -156,11 +158,41 @@ class LeasedHostInfo(BaseModel):
     )
 
 
-# What counts as one "remote workspace": a pool-host row leased to the user
-# (running or stopped -- stopped workspaces still hold their lease and slice).
-# Shared by the lease-time quota check and the /account usage display so the
-# two can never drift.
-_COUNT_LEASED_HOSTS_SQL: Final = "SELECT COUNT(*) FROM pool_hosts WHERE leased_to_user = %s AND status = 'leased'"
+# The workspace lifecycle statuses a user's row can hold. "Running" rows hold
+# (or are about to hold) a bare-metal slot: leased, plus the in-flight stopping
+# (VM halted but slot retained until the upload finalizes) and starting
+# transitions. "Total" adds stopped rows, whose VM exists only as encrypted
+# objects in the tier bucket. Shared by the quota checks and the /account
+# usage display so the two can never drift.
+RUNNING_WORKSPACE_STATUSES: Final[tuple[str, ...]] = ("leased", "stopping", "starting")
+TOTAL_WORKSPACE_STATUSES: Final[tuple[str, ...]] = RUNNING_WORKSPACE_STATUSES + ("stopped",)
+
+
+def _count_by_statuses_sql(statuses: tuple[str, ...]) -> str:
+    literals = ", ".join(f"'{status}'" for status in statuses)
+    return f"SELECT COUNT(*) FROM pool_hosts WHERE leased_to_user = %s AND status IN ({literals})"
+
+
+COUNT_RUNNING_WORKSPACES_SQL: Final = _count_by_statuses_sql(RUNNING_WORKSPACE_STATUSES)
+_COUNT_TOTAL_WORKSPACES_SQL: Final = _count_by_statuses_sql(TOTAL_WORKSPACE_STATUSES)
+
+# Quarantine status for a row whose host could not be reached at lease time
+# (SSH key injection failed). Inert everywhere else: every other query filters
+# on available/leased/removing, so a quarantined row simply sits out of
+# rotation until an operator destroys it (the admin destroy claims this status
+# too -- mirrors POOL_HOST_STATUS_UNREACHABLE in mngr_imbue_cloud's
+# ``bare_metal_db``, duplicated because the shipped connector package must not
+# depend on the monorepo).
+_POOL_HOST_STATUS_UNREACHABLE: Final = "unreachable"
+
+# How many candidate rows one lease request tries before giving up. Each
+# attempt whose SSH key injection fails quarantines its row and moves on to
+# the next-oldest match, so a single dead host can never wedge the pool (the
+# 2026-08 production outage: the oldest available rows were on a box with a
+# dead disk, and every lease retried the same dead row forever). The cap
+# bounds the request's worst-case latency (each injection attempt can take up
+# to two 15s SSH timeouts).
+_LEASE_MAX_HOST_ATTEMPTS: Final = 3
 
 
 def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, expected_host_public_key: str) -> None:
@@ -186,7 +218,7 @@ def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, exp
 
 
 @contextlib.contextmanager
-def _management_ssh_client(
+def management_ssh_client(
     host: str,
     port: int,
     user: str,
@@ -218,7 +250,7 @@ def _append_authorized_key(
     expected_host_public_key: str,
 ) -> None:
     """SSH into a host using the management key and append a public key to authorized_keys."""
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=15, expected_host_public_key=expected_host_public_key
     ) as client:
         key_line = public_key_to_add.strip()
@@ -250,11 +282,11 @@ def build_slice_teardown_commands(lima_instance_name: str, lima_disk_name: str |
     return tuple(commands)
 
 
-def _run_ssh_commands_on_box(
+def run_ssh_commands_on_box(
     host: str, port: int, user: str, management_key_pem: str, commands: tuple[str, ...], box_host_public_key: str
 ) -> None:
     """SSH into the box with the pool management key and run each command, raising on failure."""
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=box_host_public_key
     ) as client:
         for command in commands:
@@ -307,7 +339,7 @@ def clean_up_slice_on_box(
         )
     management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
     commands = build_slice_teardown_commands(lima_instance_name, lima_disk_name)
-    _run_ssh_commands_on_box(box_address, 22, lima_service_user, management_key_pem, commands, box_host_public_key)
+    run_ssh_commands_on_box(box_address, 22, lima_service_user, management_key_pem, commands, box_host_public_key)
 
 
 # Slice lima resources are named ``mngr-slice-<env>-<host-hex>`` (the data disk
@@ -333,27 +365,24 @@ def slice_name_env_owner(name: str) -> str | None:
     return match.group("env") if match else None
 
 
-def _list_box_lima_names(
-    host: str, user: str, management_key_pem: str, json_subcommand: str, box_host_public_key: str
-) -> set[str]:
-    """SSH the box and return the ``name`` of every lima instance or disk (per ``json_subcommand``).
+def _list_box_lima_names(client: paramiko.SSHClient, host: str, json_subcommand: str) -> set[str]:
+    """Return the ``name`` of every lima instance or disk on the box (per ``json_subcommand``).
 
-    ``json_subcommand`` is ``list --json`` (instances) or ``disk list --json`` (disks);
-    both emit one JSON object per line. Raises ``PoolHostCleanupError`` on a non-zero exit
-    so the caller skips this box rather than mistaking an SSH failure for "no VMs".
+    Runs over the caller's already-connected management SSH ``client`` (``host`` is
+    for error messages only). ``json_subcommand`` is ``list --json`` (instances) or
+    ``disk list --json`` (disks); both emit one JSON object per line. Raises
+    ``PoolHostCleanupError`` on a non-zero exit so the caller treats the box as not
+    reconciled rather than mistaking an SSH failure for "no VMs".
     """
     names: set[str] = set()
     command = f"{_BOX_LIMACTL_PATH_PREFIX} limactl {json_subcommand}"
-    with _management_ssh_client(
-        host, 22, user, management_key_pem, timeout_seconds=30, expected_host_public_key=box_host_public_key
-    ) as client:
-        _stdin, stdout, stderr = client.exec_command(command)
-        exit_status = stdout.channel.recv_exit_status()
-        output = stdout.read().decode()
-        if exit_status != 0:
-            raise PoolHostCleanupError(
-                f"`limactl {json_subcommand}` on {host} failed (exit {exit_status}): {stderr.read().decode()}"
-            )
+    _stdin, stdout, stderr = client.exec_command(command)
+    exit_status = stdout.channel.recv_exit_status()
+    output = stdout.read().decode()
+    if exit_status != 0:
+        raise PoolHostCleanupError(
+            f"`limactl {json_subcommand}` on {host} failed (exit {exit_status}): {stderr.read().decode()}"
+        )
     for line in output.splitlines():
         stripped = line.strip()
         if not stripped:
@@ -369,24 +398,96 @@ def _list_box_lima_names(
     return names
 
 
+# Box-health probe run over the same management SSH connection as the lima
+# listing (the reconcile opens one connection per box and runs both on it):
+# /proc/mdstat (degraded RAID arrays) and /proc/swaps (unmirrored raw-partition
+# swap). Both files are world-readable, and one exec keeps the probe a single
+# round-trip.
+_BOX_HEALTH_SPLIT_MARKER: Final = "MNGR_BOX_HEALTH_SPLIT"
+_BOX_HEALTH_COMMAND: Final = f"cat /proc/mdstat && echo {_BOX_HEALTH_SPLIT_MARKER} && cat /proc/swaps"
+
+# /proc/mdstat structure: an array header line (``md3 : active raid1 ...``)
+# followed by a status line whose ``[expected/active]`` bracket reports member
+# counts. Mirrors ``mngr_imbue_cloud.slices.bare_metal`` (duplicated, not
+# imported -- the shipped connector package must not depend on the monorepo).
+_MD_ARRAY_HEADER_RE = re.compile(r"^(md\d+)\s*:")
+_MD_MEMBER_COUNTS_RE = re.compile(r"\[(\d+)/(\d+)\]")
+
+
+def _parse_degraded_md_arrays(mdstat_text: str) -> list[str]:
+    """The md arrays in a ``/proc/mdstat`` dump running with a failed member."""
+    degraded: list[str] = []
+    current_array: str | None = None
+    for line in mdstat_text.splitlines():
+        header_match = _MD_ARRAY_HEADER_RE.match(line)
+        if header_match:
+            current_array = header_match.group(1)
+            continue
+        counts_match = _MD_MEMBER_COUNTS_RE.search(line)
+        if counts_match and current_array is not None:
+            expected_members, active_members = int(counts_match.group(1)), int(counts_match.group(2))
+            if active_members < expected_members:
+                degraded.append(current_array)
+            current_array = None
+    return degraded
+
+
+def _parse_raw_swap_devices(proc_swaps_text: str) -> list[str]:
+    """The swap devices in a ``/proc/swaps`` dump that are raw (non-md) partitions.
+
+    Unmirrored swap is what turned one dead disk into a slow box-wide SIGBUS
+    massacre in the 2026-08-07 production incident; the box prep now retires
+    these, so any partition entry means the box needs a prep re-run. Swap on an
+    md device is itself mirrored, so ``/dev/md*`` entries are not flagged.
+    """
+    raw_devices: list[str] = []
+    # The first line is the fixed "Filename Type Size ..." header.
+    for line in proc_swaps_text.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) >= 2 and fields[1] == "partition" and not fields[0].startswith("/dev/md"):
+            raw_devices.append(fields[0])
+    return raw_devices
+
+
+def _read_box_health_texts(client: paramiko.SSHClient, host: str) -> tuple[str, str]:
+    """Return the box's (/proc/mdstat, /proc/swaps) contents in one exec round-trip.
+
+    Runs over the caller's already-connected management SSH ``client`` (``host`` is
+    for error messages only). Raises ``PoolHostCleanupError`` on a non-zero exit so
+    the caller treats an unreadable box as a failed reconcile rather than a healthy
+    one.
+    """
+    _stdin, stdout, stderr = client.exec_command(_BOX_HEALTH_COMMAND)
+    exit_status = stdout.channel.recv_exit_status()
+    output = stdout.read().decode()
+    if exit_status != 0:
+        raise PoolHostCleanupError(f"box health probe on {host} failed (exit {exit_status}): {stderr.read().decode()}")
+    mdstat_text, _, proc_swaps_text = output.partition(f"{_BOX_HEALTH_SPLIT_MARKER}\n")
+    return mdstat_text, proc_swaps_text
+
+
 def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
     """Audit each box's lima slices against the DB, scoped to ``env_name``'s stamped slices.
 
     Returns the number of divergences found (and logged). Alert-only by design: for
     every bare-metal box it logs, at error level,
 
-    * a slice stamped for ``env_name`` present on the box with no pool_hosts row, and
-    * a pool_hosts row whose VM is absent from the box.
+    * a slice stamped for ``env_name`` present on the box with no pool_hosts row,
+    * a pool_hosts row whose VM is absent from the box, and
+    * a box hardware-health problem: a degraded md RAID array, or swap on an
+      unmirrored raw partition (both from the 2026-08-07 nvme incident, which ran
+      undetected for six days).
 
     It deliberately does NOT auto-delete. A row-less stamped slice is most often a
     bake mid-flight (the carve creates the instance ~10-30 min before it inserts the
     row), and this cron runs on a fixed hourly schedule independent of bakes -- so
     auto-reaping here would race a live bake and destroy its slice. Actual reaping is
     left to the bake-time reaper (which runs in the bake's own ``finally``, where the
-    in-flight set is known). If a box's lima resources cannot be listed, this raises:
-    a box we could not inspect was NOT reconciled, and that failure must surface
-    rather than be mistaken for a clean audit. Other envs' slices and legacy
-    un-stamped slices are never inspected, so this is safe on a shared box.
+    in-flight set is known). If a box cannot be inspected (the health probe or the
+    lima listing fails), this raises: a box we could not inspect was NOT reconciled,
+    and that failure must surface rather than be mistaken for a clean audit. Other
+    envs' slices and legacy un-stamped slices are never inspected, so this is safe
+    on a shared box.
     """
     if not env_name:
         logger.info("Slice reconcile skipped: connector has no MINDS_ENV_NAME to scope to")
@@ -415,12 +516,41 @@ def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
             divergence_count += 1
             continue
         user = lima_service_user or "root"
-        # If we cannot list a box's lima resources we did NOT reconcile it; let the
-        # failure propagate rather than silently skipping (which would look like a
-        # clean audit and could mask vanished/leaked VMs).
-        box_instances = _list_box_lima_names(
-            public_address, user, management_key_pem, "list --json", box_host_public_key
-        )
+        # One management SSH connection per box serves both reads. Box hardware
+        # health is read and logged first, before the lima listing is attempted: a
+        # degraded RAID array or unmirrored raw-partition swap is exactly the
+        # precursor state of the 2026-08-07 nvme incident, and nothing else on the
+        # box surfaces it -- if a box's degraded hardware also breaks the lima
+        # listing, the health diagnostics must already be logged rather than lost
+        # to the exception. If either read fails we did NOT reconcile this box; let
+        # the failure propagate rather than silently skipping (which would look
+        # like a clean audit and could mask vanished/leaked VMs).
+        with management_ssh_client(
+            public_address,
+            22,
+            user,
+            management_key_pem,
+            timeout_seconds=30,
+            expected_host_public_key=box_host_public_key,
+        ) as box_client:
+            mdstat_text, proc_swaps_text = _read_box_health_texts(box_client, public_address)
+            for degraded_array in _parse_degraded_md_arrays(mdstat_text):
+                divergence_count += 1
+                logger.error(
+                    "Box health on %s: md array %s is degraded (a RAID member has failed); "
+                    "the box needs a disk replacement",
+                    public_address,
+                    degraded_array,
+                )
+            for raw_swap_device in _parse_raw_swap_devices(proc_swaps_text):
+                divergence_count += 1
+                logger.error(
+                    "Box health on %s: swap device %s is an unmirrored raw partition "
+                    "(a disk death loses its pages and SIGBUS-kills processes); re-run box prep to retire it",
+                    public_address,
+                    raw_swap_device,
+                )
+            box_instances = _list_box_lima_names(box_client, public_address, "list --json")
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT lima_instance_name FROM pool_hosts WHERE bare_metal_server_id = %s",
@@ -460,9 +590,14 @@ def lease_host(request: Request, body: LeaseHostRequest) -> dict[str, object]:
     leases so two simultaneous requests cannot both squeeze past the count
     check. Stopped workspaces still hold their lease (and their slice), so
     they count against the quota too.
+
+    Requires a verified email (spam/abuse mitigation): an unverified account
+    gets the structured ``email_not_verified`` 403, and the refusal itself
+    sends the verification email (under the server-side cooldown).
     """
     with handle_endpoint_errors():
         user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
+        auth_proxy_module.require_verified_email_for_remote_workspace(user, full_user_id)
         entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         return _lease_pool_host(user, entitlements, body).model_dump()
 
@@ -474,11 +609,21 @@ def _lease_pool_host(
 ) -> LeaseHostResponse:
     """The lease flow shared by ``/hosts/lease`` and ``/hosts/claim``.
 
-    Quota check (under the per-user advisory lock), row selection with
+    Quota check (under the per-user advisory lock), then up to
+    ``_LEASE_MAX_HOST_ATTEMPTS`` rounds of: row selection with
     ``FOR UPDATE SKIP LOCKED``, SSH key injection with strict host-key
-    pinning, and the status flip to ``leased``. Raises ``HTTPException``
-    on every failure path exactly as the lease endpoint always has.
+    pinning, and the status flip to ``leased``. A row whose injection fails is
+    quarantined (status ``unreachable``) and the next-oldest match is tried, so
+    a dead host removes itself from rotation instead of wedging every lease.
+    Raises ``HTTPException`` on every failure path.
     """
+    # Rows this request quarantined; committed even when the lease ultimately
+    # fails (the whole attempt loop exits the transaction normally), so a dead
+    # host stays out of rotation for the caller's retry.
+    quarantined_host_db_ids: list[Any] = []
+    leased: LeaseHostResponse | None = None
+    is_pool_exhausted = False
+    no_host_keys_detail: str | None = None
     conn = db.get_pool_db_connection()
     try:
         with conn:
@@ -487,7 +632,7 @@ def _lease_pool_host(
                 # transaction, then enforce the workspace quota. The
                 # advisory lock releases automatically at commit/rollback.
                 cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (user.user_id_prefix,))
-                cur.execute(_COUNT_LEASED_HOSTS_SQL, (user.user_id_prefix,))
+                cur.execute(COUNT_RUNNING_WORKSPACES_SQL, (user.user_id_prefix,))
                 count_row = cur.fetchone()
                 leased_count = int(count_row[0]) if count_row is not None else 0
                 if leased_count >= entitlements.max_remote_workspaces:
@@ -496,6 +641,18 @@ def _lease_pool_host(
                         entitlements.max_remote_workspaces,
                         leased_count,
                         "remote workspaces",
+                    )
+                # A new lease adds to the running AND total counts, so both
+                # caps gate it (stopped workspaces consume only the total).
+                cur.execute(_COUNT_TOTAL_WORKSPACES_SQL, (user.user_id_prefix,))
+                total_row = cur.fetchone()
+                total_count = int(total_row[0]) if total_row is not None else 0
+                if total_count >= entitlements.max_total_workspaces:
+                    raise_quota_exceeded(
+                        "max_total_workspaces",
+                        entitlements.max_total_workspaces,
+                        total_count,
+                        "total workspaces (running + stopped)",
                     )
                 # Build the lease selection dynamically. A hard ``region``
                 # adds an equality filter; when unset the lease is
@@ -514,91 +671,126 @@ def _lease_pool_host(
                     f"WHERE {' AND '.join(where_clauses)} "
                     f"ORDER BY {order_by} LIMIT 1 FOR UPDATE SKIP LOCKED"
                 )
-                cur.execute(lease_select_sql, tuple(query_params))
-                row = cur.fetchone()
-                if row is None:
-                    raise HTTPException(
-                        status_code=503,
-                        detail=(
-                            "No pre-created agents match the requested attributes. "
-                            "Please ask Josh to provision more, or relax the attribute filter."
-                        ),
-                    )
-                (
-                    host_db_id,
-                    vps_address,
-                    ssh_port,
-                    ssh_user,
-                    container_ssh_port,
-                    agent_id,
-                    host_id,
-                    attributes,
-                    outer_host_public_key,
-                    container_host_public_key,
-                ) = row
-
-                # Fail closed: a row without both pinned host keys cannot be
-                # leased without trust-on-first-use. This only happens for rows
-                # baked before the host-key columns existed; the one-time
-                # keyscan backfill populates them. Surface it as no-capacity so
-                # the caller (and the fast/slow path retry) treats it like an
-                # unavailable host rather than a hard error.
-                if not outer_host_public_key or not container_host_public_key:
-                    raise HTTPException(
-                        status_code=503,
-                        detail=(
-                            f"Pool host {host_db_id} has no pinned SSH host keys yet; "
-                            "run the one-time `mngr imbue_cloud admin` host-key backfill."
-                        ),
-                    )
-
-                # Inject the user's SSH public key on VPS and container, pinning
-                # each sshd's recorded host key (strict, no trust-on-first-use).
-                management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
-                try:
-                    _append_authorized_key(
+                for _attempt in range(_LEASE_MAX_HOST_ATTEMPTS):
+                    # An in-transaction quarantine below flips its row away from
+                    # 'available', so re-running the same SELECT never returns a
+                    # row this request already failed on.
+                    cur.execute(lease_select_sql, tuple(query_params))
+                    row = cur.fetchone()
+                    if row is None:
+                        is_pool_exhausted = True
+                        break
+                    (
+                        host_db_id,
                         vps_address,
                         ssh_port,
                         ssh_user,
-                        management_key_pem,
-                        body.ssh_public_key,
-                        outer_host_public_key,
-                    )
-                    _append_authorized_key(
-                        vps_address,
                         container_ssh_port,
-                        ssh_user,
-                        management_key_pem,
-                        body.ssh_public_key,
+                        agent_id,
+                        host_id,
+                        attributes,
+                        outer_host_public_key,
                         container_host_public_key,
-                    )
-                except (paramiko.SSHException, OSError) as exc:
-                    logger.warning("SSH key injection failed for host %s: %s", host_db_id, exc)
-                    raise HTTPException(status_code=502, detail=f"Failed to inject SSH key on host: {exc}") from exc
+                    ) = row
 
-                # ``host_name`` is mutable per-lease: it gets overwritten with the
-                # user-supplied name each time the pool row is leased (and could
-                # later be patched by a rename endpoint).
-                cur.execute(
-                    "UPDATE pool_hosts SET status = 'leased', leased_to_user = %s, "
-                    "leased_at = NOW(), host_name = %s WHERE id = %s",
-                    (user.user_id_prefix, body.host_name, host_db_id),
-                )
+                    # Fail closed: a row without both pinned host keys cannot be
+                    # leased without trust-on-first-use. This only happens for rows
+                    # baked before the host-key columns existed; the one-time
+                    # keyscan backfill populates them. Surface it as no-capacity so
+                    # the caller (and the fast/slow path retry) treats it like an
+                    # unavailable host rather than a hard error. Break rather than
+                    # raise: an exception here would roll back the transaction and
+                    # un-quarantine any dead rows this request already flipped
+                    # (re-wedging the pool on them); the 503 is raised after the
+                    # commit instead. Not skippable either -- the row stays
+                    # 'available', so re-selecting would return it again.
+                    if not outer_host_public_key or not container_host_public_key:
+                        no_host_keys_detail = (
+                            f"Pool host {host_db_id} has no pinned SSH host keys yet; "
+                            "run the one-time `mngr imbue_cloud admin` host-key backfill."
+                        )
+                        break
+
+                    # Inject the user's SSH public key on VPS and container, pinning
+                    # each sshd's recorded host key (strict, no trust-on-first-use).
+                    management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
+                    try:
+                        _append_authorized_key(
+                            vps_address,
+                            ssh_port,
+                            ssh_user,
+                            management_key_pem,
+                            body.ssh_public_key,
+                            outer_host_public_key,
+                        )
+                        _append_authorized_key(
+                            vps_address,
+                            container_ssh_port,
+                            ssh_user,
+                            management_key_pem,
+                            body.ssh_public_key,
+                            container_host_public_key,
+                        )
+                    except (paramiko.SSHException, OSError) as exc:
+                        logger.error(
+                            "Quarantining pool host %s (%s ports %s/%s): SSH key injection failed: %s",
+                            host_db_id,
+                            vps_address,
+                            ssh_port,
+                            container_ssh_port,
+                            exc,
+                        )
+                        cur.execute(
+                            f"UPDATE pool_hosts SET status = '{_POOL_HOST_STATUS_UNREACHABLE}' WHERE id = %s",
+                            (host_db_id,),
+                        )
+                        quarantined_host_db_ids.append(host_db_id)
+                        continue
+
+                    # ``host_name`` is mutable per-lease: it gets overwritten with the
+                    # user-supplied name each time the pool row is leased (and could
+                    # later be patched by a rename endpoint).
+                    cur.execute(
+                        "UPDATE pool_hosts SET status = 'leased', leased_to_user = %s, "
+                        "leased_at = NOW(), host_name = %s WHERE id = %s",
+                        (user.user_id_prefix, body.host_name, host_db_id),
+                    )
+                    leased = LeaseHostResponse(
+                        host_db_id=host_db_id,
+                        vps_address=vps_address,
+                        ssh_port=ssh_port,
+                        ssh_user=ssh_user,
+                        container_ssh_port=container_ssh_port,
+                        agent_id=agent_id,
+                        host_id=host_id,
+                        host_name=body.host_name,
+                        attributes=attributes if isinstance(attributes, dict) else {},
+                        outer_host_public_key=outer_host_public_key,
+                        container_host_public_key=container_host_public_key,
+                    )
+                    break
     finally:
         conn.close()
-    attrs_dict = attributes if isinstance(attributes, dict) else {}
-    return LeaseHostResponse(
-        host_db_id=host_db_id,
-        vps_address=vps_address,
-        ssh_port=ssh_port,
-        ssh_user=ssh_user,
-        container_ssh_port=container_ssh_port,
-        agent_id=agent_id,
-        host_id=host_id,
-        host_name=body.host_name,
-        attributes=attrs_dict,
-        outer_host_public_key=outer_host_public_key,
-        container_host_public_key=container_host_public_key,
+    if leased is not None:
+        return leased
+    # Nothing leased. The quarantines above are already committed (the
+    # transaction exited normally), so these raises never roll them back.
+    if no_host_keys_detail is not None:
+        raise HTTPException(status_code=503, detail=no_host_keys_detail)
+    if is_pool_exhausted:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No pre-created agents match the requested attributes. "
+                "Please ask Josh to provision more, or relax the attribute filter."
+            ),
+        )
+    raise HTTPException(
+        status_code=502,
+        detail=(
+            f"Failed to inject SSH key on {len(quarantined_host_db_ids)} pool host(s); "
+            "they were quarantined (status 'unreachable'). Retry to try further hosts."
+        ),
     )
 
 
@@ -615,6 +807,10 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
     ``removing`` and the endpoint returns an error (5xx) so the client retries;
     we never report success on a failed teardown. A failure before ``removing``
     is committed (lookup, ownership, the status flip) surfaces as an error too.
+    The one exception is a ``crashed`` row (operator-asserted permanently dead
+    box): its teardown is best-effort, so a failure is logged, the row is
+    deleted anyway, and any VM actually left behind surfaces in the
+    box-reconcile sweep.
 
     Idempotent at the HTTP layer: a release on a row that is already gone
     (deleted) or no longer leased returns 200 ``status: already_released``.
@@ -630,7 +826,7 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
                 # (it raises "can't adapt type 'UUID'").
                 cur.execute(
                     "SELECT leased_to_user, status, "
-                    "lima_instance_name, lima_disk_name, bare_metal_server_id "
+                    "lima_instance_name, lima_disk_name, bare_metal_server_id, host_id "
                     "FROM pool_hosts WHERE id = %s",
                     (str(host_db_id),),
                 )
@@ -644,34 +840,108 @@ def release_host(request: Request, host_db_id: UUID) -> dict[str, object]:
                     lima_instance_name,
                     lima_disk_name,
                     bare_metal_server_id,
+                    mngr_host_id,
                 ) = row
                 # Ownership check first: we don't want to leak a status
                 # signal to other users via the response code.
                 if leased_to_user != user.user_id_prefix:
                     raise HTTPException(status_code=403, detail="You do not own this host lease")
-                # Only a leased or already-removing row is eligible for
-                # cleanup; anything else is treated as already released.
-                if status not in ("leased", "removing"):
+                # Any lifecycle status the user can hold is releasable; only
+                # 'available' rows (already back in the pool) report released.
+                if status not in ("leased", "removing", "stopping", "starting", "stopped", "crashed"):
                     return ReleaseHostResponse(status="already_released").model_dump()
-                if status == "leased":
-                    cur.execute(
-                        "UPDATE pool_hosts SET status = 'removing', released_at = NOW() WHERE id = %s",
-                        (str(host_db_id),),
-                    )
+                # leased/stopping rows always have a VM, so teardown runs --
+                # and fails loudly on corrupt bookkeeping -- exactly as before.
+                # For every other status the box link itself says whether a VM
+                # exists: it is NULL after a stop finalizes (stopped/crashed)
+                # and during a restore before its final CAS places the VM
+                # (starting, and removing rows descended from such a release,
+                # including crashed ones -- the flip below clears the link).
+                # With a NULL link there is nothing the connector could ever
+                # tear down, so forcing teardown would just wedge the row in
+                # 'removing' forever; the artifacts (if any) are the only
+                # cloud resource left.
+                is_vm_expected = status in ("leased", "stopping") or (bare_metal_server_id is not None)
+                if status != "removing":
+                    if status == "crashed":
+                        # A crashed row's teardown below is best-effort, so the
+                        # flip to ``removing`` must also clear the box link: a
+                        # retry after a partial failure (say the artifact
+                        # deletion raising) reads ``removing`` -- not
+                        # ``crashed`` -- and must not turn into a must-succeed
+                        # teardown against the permanently dead box. The
+                        # teardown attempt below still runs with the values
+                        # read above; a VM left on a box that was actually
+                        # alive surfaces in the box-reconcile sweep.
+                        cur.execute(
+                            "UPDATE pool_hosts SET status = 'removing', released_at = NOW(), "
+                            "bare_metal_server_id = NULL WHERE id = %s",
+                            (str(host_db_id),),
+                        )
+                    else:
+                        cur.execute(
+                            "UPDATE pool_hosts SET status = 'removing', released_at = NOW() WHERE id = %s",
+                            (str(host_db_id),),
+                        )
                     conn.commit()
             # Past the commit point: the row is durably ``removing``. A teardown
             # failure below leaves the row ``removing`` and surfaces a 5xx so the
             # client retries.
-            _finish_releasing_pool_host(
-                conn,
-                host_db_id,
-                lima_instance_name,
-                lima_disk_name,
-                bare_metal_server_id,
-            )
+            _delete_workspace_artifacts(mngr_host_id)
+            if is_vm_expected and status == "crashed":
+                # ``crashed`` is the operator's assertion (via abandon) that the
+                # box is permanently dead, so a must-succeed teardown adds no
+                # safety and would wedge the row in ``removing`` forever. Try
+                # anyway with the usual bounded SSH timeout; if the operator was
+                # wrong and the box is alive, any VM this leaves behind is
+                # exactly what the box-reconcile sweep surfaces.
+                try:
+                    _finish_releasing_pool_host(
+                        conn,
+                        host_db_id,
+                        lima_instance_name,
+                        lima_disk_name,
+                        bare_metal_server_id,
+                    )
+                except (PoolHostCleanupError, paramiko.SSHException, OSError) as e:
+                    logger.warning(
+                        "Releasing crashed workspace %s: teardown against box %s failed (%s); deleting the row anyway",
+                        host_db_id,
+                        bare_metal_server_id,
+                        e,
+                    )
+                    _delete_pool_host_row(conn, host_db_id)
+            elif is_vm_expected:
+                _finish_releasing_pool_host(
+                    conn,
+                    host_db_id,
+                    lima_instance_name,
+                    lima_disk_name,
+                    bare_metal_server_id,
+                )
+            else:
+                _delete_pool_host_row(conn, host_db_id)
         finally:
             conn.close()
         return ReleaseHostResponse(status="released").model_dump()
+
+
+def _delete_workspace_artifacts(mngr_host_id: str | None) -> None:
+    """Delete a released workspace's stop/start artifacts from the tier bucket.
+
+    A no-op when storage is unconfigured for this env (nothing could have
+    been uploaded) or the row has no host id recorded. Raises on a real
+    deletion failure so the release stays retryable (row remains
+    ``removing``).
+    """
+    if not mngr_host_id:
+        return
+    if not storage_module.is_storage_configured():
+        return
+    storage_config = storage_module.read_storage_config()
+    storage_module.delete_prefix(
+        storage_config, f"{storage_module.workspace_key_prefix(storage_config, mngr_host_id)}/"
+    )
 
 
 def _finish_releasing_pool_host(
@@ -733,7 +1003,15 @@ def rename_host(request: Request, host_db_id: UUID, body: RenameHostRequest) -> 
 
 @router.get("/hosts")
 def list_leased_hosts(request: Request) -> list[dict[str, object]]:
-    """List all hosts currently leased by the authenticated user."""
+    """List all hosts currently leased by the authenticated user.
+
+    Deprecated in favor of ``GET /workspaces`` (which returns every
+    lifecycle state with a ``status`` field). Kept leased-only forever so
+    released clients -- which treat every returned row as a live,
+    SSH-reachable lease -- never see a stopped workspace here.
+    CLEANUP: remove this route (and the client fallbacks to it) once every
+    supported mngr/minds client consumes /workspaces.
+    """
     with handle_endpoint_errors():
         user = accounts_web_module.authenticate_web_request(request)
         conn = db.get_pool_db_connection()
@@ -769,11 +1047,20 @@ def list_leased_hosts(request: Request) -> list[dict[str, object]]:
 
 
 def count_leased_hosts(user_id_prefix: str) -> int:
-    """Count the user's current pool-host leases (the remote-workspace usage number)."""
+    """Count the user's running workspaces (the max_remote_workspaces usage number)."""
+    return _count_user_workspaces(user_id_prefix, COUNT_RUNNING_WORKSPACES_SQL)
+
+
+def count_total_workspaces(user_id_prefix: str) -> int:
+    """Count the user's running + stopped workspaces (the max_total_workspaces usage number)."""
+    return _count_user_workspaces(user_id_prefix, _COUNT_TOTAL_WORKSPACES_SQL)
+
+
+def _count_user_workspaces(user_id_prefix: str, count_sql: str) -> int:
     conn = db.get_pool_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(_COUNT_LEASED_HOSTS_SQL, (user_id_prefix,))
+            cur.execute(count_sql, (user_id_prefix,))
             row = cur.fetchone()
     finally:
         conn.close()
@@ -800,7 +1087,8 @@ class EnableSharingResponse(BaseModel):
         default=None,
         description=(
             "The workspace's shell-service origin label (the chrome's routable entry origin is "
-            "<entry_label>.<workspace_domain>); None when it could not be read from the workspace."
+            "<entry_label>.<workspace_domain>); None until the workspace's tunnel has claimed "
+            "its service labels (the frps NewProxy callback records it)."
         ),
     )
 
@@ -808,7 +1096,6 @@ class EnableSharingResponse(BaseModel):
 def build_share_env_text(
     *,
     workspace_domain: str,
-    relay_endpoint: str,
     relay_token: str,
     connector_url: str,
     broker_url: str,
@@ -817,14 +1104,15 @@ def build_share_env_text(
     """Render share.env in the shape the workspace's share-gateway parses.
 
     Mirrors the desktop's ``build_share_env_text``; ``SHARE_CHROME_ORIGIN`` is
-    new and is what lets the hosted chrome embed the workspace and probe
-    ``/_health``. The keys are a wire contract with the share-gateway's
-    ``parse_share_materials`` (duplicated, not imported -- the connector image
-    ships none of the workspace code).
+    what lets the hosted chrome embed the workspace and probe ``/_health``.
+    Deliberately carries NO relay endpoint: the gateway fetches its current
+    relay set from ``GET /shares/assignment`` (relay-token auth) and re-polls,
+    so fleet changes never require re-injecting materials. The keys are a wire
+    contract with the share-gateway's ``parse_share_materials`` (duplicated,
+    not imported -- the connector image ships none of the workspace code).
     """
     lines = [
         f"export SHARE_WORKSPACE_DOMAIN={workspace_domain}",
-        f"export SHARE_RELAY_ENDPOINT={relay_endpoint}",
         f"export SHARE_RELAY_TOKEN={relay_token}",
         f"export SHARE_CONNECTOR_URL={connector_url}",
         f"export SHARE_BROKER_URL={broker_url}",
@@ -884,7 +1172,7 @@ def _write_files_on_container(
     See ``build_container_file_write_command`` for the write semantics (base64
     transport, temp-file-and-rename atomicity, seed-if-absent skipping).
     """
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         for remote_path, content in files_by_remote_path.items():
@@ -901,77 +1189,6 @@ def _write_files_on_container(
 def _share_chrome_origin() -> str:
     """The hosted-chrome origin allowed to embed shared workspaces (empty disables it)."""
     return os.environ.get("SHARE_CHROME_ORIGIN", "").strip().rstrip("/")
-
-
-# Where the workspace's registered services (and their origin labels) live, and
-# the service whose label is the chrome's entry origin. The share stack routes
-# only ``<label>.<domain>`` origins on the relay (never the bare domain), so
-# the chrome needs one routable label to enter and health-probe a workspace.
-_APPS_TOML_REMOTE_PATH = "/home/user/workspace/data/.state/apps.toml"
-_ENTRY_SERVICE_NAME: Final = "system_interface"
-
-
-def _parse_entry_label_from_apps_toml(apps_toml_text: str) -> str | None:
-    """The shell service's origin label from an apps.toml body, or None.
-
-    The label is validated against the same single-origin-label shape rule
-    that ``POST /shares`` enforces on client-supplied labels: apps.toml is
-    writable from inside the workspace, and the recorded label ends up
-    interpolated into ``https://<label>.<workspace domain>/`` URLs by the
-    hosted chrome.
-    """
-    try:
-        parsed = tomllib.loads(apps_toml_text)
-    except tomllib.TOMLDecodeError as exc:
-        logger.warning("Could not parse the workspace's apps.toml for its entry label: %s", exc)
-        return None
-    for entry in parsed.get("apps", []):
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("name") == _ENTRY_SERVICE_NAME and isinstance(entry.get("label"), str) and entry["label"]:
-            normalized = shares_module.normalize_entry_label(entry["label"])
-            if normalized is None:
-                logger.warning(
-                    "Ignoring the workspace's apps.toml entry label %r: not a single origin label", entry["label"]
-                )
-            return normalized
-    return None
-
-
-def _read_workspace_entry_label(
-    host: str,
-    port: int,
-    user: str,
-    management_key_pem: str,
-    expected_host_public_key: str,
-) -> str | None:
-    """Read the workspace's shell-service origin label from its apps.toml over SSH.
-
-    Best-effort: a workspace whose services have not registered yet (or an
-    unreadable file) yields None -- the share still comes up, the chrome just
-    has no entry origin until a re-enable records one.
-    """
-    try:
-        with _management_ssh_client(
-            host,
-            port,
-            user,
-            management_key_pem,
-            timeout_seconds=30,
-            expected_host_public_key=expected_host_public_key,
-        ) as client:
-            sftp = client.open_sftp()
-            try:
-                with sftp.open(_APPS_TOML_REMOTE_PATH, "r") as remote:
-                    apps_toml_text = remote.read().decode("utf-8")
-            finally:
-                sftp.close()
-    except (paramiko.SSHException, OSError, UnicodeDecodeError) as exc:
-        # UnicodeDecodeError: apps.toml is writable from inside the workspace,
-        # so invalid UTF-8 must degrade to no-label like any unreadable file.
-        logger.warning("Could not read the workspace's apps.toml for its entry label: %s", exc)
-        return None
-    return _parse_entry_label_from_apps_toml(apps_toml_text)
 
 
 @router.post("/hosts/{host_db_id}/enable-sharing")
@@ -1031,19 +1248,17 @@ def _enable_sharing_core(
             detail=f"Host {host_db_id} has no pinned container host key yet; run the host-key backfill.",
         )
 
-    # The chrome's entry origin: the shell service's label from the
-    # workspace's own apps.toml (the bare domain is unrouted on the relay).
     management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
-    entry_label = _read_workspace_entry_label(
-        vps_address,
-        container_ssh_port,
-        ssh_user,
-        management_key_pem,
-        container_host_public_key,
-    )
-
     store = shares_module.get_share_store()
-    region = shares_module.resolve_share_region(store.get_pool_host_datacenter(host_id))
+    existing_share = store.get_share(host_id, user_label)
+    relay_rows = shares_module.active_relay_rows()
+    region = shares_module.resolve_share_region_for_share(
+        existing_region=str(existing_share["region"]) if existing_share is not None else None,
+        datacenter=store.get_pool_host_datacenter(host_id),
+        preferred_region=None,
+        eligible_regions=relays_module.eligible_regions(relay_rows),
+        host_id=host_id,
+    )
     coordinate = shares_module.make_share_coordinate(
         host_id=host_id,
         user_label=user_label,
@@ -1051,17 +1266,20 @@ def _enable_sharing_core(
         content_domain=shares_module.share_content_domain(),
     )
     relay_token = shares_module.generate_relay_token()
+    # No entry label is supplied here: the frps NewProxy callback records it
+    # once the workspace's tunnel claims its service labels, so the connector
+    # never has to read anything from inside the workspace. The COALESCE in
+    # the activation keeps a label an earlier tunnel already recorded.
     store.activate_share_and_rotate_token(
         coordinate,
         shares_module.DEFAULT_MAX_SHARED_WORKSPACES_PER_USER,
         shares_module.hash_relay_token(relay_token),
-        entry_label,
+        None,
     )
 
     base_url = accounts_web_module.accounts_public_base_url(request)
     share_env_text = build_share_env_text(
         workspace_domain=coordinate.workspace_domain,
-        relay_endpoint=shares_module.share_relay_endpoint_map()[region],
         relay_token=relay_token,
         connector_url=base_url,
         broker_url=base_url,
@@ -1086,11 +1304,15 @@ def _enable_sharing_core(
         logger.warning("Failed to inject share materials on host %s: %s", host_db_id, exc)
         raise HTTPException(status_code=502, detail=f"Failed to enable sharing on host: {exc}") from exc
 
+    # Report whatever entry label an earlier tunnel already recorded (None on
+    # a first enable, until the tunnel comes up and NewProxy records one).
+    share_row = store.get_share(coordinate.host_id, user_label)
+    recorded_entry_label = share_row.get("entry_label") if share_row is not None else None
     return EnableSharingResponse(
         host_id=host_id,
         workspace_domain=coordinate.workspace_domain,
         region=region,
-        entry_label=entry_label,
+        entry_label=recorded_entry_label,
     )
 
 
@@ -1156,7 +1378,8 @@ class ClaimHostResponse(BaseModel):
         default=None,
         description=(
             "The workspace's shell-service origin label (the chrome's routable entry origin is "
-            "<entry_label>.<workspace_domain>); None when it could not be read from the workspace."
+            "<entry_label>.<workspace_domain>); None until the workspace's tunnel has claimed "
+            "its service labels (the frps NewProxy callback records it)."
         ),
     )
 
@@ -1216,7 +1439,7 @@ def _adopt_workspace_on_container(
     Raises ``paramiko.SSHException`` / ``OSError`` on any failure; the caller
     releases the lease and surfaces the error.
     """
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         sftp = client.open_sftp()
@@ -1308,7 +1531,7 @@ def _start_workspace_agent_on_container(
     the lease -- a claim that cannot boot the workspace must not hand the user
     a dead lease.
     """
-    with _management_ssh_client(
+    with management_ssh_client(
         host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         command = f"bash -lc 'exec {_START_SERVICES_AGENT_SCRIPT}'"
@@ -1337,14 +1560,16 @@ def _release_lease_after_failed_claim(host_db_id: UUID) -> None:
                 # the slice's lima bookkeeping.
                 cur.execute(
                     "SELECT leased_to_user, status, "
-                    "lima_instance_name, lima_disk_name, bare_metal_server_id "
+                    "lima_instance_name, lima_disk_name, bare_metal_server_id, host_id "
                     "FROM pool_hosts WHERE id = %s",
                     (str(host_db_id),),
                 )
                 row = cur.fetchone()
                 if row is None:
                     return
-                (_leased_to_user, _status, lima_instance_name, lima_disk_name, bare_metal_server_id) = row
+                (_leased_to_user, _status, lima_instance_name, lima_disk_name, bare_metal_server_id, _mngr_host_id) = (
+                    row
+                )
                 cur.execute(
                     "UPDATE pool_hosts SET status = 'removing', released_at = NOW() WHERE id = %s",
                     (str(host_db_id),),
@@ -1370,10 +1595,13 @@ def claim_host(request: Request, body: ClaimHostRequest) -> dict[str, object]:
 
     A failure after the lease releases it (slice teardown) before the error
     propagates, so a retry starts clean. Refused with 503 when the tier has
-    no pinned web template configured.
+    no pinned web template configured. Like ``/hosts/lease``, requires a
+    verified email: an unverified account gets the structured
+    ``email_not_verified`` 403 and the refusal sends the verification email.
     """
     with handle_endpoint_errors():
         user, full_user_id = accounts_web_module.resolve_web_user_identity(request)
+        auth_proxy_module.require_verified_email_for_remote_workspace(user, full_user_id)
         entitlements = entitlements_module.resolve_entitlements_for_user(full_user_id, user)
         pinned_attributes = _web_claim_pinned_attributes()
         if pinned_attributes is None:

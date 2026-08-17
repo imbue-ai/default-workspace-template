@@ -19,6 +19,7 @@ from imbue.mngr.api.find import resolve_to_started_host_and_running_agent
 from imbue.mngr.api.list import ErrorBehavior
 from imbue.mngr.api.list import list_agents
 from imbue.mngr.api.message import MessageResult
+from imbue.mngr.api.message import send_key_chord_to_agents
 from imbue.mngr.api.message import send_message_to_agents
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.loader import load_config
@@ -27,6 +28,9 @@ from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentName
 from imbue.mngr.utils.env_utils import parse_env_file
+from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
+from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.system_interface.harnesses.harness_type import parse_harness
 
 logger = _loguru_logger
 
@@ -51,6 +55,10 @@ class AgentInfo(FrozenModel):
     claude_config_dir: Path = Field(description="Path to the Claude config directory for this agent")
     labels: dict[str, str] = Field(default_factory=dict, description="Agent labels")
     work_dir: str | None = Field(default=None, description="Agent working directory path")
+    harness: HarnessType = Field(
+        default=DEFAULT_HARNESS,
+        description="The agent's harness, narrowed from mngr's AgentDetails.type. Resolved here and nowhere else.",
+    )
 
 
 def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
@@ -158,6 +166,7 @@ def discover_agents(
                 claude_config_dir=claude_config_dir,
                 labels=dict(agent_details.labels),
                 work_dir=str(agent_details.work_dir),
+                harness=parse_harness(str(agent_details.type)),
             )
         )
 
@@ -166,6 +175,9 @@ def discover_agents(
 
 DiscoverFn = Callable[[AgentId, MngrContext], Sequence[AgentMatch]]
 SendFn = Callable[[Sequence[AgentMatch], str, MngrContext], MessageResult]
+# Press a tmux key token (e.g. "M-q") into a resolved set of agents' panes. Same shape as
+# SendFn -- the str is the key token rather than message text.
+PressFn = Callable[[Sequence[AgentMatch], str, MngrContext], MessageResult]
 
 
 def _discover_locations(agent_id: AgentId, mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
@@ -193,16 +205,33 @@ def _send_to(matches: Sequence[AgentMatch], message: str, mngr_ctx: MngrContext)
     )
 
 
-class MngrMessenger(FrozenModel):
-    """Sends a message to an agent, preferring a known location over discovery.
+def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
+    """Press ``key`` into a pre-resolved set of agents' panes (never auto-starting).
 
-    Holds the two side-effecting mngr collaborators (`discover`, `send`) as
-    injected fields so tests can substitute deterministic fakes without
-    monkeypatching. `AgentManager` owns one instance with the real defaults.
+    Unlike a text send, a key chord targets a live turn (there is nothing to flush in a
+    stopped agent), so ``is_start_desired`` stays False -- a stopped agent just fails the
+    press and the caller reports it, rather than being resurrected to receive a keystroke.
+    """
+    return send_key_chord_to_agents(
+        mngr_ctx=mngr_ctx,
+        key=key,
+        agents_to_message=matches,
+        error_behavior=ErrorBehavior.CONTINUE,
+        is_start_desired=False,
+    )
+
+
+class MngrMessenger(FrozenModel):
+    """Sends a message to (or presses a key chord into) an agent, preferring a known location.
+
+    Holds the side-effecting mngr collaborators (`discover`, `send`, `press`) as injected
+    fields so tests can substitute deterministic fakes without monkeypatching. `AgentManager`
+    owns one instance with the real defaults.
     """
 
     discover: DiscoverFn = _discover_locations
     send: SendFn = _send_to
+    press: PressFn = _press_to
 
     def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Send to the agent with ``agent_id`` at ``known_locations``, else discovery.
@@ -220,6 +249,23 @@ class MngrMessenger(FrozenModel):
                 return True
             matches = self.discover(agent_id, mngr_ctx)
             return bool(self.send(matches, message, mngr_ctx).successful_agents)
+        finally:
+            cg.__exit__(None, None, None)
+
+    def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
+        """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
+
+        The key-chord sibling of ``send_to_agent`` and resolves the agent exactly the same
+        way (known location first, discovery on a miss), but delivers a keystroke rather than
+        text and never auto-starts a stopped agent. Returns True when the chord reached the
+        agent.
+        """
+        mngr_ctx, cg = _get_mngr_context()
+        try:
+            if known_locations and self.press(known_locations, key, mngr_ctx).successful_agents:
+                return True
+            matches = self.discover(agent_id, mngr_ctx)
+            return bool(self.press(matches, key, mngr_ctx).successful_agents)
         finally:
             cg.__exit__(None, None, None)
 

@@ -311,6 +311,22 @@ mngr imbue_cloud hosts release [OPTIONS] HOST_DB_ID
 | `--account` | text | Account email (defaults to the active account) | None |
 | `--connector-url` | text | Override connector URL | None |
 
+## mngr imbue_cloud hosts rotate
+
+**Usage:**
+
+```text
+mngr imbue_cloud hosts rotate [OPTIONS] HOST_REF
+```
+**Options:**
+
+## Other Options
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--account` | text | Account email (defaults to the active account) | None |
+| `--connector-url` | text | Override connector URL | None |
+
 ## mngr imbue_cloud hosts enable-sharing
 
 **Usage:**
@@ -579,6 +595,7 @@ mngr imbue_cloud shares create [OPTIONS] HOST_ID
 | `--account` | text | Account email (defaults to the active account) | None |
 | `--connector-url` | text | Override connector URL | None |
 | `--entry-label` | text | The workspace's shell-service origin label (e.g. system_interface-<rand>); the hosted web chrome enters the workspace at <entry-label>.<workspace-domain>. Omit to keep any previously recorded label. | None |
+| `--preferred-region` | text | Preferred relay region code (e.g. us1) for a first-time share of a local workspace. Ignored for pool hosts, unknown regions, and re-shares (the existing region sticks). | None |
 
 ## mngr imbue_cloud shares delete
 
@@ -618,6 +635,22 @@ mngr imbue_cloud shares status [OPTIONS] HOST_ID
 
 ```text
 mngr imbue_cloud shares list [OPTIONS]
+```
+**Options:**
+
+## Other Options
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--account` | text | Account email (defaults to the active account) | None |
+| `--connector-url` | text | Override connector URL | None |
+
+## mngr imbue_cloud shares relays
+
+**Usage:**
+
+```text
+mngr imbue_cloud shares relays [OPTIONS]
 ```
 **Options:**
 
@@ -1070,6 +1103,33 @@ mngr imbue_cloud admin account set-quota [OPTIONS] EMAIL ENTITLEMENT VALUE
 | `--api-key` | text | Admin API key. Defaults to $MINDS_ADMIN_KEY. | None |
 | `--connector-url` | text | Connector base URL. Defaults to $MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL. | None |
 
+## mngr imbue_cloud admin workspaces
+
+**Usage:**
+
+```text
+mngr imbue_cloud admin workspaces [OPTIONS] COMMAND [ARGS]...
+```
+**Options:**
+
+
+## mngr imbue_cloud admin workspaces abandon
+
+**Usage:**
+
+```text
+mngr imbue_cloud admin workspaces abandon [OPTIONS] HOST_DB_ID
+```
+**Options:**
+
+## Other Options
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--reason` | text | Why the workspace is being abandoned (recorded on the row) | None |
+| `--api-key` | text | Admin API key. Defaults to $MINDS_ADMIN_KEY. | None |
+| `--connector-url` | text | Connector base URL. Defaults to $MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL. | None |
+
 ## mngr imbue_cloud admin sweep
 
 **Usage:**
@@ -1094,6 +1154,69 @@ mngr imbue_cloud admin sweep r2 [OPTIONS]
 | Name | Type | Description | Default |
 | ---- | ---- | ----------- | ------- |
 | `--email` | text | Scope the pass to one account (full pass when omitted) | None |
+| `--api-key` | text | Admin API key. Defaults to $MINDS_ADMIN_KEY. | None |
+| `--connector-url` | text | Connector base URL. Defaults to $MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL. | None |
+
+## mngr imbue_cloud admin relays
+
+**Usage:**
+
+```text
+mngr imbue_cloud admin relays [OPTIONS] COMMAND [ARGS]...
+```
+**Options:**
+
+
+## mngr imbue_cloud admin relays list
+
+**Usage:**
+
+```text
+mngr imbue_cloud admin relays list [OPTIONS]
+```
+**Options:**
+
+## Other Options
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--api-key` | text | Admin API key. Defaults to $MINDS_ADMIN_KEY. | None |
+| `--connector-url` | text | Connector base URL. Defaults to $MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL. | None |
+
+## mngr imbue_cloud admin relays add
+
+**Usage:**
+
+```text
+mngr imbue_cloud admin relays add [OPTIONS]
+```
+**Options:**
+
+## Other Options
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--relay-id` | text | Existing relay id to update/revive; omit to mint a fresh one | None |
+| `--region` | text | Region code the relay serves (e.g. us1) | None |
+| `--tunnel-endpoint` | text | host:port the workspaces' frpc dials (typically <ip>:7000) | None |
+| `--ip` | text | Public IPv4 (DNS answer + healthz probe target) | None |
+| `--instance-name` | text | Human-readable OVH instance name | `` |
+| `--api-key` | text | Admin API key. Defaults to $MINDS_ADMIN_KEY. | None |
+| `--connector-url` | text | Connector base URL. Defaults to $MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL. | None |
+
+## mngr imbue_cloud admin relays remove
+
+**Usage:**
+
+```text
+mngr imbue_cloud admin relays remove [OPTIONS] RELAY_ID
+```
+**Options:**
+
+## Other Options
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
 | `--api-key` | text | Admin API key. Defaults to $MINDS_ADMIN_KEY. | None |
 | `--connector-url` | text | Connector base URL. Defaults to $MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL. | None |
 
@@ -1159,7 +1282,7 @@ mngr imbue_cloud admin server backfill-autostart [OPTIONS]
 | ---- | ---- | ----------- | ------- |
 | `--database-url` | text | Pool DSN (else resolved from env/activated minds env). | None |
 | `--server-id` | text | Restrict the sweep to these bare_metal_servers row ids (repeatable; default: every box). | None |
-| `--dry-run` | boolean | List the slice VMs that would be backfilled (with the per-VM start-script path) without applying. | `False` |
+| `--dry-run` | boolean | List the slice VMs that would be backfilled (probing each VM's reachability) without applying. | `False` |
 
 ## mngr imbue_cloud admin server register
 
@@ -1286,3 +1409,21 @@ mngr imbue_cloud admin server setup [OPTIONS]
 | `--os-template` | text | OVH OS template to reinstall onto the box. | `debian12_64` |
 | `--ssh-ready-timeout` | float | Seconds to wait for SSH. | `900.0` |
 | `--database-url` | text |  | None |
+
+## mngr imbue_cloud admin repair-keys
+
+**Usage:**
+
+```text
+mngr imbue_cloud admin repair-keys [OPTIONS]
+```
+**Options:**
+
+## Other Options
+
+| Name | Type | Description | Default |
+| ---- | ---- | ----------- | ------- |
+| `--database-url` | text | Pool DSN (else resolved from env/activated minds env). | None |
+| `--server-id` | text | Restrict the sweep to these bare_metal_servers row ids (repeatable; default: every box). | None |
+| `--vm-name` | text | Restrict the sweep to these lima instance names (repeatable; the single-VM break-glass mode). | None |
+| `--dry-run` | boolean | List the slice VMs that would be repaired (and whether their lima.yaml needs the patch). | `False` |

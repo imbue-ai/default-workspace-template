@@ -14,8 +14,11 @@ from imbue.remote_service_connector.errors import EmailNotVerifiedError
 from imbue.remote_service_connector.errors import InvalidCsrError
 from imbue.remote_service_connector.errors import InvalidPaidListEntryError
 from imbue.remote_service_connector.errors import InvalidR2BucketNameError
+from imbue.remote_service_connector.errors import InvalidRelayRecordError
 from imbue.remote_service_connector.errors import InvalidShareCoordinateError
 from imbue.remote_service_connector.errors import MissingShareConfigError
+from imbue.remote_service_connector.errors import MissingStorageConfigError
+from imbue.remote_service_connector.errors import NoActiveRelaysError
 from imbue.remote_service_connector.errors import PlanNotFoundError
 from imbue.remote_service_connector.errors import PoolHostCleanupError
 from imbue.remote_service_connector.errors import QuotaExceededError
@@ -26,6 +29,7 @@ from imbue.remote_service_connector.errors import R2BucketNotFoundError
 from imbue.remote_service_connector.errors import R2BucketOwnershipError
 from imbue.remote_service_connector.errors import R2ReservedBucketNameError
 from imbue.remote_service_connector.errors import R2StorageResultTruncatedError
+from imbue.remote_service_connector.errors import RelayNotFoundError
 from imbue.remote_service_connector.errors import ShareNotFoundError
 from imbue.remote_service_connector.errors import ShareQuotaExceededError
 
@@ -64,6 +68,9 @@ def raise_as_http(exc: Exception) -> NoReturn:
             detail={
                 "code": "email_not_verified",
                 "email": exc.email,
+                # Whether the refusal itself sent the verification email
+                # (null when no send was attempted in this context).
+                "sent": exc.is_verification_email_sent,
                 "message": str(exc),
             },
         ) from exc
@@ -95,6 +102,12 @@ def raise_as_http(exc: Exception) -> NoReturn:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, InvalidShareCoordinateError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, InvalidRelayRecordError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, RelayNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, NoActiveRelaysError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, ShareNotFoundError):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, ShareQuotaExceededError):
@@ -110,6 +123,8 @@ def raise_as_http(exc: Exception) -> NoReturn:
             },
         ) from exc
     if isinstance(exc, MissingShareConfigError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if isinstance(exc, MissingStorageConfigError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, InvalidCsrError):
         raise HTTPException(status_code=400, detail=str(exc)) from exc

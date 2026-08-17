@@ -1303,6 +1303,41 @@ def test_parse_agents_from_json_extracts_ssh_info() -> None:
     assert ssh_info.host == "remote.example.com"
     assert ssh_info.port == 12345
     assert ssh_info.key_path == Path("/home/user/.mngr/providers/modal/modal_ssh_key")
+    # Older mngr versions don't emit known_hosts_path; its absence must parse as
+    # None (the tunnel then falls back to the key-sibling convention).
+    assert ssh_info.known_hosts_path is None
+
+
+def test_parse_agents_from_json_carries_the_explicit_known_hosts_path() -> None:
+    ssh_data = {
+        "user": "root",
+        "host": "remote.example.com",
+        "port": 12345,
+        "key_path": "/tmp/key",
+        "known_hosts_path": "/tmp/pins/known_hosts",
+    }
+    json_str = _make_agents_json_with_ssh((str(_AGENT_A), ssh_data))
+    result = parse_agents_from_json(json_str)
+
+    ssh_info = result.ssh_info_by_agent_id.get(str(_AGENT_A))
+    assert ssh_info is not None
+    assert ssh_info.known_hosts_path == Path("/tmp/pins/known_hosts")
+
+
+def test_parse_agents_from_json_drops_ssh_info_with_a_non_string_known_hosts_path() -> None:
+    """A malformed known_hosts_path value must degrade to no SSH info, not crash the parse."""
+    ssh_data = {
+        "user": "root",
+        "host": "remote.example.com",
+        "port": 12345,
+        "key_path": "/tmp/key",
+        "known_hosts_path": 123,
+    }
+    json_str = _make_agents_json_with_ssh((str(_AGENT_A), ssh_data))
+    result = parse_agents_from_json(json_str)
+
+    assert _AGENT_A in result.agent_ids
+    assert str(_AGENT_A) not in result.ssh_info_by_agent_id
 
 
 def test_parse_agents_from_json_returns_none_ssh_for_local_agents() -> None:
@@ -1435,6 +1470,31 @@ def test_mngr_cli_resolver_get_agent_display_info_returns_none_for_unknown_agent
     resolver = make_resolver_with_data(agents_json=agents_json, service_logs={})
 
     assert resolver.get_agent_display_info(_AGENT_B) is None
+
+
+def test_mngr_cli_resolver_get_agent_display_info_picks_smallest_host_for_duplicated_id() -> None:
+    """A workspace id on two machines (agent ids are unique per host) resolves deterministically.
+
+    The instances are fed in descending host-id order to prove the selection sorts
+    by host id rather than following discovery order, so the displayed machine
+    cannot flap between refreshes during a migration window.
+    """
+    host_id_small = "host-" + "0" * 31 + "1"
+    host_id_large = "host-" + "0" * 31 + "2"
+    agents_json = json.dumps(
+        {
+            "agents": [
+                {"id": str(_AGENT_A), "host": {"id": host_id_large, "name": "machine-two"}},
+                {"id": str(_AGENT_A), "host": {"id": host_id_small, "name": "machine-one"}},
+            ]
+        }
+    )
+    resolver = make_resolver_with_data(agents_json=agents_json, service_logs={})
+
+    info = resolver.get_agent_display_info(_AGENT_A)
+
+    assert info is not None
+    assert info.host_id == host_id_small
 
 
 # -- BackendResolverInterface.get_agent_display_info default --

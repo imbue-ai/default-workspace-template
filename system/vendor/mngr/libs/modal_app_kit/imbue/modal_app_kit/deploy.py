@@ -45,6 +45,16 @@ def read_min_containers(env_var: str) -> int:
     return int(os.environ.get(env_var, "0"))
 
 
+def read_custom_domains(env_var: str) -> list[str] | None:
+    """Comma-separated Modal custom-domain hosts threaded in by ``minds env deploy``.
+
+    None (the default) means the app deploys with no custom domains -- the
+    shape ``modal.asgi_app(custom_domains=...)`` expects for "none".
+    """
+    hosts = [host.strip() for host in os.environ.get(env_var, "").split(",") if host.strip()]
+    return hosts or None
+
+
 def read_scaledown_window(env_var: str) -> int | None:
     """Idle-before-scaledown window (seconds) threaded in by ``minds env deploy``.
 

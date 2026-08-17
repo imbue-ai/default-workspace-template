@@ -943,6 +943,74 @@ def test_await_returns_shed_code_when_worker_shed(
     assert "demo" in err and "--restart" in err
 
 
+def test_await_returns_idle_code_when_worker_idle_without_report(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A worker observed idle for the consecutive-poll threshold with no report
+    ends the poll early with the idle code and a message pointing at the
+    worker's own worktree -- not the silent full-length timeout."""
+    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    out = io.StringIO()
+    idle_polls: list[str] = []
+
+    def _always_idle(name: str) -> bool:
+        idle_polls.append(name)
+        return True
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=_no_sleep,
+        clock=lambda: 0.0,
+        out=out,
+        worker_name="demo",
+        pending_shed_check=lambda _name: False,
+        idle_check=_always_idle,
+    )
+
+    assert rc == create_worker_mod._AWAIT_IDLE_RC
+    assert len(idle_polls) == create_worker_mod._IDLE_POLLS_BEFORE_GIVING_UP
+    assert out.getvalue() == ""
+    err = capsys.readouterr().err
+    assert "ended its turn" in err and "worktree" in err
+
+
+def test_await_transient_idle_does_not_end_the_poll(tmp_path: Path) -> None:
+    """Idle observations must be consecutive: a worker seen active again resets
+    the counter, and a report that then appears wins normally."""
+    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    out = io.StringIO()
+
+    # Idle twice, then active (counter resets), then idle again while the
+    # report lands via the sleeper -- await must return the report, not the
+    # idle code.
+    idle_answers = iter([True, True, False, True, True, True])
+    sleeps: list[float] = []
+
+    def _sleeper_that_creates_report(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 4:
+            report.write_text("---\ntype: status\nname: done\n---\n\nmade it\n")
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        sleeper=_sleeper_that_creates_report,
+        clock=lambda: 0.0,
+        out=out,
+        worker_name="demo",
+        pending_shed_check=lambda _name: False,
+        idle_check=lambda _name: next(idle_answers),
+    )
+
+    assert rc == 0
+    assert "made it" in out.getvalue()
+
+
 def test_await_report_wins_over_pending_shed(tmp_path: Path) -> None:
     """The report file is checked before the shed ledger, so a worker that
     reported and was then shed still yields its report (rc 0)."""
