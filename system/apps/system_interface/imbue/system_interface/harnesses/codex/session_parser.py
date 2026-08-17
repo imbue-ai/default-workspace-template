@@ -58,7 +58,6 @@ from loguru import logger as _loguru_logger
 from imbue.system_interface.harnesses.codex.tool_labels import is_tk_lifecycle
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
-from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
@@ -66,7 +65,6 @@ from imbue.system_interface.harnesses.message_display import classify_user_messa
 from imbue.system_interface.harnesses.message_display import is_non_turn_tail
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
 from imbue.system_interface.harnesses.tool_output import find_permission_request
-from imbue.system_interface.harnesses.tool_output import is_permission_request_call
 from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
 logger = _loguru_logger

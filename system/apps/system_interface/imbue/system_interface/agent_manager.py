@@ -41,12 +41,10 @@ from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface import client_activity
 from imbue.system_interface import workspace_layouts
-from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
-from imbue.system_interface.activity_state import resolve_is_agent_running
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import discover_agents
@@ -1610,7 +1608,6 @@ class AgentManager:
         with self._lock:
             tracker = self._activity_tracker_by_agent.get(agent_id)
             recompute_agent_state = self._agents.get(agent_id)
-        harness = recompute_agent_state.harness if recompute_agent_state is not None else None
         # A positively-dead lifecycle is the one signal a live backend cannot self-observe (an
         # abrupt daemon kill emits no idle sweep), so tell the session -- level-triggered on
         # every recompute and idempotent (codex reaps its connection + ephemeral queue chips;
@@ -1627,30 +1624,29 @@ class AgentManager:
         # reflected even when no new transcript events arrive -- the post-restart
         # observe snapshot drives the recompute.
         process_started_at = self._read_process_started_at(agent_id, tracker.marker_filename)
-        # The `active` marker flips promptly at turn start/end, whereas the observe-reported lifecycle
-        # state can miss a short turn -- so read it for a timely "is a turn in flight" signal (stat
-        # outside the lock). codex has no such marker: its RUNNING lifecycle is thread/status-derived
-        # and authoritative, so it passes False and relies on the lifecycle state alone.
-        is_active_marker_present = harness != HarnessType.CODEX and (
-            self._get_agent_state_dir(agent_id) / ACTIVE_MARKER_FILENAME
-        ).exists()
+        # The turn-in-flight marker flips promptly at turn start/end, whereas the observe-reported
+        # lifecycle state can miss a short turn -- so read it for a timely signal (stat outside the
+        # lock). The tracker declares which file that is; ``None`` = the harness keeps no marker
+        # (codex -- its daemon is the turn authority) and the lifecycle state stands alone.
+        active_marker_filename = tracker.active_marker_filename
+        is_active_marker_present = (
+            active_marker_filename is not None
+            and (self._get_agent_state_dir(agent_id) / active_marker_filename).exists()
+        )
         with self._lock:
             if agent_id not in self._activity_tracked_agents:
                 return
             agent_state = self._agents.get(agent_id)
             if agent_state is None:
                 return
+            # The universal gates (dead lifecycle -> IDLE, stale tail -> IDLE) are the base
+            # tracker's own first steps -- structural, not a caller-side override -- and a dead
+            # agent's IDLE still fires the level-triggered stale-queue sweep below.
             new_state = tracker.derive(
-                is_agent_running=resolve_is_agent_running(agent_state.state, is_active_marker_present),
+                lifecycle_state=agent_state.state,
+                is_active_marker_present=is_active_marker_present,
                 process_started_at=process_started_at,
             )
-            # A positively-dead lifecycle (STOPPED and friends -- never UNKNOWN, which is
-            # non-evidence) overrides whatever the transcript derives: the process's in-memory queue
-            # and in-flight turn died with it. Every harness's derive already gates on
-            # ``is_agent_running`` (dead -> IDLE), so this is belt-and-suspenders -- it also fires the
-            # level-triggered stale-queue sweep below when a dead agent still holds queued chips.
-            if is_lifecycle_dead(agent_state.state):
-                new_state = ActivityState.IDLE
             old_state = self._activity_state_by_agent.get(agent_id)
             # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
             # IDLE agent's harness queue is drained by definition, so ANY queued
