@@ -45,3 +45,22 @@ export function getPrimaryAgentId(): string {
   cachedPrimaryAgentId = metaElement?.getAttribute("content") ?? "";
   return cachedPrimaryAgentId;
 }
+
+let cachedOtherHarnessesEnabled: boolean | null = null;
+
+/**
+ * Whether the non-claude harnesses are enabled for this host (backend
+ * FEATURE_FLAG_ENABLE_OTHER_HARNESSES, delivered as the
+ * ``system-interface-enable-other-harnesses`` meta tag). Gates the new-tab menu's
+ * "New <harness> agent" launchers (Codex, Pi) and nothing else -- an existing codex or
+ * pi agent stays fully functional with the flag off, model bar included, since it may
+ * have been created outside this menu. Off unless the meta tag is explicitly "true".
+ */
+export function areOtherHarnessesEnabled(): boolean {
+  if (cachedOtherHarnessesEnabled !== null) {
+    return cachedOtherHarnessesEnabled;
+  }
+  const metaElement = document.querySelector('meta[name="system-interface-enable-other-harnesses"]');
+  cachedOtherHarnessesEnabled = metaElement?.getAttribute("content") === "true";
+  return cachedOtherHarnessesEnabled;
+}
