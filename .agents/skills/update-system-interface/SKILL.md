@@ -281,10 +281,6 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 - **Reveals**: rebuilds the gitignored `static/` bundle (frontend); restarts the
   services agent so the editable backend re-imports the merged `.py` (backend).
   A build that exits 0 without producing a bundle counts as a failure.
-- **Rebuilds the user's view** afterwards, via
-  `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
-  since the restart leaves the open page rendering what it had already fetched.
-  Best-effort: it never fails a reveal that landed.
 - **Verifies** the live service is healthy by polling its loopback endpoint, and
   that the app shell really is the built app and that its module script serves as
   JavaScript. The backend endpoint alone cannot see either failure: the "frontend
@@ -293,6 +289,12 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
   frontend that was serving then has to be serving after. A workspace that was
   already broken gets the finding reported on stderr rather than a rollback,
   since rolling an unrelated change back would not fix it.
+- **Rebuilds the user's view** last, via
+  `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
+  since the restart leaves the open page rendering what it had already fetched.
+  After the checks above, so a reveal that regressed the frontend rolls back
+  rather than asking every open view to reload into it. Best-effort: it never
+  fails a reveal that landed.
 - **Auto-rolls-back on any failure**: restores the tree to `--rollback-to` as a
   forward revert commit, puts the snapshotted bundle back, restarts if needed,
   and re-confirms the UI is healthy -- to the same frontend standard, so a
@@ -303,24 +305,26 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
 Interpret the exit code and report it to the user:
 
 - `0` -- revealed; the live UI is updated and healthy. One variant to read for:
-  if the workspace's frontend was *already* broken when the reveal started, the
-  change still lands and still exits `0`, but the final line names the breakage
-  instead of confirming health. Pass that finding on -- it is a separate
-  problem, not something rolling this change back would have fixed.
+  if the workspace's frontend was *already* broken when the reveal started and
+  is still broken now, the change still lands and still exits `0`, but the final
+  line names the breakage instead of confirming health. Pass that finding on --
+  it is a separate problem, not something rolling this change back would have
+  fixed. (A reveal that happened to fix it prints the ordinary healthy line.)
 - `2` -- the change was bad and was **automatically rolled back**; the live UI is
   healthy on the previous revision, but the requested change did **not** land.
   Report this and diagnose before retrying. This carries the same variant as `0`:
   when the frontend was already broken beforehand the rollback is never held to
   that standard, so the final line says the backend is healthy and names what
   could not be confirmed instead of claiming the UI is. Pass both problems on.
-- `3` -- **emergency**: even rollback could not restore a healthy UI. The
-  interface may be down; escalate immediately. If the reveal touched the
-  frontend, the snapshotted bundle is kept and its path printed on stderr --
-  copying it back over
+- `3` -- **emergency**: even rollback could not restore a healthy UI (including
+  a rollback whose own git steps failed). The interface may be down; escalate
+  immediately. If the reveal touched the frontend *and* a snapshot was taken,
+  the bundle is kept and its path printed on stderr -- copying it back over
   `system/apps/system_interface/imbue/system_interface/static/` needs neither
-  `npm` nor a registry, so pass that path on with the escalation. A backend-only
-  reveal never wrote that directory, so it prints no such path and there is
-  nothing to pass on.
+  `npm` nor a registry, so pass that path on with the escalation. Read the
+  stderr rather than assuming a path is there: a backend-only reveal never wrote
+  that directory, and a frontend one has nothing to hand over when there was no
+  bundle to copy or the copy itself failed (both say so at the time).
 - `1` -- precondition error (e.g. a dirty tree); nothing was changed.
 
 Once you no longer need the preview (after a successful reveal, *or* after a

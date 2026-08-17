@@ -68,9 +68,9 @@ unconditionally, since a backend-only change leaves the open page rendering what
 it had already fetched. For a backend change it pre-flights the merged code on a
 throwaway port before touching the live service, then polls the loopback
 endpoint to confirm health. If anything fails, it restores the tree to
-`--rollback-to` as a forward revert commit, restores the bundle, restarts from
-it, and re-confirms the UI is healthy -- so the served interface can never be
-left broken. The exit code reports the outcome (`0` revealed, `2` rolled back,
+`--rollback-to` as a forward revert commit, restores the bundle, restarts only
+if the failed reveal had already restarted the service, and re-confirms the UI
+is healthy -- so the served interface can never be left broken. The exit code reports the outcome (`0` revealed, `2` rolled back,
 `3` emergency, `1` precondition error).
 
 Two properties are load-bearing there. It **snapshots `static/` before anything
