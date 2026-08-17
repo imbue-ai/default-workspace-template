@@ -62,8 +62,9 @@ Exit codes:
     0  Success (instance is up and healthy / rebooted in place / torn down).
     1  Failure to boot (partial state torn down); or, for ``refresh``, there was
        no refreshable instance, the old server would not exit in time, or the
-       rebooted server never became healthy; or a bad argument / unreadable
-       state file.
+       rebooted server never became healthy; or, for ``down``, a recorded process
+       survived SIGKILL (its state dir is kept so it stays findable); or a bad
+       argument / unreadable state file.
 """
 
 from __future__ import annotations
@@ -80,7 +81,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, NamedTuple, Sequence
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and
@@ -90,6 +91,11 @@ STATE_ROOT = "data/.state/isolated-instances"
 STATE_FILENAME = "instance.json"
 INNER_LOG_FILENAME = "instance.log"
 WRAPPER_LOG_FILENAME = "wrapper.log"
+# A failed ``up`` deletes the whole state directory, taking the log its own
+# failure message just pointed at with it. The log is copied here first -- outside
+# the state dir, one per name, overwritten each time -- so the path in the message
+# still exists when the agent goes to read more of it.
+FAILED_LOG_SUFFIX = "-failed.log"
 
 # forward_port.py imports tomlkit (a venv dependency), but this script is run via
 # bare python3 with no venv assumed. Invoke it through ``uv run`` (like
@@ -114,18 +120,59 @@ _HEALTH_ATTEMPTS = 60
 _HEALTH_INTERVAL_SECONDS = 1.0
 
 # When ``refresh`` reboots the inner server, how long to wait for the old process
-# to exit (and release its listening socket) before rebinding the same port.
+# to exit (and release its listening socket) before rebinding the same port. A
+# teardown gives a process the same grace to exit on SIGTERM.
 _STOP_ATTEMPTS = 30
 _STOP_INTERVAL_SECONDS = 0.5
+
+# How long to keep watching after SIGKILL before calling a process unkillable.
+# SIGKILL cannot be caught, so anything still here is stuck in the kernel (an
+# uninterruptible I/O wait) and no further wait would help.
+_KILL_ATTEMPTS = 10
+_KILL_INTERVAL_SECONDS = 0.5
 
 # How much of a failed boot's log to quote back on stderr. Enough to carry the
 # traceback or the refusal message that explains the failure, short enough not to
 # bury it.
 _LOG_EXCERPT_LINES = 40
 
+# How much of a failing health response's body to quote. The body is where the
+# diagnosis lives -- a system interface answering 503 names in it exactly which
+# precondition failed -- and that one sentence is the difference between an agent
+# that knows what to fix and one reading a wall of discovery DEBUG chatter.
+_HEALTH_BODY_EXCERPT_BYTES = 400
+
+# Written into the (append-only, refresh-reused) inner log before every spawn, so
+# an excerpt can be scoped to the boot that just failed. Without it, a boot that
+# hangs at import and writes nothing shows the *previous* boot's traceback, and an
+# agent reading that hunts a cause that no longer exists in the source.
+_BOOT_MARKER_PREFIX = "===== boot "
+
+# Where the shared service-band tagger lives, relative to the repo root. An
+# isolated instance is launched directly rather than as a supervisord program, so
+# nothing else bands it: it inherits the launching shell's band, and every Claude
+# bash command self-tags AGENT_SUBPROCESS (900). That makes the surface the user is
+# actually looking at the first non-browser thing shed under memory pressure, with
+# nothing re-polling health afterwards to tell them their tab went dead.
+_OOM_TAG_SCRIPT = "system/services/oom_priority/bin/oom_tag_service.py"
+# The band every user-created service shares. A served instance is exactly that.
+# The tradeoff is deliberate: at 200 the instance outlives every agent, including
+# the lead driving it. The alternative kills the surface under the user's eyes
+# first, which is the one loss that stays invisible until they stare at a dead tab.
+_OOM_SERVICE_KEY = "user"
+
 
 class InstanceError(Exception):
-    """A throwaway instance failed to boot (avoids raising built-in exceptions)."""
+    """A throwaway instance failed to boot (avoids raising built-in exceptions).
+
+    Carries the log the failing server was writing, when there is one, so the
+    handler can quote the right boot's tail and preserve the file before the
+    state directory it lives in is removed.
+    """
+
+    def __init__(self, message: str, log_path: Path | None = None) -> None:
+        super().__init__(message)
+        self.log_path = log_path
 
 
 class Runner:
@@ -167,18 +214,56 @@ class Runner:
             return True
 
 
+class ProbeResult(NamedTuple):
+    """One health probe: the status (None when unreachable) and the response body."""
+
+    status: int | None
+    body: str
+
+    @property
+    def is_healthy(self) -> bool:
+        return self.status == 200
+
+    def describe(self) -> str:
+        """One stderr line saying what the probe actually got back.
+
+        The whole point of keeping the body: a health endpoint that refuses states
+        *why* in it, and discarding that leaves the caller with a bare status code
+        and a log to go read.
+        """
+        if self.status is None:
+            return "  last probe: no response (connection refused, or timed out)\n"
+        if not self.body:
+            return f"  last probe: HTTP {self.status}, empty body\n"
+        return f"  last probe: HTTP {self.status} {self.body}\n"
+
+
+def _read_body_excerpt(response) -> str:
+    """Read at most ``_HEALTH_BODY_EXCERPT_BYTES`` of a response body, as text."""
+    try:
+        raw = response.read(_HEALTH_BODY_EXCERPT_BYTES + 1)
+    except OSError:
+        return ""
+    text = raw.decode("utf-8", errors="replace").strip()
+    if len(text) > _HEALTH_BODY_EXCERPT_BYTES:
+        return text[:_HEALTH_BODY_EXCERPT_BYTES] + "..."
+    return text
+
+
 class HttpClient:
     """Indirection over the loopback health probe."""
 
-    def get_status(self, url: str, timeout: float) -> int | None:
-        """Return the HTTP status for a GET, or ``None`` if the host is unreachable."""
+    def get(self, url: str, timeout: float) -> ProbeResult:
+        """GET ``url``, returning its status and a truncated body."""
         try:
             with urllib.request.urlopen(url, timeout=timeout) as response:
-                return int(response.status)
+                return ProbeResult(int(response.status), _read_body_excerpt(response))
         except urllib.error.HTTPError as exc:
-            return int(exc.code)
+            # An HTTPError *is* the response, so the refusal's body is readable
+            # here -- and a refusal is exactly the case whose body is worth having.
+            return ProbeResult(int(exc.code), _read_body_excerpt(exc))
         except (urllib.error.URLError, OSError):
-            return None
+            return ProbeResult(None, "")
 
 
 class Spawner:
@@ -224,14 +309,20 @@ def wait_healthy(
     attempts: int,
     interval: float,
     sleeper: Callable[[float], None],
-) -> bool:
-    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times."""
+) -> ProbeResult:
+    """Poll ``url`` until it returns HTTP 200, up to ``attempts`` times.
+
+    Returns the *last* probe rather than a bare bool, so a caller reporting the
+    failure can say what the final attempt actually got back.
+    """
+    result = ProbeResult(None, "")
     for index in range(attempts):
-        if http.get_status(url, timeout=5.0) == 200:
-            return True
+        result = http.get(url, timeout=5.0)
+        if result.is_healthy:
+            return result
         if index < attempts - 1:
             sleeper(interval)
-    return False
+    return result
 
 
 def _wait_process_gone(
@@ -282,23 +373,92 @@ def parse_env_assignments(assignments: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
-def _log_excerpt(log_path: Path, max_lines: int = _LOG_EXCERPT_LINES) -> str:
-    """Return the last ``max_lines`` of a boot log, formatted for stderr.
+def _append_boot_marker(log_path: Path, name: str) -> None:
+    """Record a boot boundary in the shared log, immediately before a spawn.
 
-    A failed boot's cause is always in this log, and the caller is an agent
+    Best-effort: an unwritable log must not stop the instance from booting; the
+    excerpt then simply falls back to the whole file, as it did before.
+    """
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a") as handle:
+            handle.write(f"{_BOOT_MARKER_PREFIX}{name} {stamp} =====\n")
+    except OSError:
+        pass
+
+
+def _lines_since_last_boot(lines: Sequence[str]) -> list[str]:
+    """Only the lines written since the most recent boot marker.
+
+    Every line before it belongs to a process that has already exited, and quoting
+    those is worse than quoting nothing: an agent cannot tell the two apart, so it
+    reads a stale traceback as the current failure.
+    """
+    for index in range(len(lines) - 1, -1, -1):
+        if lines[index].startswith(_BOOT_MARKER_PREFIX):
+            return list(lines[index + 1 :])
+    return list(lines)
+
+
+def _log_excerpt(
+    log_path: Path,
+    display_path: Path | None = None,
+    max_lines: int = _LOG_EXCERPT_LINES,
+) -> str:
+    """Return the last ``max_lines`` this boot wrote, formatted for stderr.
+
+    A failed boot's cause is usually in this log, and the caller is an agent
     reading our stderr -- quoting the tail inline turns "it did not become
     healthy" into an actionable message instead of a pointer to a file it has to
-    remember to go read. Best-effort: an unreadable log just yields a note.
+    remember to go read. An empty excerpt is itself the diagnosis when the boot
+    hung: the new process wrote nothing at all.
+
+    ``display_path`` is what the message points the reader at, which is not always
+    where the lines came from: a failed ``up`` deletes the instance's state
+    directory, so it names the copy kept outside it. Best-effort: an unreadable
+    log just yields a note.
     """
+    named = display_path if display_path is not None else log_path
     try:
         lines = log_path.read_text(errors="replace").splitlines()
     except OSError as exc:
         return f"  (could not read {log_path}: {exc})\n"
-    if not lines:
-        return f"  ({log_path} is empty)\n"
-    tail = lines[-max_lines:]
+    tail = _lines_since_last_boot(lines)[-max_lines:]
+    if not tail:
+        return f"  ({named} holds no output from this boot)\n"
     body = "".join(f"  | {line}\n" for line in tail)
-    return f"  last {len(tail)} line(s) of {log_path}:\n{body}"
+    return f"  last {len(tail)} line(s) of {named}:\n{body}"
+
+
+def _preserve_failed_log(repo_root: Path, name: str, log_path: Path) -> Path | None:
+    """Copy a failed boot's log out of the state dir before that dir is removed.
+
+    Returns where it landed, or None if there was nothing to copy -- in which case
+    the caller falls back to naming the original path, which is all it ever had.
+    """
+    destination = repo_root / STATE_ROOT / f"{name}{FAILED_LOG_SUFFIX}"
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(log_path, destination)
+    except OSError:
+        return None
+    return destination
+
+
+def _banded(repo_root: Path, command: Sequence[str]) -> list[str]:
+    """Prefix ``command`` with the service-band tagger, when the repo ships one.
+
+    The tagger sets its own ``oom_score_adj`` and then ``exec``s, so the band is
+    inherited by everything the command spawns and the argv is otherwise
+    untouched. When the tagger is not there (a caller whose ``--repo-root`` is not
+    a workspace checkout), the command launches exactly as it did before -- an
+    untagged instance is a far smaller problem than one that cannot start.
+    """
+    tagger = repo_root / _OOM_TAG_SCRIPT
+    if not tagger.is_file():
+        return list(command)
+    return [sys.executable, str(tagger), _OOM_SERVICE_KEY, *command]
 
 
 def _state_dir(repo_root: Path, name: str) -> Path:
@@ -330,21 +490,46 @@ def _register_service(
         raise InstanceError(f"{what} failed (exit {result.returncode}): {stderr}")
 
 
+def _kill_process_group_and_wait(
+    runner: Runner, pid: int, sleeper: Callable[[float], None]
+) -> bool:
+    """SIGTERM, wait, then SIGKILL and wait again. True once the group is gone.
+
+    The situation a teardown is reached in is often precisely a wedged instance, so
+    "asked it to stop" is not the same as "it stopped": a server that traps SIGTERM
+    keeps its port bound and keeps serving, and the state file naming its pid is
+    about to be deleted. Only a process that survives SIGKILL is genuinely beyond
+    reach (stuck in an uninterruptible kernel wait), and that is what False means.
+    """
+    runner.kill_process_group(pid, signal.SIGTERM)
+    if _wait_process_gone(runner, pid, _STOP_ATTEMPTS, _STOP_INTERVAL_SECONDS, sleeper):
+        return True
+    runner.kill_process_group(pid, signal.SIGKILL)
+    return _wait_process_gone(
+        runner, pid, _KILL_ATTEMPTS, _KILL_INTERVAL_SECONDS, sleeper
+    )
+
+
 def _teardown(
     repo_root: Path,
     runner: Runner,
     *,
     pids: Sequence[int],
     services: Sequence[str],
-) -> None:
-    """Best-effort teardown of whatever ``up`` set up. Every step is unchecked so
-    partial state still fully unwinds and re-runs are no-ops.
+    sleeper: Callable[[float], None] = time.sleep,
+) -> list[int]:
+    """Tear down whatever ``up`` set up; return the pids that would not die.
 
-    Order: kill every detached server (by process group), then deregister every
-    registered service so the workspace stops routing to a dead port.
+    Order: kill every detached server (by process group, escalating to SIGKILL),
+    then deregister every registered service so the workspace stops routing at a
+    dead port. Deregistration is unchecked and runs for every service regardless,
+    so partial state still fully unwinds and re-runs are no-ops -- but a surviving
+    process is reported rather than swallowed, because the caller must not delete
+    the record of a pid and port that are still in use.
     """
-    for pid in pids:
-        runner.kill_process_group(pid)
+    survivors = [
+        pid for pid in pids if not _kill_process_group_and_wait(runner, pid, sleeper)
+    ]
     for service in services:
         runner.run(
             [*FORWARD_PORT_CMD, "--remove", "--name", service],
@@ -353,6 +538,7 @@ def _teardown(
             text=True,
             check=False,
         )
+    return survivors
 
 
 def up(
@@ -401,8 +587,16 @@ def up(
         )
         return 1
 
-    # Clear any stale instance for this name first so a re-run is clean.
-    down(name, repo_root, runner=runner)
+    # Clear any stale instance for this name first so a re-run is clean. Booting
+    # over one that could not be cleared would leave the old server holding its
+    # port with nothing left recording its pid, so refuse instead.
+    if down(name, repo_root, runner=runner, sleeper=sleeper) != 0:
+        sys.stderr.write(
+            f"up: refusing to boot '{name}' over an instance that could not be "
+            f"cleared (see above). Resolve it, or remove "
+            f"{_state_dir(repo_root, name)} to start fresh.\n"
+        )
+        return 1
 
     state_dir = _state_dir(repo_root, name)
     inner_log_path = state_dir / INNER_LOG_FILENAME
@@ -417,25 +611,28 @@ def up(
         # 1. Boot the service on a free port, with the isolating env overrides.
         inner_port = find_free_port()
         env = _inner_env(port_env, inner_port, host_env, env_overrides, unset_env)
+        _append_boot_marker(inner_log_path, name)
         pids.append(
             spawner.spawn_detached(
-                list(command),
+                _banded(repo_root, command),
                 cwd=cwd,
                 env=env,
                 log_path=str(inner_log_path),
             )
         )
         inner_url = f"http://127.0.0.1:{inner_port}"
-        if not wait_healthy(
+        probe = wait_healthy(
             http,
             f"{inner_url}{health_path}",
             _HEALTH_ATTEMPTS,
             _HEALTH_INTERVAL_SECONDS,
             sleeper,
-        ):
+        )
+        if not probe.is_healthy:
             raise InstanceError(
                 f"instance did not become healthy on port {inner_port}\n"
-                f"{_log_excerpt(inner_log_path)}"
+                f"{probe.describe()}",
+                log_path=inner_log_path,
             )
 
         # 2. Register it as a service (own browser origin), if asked.
@@ -456,33 +653,39 @@ def up(
                 and preview_title is not None
             )
             wrapper_port = find_free_port()
+            _append_boot_marker(wrapper_log_path, name)
             pids.append(
                 spawner.spawn_detached(
-                    [
-                        sys.executable,
-                        str(_WRAPPER_SCRIPT_PATH),
-                        "--port",
-                        str(wrapper_port),
-                        "--inner-service",
-                        service_name,
-                        "--title",
-                        preview_title,
-                    ],
+                    _banded(
+                        repo_root,
+                        [
+                            sys.executable,
+                            str(_WRAPPER_SCRIPT_PATH),
+                            "--port",
+                            str(wrapper_port),
+                            "--inner-service",
+                            service_name,
+                            "--title",
+                            preview_title,
+                        ],
+                    ),
                     cwd=str(repo_root),
                     env=dict(os.environ),
                     log_path=str(wrapper_log_path),
                 )
             )
-            if not wait_healthy(
+            wrapper_probe = wait_healthy(
                 http,
                 f"http://127.0.0.1:{wrapper_port}/",
                 _HEALTH_ATTEMPTS,
                 _HEALTH_INTERVAL_SECONDS,
                 sleeper,
-            ):
+            )
+            if not wrapper_probe.is_healthy:
                 raise InstanceError(
                     f"preview wrapper did not become healthy on port {wrapper_port}\n"
-                    f"{_log_excerpt(wrapper_log_path)}"
+                    f"{wrapper_probe.describe()}",
+                    log_path=wrapper_log_path,
                 )
             _register_service(
                 runner,
@@ -524,8 +727,24 @@ def up(
         # missing ``uv`` binary surfaces as FileNotFoundError, and find_free_port
         # can raise a socket OSError. Either way a server may already be running,
         # so teardown must run.
-        sys.stderr.write(f"up failed: {exc}\ntearing down partial instance...\n")
-        _teardown(repo_root, runner, pids=pids, services=services)
+        #
+        # The log is copied out and quoted *before* the teardown below removes the
+        # state directory it lives in, so the path this message names still exists
+        # when the agent goes to read the rest of it.
+        failed_log = getattr(exc, "log_path", None)
+        excerpt = ""
+        if failed_log is not None:
+            preserved = _preserve_failed_log(repo_root, name, failed_log)
+            excerpt = _log_excerpt(failed_log, preserved)
+        sys.stderr.write(f"up failed: {exc}{excerpt}tearing down partial instance...\n")
+        survivors = _teardown(
+            repo_root, runner, pids=pids, services=services, sleeper=sleeper
+        )
+        if survivors:
+            sys.stderr.write(
+                f"warning: pid(s) {', '.join(str(pid) for pid in survivors)} survived "
+                "SIGKILL and may still hold their port.\n"
+            )
         shutil.rmtree(state_dir, ignore_errors=True)
         return 1
 
@@ -554,13 +773,25 @@ def up(
     return 0
 
 
-def down(name: str, repo_root: Path, *, runner: Runner) -> int:
+def down(
+    name: str,
+    repo_root: Path,
+    *,
+    runner: Runner,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> int:
     """Tear down the instance for ``name``: kill the server(s), deregister the
     service(s), delete the state directory.
 
     Idempotent: a missing state file is a no-op success, so this is safe to run to
     clean up after a successful test, a rejected preview, or a half-set-up
-    instance. Returns 0 unless the state file is unreadable.
+    instance.
+
+    Returns 1 -- and keeps the state directory -- when the state file is
+    unreadable, or when a recorded process is still alive after SIGKILL. Deleting
+    the state on a survivor would be the worst outcome available: the file naming
+    its pid and port is the only way anything could find it again, and the port
+    stays bound either way, so the next ``up`` would silently take a different one.
     """
     state_path = _state_path(repo_root, name)
     if not state_path.exists():
@@ -573,7 +804,17 @@ def down(name: str, repo_root: Path, *, runner: Runner) -> int:
         return 1
     pids = state.get("pids") or []
     services = state.get("services") or []
-    _teardown(repo_root, runner, pids=pids, services=services)
+    survivors = _teardown(
+        repo_root, runner, pids=pids, services=services, sleeper=sleeper
+    )
+    if survivors:
+        sys.stderr.write(
+            f"error: instance '{name}' is NOT torn down: pid(s) "
+            f"{', '.join(str(pid) for pid in survivors)} are still alive after "
+            f"SIGKILL and their port(s) are still bound. Keeping {state_path} so "
+            "they stay findable; investigate those pids before re-running.\n"
+        )
+        return 1
     shutil.rmtree(_state_dir(repo_root, name), ignore_errors=True)
     sys.stderr.write(f"instance for '{name}' torn down.\n")
     return 0
@@ -648,9 +889,10 @@ def refresh(
         inner.get("env_overrides") or {},
         inner.get("unset_env") or [],
     )
+    _append_boot_marker(Path(inner_log), name)
     try:
         new_pid = spawner.spawn_detached(
-            list(inner["command"]),
+            _banded(repo_root, inner["command"]),
             cwd=str(state["cwd"]),
             env=env,
             log_path=inner_log,
@@ -664,17 +906,19 @@ def refresh(
     state["pids"] = pids
     state_path.write_text(json.dumps(state, indent=2))
 
-    if not wait_healthy(
+    probe = wait_healthy(
         http,
         f"http://127.0.0.1:{port}{inner['health_path']}",
         _HEALTH_ATTEMPTS,
         _HEALTH_INTERVAL_SECONDS,
         sleeper,
-    ):
+    )
+    if not probe.is_healthy:
         sys.stderr.write(
             f"refresh: inner server did not become healthy on port {port} after "
             "reboot. The preview tab will show an error until the underlying "
             "build boots; fix it and refresh again.\n"
+            f"{probe.describe()}"
             f"{_log_excerpt(Path(inner_log))}"
         )
         return 1

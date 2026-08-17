@@ -21,12 +21,15 @@ What it does, given the pre-merge revision (``--rollback-to``):
 4. For a backend change, *pre-flight* the merged code on a throwaway port before
    touching the live service -- if it cannot boot, the live service is never
    restarted and we go straight to rollback (the UI never went down).
-5. Build the frontend bundle and restart the backend, as applicable, then ask
-   every open view of the workspace to reload, via
+5. Build the frontend bundle and restart the backend, as applicable (the
+   ``system_interface`` supervisord program alone -- see ``SUPERVISOR_PROGRAM``),
+   then ask every open view of the workspace to reload, via
    ``system/scripts/refresh_workspace_view.py`` -- for a backend-only change
    too, since the restart leaves the open page rendering from what it had
    already fetched.
-6. Probe the live service's loopback endpoint until healthy (with a deadline).
+6. Probe the live service's loopback endpoint until it is *settled* healthy
+   (several consecutive 200s on an unchanging supervisord pid, with a deadline),
+   since this verdict is what arms the automatic rollback below.
 7. On ANY failure, restore the served tree to the known-good revision (as a
    forward revert commit) and re-probe to *confirm* the UI is back. The live
    backend is restarted during recovery only if the failed reveal had already
@@ -215,10 +218,30 @@ STRICT_HEALTH_PATH = "/api/health"
 HEALTH_PATH = "/api/agents"
 SERVE_PATH = "/"
 
+# The supervisord program that runs the live system interface, and the client
+# used to bounce it. Restarting only this program -- rather than the whole
+# services agent, which is supervisord's parent and so bounces every program in
+# the workspace -- is what makes the reveal's own health budget meaningful: a
+# dependency-only change touches this service's venv and node_modules and nothing
+# else consumes them, so nothing else needs to come back for the verdict to be
+# true. (A change to ``bootstrap`` or ``supervisord.conf`` *would* need the full
+# services-agent restart, but this script only ever reveals changes under
+# ``system/apps/system_interface`` -- see ``classify_changes``.)
+SUPERVISOR_PROGRAM = "system_interface"
+_SUPERVISORCTL = "supervisorctl"
+
 # Poll budget for "did the service come back up". Restart is fire-and-forget, so
-# we poll rather than assume.
-_HEALTH_ATTEMPTS = 30
+# we poll rather than assume. 60s matches the shared serve script's boot gate:
+# this gate does strictly more (a restart, then a settled confirmation), so it
+# must not get half that script's budget.
+_HEALTH_ATTEMPTS = 60
 _HEALTH_INTERVAL_SECONDS = 1.0
+# How many consecutive healthy answers (one poll interval apart) make a verdict.
+# One 200 is a point-in-time probe, not settled state: it reads green in a gap
+# between two restarts and red on a change that was never broken. Since this
+# verdict is what arms the automatic rollback, both directions are expensive --
+# green ships a stack that is still turning over, red reverts a good change.
+_SETTLED_HEALTHY_PROBES = 3
 # Pre-flight boot is a fresh process on a throwaway port; give it the same grace.
 _PREFLIGHT_ATTEMPTS = 30
 _PREFLIGHT_INTERVAL_SECONDS = 1.0
@@ -454,6 +477,79 @@ def wait_healthy(
     return False
 
 
+def parse_supervisor_pid(status_output: str) -> str | None:
+    """The pid a ``supervisorctl status`` line reports, or None if it is not RUNNING.
+
+    The line reads ``system_interface   RUNNING   pid 1234, uptime 0:00:05``.
+    Every other state (STARTING, BACKOFF, FATAL, STOPPED) names no settled
+    process, so it answers None -- which is the same answer a supervisorctl that
+    could not be reached gets, because neither is evidence the service has
+    settled, and that is the only question asked here.
+    """
+    if "RUNNING" not in status_output:
+        return None
+    marker = "pid "
+    index = status_output.find(marker)
+    if index == -1:
+        return None
+    return status_output[index + len(marker) :].split(",")[0].strip() or None
+
+
+def _live_service_pid(repo_root: Path, runner: Runner) -> str | None:
+    """Ask supervisord for the live system interface's pid (None if not RUNNING)."""
+    result = runner.run(
+        [_SUPERVISORCTL, "status", SUPERVISOR_PROGRAM],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return parse_supervisor_pid(getattr(result, "stdout", "") or "")
+
+
+def wait_settled(
+    http: HttpClient,
+    url: str,
+    repo_root: Path,
+    runner: Runner,
+    sleeper: Callable[[float], None],
+    *,
+    require_stable_pid: bool,
+    attempts: int = _HEALTH_ATTEMPTS,
+) -> bool:
+    """Whether the live service reaches -- and holds -- a healthy state.
+
+    Requires ``_SETTLED_HEALTHY_PROBES`` consecutive healthy answers rather than
+    one, and, when the caller has just restarted the service, that supervisord
+    reports it RUNNING on the same pid throughout. A pid that turns over mid-run
+    restarts the confirmation instead of failing it: the stack is still settling,
+    which is the situation this exists to wait out rather than to judge.
+
+    ``require_stable_pid`` is set only by callers that ran the restart themselves,
+    so a workspace where supervisorctl cannot be reached never turns into a
+    spurious "the UI is down" -- the restart would already have failed loudly.
+    """
+    healthy_streak = 0
+    streak_pid: str | None = None
+    for index in range(attempts):
+        is_healthy = http.get_status(url, timeout=5.0) == 200
+        pid = _live_service_pid(repo_root, runner) if require_stable_pid else None
+        if is_healthy and (pid is not None or not require_stable_pid):
+            if healthy_streak == 0 or pid != streak_pid:
+                healthy_streak = 1
+                streak_pid = pid
+            else:
+                healthy_streak += 1
+            if healthy_streak >= _SETTLED_HEALTHY_PROBES:
+                return True
+        else:
+            healthy_streak = 0
+            streak_pid = None
+        if index < attempts - 1:
+            sleeper(_HEALTH_INTERVAL_SECONDS)
+    return False
+
+
 def _preflight_ok(
     repo_root: Path,
     http: HttpClient,
@@ -567,20 +663,21 @@ def _apply_reveal(
         # failure leaves it potentially running broken code: recovery must restart.
         _run_checked(
             runner,
-            ["mngr", "start", "--restart", "system-services"],
+            [_SUPERVISORCTL, "restart", SUPERVISOR_PROGRAM],
             repo_root,
-            "mngr start --restart",
+            f"supervisorctl restart {SUPERVISOR_PROGRAM}",
             live_service_restarted=True,
         )
-        if not wait_healthy(
+        if not wait_settled(
             http,
             f"{base_url}{HEALTH_PATH}",
-            _HEALTH_ATTEMPTS,
-            _HEALTH_INTERVAL_SECONDS,
+            repo_root,
+            runner,
             sleeper,
+            require_stable_pid=True,
         ):
             raise RevealFailed(
-                "backend did not become healthy after restart",
+                "backend did not settle into a healthy state after restart",
                 live_service_restarted=True,
             )
     # Unconditional: this runs only when something changed (``reveal`` returns
@@ -671,28 +768,32 @@ def _recover_running_state(
             if live_service_restarted:
                 _run_checked(
                     runner,
-                    ["mngr", "start", "--restart", "system-services"],
+                    [_SUPERVISORCTL, "restart", SUPERVISOR_PROGRAM],
                     repo_root,
-                    "mngr start --restart",
+                    f"supervisorctl restart {SUPERVISOR_PROGRAM}",
                 )
             # Probe the backend health endpoint either way: after a restart to
             # confirm known-good booted, or (no restart) to confirm the untouched
-            # service is still serving.
-            healthy = wait_healthy(
+            # service is still serving. Settled, not point-in-time, for the same
+            # reason the reveal path is: "the live UI is confirmed healthy" was
+            # printed once while supervisord was still turning the pid over.
+            healthy = wait_settled(
                 http,
                 f"{base_url}{HEALTH_PATH}",
-                _HEALTH_ATTEMPTS,
-                _HEALTH_INTERVAL_SECONDS,
+                repo_root,
+                runner,
                 sleeper,
+                require_stable_pid=live_service_restarted,
             )
         else:
             # Frontend-only: the server was never restarted; confirm it still serves.
-            healthy = wait_healthy(
+            healthy = wait_settled(
                 http,
                 f"{base_url}{SERVE_PATH}",
-                _HEALTH_ATTEMPTS,
-                _HEALTH_INTERVAL_SECONDS,
+                repo_root,
+                runner,
                 sleeper,
+                require_stable_pid=False,
             )
     except RevealFailed as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")

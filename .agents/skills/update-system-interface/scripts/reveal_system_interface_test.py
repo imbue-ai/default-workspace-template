@@ -132,12 +132,22 @@ def _no_ambient_live_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
 
 
+def _supervisor_status(pid: int) -> _Result:
+    """What ``supervisorctl status`` prints for a RUNNING program on ``pid``."""
+    return _Result(
+        stdout=f"{reveal_mod.SUPERVISOR_PROGRAM}   RUNNING   pid {pid}, uptime 0:00:12\n"
+    )
+
+
 def _runner_with_diff(name_status: str, *, dirty: bool = False) -> _RecordingRunner:
     runner = _RecordingRunner()
     runner.respond(
         ("git", "status", "--porcelain"), _Result(stdout=" M foo\n" if dirty else "")
     )
     runner.respond(("git", "diff"), _Result(stdout=name_status))
+    # A settled service by default: RUNNING on one pid that does not turn over.
+    # Tests about an unsettled stack override this with a pid-changing response.
+    runner.respond(("supervisorctl", "status"), _supervisor_status(4242))
     return runner
 
 
@@ -229,7 +239,9 @@ def test_frontend_only_builds_and_refreshes_without_restart() -> None:
 
     assert code == 0
     assert runner.ran("npm", "run", "build")
-    assert not runner.ran("mngr", "start")  # frontend change never restarts the backend
+    assert not runner.ran(
+        "supervisorctl", "restart"
+    )  # frontend change never restarts the backend
     assert not runner.ran(
         "uv", "tool", "install"
     )  # no manifest change -> no dep refresh
@@ -252,7 +264,7 @@ def test_backend_only_change_still_refreshes_the_view() -> None:
     code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
 
     assert code == 0
-    assert runner.ran("mngr", "start", "--restart", "system-services")
+    assert runner.ran("supervisorctl", "restart", reveal_mod.SUPERVISOR_PROGRAM)
     assert _refreshed_the_view(runner)
 
 
@@ -265,7 +277,7 @@ def test_refresh_runs_after_the_restart_not_before() -> None:
     _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner())
 
     restart_index = next(
-        i for i, c in enumerate(runner.calls) if c[:2] == ["mngr", "start"]
+        i for i, c in enumerate(runner.calls) if c[:2] == ["supervisorctl", "restart"]
     )
     refresh_index = next(
         i
@@ -338,7 +350,7 @@ def test_backend_with_manifest_refreshes_preflights_restarts_and_probes() -> Non
         reveal_mod.TOOL_NAME
     ]  # pre-flight booted
     assert spawner.last is not None and spawner.last.terminated  # and torn down
-    assert runner.ran("mngr", "start", "--restart", "system-services")
+    assert runner.ran("supervisorctl", "restart", reveal_mod.SUPERVISOR_PROGRAM)
     assert any(_is_live(u) for u in http.get_urls)  # live health probed
 
 
@@ -385,7 +397,7 @@ def test_backend_src_only_skips_dependency_refresh() -> None:
 
     assert code == 0
     assert not runner.ran("uv", "tool", "install")
-    assert runner.ran("mngr", "start")
+    assert runner.ran("supervisorctl", "restart")
 
 
 def test_no_relevant_changes_does_nothing() -> None:
@@ -396,7 +408,7 @@ def test_no_relevant_changes_does_nothing() -> None:
 
     assert code == 0
     assert not runner.ran("npm", "run", "build")
-    assert not runner.ran("mngr", "start")
+    assert not runner.ran("supervisorctl", "restart")
     # The unconditional refresh in _apply_reveal is only safe because this run
     # never reaches it: nothing changed, so there is nothing to reveal and no
     # reason to reload the view the user is already looking at.
@@ -420,7 +432,7 @@ def test_failed_preflight_never_restarts_live_service_and_rolls_back() -> None:
     # The live service was never restarted -- pre-flight failed before the
     # restart, so the running service is still healthy on known-good code and
     # recovery must NOT restart it (doing so would needlessly blip a live UI).
-    assert not runner.ran("mngr", "start")
+    assert not runner.ran("supervisorctl", "restart")
     # Recovery still re-confirmed the untouched service via the health probe.
     assert any(_is_live(u) for u in http.get_urls)
     # An added file is removed on rollback (not checked out).
@@ -440,7 +452,9 @@ def test_failed_preflight_with_manifest_refreshes_deps_but_does_not_restart() ->
     code = _reveal(runner, http, _FakeSpawner())
 
     assert code == 2
-    assert not runner.ran("mngr", "start")  # untouched live service is not restarted
+    assert not runner.ran(
+        "supervisorctl", "restart"
+    )  # untouched live service is not restarted
     # uv tool install ran twice: once in the failed reveal, once in recovery to
     # restore the known-good dependency set on disk.
     assert len(runner.argvs_starting("uv", "tool", "install")) == 2
@@ -458,7 +472,9 @@ def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
     def responder(url: str) -> int | None:
         if not _is_live(url):
             return 200  # pre-flight always boots
-        restarts = runner.calls.count(["mngr", "start", "--restart", "system-services"])
+        restarts = runner.calls.count(
+            ["supervisorctl", "restart", reveal_mod.SUPERVISOR_PROGRAM]
+        )
         return 200 if restarts >= 2 else None
 
     http = _FakeHttp(responder)
@@ -474,7 +490,7 @@ def test_failed_post_restart_health_triggers_rollback_then_recovers() -> None:
             [
                 c
                 for c in runner.calls
-                if c == ["mngr", "start", "--restart", "system-services"]
+                if c == ["supervisorctl", "restart", reveal_mod.SUPERVISOR_PROGRAM]
             ]
         )
         == 2
@@ -496,6 +512,74 @@ def test_emergency_when_rollback_cannot_restore_health() -> None:
     code = _reveal(runner, http, _FakeSpawner())
 
     assert code == 3
+
+
+def test_emergency_when_a_recovery_step_itself_fails() -> None:
+    """Exit 3 is not only "never went green" -- a recovery *step* can fail outright.
+
+    Here the tree is restored fine, but rebuilding from known-good fails, so the
+    recovery never reaches its health probe at all. That has to read as the
+    emergency it is rather than as a successful rollback.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n"
+    )
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="type error"))
+    http = _FakeHttp(_all_healthy)
+
+    code = _reveal(runner, http, _FakeSpawner())
+
+    assert code == 3
+    assert runner.ran("git", "checkout", _ROLLBACK)  # the tree was still restored
+
+
+def test_a_green_verdict_requires_the_service_to_stop_turning_over() -> None:
+    """A single 200 can land in the gap between two restarts of a settling stack.
+
+    Reveal printed "updated and confirmed healthy" on exactly that, and five
+    seconds later the live UI did not answer and supervisord had a new pid. The
+    verdict arms the automatic rollback, so it has to describe settled state.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    # A different pid on every status call for the reveal's entire budget, so no
+    # run of consecutive probes ever shares one. The canned list's last entry
+    # repeats once exhausted, which is the stack finally settling -- so the
+    # rollback that follows can confirm the UI and this stays an ordinary exit 2.
+    runner.respond(
+        ("supervisorctl", "status"),
+        [
+            _supervisor_status(7000 + offset)
+            for offset in range(reveal_mod._HEALTH_ATTEMPTS)
+        ],
+    )
+    http = _FakeHttp(_all_healthy)  # every probe answers 200
+
+    code = _reveal(runner, http, _FakeSpawner())
+
+    assert code == 2, "a stack that is still restarting is not a healthy reveal"
+    assert runner.ran("git", "checkout", _ROLLBACK)
+
+
+def test_a_settled_verdict_tolerates_a_pid_that_settles_partway_through() -> None:
+    """The confirmation restarts on a pid change rather than failing on one.
+
+    The point is to wait a settling stack out, not to judge it: a restart landing
+    mid-confirmation is exactly the normal case this budget exists for.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n"
+    )
+    runner.respond(
+        ("supervisorctl", "status"),
+        [_supervisor_status(7001), _supervisor_status(7002)],
+    )
+    http = _FakeHttp(_all_healthy)
+
+    code = _reveal(runner, http, _FakeSpawner())
+
+    assert code == 0
 
 
 def test_frontend_build_failure_rolls_back() -> None:
@@ -527,7 +611,7 @@ def test_dirty_tree_refuses_before_touching_anything() -> None:
     with pytest.raises(reveal_mod.PreconditionError):
         _reveal(runner, http, _FakeSpawner())
 
-    assert not runner.ran("mngr", "start")
+    assert not runner.ran("supervisorctl", "restart")
     assert not runner.ran("npm", "run", "build")
 
 

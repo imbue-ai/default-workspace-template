@@ -22,7 +22,13 @@ tabs (which proxy straight through) stayed current. The fix is a new
   only complete lines (a large snapshot exceeds the atomic append size, so the
   tail can hold a half-written line), and re-seeds if the file is truncated. If
   no process holds the observe lock there is nothing to follow, so it refuses to
-  start rather than tailing a dormant file.
+  start rather than tailing a dormant file. Losing the observer *later* -- an OOM
+  shed, a crash, an unrelated `supervisorctl restart` during a pass that runs for
+  an hour -- is a transient outage rather than the end: `/api/health` flips to 503
+  and says why for as long as it lasts, and the returning observer's opening
+  snapshot brings the instance back to 200 on its own. It used to freeze
+  permanently, which is the same silently-stale agent view this whole mode exists
+  to prevent, arriving at run time instead of at boot.
 
 The follower itself now comes from mngr rather than living here. `mngr observe`
 owns the event file's format, so the mechanics of tailing it (anchor the fold at a
@@ -35,8 +41,9 @@ an instance uses (`AgentEventsMode`) and how it reports whether events are arriv
 where a format change would be noticed.
 
 `AgentManager` now tracks whether lifecycle events are actually reaching it, in
-either mode, and a new `GET /api/health` reports it: 200 only when a fresh mngr
-discovery succeeds *and* the lifecycle stream is live, 503 otherwise. In both
+either mode, and a new `GET /api/health` reports it (`agent_events.is_stream_healthy`):
+200 only when a fresh mngr discovery succeeds *and* the lifecycle stream is live,
+503 otherwise. In both
 modes, "live" means an event has actually been folded -- merely spawning the
 observe subprocess does not count (an observer that loses the lock exits without
 ever emitting), and neither does starting a follower cleanly (it drops every
@@ -60,3 +67,9 @@ withheld rather than the call sites gated because `reapply` is reachable in
 runs `record_running_agents`, and the preview serves its own frontend, which can
 post `/api/activity` -- so a call site added later is inert by construction
 instead of needing to remember a mode check.
+
+An unknown `/api/*` path is now a JSON 404 instead of HTTP 200 with the app's
+`index.html`. The single-page-app catch-all answered any unmatched path with the
+shell, so a mistyped API fetch "succeeded" and its caller parsed a web page as
+data -- and probing whether a route existed yet reported that every route already
+did. Client-side routes are unaffected; only the `api/` prefix changes.

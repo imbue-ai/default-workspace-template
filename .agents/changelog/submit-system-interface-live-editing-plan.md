@@ -59,7 +59,14 @@ preview tab.
   a ref that does not exist -- destroying the just-created worker first, so a
   branch it cannot name does not leave a live agent behind (an orphan also wedges
   the next call, since `launch` refuses a stale report and `mngr create` refuses
-  the duplicate name). The `launch-task` skill documents the flag.
+  the duplicate name). That raise now reaches `launch-sync`'s caller as exit 2
+  like every other failure rather than as a traceback, a destroy that itself fails
+  reports both facts instead of replacing the original cause, and the worker name
+  is validated against mngr's own name rules before being interpolated into the
+  `mngr ls --include` filter -- a quote there reshapes the CEL expression rather
+  than failing, and the empty listing that comes back is indistinguishable from
+  "no such agent", which is the branch that destroys the worker. The `launch-task`
+  skill documents the flag.
 
 - `op-update.md`'s system-interface exception was retargeted at the new handoff:
   the worker's branch already carries the user-approved change, and the task says
@@ -83,10 +90,64 @@ preview tab.
   and lifecycle-stream trouble on the live UI is not something reverting a UI
   change would fix.
 
-- `serve_isolated_instance.py` now quotes the tail of the boot log on stderr when
-  an instance (or the preview wrapper, or a `refresh`) fails to become healthy,
-  instead of only naming the log file. The caller reading that stderr is an agent,
-  so the reason for the failure is now in front of it.
+- **A failed boot now states its cause and points at a log that still exists.**
+  `serve_isolated_instance.py` quotes the tail of the boot log on stderr when an
+  instance (or the preview wrapper, or a `refresh`) fails to become healthy, and
+  three things make that tail worth reading. The health probe keeps the response
+  *body* instead of only its status code, so a refusal's own sentence ("No 'mngr
+  observe' process holds ...") is the first thing in the message rather than a
+  bare `503` buried in access-log lines. Each spawn writes a boundary marker into
+  the (append-only, refresh-reused) log and the excerpt is scoped to the last one,
+  so a reboot that hangs at import shows *nothing* -- the truthful signal -- rather
+  than the previous boot's traceback, which sent an agent hunting a cause no longer
+  in the source. And a failed `up` copies the log to
+  `data/.state/isolated-instances/<name>-failed.log` before the teardown deletes
+  the state directory, so the path the message names is still there when the agent
+  goes to read the rest of it.
+
+- **`down` now verifies the process actually died, and says so when it did not.**
+  It sent SIGTERM and never looked, so a service that traps SIGTERM was reported
+  torn down while it kept serving on a port that stayed bound -- and the state file
+  naming its pid was deleted, leaving nothing able to find it again. It now
+  escalates (SIGTERM, wait, SIGKILL, wait) and only removes the state directory
+  once every recorded process group is confirmed gone; a survivor keeps the state,
+  names its pid, and exits non-zero. `up`'s partial-instance teardown escalates the
+  same way, and `up` refuses to boot over a stale instance it could not clear.
+
+- **An isolated instance is tagged into the `user` service OOM band (200).** It is
+  launched directly rather than as a supervisord program, so nothing else banded
+  it: it inherited the launching shell's band, and every Claude bash command
+  self-tags `AGENT_SUBPROCESS` (900) -- making the surface the user is actually
+  looking at the first non-browser thing shed under memory pressure, with nothing
+  re-polling health afterwards to tell them their tab had died. Both the inner
+  server and the preview wrapper are prefixed with the existing
+  `oom_tag_service.py user` wrapper, the same way `build-app` scaffolds a service.
+  The tradeoff is deliberate: at 200 the instance outlives every agent, including
+  the lead driving it.
+
+- **`reveal` restarts only the `system_interface` service, and its health verdict
+  is settled state.** It ran `mngr start --restart system-services`, and the
+  services agent *is* supervisord's parent -- so a dependency-only change bounced
+  every program in the workspace, and a 30s health budget then raced a whole-stack
+  restart storm. The dependency refresh touches this app's own venv and
+  `node_modules`, which nothing else consumes, so it is now
+  `supervisorctl restart system_interface`. The verdict that arms the automatic
+  rollback also stopped being a point-in-time probe: it requires several
+  consecutive healthy answers on an unchanging supervisord pid, over a 60s budget
+  matching the shared serve script's boot gate. Both directions were expensive --
+  the same cosmetic manifest change revealed twice reported "confirmed healthy"
+  while the pid was still turning over, then auto-rolled-back a change that was
+  never broken. The post-rollback "the live UI is confirmed healthy" claim uses
+  the same settled check.
+
+- **`update-system-interface` now says what to do when the hand-off cannot be
+  delivered.** `layout.py open` is the act of showing the user the preview, but
+  nothing covered every layout refusing it because no client is connected -- so a
+  lead improvised (verify privately, surface a screenshot) and then asked for
+  approval as though the user had seen the live surface. The skill now sanctions
+  the screenshot fallback *as* a fallback: say plainly that the live tab could not
+  be put on their screen, that approval on a still image is weaker, and re-attempt
+  the `open` rather than treating the screenshot round as the delivered preview.
 
 - `interactive-delivery.md` phase 5 was recast around **fast feedback**, with
   two demonstrative-prototype types chosen by wiring-cost vs. restart-cost: a
@@ -119,3 +180,16 @@ preview tab.
   regression test the harden gate already produced. This is the Step 2 test-only /
   no-surface carve-out applied at merge time, and it restores the two-part gate the
   plan specified (the skill had collapsed it to "essentially always").
+
+- **Three doc defects that cost two independent leads real time.**
+  `update-creation` and `heal-creation` spelled `create_worker.py await` without
+  its required `--name`, which argparse rejects -- and the background runner
+  reported the failed command as "completed (exit code 0)", so both leads read it
+  as the worker finishing. `type-system-interface.md` now says never to use
+  Playwright's `wait_until="networkidle"` against a system-interface instance: it
+  holds live connections, so the network never goes idle and the call burns its
+  whole timeout. And the "no `## Change origin` marker" exception is now stated in
+  `update-creation`, where the task-file format is *defined* and where a lead
+  actually looks, instead of only in `update-system-interface`'s Step 3 -- a lead
+  that read the general rule wrote the marker anyway and re-armed the gate the
+  exception exists to skip.

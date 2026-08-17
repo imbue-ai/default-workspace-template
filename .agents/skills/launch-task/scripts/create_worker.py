@@ -98,6 +98,7 @@ import argparse
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -126,6 +127,14 @@ class WorkerBranchUnknownError(ValueError):
     """Raised when mngr cannot tell us which branch the worker ended up on."""
 
 
+# What mngr accepts as an agent name (``SafeName``): alphanumeric, with dashes and
+# underscores allowed in the middle. Re-stated here because the name is
+# interpolated into a CEL filter string below, where a quote would silently
+# reshape the expression rather than fail -- and the failure it produces ("mngr
+# reports no agent named ...") reads as "the worker is gone" and destroys it.
+_MNGR_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$")
+
+
 def read_worker_branch(name: str, runner: Runner) -> str:
     """Ask mngr which branch the worker's work_dir is actually on.
 
@@ -140,6 +149,15 @@ def read_worker_branch(name: str, runner: Runner) -> str:
     answer sends them at a branch the worker never committed to. Raising is
     therefore better than guessing.
     """
+    if not _MNGR_SAFE_NAME_RE.match(name):
+        # The filter below embeds the name in a quoted CEL string, where a quote
+        # or a backslash reshapes the expression instead of failing it -- and the
+        # empty listing that follows is indistinguishable from "the worker is
+        # gone", which is the branch that destroys the worker.
+        raise WorkerBranchUnknownError(
+            f"{name!r} is not a name mngr can have given an agent (alphanumeric, with dashes "
+            "and underscores allowed in the middle), so it cannot be looked up"
+        )
     result = runner.run(
         [
             "mngr",
@@ -160,7 +178,9 @@ def read_worker_branch(name: str, runner: Runner) -> str:
     try:
         agents = json.loads(getattr(result, "stdout", "") or "")["agents"]
     except (ValueError, KeyError, TypeError) as e:
-        raise WorkerBranchUnknownError(f"could not parse `mngr ls` output for {name!r}: {e}") from e
+        raise WorkerBranchUnknownError(
+            f"could not parse `mngr ls` output for {name!r}: {e}"
+        ) from e
     if not agents:
         raise WorkerBranchUnknownError(f"mngr reports no agent named {name!r}")
     branch = agents[0].get("initial_branch")
@@ -869,7 +889,7 @@ def launch_sync(
     # would discard the report we had just collected.
     try:
         worker_branch = read_worker_branch(name, runner)
-    except WorkerBranchUnknownError:
+    except WorkerBranchUnknownError as branch_error:
         # The worker exists but we cannot name the branch our caller is supposed to
         # merge from, so proceeding is not an option. Destroy it rather than leaking
         # it: this file's own rule (see ``_flush_common_transcript``) is that a
@@ -877,7 +897,17 @@ def launch_sync(
         # wedges the next call -- ``launch`` refuses a stale report and ``mngr
         # create`` refuses the duplicate name, so the task could not be retried
         # without manual cleanup.
-        destroy(name, runner)
+        try:
+            destroy(name, runner)
+        except (OSError, subprocess.SubprocessError) as destroy_error:
+            # Both facts matter and neither may replace the other: the branch error
+            # is why we are here, and the destroy failing means the cleanup this
+            # path promises did not happen, so a worker really is orphaned.
+            raise WorkerBranchUnknownError(
+                f"{branch_error}; and the worker could not be destroyed afterwards "
+                f"({type(destroy_error).__name__}: {destroy_error}), so agent {name!r} "
+                "is orphaned -- clean it up with `mngr destroy` before retrying"
+            ) from branch_error
         raise
 
     buffer = io.StringIO()
@@ -972,19 +1002,27 @@ def _run_launch_sync(args: argparse.Namespace, runner: Runner | None) -> int:
     _read_finish_report_path(args.task_file)
     state_dir_env = os.environ.get("MNGR_AGENT_STATE_DIR")
     state_dir = Path(state_dir_env) if state_dir_env else None
-    return launch_sync(
-        name=args.name,
-        template=args.template,
-        runtime_dir=args.runtime_dir,
-        task_file=args.task_file,
-        timeout_seconds=args.timeout,
-        poll_interval_seconds=args.poll_interval,
-        destroy_on_finish=not args.keep_agent,
-        state_dir=state_dir,
-        runner=runner,
-        result_path=args.result_json,
-        branch=args.branch,
-    )
+    try:
+        return launch_sync(
+            name=args.name,
+            template=args.template,
+            runtime_dir=args.runtime_dir,
+            task_file=args.task_file,
+            timeout_seconds=args.timeout,
+            poll_interval_seconds=args.poll_interval,
+            destroy_on_finish=not args.keep_agent,
+            state_dir=state_dir,
+            runner=runner,
+            result_path=args.result_json,
+            branch=args.branch,
+        )
+    except WorkerBranchUnknownError as e:
+        # Not an authoring bug like the ValueError above: mngr answered, and its
+        # answer was that it cannot name the branch. That is an ordinary run-time
+        # failure of this command, so it reports like every other one instead of
+        # reaching the caller as a traceback.
+        sys.stderr.write(f"create_worker: {e}\n")
+        return 2
 
 
 def _run_destroy(args: argparse.Namespace, runner: Runner | None) -> int:

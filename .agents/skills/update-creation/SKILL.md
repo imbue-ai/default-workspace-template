@@ -137,6 +137,15 @@ Set `ORIGIN: committed` and `type:` as appropriate. Fill in the real
 content; do not leave placeholders. The `## Change origin` marker is required --
 the worker fails loudly if it is missing.
 
+**One exception, and it lives here so you meet it where the format is defined:**
+a `type: system-interface` harden task dispatched from `update-system-interface`
+carries **no `## Change origin` marker and no worker gate** (see the
+system-interface exception in `.agents/shared/worker/references/op-update.md`).
+That flow already got the user's approval through its live preview loop, so
+re-arming the gate would ask them to approve the same thing twice -- and writing
+the marker anyway, or telling the worker in the task body to follow it, puts the
+gate back. Every other task file needs it.
+
 ## Step 3: Launch the worker and poll
 
 **Commit any pending changes before you launch, and never harden inline.** The
@@ -156,8 +165,9 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/harden/update-$TARGET/task.md
 ```
 
-Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
-`run_in_background: true`) and follow `.agents/shared/references/lead-proxy.md`.
+Then background-poll (`create_worker.py await --name update-$TARGET --task-file
+... --timeout 90m`, `run_in_background: true`) and follow
+`.agents/shared/references/lead-proxy.md`.
 Flow-specific substitutions:
 
 - Worker name: `update-$TARGET`; branch: `mngr/update-$TARGET`

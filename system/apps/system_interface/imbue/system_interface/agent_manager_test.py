@@ -1126,7 +1126,7 @@ def test_dead_observe_subprocess_makes_the_lifecycle_stream_report_dead(
     try:
         manager._start_observe()
         went_dead = poll_until(
-            lambda: not manager.get_agent_events_status().is_alive
+            lambda: not manager.get_agent_events_status().is_stream_healthy
             and "exited unexpectedly" in manager.get_agent_events_status().detail,
             timeout=5.0,
             poll_interval=0.05,
@@ -1147,12 +1147,12 @@ def test_observe_mode_is_not_alive_until_an_event_actually_arrives(
     """
     before = agent_manager.get_agent_events_status()
     assert before.mode is AgentEventsMode.OBSERVE
-    assert before.is_alive is False
+    assert before.is_stream_healthy is False
 
     agent_manager._handle_observe_event(make_full_agent_state_event([_agent_details("first")]))
 
     after = agent_manager.get_agent_events_status()
-    assert after.is_alive is True
+    assert after.is_stream_healthy is True
 
 
 def test_follow_mode_folds_agents_from_the_running_observers_event_file(
@@ -1177,7 +1177,7 @@ def test_follow_mode_folds_agents_from_the_running_observers_event_file(
     try:
         manager.start()
         assert poll_until(
-            lambda: manager.get_agent_events_status().is_alive,
+            lambda: manager.get_agent_events_status().is_stream_healthy,
             timeout=5.0,
             poll_interval=0.05,
         ), f"status stayed {manager.get_agent_events_status()!r}"
@@ -1194,6 +1194,61 @@ def test_follow_mode_folds_agents_from_the_running_observers_event_file(
         assert poll_until(
             lambda: any(a.name == "created-later" for a in manager.get_agents()),
             timeout=5.0,
+            poll_interval=0.05,
+        ), f"agents were {manager.get_agents()!r}"
+    finally:
+        manager.stop()
+        release_observe_lock(lock_fd)
+
+
+def test_follow_mode_health_reopens_when_the_observer_restarts_under_it(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate has to reopen when the observer comes back, not only close when it goes.
+
+    The boot gate closed the door once and nothing watched it afterwards, so an
+    unrelated restart of the workspace's own system interface -- an OOM shed,
+    another flow's reveal, a plain ``supervisorctl restart`` -- left this instance
+    serving a permanently frozen agent view while every other part of it kept
+    working. That is the exact failure FOLLOW mode exists to prevent, arriving at
+    run time instead of at boot.
+    """
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    append_observe_event(tmp_path, make_full_agent_state_event([_agent_details("before-restart")]))
+
+    manager = AgentManager.build(broadcaster, events_mode=AgentEventsMode.FOLLOW)
+    lock_fd = acquire_observe_lock(tmp_path)
+    try:
+        manager.start()
+        assert poll_until(
+            lambda: manager.get_agent_events_status().is_stream_healthy,
+            timeout=5.0,
+            poll_interval=0.05,
+        ), f"status stayed {manager.get_agent_events_status()!r}"
+
+        # The observer exits, taking the event stream with it.
+        release_observe_lock(lock_fd)
+        assert poll_until(
+            lambda: not manager.get_agent_events_status().is_stream_healthy,
+            timeout=10.0,
+            poll_interval=0.05,
+        ), "the outage was never reported, so /api/health would have stayed 200"
+
+        # A new observer takes the lock and writes its opening snapshot.
+        lock_fd = acquire_observe_lock(tmp_path)
+        append_observe_event(tmp_path, make_full_agent_state_event([_agent_details("after-restart")]))
+        assert poll_until(
+            lambda: manager.get_agent_events_status().is_stream_healthy,
+            timeout=10.0,
+            poll_interval=0.05,
+        ), f"status stayed {manager.get_agent_events_status()!r}"
+        assert poll_until(
+            lambda: any(a.name == "after-restart" for a in manager.get_agents()),
+            timeout=10.0,
             poll_interval=0.05,
         ), f"agents were {manager.get_agents()!r}"
     finally:
@@ -1238,7 +1293,7 @@ def test_follow_mode_does_not_run_the_oom_staleness_sweep(
     try:
         manager.start()
         assert poll_until(
-            lambda: manager.get_agent_events_status().is_alive,
+            lambda: manager.get_agent_events_status().is_stream_healthy,
             timeout=5.0,
             poll_interval=0.05,
         ), f"status stayed {manager.get_agent_events_status()!r}"
@@ -1274,11 +1329,11 @@ def test_follow_mode_is_not_alive_until_a_snapshot_has_been_folded(
         manager.start()
         status = manager.get_agent_events_status()
         assert status.mode is AgentEventsMode.FOLLOW
-        assert status.is_alive is False
+        assert status.is_stream_healthy is False
 
         append_observe_event(tmp_path, make_full_agent_state_event([_agent_details("first")]))
         assert poll_until(
-            lambda: manager.get_agent_events_status().is_alive,
+            lambda: manager.get_agent_events_status().is_stream_healthy,
             timeout=5.0,
             poll_interval=0.05,
         ), f"status stayed {manager.get_agent_events_status()!r}"
@@ -1302,7 +1357,7 @@ def test_follow_mode_reports_dead_when_there_is_no_observer_to_follow(
         manager.start()
         status = manager.get_agent_events_status()
         assert status.mode is AgentEventsMode.FOLLOW
-        assert status.is_alive is False
+        assert status.is_stream_healthy is False
         assert "mngr observe" in status.detail
     finally:
         manager.stop()

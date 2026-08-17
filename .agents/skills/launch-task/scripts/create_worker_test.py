@@ -169,7 +169,9 @@ def test_no_branch_omits_the_flag(tmp_path: Path) -> None:
 
 def _mngr_ls_result(branch: object, name: str = "demo-worker") -> _StubResult:
     """A canned ``mngr ls --format json`` payload naming the agent's branch."""
-    return _StubResult(stdout=json.dumps({"agents": [{"name": name, "initial_branch": branch}]}))
+    return _StubResult(
+        stdout=json.dumps({"agents": [{"name": name, "initial_branch": branch}]})
+    )
 
 
 def test_read_worker_branch_reports_what_mngr_says() -> None:
@@ -182,7 +184,10 @@ def test_read_worker_branch_reports_what_mngr_says() -> None:
     runner = _RecordingRunner()
     runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/update-my-slug"))
 
-    assert create_worker_mod.read_worker_branch("demo-worker", runner) == "mngr/update-my-slug"
+    assert (
+        create_worker_mod.read_worker_branch("demo-worker", runner)
+        == "mngr/update-my-slug"
+    )
     ls_call = next(c for c in runner.calls if c.argv[:2] == ["mngr", "ls"])
     assert ls_call.argv[-2:] == ["--format", "json"]
 
@@ -195,7 +200,9 @@ def test_read_worker_branch_reports_what_mngr_says() -> None:
         # Listed, but no such agent.
         _StubResult(stdout='{"agents": []}'),
         # Listed, but mngr knows no branch for it (no git work_dir).
-        _StubResult(stdout='{"agents": [{"name": "demo-worker", "initial_branch": null}]}'),
+        _StubResult(
+            stdout='{"agents": [{"name": "demo-worker", "initial_branch": null}]}'
+        ),
         # Output that is not the expected shape at all.
         _StubResult(stdout="not json"),
     ],
@@ -247,6 +254,97 @@ def test_launch_sync_destroys_the_worker_when_its_branch_cannot_be_read(
     assert destroys == [["mngr", "destroy", "demo-worker", "--force"]]
 
 
+@pytest.mark.parametrize(
+    "name", ['demo" || name != "x', "demo\\", "-demo", "de mo", ""]
+)
+def test_read_worker_branch_refuses_a_name_mngr_could_not_have_given(name: str) -> None:
+    """The name is interpolated into a quoted CEL filter, which cannot fail loudly.
+
+    A quote reshapes the expression instead of erroring, and the empty listing that
+    comes back is indistinguishable from "no such agent" -- which is the branch
+    that destroys the worker. So a name mngr could never have assigned is rejected
+    before it reaches the filter.
+    """
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/whatever"))
+
+    with pytest.raises(create_worker_mod.WorkerBranchUnknownError):
+        create_worker_mod.read_worker_branch(name, runner)
+
+    assert not [c for c in runner.calls if c.argv[:2] == ["mngr", "ls"]]
+
+
+def test_launch_sync_reports_both_failures_when_the_cleanup_destroy_also_fails(
+    tmp_path: Path,
+) -> None:
+    """A failed destroy must not replace the error that caused it.
+
+    Both facts are needed: why the branch could not be read, and that the worker
+    this path promises to clean up is actually still there.
+    """
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    _write_launch_sync_task(task, report)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), _StubResult(returncode=1, stderr="boom"))
+    runner.respond(
+        ("mngr", "destroy"),
+        subprocess.CalledProcessError(
+            1, ["mngr", "destroy"], stderr="host unreachable"
+        ),
+    )
+
+    with pytest.raises(create_worker_mod.WorkerBranchUnknownError) as exc_info:
+        create_worker_mod.launch_sync(
+            name="demo-worker",
+            template="worker",
+            runtime_dir=runtime,
+            task_file=task,
+            timeout_seconds=30,
+            poll_interval_seconds=5,
+            runner=runner,
+            sleeper=lambda _seconds: None,
+            clock=lambda: 0.0,
+            out=io.StringIO(),
+        )
+
+    message = str(exc_info.value)
+    assert "boom" in message, "the original cause must survive"
+    assert "orphaned" in message, "and the failed cleanup must be stated too"
+
+
+def test_main_launch_sync_exits_2_on_an_unreadable_branch(tmp_path: Path) -> None:
+    """mngr answering "I cannot name the branch" is a run-time failure, not a crash.
+
+    Escaping ``main`` as a traceback makes the caller read it as a bug in this
+    script rather than as the reportable outcome every other failure here has.
+    """
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    _write_launch_sync_task(task, report)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "ls"), _StubResult(returncode=1, stderr="boom"))
+
+    rc = create_worker_mod.main(
+        [
+            "launch-sync",
+            "--name",
+            "demo-worker",
+            "--template",
+            "worker",
+            "--runtime-dir",
+            str(runtime),
+            "--task-file",
+            str(task),
+        ],
+        runner=runner,
+    )
+
+    assert rc == 2
+
+
 def test_launch_sync_publishes_the_branch_mngr_reports(tmp_path: Path) -> None:
     # End to end: the published result names whatever mngr says the worker is on,
     # even when that differs from the conventional mngr/<name>.
@@ -266,7 +364,9 @@ def test_launch_sync_publishes_the_branch_mngr_reports(tmp_path: Path) -> None:
         timeout_seconds=30,
         poll_interval_seconds=5,
         runner=runner,
-        sleeper=_write_report_on_sleep(report, "---\ntype: status\nname: done\n---\n\nok\n"),
+        sleeper=_write_report_on_sleep(
+            report, "---\ntype: status\nname: done\n---\n\nok\n"
+        ),
         clock=lambda: 0.0,
         out=io.StringIO(),
         result_path=result_json,
@@ -721,10 +821,15 @@ def test_set_frontmatter_field_replaces_inserts_and_ignores_bodyless() -> None:
     assert "lead_agent: new" in replaced
     assert "lead_agent: old" not in replaced
     assert "x: 1" in replaced  # sibling fields preserved
-    inserted = create_worker_mod._set_frontmatter_field("---\nx: 1\n---\nbody\n", "lead_agent", "new")
+    inserted = create_worker_mod._set_frontmatter_field(
+        "---\nx: 1\n---\nbody\n", "lead_agent", "new"
+    )
     assert "lead_agent: new" in inserted
     assert "x: 1" in inserted
-    assert create_worker_mod._set_frontmatter_field("just body", "lead_agent", "new") == "just body"
+    assert (
+        create_worker_mod._set_frontmatter_field("just body", "lead_agent", "new")
+        == "just body"
+    )
 
 
 def test_runtime_dir_must_exist(
@@ -997,7 +1102,9 @@ def _write_await_task(task_file: Path, report_path: Path) -> None:
 
 def test_await_returns_report_immediately_when_present(tmp_path: Path) -> None:
     """A report already on disk is printed at once, before any sleep."""
-    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
     report.parent.mkdir(parents=True)
     report.write_text("---\ntype: status\nname: done\n---\n\nall good\n")
     out = io.StringIO()
@@ -1021,7 +1128,9 @@ def test_await_returns_report_immediately_when_present(tmp_path: Path) -> None:
 
 def test_await_polls_until_report_appears(tmp_path: Path) -> None:
     """await loops, sleeping, until the report shows up, then prints it."""
-    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
     report.parent.mkdir(parents=True)
     out = io.StringIO()
 
@@ -1050,7 +1159,9 @@ def test_await_times_out_when_report_never_appears(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """When the deadline passes with no report, await returns the timeout code."""
-    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
     report.parent.mkdir(parents=True)
     out = io.StringIO()
 
@@ -1073,7 +1184,9 @@ def test_await_returns_shed_code_when_worker_shed(
 ) -> None:
     """A worker shed for memory pressure ends the poll early with the shed code
     and an actionable revive message -- not the silent full-length timeout."""
-    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
     report.parent.mkdir(parents=True)
     out = io.StringIO()
 
@@ -1097,7 +1210,9 @@ def test_await_returns_shed_code_when_worker_shed(
 def test_await_report_wins_over_pending_shed(tmp_path: Path) -> None:
     """The report file is checked before the shed ledger, so a worker that
     reported and was then shed still yields its report (rc 0)."""
-    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
     report.parent.mkdir(parents=True)
     report.write_text("---\ntype: status\nname: done\n---\n\nfinished first\n")
     out = io.StringIO()
@@ -1120,7 +1235,9 @@ def test_await_report_wins_over_pending_shed(tmp_path: Path) -> None:
 def test_read_finish_report_path_returns_field(tmp_path: Path) -> None:
     """_read_finish_report_path pulls the path out of the task frontmatter."""
     task = tmp_path / "task.md"
-    _write_await_task(task, Path("data/.tasks/harden/crystallize-demo/reports/report.md"))
+    _write_await_task(
+        task, Path("data/.tasks/harden/crystallize-demo/reports/report.md")
+    )
 
     result = create_worker_mod._read_finish_report_path(task)
 
@@ -1148,7 +1265,9 @@ def test_main_await_prints_report(
     The report exists up front, so main()'s real ``time.sleep`` is never
     reached and the loop returns immediately.
     """
-    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
     report.parent.mkdir(parents=True)
     report.write_text("hello from worker\n")
     task = tmp_path / "task.md"
@@ -1291,7 +1410,7 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
     _write_launch_sync_task(task, report)
     result_json = tmp_path / "result.json"
     runner = _RecordingRunner()
-    runner.respond(('mngr', 'ls'), _mngr_ls_result('mngr/demo-worker'))
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/demo-worker"))
     out = io.StringIO()
 
     rc = create_worker_mod.launch_sync(
@@ -1400,7 +1519,7 @@ def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
     report.parent.mkdir(parents=True)
     _write_launch_sync_task(task, report)
     runner = _RecordingRunner()
-    runner.respond(('mngr', 'ls'), _mngr_ls_result('mngr/demo-worker'))
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/demo-worker"))
 
     rc = create_worker_mod.launch_sync(
         name="demo-worker",
@@ -1431,7 +1550,7 @@ def test_launch_sync_timeout_keeps_worker_alive(tmp_path: Path) -> None:
     _write_launch_sync_task(task, report)
     result_json = tmp_path / "result.json"
     runner = _RecordingRunner()
-    runner.respond(('mngr', 'ls'), _mngr_ls_result('mngr/demo-worker'))
+    runner.respond(("mngr", "ls"), _mngr_ls_result("mngr/demo-worker"))
 
     rc = create_worker_mod.launch_sync(
         name="demo-worker",

@@ -102,6 +102,11 @@ _FRONTEND_NOT_BUILT_HTML = (
     "<html><body><p>Frontend not built. Run <code>npm run build</code> in <code>frontend/</code>.</p></body></html>"
 )
 
+# The prefix every API route shares, as the single-page-app catch-all sees it
+# (no leading slash). Anything under it that reaches the catch-all is a path no
+# API route claimed, and must not be answered with the app shell.
+_API_PATH_PREFIX = "api/"
+
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
 
@@ -225,6 +230,13 @@ def _index() -> Response:
 
 
 def _index_catch_all(path: str) -> Response:
+    # An /api path reaching the catch-all matched no API route. Falling through to
+    # the app shell would answer it 200 with index.html, so a mistyped API fetch
+    # "succeeds" and its caller parses a web page as data -- and probing whether a
+    # route exists yet reports that every route already does.
+    if path.startswith(_API_PATH_PREFIX):
+        error = ErrorResponse(detail=f"No such API route: /{path}")
+        return _json_response(error.model_dump(), status_code=404)
     # An agent-authored file is addressed by its absolute on-disk path, which
     # lands here as a catch-all path; serve it (image inline, any other existing
     # file as a download) before falling through to the single-page-app shell.
@@ -284,11 +296,11 @@ def _health_endpoint() -> Response:
     agents = _discover_with_filters()
     status = get_state().agent_manager.get_agent_events_status()
     payload = {
-        "status": "ok" if status.is_alive else "degraded",
+        "status": "ok" if status.is_stream_healthy else "degraded",
         "agent_count": len(agents),
         "agent_events": status.model_dump(mode="json"),
     }
-    return _json_response(payload, status_code=200 if status.is_alive else 503)
+    return _json_response(payload, status_code=200 if status.is_stream_healthy else 503)
 
 
 def _find_agent(agent_id: str) -> AgentInfo | None:

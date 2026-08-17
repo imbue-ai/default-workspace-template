@@ -44,12 +44,12 @@ class AgentEventsMode(UpperCaseStrEnum):
 class AgentEventsStatus(FrozenModel):
     """Whether the agent-lifecycle event stream is actually feeding this instance.
 
-    ``is_alive`` is the thing a health gate must assert. It is deliberately *not*
+    ``is_stream_healthy`` is the thing a health gate must assert. It is deliberately *not*
     "can I list agents": a one-shot discovery works fine on an instance whose
     lifecycle stream is dead, which is exactly how a broken preview used to pass
     its health check.
     """
 
     mode: AgentEventsMode = Field(description="How this instance sources lifecycle events")
-    is_alive: bool = Field(description="Whether lifecycle events are actually reaching this instance")
+    is_stream_healthy: bool = Field(description="Whether lifecycle events are actually reaching this instance")
     detail: str = Field(description="Human-readable explanation of the current state")
