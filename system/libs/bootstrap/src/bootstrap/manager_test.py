@@ -22,6 +22,7 @@ from bootstrap.manager import (
     _build_create_chat_command,
     _configure_git_global,
     _fetch_user_timezone,
+    _file_initial_chat_title,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
     _maybe_create_initial_chat,
@@ -151,9 +152,7 @@ def test_build_create_chat_command_includes_welcome_and_template() -> None:
     cmd = _build_create_chat_command(
         "my-workspace", {"workspace": "my-workspace"}, True
     )
-    # The first chat is named "Chat 1" (the series the launcher continues),
-    # created on the workspace's host rather than inheriting its name.
-    assert cmd[:3] == ["mngr", "create", "Chat 1@my-workspace"]
+    assert cmd[:3] == ["mngr", "create", "my-workspace"]
     # The harness rides `--type claude`; the role rides the lone `--template`.
     assert cmd[cmd.index("--type") + 1] == "claude"
     templates = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--template"]
@@ -356,6 +355,55 @@ def test_persist_initial_chat_agent_id_skips_when_host_dir_unset(
     monkeypatch.chdir(tmp_path)
     _persist_initial_chat_agent_id("agent-abc")
     assert not (tmp_path / INITIAL_CHAT_AGENT_ID_FILENAME).exists()
+
+
+# --- _file_initial_chat_title ---
+
+
+def test_file_initial_chat_title_names_the_first_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The mngr agent keeps its host-derived name; "Chat 1" goes into the
+    # machine-wide title store the launcher's own creates file into, in the
+    # exact shape system_interface's member_titles.py reads back.
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-services")
+
+    _file_initial_chat_title("agent-abc")
+
+    titles_path = (
+        tmp_path / "agents" / "agent-services" / "workspace_layout" / "member_titles.json"
+    )
+    assert json.loads(titles_path.read_text()) == {
+        "title_by_ref": {"chat:agent-abc": "Chat 1"}
+    }
+
+
+def test_file_initial_chat_title_merges_into_an_existing_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-services")
+    layout_dir = tmp_path / "agents" / "agent-services" / "workspace_layout"
+    layout_dir.mkdir(parents=True)
+    (layout_dir / "member_titles.json").write_text(
+        json.dumps({"title_by_ref": {"terminal:build": "Build box"}})
+    )
+
+    _file_initial_chat_title("agent-abc")
+
+    assert json.loads((layout_dir / "member_titles.json").read_text()) == {
+        "title_by_ref": {"terminal:build": "Build box", "chat:agent-abc": "Chat 1"}
+    }
+
+
+def test_file_initial_chat_title_skips_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    _file_initial_chat_title("agent-abc")
+    assert not (tmp_path / "agents").exists()
 
 
 # --- _maybe_create_initial_chat ---

@@ -193,11 +193,7 @@ def _build_create_chat_command(
     cmd: list[str] = [
         "mngr",
         "create",
-        # Named explicitly so the first chat's tab reads "Chat 1" -- the same
-        # series the launcher's Chat tile continues ("Chat 2", ...) -- rather
-        # than inheriting the workspace's name from the host. First boot, so
-        # the name is always free.
-        f"Chat 1@{host_name}",
+        host_name,
         # `--transfer none` matches what `AgentManager.create_chat_agent`
         # uses for the "New Chat" button (system/apps/system_interface/.../
         # agent_manager.py). Without it, mngr defaults to creating a
@@ -273,6 +269,44 @@ def _persist_initial_chat_agent_id(agent_id: str) -> None:
     logger.info("Persisted initial chat agent id {} for welcome resend", agent_id)
 
 
+def _file_initial_chat_title(agent_id: str) -> None:
+    """Name the initial chat "Chat 1" in the workspace's machine-wide title store.
+
+    The mngr-level agent name stays the host's (an mngr name cannot hold the
+    space anyway); "Chat 1" is filed as the display name, exactly as the New
+    Tab launcher files "Chat N" for the chats it creates -- so the first tab
+    reads like every later one and the launcher's numbering continues from it.
+    The store is system_interface's `member_titles.json` under the services
+    agent's workspace_layout; its format is repeated here (not imported) to
+    keep bootstrap's dependencies minimal, the same trade
+    `FAST_MODE_DECISION_FILE` makes above. Bootstrap runs before supervisord
+    starts the system interface, so nothing else is touching the file yet.
+    Best-effort: the chat works fine under its derived name.
+    """
+    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
+    services_agent_id = os.environ.get(_AGENT_ID_ENV_VAR, "")
+    if not host_dir or not services_agent_id:
+        logger.warning("Host dir or agent id unset; leaving the initial chat under its derived name")
+        return
+    layout_dir = Path(host_dir) / "agents" / services_agent_id / "workspace_layout"
+    titles_path = layout_dir / "member_titles.json"
+    try:
+        stored = json.loads(titles_path.read_text()) if titles_path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        stored = {}
+    title_by_ref = stored.get("title_by_ref") if isinstance(stored, dict) else None
+    if not isinstance(title_by_ref, dict):
+        title_by_ref = {}
+    title_by_ref[f"chat:{agent_id}"] = "Chat 1"
+    try:
+        layout_dir.mkdir(parents=True, exist_ok=True)
+        titles_path.write_text(json.dumps({"title_by_ref": title_by_ref}, indent=2))
+    except OSError as e:
+        logger.warning("Failed to file the initial chat's title: {}", e)
+        return
+    logger.info("Filed the initial chat's display name as 'Chat 1'")
+
+
 def _create_initial_chat_agent(host_name: str, labels: dict[str, str]) -> bool:
     """Invoke `mngr create` for the initial chat agent; persist its id. Returns success."""
     cmd = _build_create_chat_command(
@@ -291,6 +325,7 @@ def _create_initial_chat_agent(host_name: str, labels: dict[str, str]) -> bool:
     agent_id = _parse_created_agent_id(result.stdout)
     if agent_id is not None:
         _persist_initial_chat_agent_id(agent_id)
+        _file_initial_chat_title(agent_id)
     else:
         logger.error(
             "Initial chat agent created but could not parse agent_id from output: {!r}",
