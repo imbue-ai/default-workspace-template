@@ -8,7 +8,7 @@
 # VM-install pin (see the bump-owner-exec skill).
 set -euo pipefail
 
-OWNER_EXEC_VERSION="v0.2.0"
+OWNER_EXEC_VERSION="v0.2.1"
 OWNER_EXEC_REPO="imbue-ai/owner-exec"
 INSTALL_PATH="/usr/local/bin/owner-exec"
 VERSION_STAMP="/usr/local/bin/.owner-exec-version"
