@@ -1,0 +1,1 @@
+`system/vendor/mngr` is refreshed to the mngr commit that minds 0.3.16 ships (mngr-internal `mngr/make-next-build` @ 8530898951), so a workspace's in-VM agent runs the same mngr the desktop binary does.
