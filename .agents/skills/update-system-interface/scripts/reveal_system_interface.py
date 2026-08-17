@@ -1150,24 +1150,35 @@ def reveal(
             sys.stderr.write(
                 f"reveal failed: {exc}\nrolling back to {rollback_to[:12]} and restoring the live UI...\n"
             )
-            _restore_tree(name_status, rollback_to, repo_root, runner)
-            _commit_rollback(
-                repo_root,
-                runner,
-                rollback_to,
-                f"Reveal failed and was auto-reverted: {exc}",
-            )
-            if _recover_running_state(
-                changes,
-                repo_root,
-                resolved_base,
-                runner,
-                http,
-                sleeper,
-                live_service_restarted=exc.live_service_restarted,
-                saved_bundle=saved_bundle,
-                is_frontend_expected=is_frontend_expected,
-            ):
+            # The rollback's own git steps run with ``check=True``. Letting one
+            # escape would leave the process reporting exit 1 -- "nothing was
+            # changed" -- over a part-restored tree with the bundle already
+            # destroyed, and the ``finally`` below would discard the copy on the
+            # way out. Not recovering is exactly what the emergency path below
+            # is for, so route it there and keep the copy.
+            try:
+                _restore_tree(name_status, rollback_to, repo_root, runner)
+                _commit_rollback(
+                    repo_root,
+                    runner,
+                    rollback_to,
+                    f"Reveal failed and was auto-reverted: {exc}",
+                )
+                is_recovered = _recover_running_state(
+                    changes,
+                    repo_root,
+                    resolved_base,
+                    runner,
+                    http,
+                    sleeper,
+                    live_service_restarted=exc.live_service_restarted,
+                    saved_bundle=saved_bundle,
+                    is_frontend_expected=is_frontend_expected,
+                )
+            except subprocess.CalledProcessError as rollback_exc:
+                sys.stderr.write(f"the rollback itself failed: {rollback_exc}\n")
+                is_recovered = False
+            if is_recovered:
                 if is_frontend_expected:
                     sys.stderr.write(
                         "rolled back to last-known-good; the live UI is confirmed healthy. "

@@ -23,6 +23,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -944,6 +945,31 @@ def test_an_emergency_hands_the_bundle_snapshot_to_the_operator(
     # Named on stderr, and actually a bundle -- a path to an empty directory
     # would be worse than saying nothing. (Reaped by
     # ``reap_snapshots_left_for_the_operator``, since nothing else does now.)
+    kept = _kept_snapshot_path(capsys.readouterr().err)
+    assert (kept / "index.html").exists()
+
+
+def test_a_rollback_whose_own_git_fails_is_an_emergency_that_keeps_the_snapshot(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The rollback's git steps run with ``check=True``.
+
+    An escape there would surface as exit 1 -- the code that means nothing was
+    changed -- over a part-restored tree whose bundle the failed build already
+    destroyed, and would discard the copy on the way out. Not recovering is what
+    exit 3 is for, and the copy is what makes it survivable.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="type error"))
+    runner.respond(
+        ("git", "checkout"),
+        subprocess.CalledProcessError(1, ["git", "checkout"], stderr="index.lock"),
+    )
+
+    assert _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner(), repo) == 3
+
     kept = _kept_snapshot_path(capsys.readouterr().err)
     assert (kept / "index.html").exists()
 
