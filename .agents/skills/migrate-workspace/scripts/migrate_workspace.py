@@ -1307,11 +1307,15 @@ def _cmd_list_agents(args: argparse.Namespace) -> int:
                 agent._asdict() for agent in sorted(agents, key=lambda a: a.name)
             ],
             "unreadable": unreadable,
-            "caveat": (
+            # The empty-scan warning takes over `caveat` when it fires: Step 5
+            # tells the lead to read `caveat` and nothing else, so under its own
+            # key it would go unread -- and with no agents found, the
+            # no-session-file caveat describes nothing anyway.
+            "caveat": _empty_scan_warning(host_dir, agents, session_paths)
+            or (
                 "An agent with no session file has no transcript to adopt -- it can be "
                 "recreated empty or skipped, which is a question for the user."
             ),
-            "suspect_empty": _empty_scan_warning(host_dir, agents, session_paths),
         },
     )
 
