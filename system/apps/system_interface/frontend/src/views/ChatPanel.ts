@@ -30,17 +30,25 @@ import { OVERSCAN_PX } from "./row-measurement";
 import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
 import { createTranscriptScroll } from "./transcript-scroll";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
-import { getAgentById, getProtoAgents } from "../models/AgentManager";
+import {
+  addAgentsUpdatedListener,
+  getAgentById,
+  getProtoAgents,
+  removeAgentsUpdatedListener,
+} from "../models/AgentManager";
 import { openLoginModal } from "../models/ClaudeAuth";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
+import { PoweredByCredit } from "./PoweredByCredit";
+import { ModelBar } from "./ModelBar";
 import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
 import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
-import { renderPendingMessages } from "./PendingMessageView";
+import { renderQueuedMessages } from "./QueuedMessageView";
+import { renderOutgoingMessages } from "./OutgoingMessageView";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -232,7 +240,15 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   let screenContent: string | null = null;
   let screenError: string | null = null;
   let screenLoading = false;
-  let screenAgentId: string | null = null;
+  // The agent a capture has already been attempted for. Set before the request
+  // and never cleared for that agent, so an attempt that comes back empty (a
+  // crashed agent with no pane to capture, or a 404 while the agent is still
+  // being registered) does not re-arm the fetch. The not-found view calls this
+  // from every render and the fetch ends in `m.redraw()`, so a guard keyed on
+  // the *result* -- as an unset `screenContent` was -- feeds itself: each empty
+  // result triggers the redraw that issues the next request, which is an
+  // unbounded request loop rather than the one-shot capture the view wants.
+  let screenAttemptedAgentId: string | null = null;
 
   // Proto-agent log state
   let logWs: WebSocket | null = null;
@@ -243,10 +259,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   let logAgentId: string | null = null;
 
   async function fetchScreenCapture(agentId: string): Promise<void> {
-    if (screenAgentId === agentId && (screenContent !== null || screenLoading)) {
+    if (screenAttemptedAgentId === agentId) {
       return;
     }
-    screenAgentId = agentId;
+    screenAttemptedAgentId = agentId;
     screenLoading = true;
     screenContent = null;
     screenError = null;
@@ -363,7 +379,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     } catch (error) {
       if (agentId === currentAgentId) {
         loading = false;
-        loadingError = (error as Error).message ?? String(error);
+        // mithril attaches the parsed JSON error body to `.response`; the server
+        // sends the human-readable reason there as `detail`. Reading `.message`
+        // alone surfaces the raw body object as "[object Object]".
+        const errResp = (error as { response?: { detail?: string } }).response;
+        loadingError = errResp?.detail ?? (error as Error).message ?? String(error);
       }
     }
   }
@@ -385,6 +405,43 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     scroll.reset();
     backfillInFlight = false;
     loadAgent(agentId);
+  }
+
+  // A retry of the snapshot that 404'd is outstanding; only one at a time.
+  let notFoundRetryInFlight = false;
+
+  /**
+   * Re-load a panel whose first events fetch 404'd, once the backend knows the
+   * agent.
+   *
+   * A newly created chat lands in that window by construction: create-chat
+   * returns 201 as soon as the background `mngr create` starts, and the agent is
+   * only registered when that finishes, so the panel's first fetch races ahead
+   * of it. `fetchEvents` latches the miss and only ever clears it on its own next
+   * call, which `ensureAgentLoaded` never makes for an agent it has already
+   * loaded -- so without this the panel sits on "No conversation data" until the
+   * page is reloaded.
+   *
+   * The trigger is the `agents_updated` snapshot rather than a retry timer, and
+   * it cannot spin: `/events` resolves the agent through the same
+   * `AgentManager._agents` that feeds `agents_updated`, so the agent being named
+   * here is exactly the condition under which the refetch stops 404ing.
+   */
+  function retryAfterAgentResolved(): void {
+    const agentId = currentAgentId;
+    if (agentId === null || notFoundRetryInFlight || !isConversationNotFound(agentId)) {
+      return;
+    }
+    // Read the agent store rather than the broadcast payload, which is filtered
+    // to the user-facing agents.
+    if (getAgentById(agentId) === undefined) {
+      return;
+    }
+    notFoundRetryInFlight = true;
+    loadAgent(agentId).finally(() => {
+      notFoundRetryInFlight = false;
+      m.redraw();
+    });
   }
 
   /**
@@ -499,8 +556,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     phantomTopHeight = 0;
     phantomBottomHeight = 0;
 
+    // The build log covers creation, so it only applies while the agent is not
+    // yet a real one. Both branches below are gated on that: the proto-agent
+    // list is rebuilt from broadcasts and can name an agent that has since been
+    // registered (the `proto_agent_created` for a finished creation, delivered
+    // late), and asking for its creation log then gets the backend's
+    // "Proto-agent not found" -- which reads as `logDone && !logSuccess` and
+    // would strand a perfectly healthy chat on a "creation failed" screen.
+    const isRegisteredAgent = getAgentById(agentId) !== undefined;
+
     // If this agent is still being created, show the build log
-    if (isProtoAgent(agentId)) {
+    if (isProtoAgent(agentId) && !isRegisteredAgent) {
       return renderBuildLog(agentId);
     }
 
@@ -510,7 +576,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // screen the instant proto_agent_completed arrives and the error flashes
     // by unreadably. The agent will never be added to getAgents() on
     // failure, so nothing else in the UI would surface the error either.
-    if (logAgentId === agentId && logDone && !logSuccess) {
+    if (logAgentId === agentId && logDone && !logSuccess && !isRegisteredAgent) {
       return renderBuildLog(agentId);
     }
 
@@ -583,18 +649,18 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const events = getEventsForAgent(agentId);
 
     if (events.length === 0) {
-      // No transcript yet -- but the user may have just sent their first
-      // message, which should still show immediately as an optimistic bubble
-      // rather than be hidden behind the empty-state placeholder.
-      const pendingNodes = renderPendingMessages(agentId);
-      if (pendingNodes.length === 0) {
+      // No transcript yet -- but a message the user just sent may already be
+      // queued (the harness parked it) or still in flight (an optimistic
+      // "Sending…" bubble), so render those rather than the empty-state placeholder.
+      const tailNodes = [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)];
+      if (tailNodes.length === 0) {
         return m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
           m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
         );
       }
-      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, pendingNodes)]);
+      return m("div", { class: "message-list-wrapper" }, [m("div", { class: MESSAGE_LIST_CLASS }, tailNodes)]);
     }
 
     const agent = getAgentById(agentId);
@@ -609,7 +675,14 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // transcript. Only an idle fast-mode chat in a workspace that has not
     // answered reaches that walk, and it raises the modal on the first render
     // that does, so the window is the one the user is about to close.
-    maybePromptForFastMode(agentId, events, agentIsIdle);
+    //
+    // Gated to Claude: the grace-period prompt is a Claude billing concept (run
+    // fast for a while, then ask whether to keep paying). Other harnesses have
+    // their own notion of "fast" and their own billing, so it is not fired for
+    // every agent whose model merely reports fast=true.
+    if (agent?.harness === "claude") {
+      maybePromptForFastMode(agentId, events, agentIsIdle);
+    }
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
@@ -672,17 +745,26 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     });
 
     return m("div", { class: "message-list-wrapper" }, [
-      // Pending (optimistic) messages render after the virtualized rows so a
-      // just-sent bubble shows at the live tail until its real event lands.
+      // The queued-message group renders after the virtualized rows so it sits at
+      // the live tail, below the last committed turn. It is a full snapshot from
+      // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
         ...renderTranscriptSegments(rows, segments),
-        ...renderPendingMessages(agentId),
+        ...renderQueuedMessages(agentId),
+        ...renderOutgoingMessages(agentId),
       ]),
     ]);
   }
 
+  const handleAgentsUpdated = (): void => retryAfterAgentResolved();
+
   return {
+    oninit() {
+      addAgentsUpdatedListener(handleAgentsUpdated);
+    },
+
     onremove() {
+      removeAgentsUpdatedListener(handleAgentsUpdated);
       disconnectLogWs();
       scroll.detach();
       if (currentAgentId !== null) {
@@ -787,28 +869,37 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 m(EmptySlot, { name: "conversation-before-input" }),
                 isConversationNotFound(agentId)
                   ? null
-                  : m(ActivityIndicator, { agentId, events: getEventsForAgent(agentId) }),
+                  : m(ActivityIndicator, {
+                      agentId,
+                      events: getEventsForAgent(agentId),
+                    }),
                 m(MessageInput, { agentId }),
-                m("div", { class: "chat-agent-terminal-link" }, [
-                  m(
-                    "button",
-                    {
-                      type: "button",
-                      onclick: () => openAgentTerminalTab(agentId),
-                    },
-                    "Open agent terminal",
-                  ),
-                  m("span", { class: "chat-agent-terminal-link-sep" }, " · "),
-                  // Persistent entry to the Claude sign-in modal so the user
-                  // can switch auth modes without waiting for an auth error.
-                  m(
-                    "button",
-                    {
-                      type: "button",
-                      onclick: () => openLoginModal(),
-                    },
-                    "Agent auth",
-                  ),
+                // Below the chat input: the original flex row -- model bar on the left, the
+                // agent-terminal + harness-auth actions right-aligned. The "Powered by" credit is
+                // rendered last as a centered overlay (absolute, pointer-events:none) so it sits
+                // in the middle without reshaping the row. Shared font, no background of its own.
+                m("div", { class: "composer-under-bar" }, [
+                  m(ModelBar, { agentId }),
+                  m("div", { class: "composer-under-bar-actions" }, [
+                    m(
+                      "button",
+                      {
+                        type: "button",
+                        class: "composer-under-bar-action",
+                        onclick: () => openAgentTerminalTab(agentId),
+                      },
+                      "Open agent terminal",
+                    ),
+                    // Persistent entry to the sign-in modal so the user can switch
+                    // auth modes without waiting for an auth error.
+                    m(
+                      "button",
+                      { type: "button", class: "composer-under-bar-action", onclick: () => openLoginModal() },
+                      "Agent auth",
+                    ),
+                  ]),
+                  // The centered "Powered by <harness>" credit, overlaid on the bar.
+                  m(PoweredByCredit, { agentId }),
                 ]),
               ]),
         ],

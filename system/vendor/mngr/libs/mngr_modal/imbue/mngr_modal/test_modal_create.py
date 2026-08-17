@@ -12,6 +12,7 @@ Or to run all tests including Modal tests:
 
 import importlib.resources
 import os
+import re
 import subprocess
 import tarfile
 from pathlib import Path
@@ -25,6 +26,10 @@ from imbue.mngr.utils.testing import get_short_random_string
 
 @pytest.mark.acceptance
 @pytest.mark.rsync
+# Fresh Modal sandboxes transiently accept TCP before sshd answers the SSH
+# handshake; mngr's bounded banner-retry rides out the common case, but a slow
+# Modal window can outlast it, so offload retries the whole test.
+@pytest.mark.flaky
 @pytest.mark.timeout(300)
 def test_mngr_create_echo_command_on_modal(
     temp_source_dir: Path,
@@ -72,6 +77,23 @@ def test_mngr_create_echo_command_on_modal(
 
     assert result.returncode == 0, f"CLI failed with stderr: {result.stderr}\nstdout: {result.stdout}"
     assert "Done." in result.stdout, f"Expected 'Done.' in output: {result.stdout}"
+
+    # Positive guard against GH-392-style silent provisioning skips. Recursive mngr
+    # provisioning runs inside `mngr create`; when it fails it downgrades to a warning
+    # (RecursivePluginConfig.is_errors_fatal defaults to False) and skips deploy-file
+    # staging, so `mngr create` still exits 0 -- which is exactly how #392 (deploy-file
+    # collection raising when the mngr host dir is outside $HOME) went unnoticed here
+    # for a long time. Assert positively that provisioning actually staged the deployer's
+    # mngr config to the remote host, rather than merely not crashing.
+    assert "Failed to provision mngr prerequisites" not in result.stderr, (
+        f"Recursive mngr provisioning failed and was silently downgraded to a warning:\n{result.stderr}"
+    )
+    upload_match = re.search(r"Uploaded (\d+) mngr config files to remote host", result.stderr)
+    assert upload_match is not None and int(upload_match.group(1)) > 0, (
+        "Expected recursive provisioning to upload the deployer's mngr config files to the remote "
+        "host (the deploy-file staging that #392 silently skipped), but no non-empty upload was "
+        f"logged.\nstderr:\n{result.stderr}"
+    )
 
 
 @pytest.mark.acceptance
@@ -167,6 +189,7 @@ def test_mngr_create_with_invalid_snapshot_id_fails(
     )
 
 
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.rsync
 @pytest.mark.timeout(300)
@@ -217,6 +240,7 @@ def test_mngr_create_with_build_args_on_modal(
     assert "Done." in result.stdout, f"Expected 'Done.' in output: {result.stdout}"
 
 
+@pytest.mark.flaky
 @pytest.mark.acceptance
 @pytest.mark.rsync
 @pytest.mark.timeout(300)
@@ -356,6 +380,12 @@ RUN echo "About to fail with marker: {unique_failure_marker}" && exit 1
 
 @pytest.mark.acceptance
 @pytest.mark.rsync
+# Flaky for the same Modal-service reasons as its already-marked siblings in
+# this file: transient function-deploy API failures and SSH transport EOFs
+# while the sandbox snapshot is taken (observed failing with both modes in one
+# CI run while byte-identical modal code passed acceptance on the two prior
+# runs of the same branch).
+@pytest.mark.flaky
 @pytest.mark.timeout(300)
 def test_mngr_create_transfers_git_repo_with_untracked_files(
     temp_git_repo: Path,
@@ -406,7 +436,9 @@ def test_mngr_create_transfers_git_repo_with_untracked_files(
     assert "Done." in result.stdout, f"Expected 'Done.' in output: {result.stdout}"
 
 
+@pytest.mark.flaky
 @pytest.mark.acceptance
+@pytest.mark.rsync
 @pytest.mark.timeout(300)
 def test_mngr_create_transfers_git_repo_with_new_branch(
     temp_git_repo: Path,

@@ -34,10 +34,11 @@ let backendProcess = null;
  * ``LATCHKEY_CURL`` is read by the upstream latchkey CLI. The dispatch
  * curl finds the impersonator binary as a sibling in the same
  * ``resources/curl/`` dir (download-binaries.js installs both or neither),
- * so no extra env var is needed. Returns ``{}`` when the dispatch curl
- * isn't bundled (a platform datalib doesn't build) so latchkey falls back
- * to the system curl -- never point ``LATCHKEY_CURL`` at a nonexistent
- * file, which would break every credential check.
+ * so no extra env var is needed. Returns ``{}`` whenever the dispatch curl
+ * is absent -- on the platforms it is never fetched for (macOS x86_64,
+ * Windows), and in packaged builds, which build.js does not stage it into --
+ * so latchkey falls back to the system curl. Never point ``LATCHKEY_CURL``
+ * at a nonexistent file, which would break every credential check.
  */
 function latchkeyCurlEnv() {
   const dispatch = paths.getLatchkeyCurlDispatchPath();
@@ -291,7 +292,7 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
       };
 
       if (paths.isDev()) {
-        // Dev mode: use system uv with the monorepo workspace venv
+        // Dev shares the developer's .venv and uv.lock, so it uses their uv.
         uvBin = 'uv';
         args = [
           'run', '--package', 'minds',
@@ -309,7 +310,8 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
           ...gitEnv,
           // Pair the bundled git binary with gitEnv in dev too: a system git
           // running against the payload's exec-path would be version-skewed.
-          PATH: `${paths.getGitBinDir()}:${process.env.PATH || ''}`,
+          // limactl too -- mngr_lima resolves it from PATH.
+          PATH: `${paths.getGitBinDir()}:${paths.getLimaBinDir()}:${process.env.PATH || ''}`,
           MINDS_ELECTRON: '1',
           MINDS_ROOT_NAME: mindsRootName,
           MNGR_HOST_DIR: mngrHostDir,

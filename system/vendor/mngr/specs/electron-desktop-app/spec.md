@@ -75,7 +75,7 @@ Everything else -- agent creation, discovery, proxying, authentication, the web 
 1. `pnpm build` assembles the Electron app:
    - Builds a wheel for every monorepo workspace package into `resources/wheels/`
    - Stages `resources/pyproject/pyproject.toml` from `electron/pyproject/pyproject.toml`, rewriting `[tool.uv.sources]` to reference the bundled wheels, and runs `uv lock` in-place to produce `resources/pyproject/uv.lock`
-   - Downloads platform-specific `uv` and `git` binaries into the resources directory (also invoked from the `todesktop:beforeInstall` hook so each ToDesktop build server gets platform-native binaries)
+   - Downloads the platform-specific binaries in `download-binaries.js`'s `BINARIES` table into the resources directory
    - Packages the Electron code (main.js, preload.js, HTML pages, assets)
 2. `pnpm exec todesktop build` uploads the assembled app to ToDesktop, which:
    - Builds native installers for each target platform

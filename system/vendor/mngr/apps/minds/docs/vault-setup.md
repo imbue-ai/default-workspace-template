@@ -52,6 +52,7 @@ secrets/minds/<tier>/litellm
 secrets/minds/<tier>/litellm-connector
 secrets/minds/<tier>/neon
 secrets/minds/<tier>/pool-ssh
+secrets/minds/<tier>/sharing
 secrets/minds/<tier>/supertokens
 ```
 
@@ -72,7 +73,13 @@ supplier API calls):
 ```
 secrets/minds/<tier>/ovh          # OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET,
                                   #   OVH_CONSUMER_KEY (shared per-tier bare-metal box
-                                  #   supplier credentials, for `mngr imbue_cloud admin server`)
+                                  #   supplier credentials, for `mngr imbue_cloud admin server`);
+                                  #   OVH_CLOUD_PROJECT_ID (the Public Cloud project that
+                                  #   share-relay instances are provisioned in)
+secrets/minds/<tier>/relay-ssh    # RELAY_SSH_PRIVATE_KEY, RELAY_SSH_PUBLIC_KEY (the tier's
+                                  #   share-relay SSH keypair; sourced by the operator for
+                                  #   `just provision-share-relay` / `just deploy-share-relay`
+                                  #   so relays can be redeployed from any machine)
 ```
 
 The dev-tier `neon-admin` token must have *project-create* scope on
@@ -104,10 +111,21 @@ credential is intentionally account-wide so any operator can order +
 manage boxes for the tier.
 
 The schema for each `<service>` is the corresponding file under
-`.minds/template/<service>.sh` at the repo root. `minds env deploy`
-validates every key declared by a Modal-pushed template against the
-Vault entry before pushing anything to Modal, so missing keys are
-caught before they break a deploy.
+`.minds/template/<service>.sh` at the repo root. For staging /
+production (`creates_resources=false`), `minds env deploy` validates
+every key declared by a Modal-pushed template against the Vault entry
+before pushing anything to Modal and hard-fails the deploy on a
+missing key or an unreadable entry -- shipping a placeholder or
+partial secret for a declared service would be a silent outage.
+Empty values are allowed (declared-but-unset; skipped at Modal push).
+Dev/ci envs keep the bootstrap-friendly behavior: an unpopulated
+service becomes a placeholder Modal Secret (logged at error level)
+that a later deploy replaces once the entry is filled in.
+
+Note that `vault kv delete` is a *soft* delete: the key stays in the
+directory listing with no data. The deploy's reader skips such
+tombstones with a warning; to actually remove a key from a service,
+use `vault kv metadata delete` so the listing is clean too.
 
 `<tier>` is one of `dev`, `staging`, `production`. Per-dev-env secrets
 (the values `minds env deploy` generates per developer for a dev env)

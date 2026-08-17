@@ -592,6 +592,8 @@ def test_classify_merge_splits_merged_and_pulled_in() -> None:
     assert pulled_paths == ["system/scripts/forward_port.py", "system/supervisord.conf"]
     # A file only local changed is not surfaced as an upstream update at all.
     assert "PURPOSE.md" not in merged_paths + pulled_paths
+    # Any both-sides file means merge work happened, so the review gates run.
+    assert result.has_merge_work is True
 
 
 def test_classify_merge_summary_fields() -> None:
@@ -632,11 +634,25 @@ def test_classify_merge_surfaces_provisioner_bump() -> None:
     ]
 
 
+def test_classify_merge_reports_no_merge_work_on_a_pure_clean_pull() -> None:
+    # No file diverged on both sides: everything arrives exactly as upstream
+    # shipped it, so the mechanical half of the review-gate rule clears. Local
+    # changes to files upstream did NOT touch do not flip it -- they are not
+    # part of the merge at all.
+    result = update_self.classify_merge(
+        ["system/scripts/forward_port.py", "system/supervisord.conf"],
+        ["PURPOSE.md", "system/apps/my_app/server.py"],
+    )
+    assert result.merged == []
+    assert result.has_merge_work is False
+
+
 def test_classify_merge_empty() -> None:
     result = update_self.classify_merge([], [])
     assert result.merged == []
     assert result.pulled_in == []
     assert result.projects_to_validate == []
+    assert result.has_merge_work is False
 
 
 # --- CLI wiring --------------------------------------------------------------
@@ -1034,3 +1050,25 @@ def test_parse_version_orders_prereleases_semver_style() -> None:
     # A branch or bare commit has no version at all, and stays uncomparable.
     assert update_self.parse_version("main") is None
     assert update_self.parse_version("abc1234") is None
+
+
+# --- SKILL.md task-file template cross-version contract --------------------
+
+
+def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> None:
+    """The SKILL.md task-file heredoc must keep `lead_agent` and `finish_report_path`.
+
+    This SKILL.md is executed cross-version: an OLDER workspace's lead follows
+    this (staged, target-version) prose but launches with its own, possibly
+    pre-lead-agent-stamping `create_worker.py` -- so the template itself is the
+    only thing that gives the worker a report address there. Removing either
+    line reintroduces the v0.3.11 -> v0.3.16 failure where the worker finished
+    but could never deliver its report and the lead waited out the full
+    timeout in silence.
+    """
+    skill_md = (_MODULE_PATH.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+    start = skill_md.index("cat << FRONTMATTER_EOF")
+    end = skill_md.index("FRONTMATTER_EOF", start + len("cat << FRONTMATTER_EOF"))
+    frontmatter_template = skill_md[start:end]
+    assert "lead_agent: $MNGR_AGENT_NAME" in frontmatter_template
+    assert "finish_report_path: " in frontmatter_template

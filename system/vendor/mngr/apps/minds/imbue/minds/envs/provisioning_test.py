@@ -11,14 +11,18 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.primitives import NonNegativeFloat
 from imbue.imbue_common.primitives import NonNegativeInt
+from imbue.minds.build_info import DEFAULT_WEB_TEMPLATE_REPO_KEY
+from imbue.minds.build_info import FALLBACK_BRANCH
 from imbue.minds.config.data_types import DeployEnvConfig
 from imbue.minds.config.data_types import DeployLifecycleConfig
 from imbue.minds.config.data_types import DeploySecretsConfig
 from imbue.minds.config.data_types import MinContainersConfig
 from imbue.minds.config.data_types import ModalEnvStrategy
+from imbue.minds.config.data_types import OriginsConfig
 from imbue.minds.config.data_types import PaidDefaultsConfig
 from imbue.minds.config.data_types import PlanQuotasConfig
 from imbue.minds.config.data_types import ScaledownWindowConfig
+from imbue.minds.config.data_types import WebWorkspacesConfig
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.envs.local_store import client_config_exists
 from imbue.minds.envs.local_store import env_root_exists
@@ -32,15 +36,23 @@ from imbue.minds.envs.providers.neon_db import NeonProjectRecord
 from imbue.minds.envs.providers.neon_db import NeonProviderError
 from imbue.minds.envs.providers.supertokens_app import SuperTokensAppRecord
 from imbue.minds.envs.providers.supertokens_app import SuperTokensProviderError
+from imbue.minds.envs.providers.workspace_storage import WorkspaceStorageProviderError
 from imbue.minds.envs.provisioning import ProviderCredentials
 from imbue.minds.envs.provisioning import Providers
 from imbue.minds.envs.provisioning import _assert_deploy_url_matches
+from imbue.minds.envs.provisioning import _compute_secret_overrides
+from imbue.minds.envs.provisioning import custom_domain_hosts_for_origins
 from imbue.minds.envs.provisioning import deploy_env
 from imbue.minds.envs.provisioning import destroy_env
 from imbue.minds.envs.provisioning import list_dev_envs
+from imbue.minds.envs.provisioning import resolve_web_template_pin
 from imbue.minds.envs.recover import RecoverTargetAlreadyExistsError
+from imbue.minds.envs.testing import make_workspace_storage_vault_values
 from imbue.minds.errors import MindError
+from imbue.minds.errors import WebTemplateRefRequiredError
 from imbue.minds.primitives import ServiceName
+from imbue.mngr_imbue_cloud.primitives import DEV_TIER
+from imbue.mngr_imbue_cloud.primitives import STAGING_TIER
 
 
 @pytest.fixture
@@ -89,6 +101,12 @@ _SHARED_TIER_LIFECYCLE: Final[DeployLifecycleConfig] = DeployLifecycleConfig(
     tracks_generation=True,
 )
 
+_STAGING_ORIGINS: Final[OriginsConfig] = OriginsConfig(
+    accounts_origin=AnyUrl("https://accounts.imbue-staging.com"),
+    chrome_origin=AnyUrl("https://minds.imbue-staging.com"),
+    cookie_domain=NonEmptyStr("imbue-staging.com"),
+)
+
 
 def _deploy_config(
     *,
@@ -99,6 +117,9 @@ def _deploy_config(
     paid: PaidDefaultsConfig | None = None,
     plans: dict[str, PlanQuotasConfig] | None = None,
     lifecycle: DeployLifecycleConfig | None = None,
+    services: tuple[str, ...] = ("cloudflare",),
+    origins: OriginsConfig | None = None,
+    web_workspaces: WebWorkspacesConfig | None = None,
 ) -> DeployEnvConfig:
     if lifecycle is None:
         lifecycle = _DEV_LIFECYCLE if tier == "dev" else _SHARED_TIER_LIFECYCLE
@@ -107,12 +128,14 @@ def _deploy_config(
         modal_env=NonEmptyStr(modal_env),
         vault_path_prefix=NonEmptyStr(f"secrets/minds/{tier}"),
         cloudflare_domain=NonEmptyStr(f"{tier}.example.com"),
-        secrets=DeploySecretsConfig(services=(ServiceName("cloudflare"),)),
+        secrets=DeploySecretsConfig(services=tuple(ServiceName(name) for name in services)),
         lifecycle=lifecycle,
         min_containers=min_containers if min_containers is not None else MinContainersConfig(),
         scaledown_window=scaledown_window if scaledown_window is not None else ScaledownWindowConfig(),
         paid=paid if paid is not None else PaidDefaultsConfig(),
         plans=plans if plans is not None else {},
+        origins=origins,
+        web_workspaces=web_workspaces,
     )
 
 
@@ -136,7 +159,6 @@ def _build_fake_providers(
     fail_step: str | None = None,
     fail_delete: set[str] | None = None,
     vault_responses: dict[str, dict[str, str]] | None = None,
-    cloudflare_tunnels: tuple[str, ...] = (),
 ) -> Providers:
     fail_delete = fail_delete or set()
     # Canned Vault dicts so tier-destroy wipes can find what they need
@@ -151,10 +173,6 @@ def _build_fake_providers(
             },
             "neon": {
                 "DATABASE_URL": "postgres://user:pass@host/db",
-            },
-            "cloudflare": {
-                "CLOUDFLARE_ACCOUNT_ID": "fake-cf-account",
-                "CLOUDFLARE_API_TOKEN": "fake-cf-token",
             },
         }
 
@@ -200,8 +218,8 @@ def _build_fake_providers(
         if "supertokens_app" in fail_delete:
             raise SuperTokensProviderError("supertokens delete boom")
 
-    def read_per_env_secret_values(service, tier_vault_prefix, overrides, cg):
-        call_log["calls"].append(("read_per_env_secret_values", service))
+    def read_per_env_secret_values(service, tier_vault_prefix, overrides, is_required, cg):
+        call_log["calls"].append(("read_per_env_secret_values", service, dict(overrides), is_required))
         # Merge canned Vault baseline + caller overrides, mirroring the
         # real ``build_per_env_secret_values`` behaviour. Empty for
         # services the test setup didn't pre-populate.
@@ -237,9 +255,20 @@ def _build_fake_providers(
             return AnyUrl(f"https://{_TEST_MODAL_WORKSPACE}-{modal_env}--llm-dev-proxy.modal.run")
         return AnyUrl(f"https://{_TEST_MODAL_WORKSPACE}--llm-{tier}-proxy.modal.run")
 
-    def deploy_remote_service_connector(modal_env, tier, min_containers, scaledown_window, deploy_id, strategy, cg):
+    def deploy_remote_service_connector(
+        modal_env, tier, min_containers, scaledown_window, deploy_id, custom_domains, strategy, cg
+    ):
         call_log["calls"].append(
-            ("deploy_remote_service_connector", modal_env, tier, min_containers, scaledown_window, deploy_id, strategy)
+            (
+                "deploy_remote_service_connector",
+                modal_env,
+                tier,
+                min_containers,
+                scaledown_window,
+                deploy_id,
+                custom_domains,
+                strategy,
+            )
         )
         if fail_step == "deploy_connector":
             raise ModalDeployError("connector deploy boom")
@@ -314,6 +343,12 @@ def _build_fake_providers(
         if fail_step == "cleanup_state_container":
             raise DockerCleanupError("docker cleanup boom")
 
+    def delete_workspace_storage_prefix(storage_values, prefix):
+        call_log["calls"].append(("delete_workspace_storage_prefix", prefix))
+        if fail_step == "delete_workspace_storage_prefix":
+            raise WorkspaceStorageProviderError("storage delete boom")
+        return 0
+
     def wipe_supertokens_app_data(app_id, core_base_url, api_key):
         call_log["calls"].append(("wipe_supertokens_app_data", app_id, core_base_url))
         if fail_step == "wipe_supertokens":
@@ -330,14 +365,6 @@ def _build_fake_providers(
 
     def delete_generation_id(tier_vault_prefix, cg):
         call_log["calls"].append(("delete_generation_id", tier_vault_prefix))
-
-    def list_cloudflare_tunnels_for_env(name, account_id, api_token):
-        call_log["calls"].append(("list_cloudflare_tunnels_for_env", str(name), account_id))
-        # Default fake: no tunnels. Tests that care set ``cloudflare_tunnels``.
-        return cloudflare_tunnels
-
-    def delete_cloudflare_tunnels(tunnel_ids, account_id, api_token):
-        call_log["calls"].append(("delete_cloudflare_tunnels", tuple(tunnel_ids)))
 
     return Providers(
         ensure_modal_env=ensure_modal_env,
@@ -364,13 +391,12 @@ def _build_fake_providers(
         verify_neon_token_has_restore_scope=verify_neon_token_has_restore_scope,
         await_apps_healthy=await_apps_healthy,
         destroy_mngr_agents=destroy_mngr_agents,
+        delete_workspace_storage_prefix=delete_workspace_storage_prefix,
         cleanup_state_container=cleanup_state_container,
         wipe_supertokens_app_data=wipe_supertokens_app_data,
         wipe_neon_db_schema=wipe_neon_db_schema,
         ensure_generation_id=ensure_generation_id,
         delete_generation_id=delete_generation_id,
-        list_cloudflare_tunnels_for_env=list_cloudflare_tunnels_for_env,
-        delete_cloudflare_tunnels=delete_cloudflare_tunnels,
     )
 
 
@@ -558,17 +584,17 @@ def test_destroy_env_dev_walks_providers_in_order_and_removes_root(
         # env root; no destroy_mngr_agents call.
         # Step 1b: state-container cleanup still runs (independent of agents).
         "cleanup_state_container",
-        # Step 2: read CF Vault entry + enumerate this env's tunnels.
-        "read_per_env_secret_values",
-        "list_cloudflare_tunnels_for_env",
-        # (No `delete_cloudflare_tunnels` -- fake returns empty list.)
-        # Step 3: SuperTokens app (cascade-deletes its users).
+        # Step 2: SuperTokens app (cascade-deletes its users).
         "delete_supertokens_app",
-        # Step 4: Neon project (atomic teardown of all DBs / roles / endpoints).
+        # Step 3: Neon project (atomic teardown of all DBs / roles / endpoints).
         "delete_neon_project",
-        # Step 5: Modal env (cascade-deletes apps/secrets/volumes inside).
+        # Step 4: Modal env (cascade-deletes apps/secrets/volumes inside).
         "delete_modal_env",
-        # Step 6: env root removal happens after all provider calls succeed.
+        # Step 5: workspace-storage cleanup reads the tier's storage Vault
+        # entry; the canned Vault has no storage entry, so the deletion
+        # itself is skipped.
+        "read_per_env_secret_values",
+        # Step 7: env root removal happens after all provider calls succeed.
     ]
     # Env root removed so subsequent commands fail fast on a dangling
     # activation rather than silently re-creating partial state.
@@ -606,9 +632,9 @@ def test_destroy_env_dev_destroys_mngr_agents_before_cloud_teardown(
     )
     # A single destroy_mngr_agents call (all ids at once) then the
     # state-container cleanup, BEFORE any cloud-side teardown (the first cloud
-    # step is the Cloudflare-tunnel Vault read).
+    # step is the SuperTokens app deletion).
     step_names = [c[0] for c in call_log["calls"]]
-    first_cloud_index = step_names.index("read_per_env_secret_values")
+    first_cloud_index = step_names.index("delete_supertokens_app")
     assert step_names[:first_cloud_index] == ["destroy_mngr_agents", "cleanup_state_container"]
     agent_id_batches = [c[1] for c in call_log["calls"] if c[0] == "destroy_mngr_agents"]
     assert agent_id_batches == [("agent-1111", "agent-2222")]
@@ -645,6 +671,108 @@ def test_destroy_env_dev_keep_agents_skips_mngr_destroy(_isolated_home: Path, _r
     # keep_agents must also skip the state-container cleanup: kept agents
     # still rely on the singleton state container.
     assert "cleanup_state_container" not in step_names
+
+
+_STORAGE_VAULT_VALUES = make_workspace_storage_vault_values()
+
+
+def test_destroy_env_dev_deletes_workspace_storage_prefix_when_configured(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """A dev destroy with populated storage Vault deletes exactly the env's key prefix."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(
+        call_log,
+        vault_responses={"storage": dict(_STORAGE_VAULT_VALUES)},
+    )
+    deploy_env(
+        DevEnvName("dev-nia"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    call_log["calls"].clear()
+
+    destroy_env(
+        DevEnvName("dev-nia"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    storage_calls = [c for c in call_log["calls"] if c[0] == "delete_workspace_storage_prefix"]
+    assert storage_calls == [("delete_workspace_storage_prefix", "dev-nia/")]
+    assert not env_root_exists(DevEnvName("dev-nia"))
+
+
+def test_destroy_env_tier_deletes_whole_storage_keyspace_when_configured(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """A shared-tier destroy deletes the whole bucket keyspace (its stamped prefix is empty)."""
+    call_log = _make_call_log()
+    vault_responses = {
+        "supertokens": {
+            "SUPERTOKENS_CONNECTION_URI": "https://st.example.com/appid-staging",
+            "SUPERTOKENS_API_KEY": "fake-api-key",
+        },
+        "neon": {"DATABASE_URL": "postgres://user:pass@host/db"},
+        "storage": dict(_STORAGE_VAULT_VALUES),
+    }
+    providers = _build_fake_providers(call_log, vault_responses=vault_responses)
+    deploy_env(
+        DevEnvName("staging"),
+        tier="staging",
+        deploy_config=_deploy_config(tier="staging", modal_env="main"),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    call_log["calls"].clear()
+
+    destroy_env(
+        DevEnvName("staging"),
+        tier="staging",
+        deploy_config=_deploy_config(tier="staging", modal_env="main"),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    storage_calls = [c for c in call_log["calls"] if c[0] == "delete_workspace_storage_prefix"]
+    assert storage_calls == [("delete_workspace_storage_prefix", "")]
+
+
+def test_destroy_env_dev_leaves_env_root_when_storage_delete_fails(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """A failed artifact deletion keeps the env root so the destroy is retryable."""
+    providers_ok = _build_fake_providers(_make_call_log(), vault_responses={"storage": dict(_STORAGE_VAULT_VALUES)})
+    deploy_env(
+        DevEnvName("dev-omar"),
+        tier="dev",
+        deploy_config=_deploy_config(),
+        credentials=_credentials(),
+        providers=providers_ok,
+        parent_concurrency_group=_root_cg,
+    )
+
+    failing_providers = _build_fake_providers(
+        _make_call_log(),
+        fail_step="delete_workspace_storage_prefix",
+        vault_responses={"storage": dict(_STORAGE_VAULT_VALUES)},
+    )
+    with pytest.raises(WorkspaceStorageProviderError, match="storage delete boom"):
+        destroy_env(
+            DevEnvName("dev-omar"),
+            tier="dev",
+            deploy_config=_deploy_config(),
+            credentials=_credentials(),
+            providers=failing_providers,
+            parent_concurrency_group=_root_cg,
+        )
+    assert env_root_exists(DevEnvName("dev-omar"))
 
 
 def test_destroy_env_dev_leaves_env_root_when_step_fails(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
@@ -804,6 +932,51 @@ def test_deploy_env_shared_tier_pushes_secrets_into_named_modal_env(
     assert all(c[2] == "main" for c in pushes)
 
 
+def test_deploy_dev_env_adds_no_relay_overrides_to_the_sharing_secret(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """The relay fleet is table-driven, so no tier overrides the sharing secret with relay env vars.
+
+    Dev relays are registered against the connector's relays table by
+    ``just provision-dev-relay`` (the env name is the region label); the
+    sharing secret carries no per-env relay endpoints.
+    """
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log)
+    deploy_env(
+        DevEnvName("dev-jo_sh"),
+        tier="dev",
+        deploy_config=_deploy_config(services=("cloudflare", "sharing")),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    sharing_reads = [c for c in call_log["calls"] if c[0] == "read_per_env_secret_values" and c[1] == "sharing"]
+    assert len(sharing_reads) == 1
+    overrides = sharing_reads[0][2]
+    assert "SHARE_DEFAULT_REGION" not in overrides
+    assert "SHARE_RELAY_ENDPOINTS" not in overrides
+
+
+def test_deploy_env_shared_tier_keeps_the_vault_configured_relay_fleet(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """Staging / production sharing secrets get NO per-env relay overrides."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log)
+    deploy_env(
+        DevEnvName("production"),
+        tier="production",
+        deploy_config=_deploy_config(tier="production", modal_env="main", services=("cloudflare", "sharing")),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    sharing_reads = [c for c in call_log["calls"] if c[0] == "read_per_env_secret_values" and c[1] == "sharing"]
+    assert len(sharing_reads) == 1
+    assert sharing_reads[0][2] == {}
+
+
 def test_deploy_env_shared_tier_runs_both_modal_deploys(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
     """llm + rsc both get deployed -- in that order."""
     call_log = _make_call_log()
@@ -932,8 +1105,7 @@ def _explorer_plan_quotas() -> PlanQuotasConfig:
     """The committed explorer-plan values (mirrors the deploy.toml [plans.explorer] block)."""
     return PlanQuotasConfig(
         max_remote_workspaces=NonNegativeInt(2),
-        max_tunnels=NonNegativeInt(50),
-        max_services_per_tunnel=NonNegativeInt(10),
+        max_total_workspaces=NonNegativeInt(10),
         max_buckets=NonNegativeInt(5),
         max_total_bucket_gb=NonNegativeInt(50),
         monthly_llm_spend_usd=NonNegativeFloat(0.0),
@@ -1068,10 +1240,9 @@ def test_destroy_env_tier_proceeds_when_env_root_missing(_isolated_home: Path, _
 
     See F22 in MANUAL_DEPLOY_FINDINGS.md: the env root is a convenience
     pointer, not authoritative -- the cloud-side resources are keyed
-    off the env name (Modal env, Modal apps, Neon, SuperTokens,
-    Cloudflare tags), so destroy can converge purely by
-    name. Refusing on missing-root would orphan cloud state for
-    operators who manually nuke the directory.
+    off the env name (Modal env, Modal apps, Neon, SuperTokens), so
+    destroy can converge purely by name. Refusing on missing-root would
+    orphan cloud state for operators who manually nuke the directory.
     """
     call_log = _make_call_log()
     providers = _build_fake_providers(call_log)
@@ -1121,7 +1292,6 @@ def test_destroy_env_tier_wipes_supertokens_app_with_parsed_app_id(
                 "SUPERTOKENS_API_KEY": "secret-key-xyz",
             },
             "neon": {"DATABASE_URL": "postgres://x"},
-            "cloudflare": {"CLOUDFLARE_ACCOUNT_ID": "a", "CLOUDFLARE_API_TOKEN": "t"},
         },
     )
     destroy_env(
@@ -1149,7 +1319,6 @@ def test_destroy_env_tier_wipes_neon_with_dsn_from_vault(_isolated_home: Path, _
                 "SUPERTOKENS_API_KEY": "k",
             },
             "neon": {"DATABASE_URL": "postgres://realuser:realpass@neon.host/realdb"},
-            "cloudflare": {"CLOUDFLARE_ACCOUNT_ID": "a", "CLOUDFLARE_API_TOKEN": "t"},
         },
     )
     destroy_env(
@@ -1175,7 +1344,6 @@ def test_destroy_env_tier_refuses_when_supertokens_vault_entry_incomplete(
         vault_responses={
             "supertokens": {},
             "neon": {"DATABASE_URL": "postgres://x"},
-            "cloudflare": {"CLOUDFLARE_ACCOUNT_ID": "a", "CLOUDFLARE_API_TOKEN": "t"},
         },
     )
     with pytest.raises(MindError, match="SUPERTOKENS_CONNECTION_URI"):
@@ -1224,16 +1392,13 @@ def test_destroy_env_tier_full_step_order(_isolated_home: Path, _root_cg: Concur
         "destroy_mngr_agents",
         # 1b: state-container cleanup (independent of agents).
         "cleanup_state_container",
-        # 2: CF tunnels (shared with dev, by env name).
-        "read_per_env_secret_values",
-        "list_cloudflare_tunnels_for_env",
-        # 3: SuperTokens -- wipe path (tier-specific).
+        # 2: SuperTokens -- wipe path (tier-specific).
         "read_per_env_secret_values",
         "wipe_supertokens_app_data",
-        # 4: Neon -- wipe path (tier-specific).
+        # 3: Neon -- wipe path (tier-specific).
         "read_per_env_secret_values",
         "wipe_neon_db_schema",
-        # 5: Modal -- stop + list-then-delete-all-timestamped-secrets path.
+        # 4: Modal -- stop + list-then-delete-all-timestamped-secrets path.
         # Two deletes: ``cloudflare-staging-<id>`` (the one entry in this
         # _deploy_config's [secrets].services) and ``litellm-connector-
         # staging-<id>`` (always pushed separately by the deploy as a
@@ -1243,6 +1408,9 @@ def test_destroy_env_tier_full_step_order(_isolated_home: Path, _root_cg: Concur
         "list_modal_secrets",
         "delete_modal_secret",
         "delete_modal_secret",
+        # 5: workspace-storage cleanup reads the tier's storage Vault entry;
+        # the canned Vault has no storage entry, so the deletion is skipped.
+        "read_per_env_secret_values",
         # 6: generation id (tier-only).
         "delete_generation_id",
     ]
@@ -1535,3 +1703,235 @@ def test_assert_deploy_url_matches_non_workspace_mismatch_keeps_formula_hint() -
     assert "workspace prefix matches" in message
     assert "hostname scheme" in message
     assert "bound to workspace" not in message
+
+
+def test_compute_secret_overrides_stamps_storage_prefix_only_for_per_env_tiers() -> None:
+    """Per-env-Modal-env tiers (dev / ci) share their tier's workspace-storage
+    bucket, so the deploy must stamp each env's key prefix into the storage
+    secret; shared tiers (staging / production) have a dedicated bucket and
+    must not get a prefix override."""
+    per_env_overrides = _compute_secret_overrides(
+        name=DevEnvName("dev-josh"),
+        lifecycle=_DEV_LIFECYCLE,
+        cloudflare_domain="dev.example.com",
+        neon_record=NeonProjectRecord(
+            project_id="proj-fake-123",
+            project_name="minds-dev-josh",
+            branch_id="branch-1",
+            host_pool_dsn=SecretStr("postgresql://owner:pw@pooler/host_pool"),
+            litellm_cost_dsn=SecretStr("postgresql://owner:pw@pooler/litellm_cost"),
+        ),
+        supertokens_record=SuperTokensAppRecord(
+            app_id="dev-josh",
+            connection_uri="https://core.example.com/appid-dev-josh",
+            api_key=SecretStr("st-api-key"),
+        ),
+        expected_connector_url=AnyUrl("https://test-ws-dev-josh--rsc-dev-api.modal.run"),
+        expected_litellm_proxy_url=AnyUrl("https://test-ws-dev-josh--llm-dev-proxy.modal.run"),
+        origins=None,
+    )
+    # Only the per-env key prefix is overridden; the bucket + credentials stay
+    # tier-shared from Vault.
+    assert per_env_overrides["storage"] == {"WORKSPACE_STORAGE_KEY_PREFIX": "dev-josh/"}
+
+    shared_overrides = _compute_secret_overrides(
+        name=DevEnvName("staging"),
+        lifecycle=_SHARED_TIER_LIFECYCLE,
+        cloudflare_domain="staging.example.com",
+        neon_record=None,
+        supertokens_record=None,
+        expected_connector_url=AnyUrl("https://test-ws--rsc-staging-api.modal.run"),
+        expected_litellm_proxy_url=AnyUrl("https://test-ws--llm-staging-proxy.modal.run"),
+        origins=None,
+    )
+    assert "storage" not in shared_overrides
+
+
+def test_resolve_web_template_pin_defaults_to_the_release_tag_on_shared_tiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REPO", raising=False)
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REF", raising=False)
+    template_repo, template_ref = resolve_web_template_pin(WebWorkspacesConfig(), tier=STAGING_TIER)
+    assert template_repo == DEFAULT_WEB_TEMPLATE_REPO_KEY
+    assert template_ref == FALLBACK_BRANCH
+
+
+def test_resolve_web_template_pin_honors_the_deploy_toml_repo_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REPO", raising=False)
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REF", raising=False)
+    config = WebWorkspacesConfig(template_repo=NonEmptyStr("github.com/example/custom-template"))
+    assert resolve_web_template_pin(config, tier=STAGING_TIER) == (
+        "github.com/example/custom-template",
+        FALLBACK_BRANCH,
+    )
+
+
+def test_resolve_web_template_pin_env_override_wins_over_everything(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINDS_WEB_TEMPLATE_REPO", "github.com/example/override-template")
+    monkeypatch.setenv("MINDS_WEB_TEMPLATE_REF", "override/branch")
+    config = WebWorkspacesConfig(template_repo=NonEmptyStr("github.com/example/custom-template"))
+    assert resolve_web_template_pin(config, tier=STAGING_TIER) == (
+        "github.com/example/override-template",
+        "override/branch",
+    )
+
+
+def test_resolve_web_template_pin_dev_tier_requires_the_explicit_ref_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REPO", raising=False)
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REF", raising=False)
+    with pytest.raises(WebTemplateRefRequiredError, match="MINDS_WEB_TEMPLATE_REF"):
+        resolve_web_template_pin(WebWorkspacesConfig(), tier=DEV_TIER)
+
+
+def test_resolve_web_template_pin_dev_tier_uses_the_explicit_ref_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REPO", raising=False)
+    monkeypatch.setenv("MINDS_WEB_TEMPLATE_REF", "minds-v9.9.9")
+    template_repo, template_ref = resolve_web_template_pin(WebWorkspacesConfig(), tier=DEV_TIER)
+    assert template_repo == DEFAULT_WEB_TEMPLATE_REPO_KEY
+    assert template_ref == "minds-v9.9.9"
+
+
+def test_deploy_env_dev_tier_with_web_workspaces_refuses_before_any_cloud_mutation(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dev deploy with [web_workspaces] but no explicit ref refuses up front.
+
+    The pin is resolved at the top of the locked deploy body, so the refusal
+    must land before the first provider call (no Modal env / Neon / SuperTokens
+    mutation) and before any local env state is written.
+    """
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REPO", raising=False)
+    monkeypatch.delenv("MINDS_WEB_TEMPLATE_REF", raising=False)
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log)
+    with pytest.raises(WebTemplateRefRequiredError, match="MINDS_WEB_TEMPLATE_REF"):
+        deploy_env(
+            DevEnvName("dev-erin"),
+            tier="dev",
+            deploy_config=_deploy_config(web_workspaces=WebWorkspacesConfig()),
+            credentials=_credentials(),
+            providers=providers,
+            parent_concurrency_group=_root_cg,
+        )
+    assert call_log["calls"] == []
+    assert not client_config_exists(DevEnvName("dev-erin"))
+
+
+def test_compute_secret_overrides_stamps_the_origin_layout_when_origins_configured() -> None:
+    """A tier with an [origins] block gets its whole browser-facing origin
+    layout from git: accounts surface, cookie apex, and chrome embed origin."""
+    overrides = _compute_secret_overrides(
+        name=DevEnvName("staging"),
+        lifecycle=_SHARED_TIER_LIFECYCLE,
+        cloudflare_domain="staging.example.com",
+        neon_record=None,
+        supertokens_record=None,
+        expected_connector_url=AnyUrl("https://test-ws--rsc-staging-api.modal.run"),
+        expected_litellm_proxy_url=AnyUrl("https://test-ws--llm-staging-proxy.modal.run"),
+        origins=_STAGING_ORIGINS,
+    )
+    # No trailing slashes anywhere: origins are compared byte-exactly by the
+    # connector (embed allowlist) and appended to (OAuth callback paths).
+    assert overrides["supertokens"]["AUTH_WEBSITE_DOMAIN"] == "https://accounts.imbue-staging.com"
+    assert overrides["sharing"] == {
+        "ACCOUNTS_BASE_URL": "https://accounts.imbue-staging.com",
+        "ACCOUNTS_COOKIE_DOMAIN": "imbue-staging.com",
+    }
+    assert overrides["litellm-connector"]["SHARE_CHROME_ORIGIN"] == "https://minds.imbue-staging.com"
+
+
+def test_compute_secret_overrides_keeps_the_connector_url_when_origins_absent() -> None:
+    overrides = _compute_secret_overrides(
+        name=DevEnvName("staging"),
+        lifecycle=_SHARED_TIER_LIFECYCLE,
+        cloudflare_domain="staging.example.com",
+        neon_record=None,
+        supertokens_record=None,
+        expected_connector_url=AnyUrl("https://test-ws--rsc-staging-api.modal.run"),
+        expected_litellm_proxy_url=AnyUrl("https://test-ws--llm-staging-proxy.modal.run"),
+        origins=None,
+    )
+    assert overrides["supertokens"]["AUTH_WEBSITE_DOMAIN"] == "https://test-ws--rsc-staging-api.modal.run/"
+    assert "sharing" not in overrides
+    assert "SHARE_CHROME_ORIGIN" not in overrides["litellm-connector"]
+
+
+def test_custom_domain_hosts_for_origins_lists_both_hosts_in_order() -> None:
+    assert custom_domain_hosts_for_origins(_STAGING_ORIGINS) == (
+        "accounts.imbue-staging.com",
+        "minds.imbue-staging.com",
+    )
+    assert custom_domain_hosts_for_origins(None) == ()
+
+
+def test_deploy_env_threads_custom_domains_from_the_origins_block(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """The [origins] hosts reach the connector deploy call (and only it)."""
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log)
+    deploy_env(
+        DevEnvName("staging"),
+        tier="staging",
+        deploy_config=_deploy_config(tier="staging", origins=_STAGING_ORIGINS),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    connector_deploys = [c for c in call_log["calls"] if c[0] == "deploy_remote_service_connector"]
+    # Tuple shape: (name, modal_env, tier, min_containers, scaledown_window, deploy_id, custom_domains, strategy).
+    assert [c[6] for c in connector_deploys] == [("accounts.imbue-staging.com", "minds.imbue-staging.com")]
+
+
+def test_deploy_env_passes_no_custom_domains_without_an_origins_block(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    call_log = _make_call_log()
+    providers = _build_fake_providers(call_log)
+    deploy_env(
+        DevEnvName("staging"),
+        tier="staging",
+        deploy_config=_deploy_config(tier="staging"),
+        credentials=_credentials(),
+        providers=providers,
+        parent_concurrency_group=_root_cg,
+    )
+    connector_deploys = [c for c in call_log["calls"] if c[0] == "deploy_remote_service_connector"]
+    assert [c[6] for c in connector_deploys] == [()]
+
+
+def test_deploy_env_marks_declared_services_required_only_on_shared_tiers(
+    _isolated_home: Path, _root_cg: ConcurrencyGroup
+) -> None:
+    """Shared tiers must hard-fail on a bad declared-service read; dev tiers keep the bootstrap placeholder path."""
+    staging_log = _make_call_log()
+    deploy_env(
+        DevEnvName("staging"),
+        tier="staging",
+        deploy_config=_deploy_config(tier="staging", services=("cloudflare", "sharing")),
+        credentials=_credentials(),
+        providers=_build_fake_providers(staging_log),
+        parent_concurrency_group=_root_cg,
+    )
+    staging_reads = {c[1]: c[3] for c in staging_log["calls"] if c[0] == "read_per_env_secret_values"}
+    assert staging_reads["cloudflare"] is True
+    assert staging_reads["sharing"] is True
+
+    dev_log = _make_call_log()
+    deploy_env(
+        DevEnvName("dev-frank"),
+        tier="dev",
+        deploy_config=_deploy_config(tier="dev", services=("cloudflare",)),
+        credentials=_credentials(),
+        providers=_build_fake_providers(dev_log),
+        parent_concurrency_group=_root_cg,
+    )
+    dev_reads = {c[1]: c[3] for c in dev_log["calls"] if c[0] == "read_per_env_secret_values"}
+    assert dev_reads["cloudflare"] is False

@@ -75,7 +75,7 @@ For example: `-d '{... "payload": {"scope": ..., "permissions": ..., "account": 
 
 When not sure (and if applicable), prefer the `*-read-all` permission variants as they are relatively safe and obvious.
 
-After posting, wait for a system message indicating whether the user
+After posting, wait for an automated system message indicating whether the user
 approved or denied the permission request.
 
 
@@ -83,12 +83,12 @@ approved or denied the permission request.
 
 The gateway natively proxies GitHub's git smart-HTTP endpoints, so plain
 `git` works through latchkey too: point git at the gateway's proxy URL and
-pass the gateway's two auth headers (both values are already in this
-environment):
+pass the gateway's auth headers (their values are already in this
+environment).
 
 ```bash
 git -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
-    -c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE" \
+    ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
     push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" <refspec>
 ```
 
@@ -119,8 +119,10 @@ Returns auth options, credentials status, and developer notes about the service.
 
 It is possible to associate credentials with a specific account
 (and have credentials for more than a single account per service).
-The user can do that by clicking "Add account" on the "Connectors" settings
-page in the Minds app.
+The user can do that from the Permissions tab of this machine's options in the
+Minds app (the key icon in the tabs along the top): "Add connection" lists the
+services that already have an account here under "Add another account", and the
+ones that do not under "Connect a new service".
 
 Another way is for you to send a permission request with an "account"
 in the payload as described above - approving the permission request will prompt
@@ -144,19 +146,16 @@ as the key means "unknown account".
 When the existing credentials are expired or invalid, there are currently two ways  to trigger a new login:
 
 - By re-sending the permission request to the user (use this when there's just a single account for the given service)
-- By disconnecting and reconnecting the account on the "Connectors" settings page (tell the user to do that if there are more than one account configured for the given service).
+- By having the user reconnect the account from the Permissions tab of this machine's options in the Minds app (the key icon in the tabs along the top): "Add connection" then "Add another account" for that service. Tell the user to do that if there is more than one account configured for the given service.
 
 
-## Secondary gateway
+## When the gateway is unreachable
 
-By default, most of the commands above are actually routed through a gateway that runs on the user's computer.
-For `latchkey curl` calls specifically, when the user's computer is offline, you would typically get "Exit code 7".
-Sometimes, there's a secondary Latchkey gateway available running in the cloud that you can use instead.
-To do that, repeat your call with the following env var overrides:
-    - `LATCHKEY_GATEWAY=$LATCHKEY_GATEWAY_SECONDARY`
-    - `LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE=""`
-If you're still not able to connect, it means the secondary gateway hasn't actually been configured.
-Permission management, or any other commands other than `latchkey curl`, are not supported by the secondary gateway.
+Every command above is routed through the Latchkey gateway at
+`$LATCHKEY_GATEWAY`. If it cannot be reached, treat it as
+a transient outage. It usually helps if the user restarts the
+Minds app. Requests to /permissions and /permission-requests are
+routed to the user's computer so they will fail if it's offline.
 
 
 ## Notes

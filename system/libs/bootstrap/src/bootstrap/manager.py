@@ -17,6 +17,7 @@ resolve or export.
 import json
 import os
 import re
+import shutil
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -24,6 +25,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+
+from bootstrap.claude_state_migration import LEGACY_ROOT_HOME, migrate_legacy_claude_state
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
@@ -203,10 +206,11 @@ def _build_create_chat_command(
 
     Mirrors the New Agent button's create path (see
     system/apps/system_interface/.../agent_manager.py:create_chat_agent): the
-    `chat` template, no-connect, and the inherited `project` label when
-    present on the services agent. Adds `--message /welcome`, which used to
-    live on `create_templates.main`. The chat agent belongs to its workspace
-    by virtue of sharing the host; it carries no `workspace` label.
+    harness chosen via `--type claude`, the `chat` role template, no-connect, and
+    the inherited `project` label when present on the services agent. Adds
+    `--message /welcome`, which used to live on `create_templates.main`. The chat
+    agent belongs to its workspace by virtue of sharing the host; it carries no
+    `workspace` label.
     """
     cmd: list[str] = [
         "mngr",
@@ -222,8 +226,8 @@ def _build_create_chat_command(
         # already exists". With --transfer none the chat agent reuses
         # the services agent's /home/user/workspace/ as its work_dir, which is what we
         # want (one workspace == one work_dir, shared across all chats).
-        "--transfer",
-        "none",
+        "--type",
+        "claude",
         "--template",
         "chat",
         "--message",
@@ -509,16 +513,18 @@ def _fetch_user_timezone() -> str:
     """
     gateway = os.environ.get("LATCHKEY_GATEWAY", "")
     password = os.environ.get("LATCHKEY_GATEWAY_PASSWORD", "")
-    permissions = os.environ.get("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "")
-    if not gateway or not password or not permissions:
+    if not gateway or not password:
         logger.debug("Latchkey gateway env not fully set; skipping timezone fetch")
         return ""
+    headers = {"X-Latchkey-Gateway-Password": password}
+    # Desktop-hosted gateways authorize via this per-agent JWT and deny
+    # requests without it; VPS gateways omit the env var.
+    permissions_override = os.environ.get("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "")
+    if permissions_override:
+        headers["X-Latchkey-Gateway-Permissions-Override"] = permissions_override
     request = urllib.request.Request(
         f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/timezone",
-        headers={
-            "X-Latchkey-Gateway-Password": password,
-            "X-Latchkey-Gateway-Permissions-Override": permissions,
-        },
+        headers=headers,
     )
     try:
         timezone_name = _request_timezone(request)
@@ -667,6 +673,57 @@ def _ensure_supervisor_log_dir() -> None:
         )
 
 
+# Bound on the boot-time venv converge. A venv that already matches the
+# lockfile no-ops in well under a second; a genuinely drifted one (image bake
+# older than the landed branch tip) reinstalls from uv's baked warm cache,
+# which stays comfortably inside this bound.
+_UV_SYNC_TIMEOUT_SECONDS = 600.0
+
+
+def _sync_workspace_venv() -> None:
+    """Converge the workspace .venv to the landed lockfile before any agent runs.
+
+    The venv is a bake-time artifact (build_workspace.sh at image build / host
+    provisioning) while the working tree is a landing-time artifact (the
+    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
+    re-runs the sync at create, so the two can disagree whenever the baked
+    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
+    sync reconciles them lazily: mid-boot, concurrent with the services and
+    the initial chat agent, and with root-closure scope rather than
+    --all-packages. Whatever imports from the venv during that rewrite window
+    fails intermittently (ModuleNotFoundError for imbue_common and friends).
+
+    Converging here -- once, up front, before the chat agent exists and before
+    supervisord starts anything -- removes both the race window and the scope
+    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
+    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
+    a failure is logged loudly but never blocks boot (the per-``uv run``
+    implicit syncs remain the fallback).
+    """
+    try:
+        result = subprocess.run(
+            ["uv", "sync", "--all-packages", "--frozen"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_UV_SYNC_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "uv sync --all-packages timed out after {}s; continuing boot",
+            _UV_SYNC_TIMEOUT_SECONDS,
+        )
+        return
+    if result.returncode != 0:
+        logger.error(
+            "uv sync --all-packages failed (rc={}): {}",
+            result.returncode,
+            (result.stderr or result.stdout).strip()[-500:],
+        )
+        return
+    logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
+
+
 def _exec_supervisord() -> None:
     """Replace this process with supervisord running in the foreground.
 
@@ -677,6 +734,57 @@ def _exec_supervisord() -> None:
     """
     logger.info("Launching supervisord with config {}", SUPERVISORD_CONF)
     os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
+
+
+# Bound on the boot-time venv converge. A venv that already matches the
+# lockfile no-ops in well under a second; a genuinely drifted one (image bake
+# older than the landed branch tip) reinstalls from uv's baked warm cache,
+# which stays comfortably inside this bound.
+_UV_SYNC_TIMEOUT_SECONDS = 600.0
+
+
+def _sync_workspace_venv() -> None:
+    """Converge the workspace .venv to the landed lockfile before any agent runs.
+
+    The venv is a bake-time artifact (build_workspace.sh at image build / host
+    provisioning) while the working tree is a landing-time artifact (the
+    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
+    re-runs the sync at create, so the two can disagree whenever the baked
+    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
+    sync reconciles them lazily: mid-boot, concurrent with the services and
+    the initial chat agent, and with root-closure scope rather than
+    --all-packages. Whatever imports from the venv during that rewrite window
+    fails intermittently (ModuleNotFoundError for imbue_common and friends).
+
+    Converging here -- once, up front, before the chat agent exists and before
+    supervisord starts anything -- removes both the race window and the scope
+    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
+    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
+    a failure is logged loudly but never blocks boot (the per-``uv run``
+    implicit syncs remain the fallback).
+    """
+    try:
+        result = subprocess.run(
+            ["uv", "sync", "--all-packages", "--frozen"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_UV_SYNC_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "uv sync --all-packages timed out after {}s; continuing boot",
+            _UV_SYNC_TIMEOUT_SECONDS,
+        )
+        return
+    if result.returncode != 0:
+        logger.error(
+            "uv sync --all-packages failed (rc={}): {}",
+            result.returncode,
+            (result.stderr or result.stdout).strip()[-500:],
+        )
+        return
+    logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
 
 
 def _run_env_converge_fast_phase() -> None:
@@ -702,12 +810,38 @@ def _run_env_converge_fast_phase() -> None:
         )
 
 
+def _migrate_legacy_claude_state_best_effort() -> None:
+    """Heal pre-/home/user-layout workspaces whose claude state is root-homed.
+
+    Must run before supervisord starts (the services would otherwise create
+    fresh state at the new location) and before the initial chat agent could
+    exist. Best-effort: a failure is logged loudly but never blocks boot --
+    the state stays where it was, and the next boot retries.
+    """
+    try:
+        migrate_legacy_claude_state(LEGACY_ROOT_HOME, Path.home())
+    except (OSError, shutil.Error) as e:
+        logger.opt(exception=e).error(
+            "Failed to migrate legacy claude state; continuing boot"
+        )
+
+
 def main() -> None:
     logger.info("Bootstrap starting: first-boot setup, then supervisord")
+
+    # Move any root-homed claude state (pre-/home/user-layout workspaces) into
+    # the current home BEFORE anything claude-related starts, so an updated
+    # workspace keeps its chat history and sign-in.
+    _migrate_legacy_claude_state_best_effort()
 
     # Apply the global git config (https rewrites) before any service or
     # agent runs git.
     _configure_git_global()
+
+    # Converge the workspace venv BEFORE the initial chat agent is created
+    # (below) and before supervisord's `uv run` services start, so nothing
+    # races the reconcile or runs against a bake-stale venv.
+    _sync_workspace_venv()
 
     # Set the container clock to the user's timezone so cron schedules run in
     # their local time. Must precede _exec_supervisord: cron reads the

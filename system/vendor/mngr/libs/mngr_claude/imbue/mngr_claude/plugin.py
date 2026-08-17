@@ -38,6 +38,8 @@ from imbue.mngr.agents.common_transcript import maybe_provision_common_transcrip
 from imbue.mngr.agents.common_transcript import provision_raw_transcript_scripts
 from imbue.mngr.agents.common_transcript import provision_scripts_to_commands_dir
 from imbue.mngr.agents.installation import ensure_cli_installed
+from imbue.mngr.agents.output_styles import read_output_style_files
+from imbue.mngr.agents.output_styles import resolve_output_style
 from imbue.mngr.agents.tui_agent import InteractiveTuiAgent
 from imbue.mngr.agents.tui_utils import POST_SUBMIT_DIALOG_OBSERVE_SECONDS
 from imbue.mngr.agents.tui_utils import SubmissionConfirmationPolicy
@@ -46,6 +48,7 @@ from imbue.mngr.agents.tui_utils import build_changed_token_probe
 from imbue.mngr.agents.tui_utils import build_file_mtime_token_command
 from imbue.mngr.agents.tui_utils import build_normalized_message_probe
 from imbue.mngr.agents.tui_utils import send_enter_keystroke
+from imbue.mngr.agents.tui_utils import send_key_keystroke
 from imbue.mngr.agents.update_policy import AgentUpdatePolicy
 from imbue.mngr.agents.update_policy import is_self_update_disabled
 from imbue.mngr.api.preservation import PreservedItem
@@ -92,10 +95,11 @@ from imbue.mngr.interfaces.host import HostLocation
 from imbue.mngr.interfaces.host import OnlineHostInterface
 from imbue.mngr.interfaces.live_output import LiveOutputReader
 from imbue.mngr.plugins.hookspecs import OnBeforeCreateArgs
-from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentTypeName
 from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import DiscoveredAgent
+from imbue.mngr.primitives import OutputStyleName
+from imbue.mngr.primitives import SystemPromptText
 from imbue.mngr.primitives import TransferMode
 from imbue.mngr.primitives import WaitingReason
 from imbue.mngr.utils.git_utils import find_git_source_path
@@ -105,7 +109,9 @@ from imbue.mngr_claude import resources as _claude_resources
 from imbue.mngr_claude.claude_config import ClaudeDirectoryNotTrustedError
 from imbue.mngr_claude.claude_config import ClaudeEffortCalloutNotDismissedError
 from imbue.mngr_claude.claude_config import ClaudeOnboardingNotCompletedError
+from imbue.mngr_claude.claude_config import KEYBINDINGS_FILENAME
 from imbue.mngr_claude.claude_config import MANAGED_SETTINGS_RELATIVE_PATH
+from imbue.mngr_claude.claude_config import PERMISSIONS_WAITING_FILENAME
 from imbue.mngr_claude.claude_config import acknowledge_cost_threshold
 from imbue.mngr_claude.claude_config import add_claude_trust_for_path
 from imbue.mngr_claude.claude_config import auto_dismiss_claude_dialogs
@@ -116,6 +122,7 @@ from imbue.mngr_claude.claude_config import check_claude_dialogs_dismissed
 from imbue.mngr_claude.claude_config import complete_onboarding
 from imbue.mngr_claude.claude_config import dismiss_effort_callout
 from imbue.mngr_claude.claude_config import encode_claude_project_dir_name
+from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
 from imbue.mngr_claude.claude_config import find_project_config
 from imbue.mngr_claude.claude_config import find_user_config_in_isolated_mode
 from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
@@ -134,6 +141,17 @@ from imbue.mngr_claude.claude_config import resolve_shared_claude_config_dir
 from imbue.mngr_claude.stream_buffer import SnapshotDeltaReader
 
 _READY_SIGNAL_TIMEOUT_SECONDS: Final[float] = 10.0
+
+# The agent's live model selection, at the agent state dir root, for any client
+# that wants to show or reconcile it. Seeded at provision from the launch
+# settings; thereafter written by the statusline script. Kept in sync with
+# claude_status_line.sh, the workspace-side writer.
+_MODEL_STATE_FILE_NAME: Final[str] = "model_state.json"
+
+# Budget for leaving a bare-`!` shell-mode strand: retries, and the wait for the
+# `❯` prompt to return after each.
+_SHELL_MODE_EXIT_MAX_ATTEMPTS: Final[int] = 3
+_SHELL_MODE_EXIT_POLL_SECONDS: Final[float] = 2.0
 
 # Paths within ~/.claude/ to sync to the per-agent config dir.
 # Used by both get_files_for_deploy() and provision() to ensure consistency.
@@ -246,8 +264,32 @@ def _resolve_adopt_session(adopt_session_arg: str, mngr_ctx: MngrContext) -> tup
     return adopt_session_arg, match.parent
 
 
+# Separator between stacked `append_system_prompt` blocks. Blank line, so each role's
+# block reads as its own paragraph in the assembled prompt.
+APPEND_SYSTEM_PROMPT_SEPARATOR: Final[str] = "\n\n"
+
+
 class ClaudeAgentConfig(AgentTypeConfig):
     """Config for the claude agent type."""
+
+    # --- role behaviour, set by a create template and applied by this harness ---
+    #
+    # Both are harness-neutral *intent*: a role states them once and each harness applies
+    # them its own way. They live on the harness subclasses rather than AgentTypeConfig so
+    # a harness that cannot honour them has no field to route to -- the create then fails
+    # naming the template, instead of launching an agent that quietly ignores its role.
+    output_style: OutputStyleName | None = Field(
+        default=None,
+        description="Name of an output style to launch with, matched against the `name:` "
+        "frontmatter of a file in the work dir's output-style directory. Scalar: the last "
+        "template in the stack to set it wins.",
+    )
+    append_system_prompt: tuple[SystemPromptText, ...] = Field(
+        default=(),
+        description="Blocks to append to the agent's system prompt, in stack order. Aggregate: "
+        "write `append_system_prompt__extend = [...]` in a template so stacked roles each "
+        "contribute a block instead of the last one replacing the rest.",
+    )
 
     command: CommandString = Field(
         default=CommandString("claude"),
@@ -562,6 +604,14 @@ an mngr agent rather than in the user's persistent ~/.claude/ directory.
 _MANAGED_SETTINGS_SHELL_PATH: Final[str] = f"$MNGR_AGENT_STATE_DIR/{'/'.join(MANAGED_SETTINGS_RELATIVE_PATH)}"
 MANAGED_SETTINGS_LAUNCH_ARG: Final[str] = f'--settings "{_MANAGED_SETTINGS_SHELL_PATH}"'
 
+# Where claude itself looks for output styles, relative to the work_dir. mngr validates
+# `output_style` against this exact path -- the one claude will read -- so a name that
+# resolves here is guaranteed to resolve for claude too.
+CLAUDE_OUTPUT_STYLES_DIR: Final[str] = ".claude/output-styles"
+
+# The settings.json key claude reads to select an output style by name.
+OUTPUT_STYLE_SETTING_KEY: Final[str] = "outputStyle"
+
 
 _PLUGINS_DIR_MARKER: Final[str] = "/plugins/"
 """Generic marker for extracting relative plugin paths.
@@ -663,6 +713,7 @@ def _build_settings_json(
     *,
     is_unattended: bool = False,
     allow_narrowing: bool = False,
+    extra_settings: dict[str, Any] | None = None,
 ) -> str:
     """Build settings.json content for per-agent config dirs.
 
@@ -696,6 +747,10 @@ def _build_settings_json(
     data = apply_settings_patch(
         data, config.settings_overrides, allow_narrowing=allow_narrowing, base_description=base_description
     )
+    # Applied last so a resolved agent-type setting (currently only `output_style`) wins
+    # over a settings_overrides value for the same key.
+    if extra_settings:
+        data.update(extra_settings)
     return json.dumps(data, indent=2) + "\n"
 
 
@@ -1493,6 +1548,54 @@ def has_input_prompt_line(pane_content: str) -> bool:
     return _INPUT_PROMPT_LINE_RE.search(pane_content) is not None
 
 
+# Claude Code's shell (bash) mode: typing `!` at an empty prompt swaps the column-0 `❯`
+# input glyph for `!` and shows the shell-mode footer, and submitting an empty shell line
+# is a no-op that STAYS in shell mode, hiding the `❯` prompt. A single Backspace deletes
+# the `!` and returns to normal mode.
+_SHELL_MODE_FOOTER_TEXT: Final[str] = "! for shell mode"
+# The shell-mode input row with an EMPTY command. Claude renders the empty box as `!` plus
+# a non-breaking space (U+00A0), so that is matched alongside ordinary spaces/tabs.
+_EMPTY_SHELL_MODE_INPUT_RE: Final[re.Pattern[str]] = re.compile(r"^![ \t\xa0]*$", re.MULTILINE)
+
+
+@pure
+def is_shell_command_message(message: str) -> bool:
+    """Whether a message drives Claude Code's shell (bash) mode -- a leading ``!``.
+
+    Such a message runs a bash command in the pane (or, for a bare ``!``, does nothing)
+    rather than sending a model turn.
+    """
+    return message.lstrip().startswith("!")
+
+
+@pure
+def is_stranded_in_empty_shell_mode(pane_content: str) -> bool:
+    """Whether the pane is stranded in Claude's shell mode on an empty command line -- the state a bare ``!`` submission leaves behind."""
+    if _SHELL_MODE_FOOTER_TEXT not in pane_content:
+        return False
+    if has_input_prompt_line(pane_content):
+        return False
+    return _EMPTY_SHELL_MODE_INPUT_RE.search(pane_content) is not None
+
+
+@pure
+def is_pending_shell_command(pane_content: str) -> bool:
+    """Whether the pane is in Claude's shell mode holding an unsubmitted (non-empty) command.
+
+    Within shell mode this is the complement of :func:`is_stranded_in_empty_shell_mode`: the
+    footer is up and the ``❯`` prompt is hidden, but the input row is not the empty strand. mngr
+    never leaves this state -- its own sends always submit with Enter -- so it can only be a
+    command a human typed directly into the pane and did not submit. Keyed off the *absence* of an
+    empty input row rather than the presence of a bare ``!`` line, so a prior ``!<command>`` echoed
+    in the transcript is not mistaken for the pending input. See ``_preflight_send_message``.
+    """
+    if _SHELL_MODE_FOOTER_TEXT not in pane_content:
+        return False
+    if has_input_prompt_line(pane_content):
+        return False
+    return not is_stranded_in_empty_shell_mode(pane_content)
+
+
 @pure
 def extract_blocking_selector_block(pane_content: str) -> str | None:
     """Return the text block of a blocking numbered selector if one is open, else None.
@@ -1557,6 +1660,17 @@ class DialogDetectedError(SendMessageError):
             agent_name,
             f"A dialog is blocking the agent's input ({dialog_description} detected in terminal). "
             f"Connect to the agent with 'mngr connect {agent_name}' to resolve it.",
+        )
+
+
+class ShellCommandPendingError(SendMessageError):
+    """The agent is stopped in Claude's shell mode on a command a human typed but did not submit."""
+
+    def __init__(self, agent_name: str) -> None:
+        super().__init__(
+            agent_name,
+            f"The agent is in shell mode with an unsubmitted command. Connect with "
+            f"'mngr connect {agent_name}' and press Enter to run it or Escape to cancel, then retry.",
         )
 
 
@@ -1791,25 +1905,14 @@ class ClaudeCoreAgent(
             if user_config_dir:
                 env_vars["CLAUDE_CONFIG_DIR"] = user_config_dir
 
-    def get_lifecycle_state(self) -> AgentLifecycleState:
-        """Get lifecycle state, accounting for Claude-specific permissions_waiting file.
+    def is_blocked_on_dialog(self) -> bool:
+        """Whether Claude has an unresolved ``PermissionRequest``.
 
-        The PermissionRequest hook creates a 'permissions_waiting' file when Claude
-        is blocked on a permission dialog. When present, this overrides RUNNING to
-        WAITING since the agent cannot make progress without user intervention.
-
-        Delegates the gating decision to the shared classify_waiting_reason so this
-        promotion and the waiting_reason field generator cannot drift: a RUNNING
-        base state means the 'active' marker is present and the process is alive, so
-        the classifier's is_active gate is satisfied and a PERMISSIONS verdict is
-        what promotes RUNNING to WAITING.
+        The hook touches ``permissions_waiting`` for both a tool-approval dialog and an
+        AskUserQuestion. Dialogs that fire no hook are not covered -- a local
+        slash-command picker such as ``/model``, or the cost threshold.
         """
-        state = super().get_lifecycle_state()
-        if state != AgentLifecycleState.RUNNING:
-            return state
-        is_blocked = self._check_file_exists(self._get_agent_dir() / "permissions_waiting")
-        reason = classify_waiting_reason(is_active=True, is_blocked_on_permission=is_blocked)
-        return AgentLifecycleState.WAITING if reason is WaitingReason.PERMISSIONS else state
+        return self._check_file_exists(self._get_agent_dir() / PERMISSIONS_WAITING_FILENAME)
 
     def get_expected_process_name(self) -> str:
         """Return 'claude' as the expected process name.
@@ -1856,6 +1959,23 @@ class ClaudeCoreAgent(
 
         return transfers
 
+    def _build_output_style_settings(self, host: OnlineHostInterface) -> dict[str, Any]:
+        """Return the ``outputStyle`` settings patch for this agent type, or ``{}`` if unset.
+
+        Claude resolves the style file itself at launch, so mngr only needs to pass the
+        name -- but it validates first, against ``.claude/output-styles/`` in the work_dir:
+        the very directory claude will read. Validating claude's own path (rather than
+        wherever the styles are authored, which may be a symlink away) is what turns a
+        broken link or a misspelled name into a failed create instead of an agent that
+        launches silently unstyled.
+        """
+        if self.agent_config.output_style is None:
+            return {}
+        styles_dir = Path(self.work_dir) / CLAUDE_OUTPUT_STYLES_DIR
+        # Raises UserInputError, listing what is available, when the name has no match.
+        resolve_output_style(self.agent_config.output_style, read_output_style_files(host, styles_dir))
+        return {OUTPUT_STYLE_SETTING_KEY: str(self.agent_config.output_style)}
+
     def _configure_agent_hooks(self, host: OnlineHostInterface, mngr_ctx: MngrContext) -> None:
         """Write mngr's hooks (and the user's settings_overrides) to the managed settings file.
 
@@ -1891,6 +2011,11 @@ class ClaudeCoreAgent(
             allow_narrowing=mngr_ctx.config.allow_settings_key_assignment_narrowing,
             base_description="mngr's managed Claude hooks",
         )
+        # Folded on last so a role's `output_style` wins over a settings_overrides
+        # outputStyle. Merged into the resolved dict rather than layered as config, so it
+        # cannot disturb the model / fastMode / skipDangerousModePermissionPrompt keys
+        # already resolved above.
+        settings.update(self._build_output_style_settings(host))
 
         settings_path = get_managed_settings_path(self._get_agent_dir())
         # The plugin/claude/ parent may not exist yet (in use_env_config_dir
@@ -1995,6 +2120,8 @@ class ClaudeCoreAgent(
             sync_local=config.sync_home_settings,
             is_unattended=self.is_unattended_enabled(),
             allow_narrowing=mngr_ctx.config.allow_settings_key_assignment_narrowing,
+            # Same fold as the shared-mode path in _configure_agent_hooks.
+            extra_settings=self._build_output_style_settings(host),
         )
 
         generated_files: dict[Path, str] = {
@@ -2154,6 +2281,19 @@ class ClaudeCoreAgent(
             # actually reads); in isolated mode the per-agent config inherits it.
             acknowledge_cost_threshold(self._dialog_dismissal_config_path())
 
+            # Seed the live model state from the launch settings so the chat
+            # model bar is populatable the moment readiness fires (the
+            # statusline, the live writer, first fires seconds later).
+            self._seed_model_state(host)
+
+            # Provision the Chat-only meta+q -> chat:cancel chord the dwt shoulder tap
+            # delivers to flush the parked message queue natively. Merged into the
+            # user-scope keybindings.json (idempotent, never clobbering an existing
+            # meta+q): in shared mode claude reads it directly; in isolated mode the
+            # per-agent config dir inherits it via _sync_user_resources, the same way
+            # keybindings.json is already synced.
+            ensure_chat_cancel_tap_keybinding(get_user_claude_config_dir() / KEYBINDINGS_FILENAME)
+
             # Transfer plugin data from source agent before config setup (if cloning via --from).
             # This copies sessions, memory, transcript offsets, etc. The subsequent config setup
             # will overwrite identity-specific files (.claude.json, credentials) with fresh values.
@@ -2176,6 +2316,34 @@ class ClaudeCoreAgent(
 
             # should be done by now, just wanted to do in parallel for latency reasons
             provision_backgroun_script_thread.join(60.0)
+
+    def _seed_model_state(self, host: OnlineHostInterface) -> None:
+        """Seed ``model_state.json`` from the launch settings before first start.
+
+        The statusline script (``claude_status_line.sh``) is the live writer of
+        this file, but its first fire lands seconds after the session starts --
+        after the chat surface is already visible. The launch settings know the
+        model at provision time, so seeding here makes the model bar populatable
+        the moment readiness fires; the statusline's later writes reconcile the
+        seed to claude's self-reported values. The seeded model is the settings
+        value verbatim (a catalog option id like ``opus[1m]``), which the chat
+        UI's matcher accepts alongside claude's reported ids. Skipped when no
+        model is pinned in ``settings_overrides`` (nothing authoritative to
+        seed).
+        """
+        overrides = self.agent_config.settings_overrides
+        model = overrides.get("model")
+        if not isinstance(model, str) or not model:
+            return
+        effort = overrides.get("effortLevel")
+        state: dict[str, Any] = {
+            "model": model,
+            "effort": effort if isinstance(effort, str) else None,
+            "fast": overrides.get("fastMode") is True,
+        }
+        state_path = self._get_agent_dir() / _MODEL_STATE_FILE_NAME
+        with log_span("Seeding model state at {}", state_path):
+            write_json_dict_via_host(host, state_path, state, make_parent=True)
 
     def _transfer_source_plugin_data(self, source_agent_state_location: HostLocation) -> None:
         """Rsync the source agent's ``plugin/`` into this agent's state dir.
@@ -2546,16 +2714,22 @@ class ClaudeAgent(
         return SnapshotDeltaReader()
 
     def _preflight_send_message(self, tmux_target: TmuxWindowTarget) -> None:
-        """Check for (and optionally clear) blocking dialogs before sending a message.
+        """Check for (and optionally clear) blocking input states before sending a message.
 
         Permission prompts (the ``permissions_waiting`` marker) are a distinct class that is
-        never auto-accepted -- always a hard raise. Any other blocking dialog already present (a
-        known-caption dialog or a generic numbered selector) is auto-accepted up to
-        ``auto_accept_preflight_prompt_depth`` times; if one remains, the send is aborted with
-        DialogDetectedError.
+        never auto-accepted -- always a hard raise. A non-empty shell command a human left
+        unsubmitted is likewise a hard raise (ShellCommandPendingError): it hides the ``❯`` prompt,
+        so surfacing it here gives an actionable error instead of a downstream readiness timeout.
+        Any other blocking dialog already present (a known-caption dialog or a generic numbered
+        selector) is auto-accepted up to ``auto_accept_preflight_prompt_depth`` times; if one
+        remains, the send is aborted with DialogDetectedError.
         """
-        if self._check_file_exists(self._get_agent_dir() / "permissions_waiting"):
+        if self._check_file_exists(self._get_agent_dir() / PERMISSIONS_WAITING_FILENAME):
             raise DialogDetectedError(str(self.name), "permission dialog")
+
+        content = self._capture_pane_content(tmux_target)
+        if content is not None and is_pending_shell_command(content):
+            raise ShellCommandPendingError(str(self.name))
 
         remaining_dialog = self._accept_dialogs_up_to_depth(
             tmux_target,
@@ -2600,6 +2774,10 @@ class ClaudeAgent(
         message landed. Seeing the column-0 input prompt with no selector means the agent is
         clear; seeing neither (an unexpected state) is still success but is warned about.
         """
+        # Leave a possible bare-`!` shell-mode strand first: it hides the `❯` prompt the
+        # checks below key off. Only a lone `!` can strand a mngr send here -- a `!<command>`
+        # was submitted with Enter and already left shell mode.
+        self._exit_empty_shell_mode(tmux_target)
         # Observe the pane for at least the full window so a selector that renders a beat after
         # delivery is caught. Early-exit only when a selector actually appears (the input prompt
         # alone is not a reliable "no dialog" signal -- the just-submitted command echo keeps a
@@ -2702,6 +2880,51 @@ class ClaudeAgent(
         """Send a single Enter keystroke to the agent's pane (accepts a selector's highlighted default)."""
         send_enter_keystroke(self, tmux_target)
 
+    def _determine_confirmation_policy(self, message: str) -> SubmissionConfirmationPolicy:
+        """Confirm a leading-``!`` shell command under the relaxed policy, like a slash command.
+
+        A ``!`` message leaves no durable submission record, so a strict confirmation
+        would hang for the full window and then wrongly fail.
+        """
+        if is_shell_command_message(message):
+            return SubmissionConfirmationPolicy.RELAXED
+        return super()._determine_confirmation_policy(message)
+
+    def _exit_empty_shell_mode(self, tmux_target: TmuxWindowTarget) -> None:
+        """Leave Claude's shell mode if a bare ``!`` submission stranded the agent on an empty line.
+
+        Empty-only by design. Every message mngr delivers is submitted with Enter, so a
+        ``!<command>`` runs and leaves shell mode on its own; only a lone ``!`` submits nothing and
+        stays. A non-empty line is a command a human typed and did not submit -- refused up front by
+        ``_preflight_send_message`` (see ``is_pending_shell_command``), never finished or deleted here.
+        """
+        content = self._capture_pane_content(tmux_target)
+        if content is None or not is_stranded_in_empty_shell_mode(content):
+            return
+        logger.info(
+            "Agent {} is in Claude shell mode after an empty `!`; sending Backspace to restore the input prompt",
+            self.name,
+        )
+        for _ in range(_SHELL_MODE_EXIT_MAX_ATTEMPTS):
+            self._press_backspace(tmux_target)
+            if poll_until(lambda: self._input_prompt_present(tmux_target), timeout=_SHELL_MODE_EXIT_POLL_SECONDS):
+                self.record_message_delivery_event(
+                    "exited_shell_mode", "left Claude shell mode after an empty `!` submission"
+                )
+                return
+        logger.warning(
+            "Agent {} still lacks the `❯` input prompt after attempting to leave Claude shell mode", self.name
+        )
+
+    def _input_prompt_present(self, tmux_target: TmuxWindowTarget) -> bool:
+        """Whether the pane currently shows Claude Code's column-0 ``❯`` input prompt."""
+        content = self._capture_pane_content(tmux_target)
+        return content is not None and has_input_prompt_line(content)
+
+    def _press_backspace(self, tmux_target: TmuxWindowTarget) -> None:
+        """Send a single Backspace keystroke to the agent's pane (leaves an empty shell mode)."""
+        send_key_keystroke(self, tmux_target, "BSpace")
+
     def wait_for_ready_signal(
         self, is_readiness_awaited: bool, start_action: Callable[[], None], timeout: float | None = None
     ) -> None:
@@ -2774,6 +2997,22 @@ class ClaudeAgent(
         script_path = "$MNGR_AGENT_STATE_DIR/commands/claude_background_tasks.sh"
         return f"( {script_path} {shlex.quote(session_name)} {shlex.quote(primary_window_name)} ) &"
 
+    def _build_append_system_prompt_args(self) -> tuple[str, ...]:
+        """Turn this agent type's ``append_system_prompt`` blocks into claude's own flag.
+
+        Joined into ONE flag rather than repeated: claude's ``--append-system-prompt`` is
+        last-wins, verified against claude 2.1.220, so passing the flag per block would
+        deliver only the final one and silently drop every role stacked before it.
+
+        ``output_style`` is deliberately absent here: claude takes it as the ``outputStyle``
+        setting written during provisioning (see ``_build_output_style_settings``), not as a
+        launch flag.
+        """
+        blocks = self.agent_config.append_system_prompt
+        if not blocks:
+            return ()
+        return ("--append-system-prompt", APPEND_SYSTEM_PROMPT_SEPARATOR.join(str(block) for block in blocks))
+
     def assemble_command(
         self,
         host: OnlineHostInterface,
@@ -2833,6 +3072,10 @@ class ClaudeAgent(
         # (Claude is last-wins) -- the accepted, documented limitation of that mode.
         cli_args = self.agent_config.cli_args
         all_extra_args = cli_args + quote_agent_args(agent_args)
+        # Role-contributed system-prompt blocks, joined into a single flag (see
+        # _build_append_system_prompt_args). Quoted here rather than in the builder so the
+        # builder stays a plain value function.
+        all_extra_args = all_extra_args + quote_agent_args(self._build_append_system_prompt_args())
         # Claude appends & unions repeated --disallowed-tools flags.
         if self.agent_config.auto_disable_questions:
             all_extra_args = all_extra_args + ("--disallowed-tools", "AskUserQuestion")
@@ -3383,17 +3626,15 @@ def register_agent_type() -> tuple[str, type[AgentInterface] | None, type[AgentT
 def _waiting_reason(agent: AgentInterface, host: OnlineHostInterface) -> WaitingReason | None:
     """Return why the agent is waiting based on marker files, or None.
 
-    Checks the agent state directory for marker files rather than calling
-    get_lifecycle_state() (which involves tmux/ps SSH commands), then delegates the
-    decision to the shared ``classify_waiting_reason`` so this and the lifecycle
-    promotion stay in lockstep. ``permissions_waiting`` is only read when ``active``
-    is present, both to short-circuit the idle case and because the classifier
-    ignores the permission signal when the agent is not in a turn.
+    Reads ``active`` directly rather than calling get_lifecycle_state() (which runs
+    tmux/ps SSH commands), and takes the block through the agent -- the same call the
+    lifecycle makes -- so the reason and the state cannot disagree about one agent. The
+    block is only consulted while ``active`` is present, since the classifier ignores it
+    outside a turn.
     """
     agent_dir = get_agent_state_dir_path(host.host_dir, agent.id)
     is_active = host.path_exists(agent_dir / "active")
-    is_blocked_on_permission = is_active and host.path_exists(agent_dir / "permissions_waiting")
-    return classify_waiting_reason(is_active, is_blocked_on_permission)
+    return classify_waiting_reason(is_active, is_active and agent.is_blocked_on_dialog())
 
 
 @hookimpl

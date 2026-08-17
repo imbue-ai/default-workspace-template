@@ -313,15 +313,24 @@ the command**, not computed in Python, because the stored command is replayed ve
 
 The agent must report RUNNING while working and WAITING when idle. Core computes state
 live (`base_agent.py:209` -> `determine_lifecycle_state`, `hosts/common.py:324`): tmux
-pane alive + expected process name present -> `RUNNING if active-marker-present else
-WAITING`. **The RUNNING/WAITING split is purely the presence of
-`$MNGR_AGENT_STATE_DIR/active`.** Core never writes it; the plugin must.
+pane alive + expected process name present -> `RUNNING if active-marker-present and not
+blocked-on-dialog else WAITING`. **The RUNNING/WAITING split is the presence of
+`$MNGR_AGENT_STATE_DIR/active`, less any dialog the agent type reports through
+`is_blocked_on_dialog()`.** Core never writes that marker; the plugin must.
 
 - **claude** (`claude_config.py:515`): hooks write markers. `UserPromptSubmit` creates
   `active`; `Notification:idle_prompt` and `Stop` remove it. A separate
   `permissions_waiting` marker (created on `PermissionRequest`, removed on
-  `PostToolUse`/`Stop`) lets `get_lifecycle_state` promote RUNNING->WAITING-on-permission
-  (`plugin.py:1478`).
+  `PostToolUse`/`Stop`) lets the lifecycle probe report WAITING-on-permission rather than RUNNING.
+  The block is folded into the probe rather than layered on top of `get_lifecycle_state`, so the
+  agent listing (which reads `probe_lifecycle`) and `mngr wait` (which reads `get_lifecycle_state`,
+  defined in terms of the probe) report the same state for a blocked agent. This reaches the listing
+  only through `_build_agent_details_from_online_agent`. The vps provider (`instance.py:2145`,
+  inherited by ovh, vultr, and -- via `OfflineCapableVpsProvider` -- aws, azure and gcp), modal
+  (`instance.py:3010`) and imbue_cloud (`providers/instance.py:1100`)
+  override `get_host_and_agent_details` and derive the state straight from
+  `determine_lifecycle_probe_result` over batched SSH data, so on those providers a blocked agent
+  still lists as RUNNING.
 - **antigravity** (`antigravity_config.py:326`): `PreInvocation` -> `set_active_marker.sh`
   touches `active`; `Stop` -> `clear_active_marker_when_idle.sh` removes it.
 - **opencode** (`resources/mngr_opencode_plugin.ts:291`): no shell hooks -- the in-process
@@ -1010,13 +1019,14 @@ Extra plugin-namespaced fields surfaced in `mngr list`, online and offline.
   codex's single touch/remove flag (opencode is a server with concurrent subagent sessions).
   Root-session idle clears any stranded marker as a safety net (codex uses the root `Stop`), and a
   fresh server clears a marker left by a prior killed/crashed server at startup (codex clears at a
-  fresh root turn; claude has a startup reset). The gating rule lives in one shared
-  `_classify_waiting_reason` routed through both the lifecycle promotion and the field generator, so
-  the two cannot drift (mirrors codex). Notably opencode does **not** inherit codex's cancelled-dialog
-  limitation: codex's hook model fires no terminal hook on Esc/No, stranding both markers until the
-  next turn, but opencode's event bus emits `permission.replied` (on deny) and/or `session.idle` (on
-  deny *and* abort), each of which clears the marker promptly -- verified live against 1.17.7.
-  `OpenCodeAgent.get_lifecycle_state` promotes RUNNING -> WAITING while the marker is present,
+  fresh root turn; claude has a startup reset). The gating rule lives in the shared
+  `classify_waiting_reason` behind the field generator, and the lifecycle weighs the same markers in
+  `determine_lifecycle_probe_result` (mirrors codex). Notably opencode does **not** inherit codex's
+  cancelled-dialog limitation: codex's hook model fires no terminal hook on Esc/No, stranding both
+  markers until the next turn, but opencode's event bus emits `permission.replied` (on deny) and/or
+  `session.idle` (on deny *and* abort), each of which clears the marker promptly -- verified live
+  against 1.17.7.
+  `OpenCodeAgent.is_blocked_on_dialog` reports the marker, so the lifecycle reads WAITING while it is present,
   mirroring claude/codex; `END_OF_TURN` follows from the `active` marker being absent. Covered live
   by a release test (`test_opencode_waiting_reason_reports_permissions`): a real `bash: ask` agent
   blocks on an approval prompt and the marker appears -- the one check that exercises the real event
@@ -1033,7 +1043,7 @@ Extra plugin-namespaced fields surfaced in `mngr list`, online and offline.
 - **codex** -- **status: implemented** (both `PERMISSIONS` and `END_OF_TURN`), via
   `agent_field_generators`. `PermissionRequest` touches a `permissions_waiting` marker (inline
   hook command) and `PostToolUse` clears it; the root `Stop` clears any stranded marker as a
-  safety net. `CodexAgent.get_lifecycle_state` also promotes RUNNING -> WAITING while the
+  safety net. `CodexAgent.is_blocked_on_dialog` also reports the marker, so the lifecycle reads WAITING while the
   marker is present, mirroring claude. Note codex has **no** `PostToolUseFailure` event (claude
   does), so cleanup is `PostToolUse` + `Stop` only. `END_OF_TURN` follows from the `active`
   marker (OR of `codex_root_active` and a non-empty `codex_subagents/`, recomputed under lock).

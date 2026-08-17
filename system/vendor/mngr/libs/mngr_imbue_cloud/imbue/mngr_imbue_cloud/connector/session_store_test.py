@@ -3,12 +3,14 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+import pytest
 from pydantic import SecretStr
 
 from imbue.mngr_imbue_cloud.connector.session_store import ImbueCloudSessionStore
 from imbue.mngr_imbue_cloud.connector.session_store import _decode_jwt_exp
 from imbue.mngr_imbue_cloud.connector.session_store import make_session_from_tokens
 from imbue.mngr_imbue_cloud.data_types import AuthSession
+from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
 from imbue.mngr_imbue_cloud.primitives import ImbueCloudAccount
 from imbue.mngr_imbue_cloud.primitives import SuperTokensUserId
 
@@ -61,6 +63,30 @@ def test_list_accounts_returns_all_signed_in_users(tmp_path: Path) -> None:
     store.save(_make_session(user_id="user-b", email="bob@imbue.com"))
     accounts = store.list_accounts()
     assert set(accounts) == {ImbueCloudAccount("alice@imbue.com"), ImbueCloudAccount("bob@imbue.com")}
+
+
+def test_legacy_pending_verification_session_files_still_parse(tmp_path: Path) -> None:
+    """Session files written by pre-web-login plugin versions carry the legacy flag; they must still load."""
+    store = ImbueCloudSessionStore(sessions_dir=tmp_path)
+    store.save(_make_session())
+    session_path = next(p for p in tmp_path.iterdir() if p.name.endswith(".json") and p.name != "accounts.json")
+    raw = session_path.read_text()
+    legacy_raw = raw.rstrip().rstrip("}") + ',  "is_pending_verification": true\n}'
+    session_path.write_text(legacy_raw)
+
+    loaded = store.load_by_account(ImbueCloudAccount("alice@imbue.com"))
+
+    assert loaded is not None
+    assert loaded.access_token.get_secret_value() == "header.payload.sig"
+
+
+def test_set_active_account_requires_a_session_on_disk(tmp_path: Path) -> None:
+    store = ImbueCloudSessionStore(sessions_dir=tmp_path)
+    with pytest.raises(ImbueCloudAuthError, match="no session on disk"):
+        store.set_active_account(ImbueCloudAccount("alice@imbue.com"))
+    store.save(_make_session())
+    store.set_active_account(ImbueCloudAccount("alice@imbue.com"))
+    assert store.get_active_account() == ImbueCloudAccount("alice@imbue.com")
 
 
 def test_is_access_token_near_expiry_returns_true_when_unknown(tmp_path: Path) -> None:

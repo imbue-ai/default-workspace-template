@@ -9,6 +9,7 @@ from loguru import logger
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.config.host_dir import deploy_dest_host_dir
 from imbue.mngr.errors import MngrError
 
 
@@ -72,21 +73,29 @@ def collect_provider_profile_files(
     Scans the provider's subdirectory under the profile (e.g.
     ~/.mngr/profiles/<id>/providers/<provider_name>/) and returns all files
     except those whose names appear in excluded_file_names (typically SSH
-    keypairs and known_hosts).
+    keypairs and known_hosts). ``*.lock`` files are always skipped: they are
+    transient local flock artifacts (e.g. the ``.<key_name>.lock`` files
+    ``load_or_create_ssh_keypair`` leaves behind) and meaningless on the
+    deployed host.
 
     Returns dict mapping destination paths (starting with "~/") to local
-    source paths.
+    source paths. Each provider file is reparented from the local host dir onto
+    the deploy destination host dir (~/.{root_name}), so destinations are
+    correct even when the local host dir lives outside $HOME.
     """
     files: dict[Path, Path | str] = {}
     provider_dir = mngr_ctx.profile_dir / "providers" / provider_name
     if not provider_dir.is_dir():
         return files
 
-    user_home = Path.home()
+    dest_host_dir = deploy_dest_host_dir()
+    local_host_dir = Path(mngr_ctx.config.default_host_dir).expanduser()
     for file_path in provider_dir.rglob("*"):
-        if file_path.is_file() and file_path.name not in excluded_file_names:
-            relative = file_path.relative_to(user_home)
-            files[Path(f"~/{relative}")] = file_path
+        if not file_path.is_file():
+            continue
+        if file_path.name in excluded_file_names or file_path.name.endswith(".lock"):
+            continue
+        files[dest_host_dir / file_path.relative_to(local_host_dir)] = file_path
     return files
 
 

@@ -4,7 +4,7 @@ A serverless [LiteLLM](https://github.com/BerriAI/litellm) proxy deployed as a M
 
 ## Architecture
 
-- **Modal function** (`app.py`): Self-contained, no monorepo imports. Uses `@modal.asgi_app()` to serve LiteLLM's FastAPI app as a long-lived serverless function.
+- **Modal function** (`app.py`): Deployed by file path; ships only this file plus the shared `imbue.modal_app_kit` deploy conventions (no other monorepo imports allowed -- see [libs/modal_app_kit/README.md](../../libs/modal_app_kit/README.md)). Uses `@modal.asgi_app()` to serve LiteLLM's FastAPI app as a long-lived serverless function.
 - **Database**: Neon PostgreSQL for cost tracking, key management, and spend logs.
 - **Auth**: LiteLLM master key for admin operations; virtual keys for per-user/per-agent cost tracking.
 - **Anthropic SDK compatible**: LiteLLM's native `POST /v1/messages` route accepts the Anthropic API request shape with a virtual key (`x-api-key` or `Authorization: Bearer sk-...`). Setting `ANTHROPIC_BASE_URL` to the proxy URL (no path suffix) routes the Anthropic SDK / Claude Code through the proxy with full cost tracking.

@@ -15,16 +15,11 @@ Everything else -- agent creation, discovery, proxying, authentication, the web 
 
 ### App shell
 
-The Electron window uses a frameless window (`frame: false` on Linux/Windows, `titleBarStyle: 'hiddenInset'` with `trafficLightPosition` on macOS). A custom title bar is injected into every backend page via `webContents.insertCSS()` and `webContents.executeJavaScript()` on the `dom-ready` event. The title bar uses `-webkit-app-region: drag` so the entire bar acts as a window drag handle, with buttons opted out via `no-drag`. The title bar provides:
+Each window is a frameless `BrowserWindow` (`frame: false` on Linux/Windows, `titleBarStyle: 'hiddenInset'` with `trafficLightPosition` on macOS) hosting ONE web context: the backend-served Mithril SPA shell (`apps/minds/frontend/`). That single page owns the titlebar, client-side routing among the hub pages (the titlebar never reloads), the sandboxed cross-origin iframe that displays workspace content (`WorkspaceFrame`), and the in-DOM Mithril modals (workspace switcher, inbox, help, sign-in, settings, accounts, workspace options). The identical page runs in a plain browser against a local `minds run` -- the desktop app adds only a slim native bridge (`window.mindsNative` from `preload.js`: window controls, native file picker, shell events, and the startup/error/quitting screens).
 
-- **Navigation**: Back/forward buttons using `history.back()`/`history.forward()`
-- **Page title**: Tracks `document.title` via MutationObserver
-- **Open in browser**: Opens the current URL in the system browser
-- **Window controls**: Minimize/maximize/close buttons (on Linux/Windows; macOS uses native traffic lights)
+Workspace content is entered through the minds `/forward-bridge` route, which hands the browser a `mngr forward` plugin session before landing on the plugin's `/goto/<host-id>/` workspace entry; the plugin appends a `frame-ancestors` policy to every workspace response so only the minds chrome (and the workspace's own origin family) may embed it. Chrome<->workspace messaging flows exclusively through the embed contract (see [embed-contract.md](./embed-contract.md)).
 
-A separate `shell.html` page handles the loading spinner and error screen during startup.
-
-When accessing an agent URL in a regular browser (not the Electron app), the Python backend wraps the content in a lightweight info bar showing the agent name, host, and application name.
+A separate `shell.html` page handles the loading spinner, the quitting screen, and the error screen during startup/teardown.
 
 ### Startup sequence
 
@@ -41,7 +36,7 @@ Closing an individual window just tears down that window's views -- the backend 
 
 #### Quitting page
 
-Backend teardown (and, when applicable, stopping running local minds) takes a moment, during which the UI would otherwise sit there looking frozen. To make the state obvious, once a quit is *committed* every open window flips to a full-window "quitting" screen: the same animated wordmark as the startup loading screen (`shell.html`, loaded with a `#quitting` hash so it reveals a status line), with the chrome view expanded to fill the window (content/sidebar/modal views collapse to zero, the same takeover `updateBundleBounds` uses for the loading and error screens). Progress text -- `Quitting…`, `Stopping N minds…`, `Closing…` -- is pushed to it through the existing `status-update` IPC channel.
+Backend teardown (and, when applicable, stopping running local minds) takes a moment, during which the UI would otherwise sit there looking frozen. To make the state obvious, once a quit is *committed* every open window flips to a full-window "quitting" screen: the same animated wordmark as the startup loading screen (`shell.html`, loaded with a `#quitting` hash so it reveals a status line), taking over the whole window. Progress text -- `Quitting…`, `Stopping N minds…`, `Closing…` -- is pushed to it through the existing `status-update` IPC channel.
 
 The flip happens *after* the mind shutdown prompt below (it is gated on the same `isShuttingDown` commit), so cancelling that prompt leaves the app fully intact with no visual change. Headless quits (SIGTERM / SIGINT) skip the flip -- they have no interactive UI to update.
 
@@ -57,7 +52,7 @@ Programmatic shutdowns (SIGTERM / SIGINT, e.g. `just minds-stop`) skip the promp
 
 ### Crash recovery
 
-If the backend exits unexpectedly, every open window switches to the error screen (chrome view expanded to fill the window, content/sidebar/modal views torn down) with the last lines from the log file. Clicking "Retry" from any window restarts the backend once; on success every window reloads to its pre-error URL.
+If the backend exits unexpectedly, every open window switches to the error screen (`shell.html` taking over the whole window) with the last lines from the log file. Clicking "Retry" from any window restarts the backend once; on success every window reloads to its pre-error URL.
 
 ### Keyboard shortcuts
 
@@ -68,13 +63,13 @@ If the backend exits unexpectedly, every open window switches to the error scree
 
 ### Multi-window behavior
 
-Each workspace (`/forwarding/{agent-id}/...`) can live in its own window. Uniqueness is enforced across the app: at most one window per workspace.
+Each workspace can live in its own window. There is deliberately NO cross-window uniqueness or locking: a window shows whatever it shows, and two windows may display the same workspace (matching the web world, where a user can always open the same page in two tabs).
 
-- **Open in a new window** (from the workspace switcher): right-click a workspace entry for a native `Open in new window` context menu, or click the always-visible arrow icon on the right of the row. Both are suppressed on the entry matching the window's current workspace.
+- **Open in a new window** (from the workspace switcher): right-click a workspace entry for an `Open in new window` context-menu entry (desktop only), or click the arrow icon on the row.
 - **Open a blank window**: cmd+N / ctrl+N, `File > New Window`, or the macOS dock menu. Opens a window on the backend's home page (`/`).
-- **Plain sidebar click**: navigates the current window to that workspace -- unless some other window is already on it, in which case that window is focused and the sender is untouched.
-- **Notifications** pointing at `/forwarding/{X}/...` focus the existing window for workspace `X`, or open a new one. Non-workspace notification URLs and `auth_required` events navigate the most-recently-focused window.
-- **Session restore**: on quit, every open window's content URL is recorded to `~/.<MINDS_ROOT_NAME>/window-state.json` (as `{ windows: [{ url, x, y, width, height, displayId }, ...] }`). On next launch (after the backend is ready) one window is reopened per recorded URL, and each window's titlebar accent is re-derived from that restored URL (see below) -- the accent is not separately persisted. URLs pointing at workspaces that no longer exist are silently dropped. (Older files that still carry a per-window `lastWorkspaceAgentId` field are accepted and the field ignored.)
+- **Plain sidebar click**: always navigates the clicking window to that workspace.
+- **Notifications** for workspace `X` focus the most-recently-focused window already showing `X`; otherwise they navigate the most-recently-focused window (a new window is never auto-opened). Non-workspace notification URLs and `auth_required` events navigate the most-recently-focused window.
+- **Session restore**: on quit, every open window's content URL is recorded to `~/.<MINDS_ROOT_NAME>/window-state.json` (as `{ windows: [{ url, x, y, width, height, displayId }, ...] }`). On next launch (after the backend is ready) one window is reopened per recorded URL (workspace windows restore through the SPA's `/workspace/<id>` route). URLs pointing at workspaces that no longer exist are silently dropped; older file shapes are accepted.
 
 ### Deeplinks (minds://)
 
@@ -98,16 +93,16 @@ Then start the dev app (its `setAsDefaultProtocolClient` call points the scheme 
 
 Every OS delivery channel -- macOS `open-url` events, Windows/Linux second-instance argv, and cold-start argv -- routes to a single `handleDeeplink` in `main.js`, which parses the URL with the pure `electron/deeplink.js` helpers (unit-tested in `test/unit/deeplink.test.js`). The URL's host names the action:
 
-- `minds://create?git_url=<repo>&branch=<ref>` focuses the most recent window and navigates it to the Create from Inspiration page (`/create/inspiration`), which offers a choice: add the Inspiration to an existing workspace (a copyable `/use-inspiration <repo>` message plus a workspace picker) or create a new workspace from it (cloud/local presets only, the repo read-only, and a required "I trust this Inspiration" acknowledgment noting Imbue has not approved or verified it). `branch` accepts anything the create form's Branch input accepts (branch, tag, or commit); when absent it stays blank -- creation then resolves the linked repo's latest version. A `minds://create` link without a `git_url` targets the plain create page. Values must be percent-encoded by the sender.
-- `minds://` bare, or any unrecognized or malformed URL, just opens/focuses the app. The browser OAuth sign-in flow relies on this: the desktop client passes `--success-redirect-url minds://` to the plugin's `auth oauth` subcommand, whose sign-in success page then offers an "Open app" link back to the app (a deliberate click, so the browser's open-external-app prompt appears on a user gesture rather than unprompted).
+- `minds://create?git_url=<repo>&branch=<ref>` focuses the most recent window and lands the user on the Create from Template stepper -- the numbered walkthrough described under [Create from Template](#create-from-template) -- in one of two shells, chosen by context. **Outside a machine** (home/general screens) it navigates the shell to the full page (`/create/template`). **Already inside a machine** it pops the same stepper as a modal (`/create/template/modal`) over that machine, which is less disruptive than a full-page takeover. The modal hosts the *add* branch in place, targeting the machine they are already in: it drops the machine picker, and its last step simply says to paste the copied `/use-template <repo>` message into that chat. That step stays up until the user acknowledges it with **Done** -- it never dismisses itself, so the instruction cannot vanish before it is read. Choosing **Create a new machine** is a bigger job than a popup should host, so it hands off to the full page (`?start=create`, which skips the now-answered chooser) and closes the modal. `main.js` reads the window's current machine id (from `bundle.currentWorkspaceId`, the shell's internal field) and passes it as `current_machine` to pick the shell and to name the machine. Because the modal is hosted in the shared overlay iframe, every navigation inside it goes through the `window.minds` bridge (`navigateContent` + `closeModal`) -- a plain `window.location` would load the destination inside the modal. `branch` accepts anything the create form's Branch input accepts (branch, tag, or commit); when absent it stays blank -- creation then resolves the linked repo's latest version. A `minds://create` link without a `git_url` navigates the shell to the plain create page. Values must be percent-encoded by the sender.
+- `minds://` bare, or any unrecognized or malformed URL, just opens/focuses the app. The browser sign-in flow relies on this: the desktop client passes `--success-redirect-url minds://` to the plugin's `auth login` subcommand, whose sign-in success page then offers an "Open app" link back to the app (a deliberate click, so the browser's open-external-app prompt appears on a user gesture rather than unprompted).
 
-Deeplinks never force a sign-in: `/create` loads regardless of account state and the page's own remote-vs-local flow prompts for sign-in only when needed. A deeplink that arrives before startup navigation has settled (backend still starting, or an error takeover showing) is queued last-writer-wins and applied once startup succeeds. This holds on a genuine first run too: an explicit deeplink wins over the welcome screen, landing the new user directly on the pre-filled create page. The navigated path is built from a fixed allowlist (the `/create` / `/create/inspiration` literals plus re-encoded query params); raw deeplink text is never handed to `loadURL`.
+Deeplinks never force a sign-in: `/create` loads regardless of account state and the page's own remote-vs-local flow prompts for sign-in only when needed. A deeplink that arrives before startup navigation has settled (backend still starting, or an error takeover showing) is queued last-writer-wins and applied once startup succeeds. This holds on a genuine first run too: an explicit deeplink wins over the welcome screen, landing the new user directly on the pre-filled create page. Both the content-nav path (`deeplinkTargetPath`, the `/create` literal) and the modal path (`deeplinkModalPath`, the `/create/template/modal` literal) are built from a fixed allowlist plus re-encoded query params; raw deeplink text is never handed to `loadURL` or `openModal`.
 
 ### Titlebar accent and the neutral chrome
 
-The full-width titlebar (and the thin shell around the content view) adopt the active workspace's accent color while you're on a workspace-scoped screen, and fall back to a **neutral** chrome on every other minds screen. The neutral chrome background comes from the `--titlebar-bg` fallback in `Chrome.jinja` (`var(--c-surface-primary)`: white in light mode, black in dark); its foreground is not a stored value but is derived from the background in pure CSS by the `.titlebar-surface` recipe in `app.css` (an `lch(from …)` relative-color contrast), the same recipe that re-bases the foreground tokens under an active workspace accent. The same neutral surface is used by the startup/quitting/error loading screen (`shell.html`). Workspace accent swatches deliberately exclude pure black and white so a workspace's color can never collide with this neutral chrome (users can still type either into the settings hex input).
+The full-width titlebar (and the thin shell around the workspace iframe) adopt the active workspace's accent color while you're on a workspace-scoped screen, and fall back to a **neutral** chrome on every other minds screen. The neutral chrome background comes from the SPA shell's `--titlebar-bg` fallback (`var(--c-surface-primary)`: white in light mode, black in dark); its foreground is not a stored value but is derived from the background in pure CSS by the `.titlebar-surface` recipe in `frontend/src/style.css` (an `lch(from …)` relative-color contrast), the same recipe that re-bases the foreground tokens under an active workspace accent. The same neutral surface is used by the startup/quitting/error loading screen (`shell.html`). Workspace accent swatches deliberately exclude pure black and white so a workspace's color can never collide with this neutral chrome (users can still type either into the settings hex input).
 
-The accent is a **pure function of the window's current screen**, not a remembered value. The titlebar is its own `WebContentsView` and can't read the content URL, so the main process derives the accent source from each content navigation (`parseAccentSourceAgentId`: the workspace id on the workspace itself plus its settings / sharing / destroying / recovery screens, `null` on a general screen) and pushes it to the titlebar over a single `accent-changed` IPC; the chrome renderer applies it unconditionally. Main also re-pushes the current value whenever a chrome view (re)loads (via `primeViewWithCachedChromeState`), which covers cold start, new windows, and crash-recovery rebuilds. The narrower "which workspace is actually being *displayed*" signal (`current-workspace-changed`) is separate and drives only the OS window title and the recovery-page auto-redirect. Browser mode derives the same accent directly from the iframe URL in its poll loop.
+The accent is a **pure function of the window's current route**, not a remembered value: the SPA shell derives the accent source from the current route (the workspace id on the workspace itself plus its settings / options / backups / destroying / recovery screens, none on a general screen -- see `frontend/src/views/shell/shell-state.ts`) and paints it from the workspace list the `/ui/ws` channel maintains, so a not-yet-cached accent paints on the next channel update. In the desktop app, `main.js` independently tracks the displayed workspace from committed navigations for the OS window title and session restore. All of this behaves identically in Electron and browser mode.
 
 ### Environment variables
 
@@ -128,12 +123,16 @@ The CLI separates two channels, following the same conventions as mngr:
 The desktop app bundles platform-specific binaries so users need zero prerequisites:
 
 - **uv**: Downloads Python, creates venvs, installs packages. Downloaded from GitHub releases during `pnpm build`.
-- **git**: Required for agent creation (cloning repos). A pinned, SHA256-verified [dugite-native](https://github.com/desktop/dugite-native) payload -- the relocatable git distribution GitHub Desktop builds for embedding in Electron apps -- downloaded during `pnpm build` (and re-run by ToDesktop's `beforeInstall` hook on the build server) per `apps/minds/scripts/git-manifest.json`. It is self-contained: the `git` binary plus its `libexec/git-core/` helpers, `share/git-core/templates/`, a system `etc/gitconfig`, and (on Linux) an `ssl/cacert.pem` CA bundle. Because the payload binaries bake in an empty prefix, the backend child environment must -- and does -- set `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, and `GIT_CONFIG_SYSTEM` (plus `GIT_SSL_CAINFO` on Linux); a bare `PATH` prepend is not sufficient. See [specs/minds-managed-git/concise.md](../../../specs/minds-managed-git/concise.md).
-- **lima**: Required for the Lima launch mode (running agents in Linux VMs). Downloaded from GitHub releases during `pnpm build`. Self-contained on macOS Apple Silicon via Lima's `vz` backend; macOS Intel and Linux still run the VM itself via host QEMU.
+- **git**: Required for agent creation (cloning repos). A pinned, SHA256-verified [dugite-native](https://github.com/desktop/dugite-native) payload -- the relocatable git distribution GitHub Desktop builds for embedding in Electron apps -- downloaded during `pnpm build` per `apps/minds/scripts/git-manifest.json`. It is self-contained: the `git` binary plus its `libexec/git-core/` helpers, `share/git-core/templates/`, a system `etc/gitconfig`, and (on Linux) an `ssl/cacert.pem` CA bundle. Because the payload binaries bake in an empty prefix, the backend child environment must -- and does -- set `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, and `GIT_CONFIG_SYSTEM` (plus `GIT_SSL_CAINFO` on Linux); a bare `PATH` prepend is not sufficient. See [specs/minds-managed-git/concise.md](../../../specs/minds-managed-git/concise.md).
+- **lima**: Required for the Lima launch mode (running agents in Linux VMs). SHA256-verified download, pinned to the version in `download-binaries.js`. Self-contained on macOS Apple Silicon via Lima's `vz` backend; macOS Intel and Linux still run the VM itself via host QEMU.
 - **restic**: Per-workspace backup repositories. Downloaded from GitHub releases.
 - **desync**: Content-defined-chunking client that fetches the pre-baked Lima image. Downloaded from GitHub releases. macOS/Linux only.
 
-Each is placed in the `resources/` directory (outside the asar archive). The packaged app prepends the `uv`, `git`, `lima`, and `desync` directories to the backend child process's `PATH`. `restic` and `desync` are also named by explicit absolute path (`MINDS_RESTIC_BINARY`, `MINDS_DESYNC_BINARY`), so their resolution never depends on `PATH` ordering; `restic` is reached *only* that way, its directory never being on `PATH`. Dev mode inherits the developer's `PATH` untouched and prepends nothing, so the only bundled binary it reaches is the one named by absolute path: it sets `MINDS_DESYNC_BINARY` (without which the fast-create path would need a system-wide `desync`), and resolves everything else, `restic` included, from `PATH`.
+Each is placed in the `resources/` directory (outside the asar archive). The packaged app prepends the `uv`, `git`, `lima`, and `desync` directories to the backend child process's `PATH`. `restic` and `desync` are also named by explicit absolute path (`MINDS_RESTIC_BINARY`, `MINDS_DESYNC_BINARY`), so their resolution never depends on `PATH` ordering; `restic` is reached *only* that way, its directory never being on `PATH`.
+
+Dev mode reaches the same pinned binaries: it prepends the `git` and `lima` directories to `PATH` and names `restic`, `desync`, and the latchkey curl by absolute path. `lima` matters because `mngr_lima` resolves `limactl` from `PATH` and enforces only a *minimum* version, so a developer's newer system lima would pass the check and then hang agent creation on the 2.1.x forwarder regression the pin exists to avoid.
+
+`uv` is the deliberate exception. Dev runs the monorepo workspace through `uv run --package minds`, against the same `.venv` and `uv.lock` the developer's shell drives, so it uses *their* uv rather than risking lockfile-format skew against shared state from a second pinned one. It is therefore the one bundled binary dev neither downloads nor resolves (`BINARIES[].usedInDev`).
 
 There is deliberately no bundled `qemu-img`. The pre-baked image is published, downloaded, and consumed as a **raw** image end to end, so nothing converts it. See [lima-image.md](./lima-image.md) for the whole pipeline, and "Why the image is raw" below.
 
@@ -141,7 +140,14 @@ There is deliberately no bundled `qemu-img`. The pre-baked image is published, d
 
 `scripts/build.js` (`pnpm build`, the first half of `pnpm dist`) is the only stage whose output reaches the app. It runs on whichever machine invokes `pnpm dist` -- in CI, the arm64 `minds-runner` -- and downloads for its own `process.arch`. ToDesktop then packages the uploaded `resources/` into `Contents/Resources` via `extraResources`, which is what `paths.getResourcesDir()` resolves to (`process.resourcesPath`) in a packaged app.
 
-The `todesktop:beforeInstall` hook (`scripts/download-binaries.js`) also downloads binaries, but its output never reaches the app. ToDesktop runs it against `app-wrapper/app/`, so the packager folds those files into `app.asar`, which nothing reads at runtime; a packaged app therefore carries a second, dead copy of `resources/`. The hook still gates the build: a download failure inside it aborts `pnpm dist`. Its only remaining purpose is that failure mode, and the `resources/` tree it writes is dead weight.
+What `build.js` stages is `scripts/download-binaries.js`'s `BINARIES` table, iterated -- not a list written out a second time. Naming the downloaders individually is what shipped `desync`, and later the latchkey `curl`, staged by nothing that reaches the app.
+
+`extraResources` is the only channel that reaches the shipped app, so `appFiles` excludes `resources/` wholesale (`'!resources/**'`) -- anything it matched would be packed into `app.asar` as a second copy nothing reads.
+
+Two things would put that copy back, so neither is wired:
+
+- **`todesktop:beforeInstall`.** ToDesktop runs a hook script against `app-wrapper/app/`, so anything it downloads is folded into `app.asar`. Its agent is x86_64, so the binaries it fetches are Intel ones inside an arm64 app -- unreachable *and* unrunnable. `scripts/build.js` is the only stage whose output ships.
+- **`mac.additionalBinariesToSign`.** The builder's signing preflight rejects a listed path that is missing from the app-files upload, so every entry pins its subtree into that upload. It buys nothing: ToDesktop deep-signs every Mach-O under `Contents/Resources` with `mac.entitlements` whether or not it is listed.
 
 ### Why the image is raw
 
@@ -157,7 +163,7 @@ Raw costs no extra disk. On the real 20 GiB image the sparse raw occupies **4.9 
 
 ToDesktop publishes `arm64`, `x64`, and `universal` mac artifacts, but only arm64 works, and only it is fetched and verified by `.github/workflows/minds-launch-to-msg.yml`. In the published x64 app, `Contents/MacOS/Minds` is x86_64 while the bundled `uv`, `restic`, and `limactl` are arm64, so it cannot launch a VM.
 
-The cause is structural. `build.js` stages binaries for the arch of the machine it runs on, and all three mac artifacts are packaged from that one upload. The `beforeInstall` hook is the only stage that runs per-agent, and it is useless for this: its output lands in `app.asar`, and its agent is x86_64 anyway, so honoring it would put Intel binaries in the arm64 app.
+The cause is structural. `build.js` stages binaries for the arch of the machine it runs on, and all three mac artifacts are packaged from that one upload. ToDesktop's own build agent is x86_64, so nothing on the build server can supply arm64 bytes either.
 
 ToDesktop exposes no arch selection -- its config schema has no `mac.target`/`mac.arch`, and the CLI has no `--arch` -- so the x64 and universal artifacts cannot be turned off from this repo. Supporting Intel would need `build.js` to stage both arches (it already downloads per-arch; nothing forces it to fetch only its own) and either a per-arch `extraResources` mapping or `lipo`-merged universal binaries, plus a pre-baked x86_64 Lima image, without which an Intel app's prefetch reports `VERSION_UNAVAILABLE` and builds in-VM anyway. `git` is already universal, since `xcrun --find git` returns Apple's fat binary.
 
@@ -229,7 +235,7 @@ deploy-time secrets flow through HCP Vault.
 
 `~/.<root>/config.toml` is optional and holds user-personal
 preferences only (the default account for new workspaces, the
-auto-open behavior for the inbox). It carries no tier-bound
+error-reporting settings). It carries no tier-bound
 URL -- env selection happens via `MINDS_CLIENT_CONFIG_PATH` /
 `--config-file` as described above.
 
@@ -333,7 +339,8 @@ apps/minds/
       uv.lock               # Pinned lockfile for reproducible installs
   scripts/
     build.js                # Build orchestrator: downloads binaries, builds wheels, stages resources/
-    download-binaries.js    # Pinned, hash-verified binary downloads (uv, git, restic, desync)
+    download-binaries.js    # BINARIES table + pinned, hash-verified downloads (uv, git, restic, desync, lima, curl)
+    ensure-binaries.js      # Dev: provisions BINARIES into the shared cache, symlinks resources/ at it
     git-manifest.json       # Pinned dugite-native git payload: tag, version, per-target hashes
   resources/                # (gitignored) Built artifacts for packaging
 ```

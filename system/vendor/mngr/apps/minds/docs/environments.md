@@ -17,6 +17,18 @@ SuperTokens account, OAuth clients, bare-metal box supplier account
 (currently OVH), Anthropic key, and pool-management SSH keypair. There
 is zero cross-tier reach.
 
+That extends to bare-metal boxes: a box belongs to exactly one tier.
+Sharing one *within* a tier is fine and routine (several `dev-<user>`
+envs on one dev box); sharing one *across* tiers is not, because each
+tier has its own pool keypair. A box serving two tiers is a box both
+tiers' keys can SSH, so each tier's operators and connector gain
+`limactl` -- and so root -- over the other's workspaces, and neither
+tier's reap will ever reclaim the other's slices. Baking a slice
+onto a box that carries another tier's slices -- or whose lima user
+authorizes more than that one tier's pool key -- is refused before
+anything is carved. `just audit-boxes` reports the same condition
+without needing a bake to fail.
+
 ## Per-env data root
 
 Every minds env owns one data root:
@@ -241,7 +253,7 @@ env-specific data that's accumulated inside operator-managed shared
 resources". For staging destroy this means:
 
 1. `mngr destroy` every agent under `~/.minds-staging/mngr/agents/`
-   so containers / pool hosts / tunnels stop cleanly before their
+   so containers / pool hosts stop cleanly before their
    cloud resources go away.
 2. `modal app stop` both deployed apps in the tier's Modal env.
 3. `modal secret delete` every per-tier Modal Secret (`<service>-staging`).
@@ -251,13 +263,9 @@ resources". For staging destroy this means:
 5. Wipe the Neon DB by running `DROP SCHEMA public CASCADE; CREATE
    SCHEMA public;` against `DATABASE_URL` from Vault (the DB itself
    + its DSN stay valid).
-6. Enumerate and delete every Cloudflare tunnel tagged with
-   `metadata.env = "staging"` (created via the connector's
-   `cf_create_tunnel` -- see "Tier generation id + activate auto-wipe"
-   below).
-7. Delete the tier generation id from Vault (so the next deploy mints
+6. Delete the tier generation id from Vault (so the next deploy mints
    a fresh one).
-8. Only after every cloud-side step succeeds, `rmdir`
+7. Only after every cloud-side step succeeds, `rmdir`
    `~/.minds-staging/`. On any partial failure the env root stays so
    the operator can re-run `destroy` to pick up where things broke
    (rather than silently leaking expensive cloud resources because
@@ -266,8 +274,7 @@ resources". For staging destroy this means:
 Dev env destroy follows the same shape but operates on the per-dev
 Modal env / Neon DB / SuperTokens app (which deploy created outright,
 so destroy deletes them outright too rather than wiping data inside).
-The Cloudflare-tunnel + mngr-agent + env-root-removal steps are
-identical.
+The mngr-agent + env-root-removal steps are identical.
 
 ## Tier generation id + activate auto-wipe
 
@@ -351,6 +358,32 @@ just minds-start
 
 (For a one-off env tied to a feature you're working on, replace
 `dev-<your-user>` with e.g. `dev-<your-user>-3`.)
+
+### Per-env share relay
+
+Workspace sharing needs a relay, and each dev/ci env expects its OWN:
+`minds env deploy` pins the env's sharing secret to region label
+`<env-name>` (underscores mapped to hyphens) with endpoint
+`relay.<env-name>.minds-dev.com:7000`. A single shared dev relay cannot
+serve multiple envs -- its frps plugin-auth URL points at exactly one
+env's connector, so whichever env owns it locks every other env's
+shares out.
+
+Stand the env's relay up once (after the first deploy; requires a
+vault login):
+
+```bash
+just provision-dev-relay            # OVH region defaults to US-EAST-VA-1
+```
+
+This provisions a small OVH instance, registers it in the env
+connector's relay fleet inventory (the `relays` table), installs frps
+pointed at the activated env's connector, and reconciles the
+`relay.<env>` + `*.<env>` DNS record sets. Skip it if you never enable
+sharing from this env. Tear the instance down with
+`just list-share-relays` + `just destroy-share-relay <instance-id>` and
+`just deregister-share-relay <connector-url> <relay-id>` when
+destroying the env (relays are not part of `minds env destroy`).
 
 Re-deploy in place (idempotent -- picks up any new tier-shared Vault
 values and re-deploys both Modal apps):

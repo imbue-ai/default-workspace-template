@@ -5,8 +5,8 @@ tab URLs each had -- so the daemon can relaunch them on the next container start
 It deliberately stores NO ownership/queue state (that is connection/process-scoped
 and dies with the old container) and NO Chromium profile bytes (cookies/logins/
 history live in each browser's persistent ``user_data_dir`` on the workspace volume;
-see ``session.py``). Because it's tiny JSON it can live under ``runtime/`` and ride
-the opt-in GitHub sync, so even a full container rebuild restores the tab list.
+see ``session.py``). It lives under ``data/.state/`` (gitignored), so it rides the
+restic host backup rather than GitHub sync; a backup restore brings the tab list back.
 
 Pure synchronous file IO (no asyncio here, on purpose): writes are atomic via a
 temp file + ``os.replace`` so a reader on the next boot sees either the old or the

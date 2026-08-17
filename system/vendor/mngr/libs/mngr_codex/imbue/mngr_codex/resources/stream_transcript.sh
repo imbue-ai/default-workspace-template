@@ -3,7 +3,7 @@
 #
 # codex writes one rollout JSONL per session under
 # $CODEX_HOME/sessions/YYYY/MM/DD/rollout-*-<uuid>.jsonl and hands the active
-# rollout's absolute path to every hook as `transcript_path`. set_active_marker.sh
+# rollout's absolute path to every hook as `transcript_path`. record_session_pointers.sh
 # records that path (at each turn boundary) in
 # $MNGR_AGENT_STATE_DIR/codex_transcript_path. This streamer reads that one path
 # and tails it, appending every new line verbatim (no reschematising) to
@@ -18,12 +18,17 @@
 # Per-rollout offsets are stored in
 # <agent-state-dir>/plugin/codex/.transcript_offsets/<sanitized-rollout-name>
 # (keyed by the rollout file path sanitized to a filename-safe token) so the
-# script resumes efficiently after restarts. The rollout lines carry no global
-# per-line id we can reconcile against, so we trust the stored offset; if a crash
-# occurred between an emit and the matching `_save_offset`, restart re-emits at
-# most the duplicate lines, and common_transcript.sh dedupes by event_id so the
-# user-visible transcript stays clean. A defensive reset handles a rollout that
-# got shorter than the stored offset.
+# script resumes efficiently after restarts. Two instances of this script can
+# run concurrently -- the 1s poll daemon and the turn-end `--single-pass` flush
+# (mngr_common_transcript_flush) -- so every emit pass re-reads the persisted
+# offset and advances it under the same per-agent lock the converter uses
+# (mngr_common_transcript_lib.sh). Serializing the read-offset/append/
+# write-offset section means whichever pass runs second sees the offset the
+# other just advanced and never re-emits those lines. The rollout lines carry
+# no global per-line id we can reconcile against, so we trust the stored
+# offset; if a crash occurred between an emit and the matching `_save_offset`,
+# restart re-emits at most the duplicate lines. A defensive reset handles a
+# rollout that got shorter than the stored offset.
 #
 # Usage: stream_transcript.sh [--single-pass]
 #
@@ -33,7 +38,7 @@
 set -euo pipefail
 
 AGENT_DATA_DIR="${MNGR_AGENT_STATE_DIR:?MNGR_AGENT_STATE_DIR must be set}"
-# Path file written by set_active_marker.sh; kept in sync with
+# Path file written by record_session_pointers.sh; kept in sync with
 # TRANSCRIPT_PATH_FILENAME in codex_config.py.
 TRANSCRIPT_PATH_FILE="$AGENT_DATA_DIR/codex_transcript_path"
 OUTPUT_FILE="$AGENT_DATA_DIR/logs/codex_transcript/events.jsonl"
@@ -50,8 +55,11 @@ _MNGR_LOG_FILE="$AGENT_DATA_DIR/events/logs/stream_transcript/events.jsonl"
 # shellcheck source=mngr_log.sh
 source "$MNGR_AGENT_STATE_DIR/commands/mngr_log.sh"
 
-# Keyed by the sanitized rollout token; values are line counts already emitted.
-declare -A _OFFSET_BY_ROLLOUT=()
+# Shared common-transcript primitives: the per-agent lock that serializes this
+# streamer's read-offset/append/write-offset section against the concurrent
+# `--single-pass` flush (and against the converter's read-modify-write).
+# shellcheck source=mngr_common_transcript_lib.sh
+source "$MNGR_AGENT_STATE_DIR/commands/mngr_common_transcript_lib.sh"
 
 _line_count() {
     if [ -f "$1" ]; then
@@ -73,10 +81,15 @@ _save_offset() {
     echo "$2" > "$OFFSET_DIR/$1"
 }
 
-# Read the current rollout path the hook recorded (empty if not yet recorded).
-_current_rollout_path() {
+# Set _CURRENT_ROLLOUT_PATH to the rollout path the hook recorded, or empty when
+# no turn has opened one yet. Assigns to a global via the read builtin instead of
+# printing for a command substitution to capture, so discovering the path costs
+# no forks at all -- at a one-second poll that subshell was most of an idle cycle.
+_CURRENT_ROLLOUT_PATH=""
+_read_current_rollout_path() {
+    _CURRENT_ROLLOUT_PATH=""
     if [ -f "$TRANSCRIPT_PATH_FILE" ]; then
-        head -n 1 "$TRANSCRIPT_PATH_FILE"
+        read -r _CURRENT_ROLLOUT_PATH < "$TRANSCRIPT_PATH_FILE" || true
     fi
 }
 
@@ -85,12 +98,18 @@ _current_rollout_path() {
 # basename is the natural key; any residual unsafe character is replaced so the
 # token is always a valid single path component.
 _offset_key_for_path() {
-    # printf (not echo) so no trailing newline is fed to tr (which would
-    # otherwise become a trailing `_` in the key).
-    printf '%s' "$(basename "$1")" | tr -c 'A-Za-z0-9._-' '_'
+    # Parameter expansion rather than basename piped through tr: both are exact
+    # bash equivalents of those tools here, and this runs on every poll cycle.
+    local name="${1##*/}"
+    printf '%s' "${name//[^A-Za-z0-9._-]/_}"
 }
 
 # Append new lines from the current rollout to the output verbatim.
+#
+# The persisted offset is re-read on every pass, under the shared lock, because
+# a concurrent instance of this script (daemon vs `--single-pass` flush) may
+# have advanced it since our last pass; trusting a per-process cache here is
+# what used to re-emit every line the other instance had already streamed.
 #
 # Uses a bounded line-range read to avoid a TOCTOU race between the wc and the
 # read (any lines appended in between are deferred to the next poll cycle).
@@ -102,16 +121,28 @@ _emit_new_lines() {
     local key
     key=$(_offset_key_for_path "$rollout_path")
 
-    # Pick up a rollout we have not tracked yet (new path on resume, or first
-    # cycle), applying the defensive shrink reset.
-    if [ -z "${_OFFSET_BY_ROLLOUT[$key]+exists}" ]; then
-        _record_rollout_offset "$rollout_path" "$key" "Picked up rollout"
+    if ! mngr_common_transcript_acquire_lock; then
+        log_warn "Could not acquire transcript lock for rollout $key; deferring emit"
+        return
     fi
-    local offset="${_OFFSET_BY_ROLLOUT[$key]:-0}"
+
+    local offset
+    offset=$(_load_stored_offset "$key")
 
     local file_lines
     file_lines=$(_line_count "$rollout_path")
+
+    # Defensive reset: if the on-disk rollout got shorter than the stored offset
+    # (e.g. codex rewrote/replaced the file), start from 0 rather than silently
+    # skipping the rest.
+    if [ "$file_lines" -lt "$offset" ]; then
+        log_warn "Rollout $key: stored offset $offset > file lines $file_lines; resetting to 0"
+        offset=0
+        _save_offset "$key" 0
+    fi
+
     if [ "$file_lines" -le "$offset" ]; then
+        mngr_common_transcript_release_lock
         return
     fi
 
@@ -123,39 +154,16 @@ _emit_new_lines() {
     # streamer never rewrites content.
     sed -n "${start},${end}p" "$rollout_path" >> "$OUTPUT_FILE"
 
-    _OFFSET_BY_ROLLOUT[$key]=$file_lines
     _save_offset "$key" "$file_lines"
+
+    mngr_common_transcript_release_lock
 
     log_debug "Emitted $new_count line(s) from rollout $key (offset $offset -> $file_lines)"
 }
 
-# Load the stored offset for a rollout, with a defensive shrink reset.
-_record_rollout_offset() {
-    local rollout_path="$1"
-    local key="$2"
-    local log_prefix="$3"
-    if [ ! -f "$rollout_path" ]; then
-        _OFFSET_BY_ROLLOUT[$key]=0
-        return
-    fi
-    local stored
-    stored=$(_load_stored_offset "$key")
-    # Defensive reset: if the on-disk rollout got shorter than the stored offset
-    # (e.g. codex rewrote/replaced the file), start from 0 rather than silently
-    # skipping the rest.
-    local file_lines
-    file_lines=$(_line_count "$rollout_path")
-    if [ "$file_lines" -lt "$stored" ]; then
-        log_warn "$log_prefix $key: stored offset $stored > file lines $file_lines; resetting to 0"
-        stored=0
-        _save_offset "$key" 0
-    fi
-    _OFFSET_BY_ROLLOUT[$key]=$stored
-}
-
 _run_one_cycle() {
-    local rollout_path
-    rollout_path=$(_current_rollout_path)
+    _read_current_rollout_path
+    local rollout_path="$_CURRENT_ROLLOUT_PATH"
     # No rollout path recorded yet (no turn has opened) -> nothing to stream.
     if [ -z "$rollout_path" ]; then
         return

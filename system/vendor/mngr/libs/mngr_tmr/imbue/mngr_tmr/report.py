@@ -18,11 +18,13 @@ live in ``imbue.mngr_mapreduce.data_types``.
 
 import html
 import json
+from collections.abc import Mapping
 from collections.abc import Sequence
 from enum import auto
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
+from typing import TypeVar
 
 from jinja2 import Environment
 from jinja2 import PackageLoader
@@ -75,49 +77,108 @@ class Change(FrozenModel):
 
 
 class EscalationKind(UpperCaseStrEnum):
-    """Why something was escalated.
+    """What kind of work an escalation is asking for.
 
-    BLOCKER: the agent could not proceed without a change beyond its own test.
-    SHARED_PATTERN: the agent's fix worked, but it recognized the same problem
-    (and the same fix) recurring across sibling tests -- the signal that a
-    suite-wide change should replace N local ones.
+    The vocabulary names the work rather than what happened to the reporting
+    agent. An earlier BLOCKER/SHARED_PATTERN split described the reporter's own
+    experience, which put 93% of a run's escalations in one bucket and told a
+    reader nothing about what to do with them. "Did this stop me?" is not
+    encoded here at all: it does not survive grouping, since one group collects
+    reports from agents it stopped and agents it did not.
+
+    UNCAUGHT_BUG: a real defect the agent noticed that no test fails on.
+    FIX_DIRECTION_AMBIGUOUS: the test and the behavior disagree, and the
+    docstring does not settle which of them is wrong.
+    HARNESS_DEFECT: shared test infrastructure is broken, misreports, or lacks a
+    capability or credential the tests need.
+    SUITE_DUPLICATION: N local patches want one shared change.
     """
 
-    BLOCKER = auto()
-    SHARED_PATTERN = auto()
+    UNCAUGHT_BUG = auto()
+    FIX_DIRECTION_AMBIGUOUS = auto()
+    HARNESS_DEFECT = auto()
+    SUITE_DUPLICATION = auto()
+
+
+class EscalationLocation(FrozenModel):
+    """Where in the tree an escalation points.
+
+    Reader-facing: it is what lets the report link an escalation to the code it
+    concerns, which the pytest node id of the reporting agent cannot do (that
+    identifies who noticed, not what needs to change).
+    """
+
+    path: str = Field(description="Repository-relative path the escalation concerns")
+    line: int | None = Field(default=None, description="1-based line number, when the escalation names one")
 
 
 class Escalation(FrozenModel):
-    """Something needing attention beyond the reporting agent's own scope.
+    """Something needing attention beyond the reporting mapper's own scope.
 
-    Raised by mappers (per test) and by the reducer (suite-wide). Orthogonal to
-    the reporter's own success: a passing test can still raise one.
+    Orthogonal to the reporter's own success: a passing test can still raise one.
     """
 
-    title: str = Field(description="Short title of the issue")
-    detail_markdown: str = Field(description="Markdown detail of what is needed to resolve it")
-    kind: EscalationKind = Field(
-        default=EscalationKind.BLOCKER,
-        description="Whether this blocked the agent or is a pattern shared with other tests",
+    description_markdown: str = Field(
+        description="Markdown description of the problem and the change it needs. Its first line is a "
+        "one-sentence summary, which is what collapsed list views render."
     )
+    kind: EscalationKind = Field(description="What kind of work this escalation is asking for")
+    locations: tuple[EscalationLocation, ...] = Field(
+        default=(), description="Places in the tree this escalation concerns"
+    )
+
+
+class IntegratorEscalation(FrozenModel):
+    """One escalation as the integrator reports it: a group of mapper escalations.
+
+    The integrator is the only step that sees every mapper's report at once, so
+    its escalations are groupings of theirs -- many agents describe one problem
+    in their own words, and it is the grouping that makes the problem legible.
+
+    ``member_ids`` may be empty: the integrator also reads the whole integrated
+    diff, so it finds problems no single mapper could see (two mappers reaching
+    opposite conclusions, for instance).
+    """
+
+    kind: EscalationKind = Field(description="What kind of work this escalation is asking for")
+    description_markdown: str = Field(
+        description="Markdown description of the problem, its scale, and what it needs. Its first line is a "
+        "one-sentence summary, which is what collapsed list views render."
+    )
+    member_ids: tuple[str, ...] = Field(
+        default=(), description="Ids of the mapper escalations this group covers; empty for the integrator's own"
+    )
+    resolved_in_commit_hash: str | None = Field(
+        default=None,
+        description="Commit that resolved this escalation. Its presence is what marks the escalation resolved, "
+        "so an escalation the integrator judged to need no change reads as unresolved.",
+    )
+
+    @property
+    def is_resolved(self) -> bool:
+        """Whether the integrator resolved this escalation within the run."""
+        return self.resolved_in_commit_hash is not None
 
 
 class ReportSection(UpperCaseStrEnum):
     """Derived section for HTML report grouping and coloring.
 
-    UNRESOLVED covers results where the coding agent tried and could not land a
-    working change. FAILED is reserved for infrastructure failures: launch
-    failures, agent timeouts, missing details, etc. -- cases where the agent
-    never had a chance to produce a real verdict.
+    FIX_FAILED covers results where the coding agent tried every change it
+    attempted and landed none. FAILED is reserved for infrastructure failures:
+    launch failures, agent timeouts, missing details -- cases where the agent
+    never had a chance to produce a real verdict. INDETERMINATE is the explicit
+    catch-all, so a result that fits no other section stops masquerading as a
+    failed fix.
 
     Escalations are deliberately not a section: they are orthogonal to the
-    outcome, so they are aggregated into their own report block instead (a
-    clean pass may carry one).
+    outcome, so they get their own report sections instead (a clean pass may
+    carry one).
     """
 
-    NON_IMPL_FIXES = auto()
     IMPL_FIXES = auto()
-    UNRESOLVED = auto()
+    TEST_AND_DOC_FIXES = auto()
+    FIX_FAILED = auto()
+    INDETERMINATE = auto()
     FAILED = auto()
     CLEAN_PASS = auto()
     RUNNING = auto()
@@ -158,12 +219,6 @@ class TestResult(FrozenModel):
     )
 
 
-class Normalization(FrozenModel):
-    """A suite-wide cleanup the integrator applied during the normalize stage."""
-
-    summary_markdown: str = Field(description="Markdown description of the cleanup that was applied and verified")
-
-
 class IntegratorResult(FrozenModel):
     """Result from the integrator agent that cherry-picks fix branches."""
 
@@ -176,11 +231,10 @@ class IntegratorResult(FrozenModel):
     )
     failed: tuple[str, ...] = Field(default=(), description="Branch names that could not be integrated")
     branch_name: str | None = Field(default=None, description="Integrated branch name, if any merges succeeded")
-    normalizations: tuple[Normalization, ...] = Field(
-        default=(), description="Suite-wide cleanups applied and verified during the normalize stage"
-    )
-    escalations: tuple[Escalation, ...] = Field(
-        default=(), description="Cross-cutting blockers the integrator could not resolve, surfaced to the user"
+    escalations: tuple[IntegratorEscalation, ...] = Field(
+        default=(),
+        description="Every escalation the integrator reports, resolved and unresolved alike. A suite-wide cleanup "
+        "it applied is a resolved escalation it raised to itself, so there is no separate normalizations field.",
     )
     pull_request_url: str | None = Field(
         default=None, description="URL of the pull request the integrator opened for this run"
@@ -227,37 +281,51 @@ EXTRACTED_TEST_OUTPUT_DIR = "test_output"
 _TESTING_OUTCOME_CACHE: dict[tuple[Path, AgentName], TestResult] = {}
 _INTEGRATOR_OUTCOME_CACHE: dict[tuple[Path, AgentName], IntegratorResult] = {}
 
-_SECTION_ORDER: list[ReportSection] = [
-    ReportSection.NON_IMPL_FIXES,
+SECTION_ORDER: list[ReportSection] = [
     ReportSection.IMPL_FIXES,
-    ReportSection.UNRESOLVED,
+    ReportSection.TEST_AND_DOC_FIXES,
+    ReportSection.FIX_FAILED,
+    ReportSection.INDETERMINATE,
     ReportSection.FAILED,
     ReportSection.CLEAN_PASS,
     ReportSection.RUNNING,
 ]
 
-_SECTION_LABELS: dict[ReportSection, str] = {
-    ReportSection.NON_IMPL_FIXES: "Non-implementation fixes",
+SECTION_LABELS: dict[ReportSection, str] = {
     ReportSection.IMPL_FIXES: "Implementation fixes",
-    ReportSection.UNRESOLVED: "Unresolved",
+    # "Test and doc" is the reducer's own name for exactly these change kinds:
+    # it squashes them into one [TEST/DOC] commit.
+    ReportSection.TEST_AND_DOC_FIXES: "Test and doc fixes",
+    ReportSection.FIX_FAILED: "Fix failed",
+    ReportSection.INDETERMINATE: "Indeterminate",
     ReportSection.FAILED: "Failed",
     ReportSection.CLEAN_PASS: "Clean pass",
     ReportSection.RUNNING: "Running",
 }
 
 _ESCALATION_KIND_LABELS: dict[EscalationKind, str] = {
-    EscalationKind.BLOCKER: "Blocker",
-    EscalationKind.SHARED_PATTERN: "Shared pattern",
+    EscalationKind.UNCAUGHT_BUG: "Uncaught bug",
+    EscalationKind.FIX_DIRECTION_AMBIGUOUS: "Fix direction ambiguous",
+    EscalationKind.HARNESS_DEFECT: "Harness defect",
+    EscalationKind.SUITE_DUPLICATION: "Suite duplication",
 }
 
-_SECTION_COLORS: dict[ReportSection, str] = {
-    ReportSection.NON_IMPL_FIXES: "rgb(33, 150, 243)",
+SECTION_COLORS: dict[ReportSection, str] = {
     ReportSection.IMPL_FIXES: "rgb(76, 175, 80)",
-    ReportSection.UNRESOLVED: "rgb(244, 67, 54)",
+    ReportSection.TEST_AND_DOC_FIXES: "rgb(33, 150, 243)",
+    ReportSection.FIX_FAILED: "rgb(244, 67, 54)",
+    ReportSection.INDETERMINATE: "rgb(156, 39, 176)",
     ReportSection.FAILED: "rgb(255, 152, 0)",
     ReportSection.CLEAN_PASS: "rgb(158, 158, 158)",
     ReportSection.RUNNING: "rgb(3, 169, 244)",
 }
+
+# Colors and anchors for the escalation sections, which sit alongside the
+# outcome sections in the sidebar and so need entries of the same shape.
+UNRESOLVED_ESCALATIONS_COLOR = "rgb(244, 67, 54)"
+RESOLVED_ESCALATIONS_COLOR = "rgb(76, 175, 80)"
+UNRESOLVED_ESCALATIONS_ANCHOR = "sec-unresolved-escalations"
+RESOLVED_ESCALATIONS_ANCHOR = "sec-resolved-escalations"
 
 
 def escalation_kind_label(kind: EscalationKind) -> str:
@@ -275,12 +343,20 @@ def section_label(section: ReportSection) -> str:
     Public so the PR-summary builder labels statuses the same way the HTML
     report does.
     """
-    return _SECTION_LABELS[section]
+    return SECTION_LABELS[section]
 
 
 _md = MarkdownIt()
 
-_NON_IMPL_CHANGE_KINDS = frozenset({ChangeKind.FIX_TEST, ChangeKind.IMPROVE_TEST, ChangeKind.FIX_TUTORIAL})
+# The "js-default" preset disables raw HTML, so agent-authored markdown cannot
+# inject markup into a report that renders it through |safe. Escalation
+# descriptions are agent prose, so they all go through this rather than _md.
+_strict_markdown = MarkdownIt("js-default")
+
+# Keys are each recipe's own change-kind enum (ChangeKind, BehaviorChangeKind).
+_ChangeKindT = TypeVar("_ChangeKindT", bound=UpperCaseStrEnum)
+
+_TEST_AND_DOC_CHANGE_KINDS = frozenset({ChangeKind.FIX_TEST, ChangeKind.IMPROVE_TEST, ChangeKind.FIX_TUTORIAL})
 
 _CHANGE_STATUS_ICONS: dict[ChangeStatus, str] = {
     ChangeStatus.SUCCEEDED: "&#10003;",
@@ -299,7 +375,7 @@ _jinja_env = Environment(
 )
 
 
-def _read_static(filename: str) -> str:
+def read_static(filename: str) -> str:
     """Read a static (non-jinja) asset shipped under report_assets/."""
     return (files("imbue.mngr_tmr.report_assets") / filename).read_text()
 
@@ -337,21 +413,62 @@ def _parse_outcome_json(raw: str) -> TestResult:
     )
 
 
-def _parse_escalations(raw: Any) -> tuple[Escalation, ...]:
-    """Parse the shared ``escalations`` list used by both mapper and reducer outcomes.
+def escalation_id(agent_name: AgentName | str, index: int) -> str:
+    """The id of a mapper's Nth escalation.
 
-    ``kind`` is optional and defaults to BLOCKER, so an outcome written before
-    the field existed still parses. Takes the raw JSON value (like the sibling
-    parsing in this module) rather than a narrowed type, since the outcome shape
-    is a contract with the agents and malformed data is caught by the callers.
+    Derived rather than agent-supplied, so it is unique by construction and
+    there is no uniqueness for the agents to get wrong. This is what the
+    integrator's ``member_ids`` reference and what ``escalation_coverage``
+    checks against.
+    """
+    return f"{agent_name}#{index}"
+
+
+def _parse_locations(raw: Any) -> tuple[EscalationLocation, ...]:
+    """Parse an escalation's ``locations`` list."""
+    if not raw:
+        return ()
+    return tuple(
+        EscalationLocation(
+            path=str(entry["path"]),
+            line=int(entry["line"]) if entry.get("line") is not None else None,
+        )
+        for entry in raw
+    )
+
+
+def _parse_escalations(raw: Any) -> tuple[Escalation, ...]:
+    """Parse a mapper outcome's ``escalations`` list.
+
+    ``kind`` and ``description_markdown`` are both required: a missing key
+    raises, which the callers turn into a warning and a dropped outcome rather
+    than silently filing the escalation under whichever kind happened to be the
+    default. Takes the raw JSON value (like the sibling parsing in this module)
+    rather than a narrowed type, since the outcome shape is a contract with the
+    agents and malformed data is caught by the callers.
     """
     if not raw:
         return ()
     return tuple(
         Escalation(
-            title=str(entry.get("title", "")),
-            detail_markdown=str(entry.get("detail_markdown", "")),
-            kind=EscalationKind(str(entry.get("kind", EscalationKind.BLOCKER.value))),
+            description_markdown=str(entry["description_markdown"]),
+            kind=EscalationKind(str(entry["kind"])),
+            locations=_parse_locations(entry.get("locations", ())),
+        )
+        for entry in raw
+    )
+
+
+def _parse_integrator_escalations(raw: Any) -> tuple[IntegratorEscalation, ...]:
+    """Parse the integrator outcome's ``escalations`` list of grouped escalations."""
+    if not raw:
+        return ()
+    return tuple(
+        IntegratorEscalation(
+            kind=EscalationKind(str(entry["kind"])),
+            description_markdown=str(entry["description_markdown"]),
+            member_ids=tuple(str(member) for member in entry.get("member_ids", ())),
+            resolved_in_commit_hash=entry.get("resolved_in_commit_hash"),
         )
         for entry in raw
     )
@@ -420,7 +537,7 @@ def load_testing_agent_outcome(agent_name: AgentName, output_dir: Path) -> TestR
         return None
     try:
         outcome = _parse_outcome_json(raw)
-    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning("Failed to parse outcome for agent '{}': {}", agent_name, exc)
         return None
     _TESTING_OUTCOME_CACHE[cache_key] = outcome
@@ -442,11 +559,7 @@ def parse_integrator_outcome(data: Any, agent_name: AgentName | None, branch_nam
         impl_commit_hashes=data.get("impl_commit_hashes", {}),
         failed=tuple(data.get("failed", ())),
         branch_name=branch_name,
-        normalizations=tuple(
-            Normalization(summary_markdown=entry.get("summary_markdown", ""))
-            for entry in data.get("normalizations", ())
-        ),
-        escalations=_parse_escalations(data.get("escalations", ())),
+        escalations=_parse_integrator_escalations(data.get("escalations", ())),
         pull_request_url=data.get("pull_request_url"),
         pull_request_error=data.get("pull_request_error"),
     )
@@ -455,18 +568,40 @@ def parse_integrator_outcome(data: Any, agent_name: AgentName | None, branch_nam
 def load_integrator_outcome_file(
     outcome_path: Path, agent_name: AgentName | None = None, branch_name: str | None = None
 ) -> IntegratorResult | None:
-    """Read and parse an integrator outcome file, or None if it is unreadable."""
+    """Read and parse an integrator outcome file, or None if it is unreadable.
+
+    The parse happens inside the try and ``KeyError``/``ValueError`` are caught
+    alongside the read errors, matching ``load_testing_agent_outcome``. Both
+    parsers now require ``kind`` and ``description_markdown`` rather than
+    defaulting them, so malformed agent output raises where it used to yield a
+    silently wrong result -- and every caller here (the report on each poll tick,
+    the PR summary, the coverage check, the recipe's PR-url read) wants a
+    warning and a None rather than a crash. ``TypeError`` is in the tuple because
+    ``locations`` is nested agent-written JSON: a list of bare strings indexes as
+    a string, not a mapping.
+    """
     try:
         data = json.loads(outcome_path.read_text())
-    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        return parse_integrator_outcome(data, agent_name, branch_name)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning("Failed to read integrator outcome at {}: {}", outcome_path, exc)
         return None
-    return parse_integrator_outcome(data, agent_name, branch_name)
 
 
-def _load_integrator_outcome(meta: AgentMetadata, output_dir: Path) -> IntegratorResult:
-    """Read and cache the integrator's outcome, returning an empty result on miss."""
-    empty = IntegratorResult(agent_name=meta.agent_name, branch_name=meta.branch_name)
+def load_integrator_outcome(meta: AgentMetadata, output_dir: Path) -> IntegratorResult | None:
+    """Read and cache the integrator's outcome, or None if it has not published one.
+
+    None rather than an empty result: an integrator that exists but has not
+    reported is a different thing from one that reported nothing, and the report
+    keys real decisions on the difference. Returning an empty result made a run
+    whose reducer crashed or is still working render an integration report and
+    accuse the grouping of omitting every escalation, when in truth there was no
+    grouping yet.
+
+    Every consumer of the return value already accepts None -- it means "no
+    integrator" throughout the rendering path -- so the empty stand-in bought
+    nothing.
+    """
     cache_key = (output_dir, meta.agent_name)
     cached = _INTEGRATOR_OUTCOME_CACHE.get(cache_key)
     if cached is not None:
@@ -475,7 +610,7 @@ def _load_integrator_outcome(meta: AgentMetadata, output_dir: Path) -> Integrato
         _outcome_path_for_integrator(output_dir, meta.agent_name), meta.agent_name, meta.branch_name
     )
     if result is None:
-        return empty
+        return None
     _INTEGRATOR_OUTCOME_CACHE[cache_key] = result
     return result
 
@@ -528,27 +663,32 @@ def _build_rows(agents: Sequence[AgentMetadata], output_dir: Path) -> list[TestM
 def report_section_of(result: TestMapReduceResult) -> ReportSection:
     """Derive a report section from a result for report grouping/coloring.
 
-    ``errored=True`` indicates an infrastructure failure (launch failed,
-    agent timed out, details missing) and is rendered in the FAILED section.
-    UNRESOLVED covers results where every change the agent attempted failed,
-    plus anything that fits no other section.
+    ``errored=True`` indicates an infrastructure failure (launch failed, agent
+    timed out, details missing) and is rendered in the FAILED section.
+    FIX_FAILED covers results where every change the agent attempted failed;
+    anything fitting no other section is INDETERMINATE.
+
+    IMPL_FIXES is checked before TEST_AND_DOC_FIXES: an agent that fixed the
+    implementation *and* touched its test has made an implementation fix, and
+    that is the fact a reviewer needs. Testing the other order first hid such
+    results under a test-only label and left IMPL_FIXES empty.
 
     Escalations do not influence the section: a result belongs to the section
-    its own outcome earns, and its escalations are aggregated separately.
+    its own outcome earns, and its escalations are reported separately.
     """
     if result.errored:
         return ReportSection.FAILED
     if result.tests_passing_before is None and result.tests_passing_after is None and not result.changes:
         return ReportSection.RUNNING
     if result.changes and all(c.status is ChangeStatus.FAILED for c in result.changes.values()):
-        return ReportSection.UNRESOLVED
-    if any(kind in _NON_IMPL_CHANGE_KINDS for kind in result.changes):
-        return ReportSection.NON_IMPL_FIXES
+        return ReportSection.FIX_FAILED
     if ChangeKind.FIX_IMPL in result.changes:
         return ReportSection.IMPL_FIXES
+    if any(kind in _TEST_AND_DOC_CHANGE_KINDS for kind in result.changes):
+        return ReportSection.TEST_AND_DOC_FIXES
     if not result.changes and result.tests_passing_after is True:
         return ReportSection.CLEAN_PASS
-    return ReportSection.UNRESOLVED
+    return ReportSection.INDETERMINATE
 
 
 def _format_test_id(test_node_id: str) -> str:
@@ -556,8 +696,8 @@ def _format_test_id(test_node_id: str) -> str:
     return html.escape(test_node_id).replace("::", "::<wbr>")
 
 
-def _format_changes(changes: dict[ChangeKind, Change]) -> str:
-    """Format changes as concise kind + icon pairs."""
+def format_changes(changes: Mapping[_ChangeKindT, Change]) -> str:
+    """Format changes as concise kind + icon pairs (any recipe's change-kind enum)."""
     parts: list[str] = []
     for kind, change in changes.items():
         icon = _CHANGE_STATUS_ICONS.get(change.status, "?")
@@ -565,19 +705,18 @@ def _format_changes(changes: dict[ChangeKind, Change]) -> str:
     return ", ".join(parts)
 
 
-def _merged_status_html(result: TestMapReduceResult, integrator: IntegratorResult | None) -> str:
+def merged_status_html(branch_name: str | None, integrator: IntegratorResult | None) -> str:
     """Return merged-status HTML: commit hash for impl, checkmark for squashed, X for failed."""
-    if integrator is None or result.branch_name is None:
+    if integrator is None or branch_name is None:
         return ""
-    branch = result.branch_name
-    if branch in integrator.impl_commit_hashes:
-        commit_hash = html.escape(integrator.impl_commit_hashes[branch][:10])
+    if branch_name in integrator.impl_commit_hashes:
+        commit_hash = html.escape(integrator.impl_commit_hashes[branch_name][:10])
         return f"<code>{commit_hash}</code>"
-    if branch in set(integrator.squashed_branches):
+    if branch_name in set(integrator.squashed_branches):
         return "&#10003;"
-    if branch in set(integrator.impl_priority) and branch not in integrator.impl_commit_hashes:
+    if branch_name in set(integrator.impl_priority) and branch_name not in integrator.impl_commit_hashes:
         return "&#10003;"
-    if branch in set(integrator.failed):
+    if branch_name in set(integrator.failed):
         return "&#10007;"
     return ""
 
@@ -585,6 +724,15 @@ def _merged_status_html(result: TestMapReduceResult, integrator: IntegratorResul
 def _render_markdown(text: str) -> str:
     """Render markdown text to HTML."""
     return _md.render(text)
+
+
+def render_markdown_without_raw_html(text: str) -> str:
+    """Render markdown to HTML with raw HTML disabled.
+
+    Public because the behaviors report renders the same agent-authored fields
+    and must apply the same policy to them.
+    """
+    return _strict_markdown.render(text)
 
 
 def _find_test_artifact_runs(
@@ -626,16 +774,36 @@ def _build_row_view(
     integrator: IntegratorResult | None,
     has_artifacts_for_agent: bool,
 ) -> dict[str, object]:
-    """Flatten a renderable row into the dict the jinja template consumes."""
+    """Flatten a renderable row into the dict the jinja template consumes.
+
+    A row carries its own escalations, so they read next to the test that raised
+    them rather than in a separate list a reader has to cross-reference by test
+    id. This is also what keeps them visible mid-run: rows exist from the moment
+    a mapper publishes, long before any grouping does.
+    """
     return {
         "test_id_html": _format_test_id(row.test_node_id),
         "agent_name": str(row.agent_name),
         "branch_name": row.branch_name,
-        "changes_html": _format_changes(row.changes) if row.changes else "-",
-        "merged_html": _merged_status_html(row, integrator),
+        "changes_html": format_changes(row.changes) if row.changes else "-",
+        "merged_html": merged_status_html(row.branch_name, integrator),
         "summary_html": _render_markdown(row.summary_markdown) if row.summary_markdown else "",
         "has_artifacts": has_artifacts_for_agent,
+        "escalations": _build_row_escalation_views(row),
     }
+
+
+def _build_row_escalation_views(row: TestMapReduceResult) -> list[dict[str, object]]:
+    """One view per escalation this mapper raised, in the order it reported them."""
+    return [
+        {
+            "id": escalation_id(row.agent_name, index),
+            "description_html": render_markdown_without_raw_html(escalation.description_markdown),
+            "kind_label": escalation_kind_label(escalation.kind),
+            "locations": [_format_location(location) for location in escalation.locations],
+        }
+        for index, escalation in enumerate(row.escalations)
+    ]
 
 
 def _build_section_views(
@@ -650,7 +818,7 @@ def _build_section_views(
         grouped.setdefault(report_section_of(r), []).append(r)
 
     sections: list[dict[str, object]] = []
-    for sec in _SECTION_ORDER:
+    for sec in SECTION_ORDER:
         group = grouped.get(sec)
         if not group:
             continue
@@ -667,8 +835,8 @@ def _build_section_views(
         sections.append(
             {
                 "kind": sec.value,
-                "label": _SECTION_LABELS[sec],
-                "color": _SECTION_COLORS[sec],
+                "label": SECTION_LABELS[sec],
+                "color": SECTION_COLORS[sec],
                 "anchor": f"sec-{sec.value}",
                 "rows": section_rows,
                 "count": len(section_rows),
@@ -678,54 +846,157 @@ def _build_section_views(
     return sections
 
 
-def _build_toc_links(sections: list[dict[str, object]]) -> list[dict[str, object]]:
-    """One sidebar entry per non-empty section."""
+def _build_toc_groups(
+    sections: list[dict[str, object]],
+    *,
+    unresolved_count: int,
+    resolved_count: int,
+) -> list[dict[str, object]]:
+    """Sidebar entries under two headings: what the integrator did, and what the tests did.
+
+    The escalation blocks used to carry no ``id`` at all while the sidebar was
+    built from ``sections`` alone, so they were reachable only by scrolling past
+    them. They are ordinary sections here, under an "Integration" heading that
+    separates the run-wide findings from the per-test results.
+    """
+    integration_links: list[dict[str, object]] = []
+    if unresolved_count:
+        integration_links.append(
+            {
+                "anchor": UNRESOLVED_ESCALATIONS_ANCHOR,
+                "color": UNRESOLVED_ESCALATIONS_COLOR,
+                "label": "Unresolved escalations",
+                "count": unresolved_count,
+            }
+        )
+    if resolved_count:
+        integration_links.append(
+            {
+                "anchor": RESOLVED_ESCALATIONS_ANCHOR,
+                "color": RESOLVED_ESCALATIONS_COLOR,
+                "label": "Resolved escalations",
+                "count": resolved_count,
+            }
+        )
+    test_links = [
+        {"anchor": s["anchor"], "color": s["color"], "label": s["label"], "count": s["count"]} for s in sections
+    ]
     return [
-        {
-            "anchor": s["anchor"],
-            "color": s["color"],
-            "label": s["label"],
-            "count": s["count"],
-        }
-        for s in sections
+        {"label": label, "links": links}
+        for label, links in [("Integration", integration_links), ("Tests", test_links)]
+        if links
     ]
 
 
-def _build_escalation_views(
-    rows: list[TestMapReduceResult],
-    integrator: IntegratorResult | None,
-) -> list[dict[str, object]]:
-    """Aggregate escalations from every mapper plus the integrator, in that order.
+def _format_location(location: EscalationLocation) -> str:
+    """Render a location as ``path:line``, or just ``path`` when it names no line."""
+    return location.path if location.line is None else f"{location.path}:{location.line}"
 
-    Mapper escalations carry the test they came from; the integrator's carry its
-    agent name. Blockers sort ahead of shared patterns so the things that stopped
-    an agent read first.
+
+def split_summary(markdown_text: str) -> tuple[str, str]:
+    """Split a description into its summary line and everything after it.
+
+    Escalations carry a single ``description_markdown`` rather than a separate
+    title, so every view labels an entry from its first line and the agents are
+    told to make that line a one-sentence summary.
+
+    One function returns both halves so a caller rendering them separately -- the
+    PR body puts the summary in a heading and the rest beneath it -- cannot have
+    the two disagree about where the split falls.
     """
-    views: list[dict[str, object]] = []
-    for row in rows:
-        for esc in row.escalations:
-            views.append(
-                {
-                    "title": esc.title,
-                    "detail_html": _render_markdown(esc.detail_markdown),
-                    "kind": esc.kind.value,
-                    "kind_label": _ESCALATION_KIND_LABELS[esc.kind],
-                    "source": row.test_node_id,
-                }
-            )
-    if integrator is not None:
-        for esc in integrator.escalations:
-            views.append(
-                {
-                    "title": esc.title,
-                    "detail_html": _render_markdown(esc.detail_markdown),
-                    "kind": esc.kind.value,
-                    "kind_label": _ESCALATION_KIND_LABELS[esc.kind],
-                    "source": "integrator",
-                }
-            )
-    views.sort(key=lambda v: 0 if v["kind"] == EscalationKind.BLOCKER.value else 1)
-    return views
+    lines = markdown_text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip():
+            return line.strip(), "\n".join(lines[index + 1 :]).strip()
+    return "", ""
+
+
+def first_line(markdown_text: str) -> str:
+    """The summary line of a description. See :func:`split_summary`."""
+    return split_summary(markdown_text)[0]
+
+
+def _mapper_escalation_ids(rows: Sequence[TestMapReduceResult]) -> list[str]:
+    """Every mapper escalation id in the run, in row order."""
+    return [escalation_id(row.agent_name, index) for row in rows for index, _ in enumerate(row.escalations)]
+
+
+def ungrouped_escalation_ids(
+    rows: Sequence[TestMapReduceResult],
+    integrator_escalations: Sequence[IntegratorEscalation],
+) -> list[str]:
+    """Mapper escalation ids that no integrator escalation claims as a member.
+
+    The report shows the raw mapper escalations regardless, so an incomplete
+    grouping never loses a report -- but it does mean the grouped view is not
+    the whole story, which is worth saying out loud rather than leaving a reader
+    to infer from counts.
+
+    Takes the escalations rather than an optional result, because callers
+    disagree about what "no integrator outcome" means: mid-run there is simply
+    no grouping yet and nothing to report, while the reducer checking its own
+    outcome wants every id back. Each decides at its own call site.
+    """
+    grouped = {member for escalation in integrator_escalations for member in escalation.member_ids}
+    return [known_id for known_id in _mapper_escalation_ids(rows) if known_id not in grouped]
+
+
+def sort_escalations(
+    escalations: Sequence[IntegratorEscalation],
+) -> list[IntegratorEscalation]:
+    """Integrator-originated first, then by descending member count.
+
+    Public so the PR body orders escalations exactly as the HTML report does.
+
+    The integrator's own findings have no members, so a plain member-count sort
+    would bury them last -- and they are precisely the ones no mapper could have
+    produced, since they come from reading the whole integrated diff. Ties keep
+    input order: the report is regenerated on every poll, so an unstable sort
+    would make entries jump between renders.
+    """
+    return sorted(escalations, key=lambda e: (1 if e.member_ids else 0, -len(e.member_ids)))
+
+
+def build_integrator_escalation_views(
+    escalations: Sequence[IntegratorEscalation],
+) -> list[dict[str, object]]:
+    """Flatten grouped escalations into the dicts a report template consumes.
+
+    Public and shared: the behaviors report renders the same model, and a
+    divergent copy there had drifted to a different markdown policy for the same
+    agent-authored field.
+    """
+    return [
+        {
+            "summary": first_line(escalation.description_markdown),
+            "description_html": render_markdown_without_raw_html(escalation.description_markdown),
+            "kind_label": escalation_kind_label(escalation.kind),
+            "scale_label": escalation_scale_label(escalation),
+            "resolved_in_commit_hash": escalation.resolved_in_commit_hash,
+        }
+        for escalation in sort_escalations(escalations)
+    ]
+
+
+def escalation_scale_label(escalation: IntegratorEscalation) -> str:
+    """How many mapper reports a group covers, or that the integrator found it alone.
+
+    Shared so the HTML report, the behaviors report, and the PR body cannot word
+    this differently -- the same reason ``escalation_kind_label`` exists.
+    """
+    if not escalation.member_ids:
+        return "found by the integrator"
+    return f"{len(escalation.member_ids)} mapper report(s)"
+
+
+def split_escalation_views(
+    escalations: Sequence[IntegratorEscalation],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Build the (unresolved, resolved) view lists both report modules render."""
+    return (
+        build_integrator_escalation_views([e for e in escalations if not e.is_resolved]),
+        build_integrator_escalation_views([e for e in escalations if e.is_resolved]),
+    )
 
 
 def _build_artifact_panels(
@@ -773,7 +1044,7 @@ def generate_html_report(
     report to s3 is the recipe's responsibility (see ``recipe.render_report``).
     """
     rows = _build_rows(agents, output_dir)
-    integrator = _load_integrator_outcome(integrator_metadata, output_dir) if integrator_metadata is not None else None
+    integrator = load_integrator_outcome(integrator_metadata, output_dir) if integrator_metadata is not None else None
 
     agent_artifact_runs: dict[str, list[tuple[str, str, Path]]] = {}
     for r in rows:
@@ -788,16 +1059,28 @@ def generate_html_report(
 
     has_artifacts = bool(agent_artifact_runs)
     sections = _build_section_views(rows, integrator, agent_artifact_runs, has_artifacts)
-    toc_links = _build_toc_links(sections)
     artifact_panels = _build_artifact_panels(agent_artifact_runs)
 
-    # Title is autoescaped by the template; detail/summary are markdown rendered
-    # to HTML here and passed through with |safe, like the per-row summary cells.
-    escalation_views = _build_escalation_views(rows, integrator)
-    normalization_views = (
-        [{"summary_html": _render_markdown(n.summary_markdown)} for n in integrator.normalizations]
-        if integrator is not None
-        else []
+    # Summaries and descriptions are markdown rendered to HTML here and passed
+    # through with |safe, like the per-row summary cells; everything else the
+    # template writes is autoescaped.
+    integrator_escalations = integrator.escalations if integrator is not None else ()
+    unresolved_escalation_views, resolved_escalation_views = split_escalation_views(integrator_escalations)
+    # Only an integrator that has actually published an outcome can have left an
+    # escalation out of its grouping; mid-run there is simply no grouping yet.
+    ungrouped_ids = ungrouped_escalation_ids(rows, integrator_escalations) if integrator is not None else []
+    mapper_escalation_count = sum(len(row.escalations) for row in rows)
+    if ungrouped_ids:
+        logger.warning(
+            "{} of {} mapper escalation(s) are in no integrator group",
+            len(ungrouped_ids),
+            mapper_escalation_count,
+        )
+
+    toc_groups = _build_toc_groups(
+        sections,
+        unresolved_count=len(unresolved_escalation_views),
+        resolved_count=len(resolved_escalation_views),
     )
 
     reintegrate_cmd = ""
@@ -811,19 +1094,26 @@ def generate_html_report(
     report_html = template.render(
         rows=rows,
         sections=sections,
-        toc_links=toc_links,
+        toc_groups=toc_groups,
         has_artifacts=has_artifacts,
         artifact_panels=artifact_panels,
         integrator=integrator,
-        escalation_views=escalation_views,
-        normalization_views=normalization_views,
+        mapper_escalation_count=mapper_escalation_count,
+        unresolved_escalation_views=unresolved_escalation_views,
+        resolved_escalation_views=resolved_escalation_views,
+        ungrouped_escalation_ids=ungrouped_ids,
+        has_integrator=integrator is not None,
+        unresolved_anchor=UNRESOLVED_ESCALATIONS_ANCHOR,
+        resolved_anchor=RESOLVED_ESCALATIONS_ANCHOR,
+        unresolved_color=UNRESOLVED_ESCALATIONS_COLOR,
+        resolved_color=RESOLVED_ESCALATIONS_COLOR,
         run_commands=run_commands or [],
         reintegrate_cmd=reintegrate_cmd,
         asciinema_css_url=ASCIINEMA_PLAYER_CSS,
         asciinema_js_url=ASCIINEMA_PLAYER_JS,
-        css=_read_static("report.css"),
+        css=read_static("report.css"),
         detail_css=DETAIL_CSS,
-        js=_read_static("artifacts.js"),
+        js=read_static("artifacts.js"),
     )
     output_path = output_dir / "index.html"
     output_dir.mkdir(parents=True, exist_ok=True)

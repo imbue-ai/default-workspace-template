@@ -9,11 +9,16 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from imbue.mngr.primitives import HostId
+from imbue.mngr_imbue_cloud.cli.server import _bake_one_slice_with_retry
 from imbue.mngr_imbue_cloud.cli.server import _box_ssh_host_key_options
 from imbue.mngr_imbue_cloud.cli.server import _destroy_one_pool_host
 from imbue.mngr_imbue_cloud.cli.server import _format_capacity_table
 from imbue.mngr_imbue_cloud.cli.server import _kill_bake_worker_processes
 from imbue.mngr_imbue_cloud.cli.server import _resolve_vendored_mngr_source
+from imbue.mngr_imbue_cloud.cli.server import _run_bake_attempts
+from imbue.mngr_imbue_cloud.cli.server import assert_box_is_exclusive_to_tier
+from imbue.mngr_imbue_cloud.cli.server import build_box_tier_audit_report
 from imbue.mngr_imbue_cloud.cli.server import build_pool_host_destroy_report
 from imbue.mngr_imbue_cloud.cli.server import build_registered_server
 from imbue.mngr_imbue_cloud.cli.server import compute_server_slice_sizing
@@ -22,14 +27,19 @@ from imbue.mngr_imbue_cloud.cli.server import run_outcome_workers_in_bounded_thr
 from imbue.mngr_imbue_cloud.cli.server import server
 from imbue.mngr_imbue_cloud.cli.server import slice_advertised_attributes
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
+from imbue.mngr_imbue_cloud.data_types import BoxTierAudit
 from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyOutcome
+from imbue.mngr_imbue_cloud.data_types import SliceBakeOutcome
+from imbue.mngr_imbue_cloud.data_types import UnauditedBox
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerStatus
 from imbue.mngr_imbue_cloud.primitives import PoolHostDestroyOutcomeStatus
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
+from imbue.mngr_imbue_cloud.primitives import SliceBakeOutcomeStatus
 from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_BOOT_DISK_GIB
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_capacity
+from imbue.mngr_imbue_cloud.slices.bare_metal import slice_lima_disk_name
 
 
 def _server(
@@ -285,3 +295,205 @@ def test_bounded_fan_out_caps_concurrency_and_collects_all_outcomes() -> None:
     )
     assert sorted(outcome["item"] for outcome in outcomes) == [0, 1, 2, 3]
     assert concurrency_state["max"] == 2
+
+
+def _bake_outcome(status: SliceBakeOutcomeStatus, host_name: str) -> SliceBakeOutcome:
+    # error is documented "failed only" on SliceBakeOutcome, so stamp it only there.
+    error = "boom" if status == SliceBakeOutcomeStatus.FAILED else None
+    return SliceBakeOutcome(host_name=host_name, server_id="server-1", status=status, error=error)
+
+
+def test_run_bake_attempts_returns_the_first_success_without_retrying() -> None:
+    call_count = {"count": 0}
+
+    def bake_once() -> SliceBakeOutcome:
+        call_count["count"] += 1
+        return _bake_outcome(SliceBakeOutcomeStatus.SUCCEEDED, f"slice-{call_count['count']}")
+
+    outcome = _run_bake_attempts(bake_once, attempt_count=3, termination_event=threading.Event())
+    assert outcome.status == SliceBakeOutcomeStatus.SUCCEEDED
+    assert call_count["count"] == 1
+
+
+def test_run_bake_attempts_retries_a_transient_failure_with_a_fresh_slice() -> None:
+    # A failed bake destroys its VM and writes no row, so the retry is a clean fresh
+    # slice: two transient failures followed by a success must yield the success.
+    call_count = {"count": 0}
+
+    def bake_once() -> SliceBakeOutcome:
+        call_count["count"] += 1
+        status = SliceBakeOutcomeStatus.SUCCEEDED if call_count["count"] == 3 else SliceBakeOutcomeStatus.FAILED
+        return _bake_outcome(status, f"slice-{call_count['count']}")
+
+    outcome = _run_bake_attempts(bake_once, attempt_count=3, termination_event=threading.Event())
+    assert outcome.status == SliceBakeOutcomeStatus.SUCCEEDED
+    assert outcome.host_name == "slice-3"
+    assert call_count["count"] == 3
+
+
+def test_run_bake_attempts_returns_the_last_failure_after_exhausting_attempts() -> None:
+    call_count = {"count": 0}
+
+    def bake_once() -> SliceBakeOutcome:
+        call_count["count"] += 1
+        return _bake_outcome(SliceBakeOutcomeStatus.FAILED, f"slice-{call_count['count']}")
+
+    outcome = _run_bake_attempts(bake_once, attempt_count=2, termination_event=threading.Event())
+    assert outcome.status == SliceBakeOutcomeStatus.FAILED
+    assert outcome.host_name == "slice-2"
+    assert call_count["count"] == 2
+
+
+def test_run_bake_attempts_does_not_retry_after_the_bake_is_terminated() -> None:
+    # A termination signal's kill sweep makes every in-flight attempt fail; retrying
+    # those would spawn replacement bakes (new VMs) after the operator killed the
+    # bake, so a set termination event must return the failure without retrying.
+    termination_event = threading.Event()
+    termination_event.set()
+    call_count = {"count": 0}
+
+    def bake_once() -> SliceBakeOutcome:
+        call_count["count"] += 1
+        return _bake_outcome(SliceBakeOutcomeStatus.FAILED, f"slice-{call_count['count']}")
+
+    outcome = _run_bake_attempts(bake_once, attempt_count=3, termination_event=termination_event)
+    assert outcome.status == SliceBakeOutcomeStatus.FAILED
+    assert call_count["count"] == 1
+
+
+def test_bake_worker_does_not_start_a_first_attempt_after_termination() -> None:
+    # A worker still queued on the concurrency semaphore when the bake is terminated
+    # must not start its first `mngr create` (a brand-new VM carve after the kill
+    # sweep); it reports the slice as failed instead. The worker kwargs deliberately
+    # omit everything _bake_one_slice requires, so any accidental bake attempt
+    # fails loudly.
+    termination_event = threading.Event()
+    termination_event.set()
+    outcome = _bake_one_slice_with_retry(termination_event=termination_event, server=_server(4, 16))
+    assert outcome.status == SliceBakeOutcomeStatus.FAILED
+    assert outcome.host_name == "slice-never-started"
+    assert outcome.error is not None and "terminated before" in outcome.error
+
+
+def test_assert_box_is_exclusive_to_tier_accepts_a_single_key_and_same_tier_slices() -> None:
+    mine = slice_lima_disk_name(HostId.generate(), "staging")
+    assert_box_is_exclusive_to_tier(
+        server=_server(slot_count=6, cpu_threads=16),
+        env_name="staging",
+        box_disk_names={mine},
+        authorized_key_count=1,
+    )
+
+
+def test_assert_box_is_exclusive_to_tier_rejects_an_extra_authorized_key() -> None:
+    # prep writes authorized_keys with a single-key overwrite, so a second key can
+    # only have been added out of band -- it hands another tier SSH into this box.
+    with pytest.raises(click.UsageError) as exc_info:
+        assert_box_is_exclusive_to_tier(
+            server=_server(slot_count=6, cpu_threads=16),
+            env_name="staging",
+            box_disk_names=set(),
+            authorized_key_count=2,
+        )
+    assert "authorizes 2 SSH keys" in str(exc_info.value)
+    assert "added out of band" in str(exc_info.value)
+    # Re-prepping overwrites authorized_keys, so it must not be advised before the
+    # operator has checked whether the other key's owner has slices running here.
+    assert "Do NOT re-prep before checking" in str(exc_info.value)
+
+
+def test_assert_box_is_exclusive_to_tier_rejects_an_empty_authorized_keys_as_never_prepped() -> None:
+    # An empty authorized_keys is the opposite failure from an extra key: nothing was
+    # added out of band, prep simply never ran, and re-prepping is the safe remedy.
+    with pytest.raises(click.UsageError) as exc_info:
+        assert_box_is_exclusive_to_tier(
+            server=_server(slot_count=6, cpu_threads=16),
+            env_name="staging",
+            box_disk_names=set(),
+            authorized_key_count=0,
+        )
+    assert "authorizes 0 SSH keys" in str(exc_info.value)
+    assert "never prepped" in str(exc_info.value)
+    assert "added out of band" not in str(exc_info.value)
+
+
+def test_assert_box_is_exclusive_to_tier_rejects_a_foreign_tier_slice() -> None:
+    theirs = slice_lima_disk_name(HostId.generate(), "dev-xiaq")
+    with pytest.raises(click.UsageError) as exc_info:
+        assert_box_is_exclusive_to_tier(
+            server=_server(slot_count=6, cpu_threads=16),
+            env_name="staging",
+            box_disk_names={theirs},
+            authorized_key_count=1,
+        )
+    assert theirs in str(exc_info.value)
+    assert "another tier" in str(exc_info.value)
+
+
+def test_assert_box_is_exclusive_to_tier_allows_sibling_dev_envs_on_one_box() -> None:
+    assert_box_is_exclusive_to_tier(
+        server=_server(slot_count=6, cpu_threads=16),
+        env_name="dev-josh",
+        box_disk_names={
+            slice_lima_disk_name(HostId.generate(), "dev-josh"),
+            slice_lima_disk_name(HostId.generate(), "dev-alice"),
+        },
+        authorized_key_count=1,
+    )
+
+
+def test_assert_box_is_exclusive_to_tier_still_checks_keys_for_an_unstamped_bake() -> None:
+    # env_name None means a legacy un-stamped bake: the slice tier is unknowable so
+    # that half is skipped, but the key check does not depend on our tier.
+    assert_box_is_exclusive_to_tier(
+        server=_server(slot_count=6, cpu_threads=16),
+        env_name=None,
+        box_disk_names={slice_lima_disk_name(HostId.generate(), "dev-xiaq")},
+        authorized_key_count=1,
+    )
+    with pytest.raises(click.UsageError):
+        assert_box_is_exclusive_to_tier(
+            server=_server(slot_count=6, cpu_threads=16),
+            env_name=None,
+            box_disk_names=set(),
+            authorized_key_count=3,
+        )
+
+
+def test_build_box_tier_audit_report_counts_each_verdict_separately() -> None:
+    # An unaudited box is NOT a clean one: it must never be folded into `exclusive`.
+    clean = BoxTierAudit(
+        server_id="a",
+        public_address="203.0.113.1",
+        slot_count=6,
+        box_used_slots=1,
+        authorized_key_count=1,
+        foreign_tier_slices=(),
+        degraded_md_arrays=(),
+        raw_swap_devices=(),
+    )
+    contaminated = BoxTierAudit(
+        server_id="b",
+        public_address="203.0.113.2",
+        slot_count=6,
+        box_used_slots=2,
+        authorized_key_count=2,
+        foreign_tier_slices=(),
+        degraded_md_arrays=(),
+        raw_swap_devices=(),
+    )
+    report = build_box_tier_audit_report(
+        env_name="staging",
+        audits=[clean, contaminated],
+        unaudited=[UnauditedBox(server_id="c", public_address=None, reason="the row has no public_address")],
+    )
+    assert (report.exclusive, report.contaminated, report.unaudited) == (1, 1, 1)
+    assert report.env_name == "staging"
+    assert report.is_foreign_tier_checked
+
+
+def test_build_box_tier_audit_report_marks_the_foreign_tier_half_as_unchecked_without_an_env() -> None:
+    # Without an env there is no tier to compare against, so an empty foreign-slice
+    # list must not be readable as a clean bill of health.
+    report = build_box_tier_audit_report(env_name=None, audits=[], unaudited=[])
+    assert not report.is_foreign_tier_checked

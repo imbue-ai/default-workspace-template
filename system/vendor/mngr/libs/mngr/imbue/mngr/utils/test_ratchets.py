@@ -56,7 +56,7 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(8))
+    rc.check_broad_exception_catch(_DIR, snapshot(7))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -90,6 +90,10 @@ def test_prevent_importlib_import_module() -> None:
     rc.check_importlib_import_module(_DIR, snapshot(0))
 
 
+# Flaky: the tree-wide regex scan usually finishes in well under a second, but
+# on a cold-cache offload run (sandbox I/O still saturated by the base image
+# build) it has blown the 10s pytest-timeout once and passed on retry.
+@pytest.mark.flaky
 def test_prevent_getattr() -> None:
     # config/key_resolver.py's _walk_to_field walks MngrConfig (and sub-model)
     # fields by name via the model_fields iterable (the override resolver looks up
@@ -274,7 +278,7 @@ def test_prevent_bare_urwid_tty_signal_keys() -> None:
 # indirection the regex can't see through; safe in practice because the value
 # already includes the exact-match `=` prefix.
 def test_prevent_bare_tmux_targets() -> None:
-    rc.check_bare_tmux_targets(_DIR, snapshot(2))
+    rc.check_bare_tmux_targets(_DIR, snapshot(0))
 
 
 def test_prevent_direct_subprocess() -> None:
@@ -330,3 +334,10 @@ def test_prevent_code_in_init_files() -> None:
             'hookimpl = pluggy.HookimplMarker("mngr")',
         },
     )
+
+
+# --- Modal images ---
+
+
+def test_prevent_unpinned_modal_pip_install() -> None:
+    rc.check_unpinned_modal_pip_install(_DIR, snapshot(0))

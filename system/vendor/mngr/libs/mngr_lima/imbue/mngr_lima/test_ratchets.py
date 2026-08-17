@@ -117,8 +117,12 @@ def test_prevent_namedtuple() -> None:
 def test_prevent_yaml_usage() -> None:
     # lima native config only accepts yaml; the provider generates a Lima YAML
     # config, and the btrfs release test writes a Lima override.yaml to make the
-    # VM bootable in CI.
-    rc.check_yaml_usage(_DIR, snapshot(112))
+    # VM bootable in CI, and the repair-keys patcher rewrites existing VMs'
+    # stored lima.yaml in place. The count includes misfires on calls to
+    # generate_default_lima_yaml from test helpers and on comments naming a
+    # host's lima.yaml file (the regex matches the substring, not actual
+    # yaml usage).
+    rc.check_yaml_usage(_DIR, snapshot(134))
 
 
 def test_prevent_functools_partial() -> None:
@@ -287,3 +291,10 @@ def test_prevent_per_file_host_upload() -> None:
 
 def test_prevent_code_in_init_files() -> None:
     rc.check_code_in_init_files(_DIR, snapshot(1))
+
+
+# --- Modal images ---
+
+
+def test_prevent_unpinned_modal_pip_install() -> None:
+    rc.check_unpinned_modal_pip_install(_DIR, snapshot(0))

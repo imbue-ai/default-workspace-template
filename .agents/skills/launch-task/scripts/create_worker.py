@@ -119,6 +119,17 @@ _AWAIT_TIMEOUT_RC = 124
 # Separate from the timeout code so the lead can tell "paused for memory" apart
 # from "still running, just slow".
 _AWAIT_SHED_RC = 75
+# Distinct exit code for an await that stopped early because the worker's agent
+# went idle (ended its turn) without the report ever appearing -- a finished or
+# stalled worker whose delivery failed will never report, so waiting out the
+# full timeout only hides the problem. The message points at the worker's own
+# worktree, where an undelivered report usually sits.
+_AWAIT_IDLE_RC = 76
+# Consecutive idle observations required before concluding the worker ended its
+# turn without reporting. Multiple observations (spaced by the poll interval)
+# absorb the race where the worker is mid-delivery: the report file is checked
+# first on every loop, so a delivered report always wins.
+_IDLE_POLLS_BEFORE_GIVING_UP = 3
 
 
 def _normalize_dir(value: str) -> str:
@@ -227,6 +238,81 @@ def _read_finish_report_path(task_file: Path) -> Path:
     if value is None:
         raise ValueError("frontmatter is missing required field `finish_report_path`")
     return Path(value)
+
+
+def _set_frontmatter_field(text: str, key: str, value: str) -> str:
+    """Return ``text`` with frontmatter ``key`` set to ``value``.
+
+    Replaces the existing ``key:`` line in place (preserving the rest of the
+    file verbatim) or, if absent, inserts it just after the opening ``---``.
+    Returns ``text`` unchanged when there is no frontmatter block.
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return text
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return text
+    for i in range(1, end):
+        if lines[i].split(":", 1)[0].strip() == key:
+            lines[i] = f"{key}: {value}"
+            return "\n".join(lines)
+    lines.insert(1, f"{key}: {value}")
+    return "\n".join(lines)
+
+
+def _ensure_lead_agent(task_file: Path) -> int | None:
+    """Stamp the launching agent as the report recipient in the task file.
+
+    The agent running ``launch`` *is* the lead that polls for the worker's
+    report, so its own ``MNGR_AGENT_NAME`` is the authoritative ``lead_agent`` --
+    we fill it in (overwriting whatever the file holds) from the environment
+    rather than trusting the task file. That frees task-file authors from setting
+    the field at all and eliminates a silent-failure class: a literal,
+    unexpanded ``$MNGR_AGENT_NAME`` (or a stale/omitted value) used to leave the
+    worker with no valid address, so it could not rsync its report back and the
+    lead's poll waited forever.
+
+    When ``MNGR_AGENT_NAME`` is unset -- i.e. ``launch`` is running outside an
+    mngr agent, as in a manual invocation or a test -- the file's existing value
+    is used as a fallback; an unresolved value (missing, blank, or an unexpanded
+    ``$...``) in that case is fatal (exit 2) rather than launching an
+    unaddressable worker.
+
+    Returns exit code ``2`` on unrecoverable misconfiguration; otherwise
+    ``None``.
+    """
+    text = task_file.read_text(encoding="utf-8")
+    # Invalid frontmatter YAML has already raised in launch's preflight
+    # (``_read_source_artifacts_dir``), so any error here is a genuine bug and
+    # is allowed to propagate.
+    frontmatter, _body = _split_frontmatter(text)
+    if frontmatter is None:
+        return None
+    current = frontmatter.get("lead_agent")
+    lead_name = os.environ.get("MNGR_AGENT_NAME")
+    if lead_name:
+        if current == lead_name:
+            return None
+        task_file.write_text(
+            _set_frontmatter_field(text, "lead_agent", lead_name), encoding="utf-8"
+        )
+        print(
+            f"create_worker: set lead_agent to {lead_name!r} (was {current!r})",
+            file=sys.stderr,
+        )
+        return None
+    # No launcher identity in the environment: fall back to the file's own value.
+    resolved = isinstance(current, str) and current.strip() and "$" not in current
+    if resolved:
+        return None
+    print(
+        "create_worker: lead_agent is unresolved "
+        f"({current!r}) and MNGR_AGENT_NAME is unset -- the worker would have no "
+        "address to send its report to.",
+        file=sys.stderr,
+    )
+    return 2
 
 
 class Runner:
@@ -422,6 +508,13 @@ def launch(
         )
         return 2
 
+    # Stamp the lead agent (this launcher) into the task file before creating
+    # the worker, so the report has a valid return address and an unaddressable
+    # case fails fast rather than after provisioning.
+    lead_rc = _ensure_lead_agent(task_file)
+    if lead_rc is not None:
+        return lead_rc
+
     runner.run(
         [
             "mngr",
@@ -501,6 +594,39 @@ def _worker_has_pending_shed(worker_name: str) -> bool:
     return has_pending_shed(worker_name)
 
 
+def _worker_is_idle(worker_name: str) -> bool:
+    """Whether the worker's agent has ended its turn (state WAITING/STOPPED).
+
+    Queried from ``mngr list`` (the same source the lead's other liveness
+    checks use). Deliberately failure-tolerant: any query error answers
+    "not idle" so a transient mngr hiccup can never abort a healthy await --
+    the timeout remains the backstop.
+    """
+    try:
+        result = subprocess.run(
+            ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    for line in result.stdout.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("resource_type") != "agent":
+            continue
+        if record.get("name") != worker_name:
+            continue
+        return record.get("state") in ("WAITING", "STOPPED")
+    return False
+
+
 def await_report(
     report_path: Path,
     timeout_seconds: float,
@@ -510,6 +636,7 @@ def await_report(
     out: TextIO | None = None,
     worker_name: str | None = None,
     pending_shed_check: Callable[[str], bool] | None = None,
+    idle_check: Callable[[str], bool] | None = None,
 ) -> int:
     """Block until ``report_path`` exists, then print its contents.
 
@@ -525,12 +652,22 @@ def await_report(
     The report file is still checked first each loop, so a report that landed
     before the shed (or a worker revived and reporting) still wins.
 
+    If ``worker_name`` and ``idle_check`` are supplied, each poll also checks
+    whether the worker's agent has ended its turn. A worker observed idle for
+    ``_IDLE_POLLS_BEFORE_GIVING_UP`` consecutive polls with no report is either
+    finished-but-undelivered (its report likely sits in its own worktree) or
+    stalled -- both deserve an immediate, actionable ``_AWAIT_IDLE_RC`` rather
+    than the remainder of the timeout in silence. The shed check runs first:
+    a shed agent also reads as not-running, and the shed diagnosis is the more
+    specific (and differently-recovered) one.
+
     ``sleeper``/``clock`` are injected so tests can drive the poll loop without
     real time. The file is checked before the first sleep, so a report already
     present returns immediately.
     """
     stream: TextIO = sys.stdout if out is None else out
     deadline = clock() + timeout_seconds
+    consecutive_idle_count = 0
     while True:
         if report_path.is_file():
             stream.write(report_path.read_text(encoding="utf-8"))
@@ -555,6 +692,25 @@ def await_report(
                 file=sys.stderr,
             )
             return _AWAIT_SHED_RC
+        if worker_name is not None and idle_check is not None:
+            consecutive_idle_count = (
+                consecutive_idle_count + 1 if idle_check(worker_name) else 0
+            )
+            if consecutive_idle_count >= _IDLE_POLLS_BEFORE_GIVING_UP:
+                print(
+                    f"create_worker: worker '{worker_name}' has ended its turn "
+                    f"(idle for {consecutive_idle_count} consecutive polls) but no "
+                    f"report has appeared at {report_path}. Either it finished and "
+                    "the report delivery failed (look for the report inside the "
+                    f"worker's own worktree, e.g. data/worktrees/{worker_name}-*/ "
+                    "under the report's relative path, and copy it to the path "
+                    "above), or it stopped without reporting (read its transcript: "
+                    f"mngr transcript {worker_name}; nudge it with mngr message "
+                    f"{worker_name} -m 'deliver your report per "
+                    "worker-reporting.md'). Not waiting out the remaining timeout.",
+                    file=sys.stderr,
+                )
+                return _AWAIT_IDLE_RC
         if clock() >= deadline:
             print(
                 f"create_worker: timed out after {timeout_seconds:g}s waiting for "
@@ -719,6 +875,7 @@ def launch_sync(
         out=buffer,
         worker_name=name,
         pending_shed_check=_worker_has_pending_shed,
+        idle_check=_worker_is_idle,
     )
     branch = f"mngr/{name}"
     if await_rc != 0:
@@ -791,6 +948,7 @@ def _run_await(args: argparse.Namespace) -> int:
         poll_interval_seconds=args.poll_interval,
         worker_name=args.name,
         pending_shed_check=_worker_has_pending_shed,
+        idle_check=_worker_is_idle,
     )
 
 
@@ -834,7 +992,7 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
     launch_parser.add_argument(
         "--template",
         required=True,
-        help="mngr create template (e.g. 'worker', 'subskill-worker').",
+        help="mngr create role template (e.g. 'worker').",
     )
     launch_parser.add_argument(
         "--runtime-dir",
@@ -893,7 +1051,7 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
     launch_sync_parser.add_argument(
         "--template",
         required=True,
-        help="mngr create template (e.g. 'worker', 'crystallize-worker').",
+        help="mngr create role template (e.g. 'worker').",
     )
     launch_sync_parser.add_argument(
         "--runtime-dir",

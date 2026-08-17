@@ -39,8 +39,8 @@ class ImbueCloudKeyError(ImbueCloudError):
     """Raised when a LiteLLM key operation fails."""
 
 
-class ImbueCloudTunnelError(ImbueCloudError):
-    """Raised when a Cloudflare tunnel operation fails."""
+class ImbueCloudShareError(ImbueCloudError):
+    """Raised when a self-hosted share operation fails."""
 
 
 class ImbueCloudPaidListError(ImbueCloudError):
@@ -60,6 +60,20 @@ class ImbueCloudQuotaExceededError(ImbueCloudError):
         self.entitlement = entitlement
         self.limit = limit
         self.current = current
+
+
+class ImbueCloudEmailNotVerifiedError(ImbueCloudError):
+    """Raised when the connector refuses an action because the account's email is unverified.
+
+    Carries the structured detail from the connector's 403 (``code:
+    email_not_verified``) so callers (e.g. the minds desktop client) can
+    respond with a contextual "verify your email" prompt instead of a
+    generic failure.
+    """
+
+    def __init__(self, message: str, email: str | None) -> None:
+        super().__init__(message)
+        self.email = email
 
 
 class ImbueCloudAccountError(ImbueCloudError):
@@ -171,3 +185,28 @@ class FixedAgentIdError(ImbueCloudError, ValueError):
 
 class ClaudeConfigPatchError(ImbueCloudError, RuntimeError):
     """Raised when patching the claude config on a leased imbue_cloud host fails."""
+
+
+class AdoptionError(ImbueCloudError):
+    """Raised when adopting a leased slice (reconciler install / key rotation / verification) fails."""
+
+
+class HostKeyDriftError(AdoptionError):
+    """Raised when an adopted endpoint serves a key that matches neither its pin nor a pending rotation.
+
+    Somebody other than this user's devices re-keyed the host (e.g. an operator
+    re-key, or a rebuild this device has not recorded). The device correctly
+    refuses to trust the new key; the user re-adopts (or re-syncs) to recover.
+    """
+
+
+class WorkspacesEndpointUnavailableError(ImbueCloudConnectorError):
+    """Raised when the connector predates the /workspaces lifecycle endpoints."""
+
+
+class WorkspaceStartFailedError(ImbueCloudError):
+    """Raised when a workspace start ended in failure server-side (row back on stopped)."""
+
+
+class WorkspaceStartTimeoutError(ImbueCloudError):
+    """Raised when a workspace start did not reach running within the client's poll window."""

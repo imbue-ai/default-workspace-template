@@ -172,10 +172,10 @@ Both `minds env deploy` (which reads dev-tier provisioning credentials -- Neon, 
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `MINDS_WORKSPACE_GIT_URL` | Template repo path/URL for the create-form | `<repo>/.external_worktrees/default-workspace-template/` (create it with `just default-workspace-template-worktree`); `just minds-start` sets this. Absent it, `templates.py` falls back to the default-workspace-template remote URL |
+| `MINDS_WORKSPACE_GIT_URL` | Template repo path/URL for the create-form | `<repo>/.external_worktrees/default-workspace-template/` (create it with `just default-workspace-template-worktree`); `just minds-start` sets this. Absent it, `workspace_defaults.py` falls back to the default-workspace-template remote URL |
 | `MINDS_WORKSPACE_BRANCH` | Default git branch for the template | The DEFAULT_WORKSPACE_TEMPLATE path's current branch (matches your mngr branch when you set up the worktree on a parallel-named branch) |
 
-The desktop client reads these in `apps/minds/imbue/minds/desktop_client/templates.py`.
+The desktop client reads these in `apps/minds/imbue/minds/desktop_client/workspace_defaults.py`.
 
 ### Clean shutdown
 
@@ -183,11 +183,26 @@ The Electron app shuts down cleanly via this chain:
 
 - Electron window close -> `before-quit` handler -> `backend.js shutdown()` -> SIGTERM to `uv run`
 - `uv run` forwards SIGTERM to Python
-- Uvicorn catches SIGTERM, does 1-second graceful shutdown (`timeout_graceful_shutdown=1`)
-- ASGI lifespan shutdown hook runs `stream_manager.stop()` (terminates `mngr observe`/`mngr event` subprocesses)
-- Uvicorn re-raises SIGTERM, process exits with code 143
+- The signal handler in `serve_desktop_client` (`desktop_client/server.py`) flips
+  `shutdown_event`, wakes the SSE and `/ui/ws` handlers, and stops the cheroot
+  WSGI server
+- The runtime's `finally` runs `_shutdown_desktop_client`: the ordered teardown
+  (envelope stream consumer / `mngr forward`, permission-requests consumer, SSH
+  tunnels, sync scheduler, pre-warmed mngr caller), then triggers and exits the
+  root ConcurrencyGroup
+- Process exits with code 143 within a few seconds
 
-If this chain breaks (orphaned `mngr observe`/`mngr event` processes appear), something is wrong -- investigate, do not just kill the orphans.
+Three processes intentionally SURVIVE a shutdown: the detached `mngr latchkey
+forward` supervisor and its `latchkey gateway` + `mngr observe
+--discovery-only` children (see the spawn comment in `cli/run.py`). They keep
+agent tunnels working across desktop-client restarts and are adopted, not
+respawned, by the next launch; `just minds-stop` excludes them (they run in
+their own session) and they are not orphans.
+
+If the chain breaks in other ways (orphaned `mngr event` readers, a
+`"strands did not finish in time"` warning in `minds-events.jsonl`, or
+`minds-stop` reporting force-killed leftovers), something is wrong --
+investigate, do not just kill the orphans.
 
 ### Rsync exclusions
 

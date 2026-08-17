@@ -81,8 +81,6 @@ from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.primitives import DevEnvNotFoundError
 from imbue.minds.envs.primitives import InvalidDevEnvNameError
 from imbue.minds.envs.primitives import VaultReadError
-from imbue.minds.envs.providers.cloudflare_tunnels import delete_tunnels as real_delete_cloudflare_tunnels
-from imbue.minds.envs.providers.cloudflare_tunnels import list_tunnels_for_env as real_list_cloudflare_tunnels_for_env
 from imbue.minds.envs.providers.modal_env import delete_modal_env as real_delete_modal_env
 from imbue.minds.envs.providers.neon_db import NeonProjectRecord
 from imbue.minds.envs.providers.neon_db import create_neon_project
@@ -99,6 +97,9 @@ from imbue.minds.envs.providers.supertokens_app import SuperTokensAppRecord
 from imbue.minds.envs.providers.supertokens_app import create_supertokens_app
 from imbue.minds.envs.providers.supertokens_app import delete_supertokens_app
 from imbue.minds.envs.providers.supertokens_app import wipe_supertokens_app_data as real_wipe_supertokens_app_data
+from imbue.minds.envs.providers.workspace_storage import (
+    delete_workspace_storage_prefix as real_delete_workspace_storage_prefix,
+)
 from imbue.minds.envs.provisioning import DeployedEnv
 from imbue.minds.envs.provisioning import ProviderCredentials
 from imbue.minds.envs.provisioning import Providers
@@ -125,12 +126,13 @@ from imbue.minds.utils.output import write_stdout_line
 # ``ci-`` map to the ``ci`` tier (CI-orchestrator-minted ephemeral envs),
 # and everything else maps to the ``dev`` tier. Mirrors the spec's
 # hard-coded tier mapping and lets ``minds env deploy`` / ``destroy``
-# dispatch on env name alone. The individual ``_PRODUCTION_ENV_NAME`` /
-# ``_STAGING_ENV_NAME`` / ``_DEV_TIER`` / ``_CI_TIER`` constants + the
-# ``_tier_for_env_name`` mapper live in ``_activated_env.py`` so
-# ``minds pool`` (which also needs to derive the tier for its
-# Vault-scoped pool-ssh / DSN reads) can share them without an
-# env.py -> pool.py back-reference.
+# dispatch on env name alone. The individual tier constants and the
+# ``tier_for_env_name`` mapper are defined in
+# ``imbue.mngr_imbue_cloud.primitives`` (one source of truth shared with
+# the bake-time box-exclusivity guard) and re-exported from
+# ``_activated_env.py``, so ``minds pool`` (which also needs to derive
+# the tier for its Vault-scoped pool-ssh / DSN reads) can share them
+# without an env.py -> pool.py back-reference.
 _RESERVED_TIER_ENV_NAMES: Final[frozenset[str]] = frozenset({"production", "staging"})
 
 # Env vars unset by ``deactivate``. Includes every var that any
@@ -182,12 +184,14 @@ def _read_per_env_secret_values_for_provider(
     service: str,
     tier_vault_prefix: str,
     overrides: dict[str, str],
+    is_required: bool,
     cg: ConcurrencyGroup,
 ) -> dict[str, str]:
     return build_per_env_secret_values(
         service,
         tier_vault_prefix=tier_vault_prefix,
         overrides=overrides,
+        is_required=is_required,
         parent_cg=cg,
     )
 
@@ -227,6 +231,7 @@ def _deploy_connector_for_provider(
     min_containers: int,
     scaledown_window: int,
     deploy_id: str,
+    custom_domains: tuple[str, ...],
     strategy: DeployStrategy,
     cg: ConcurrencyGroup,
 ) -> AnyUrl:
@@ -236,6 +241,7 @@ def _deploy_connector_for_provider(
         min_containers=min_containers,
         scaledown_window=scaledown_window,
         deploy_id=deploy_id,
+        custom_domains=custom_domains,
         strategy=strategy,
         parent_cg=cg,
     )
@@ -324,18 +330,6 @@ def _cleanup_state_container_for_provider(name: DevEnvName, cg: ConcurrencyGroup
     cleanup_env_state_container(name, parent_concurrency_group=cg)
 
 
-def _list_cloudflare_tunnels_for_env_for_provider(
-    name: DevEnvName, account_id: str, api_token: SecretStr
-) -> tuple[str, ...]:
-    return real_list_cloudflare_tunnels_for_env(name, account_id=account_id, api_token=api_token)
-
-
-def _delete_cloudflare_tunnels_for_provider(
-    tunnel_ids: tuple[str, ...], account_id: str, api_token: SecretStr
-) -> None:
-    real_delete_cloudflare_tunnels(tunnel_ids, account_id=account_id, api_token=api_token)
-
-
 def _build_real_providers() -> Providers:
     """Wire the provider modules into the Providers bundle.
 
@@ -368,13 +362,12 @@ def _build_real_providers() -> Providers:
         verify_neon_token_has_restore_scope=_verify_neon_token_has_restore_scope_for_provider,
         await_apps_healthy=_await_apps_healthy_for_provider,
         destroy_mngr_agents=real_destroy_mngr_agents,
+        delete_workspace_storage_prefix=real_delete_workspace_storage_prefix,
         cleanup_state_container=_cleanup_state_container_for_provider,
         wipe_supertokens_app_data=_wipe_supertokens_for_provider,
         wipe_neon_db_schema=_wipe_neon_db_schema_for_provider,
         ensure_generation_id=_ensure_generation_id_for_provider,
         delete_generation_id=_delete_generation_id_for_provider,
-        list_cloudflare_tunnels_for_env=_list_cloudflare_tunnels_for_env_for_provider,
-        delete_cloudflare_tunnels=_delete_cloudflare_tunnels_for_provider,
     )
 
 

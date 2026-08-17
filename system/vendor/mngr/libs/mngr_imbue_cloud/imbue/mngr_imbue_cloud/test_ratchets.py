@@ -113,9 +113,12 @@ def test_prevent_namedtuple() -> None:
 def test_prevent_yaml_usage() -> None:
     # The slice path builds a Lima VM config, and Lima's native config format is
     # YAML only -- so lima_slice.py / lima_slice_client.py reference mngr_lima's
-    # *_lima_yaml helpers. This is necessary lima usage, not a config-file
-    # anti-pattern (mngr_lima itself allows YAML for the same reason).
-    rc.check_yaml_usage(_DIR, snapshot(39))
+    # *_lima_yaml helpers, and the repair-keys sweep (key_repair.py + its test)
+    # reads and patches existing slices' stored lima.yaml files. This is
+    # necessary lima usage, not a config-file anti-pattern (mngr_lima itself
+    # allows YAML for the same reason); most matches are the literal substring
+    # in "lima.yaml" strings and comments.
+    rc.check_yaml_usage(_DIR, snapshot(96))
 
 
 def test_prevent_functools_partial() -> None:
@@ -127,7 +130,7 @@ def test_prevent_exit_stack() -> None:
 
 
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(7))
+    rc.check_async_await(_DIR, snapshot(0))
 
 
 # --- Hardcoded paths ---
@@ -218,7 +221,7 @@ def test_prevent_unittest_mock_imports() -> None:
 
 
 def test_prevent_monkeypatch_setattr() -> None:
-    rc.check_monkeypatch_setattr(_DIR, snapshot(8))
+    rc.check_monkeypatch_setattr(_DIR, snapshot(2))
 
 
 def test_prevent_test_container_classes() -> None:
@@ -252,7 +255,7 @@ def test_prevent_bare_tmux_targets() -> None:
 
 
 def test_prevent_if_elif_without_else() -> None:
-    rc.check_if_elif_without_else(_DIR, snapshot(2))
+    rc.check_if_elif_without_else(_DIR, snapshot(1))
 
 
 def test_prevent_inline_functions() -> None:
@@ -284,3 +287,10 @@ def test_prevent_per_file_host_upload() -> None:
 
 def test_prevent_code_in_init_files() -> None:
     rc.check_code_in_init_files(_DIR, snapshot(1))
+
+
+# --- Modal images ---
+
+
+def test_prevent_unpinned_modal_pip_install() -> None:
+    rc.check_unpinned_modal_pip_install(_DIR, snapshot(0))

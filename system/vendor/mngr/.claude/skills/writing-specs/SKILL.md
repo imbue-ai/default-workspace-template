@@ -50,6 +50,7 @@ When updating or improving existing specs, follow an abbreviated version of the 
 Always remember the following best practices for specifications and design docs:
 
 - Write sentences that are clear, concise, and easy to understand.
+- Write prose one sentence per line, per the canonical specification owned by the `behaviors` skill (see its "Prose style" section).
 - Be explicit about requirements, constraints, interfaces, and assumptions.
 - Always write in Markdown format (.md files).
 - Name files and headings clearly to reflect their content.

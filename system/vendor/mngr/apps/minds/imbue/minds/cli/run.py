@@ -21,6 +21,7 @@ the gateway itself into each agent's container.
 
 import os
 import secrets
+import tempfile
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -36,6 +37,7 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds.bootstrap import MindsRoot
 from imbue.minds.bootstrap import minds_data_dir_for
+from imbue.minds.bootstrap import resolve_effective_mngr_host_dir
 from imbue.minds.bootstrap import resolve_minds_root_name
 from imbue.minds.build_info import resolve_git_sha
 from imbue.minds.build_info import resolve_release_id
@@ -45,6 +47,7 @@ from imbue.minds.config.data_types import MNGR_BINARY
 from imbue.minds.config.data_types import WorkspacePaths
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.desktop_client.agent_creator import AgentCreator
+from imbue.minds.desktop_client.agent_creator import sweep_orphaned_scratch_clones
 from imbue.minds.desktop_client.api_key_store import generate_api_key
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.app import start_discovery_health_watchdog_loop
@@ -53,6 +56,7 @@ from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backup_reaper import BackupReaperManager
 from imbue.minds.desktop_client.backup_reaper import make_quota_evictor
+from imbue.minds.desktop_client.device_identity import get_or_create_device_id
 from imbue.minds.desktop_client.discovery_health import DiscoveryHealthWatchdog
 from imbue.minds.desktop_client.discovery_health import SupervisorProducerRemediator
 from imbue.minds.desktop_client.forward_cli import ForwardSubprocessConfig
@@ -91,11 +95,10 @@ from imbue.minds.desktop_client.supertokens_routes import bounce_latchkey_forwar
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.system_interface_health import should_enroll_suspect_for_backend_failure
-from imbue.minds.desktop_client.templates import DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
-from imbue.minds.desktop_client.templates import FALLBACK_BRANCH
-from imbue.minds.desktop_client.templates import is_local_workspace_defaults_opt_in
+from imbue.minds.desktop_client.workspace_defaults import DEFAULT_WORKSPACE_TEMPLATE_GIT_URL
+from imbue.minds.desktop_client.workspace_defaults import FALLBACK_BRANCH
+from imbue.minds.desktop_client.workspace_defaults import is_local_workspace_defaults_opt_in
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
-from imbue.minds.desktop_client.workspace_record_store import read_device_id
 from imbue.minds.desktop_client.workspace_record_store import read_device_label
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.envs.docker_cleanup import start_active_env_state_container
@@ -229,8 +232,7 @@ def run(
     anonymous_user_id = resolve_anonymous_user_id(data_directory)
     # Resolved up front (and reused below for the state container + the ``mngr forward``
     # consumer): the Sentry attachment sweep needs the discovery events dir under it.
-    mngr_host_dir_str = os.environ.get("MNGR_HOST_DIR")
-    mngr_host_dir = Path(mngr_host_dir_str).expanduser() if mngr_host_dir_str else (Path.home() / ".mngr")
+    mngr_host_dir = resolve_effective_mngr_host_dir()
     # Built before Sentry setup so the attachment sweep knows the latchkey plugin
     # data dir (the detached ``mngr latchkey forward`` daemon's logs live there).
     latchkey = _build_latchkey(data_directory=data_directory)
@@ -411,7 +413,9 @@ def run(
         paths=paths,
         mngr_host_dir=mngr_host_dir,
         cli=imbue_cloud_cli,
-        device_id=read_device_id(mngr_host_dir),
+        # Read-or-create eagerly so this install always has a real identity
+        # from its very first session (a failure aborts startup).
+        device_id=get_or_create_device_id(data_directory, mngr_host_dir),
         device_label=read_device_label(),
     )
     session_store = MultiAccountSessionStore(
@@ -456,8 +460,13 @@ def run(
     seed_laptop_agent_types_for_minds(mngr_host_dir)
     forward_config = ForwardSubprocessConfig(
         mngr_host_dir=mngr_host_dir,
+        # The chrome page embeds workspace origins in an iframe, so the proxy's
+        # frame-ancestors policy must allow the minds origin. Both loopback
+        # spellings are listed: Electron navigates by 127.0.0.1 while the
+        # printed browser login URL uses localhost.
+        embedder_origins=(f"http://localhost:{port}", f"http://127.0.0.1:{port}"),
     )
-    consumer, preauth_cookie = start_mngr_forward(
+    consumer, preauth_cookie, browser_bridge_token = start_mngr_forward(
         config=forward_config,
         resolver=backend_resolver,
     )
@@ -482,9 +491,12 @@ def run(
     # otherwise early failures would dispatch against an empty list).
     system_interface_health_tracker = SystemInterfaceHealthTracker()
 
-    # The plugin reports every non-2xx response; minds decides which ones count.
-    # Only connection-level failures and infrastructure 5xx enroll a suspect --
-    # application errors (and UNRESOLVED, a routeless warm-up) are left alone.
+    # The plugin reports every backend failure it observes; minds decides which
+    # ones count. Only envelopes carrying no status code, or an infrastructure
+    # 5xx, enroll a suspect -- application errors (and UNRESOLVED, a routeless
+    # warm-up) are left alone. STALLED enrolls despite not reporting a failed
+    # request at all: a wedged backend and a slow one look identical until the
+    # probe adjudicates.
     consumer.add_on_system_interface_backend_failure_callback(
         lambda agent_id, reason, status_code: system_interface_health_tracker.record_failure(agent_id)
         if should_enroll_suspect_for_backend_failure(reason, status_code)
@@ -606,6 +618,17 @@ def run(
         is_checked=False,
     )
 
+    # Each create attempt clones its source into a private temp dir and removes
+    # it in a ``finally`` -- which a force-quit or crash skips, since the create
+    # worker is a daemon thread. Reclaim the day-old leftovers. Backgrounded
+    # because rmtree of a ~240MB clone is not instant, and is_checked=False so a
+    # failed sweep never tears down the app over disk hygiene.
+    root_concurrency_group.start_new_thread(
+        target=lambda: sweep_orphaned_scratch_clones(Path(tempfile.gettempdir())),
+        name="startup-scratch-clone-sweep",
+        is_checked=False,
+    )
+
     # Every newly-discovered agent on a minds-managed host gets
     # its id appended to the host's ``latchkey_permissions.json``
     # allowed-agent list.
@@ -653,6 +676,7 @@ def run(
         server_port=port,
         mngr_forward_port=mngr_forward_port,
         mngr_forward_preauth_cookie=preauth_cookie,
+        mngr_forward_browser_bridge_token=browser_bridge_token,
         output_format=output_format,
         root_concurrency_group=root_concurrency_group,
         system_interface_health_tracker=system_interface_health_tracker,

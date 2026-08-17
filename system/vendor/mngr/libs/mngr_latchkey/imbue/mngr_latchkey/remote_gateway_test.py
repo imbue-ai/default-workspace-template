@@ -1,42 +1,68 @@
 import json
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
 import pytest
+from packaging.version import Version
 from pydantic import Field
 
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.interfaces.data_types import CommandResult
 from imbue.mngr.interfaces.host import OuterHostInterface
 from imbue.mngr.primitives import HostId
+from imbue.mngr_latchkey.additional_services import additional_service_registration_entries
+from imbue.mngr_latchkey.core import AGENT_SIDE_LATCHKEY_PORT
 from imbue.mngr_latchkey.core import CONFIG_FILENAME
 from imbue.mngr_latchkey.core import GATEWAY_MAX_BODY_SIZE_BYTES
+from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION
 from imbue.mngr_latchkey.core import Latchkey
 from imbue.mngr_latchkey.core import UPSTREAM_DATA_FORMAT_VERSION_FILENAME
 from imbue.mngr_latchkey.encryption_key import encryption_key_path
 from imbue.mngr_latchkey.remote_gateway import DATALIB_CURL_VERSION
-from imbue.mngr_latchkey.remote_gateway import INNER_PORT
+from imbue.mngr_latchkey.remote_gateway import DESKTOP_GATEWAY_VPS_PORT
 from imbue.mngr_latchkey.remote_gateway import LATCHKEY_VERSION
 from imbue.mngr_latchkey.remote_gateway import OUTER_PORT
 from imbue.mngr_latchkey.remote_gateway import RemoteGatewayError
 from imbue.mngr_latchkey.remote_gateway import _CURL_DISPATCH_PATH
 from imbue.mngr_latchkey.remote_gateway import _CURL_IMPERSONATE_PATH
+from imbue.mngr_latchkey.remote_gateway import _CURL_STAGED_SUFFIX
+from imbue.mngr_latchkey.remote_gateway import _CURL_VERSION_STAMP_PATH
 from imbue.mngr_latchkey.remote_gateway import _GATEWAY_PROGRAM_NAME
 from imbue.mngr_latchkey.remote_gateway import _MINIMUM_NODE_MAJOR_VERSION
 from imbue.mngr_latchkey.remote_gateway import _TUNNEL_PROGRAM_NAME
 from imbue.mngr_latchkey.remote_gateway import _build_supervisor_program_config
 from imbue.mngr_latchkey.remote_gateway import _ensure_container_tunnel_keypair
 from imbue.mngr_latchkey.remote_gateway import _ensure_latchkey_gateway_reachable_from_container
-from imbue.mngr_latchkey.remote_gateway import _ensure_latchkey_gateway_running
+from imbue.mngr_latchkey.remote_gateway import (
+    _ensure_latchkey_gateway_running as _ensure_latchkey_gateway_running_real,
+)
 from imbue.mngr_latchkey.remote_gateway import _ensure_latchkey_installed
 from imbue.mngr_latchkey.remote_gateway import _migrate_legacy_remote_gateway_state
 from imbue.mngr_latchkey.remote_gateway import provision_remote_gateway
 from imbue.mngr_latchkey.remote_gateway import sync_credentials
 from imbue.mngr_latchkey.remote_gateway import sync_permissions
+from imbue.mngr_latchkey.store import LatchkeyPermissionsConfig
+from imbue.mngr_latchkey.store import link_opaque_permissions_to_host
+from imbue.mngr_latchkey.store import new_opaque_permissions_path
 from imbue.mngr_latchkey.store import permissions_path_for_host
 from imbue.mngr_latchkey.store import plugin_data_dir
+from imbue.mngr_latchkey.store import save_permissions
+
+
+def _ensure_latchkey_gateway_running(
+    outer: OuterHostInterface,
+    latchkey_directory: Path,
+    gateway_password: str,
+) -> None:
+    _ensure_latchkey_gateway_running_real(
+        outer,
+        latchkey_directory,
+        gateway_password,
+        "desktop-override-jwt",
+    )
 
 
 class _Recorded(MutableModel):
@@ -90,12 +116,17 @@ class _StubOuter(MutableModel):
     ) -> CommandResult:
         self.recorded.append(_Recorded(command=command, timeout_seconds=timeout_seconds))
         # Only the dedicated $HOME-resolution probe gets the home response; the
-        # container lookup returns the configured name; everything else
-        # (install/gateway/keypair/tunnel scripts) returns the configured result.
+        # container lookup returns the configured name; the owner-exec vm
+        # docker-bridge probe resolves to a bridge address (so the vm daemon
+        # provisioning that provision_remote_gateway now runs succeeds instead of
+        # failing closed); everything else (install/gateway/keypair/tunnel
+        # scripts) returns the configured result.
         if command.strip() == 'echo "$HOME"':
             return CommandResult(stdout=f"{self.home}\n", stderr="", success=True)
         if command.startswith("docker ps"):
             return CommandResult(stdout=f"{self.container_name}\n", stderr="", success=True)
+        if "addr show docker0" in command:
+            return CommandResult(stdout="172.17.0.1\n", stderr="", success=True)
         return self.result
 
     def path_exists(self, path: Path) -> bool:
@@ -131,6 +162,18 @@ def _outer(result: CommandResult, name: str = "vps-test") -> OuterHostInterface:
 
 def _stub(outer: OuterHostInterface) -> _StubOuter:
     return cast(_StubOuter, outer)
+
+
+def test_minimum_version_is_not_newer_than_the_version_we_install() -> None:
+    """A floor newer than the version we install means a half-finished bump.
+
+    See the comment above :data:`LATCHKEY_MIN_VERSION` for why the pins move
+    together.
+    """
+    assert Version(LATCHKEY_MIN_VERSION) <= Version(LATCHKEY_VERSION), (
+        f"LATCHKEY_MIN_VERSION={LATCHKEY_MIN_VERSION} is newer than the installed "
+        f"LATCHKEY_VERSION={LATCHKEY_VERSION}; raise the install pin to at least the minimum."
+    )
 
 
 def test_ensure_latchkey_installed_issues_single_idempotent_command() -> None:
@@ -185,16 +228,45 @@ def test_ensure_latchkey_installed_installs_impersonating_curl() -> None:
     # the dispatch curl and the impersonator it fronts.
     assert f"releases/download/{DATALIB_CURL_VERSION}/" in command
     assert "curl-${_ci_triple}.tar.gz" in command
+    # Every arch the script resolves lands on a statically linked musl build:
+    # the glibc build only runs where glibc is at least as new as datalib's
+    # build host, which rules out older VPS images. Checked over the whole set
+    # of ``_ci_triple`` assignments so an arch branch added later cannot
+    # quietly reintroduce a gnu triple.
+    assert set(re.findall(r"_ci_triple=(\S+)", command)) == {
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+    }
     assert "sha256sum -c" in command
     assert "tar -xzf" in command and "--strip-components=1" in command
-    assert f'install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_PATH.rsplit("/", 1)[1]}" "{_CURL_DISPATCH_PATH}"' in command
+    # Both binaries are staged beside their destinations and then renamed into
+    # place: overwriting them directly would truncate a file the running
+    # gateway may be executing (ETXTBSY), and staging both before swapping
+    # either leaves the previous pair untouched if the download, checksum, or
+    # staging fails.
+    staged_dispatch = f"{_CURL_DISPATCH_PATH}{_CURL_STAGED_SUFFIX}"
+    staged_impersonate = f"{_CURL_IMPERSONATE_PATH}{_CURL_STAGED_SUFFIX}"
+    assert f'install -m 0755 "${{_ci_tmp}}/{_CURL_DISPATCH_PATH.rsplit("/", 1)[1]}" "{staged_dispatch}"' in command
     assert (
-        f'install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_PATH.rsplit("/", 1)[1]}" "{_CURL_IMPERSONATE_PATH}"'
-        in command
+        f'install -m 0755 "${{_ci_tmp}}/{_CURL_IMPERSONATE_PATH.rsplit("/", 1)[1]}" "{staged_impersonate}"' in command
     )
-    # Installed only when missing (idempotent) and fail-loud like the other
-    # components -- no best-effort warning fallback that swallows failures.
-    assert f"if [ ! -x {_CURL_DISPATCH_PATH} ]; then" in command
+    assert f'mv -f "{staged_impersonate}" "{_CURL_IMPERSONATE_PATH}"' in command
+    assert f'mv -f "{staged_dispatch}" "{_CURL_DISPATCH_PATH}"' in command
+    # The dispatch curl -- the one LATCHKEY_CURL names -- is swapped last, so
+    # no request reaches a new dispatch curl fronting an old impersonator.
+    assert command.index(f'mv -f "{staged_impersonate}"') < command.index(f'mv -f "{staged_dispatch}"')
+    # Version-gated, not presence-gated: the binaries are installed under
+    # version-less names, so a VPS that already has an older release's pair
+    # must be re-installed rather than skipped -- otherwise a bump only ever
+    # reaches hosts that have never been provisioned.
+    assert f"[ ! -x {_CURL_DISPATCH_PATH} ] || " in command
+    assert f'[ "$(cat {_CURL_VERSION_STAMP_PATH} 2>/dev/null)" != "$_ci_want" ]; then' in command
+    assert f'_ci_want="{DATALIB_CURL_VERSION} ${{_ci_triple}}"' in command
+    # The stamp is written only after both binaries are swapped in, so an
+    # aborted install never leaves a stamp claiming the new version.
+    assert command.index(f'mv -f "{staged_dispatch}"') < command.index(f"> {_CURL_VERSION_STAMP_PATH}")
+    # Fail-loud like the other components -- no best-effort warning fallback
+    # that swallows failures.
     assert "latchkey will use system curl" not in command
 
 
@@ -451,6 +523,48 @@ def test_sync_permissions_copies_per_host_file_to_remote_permissions_json(tmp_pa
     assert shared.is_atomic is True
 
 
+def test_sync_permissions_links_legacy_override_target_at_the_vps_permissions_file(tmp_path: Path) -> None:
+    """TEMPORARY legacy shim: a pre-rollout workspace's baked-in override JWT must resolve.
+
+    Its target is a desktop-side opaque handle path that does not exist on the
+    VPS, and upstream latchkey answers 400 for a missing override target before
+    it dispatches anything -- so provisioning links that exact path (and the
+    shared schemas file beside it) at the VPS permissions file.
+    """
+    latchkey_directory = tmp_path / "latchkey"
+    data_dir = plugin_data_dir(latchkey_directory)
+    host_id = HostId.generate()
+    opaque_path = new_opaque_permissions_path(data_dir)
+    save_permissions(opaque_path, LatchkeyPermissionsConfig(rules=({"slack-api": ["slack-read-all"]},)))
+    link_opaque_permissions_to_host(data_dir, opaque_path, host_id)
+    outer = _outer(CommandResult(stdout="", stderr="", success=True))
+
+    sync_permissions(outer, latchkey_directory, host_id)
+
+    link_commands = [record.command for record in _stub(outer).recorded if "ln -sfn" in record.command]
+    assert len(link_commands) == 1
+    assert f"ln -sfn /root/.latchkey/permissions.json {opaque_path}" in link_commands[0]
+    assert (
+        f"ln -sfn /root/.latchkey/minds_shared_schemas.json {opaque_path.parent / 'minds_shared_schemas.json'}"
+        in link_commands[0]
+    )
+    assert f"mkdir -p {opaque_path.parent}" in link_commands[0]
+
+
+def test_sync_permissions_skips_legacy_override_link_without_a_legacy_handle(tmp_path: Path) -> None:
+    """A workspace created after the rollout carries no override, so nothing is linked."""
+    latchkey_directory = tmp_path / "latchkey"
+    host_id = HostId.generate()
+    local_path = permissions_path_for_host(plugin_data_dir(latchkey_directory), host_id)
+    local_path.parent.mkdir(parents=True)
+    local_path.write_text('{"rules": []}')
+    outer = _outer(CommandResult(stdout="", stderr="", success=True))
+
+    sync_permissions(outer, latchkey_directory, host_id)
+
+    assert all("ln -sfn" not in record.command for record in _stub(outer).recorded)
+
+
 def test_sync_permissions_falls_back_to_restrictive_default_when_local_missing(tmp_path: Path) -> None:
     latchkey_directory = tmp_path / "latchkey"
     host_id = HostId.generate()
@@ -487,9 +601,9 @@ def test_sync_permissions_raises_when_home_resolution_fails(tmp_path: Path) -> N
         sync_permissions(outer, latchkey_directory, host_id)
 
 
-def test_ports_are_integers() -> None:
-    assert isinstance(INNER_PORT, int)
-    assert isinstance(OUTER_PORT, int)
+def test_workspace_and_vps_gateway_ports_are_consistent() -> None:
+    assert OUTER_PORT == AGENT_SIDE_LATCHKEY_PORT
+    assert DESKTOP_GATEWAY_VPS_PORT != OUTER_PORT
 
 
 def _written_by_path(outer: OuterHostInterface, path: str) -> _WrittenFile:
@@ -510,7 +624,7 @@ def _gateway_conf(outer: OuterHostInterface) -> str:
 
 
 def _reload_commands(outer: OuterHostInterface) -> list[str]:
-    return [r.command for r in _stub(outer).recorded if "supervisorctl" in r.command]
+    return [r.command for r in _stub(outer).recorded if r.command.startswith("supervisorctl reread")]
 
 
 def test_build_supervisor_program_config_escapes_percent_for_supervisord_interpolation() -> None:
@@ -545,6 +659,14 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     # user's OAuth token: it runs on a synced copy and the desktop-side
     # latchkey remains the single owner of credential refresh.
     assert "export LATCHKEY_DISABLE_CREDENTIALS_REFRESH=1" in run_script
+    assert f"export LATCHKEY_EXTENSION_DESKTOP_GATEWAY_URL=http://127.0.0.1:{DESKTOP_GATEWAY_VPS_PORT}" in run_script
+    proxy_candidate = _written_by_path(outer, "/root/.latchkey/extensions/desktop_gateway_proxy.mjs.candidate")
+    assert b"Desktop latchkey gateway is unreachable" in proxy_candidate.content
+    extension_install_command = next(
+        record.command for record in _stub(outer).recorded if "desktop_gateway_proxy.mjs.candidate" in record.command
+    )
+    assert "cmp -s" in extension_install_command
+    assert "supervisorctl" not in extension_install_command
     # exec so supervisord tracks the gateway PID directly, not a wrapping shell,
     # with the same body-size limit the desktop-side gateway uses.
     assert f"exec latchkey gateway --max-body-size {GATEWAY_MAX_BODY_SIZE_BYTES}" in run_script
@@ -552,14 +674,15 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     # environment (not interpolated), so the literal secret never appears.
     assert 'LATCHKEY_ENCRYPTION_KEY="$(cat ' in run_script
     assert 'LATCHKEY_GATEWAY_LISTEN_PASSWORD="$(cat ' in run_script
+    assert 'LATCHKEY_EXTENSION_DESKTOP_GATEWAY_PERMISSIONS_OVERRIDE="$(cat ' in run_script
     assert "export LATCHKEY_ENCRYPTION_KEY LATCHKEY_GATEWAY_LISTEN_PASSWORD" in run_script
+    assert "export LATCHKEY_EXTENSION_DESKTOP_GATEWAY_PERMISSIONS_OVERRIDE" in run_script
     assert "shared-password" not in run_script
-    # Routes latchkey through the bundled dispatch curl -- but only when both
-    # binaries are present, so a host without the impersonating curl installed
-    # (fetch failed / older release) falls back to system curl unchanged.
-    # Unconditional export -- provisioning guarantees the dispatch curl is
-    # installed. The dispatch curl finds the impersonator as a sibling, so no
-    # second env var is exported.
+    assert "desktop-override-jwt" not in run_script
+    # Routes latchkey through the bundled dispatch curl. Unconditional export --
+    # provisioning installs the pair fail-loud, so reaching this script at all
+    # guarantees they are there. The dispatch curl finds the impersonator as a
+    # sibling, so no second env var is exported.
     assert f"export LATCHKEY_CURL={_CURL_DISPATCH_PATH}" in run_script
     assert "FRANKWEILER_IMPERSONATE_CURL" not in run_script
     # The wrapper refuses to launch a keyless gateway when its tmpfs secrets are
@@ -571,9 +694,11 @@ def test_ensure_latchkey_gateway_running_registers_supervisord_program_on_outer_
     assert "autostart=true" in conf
     assert "autorestart=true" in conf
     assert "/bin/sh /root/.latchkey/gateway_run.sh" in conf
-    # Applied via reread + update + best-effort start; no more nohup/pidfile launch.
+    # Applied via reread + update + restart so rewritten tmpfs secrets and the
+    # wrapper environment take effect even when the supervisord config is unchanged.
     assert _reload_commands(outer) == [
-        f"supervisorctl reread && supervisorctl update && (supervisorctl start {_GATEWAY_PROGRAM_NAME} || true)"
+        f"supervisorctl reread && supervisorctl update && "
+        f"(supervisorctl restart {_GATEWAY_PROGRAM_NAME} || supervisorctl start {_GATEWAY_PROGRAM_NAME})"
     ]
     assert all("nohup" not in r.command for r in _stub(outer).recorded)
 
@@ -585,18 +710,22 @@ def test_ensure_latchkey_gateway_running_writes_secrets_to_0600_tmpfs_files(tmp_
     # beside the encrypted credential store; the wrapper stays on the normal disk.
     key_file = _written_by_path(outer, "/run/mngr-latchkey/gateway_encryption_key")
     password_file = _written_by_path(outer, "/run/mngr-latchkey/gateway_listen_password")
+    desktop_permissions_file = _written_by_path(outer, "/run/mngr-latchkey/desktop_permissions_override")
     run_file = _written_by_path(outer, "/root/.latchkey/gateway_run.sh")
     # The password file's content is the literal secret; it is never written to
     # a command (see the wrapper test above).
     assert password_file.content == b"shared-password"
+    assert desktop_permissions_file.content == b"desktop-override-jwt"
     # Secrets are 0600; the wrapper is executable (0700).
     assert key_file.mode == "0600"
     assert password_file.mode == "0600"
+    assert desktop_permissions_file.mode == "0600"
     assert run_file.mode == "0700"
     # The wrapper reads back exactly the two tmpfs secret file paths.
     run_script = run_file.content.decode("utf-8")
     assert key_file.path in run_script
     assert password_file.path in run_script
+    assert desktop_permissions_file.path in run_script
 
 
 def test_ensure_latchkey_gateway_running_injects_local_encryption_key(
@@ -658,6 +787,23 @@ def test_ensure_latchkey_gateway_running_hides_builtin_services_in_config(tmp_pa
     assert "notion" in config["settings"]["hideBuiltinServices"]
 
 
+def test_ensure_latchkey_gateway_running_registers_custom_services_in_config(tmp_path: Path) -> None:
+    """The VPS gateway is given minds' custom-service registrations.
+
+    ``sync_credentials`` ships a granted custom service's credentials here, but a
+    gateway that does not know the service cannot resolve a request to it, so it
+    would never inject them.
+    """
+    outer = _outer(CommandResult(stdout="", stderr="", success=True))
+    _ensure_latchkey_gateway_running(outer, tmp_path, "shared-password")
+    config = json.loads(_remote_config_text(outer))
+    assert config["registeredServices"] == additional_service_registration_entries()
+    # Pinned concretely too: comparing the two projections alone would still pass
+    # if the bundled catalog degraded to nothing, which is the very failure
+    # (a VPS gateway that knows no custom service) this shipping is meant to rule out.
+    assert config["registeredServices"]["claude-ai"]["baseApiUrl"] == "https://claude.ai/"
+
+
 def test_ensure_latchkey_gateway_running_preserves_existing_remote_config(tmp_path: Path) -> None:
     existing = json.dumps({"settings": {"theme": "dark"}, "accounts": {"slack": {}}})
     outer = cast(OuterHostInterface, _StubOuter(config_json=existing))
@@ -689,11 +835,11 @@ def test_ensure_latchkey_gateway_reachable_registers_reverse_tunnel_program() ->
         container_ssh_key_path=Path("/etc/mngr/container_key"),
     )
     conf = _tunnel_conf(outer)
-    # supervisord program that reverse-forwards the container's INNER_PORT
-    # loopback to the VPS gateway's OUTER_PORT, restarted on exit.
+    # The VPS gateway is exposed at the same fixed container port used by
+    # local workspaces, so agents always use one LATCHKEY_GATEWAY URL.
     assert f"[program:{_TUNNEL_PROGRAM_NAME}]" in conf
     assert "autorestart=true" in conf
-    assert f"-R 127.0.0.1:{INNER_PORT}:127.0.0.1:{OUTER_PORT}" in conf
+    assert f"-R 127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}:127.0.0.1:{OUTER_PORT}" in conf
     # SSHes into the published container sshd over VPS loopback, as the given
     # user, via an absolute ssh path (supervisord resolves via its own PATH).
     assert "/usr/bin/ssh" in conf
@@ -779,6 +925,7 @@ def test_provision_remote_gateway_runs_full_sequence_on_the_outer_host(tmp_path:
         container_ssh_port=2222,
         latchkey_directory=tmp_path,
         gateway_password="shared-password",
+        desktop_permissions_override="desktop-override-jwt",
     )
     commands = "\n\n".join(r.command for r in _stub(outer).recorded)
     written = "\n\n".join(w.content.decode("utf-8", "replace") for w in _stub(outer).written)
@@ -801,8 +948,10 @@ def test_provision_remote_gateway_runs_full_sequence_on_the_outer_host(tmp_path:
     assert f"[program:{_GATEWAY_PROGRAM_NAME}]" in written
     assert f"[program:{_TUNNEL_PROGRAM_NAME}]" in written
     assert "exec latchkey gateway" in written
-    # The VPS gateway's config.json hides the confusing built-in services.
+    # The VPS gateway's config.json hides the confusing built-in services and
+    # loads only the desktop-gateway forwarding extension.
     assert "hideBuiltinServices" in written and "notion" in written
+    assert "Desktop latchkey gateway is unreachable" in written
     assert "-R 127.0.0.1:" in written
     # The gateway listen password is written to a file, never a command.
     assert "shared-password" not in commands
@@ -821,13 +970,16 @@ def test_migrate_legacy_remote_gateway_state_kills_pidfile_processes_and_scrubs_
     assert '"$HOME/.latchkey/gateway.pid"' in script
     assert '"$HOME/.latchkey/tunnel.pid"' in script
     assert "grep -qaF gateway " in script
-    assert f"grep -qaF 127.0.0.1:{INNER_PORT}:127.0.0.1:{OUTER_PORT} " in script
+    assert f"grep -qaF 127.0.0.1:1990:127.0.0.1:{OUTER_PORT} " in script
     assert 'kill "$_pid"' in script
     assert 'kill -9 "$_pid"' in script
     assert 'rm -f "$_pidfile"' in script
     # Scrubs any on-disk secrets an intermediate build persisted (now tmpfs-only);
     # double-quoted so $HOME expands (shlex.quote would stop it).
-    assert 'rm -f "$HOME/.latchkey/gateway_encryption_key" "$HOME/.latchkey/gateway_listen_password"' in script
+    assert (
+        'rm -f "$HOME/.latchkey/gateway_encryption_key" "$HOME/.latchkey/gateway_listen_password" '
+        '"$HOME/.latchkey/desktop_permissions_override"'
+    ) in script
 
 
 def test_migrate_legacy_remote_gateway_state_raises_on_failure() -> None:
@@ -846,6 +998,7 @@ def test_provision_remote_gateway_raises_when_container_not_found(tmp_path: Path
             container_ssh_port=2222,
             latchkey_directory=tmp_path,
             gateway_password="shared-password",
+            desktop_permissions_override="desktop-override-jwt",
         )
 
 
@@ -860,5 +1013,6 @@ def test_provision_remote_gateway_is_noop_on_local_outer_host(tmp_path: Path) ->
         container_ssh_port=2222,
         latchkey_directory=tmp_path,
         gateway_password="shared-password",
+        desktop_permissions_override="desktop-override-jwt",
     )
     assert _stub(outer).recorded == []

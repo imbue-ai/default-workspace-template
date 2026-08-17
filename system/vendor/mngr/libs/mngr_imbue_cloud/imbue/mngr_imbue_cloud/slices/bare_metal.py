@@ -17,6 +17,7 @@ from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_FAILED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_ORDERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
+from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
 
 # RAM overhead is modeled in two parts so a box's slot count reflects what it can
 # REALISTICALLY run without overcommitting RAM:
@@ -318,6 +319,101 @@ def count_slice_resource_names(names: AbstractSet[str]) -> int:
     cannot collectively over-subscribe it.
     """
     return sum(1 for name in names if name.startswith(SLICE_LIMA_INSTANCE_PREFIX))
+
+
+# /proc/mdstat structure: an array header line (``md3 : active raid1 ...``)
+# followed by a status line whose ``[expected/active]`` bracket reports member
+# counts (``... blocks super 1.2 [2/1] [_U]``). Fewer active members than
+# expected means the array is degraded (a member disk has failed or dropped).
+_MD_ARRAY_HEADER_RE: Final[re.Pattern[str]] = re.compile(r"^(md\d+)\s*:")
+_MD_MEMBER_COUNTS_RE: Final[re.Pattern[str]] = re.compile(r"\[(\d+)/(\d+)\]")
+
+
+@pure
+def parse_degraded_md_arrays(mdstat_text: str) -> list[str]:
+    """The md arrays in a ``/proc/mdstat`` dump that are running with a failed member.
+
+    A degraded array still serves reads/writes from its surviving mirror, so
+    nothing else on the box makes the failure visible -- this is how a slice box
+    runs for days on one disk (the 2026-08-07 production incident) unless
+    something reads mdstat and reports it.
+    """
+    degraded: list[str] = []
+    current_array: str | None = None
+    for line in mdstat_text.splitlines():
+        header_match = _MD_ARRAY_HEADER_RE.match(line)
+        if header_match:
+            current_array = header_match.group(1)
+            continue
+        counts_match = _MD_MEMBER_COUNTS_RE.search(line)
+        if counts_match and current_array is not None:
+            expected_members, active_members = int(counts_match.group(1)), int(counts_match.group(2))
+            if active_members < expected_members:
+                degraded.append(current_array)
+            current_array = None
+    return degraded
+
+
+@pure
+def parse_raw_swap_devices(proc_swaps_text: str) -> list[str]:
+    """The swap devices in a ``/proc/swaps`` dump that are raw (non-md) partitions.
+
+    Swap on a raw partition sits outside the box's RAID mirrors: when that disk
+    dies its swapped-out pages are permanently lost and every process touching
+    one gets SIGBUS -- the mechanism that killed the slices in the 2026-08-07
+    production incident. All swap belongs on the mirrored filesystem (the prep
+    swapfile); a partition entry here means the box needs a prep re-run. Swap on
+    an md device would itself be mirrored, so ``/dev/md*`` entries are not
+    flagged.
+    """
+    raw_devices: list[str] = []
+    # The first line is the fixed "Filename Type Size ..." header.
+    for line in proc_swaps_text.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) >= 2 and fields[1] == "partition" and not fields[0].startswith("/dev/md"):
+            raw_devices.append(fields[0])
+    return raw_devices
+
+
+@pure
+def count_authorized_key_lines(authorized_keys_text: str) -> int:
+    """Number of public keys an ``authorized_keys`` file authorizes.
+
+    Blank lines and ``#`` comments carry no key, so they do not count;
+    everything else is one authorized key. A correctly prepped box yields exactly
+    :data:`EXPECTED_AUTHORIZED_KEY_COUNT` -- ``build_box_prep_script`` writes the
+    file with a single-key overwrite (``cat >``, never an append) -- so any other
+    count means a key was added out of band, which is how a box ends up reachable
+    by a tier that does not own it.
+    """
+    return sum(1 for line in authorized_keys_text.splitlines() if line.strip() and not line.strip().startswith("#"))
+
+
+@pure
+def foreign_tier_slice_names(box_names: AbstractSet[str], env_name: str) -> set[str]:
+    """Slice resources on the box whose env stamp belongs to a DIFFERENT tier than ``env_name``.
+
+    Box sharing is legitimate *within* a tier -- several ``dev-<user>`` envs
+    routinely carve slices on one dev box, which is why occupancy is read from the
+    box rather than from one env's rows. It is never legitimate *across* tiers,
+    and the reason is the pool keypair, not the database: a box carrying two
+    tiers' slices is a box both tiers' pool keys can SSH, which is precisely the
+    "zero cross-tier reach" boundary (see ``apps/minds/docs/environments.md``) --
+    each tier's operators and connector gain limactl, and so root, over the
+    other's workspaces. Separate ``host_pool`` databases do not distinguish the
+    two cases: every dev env has its own database too, and the orphan reap is
+    scoped by env rather than by tier either way.
+
+    Legacy un-stamped slices (``mngr-slice-<host-hex>``, no env) have no knowable
+    tier, so they are excluded here: they still count toward occupancy, but a name
+    that predates env stamping is not evidence of a cross-tier bake.
+    """
+    expected_tier = tier_for_env_name(env_name)
+    return {
+        name
+        for name in box_names
+        if (owner := slice_name_env_owner(name)) is not None and tier_for_env_name(owner) != expected_tier
+    }
 
 
 @pure

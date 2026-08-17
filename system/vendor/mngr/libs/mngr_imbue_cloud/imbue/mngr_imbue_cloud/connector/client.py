@@ -1,11 +1,13 @@
 """HTTP client for the remote_service_connector.
 
-One client wraps all four connector concerns (auth, hosts, keys, tunnels) so
-the CLI commands and provider can share a single httpx instance per account.
+One client wraps all the connector concerns (auth, hosts, keys, shares, ...)
+so the CLI commands and provider can share a single httpx instance per
+account.
 
 Authentication semantics:
-- Methods explicitly named ``*_auth_*`` (signin/signup/oauth/refresh) take no
-  bearer token and are intended for unauthenticated callers.
+- Methods explicitly named ``*_auth_*`` (signin/signup/refresh, the browser
+  login's device-token exchange) take no bearer token and are intended for
+  unauthenticated callers.
 - All other methods take an ``access_token`` (a SecretStr).
 - The session store handles persistence; this client never reads or writes
   session files itself.
@@ -18,6 +20,7 @@ from urllib.parse import quote
 import httpx
 from loguru import logger
 from pydantic import AnyUrl
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -25,7 +28,6 @@ from imbue.imbue_common.errors import SwitchError
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr_imbue_cloud.data_types import AccountInfo
-from imbue.mngr_imbue_cloud.data_types import AuthPolicy
 from imbue.mngr_imbue_cloud.data_types import LeaseAttributes
 from imbue.mngr_imbue_cloud.data_types import LeaseResult
 from imbue.mngr_imbue_cloud.data_types import LeasedHostInfo
@@ -36,12 +38,16 @@ from imbue.mngr_imbue_cloud.data_types import R2BucketCreateResult
 from imbue.mngr_imbue_cloud.data_types import R2BucketInfo
 from imbue.mngr_imbue_cloud.data_types import R2KeyInfo
 from imbue.mngr_imbue_cloud.data_types import R2KeyMaterial
-from imbue.mngr_imbue_cloud.data_types import ServiceInfo
+from imbue.mngr_imbue_cloud.data_types import RelayAdminInfo
+from imbue.mngr_imbue_cloud.data_types import ShareInfo
+from imbue.mngr_imbue_cloud.data_types import ShareRelayEndpoint
+from imbue.mngr_imbue_cloud.data_types import ShareRelayLogin
+from imbue.mngr_imbue_cloud.data_types import ShareRelayMap
 from imbue.mngr_imbue_cloud.data_types import StorageCleanupGrant
 from imbue.mngr_imbue_cloud.data_types import StorageRecheckResult
 from imbue.mngr_imbue_cloud.data_types import SyncKeyBundle
 from imbue.mngr_imbue_cloud.data_types import SyncWorkspaceRecord
-from imbue.mngr_imbue_cloud.data_types import TunnelInfo
+from imbue.mngr_imbue_cloud.data_types import WorkspaceInfo
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketError
@@ -51,27 +57,27 @@ from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketNotEmptyError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketNotFoundError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudCleanupGrantBudgetError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudEmailNotVerifiedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudKeyError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudLeaseUnavailableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudPaidListError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudQuotaExceededError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudShareError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncConflictError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncError
-from imbue.mngr_imbue_cloud.errors import ImbueCloudTunnelError
+from imbue.mngr_imbue_cloud.errors import WorkspacesEndpointUnavailableError
+from imbue.mngr_imbue_cloud.primitives import WorkspaceStatus
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 KEY_OP_TIMEOUT_SECONDS = 90.0
 
-# Tunnel-name convention mirrored from the connector
-# (``apps/remote_service_connector/.../app.py``): every tunnel is named
-# ``<user_id_prefix>--<agent-prefix>``, where ``<agent-prefix>`` is the first 16 hex
-# chars of the agent UUID (``"agent-"`` prefix stripped). Used only by the
-# ``find_tunnel_for_agent`` back-compat fallback, which enumerates tunnels and
-# matches on this trailing slug when the connector lacks the O(1) by-agent
-# endpoint. Keep in lockstep with the connector's ``TUNNEL_NAME_SEP`` /
-# ``_AGENT_ID_PREFIX_LENGTH``.
-_TUNNEL_NAME_SEP = "--"
-_AGENT_ID_PREFIX_LENGTH = 16
+# What a user should do when their connector predates the hosted accounts
+# surface (browser sign-in). Shared by the login command's up-front probe and
+# the device-token exchange's 404 safety net.
+CONNECTOR_TOO_OLD_REMEDY = (
+    "If this is your own dev/CI env, update it by running `minds env deploy`; "
+    "otherwise sign in headlessly with `mngr imbue_cloud auth signin --account <email>`."
+)
 
 # Transient-transport retry policy for connector calls. The connector is a
 # Modal app that scales to zero, so a call hitting a cold/scaling instance can
@@ -107,8 +113,17 @@ class AuthRawResponse(FrozenModel):
 class ImbueCloudConnectorClient(MutableModel):
     """Thin synchronous HTTP wrapper over the connector endpoints."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     base_url: AnyUrl = Field(description="Base URL of the remote_service_connector")
     timeout_seconds: float = Field(default=DEFAULT_TIMEOUT_SECONDS, description="Default per-request timeout")
+    transport: httpx.BaseTransport | None = Field(
+        default=None,
+        description=(
+            "Optional httpx transport override. Tests inject an httpx.MockTransport here so "
+            "requests never leave the process; production leaves it None (module-level httpx calls)."
+        ),
+    )
 
     # ------------------------------------------------------------------
     # URL + header helpers
@@ -135,6 +150,22 @@ class ImbueCloudConnectorClient(MutableModel):
                 entitlement=str(detail.get("entitlement", "")),
                 limit=float(detail.get("limit", 0)),
                 current=float(detail.get("current", 0)),
+            )
+
+    def _raise_if_email_not_verified(self, response: httpx.Response) -> None:
+        """Raise the typed verification error when a 403 carries the connector's structured detail."""
+        if response.status_code != 403:
+            return
+        try:
+            payload = response.json()
+        except ValueError:
+            return
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        if isinstance(detail, dict) and detail.get("code") == "email_not_verified":
+            email = detail.get("email")
+            raise ImbueCloudEmailNotVerifiedError(
+                str(detail.get("message", "This action requires a verified email address")),
+                email=email if isinstance(email, str) else None,
             )
 
     def _raise_if_grant_budget_exhausted(self, response: httpx.Response) -> None:
@@ -165,9 +196,10 @@ class ImbueCloudConnectorClient(MutableModel):
         """
         self._raise_if_quota_exceeded(response)
         self._raise_if_grant_budget_exhausted(response)
+        self._raise_if_email_not_verified(response)
         if response.status_code in (401, 403):
             raise ImbueCloudAuthError(f"Unauthenticated ({response.status_code}): {response.text[:300]}")
-        if response.status_code in (200, 201, 204):
+        if response.status_code in (200, 201, 202, 204):
             if not response.content:
                 return {}
             try:
@@ -181,8 +213,12 @@ class ImbueCloudConnectorClient(MutableModel):
 
         Calls ``httpx.get``/``post``/``put``/``delete`` by name at call time (not a
         cached reference) so tests that monkeypatch those functions still
-        intercept the request.
+        intercept the request. When an explicit ``transport`` is injected
+        (the preferred test seam), the call goes through it instead.
         """
+        if self.transport is not None:
+            with httpx.Client(transport=self.transport) as injected_client:
+                return injected_client.request(method, url, **kwargs)
         if method == "GET":
             return httpx.get(url, **kwargs)
         if method == "POST":
@@ -258,43 +294,75 @@ class ImbueCloudConnectorClient(MutableModel):
         )
         return AuthRawResponse.model_validate(self._check(response, ImbueCloudAuthError))
 
-    def auth_oauth_authorize(self, provider_id: str, callback_url: str) -> dict[str, Any]:
-        response = httpx.post(
-            self._url("/auth/oauth/authorize"),
-            json={"provider_id": provider_id, "callback_url": callback_url},
-            timeout=self.timeout_seconds,
-        )
-        return self._check(response, ImbueCloudAuthError)
+    def supports_browser_login(self) -> bool:
+        """Whether the connector serves the hosted accounts surface (the browser login flow).
 
-    def auth_oauth_callback(
-        self,
-        provider_id: str,
-        callback_url: str,
-        query_params: dict[str, str],
-    ) -> AuthRawResponse:
-        response = httpx.post(
-            self._url("/auth/oauth/callback"),
-            json={
-                "provider_id": provider_id,
-                "callback_url": callback_url,
-                "query_params": query_params,
-            },
+        Probes the unauthenticated accounts-config endpoint; a 404 means the
+        connector predates the hosted accounts pages (a stale dev/CI env).
+        """
+        response = self._send(
+            "GET",
+            self._url("/accounts/api/config"),
+            exc_cls=ImbueCloudAuthError,
             timeout=self.timeout_seconds,
         )
+        if response.status_code == 404:
+            return False
+        self._check(response, ImbueCloudAuthError)
+        return True
+
+    def auth_device_token(self, code: str, code_verifier: str, redirect_uri: str) -> AuthRawResponse:
+        """Exchange a browser-login one-time code (+ PKCE verifier) for a fresh device session.
+
+        The code is single-use, so only connect-phase transport errors are
+        retried (a post-send retry would present an already-consumed code).
+        """
+        response = self._send(
+            "POST",
+            self._url("/auth/device/token"),
+            exc_cls=ImbueCloudAuthError,
+            idempotent=False,
+            json={"code": code, "code_verifier": code_verifier, "redirect_uri": redirect_uri},
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code == 400:
+            detail = _detail_from_response(response)
+            raise ImbueCloudAuthError(f"Device code exchange refused: {detail}")
+        if response.status_code == 404:
+            raise ImbueCloudAuthError(
+                "The connector does not serve the browser-login code exchange (it is too old). "
+                + CONNECTOR_TOO_OLD_REMEDY
+            )
         return AuthRawResponse.model_validate(self._check(response, ImbueCloudAuthError))
 
     def auth_refresh_session(self, refresh_token: SecretStr) -> dict[str, Any]:
-        """Returns ``{status, access_token, refresh_token}``."""
-        response = httpx.post(
+        """Returns ``{status, access_token, refresh_token}``.
+
+        Not idempotent: SuperTokens rotates the refresh token, and re-sending
+        an already-consumed one trips its token-theft detection, so only
+        connect-phase transport errors (request never reached the server) are
+        retried.
+        """
+        response = self._send(
+            "POST",
             self._url("/auth/session/refresh"),
+            exc_cls=ImbueCloudAuthError,
+            idempotent=False,
             json={"refresh_token": refresh_token.get_secret_value()},
             timeout=self.timeout_seconds,
         )
         return self._check(response, ImbueCloudAuthError)
 
     def auth_revoke_session(self, access_token: SecretStr) -> None:
-        response = httpx.post(
+        """Revoke EVERY session for the caller's user (all devices + browser).
+
+        Kept for the explicit sign-out-everywhere action; regular device
+        sign-out uses :meth:`auth_revoke_current_session`.
+        """
+        response = self._send(
+            "POST",
             self._url("/auth/session/revoke"),
+            exc_cls=ImbueCloudAuthError,
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
         )
@@ -303,22 +371,76 @@ class ImbueCloudConnectorClient(MutableModel):
             return
         raise ImbueCloudAuthError(f"Revoke failed ({response.status_code}): {response.text[:200]}")
 
-    def auth_send_verification_email(self, user_id: str, email: str) -> None:
-        response = httpx.post(
-            self._url("/auth/email/send-verification"),
-            json={"user_id": user_id, "email": email},
+    def auth_revoke_current_session(self, access_token: SecretStr) -> None:
+        """Revoke only the presented session (this device's sign-out).
+
+        Falls back to the revoke-all endpoint against a connector too old to
+        serve the device-scoped route, so sign-out never silently leaves the
+        token live. A 401 counts as already revoked (idempotent).
+        """
+        response = self._send(
+            "POST",
+            self._url("/auth/session/revoke-current"),
+            exc_cls=ImbueCloudAuthError,
+            headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
         )
-        self._check(response, ImbueCloudAuthError)
+        if response.status_code in (200, 204, 401):
+            return
+        if response.status_code in (404, 405):
+            logger.debug("Connector lacks /auth/session/revoke-current; falling back to revoke-all")
+            self.auth_revoke_session(access_token)
+            return
+        raise ImbueCloudAuthError(f"Revoke failed ({response.status_code}): {response.text[:200]}")
 
-    def auth_is_email_verified(self, user_id: str, email: str) -> bool:
-        response = httpx.post(
-            self._url("/auth/email/is-verified"),
-            json={"user_id": user_id, "email": email},
+    def auth_send_verification_email(self, access_token: SecretStr, email: str) -> bool:
+        """(Re)send the caller's verification email; returns False when suppressed by the server cooldown.
+
+        Authenticated by the caller's own access token (unverified sessions are
+        deliberately accepted server-side -- resending is exactly what an
+        unverified user needs to do). Not idempotent (a retried send could
+        deliver twice), so only connect-phase transport errors are retried.
+        """
+        response = self._send(
+            "POST",
+            self._url("/auth/email/send-verification"),
+            exc_cls=ImbueCloudAuthError,
+            idempotent=False,
+            headers=self._bearer(access_token),
+            json={"email": email},
             timeout=self.timeout_seconds,
         )
         body = self._check(response, ImbueCloudAuthError)
-        return bool(body.get("verified", False))
+        sent = body.get("sent")
+        if not isinstance(sent, bool):
+            # A missing/non-bool ``sent`` is a broken contract; raising (rather
+            # than defaulting to False) keeps callers from claiming the send
+            # was "suppressed by the cooldown" when nothing of the sort is known.
+            raise ImbueCloudAuthError(
+                f"Malformed send-verification response: expected a 'sent' bool, got keys {sorted(body)}"
+            )
+        return sent
+
+    def auth_is_email_verified(self, access_token: SecretStr, email: str) -> bool:
+        """Return whether the caller's ``email`` is verified, authenticated by their access token."""
+        response = self._send(
+            "POST",
+            self._url("/auth/email/is-verified"),
+            exc_cls=ImbueCloudAuthError,
+            headers=self._bearer(access_token),
+            json={"email": email},
+            timeout=self.timeout_seconds,
+        )
+        body = self._check(response, ImbueCloudAuthError)
+        verified = body.get("verified")
+        if not isinstance(verified, bool):
+            # A missing/non-bool ``verified`` is a broken contract; raising
+            # (rather than defaulting to False) keeps the verification poll
+            # from spinning forever on a "not verified" that was never known.
+            raise ImbueCloudAuthError(
+                f"Malformed is-verified response: expected a 'verified' bool, got keys {sorted(body)}"
+            )
+        return verified
 
     def auth_forgot_password(self, email: str) -> None:
         response = httpx.post(
@@ -427,6 +549,26 @@ class ImbueCloudConnectorClient(MutableModel):
             ) from exc
         self._check(response, ImbueCloudConnectorError)
 
+    def enable_host_sharing(self, access_token: SecretStr, host_db_id: str) -> dict[str, Any]:
+        """Bring sharing up for a leased host server-side (POST /hosts/{id}/enable-sharing).
+
+        The connector creates/rotates the share record and injects the share
+        materials (including the web chrome origin) into the container with
+        the pool key -- the primitive behind "enable web access". Idempotent;
+        returns the connector's ``{host_id, workspace_domain, region}`` body.
+        """
+        try:
+            response = httpx.post(
+                self._url(f"/hosts/{host_db_id}/enable-sharing"),
+                headers=self._bearer(access_token),
+                timeout=self.timeout_seconds,
+            )
+        except httpx.HTTPError as exc:
+            raise ImbueCloudConnectorError(
+                f"enable-sharing request for host {host_db_id} could not reach the connector: {exc}"
+            ) from exc
+        return self._check(response, ImbueCloudConnectorError)
+
     def list_hosts(self, access_token: SecretStr) -> list[LeasedHostInfo]:
         response = httpx.get(
             self._url("/hosts"),
@@ -444,6 +586,118 @@ class ImbueCloudConnectorClient(MutableModel):
             except ValueError:
                 logger.debug("Skipped unparseable leased host entry: {}", entry)
         return result
+
+    # ------------------------------------------------------------------
+    # Workspaces (full-lifecycle listing + stop/start)
+    # ------------------------------------------------------------------
+
+    def _check_workspaces_supported(self, response: httpx.Response) -> None:
+        # An old connector has no /workspaces routes; FastAPI answers its
+        # fixed 404 "Not Found" (or 405 "Method Not Allowed" for a method
+        # mismatch). Surface that as its own type so callers can fall back to
+        # the deprecated leased-only /hosts listing. A modern connector's own
+        # 404 carries a specific detail (e.g. "No such workspace" when the
+        # row was released concurrently) and must fall through to the normal
+        # error mapping instead of masquerading as a missing endpoint.
+        if response.status_code not in (404, 405):
+            return
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        detail = body.get("detail") if isinstance(body, dict) else None
+        if detail is None or detail in ("Not Found", "Method Not Allowed"):
+            raise WorkspacesEndpointUnavailableError(
+                "This connector does not serve /workspaces yet; redeploy it (minds env deploy) "
+                "or fall back to the leased-only listing."
+            )
+
+    def list_workspaces(self, access_token: SecretStr) -> list[WorkspaceInfo]:
+        """List the account's workspaces in every lifecycle state.
+
+        Raises ``WorkspacesEndpointUnavailableError`` against a connector that
+        predates the endpoint (callers fall back to ``list_hosts``).
+        """
+        response = httpx.get(
+            self._url("/workspaces"),
+            headers=self._bearer(access_token),
+            timeout=self.timeout_seconds,
+        )
+        self._check_workspaces_supported(response)
+        body = self._check(response, ImbueCloudConnectorError)
+        if not isinstance(body, list):
+            return []
+        result: list[WorkspaceInfo] = []
+        for entry in body:
+            try:
+                result.append(WorkspaceInfo.model_validate(entry))
+            except ValueError:
+                logger.debug("Skipped unparseable workspace entry: {}", entry)
+        return result
+
+    def get_workspace(self, access_token: SecretStr, host_db_id: str) -> WorkspaceInfo:
+        """One workspace's lifecycle view (the poll target during stop/start).
+
+        Routed through ``_send`` so a transient transport blip during the
+        minutes-long start poll is retried instead of aborting the wait.
+        """
+        response = self._send(
+            "GET",
+            self._url(f"/workspaces/{host_db_id}"),
+            exc_cls=ImbueCloudConnectorError,
+            headers=self._bearer(access_token),
+            timeout=self.timeout_seconds,
+        )
+        body = self._check(response, ImbueCloudConnectorError)
+        return WorkspaceInfo.model_validate(body)
+
+    def stop_workspace(self, access_token: SecretStr, host_db_id: str) -> WorkspaceStatus:
+        """Begin stopping a workspace (VM halt + upload + slot free); returns its status.
+
+        Asynchronous and idempotent server-side (a retried POST joins the
+        in-flight stop): the returned status is ``stopping`` when the request
+        initiated (or joined) a stop, or the workspace's current status when
+        it was already past ``running``.
+        """
+        response = self._send(
+            "POST",
+            self._url(f"/workspaces/{host_db_id}/stop"),
+            exc_cls=ImbueCloudConnectorError,
+            headers=self._bearer(access_token),
+            timeout=self.timeout_seconds,
+        )
+        self._check_workspaces_supported(response)
+        body = self._check(response, ImbueCloudConnectorError)
+        return WorkspaceStatus(str(body.get("status", "")))
+
+    def start_workspace(self, access_token: SecretStr, host_db_id: str) -> WorkspaceStatus:
+        """Begin starting a stopped workspace; returns its status (poll ``get_workspace``).
+
+        Idempotent server-side (a retried POST joins the in-flight start).
+        """
+        response = self._send(
+            "POST",
+            self._url(f"/workspaces/{host_db_id}/start"),
+            exc_cls=ImbueCloudConnectorError,
+            headers=self._bearer(access_token),
+            timeout=self.timeout_seconds,
+        )
+        self._check_workspaces_supported(response)
+        self._raise_if_quota_exceeded(response)
+        body = self._check(response, ImbueCloudConnectorError)
+        return WorkspaceStatus(str(body.get("status", "")))
+
+    def admin_abandon_workspace(self, admin_key: SecretStr, host_db_id: str, reason: str) -> None:
+        """Operator escape hatch: mark a workspace crashed (admin-key authenticated, idempotent)."""
+        response = self._send(
+            "POST",
+            self._url(f"/admin/workspaces/{host_db_id}/abandon"),
+            exc_cls=ImbueCloudConnectorError,
+            headers={"Authorization": f"Bearer {admin_key.get_secret_value()}"},
+            json={"reason": reason},
+            timeout=self.timeout_seconds,
+        )
+        self._check(response, ImbueCloudConnectorError)
 
     # ------------------------------------------------------------------
     # Keys (LiteLLM)
@@ -534,238 +788,99 @@ class ImbueCloudConnectorClient(MutableModel):
         self._check(response, ImbueCloudKeyError)
 
     # ------------------------------------------------------------------
-    # Tunnels (Cloudflare)
+    # Shares (self-hosted relays)
     # ------------------------------------------------------------------
 
-    def create_tunnel(
+    def create_share(
         self,
         access_token: SecretStr,
-        agent_id: str,
-        default_auth_policy: AuthPolicy | None,
-    ) -> TunnelInfo:
-        body: dict[str, Any] = {"agent_id": agent_id}
-        if default_auth_policy is not None:
-            body["default_auth_policy"] = _auth_policy_to_connector_body(default_auth_policy)
+        host_id: str,
+        entry_label: str | None = None,
+        preferred_region: str | None = None,
+    ) -> ShareInfo:
+        """Enable sharing for one workspace; the returned relay token is only ever returned here.
+
+        ``entry_label`` is the workspace's shell-service origin label -- the
+        routable origin the hosted web chrome enters and health-probes the
+        workspace at (the bare share domain is unrouted on the relay).
+        Omitting it keeps any label a previous bring-up recorded.
+        ``preferred_region`` steers a first-time share of a local workspace
+        (a host the connector has no datacenter record of) to a specific
+        relay region; the connector ignores it for pool hosts and always
+        keeps an existing share's region.
+        """
+        body_json: dict[str, str] = {"host_id": host_id}
+        if entry_label:
+            body_json["entry_label"] = entry_label
+        if preferred_region:
+            body_json["preferred_region"] = preferred_region
         response = self._send(
             "POST",
-            self._url("/tunnels"),
-            exc_cls=ImbueCloudTunnelError,
+            self._url("/shares"),
+            exc_cls=ImbueCloudShareError,
             headers=self._bearer(access_token),
-            json=body,
+            json=body_json,
             timeout=self.timeout_seconds,
         )
-        body_json = self._check(response, ImbueCloudTunnelError)
-        return _parse_tunnel_info(body_json)
+        body = self._check(response, ImbueCloudShareError)
+        return _parse_share_info(body, state="active")
 
-    def list_tunnels(self, access_token: SecretStr) -> list[TunnelInfo]:
+    def delete_share(self, access_token: SecretStr, host_id: str) -> None:
         response = self._send(
-            "GET",
-            self._url("/tunnels"),
-            exc_cls=ImbueCloudTunnelError,
+            "DELETE",
+            self._url(f"/shares/{host_id}"),
+            exc_cls=ImbueCloudShareError,
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
         )
-        body = self._check(response, ImbueCloudTunnelError)
-        if not isinstance(body, list):
-            return []
-        return [_parse_tunnel_info(entry) for entry in body if isinstance(entry, dict)]
+        self._check(response, ImbueCloudShareError)
 
-    def find_tunnel_for_agent(self, access_token: SecretStr, agent_id: str) -> TunnelInfo | None:
-        """Resolve the caller's tunnel for ``agent_id``, or ``None`` if there is none.
-
-        Fast path: ``GET /tunnels/by-agent/{agent_id}`` resolves the exact
-        tunnel through Cloudflare's server-side name filter (2 Cloudflare
-        calls) rather than enumerating every tunnel and fetching each one's
-        config. On that endpoint, HTTP 200 with ``null`` means "no tunnel for
-        this agent yet".
-
-        Back-compat: a connector deployed before this endpoint existed answers
-        the unknown route with a generic 404. Clients update independently of
-        (and often ahead of) the connector, so a 404 here is treated as "this
-        connector is too old" and we transparently fall back to the O(n)
-        ``GET /tunnels`` enumeration, matching on the ``<user_id_prefix>--<agent>``
-        name convention. This keeps sharing working during the rollout window;
-        once the connector is redeployed, every call takes the fast path.
-        """
+    def get_share_status(self, access_token: SecretStr, host_id: str) -> ShareInfo | None:
+        """The share's status document, or None when this workspace has never been shared."""
         response = self._send(
             "GET",
-            self._url(f"/tunnels/by-agent/{agent_id}"),
-            exc_cls=ImbueCloudTunnelError,
+            self._url(f"/shares/{host_id}/status"),
+            exc_cls=ImbueCloudShareError,
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
         )
         if response.status_code == 404:
-            return self._find_tunnel_for_agent_via_list(access_token, agent_id)
-        body = self._check(response, ImbueCloudTunnelError)
-        if not body:
             return None
-        return _parse_tunnel_info(body)
+        body = self._check(response, ImbueCloudShareError)
+        return _parse_share_info(body, state=str(body.get("state", "")))
 
-    def _find_tunnel_for_agent_via_list(self, access_token: SecretStr, agent_id: str) -> TunnelInfo | None:
-        """O(n) fallback for connectors without the ``by-agent`` endpoint.
-
-        Enumerates the caller's tunnels and matches on the trailing
-        ``--<agent-prefix>`` slug the connector uses for tunnel names.
-        """
-        short_agent = agent_id.removeprefix("agent-")[:_AGENT_ID_PREFIX_LENGTH]
-        suffix = f"{_TUNNEL_NAME_SEP}{short_agent}"
-        for tunnel in self.list_tunnels(access_token):
-            if tunnel.tunnel_name.endswith(suffix):
-                return tunnel
-        return None
-
-    def delete_tunnel(self, access_token: SecretStr, tunnel_name: str) -> None:
-        response = self._send(
-            "DELETE",
-            self._url(f"/tunnels/{tunnel_name}"),
-            exc_cls=ImbueCloudTunnelError,
-            headers=self._bearer(access_token),
-            timeout=self.timeout_seconds,
-        )
-        self._check(response, ImbueCloudTunnelError)
-
-    def add_service(
-        self,
-        access_token: SecretStr,
-        tunnel_name: str,
-        service_name: str,
-        service_url: str,
-    ) -> ServiceInfo:
-        response = self._send(
-            "POST",
-            self._url(f"/tunnels/{tunnel_name}/services"),
-            exc_cls=ImbueCloudTunnelError,
-            headers=self._bearer(access_token),
-            json={"service_name": service_name, "service_url": service_url},
-            timeout=self.timeout_seconds,
-        )
-        body = self._check(response, ImbueCloudTunnelError)
-        return _parse_service_info(body)
-
-    def list_services(self, access_token: SecretStr, tunnel_name: str) -> list[ServiceInfo]:
+    def list_shares(self, access_token: SecretStr) -> list[ShareInfo]:
         response = self._send(
             "GET",
-            self._url(f"/tunnels/{tunnel_name}/services"),
-            exc_cls=ImbueCloudTunnelError,
+            self._url("/shares"),
+            exc_cls=ImbueCloudShareError,
             headers=self._bearer(access_token),
             timeout=self.timeout_seconds,
         )
-        body = self._check(response, ImbueCloudTunnelError)
-        if not isinstance(body, list):
-            return []
-        return [_parse_service_info(entry) for entry in body if isinstance(entry, dict)]
+        body = self._check(response, ImbueCloudShareError)
+        return [_parse_share_info(entry, state=str(entry.get("state", ""))) for entry in body.get("shares", [])]
 
-    def enable_sharing(
-        self,
-        access_token: SecretStr,
-        agent_id: str,
-        service_name: str,
-        service_url: str,
-        policy: AuthPolicy,
-    ) -> tuple[TunnelInfo, ServiceInfo]:
-        """Enable (or update) sharing for one service in a single connector call.
-
-        Wraps ``POST /sharing/enable``, which ensures the tunnel exists
-        (idempotent), adds the service, and applies ``policy`` directly to
-        its Access Application -- replacing the previous create-tunnel +
-        add-service + set-service-auth three-call sequence. The returned
-        tunnel carries the cloudflared token, so no follow-up reads are
-        needed.
-        """
+    def list_share_relays(self, access_token: SecretStr) -> ShareRelayMap:
+        """The relay fleet: every active relay's tunnel-control endpoint per region."""
         response = self._send(
-            "POST",
-            self._url("/sharing/enable"),
-            exc_cls=ImbueCloudTunnelError,
+            "GET",
+            self._url("/shares/relays"),
+            exc_cls=ImbueCloudShareError,
             headers=self._bearer(access_token),
-            json={
-                "agent_id": agent_id,
-                "service_name": service_name,
-                "service_url": service_url,
-                "auth_policy": _auth_policy_to_connector_body(policy),
+            timeout=self.timeout_seconds,
+        )
+        body = self._check(response, ImbueCloudShareError)
+        relays = body.get("relays")
+        # Strict: a malformed body must not degrade to an empty (or partial)
+        # relay map -- the desktop's region picker would silently skip its
+        # latency measurement and the misbehaving connector would go unnoticed.
+        if not isinstance(relays, dict) or not all(isinstance(endpoints, list) for endpoints in relays.values()):
+            raise ImbueCloudShareError(f"Connector returned a malformed relays response: {str(body)[:200]}")
+        return ShareRelayMap(
+            relay_endpoints_by_region={
+                str(region): tuple(str(endpoint) for endpoint in endpoints) for region, endpoints in relays.items()
             },
-            timeout=self.timeout_seconds,
         )
-        body = self._check(response, ImbueCloudTunnelError)
-        tunnel_raw = body.get("tunnel")
-        service_raw = body.get("service")
-        if not isinstance(tunnel_raw, dict) or not isinstance(service_raw, dict):
-            # Describe only the body's shape, never its contents: a well-formed
-            # "tunnel" half carries the cloudflared token, which must not leak
-            # into an error message that ends up in CLI stderr and client logs.
-            raise ImbueCloudTunnelError(
-                f"Malformed /sharing/enable response: expected 'tunnel' and 'service' objects, "
-                f"got dict with keys {sorted(body)}"
-            )
-        return _parse_tunnel_info(tunnel_raw), _parse_service_info(service_raw)
-
-    def remove_service(self, access_token: SecretStr, tunnel_name: str, service_name: str) -> None:
-        response = self._send(
-            "DELETE",
-            self._url(f"/tunnels/{tunnel_name}/services/{service_name}"),
-            exc_cls=ImbueCloudTunnelError,
-            headers=self._bearer(access_token),
-            timeout=self.timeout_seconds,
-        )
-        self._check(response, ImbueCloudTunnelError)
-
-    def get_tunnel_auth(self, access_token: SecretStr, tunnel_name: str) -> AuthPolicy:
-        response = self._send(
-            "GET",
-            self._url(f"/tunnels/{tunnel_name}/auth"),
-            exc_cls=ImbueCloudTunnelError,
-            headers=self._bearer(access_token),
-            timeout=self.timeout_seconds,
-        )
-        body = self._check(response, ImbueCloudTunnelError)
-        return _parse_auth_policy(body)
-
-    def set_tunnel_auth(self, access_token: SecretStr, tunnel_name: str, policy: AuthPolicy) -> None:
-        response = self._send(
-            "PUT",
-            self._url(f"/tunnels/{tunnel_name}/auth"),
-            exc_cls=ImbueCloudTunnelError,
-            headers=self._bearer(access_token),
-            json=_auth_policy_to_connector_body(policy),
-            timeout=self.timeout_seconds,
-        )
-        self._check(response, ImbueCloudTunnelError)
-
-    def get_service_auth(
-        self,
-        access_token: SecretStr,
-        tunnel_name: str,
-        service_name: str,
-    ) -> AuthPolicy:
-        response = self._send(
-            "GET",
-            self._url(f"/tunnels/{tunnel_name}/services/{service_name}/auth"),
-            exc_cls=ImbueCloudTunnelError,
-            headers=self._bearer(access_token),
-            timeout=self.timeout_seconds,
-        )
-        body = self._check(response, ImbueCloudTunnelError)
-        return _parse_auth_policy(body)
-
-    def set_service_auth(
-        self,
-        access_token: SecretStr,
-        tunnel_name: str,
-        service_name: str,
-        policy: AuthPolicy,
-    ) -> None:
-        response = self._send(
-            "PUT",
-            self._url(f"/tunnels/{tunnel_name}/services/{service_name}/auth"),
-            exc_cls=ImbueCloudTunnelError,
-            headers=self._bearer(access_token),
-            json=_auth_policy_to_connector_body(policy),
-            timeout=self.timeout_seconds,
-        )
-        self._check(response, ImbueCloudTunnelError)
-
-    # ------------------------------------------------------------------
-    # Buckets (R2)
-    # ------------------------------------------------------------------
 
     def _check_bucket(self, response: httpx.Response) -> Any:
         """Validate a bucket-route response, mapping status codes to typed errors."""
@@ -889,6 +1004,7 @@ class ImbueCloudConnectorClient(MutableModel):
         # get the typed quota error first.
         if response.status_code == 403:
             self._raise_if_quota_exceeded(response)
+            self._raise_if_email_not_verified(response)
             try:
                 detail = response.json().get("detail")
             except ValueError:
@@ -930,6 +1046,62 @@ class ImbueCloudConnectorClient(MutableModel):
             timeout=KEY_OP_TIMEOUT_SECONDS,
         )
         return StorageRecheckResult.model_validate(self._check(response, ImbueCloudAccountError))
+
+    # ------------------------------------------------------------------
+    # Relay fleet admin (MINDS_ADMIN_KEY authenticated)
+    # ------------------------------------------------------------------
+
+    def admin_list_relays(self, admin_api_key: SecretStr) -> list[RelayAdminInfo]:
+        response = self._send(
+            "GET",
+            self._url("/admin/relays"),
+            exc_cls=ImbueCloudShareError,
+            headers=self._bearer(admin_api_key),
+            timeout=self.timeout_seconds,
+        )
+        body = self._check(response, ImbueCloudShareError)
+        return [RelayAdminInfo.model_validate(entry) for entry in body.get("relays", [])]
+
+    def admin_register_relay(
+        self,
+        admin_api_key: SecretStr,
+        # None registers a fresh relay (the connector mints the id); a value
+        # re-registers / revives that relay in place.
+        relay_id: str | None,
+        region: str,
+        tunnel_endpoint: str,
+        ip_address: str,
+        instance_name: str,
+    ) -> RelayAdminInfo:
+        """Register (or update) one relay row; an idempotent upsert, safe to retry."""
+        body_json: dict[str, str] = {
+            "region": region,
+            "tunnel_endpoint": tunnel_endpoint,
+            "ip_address": ip_address,
+            "instance_name": instance_name,
+        }
+        if relay_id:
+            body_json["relay_id"] = relay_id
+        response = self._send(
+            "POST",
+            self._url("/admin/relays"),
+            exc_cls=ImbueCloudShareError,
+            headers=self._bearer(admin_api_key),
+            json=body_json,
+            timeout=self.timeout_seconds,
+        )
+        return RelayAdminInfo.model_validate(self._check(response, ImbueCloudShareError))
+
+    def admin_retire_relay(self, admin_api_key: SecretStr, relay_id: str) -> dict[str, Any]:
+        """Retire one relay (it leaves assignment, DNS, and frps auth); idempotent."""
+        response = self._send(
+            "DELETE",
+            self._url(f"/admin/relays/{relay_id}"),
+            exc_cls=ImbueCloudShareError,
+            headers=self._bearer(admin_api_key),
+            timeout=self.timeout_seconds,
+        )
+        return self._check(response, ImbueCloudShareError)
 
     # ------------------------------------------------------------------
     # Account admin (email-addressed, MINDS_ADMIN_KEY authenticated)
@@ -1116,7 +1288,7 @@ class ImbueCloudConnectorClient(MutableModel):
     #
     # These take the fixed admin API key (NOT a SuperTokens
     # session token); the connector authenticates them against
-    # ``MINDS_ADMIN_KEY`` and rejects user / tunnel tokens.
+    # ``MINDS_ADMIN_KEY`` and rejects user tokens.
 
     def _list_paid_entries(
         self, admin_api_key: SecretStr, path: str, value_key: str, paid_only: bool
@@ -1239,101 +1411,30 @@ def _parse_paid_list_entry(raw: dict[str, Any], value_key: str) -> PaidListEntry
     )
 
 
-def _parse_tunnel_info(raw: dict[str, Any]) -> TunnelInfo:
-    """Best-effort coerce a connector tunnel dict into our TunnelInfo."""
-    services = raw.get("services") or ()
-    if isinstance(services, list):
-        # Connector returns either ['name1', 'name2'] or [{service_name: ...}, ...].
-        flat: list[str] = []
-        for entry in services:
-            if isinstance(entry, str):
-                flat.append(entry)
-            elif isinstance(entry, dict) and "service_name" in entry:
-                flat.append(str(entry["service_name"]))
-        services_tuple = tuple(flat)
-    else:
-        services_tuple = ()
-    token_value = raw.get("token") or raw.get("tunnel_token")
-    return TunnelInfo(
-        tunnel_name=str(raw.get("tunnel_name", raw.get("name", ""))),
-        tunnel_id=str(raw.get("tunnel_id", raw.get("id", ""))),
-        token=SecretStr(str(token_value)) if token_value else None,
-        services=services_tuple,
+def _parse_share_info(body: dict[str, Any], state: str) -> ShareInfo:
+    """Build a ShareInfo from a connector share payload (create/status/list shapes)."""
+    relay_token = body.get("relay_token")
+    raw_endpoints = body.get("relay_endpoints")
+    relay_endpoints = tuple(
+        ShareRelayEndpoint(relay_id=str(entry.get("relay_id", "")), endpoint=str(entry.get("endpoint", "")))
+        for entry in (raw_endpoints if isinstance(raw_endpoints, list) else [])
+        if isinstance(entry, dict)
     )
-
-
-def _parse_service_info(raw: dict[str, Any]) -> ServiceInfo:
-    return ServiceInfo(
-        service_name=str(raw.get("service_name", raw.get("name", ""))),
-        service_url=str(raw.get("service_url", raw.get("url", ""))),
-        hostname=str(raw.get("hostname", "")),
+    # Per-relay tunnel login stamps; only the status document carries them.
+    raw_relay_logins = body.get("relays")
+    relay_logins = tuple(
+        ShareRelayLogin(relay_id=str(entry.get("relay_id", "")), last_login_at=entry.get("last_login_at"))
+        for entry in (raw_relay_logins if isinstance(raw_relay_logins, list) else [])
+        if isinstance(entry, dict)
     )
-
-
-def _auth_policy_to_connector_body(policy: AuthPolicy) -> dict[str, Any]:
-    """Translate the plugin's high-level ``AuthPolicy`` into the body shape
-    the connector accepts (Cloudflare-native ``{"rules": [...]}``).
-
-    The connector's ``AuthPolicy`` model wraps a list of Cloudflare Access
-    rule dicts (``{action, include}``) and is consumed both directly
-    (per-service Access policies) and via KV (default-tunnel policy). Our
-    high-level model carries flat allow-lists (emails, email domains,
-    required IDPs); this helper bundles everything into a single
-    ``allow`` rule whose ``include`` is the union of the three.
-
-    A policy with no allow-list members serializes to ``{"rules": []}``,
-    which the connector interprets as "no policy" without rejecting the
-    request body.
-    """
-    include: list[dict[str, Any]] = []
-    for email in policy.emails:
-        include.append({"email": {"email": email}})
-    for domain in policy.email_domains:
-        include.append({"email_domain": {"domain": domain}})
-    for idp_id in policy.require_idp:
-        include.append({"login_method": {"id": idp_id}})
-    if not include:
-        return {"rules": []}
-    return {"rules": [{"action": "allow", "include": include}]}
-
-
-def _parse_auth_policy(raw: dict[str, Any]) -> AuthPolicy:
-    """Translate the connector's ``{"rules": [...]}`` response back into
-    the plugin's high-level ``AuthPolicy``.
-
-    Walks every rule's ``include`` list and bins entries by Cloudflare
-    Access rule type (``email`` / ``email_domain`` / ``login_method``).
-    Unknown shapes are ignored rather than raising so a connector that
-    later adds a new include type doesn't break older plugin clients.
-    """
-    emails: list[str] = []
-    email_domains: list[str] = []
-    require_idp: list[str] = []
-    rules = raw.get("rules") or []
-    if not isinstance(rules, list):
-        return AuthPolicy()
-    for rule in rules:
-        if not isinstance(rule, dict):
-            continue
-        include = rule.get("include") or []
-        if not isinstance(include, list):
-            continue
-        for entry in include:
-            if not isinstance(entry, dict):
-                continue
-            email_obj = entry.get("email")
-            if isinstance(email_obj, dict) and isinstance(email_obj.get("email"), str):
-                emails.append(email_obj["email"])
-                continue
-            domain_obj = entry.get("email_domain")
-            if isinstance(domain_obj, dict) and isinstance(domain_obj.get("domain"), str):
-                email_domains.append(domain_obj["domain"])
-                continue
-            login_obj = entry.get("login_method")
-            if isinstance(login_obj, dict) and isinstance(login_obj.get("id"), str):
-                require_idp.append(login_obj["id"])
-    return AuthPolicy(
-        emails=tuple(emails),
-        email_domains=tuple(email_domains),
-        require_idp=tuple(require_idp),
+    return ShareInfo(
+        host_id=str(body.get("host_id", "")),
+        workspace_domain=str(body.get("workspace_domain", "")),
+        region=str(body.get("region", "")),
+        state=state or "active",
+        relay_endpoints=relay_endpoints,
+        relays=relay_logins,
+        relay_token=SecretStr(relay_token) if relay_token else None,
+        last_tunnel_login_at=body.get("last_tunnel_login_at"),
+        cert_not_after=body.get("cert_not_after"),
     )
