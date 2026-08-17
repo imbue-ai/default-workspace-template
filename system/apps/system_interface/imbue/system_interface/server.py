@@ -43,9 +43,6 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
 from imbue.system_interface.harnesses.claude import auth_endpoints
-from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
-from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
-from imbue.system_interface.harnesses.claude.launch_defaults import write_workspace_fast_mode_decision
 from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.model import ModelIdentity
@@ -53,6 +50,7 @@ from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.registry import HARNESS_SPECS
 from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
@@ -87,11 +85,10 @@ from imbue.system_interface.models import RandomNameResponse
 from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import SendMessageResponse
 from imbue.system_interface.models import SetModelChoiceRequest
-from imbue.system_interface.models import SetWorkspaceFastModeRequest
 from imbue.system_interface.models import ShoulderTapAtomicResponse
 from imbue.system_interface.models import StartAgentResponse
 from imbue.system_interface.models import TerminalSessionInfo
-from imbue.system_interface.models import WorkspaceFastModeResponse
+from imbue.system_interface.models import FastModePromptAnsweredResponse
 from imbue.system_interface.plugins import get_plugin_manager
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -125,6 +122,8 @@ _WS_PING_INTERVAL_SECONDS = 25
 # cleanup step is itself bounded, so destroy cannot hang indefinitely: a
 # generous cap only converts spurious kills into patience.
 _DESTROY_TIMEOUT_SECONDS = 120.0
+# `mngr label` is a metadata write (data.json merge), fast even on a busy host.
+_LABEL_TIMEOUT_SECONDS = 30.0
 
 
 class _ReflectClientSubprotocols:
@@ -491,9 +490,18 @@ def _get_harnesses_endpoint() -> Response:
         # A parsed catalog (pi) reads data files; a bad/absent one must be
         # skipped, not 500 the endpoint for every other harness.
         try:
-            catalogs[harness.value] = get_catalog(harness).model_dump()
+            catalog = get_catalog(harness).model_dump()
         except (OSError, ValueError) as e:
             logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
+            continue
+        # The catalog model is the wire shape for the model bar; the popup and
+        # agent-auth declarations live on the HarnessSpec and are merged in here
+        # so one response carries everything the frontend keys by harness.
+        spec = get_harness_spec(harness)
+        catalog["popups"] = [popup.model_dump() for popup in spec.popups]
+        catalog["auth_modal"] = spec.auth_modal
+        catalog["auth_instructions"] = spec.auth_instructions
+        catalogs[harness.value] = catalog
     return _json_response(catalogs)
 
 
@@ -612,46 +620,40 @@ def _get_powered_by_endpoint(agent_id: str) -> Response:
     return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_label).model_dump())
 
 
-def _workspace_fast_mode_decision_path() -> Path | None:
-    """Where this workspace records its fast-mode decision, or None outside a workspace."""
-    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
-    if not work_dir:
-        return None
-    return get_workspace_fast_mode_decision_path(Path(work_dir))
+def _build_fast_mode_answered_label_command(agent_name: str) -> list[str]:
+    """Build the ``mngr label`` argv that latches the fast-mode prompt as answered.
 
-
-def _get_workspace_fast_mode_endpoint() -> Response:
-    """Return the workspace's fast-mode decision, or null if it has not answered.
-
-    The frontend uses this to decide whether a chat still owes the user the
-    fast-mode prompt.
+    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
+    against the live CLI without a subprocess (see ``server_test.py``).
     """
-    decision_path = _workspace_fast_mode_decision_path()
-    decision = None if decision_path is None else read_workspace_fast_mode_decision(decision_path)
-    return _json_response(WorkspaceFastModeResponse(fast_mode=decision).model_dump())
+    return ["mngr", "label", agent_name, "-l", "fast_mode_prompt_answered=true"]
 
 
-def _set_workspace_fast_mode_endpoint() -> Response:
-    """Record the user's answer to the fast-mode prompt for the whole workspace.
+def _mark_fast_mode_prompt_answered(agent_id: str) -> Response:
+    """Latch the fast-mode prompt as answered for one agent, via an agent label.
 
-    Every chat agent created from here on launches with this setting, and no chat
-    prompts again. Applying it to the *running* agent is a separate call to the
-    per-agent fast endpoint, so the two stay independently testable.
+    The prompt asks once per agent, ever: any exit from the modal routes here, so
+    the label is the durable record that the question was put to the user. The
+    label reaches the frontend with the next observe relist; the frontend keeps
+    its own in-session mark so the prompt cannot re-fire in the meantime.
     """
-    decision_path = _workspace_fast_mode_decision_path()
-    if decision_path is None:
-        error = ErrorResponse(detail="Cannot record a fast-mode decision outside a workspace")
-        return _json_response(error.model_dump(), status_code=500)
+    agent_manager: AgentManager = get_state().agent_manager
+    agent_state = agent_manager.get_agent_by_id(agent_id)
+    if agent_state is None:
+        error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
+        return _json_response(error.model_dump(), status_code=404)
 
-    set_request = SetWorkspaceFastModeRequest.model_validate(request.get_json())
-    try:
-        write_workspace_fast_mode_decision(decision_path, set_request.enabled)
-    except OSError as e:
-        logger.opt(exception=e).error("Failed to record the workspace fast-mode decision")
-        error = ErrorResponse(detail="Failed to record the fast-mode decision")
-        return _json_response(error.model_dump(), status_code=500)
+    result = run_local_command_modern_version(
+        command=_build_fast_mode_answered_label_command(agent_state.name),
+        cwd=None,
+        is_checked=False,
+        timeout=_LABEL_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        detail = f"Failed to record the fast-mode answer for '{agent_state.name}': {result.stderr.strip()}"
+        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
 
-    return _json_response(WorkspaceFastModeResponse(fast_mode=set_request.enabled).model_dump())
+    return _json_response(FastModePromptAnsweredResponse(status="ok").model_dump())
 
 
 def _activity_endpoint() -> Response:
@@ -1473,7 +1475,11 @@ def _create_chat_agent() -> Response:
 
     try:
         create_request = CreateChatRequest(**body)
-        agent_id = agent_manager.create_chat_agent(create_request.name, create_request.harness)
+        agent_id = agent_manager.create_chat_agent(
+            create_request.name,
+            create_request.harness,
+            extra_role_templates=("first",) if create_request.first else (),
+        )
         return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
@@ -2087,12 +2093,10 @@ def create_application(state: SystemInterfaceState) -> Flask:
         "/api/agents/<agent_id>/model-options", view_func=_get_model_options_endpoint, methods=["GET"]
     )
     application.add_url_rule("/api/agents/<agent_id>/powered-by", view_func=_get_powered_by_endpoint, methods=["GET"])
-    application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
     application.add_url_rule(
-        "/api/workspace/fast-mode",
-        view_func=_set_workspace_fast_mode_endpoint,
+        "/api/agents/<agent_id>/fast-mode-answered",
+        view_func=_mark_fast_mode_prompt_answered,
         methods=["POST"],
-        endpoint="_set_workspace_fast_mode",
     )
     application.add_url_rule("/api/activity", view_func=_activity_endpoint, methods=["POST"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
