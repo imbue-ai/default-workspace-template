@@ -314,10 +314,13 @@ Interpret the exit code and report it to the user:
   that standard, so the final line says the backend is healthy and names what
   could not be confirmed instead of claiming the UI is. Pass both problems on.
 - `3` -- **emergency**: even rollback could not restore a healthy UI. The
-  interface may be down; escalate immediately. The snapshotted bundle is kept in
-  this case and its path printed on stderr -- copying it back over
+  interface may be down; escalate immediately. If the reveal touched the
+  frontend, the snapshotted bundle is kept and its path printed on stderr --
+  copying it back over
   `system/apps/system_interface/imbue/system_interface/static/` needs neither
-  `npm` nor a registry, so pass that path on with the escalation.
+  `npm` nor a registry, so pass that path on with the escalation. A backend-only
+  reveal never wrote that directory, so it prints no such path and there is
+  nothing to pass on.
 - `1` -- precondition error (e.g. a dirty tree); nothing was changed.
 
 Once you no longer need the preview (after a successful reveal, *or* after a
