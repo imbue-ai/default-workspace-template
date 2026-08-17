@@ -24,8 +24,8 @@ from flask import Response
 from flask import request
 from loguru import logger as _loguru_logger
 
-from imbue.system_interface.harnesses.claude import auth
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.harnesses.claude import auth
 from imbue.system_interface.models import ClaudeAuthCredentialsRequest
 from imbue.system_interface.models import ClaudeAuthStatusResponse
 from imbue.system_interface.models import ClaudeOAuthLoginStartRequest

@@ -25,10 +25,6 @@ from oom_priority import bands
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr_codex.app_server_client import CodexModel
-from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
-from imbue.system_interface.harnesses.codex.model import codex_models_to_options
-from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
-from imbue.system_interface.harnesses.codex.model import read_codex_model_options
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_discovery import AgentInfo
@@ -38,11 +34,19 @@ from imbue.system_interface.app_context import state_of
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
+from imbue.system_interface.harnesses.codex.ledger import ShoulderTapResult
+from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
+from imbue.system_interface.harnesses.codex.model import codex_models_to_options
+from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
+from imbue.system_interface.harnesses.codex.model import read_codex_model_options
+from imbue.system_interface.harnesses.codex.session import CodexHarnessSession
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
+from imbue.system_interface.harnesses.registry import build_shoulder_tap
+from imbue.system_interface.harnesses.session import FileHarnessSession
+from imbue.system_interface.harnesses.session import SessionDeps
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.harnesses.codex.ledger import ShoulderTapResult
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
@@ -465,6 +469,37 @@ def _codex_client(agent_info: AgentInfo) -> FlaskClient:
     return create_application(build_test_state(agent_manager=manager)).test_client()
 
 
+def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarnessSession:
+    """A real FileHarnessSession over inert deps, optionally pre-seeded with an in-flight send."""
+    deps = SessionDeps(
+        agent_id=agent_info.id,
+        harness=agent_info.harness,
+        state_dir=agent_info.agent_state_dir,
+        send_to_harness=lambda text: True,
+        notify_agents_changed=lambda: None,
+        is_tracked=lambda: True,
+        on_queue_snapshot=lambda snapshot: None,
+        on_user_turn=lambda event: None,
+        recompute_activity=lambda: None,
+        clear_queue_state=lambda: None,
+        catalog_options=lambda: (),
+        build_interrupter=build_interrupt_to_composer,
+        build_shoulder_tap=build_shoulder_tap,
+    )
+    file_session = FileHarnessSession.build(deps)
+    if in_flight:
+        file_session._sending.record("t-in-flight", in_flight)
+    return file_session
+
+
+def _codex_session_over(ledger: "_FakeCodexLedger | None") -> CodexHarnessSession:
+    """A codex session whose live ledger is the given fake (None = daemon down/starting)."""
+    session = CodexHarnessSession.__new__(CodexHarnessSession)
+    session.ensure_live = lambda: None
+    session._live_ledger = lambda: ledger
+    return session
+
+
 def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
     """A codex send is submitted through the live ledger (backend authority), not the mngr send."""
     agent_id = "codex-agent-1"
@@ -473,7 +508,7 @@ def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(AgentManager, "ensure_codex_ledger", return_value=ledger),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi", "message_id": "m1"})
     assert response.status_code == 200
@@ -488,7 +523,7 @@ def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: P
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(AgentManager, "ensure_codex_ledger", return_value=None),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi"})
     assert response.status_code == 503
@@ -502,7 +537,7 @@ def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> N
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
@@ -519,7 +554,7 @@ def test_shoulder_tap_codex_is_a_benign_200_when_a_send_is_in_flight(tmp_path: P
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
@@ -532,7 +567,7 @@ def test_shoulder_tap_codex_no_ledger_is_a_noop(tmp_path: Path) -> None:
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(AgentManager, "get_codex_ledger", return_value=None),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
@@ -548,7 +583,7 @@ def test_shoulder_tap_codex_resend_failure_hands_the_block_back_to_the_composer(
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
     assert response.status_code == 200
@@ -565,7 +600,7 @@ def test_drain_to_composer_codex_returns_the_ledger_block(tmp_path: Path) -> Non
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(AgentManager, "get_codex_ledger", return_value=ledger),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(ledger)),
     ):
         response = client.post(f"/api/agents/{agent_id}/drain-to-composer")
     assert response.status_code == 200
@@ -578,7 +613,7 @@ def test_drain_to_composer_codex_no_ledger_returns_empty_block(tmp_path: Path) -
     client = _codex_client(agent_info)
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
-        patch.object(AgentManager, "get_codex_ledger", return_value=None),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/agents/{agent_id}/drain-to-composer")
     assert response.status_code == 200
@@ -763,7 +798,7 @@ def test_set_model_switches_codex_via_thread_settings_update(tmp_path: Path) -> 
             }
         ),
     )
-    manager.store_codex_model_options(agent_id, codex_models_to_options(codex_models))
+    manager.get_or_create_session(agent_info).note_offered_options(codex_models_to_options(codex_models))
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch(
@@ -832,7 +867,7 @@ def test_picker_open_reconciles_the_chip_and_switch_model_sets_for_codex(tmp_pat
 
     # Before any open, the chip-match and switch-validation sets are unpopulated -- the model below
     # would 400 on a switch.
-    assert manager.get_codex_model_options(agent_id) is None
+    assert manager.get_or_create_session(agent_info).switch_options() == ()
     assert _agent_switch_options(manager, agent_info) == ()
 
     # A fresh picker-open fetch offers a model the sets did not have.
@@ -861,8 +896,8 @@ def test_picker_open_reconciles_the_chip_and_switch_model_sets_for_codex(tmp_pat
 
         # The reconciliation: the picker offer set, the chip-match set, and the switch-validation set
         # are now the SAME set -- the open's fetch updated the one stored per-agent set.
-        chip_options = manager.get_codex_model_options(agent_id)
-        assert chip_options is not None
+        chip_options = manager.get_or_create_session(agent_info).switch_options()
+        assert chip_options != ()
         chip_ids = [opt.id for opt in chip_options]
         switch_ids = [opt.id for opt in _agent_switch_options(manager, agent_info)]
         assert picker_ids == chip_ids == switch_ids == ["gpt-5.6-terra"]
@@ -924,12 +959,14 @@ def test_codex_connect_seed_persists_the_raw_model_options_sidecar(tmp_path: Pat
         ),
     )
     with patch.object(CodexLiveConnection, "build", return_value=_FakeCodexConnection(models)):
-        manager._ensure_codex_connection(agent_id)
+        session = manager._build_session(agent_id, HarnessType.CODEX)
+        with manager._lock:
+            manager._session_by_agent[agent_id] = session
+        session.ensure_live()
 
     state_dir = manager._get_agent_state_dir(agent_id)
     assert read_codex_model_options(get_codex_model_options_path(state_dir)) == models
-    in_memory = manager.get_codex_model_options(agent_id)
-    assert in_memory is not None
+    in_memory = session.switch_options()
     assert [opt.id for opt in in_memory] == ["gpt-5.6-terra"]
 
 
@@ -1729,10 +1766,12 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
     Interrupt/A4: return every not-Delivered message) -- queued block first, then the still-in-
     flight send -- rather than being lost."""
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
-    fake_watcher = _fake_queue_watcher("bring me back to edit", in_flight_block="a message still sending")
+    fake_watcher = _fake_queue_watcher("bring me back to edit")
+    in_flight_session = _file_session_for(agent_info, in_flight="a message still sending")
     with (
         _hold_message_lock(tmp_path),
         patch("imbue.system_interface.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
+        patch.object(AgentManager, "get_or_create_session", return_value=in_flight_session),
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
         patch.object(SystemInterfaceState, "get_or_create_watcher", return_value=fake_watcher),
         patch(
@@ -1794,11 +1833,12 @@ def test_drain_to_composer_claude_returns_in_flight_send_when_the_lock_stays_hel
     session.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
     agent_id = "agent-00000000000000000000000000000043"
     agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
-    fake_watcher = _fake_claude_interrupt_watcher(
-        block="", queued=[], session_file=session, in_flight_block="message caught mid-send"
-    )
+    fake_watcher = _fake_claude_interrupt_watcher(block="", queued=[], session_file=session)
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    in_flight_session = manager.get_or_create_session(agent_info)
+    assert isinstance(in_flight_session, FileHarnessSession)
+    in_flight_session._sending.record("t-in-flight", "message caught mid-send")
     app = create_application(build_test_state(agent_manager=manager))
     with (
         _hold_message_lock(state_dir),

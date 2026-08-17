@@ -34,32 +34,30 @@ from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
-from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
 from imbue.system_interface import workspace_layouts
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.agent_manager import AgentManager
+from imbue.system_interface.agent_manager import _LogQueueCallback
+from imbue.system_interface.agent_manager import _build_chat_create_command
+from imbue.system_interface.agent_manager import _build_observe_command_argv
+from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
 from imbue.system_interface.harnesses.codex.model import write_codex_model_options
-from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
-from imbue.system_interface.agent_manager import AgentManager
-from imbue.system_interface.agent_manager import _LogQueueCallback
-from imbue.system_interface.agent_manager import _build_chat_create_command
-from imbue.system_interface.harnesses.auth_check import HARNESS_AUTH_CHECKS
-from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.agent_manager import _build_observe_command_argv
-from imbue.system_interface.agent_manager import _make_apps_file_handler
+from imbue.system_interface.harnesses.session import FileHarnessSession
+from imbue.system_interface.harnesses.registry import get_model_state_path
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
-from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.models import QueuedMessageState
+from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Several tests in this module spin up real watchdog FSEvents observers
@@ -304,13 +302,9 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Both menu entries make a chat, so creation_type is the role -- never the harness."""
-    # Stub codex's sign-in preflight to a command that always reports signed in, so the
-    # create does not depend on a real (possibly signed-out) codex CLI in the test env.
-    monkeypatch.setitem(
-        HARNESS_AUTH_CHECKS,
-        HarnessType.CODEX,
-        HarnessAuthCheck(command=("true",), display_name="Codex", signin_instructions="Sign in."),
-    )
+    # Stub the sign-in preflight to always report signed in, so the create does not depend
+    # on a real (possibly signed-out) codex CLI in the test env.
+    agent_manager._auth_gate = lambda check: None
     q = broadcaster.register()
 
     with agent_manager._lock:
@@ -1466,8 +1460,8 @@ def test_codex_agent_gets_a_transcript_turn_latch_tracker(agent_manager: AgentMa
         "agent-1", [{"type": SPECIAL_EVENT_TYPE, "kind": SpecialEventKind.TURN_STARTED.value}]
     )
     assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.THINKING
-    # No daemon in the test, so no live ledger is available.
-    assert agent_manager.get_codex_ledger("agent-1") is None
+    # No daemon in the test, so the session has no live connection to tap through.
+    assert agent_manager._session_by_agent["agent-1"].is_tap_available(has_queued=True) is False
 
 
 def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_path: Path) -> None:
@@ -1545,12 +1539,15 @@ def test_shoulder_tap_available_reflects_queue_and_send_in_flight(
     agent_manager.update_queued_messages("agent-1", [{"queued_id": "q1", "content": "hi", "timestamp": "t"}])
     assert available() is True
 
-    # A send in flight greys it, even with a non-empty queue.
-    agent_manager.mark_send_in_flight("agent-1")
+    # A send in flight greys it, even with a non-empty queue (the manager consults the
+    # session's Sending state, which the session's own send maintains around delivery).
+    session = agent_manager._session_by_agent["agent-1"]
+    assert isinstance(session, FileHarnessSession)
+    session._sending.record("t1", "mid-flight")
     assert available() is False
 
     # Send resolved -> available again.
-    agent_manager.clear_send_in_flight("agent-1")
+    session._sending.resolve("t1")
     assert available() is True
 
     agent_manager.stop()
@@ -2020,9 +2017,10 @@ def _codex_model_entry(model: str, effort: str, *, priority: bool = False) -> Co
 
 
 def test_codex_model_options_is_none_without_a_cache_or_a_sidecar(agent_manager: AgentManager) -> None:
-    # No in-memory set and no sidecar on disk -> None (the chip goes logo-only, not a spurious empty set).
+    # No in-memory set and no sidecar on disk -> empty (the chip goes logo-only).
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
-    assert agent_manager.get_codex_model_options("agent-1") is None
+    session = agent_manager._build_session("agent-1", HarnessType.CODEX)
+    assert session.switch_options() == ()
 
 
 def test_codex_model_options_falls_back_to_the_sidecar_when_the_cache_is_empty(
@@ -2033,8 +2031,8 @@ def test_codex_model_options_falls_back_to_the_sidecar_when_the_cache_is_empty(
     _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
     models = (_codex_model_entry("gpt-5.6-terra", "high", priority=True),)
     write_codex_model_options(get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-1")), models)
-    options = agent_manager.get_codex_model_options("agent-1")
-    assert options is not None
+    session = agent_manager._build_session("agent-1", HarnessType.CODEX)
+    options = session.switch_options()
     assert [opt.id for opt in options] == ["gpt-5.6-terra"]
 
 
@@ -2045,9 +2043,9 @@ def test_codex_model_options_in_memory_cache_wins_over_the_sidecar(agent_manager
     stale = (_codex_model_entry("gpt-old", "high"),)
     write_codex_model_options(get_codex_model_options_path(agent_manager._get_agent_state_dir("agent-1")), stale)
     live = codex_models_to_options((_codex_model_entry("gpt-5.6-terra", "high"),))
-    agent_manager.store_codex_model_options("agent-1", live)
-    options = agent_manager.get_codex_model_options("agent-1")
-    assert options is not None
+    session = agent_manager._build_session("agent-1", HarnessType.CODEX)
+    session.note_offered_options(live)
+    options = session.switch_options()
     assert [opt.id for opt in options] == ["gpt-5.6-terra"]
 
 
@@ -2066,7 +2064,8 @@ def test_offline_codex_chip_matches_the_persisted_selection_from_the_sidecar(age
     )
 
     # Without the sidecar the identity would match nothing (the pre-fix shrug); with it, the chip resolves.
-    assert agent_manager.get_codex_model_options(agent_id) is not None
+    agent_manager._session_by_agent[agent_id] = agent_manager._build_session(agent_id, HarnessType.CODEX)
+    assert agent_manager._session_by_agent[agent_id].switch_options() != ()
     agent_manager._recompute_model_choice(agent_id, broadcast_on_change=False)
     choice = agent_manager._agents[agent_id].model_choice
     assert choice is not None

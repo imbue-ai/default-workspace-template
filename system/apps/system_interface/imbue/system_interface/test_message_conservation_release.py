@@ -231,7 +231,7 @@ def test_live_claude_stop_flush_and_restart_conserve_every_message(tmp_path: Pat
         # press_chord is wired inert: this stop exercises the NONEMPTY branch (the bounded-lock
         # restart-drain); were the mirror to read empty, an inert chord still falls back to the
         # base restart, so the stop always stops.
-        block = interrupter.drain_to_composer(watcher, restart_process, lambda: None, lambda: False)
+        block = interrupter.drain_to_composer(watcher, restart_process, lambda: None, lambda: False, lambda: "")
         assert message_2 in block and message_3 in block, f"retracted messages must ride the block: {block!r}"
         assert block.index(message_2) < block.index(message_3), f"the block must keep queue order: {block!r}"
 

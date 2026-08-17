@@ -122,34 +122,3 @@ class AgentSessionWatcher(ABC):
     def notify_idle(self) -> list[dict[str, Any]]:
         """Apply the working->IDLE backstop and return the resulting snapshot (empty by default)."""
         return []
-
-    def note_sent_message(self, content: str, message_id: str = "") -> str | None:
-        """The UI is about to send ``content`` to this agent (called BEFORE the send).
-
-        No-op returning None by default. A harness that tracks the *Sending* state
-        (contract A1) -- the message is accepted and in flight but not yet committed or
-        queued -- overrides this to record it (keyed by ``message_id``, the sender's
-        stable send-time id, or a minted one when empty) and returns an opaque token for
-        :meth:`retract_sent_message` (failure) / :meth:`commit_sent_message` (resolved).
-        """
-        return None
-
-    def retract_sent_message(self, token: str) -> None:
-        """The send behind ``token`` failed: un-track it (it is Returned, not Sending).
-        No-op by default."""
-
-    def commit_sent_message(self, token: str) -> None:
-        """The send behind ``token`` resolved (committed or queued): it is no longer Sending.
-
-        Called AFTER a successful send so the Sending record is cleared once the message
-        has a real representation (a transcript turn or a queue chip). No-op by default.
-        """
-
-    def get_in_flight_block(self) -> str:
-        """The still-in-flight (Sending) messages as one concatenated block; '' by default.
-
-        Read by the interrupt path so a send caught mid-flight (never committed) returns
-        to the composer instead of being lost. Empty for a harness that tracks no Sending
-        state.
-        """
-        return ""

@@ -1,5 +1,11 @@
+from collections.abc import Callable
+from pathlib import Path
+
+from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.sending_registry import SendingRegistry
-from imbue.system_interface.harnesses.sending_registry import SendingStateWatcherMixin
+from imbue.system_interface.harnesses.session import FileHarnessSession
+from imbue.system_interface.harnesses.session import SendOutcome
+from imbue.system_interface.harnesses.session import SessionDeps
 
 
 def test_empty_registry_has_no_block() -> None:
@@ -55,40 +61,62 @@ def test_clear_drops_everything() -> None:
     assert registry.in_flight_texts() == []
 
 
-class _MixinHost(SendingStateWatcherMixin):
-    """A minimal watcher-shaped host: constructed via ``__new__``/``build`` like the real
-    watchers (no ``__init__``), calling the mixin's initializer from ``build``."""
-
-    @classmethod
-    def build(cls) -> "_MixinHost":
-        self = cls.__new__(cls)
-        self._init_sending_state()
-        return self
-
-
-def test_mixin_tracks_and_resolves_sending_state() -> None:
-    host = _MixinHost.build()
-    # note_sent_message records and returns a token; the block reflects send order.
-    t1 = host.note_sent_message("first")
-    host.note_sent_message("second", message_id="explicit-id")
-    assert t1 is not None
-    assert host.get_in_flight_block() == "first\nsecond"
-    # commit / retract each drop exactly the named message.
-    host.commit_sent_message(t1)
-    assert host.get_in_flight_block() == "second"
-    host.retract_sent_message("explicit-id")
-    assert host.get_in_flight_block() == ""
+def _file_session(send_to_harness: "Callable[[str], bool] | None" = None) -> "FileHarnessSession":
+    """A FileHarnessSession over inert deps -- only the Sending surface is exercised."""
+    deps = SessionDeps(
+        agent_id="a1",
+        harness=HarnessType.CLAUDE,
+        state_dir=Path("/nonexistent"),
+        send_to_harness=send_to_harness if send_to_harness is not None else lambda text: True,
+        notify_agents_changed=lambda: None,
+        is_tracked=lambda: True,
+        on_queue_snapshot=lambda snapshot: None,
+        on_user_turn=lambda event: None,
+        recompute_activity=lambda: None,
+        clear_queue_state=lambda: None,
+        catalog_options=lambda: (),
+        build_interrupter=lambda agent_info: (_ for _ in ()).throw(AssertionError("unused")),
+        build_shoulder_tap=lambda agent_info: None,
+    )
+    return FileHarnessSession.build(deps)
 
 
-def test_mixin_uses_the_supplied_message_id_as_the_token() -> None:
-    host = _MixinHost.build()
-    returned = host.note_sent_message("hi", message_id="stable-42")
-    assert returned == "stable-42"
+def test_session_send_tracks_and_resolves_sending_state() -> None:
+    """The Sending record exists exactly for the send's in-flight window (contract A1)."""
+    observed: list[str] = []
+    holder: list[FileHarnessSession] = []
+
+    # Capture the in-flight block DURING the blocking send: the record must be live then.
+    def send_and_observe(text: str) -> bool:
+        observed.append(holder[0].in_flight_block())
+        return True
+
+    session = _file_session(send_and_observe)
+    holder.append(session)
+    assert session.send("first", "t1") == SendOutcome.OK
+    assert observed == ["first"]
+    # Resolved after the send: nothing in flight, tap no longer greyed by Sending.
+    assert session.in_flight_block() == ""
+    assert session.is_sending() is False
 
 
-def test_mixin_has_its_own_lock_independent_of_any_subclass_lock() -> None:
-    # The mixin's lock is private to the Sending concern, not a shared ``_lock`` a
-    # subclass might also use for its transcript mirror.
-    host = _MixinHost.build()
-    assert not hasattr(host, "_lock")
-    assert host._sending_lock is not None
+def test_session_send_failure_resolves_the_record_too() -> None:
+    session = _file_session(lambda text: False)
+    assert session.send("hi", "stable-42") == SendOutcome.FAILED
+    assert session.in_flight_block() == ""
+
+
+def test_session_is_tap_available_greys_while_sending() -> None:
+    during: list[bool] = []
+    holder: list[FileHarnessSession] = []
+
+    def send_and_probe(text: str) -> bool:
+        during.append(holder[0].is_tap_available(has_queued=True))
+        return True
+
+    session = _file_session(send_and_probe)
+    holder.append(session)
+    assert session.is_tap_available(has_queued=True) is True
+    assert session.is_tap_available(has_queued=False) is False
+    session.send("hi", "t1")
+    assert during == [False]

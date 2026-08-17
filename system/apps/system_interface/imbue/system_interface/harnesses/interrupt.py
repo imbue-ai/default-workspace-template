@@ -143,12 +143,16 @@ class InterruptToComposer(ABC):
         restart_process: RestartProcess,
         settle_activity: SettleActivity,
         press_chord: PressChord,
+        get_in_flight_block: Callable[[], str],
     ) -> str:
         """Interrupt the turn and return the queued messages as one block (``""`` = nothing queued).
 
         ``watcher`` is the agent's live queue mirror; ``restart_process`` / ``settle_activity``
         are the base restart-drain's capabilities; ``press_chord`` delivers the harness's native
         cancel chord under mngr's lock (claude's empty-queue path uses it, the others ignore it).
+        ``get_in_flight_block`` reads the session's *Sending* records, so a send aborted
+        mid-flight is folded into the returned block (contract A4/B) by the harnesses that
+        guarantee ordering (claude, pi); the base restart-drain ignores it.
         Raises :class:`AgentRestartError` if a restart-based implementation cannot restart.
         """
 
@@ -226,6 +230,8 @@ class RestartDrainInterruptToComposer(InterruptToComposer):
         restart_process: RestartProcess,
         settle_activity: SettleActivity,
         press_chord: PressChord,
+        get_in_flight_block: Callable[[], str],
     ) -> str:
-        # The base restart-drain interrupts via SIGKILL-relaunch; it has no use for the chord.
+        # The base restart-drain interrupts via SIGKILL-relaunch; it has no use for the chord
+        # or the in-flight fold (its bounded lock acquire is best-effort, not ordered).
         return restart_drain_under_message_lock(self._agent_info, watcher, restart_process, settle_activity)
