@@ -120,7 +120,12 @@ anything.
 ```bash
 uv run host-backup-now --timeout 600
 ssh -i /tmp/mind_key -p <port> <user>@<host> \
-    '/home/user/workspace/system/scripts/with_agent_env.sh uv run host-backup-now --timeout 600'
+    'for w in /home/user/workspace/system/scripts/with_agent_env.sh \
+              /home/user/workspace/system/libs/automations/with_agent_env.sh \
+              /mngr/code/scripts/with_agent_env.sh; do
+       [ -x "$w" ] && exec "$w" uv run host-backup-now --timeout 600
+     done
+     echo "no with_agent_env.sh in this source generation" >&2; exit 127'
 ```
 
 **Send it through `with_agent_env.sh`.** sshd builds a fresh environment per
@@ -128,10 +133,16 @@ session, so a bare `ssh <host> 'uv run host-backup-now'` has no
 `MNGR_AGENT_STATE_DIR` or `MNGR_HOST_DIR` and cannot locate the events log to
 wait on -- it exits 2 immediately having printed nothing, which reads exactly
 like a broken source. The wrapper rebuilds the agent environment from the files
-mngr maintains and execs from the repo root (so it replaces the `cd` too). A
-**pre-declutter** source has no wrapper at that path; there, fall back to the
-explicit events-log paths in
-[references/pre-declutter-layout.md](references/pre-declutter-layout.md).
+mngr maintains and execs from the repo root (so it replaces the `cd` too).
+
+**Probe for it; do not hardcode one path.** This command runs on the *source*,
+so what matters is where that source's generation keeps the wrapper -- and it
+has moved twice (`system/scripts/` before 2026-07-28, `system/libs/automations/`
+until 2026-08-17, `system/scripts/` since). Naming a single path fails with 127
+on every source outside that one window. The same candidate-list shape is used
+for `minds_start_services_agent.sh` in `.mngr/settings.toml`. Exit 127 means the
+source predates the wrapper entirely; fall back to the explicit events-log paths
+in [references/pre-declutter-layout.md](references/pre-declutter-layout.md).
 
 **Bound both waits explicitly.** An older `host-backup-now` ends its wait only on
 a restic outcome, so a tick that never reaches restic -- most likely one skipped
