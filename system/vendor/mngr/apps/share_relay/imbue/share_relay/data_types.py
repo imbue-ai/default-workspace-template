@@ -9,6 +9,7 @@ from imbue.share_relay.primitives import DEFAULT_HEALTHCHECK_PORT
 from imbue.share_relay.primitives import DEFAULT_TUNNEL_CONTROL_PORT
 from imbue.share_relay.primitives import DEFAULT_VHOST_HTTPS_PORT
 from imbue.share_relay.primitives import RegionCode
+from imbue.share_relay.primitives import RelayId
 from imbue.share_relay.primitives import RelayPort
 
 
@@ -22,6 +23,12 @@ class RelayConfiguration(FrozenModel):
     connector, so the relay holds no per-share state and no plaintext.
     """
 
+    relay_id: RelayId = Field(
+        description=(
+            "This relay's registered identity (relay-<hex>); appended to the plugin-auth path so the "
+            "connector can attribute Login/NewProxy callbacks per relay"
+        )
+    )
     region: RegionCode = Field(
         description="Region code -- the label under the content domain apex this relay serves (e.g. 'us1')"
     )

@@ -42,6 +42,22 @@ class ContentDomain(NonEmptyStr):
         return instance
 
 
+class RelayId(NonEmptyStr):
+    """Opaque relay identity (``relay-<hex>``) minted at registration.
+
+    Embedded in the relay's rendered frps plugin-auth path
+    (``/frps/auth/<secret>/<relay-id>``) so the connector can attribute
+    Login/NewProxy callbacks to one relay, and used as the primary key of the
+    connector's ``relays`` inventory row.
+    """
+
+    def __new__(cls, value: str) -> "RelayId":
+        instance = super().__new__(cls, value)
+        if _RELAY_ID_RE.match(str(instance)) is None:
+            raise InvalidPrimitiveValueError(f"{cls.__name__} must be 'relay-<8..32 hex>'; got {value!r}")
+        return instance
+
+
 class RelayPort(PositiveInt):
     """A TCP port a relay process binds. Must be > 0."""
 
@@ -49,6 +65,9 @@ class RelayPort(PositiveInt):
 # A single DNS label: lowercase alphanumeric runs joined by single hyphens, no
 # leading/trailing/consecutive hyphens, 1..63 chars.
 _DNS_LABEL_RE: Final[re.Pattern[str]] = re.compile(r"^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+# Relay id shape, mirrored by the connector's relays admin API validation.
+_RELAY_ID_RE: Final[re.Pattern[str]] = re.compile(r"^relay-[a-f0-9]{8,32}$")
 
 # The frps SNI-passthrough vhost port. Browsers reach shared workspaces over
 # TLS on 443; frps reads the ClientHello SNI and splices the raw byte stream

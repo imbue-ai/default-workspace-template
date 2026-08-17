@@ -9,6 +9,7 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.share_relay.data_types import RelayConfiguration
 from imbue.share_relay.primitives import ContentDomain
 from imbue.share_relay.primitives import RegionCode
+from imbue.share_relay.primitives import RelayId
 from imbue.share_relay.remote_install import FRP_VERSION
 from imbue.share_relay.remote_install import REMOTE_ARTIFACT_PATHS
 from imbue.share_relay.remote_install import REMOTE_STAGING_DIR
@@ -56,6 +57,7 @@ def test_standalone_healthcheck_script_is_stdlib_only() -> None:
 
 def _deploy_config() -> RelayConfiguration:
     return RelayConfiguration(
+        relay_id=RelayId("relay-" + "e" * 16),
         region=RegionCode("us1"),
         content_domain=ContentDomain("imbueminds.com"),
         plugin_auth_url=AnyHttpUrl("https://connector.example.com/frps/auth"),

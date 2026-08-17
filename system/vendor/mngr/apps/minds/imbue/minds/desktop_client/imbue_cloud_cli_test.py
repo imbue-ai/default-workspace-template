@@ -5,11 +5,13 @@ import pytest
 from pydantic import AnyUrl
 
 from imbue.minds.desktop_client.conftest import make_fake_imbue_cloud_cli
+from imbue.minds.desktop_client.imbue_cloud_cli import ActiveShareCache
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthFailedCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudEmailNotVerifiedCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudQuotaExceededCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
 from imbue.minds.desktop_client.imbue_cloud_cli import _CONNECTOR_URL_SUBPROCESS_ENV
 from imbue.minds.desktop_client.imbue_cloud_cli import _parse_conflict_stored
 from imbue.minds.desktop_client.imbue_cloud_cli import _parse_stderr_error_message
@@ -153,6 +155,30 @@ def test_parse_conflict_stored_returns_none_without_a_stored_row() -> None:
     assert _parse_conflict_stored("plain traceback text\nwithout any json\n") is None
 
 
+def test_get_share_status_parses_the_per_relay_login_stamps() -> None:
+    # `shares status` output carries per-relay login stamps (an ops signal);
+    # ShareCliInfo forbids unknown keys, so it must model the field explicitly.
+    body = {
+        "host_id": "host-abc",
+        "workspace_domain": "host-abc.owner1234.us1.shares.example",
+        "region": "us1",
+        "state": "active",
+        "relay_endpoints": [{"relay_id": "relay-" + "1" * 16, "endpoint": "relay-us1.shares.example:7000"}],
+        "relays": [{"relay_id": "relay-" + "1" * 16, "last_login_at": "2026-07-29 01:02:03+00:00"}],
+        "last_tunnel_login_at": "2026-07-29 01:02:03+00:00",
+        "cert_not_after": None,
+    }
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps(body)))
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    info = cli.get_share_status(account="owner@example.com", host_id="host-abc")
+
+    assert info is not None
+    assert [(entry.relay_id, entry.last_login_at) for entry in info.relays] == [
+        ("relay-" + "1" * 16, "2026-07-29 01:02:03+00:00")
+    ]
+
+
 def test_create_share_malformed_output_error_omits_the_relay_token() -> None:
     """A malformed shares-create payload (a body with a relay token but no
     workspace_domain) must not leak the relay token into the exception
@@ -172,19 +198,29 @@ def test_create_share_malformed_output_error_omits_the_relay_token() -> None:
 
 
 def test_list_share_relays_parses_the_relay_map() -> None:
-    body = {"relays": {"us1": "relay-us1.example:7000", "us2": "relay-us2.example:7000"}, "default_region": "us1"}
+    body = {
+        "relays": {"us1": ["relay-us1.example:7000", "relay-us1b.example:7000"], "us2": ["relay-us2.example:7000"]}
+    }
     caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps(body)))
     cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
 
     relays = cli.list_share_relays(account="owner@example.com")
 
-    assert relays == {"us1": "relay-us1.example:7000", "us2": "relay-us2.example:7000"}
+    assert relays == {"us1": ("relay-us1.example:7000", "relay-us1b.example:7000"), "us2": ("relay-us2.example:7000",)}
     assert caller.recorded_calls[0].argv == ("imbue_cloud", "shares", "relays", "--account", "owner@example.com")
 
 
-def test_list_share_relays_raises_on_malformed_output() -> None:
-    """A body without a relays map is a broken plugin contract, not an empty fleet."""
-    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps({"default_region": "us1"})))
+@pytest.mark.parametrize(
+    "malformed_body",
+    [
+        {"unexpected": True},
+        # The old region -> single-endpoint shape: a non-list per-region value.
+        {"relays": {"us1": "relay-us1.example:7000"}},
+    ],
+)
+def test_list_share_relays_raises_on_malformed_output(malformed_body: dict[str, object]) -> None:
+    """A body without a relays map (or without an endpoint list per region) is a broken plugin contract."""
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps(malformed_body)))
     cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
 
     with pytest.raises(ImbueCloudCliError, match="Malformed shares relays output"):
@@ -229,3 +265,42 @@ def test_expect_success_raises_typed_email_not_verified_error_with_the_email() -
 
     assert exc_info.value.email == "alice@example.com"
     assert "verified email" in str(exc_info.value)
+
+
+# --- ActiveShareCache ---
+
+
+def test_active_share_cache_serves_hits_and_caches_negative_lookups() -> None:
+    cache = ActiveShareCache()
+    share = ShareCliInfo(host_id="host-" + "a" * 32, workspace_domain="d.example", region="us1", state="active")
+
+    assert cache.get("host-" + "a" * 32) is None
+    cache.put("host-" + "a" * 32, share)
+    cache.put("host-" + "b" * 32, None)
+
+    hit = cache.get("host-" + "a" * 32)
+    assert hit is not None
+    assert hit.share == share
+    # A cached "not shared" answer is a hit too (share=None), distinct from a miss.
+    negative_hit = cache.get("host-" + "b" * 32)
+    assert negative_hit is not None
+    assert negative_hit.share is None
+
+
+def test_active_share_cache_expires_entries_after_the_ttl() -> None:
+    cache = ActiveShareCache(ttl_seconds=0.0)
+    share = ShareCliInfo(host_id="host-" + "c" * 32, workspace_domain="d.example", region="us1", state="active")
+
+    cache.put("host-" + "c" * 32, share)
+
+    assert cache.get("host-" + "c" * 32) is None
+
+
+def test_active_share_cache_invalidate_forces_the_next_lookup_to_miss() -> None:
+    cache = ActiveShareCache()
+    share = ShareCliInfo(host_id="host-" + "d" * 32, workspace_domain="d.example", region="us1", state="active")
+    cache.put("host-" + "d" * 32, share)
+
+    cache.invalidate("host-" + "d" * 32)
+
+    assert cache.get("host-" + "d" * 32) is None

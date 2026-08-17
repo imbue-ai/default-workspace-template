@@ -247,7 +247,10 @@ export async function provisionBackupsOverExec(
         "(open the workspace once so the owner session exists, then resume setup)",
     );
   }
-  const exec = new ExecClient(execOrigin, claim.workspace_domain, keypair);
+  // Address the inner owner-exec by its host-id-scoped audience. The daemon
+  // also accepts the share domain, but container:<host-id> is the going-forward
+  // default and works whether or not the workspace is shared.
+  const exec = new ExecClient(execOrigin, `container:${claim.host_id}`, keypair);
   onProgress({ step: "backups", message: "Creating the backup bucket..." });
   const resticEnv = await mintBackupResticEnv(claim.host_id);
   onProgress({ step: "backups", message: "Writing backup credentials..." });

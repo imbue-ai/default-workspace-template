@@ -16,15 +16,18 @@ parses those into typed pydantic objects.
 import json as _json
 import os
 import tempfile
+import threading
 import time
 from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 from loguru import logger
 from pydantic import AnyUrl
 from pydantic import Field
+from pydantic import PrivateAttr
 from pydantic import SecretStr
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -177,6 +180,20 @@ class LiteLLMKeyMaterial(FrozenModel):
     base_url: AnyUrl
 
 
+class ShareCliRelayEndpoint(FrozenModel):
+    """One relay a shared workspace tunnels to (from `shares create` / `shares status`)."""
+
+    relay_id: str
+    endpoint: str
+
+
+class ShareCliRelayLogin(FrozenModel):
+    """One relay's last tunnel Login stamp for a share (from `shares status`)."""
+
+    relay_id: str
+    last_login_at: str | None = None
+
+
 class ShareCliInfo(FrozenModel):
     """Result of `mngr imbue_cloud shares create` / `shares status`."""
 
@@ -184,10 +201,70 @@ class ShareCliInfo(FrozenModel):
     workspace_domain: str
     region: str
     state: str
-    relay_endpoint: str | None = None
+    relay_endpoints: tuple[ShareCliRelayEndpoint, ...] = ()
+    # Per-relay tunnel login stamps; `shares status` output only (ops signal,
+    # not shown in the end-user UI).
+    relays: tuple[ShareCliRelayLogin, ...] = ()
     relay_token: SecretStr | None = None
     last_tunnel_login_at: str | None = None
     cert_not_after: str | None = None
+
+
+# How long a readiness poll may reuse a cached connector share lookup. The
+# share's domain is immutable for its lifetime and the progress stamps riding
+# along (cert expiry, tunnel login) change on the scale of the ACME/tunnel
+# bring-up, so one connector read per window is plenty -- while the poll
+# itself fires every ~2 seconds and each uncached read is a multi-second
+# ``mngr imbue_cloud shares status`` subprocess.
+_ACTIVE_SHARE_CACHE_TTL_SECONDS: Final[float] = 20.0
+
+
+class CachedShareLookup(FrozenModel):
+    """One cached connector share lookup (``share`` is None for 'not actively shared')."""
+
+    share: ShareCliInfo | None = Field(description="The active share, or None when the host has no active share")
+
+
+class ActiveShareCache(MutableModel):
+    """Short-TTL cache of connector share lookups, keyed by host id.
+
+    Serves the readiness poll: the poll needs the share's (immutable) domain
+    plus slow-moving progress stamps every ~2 seconds, and an uncached lookup
+    costs a multi-second CLI subprocess. Enable/disable invalidate their
+    host's entry so state flips are observed immediately rather than at TTL
+    expiry.
+    """
+
+    ttl_seconds: float = Field(
+        default=_ACTIVE_SHARE_CACHE_TTL_SECONDS,
+        frozen=True,
+        description="How long one lookup may be reused",
+    )
+    _lookup_and_deadline_by_host_id: dict[str, tuple[float, CachedShareLookup]] = PrivateAttr(default_factory=dict)
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+
+    def get(self, host_id: str) -> CachedShareLookup | None:
+        """The unexpired cached lookup for ``host_id``, or None on a miss."""
+        with self._lock:
+            entry = self._lookup_and_deadline_by_host_id.get(host_id)
+            if entry is None:
+                return None
+            deadline, lookup = entry
+            if time.monotonic() >= deadline:
+                del self._lookup_and_deadline_by_host_id[host_id]
+                return None
+            return lookup
+
+    def put(self, host_id: str, share: ShareCliInfo | None) -> None:
+        with self._lock:
+            self._lookup_and_deadline_by_host_id[host_id] = (
+                time.monotonic() + self.ttl_seconds,
+                CachedShareLookup(share=share),
+            )
+
+    def invalidate(self, host_id: str) -> None:
+        with self._lock:
+            self._lookup_and_deadline_by_host_id.pop(host_id, None)
 
 
 class R2BucketKeyMaterial(FrozenModel):
@@ -469,21 +546,6 @@ class ImbueCloudCli(MutableModel):
             return []
         return [LeasedHost.model_validate(entry) for entry in entries if isinstance(entry, dict)]
 
-    def enable_web_access(self, *, account: str, host_ref: str) -> dict[str, Any]:
-        """Bring sharing up server-side for a leased host (``hosts enable-sharing``).
-
-        The connector creates/rotates the share record and injects the share
-        materials (owner granted, web chrome origin included) into the
-        container with the pool key. Idempotent; returns the connector's
-        ``{host_id, workspace_domain, region}`` body.
-        """
-        result = self._run(
-            ["hosts", "enable-sharing", host_ref, "--account", account],
-            cg_name="imbue-cloud-hosts-enable-sharing",
-        )
-        body = self._expect_success(result, "hosts enable-sharing")
-        return body if isinstance(body, dict) else {}
-
     def release_host(self, account: str, host_db_id: str) -> bool:
         result = self._run(
             ["hosts", "release", host_db_id, "--account", account],
@@ -630,8 +692,8 @@ class ImbueCloudCli(MutableModel):
             return None
         return ShareCliInfo.model_validate(body)
 
-    def list_share_relays(self, *, account: str) -> dict[str, str]:
-        """The relay fleet as ``{region: tunnel-control endpoint}`` (for latency-based region picking)."""
+    def list_share_relays(self, *, account: str) -> dict[str, tuple[str, ...]]:
+        """The relay fleet as ``{region: tunnel-control endpoints}`` (for latency-based region picking)."""
         result = self._run(
             ["shares", "relays", "--account", account],
             cg_name="imbue-cloud-shares-relays",
@@ -640,7 +702,9 @@ class ImbueCloudCli(MutableModel):
         relays = body.get("relays") if isinstance(body, dict) else None
         if not isinstance(relays, dict):
             raise ImbueCloudCliError("Malformed shares relays output: expected a relays map")
-        return {str(region): str(endpoint) for region, endpoint in relays.items()}
+        if not all(isinstance(endpoints, list) for endpoints in relays.values()):
+            raise ImbueCloudCliError("Malformed shares relays output: expected an endpoint list per region")
+        return {str(region): tuple(str(endpoint) for endpoint in endpoints) for region, endpoints in relays.items()}
 
     # ------------------------------------------------------------------
     # R2 buckets (one per workspace; used to back up the host_dir via restic)

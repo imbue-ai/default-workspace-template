@@ -135,86 +135,95 @@ body {
   padding: 0.08em 0.2em;
 }
 
-/* ── Optimistic (pending) message ── */
-/* An optimistic bubble for a message the user just sent. While the send request
-   is in flight it is dimmed and captioned "Sending…"; on success it settles to a
-   normal bubble (the opacity transition makes the confirmation feel smooth). */
-/* A plain block wrapper -- deliberately NOT a flex/align-items:flex-end column.
-   The inner .message-user must fill the full column width exactly as it does in
-   the main message list (which stretches its children); otherwise it would
-   shrink-wrap to its content and the bubble's max-width:80% would resolve
-   against that narrower base, capping the sending bubble narrower than a normal
-   message. Right alignment of the bubble comes from .message-user's own
-   align-items:flex-end, and of the caption from text-align below. */
-.pending-message {
-  /* Own the inter-message spacing here, and zero out the inner bubble's own
-     margin (below), so the "Sending…" caption hugs its own bubble rather than
-     being pushed 20px down by the bubble's margin and ending up flush against
-     the next message. */
+/* ── Queued messages (the shoulder-tap group) ── */
+/* Messages the harness has parked while the agent is mid-turn, rendered below the
+   last committed turn as a distinct group under a subtle header row. This is a
+   full snapshot from the backend -- there is no optimistic/"sending" state. */
+.queued-group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   margin-bottom: 20px;
 }
 
-.pending-message .message {
-  margin-bottom: 0;
-}
-
-.pending-message .message-user-bubble {
-  transition: opacity 0.2s ease;
-}
-
-.pending-message--sending .message-user-bubble {
-  opacity: 0.6;
-}
-
-.pending-message-status {
+/* Header row spanning the message column's left..right bounds: 'Queued messages'
+   left-aligned with the chat message column / composer, the [Shoulder tap] button
+   pinned to the column's right. When the column is narrow the label truncates
+   rather than crowding the button -- space-between + gap keeps spacing between
+   them, and the button never shrinks. */
+.queued-header {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-  padding-right: 4px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
+  justify-content: space-between;
+  gap: 12px;
 }
 
-/* "Interrupt and send now" action on a queued message: a compact icon button
-   (up-arrow), styled as an understated secondary control, with a CSS tooltip
-   (native `title` is unreliable in the desktop webview). */
-.pending-message-interrupt {
-  position: relative;
-  display: inline-flex;
+/* Left group: the 'Queued messages' label plus its (i) info icon, kept together
+   and allowed to shrink/ellipsize so the [Shoulder tap] button on the right is
+   never crowded. */
+.queued-header-title {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: none;
+  gap: 6px;
+  min-width: 0;
+}
+
+.queued-header-label {
+  font-family: var(--font-family-base);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--color-text-secondary);
+  /* Let the label shrink and ellipsize in a narrow column instead of overlapping
+     the button. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-action {
+  position: relative;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 12px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
   cursor: pointer;
+  white-space: nowrap;
   transition:
     color 0.15s ease,
     background 0.15s ease,
     border-color 0.15s ease;
 }
 
-.pending-message-interrupt:hover {
+.queued-action:hover:not(:disabled) {
   color: var(--color-accent);
   border-color: var(--color-accent);
   background: var(--color-accent-light);
 }
 
-.pending-message-interrupt::after {
+.queued-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* CSS tooltip for the [Shoulder tap] button (native title= is unreliable in the
+   webview). Right-anchored so it never clips the panel's right edge; points down
+   from above the button, matching the progress-view marker tooltips. */
+.queued-action[data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 7px);
-  /* Right-anchored (the button sits at the message column's right edge), so the
-     bubble extends leftward and never clips against the panel's right side. */
   right: 0;
   z-index: 1000;
   width: max-content;
-  max-width: 240px;
+  max-width: 260px;
   padding: 6px 9px;
   border-radius: 6px;
   background: var(--color-text-primary);
@@ -230,26 +239,106 @@ body {
   transition: opacity 0.12s ease;
 }
 
-.pending-message-interrupt::before {
-  content: "";
+.queued-action[data-tooltip]:hover::after,
+.queued-action[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* A queued bubble reuses the user-bubble view but is marked as not-yet-sent: a
+   slightly muted fill distinguishes it from a committed turn (the labeled 'Queued
+   messages' group is what sets it apart; no outline). */
+.queued-message {
+  margin-bottom: 0;
+}
+
+.queued-message .message-user-bubble {
+  opacity: 0.85;
+}
+
+/* Frozen queued group: while a shoulder-tap restart is in flight, the captured
+   messages are held greyed (ignoring the backend snapshot briefly emptying) so
+   they do not blip out and back, until a backend arrival releases the hold. No
+   countdown is shown. */
+.queued-group--frozen {
+  opacity: 0.55;
+}
+
+.queued-header--frozen {
+  color: var(--color-text-secondary);
+}
+
+/* The (i) info affordance next to 'Queued messages'. */
+.queued-info {
+  position: relative;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--color-text-secondary);
+  opacity: 0.7;
+  cursor: help;
+}
+
+.queued-info:hover {
+  opacity: 1;
+}
+
+/* Its hover tooltip, same right-anchored CSS pattern as the [Shoulder tap] button
+   (native title= is unreliable in the webview). Left-anchored here since the icon
+   sits at the column's left edge, so the tooltip does not clip off-screen. */
+.queued-info[data-tooltip]::after {
+  content: attr(data-tooltip);
   position: absolute;
-  bottom: calc(100% + 2px);
-  /* Centre the little pointer under the button (which is ~24px wide). */
-  right: 7px;
+  bottom: calc(100% + 7px);
+  left: 0;
   z-index: 1000;
-  border: 5px solid transparent;
-  border-top-color: var(--color-text-primary);
+  width: max-content;
+  max-width: 300px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--color-text-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
   opacity: 0;
   visibility: hidden;
+  pointer-events: none;
   transition: opacity 0.12s ease;
 }
 
-.pending-message-interrupt:hover::after,
-.pending-message-interrupt:focus-visible::after,
-.pending-message-interrupt:hover::before,
-.pending-message-interrupt:focus-visible::before {
+.queued-info[data-tooltip]:hover::after,
+.queued-info[data-tooltip]:focus-visible::after {
   opacity: 1;
   visibility: visible;
+}
+
+/* Optimistic "Sending…" bubble: shown at the tail the instant the user sends,
+   until the real (queued/committed) state arrives or it fails. Reuses the
+   user-bubble view with a small status caption; a failed one turns its caption
+   red and stays put. */
+.outgoing-message {
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.outgoing-message--sending {
+  opacity: 0.6;
+}
+
+.outgoing-message .message-user-bubble {
+  border: 1px dashed var(--color-border);
+}
+
+.outgoing-status {
+  margin-top: 3px;
+  font-family: var(--font-family-base);
+  font-size: 11px;
+  color: var(--color-text-secondary);
 }
 
 /* ── Assistant message ── */
@@ -265,26 +354,76 @@ body {
   border: none;
 }
 
-.chat-agent-terminal-link {
-  margin-top: 6px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--color-text-faint);
+/* The row below the chat input: model bar on the left, agent-terminal + harness-auth actions
+   right-aligned -- the original flex row, undisturbed. The "Powered by" credit is centered over
+   the bar as a non-interactive overlay (see .composer-under-bar-credit) rather than as a flow
+   element, so it never reshapes the row or clips the pickers. Shares the model bar's font; no
+   background of its own; text at the visible secondary color. */
+.composer-under-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 0 4px;
+  max-width: calc(var(--width-message-column) + 2 * var(--radius-composer));
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  /* Containing block for the centered credit overlay. */
+  position: relative;
 }
 
-.chat-agent-terminal-link button {
-  color: inherit;
+.composer-under-bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.composer-under-bar-action {
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
   background: none;
   border: none;
-  padding: 0;
-  font: inherit;
+  border-radius: 8px;
   cursor: pointer;
-  opacity: 0.7;
+  white-space: nowrap;
+  transition:
+    color 120ms,
+    background 120ms;
 }
 
-.chat-agent-terminal-link button:hover {
-  opacity: 1;
-  text-decoration: underline;
+.composer-under-bar-action:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* A non-clickable credit sharing the action buttons' font, but static: no hover,
+   no pointer cursor, not focusable. */
+.composer-under-bar-credit {
+  /* Centered over the bar as an overlay: pointer-events:none so it never intercepts clicks on
+     the model bar or buttons beneath it, and being out of flow it leaves the original flex row
+     unchanged. max-width keeps it clear of the side groups; it ellipsizes if it would collide. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  user-select: none;
 }
 
 .message-input {
@@ -334,15 +473,19 @@ body {
 }
 
 /* Hover tooltips for the composer toolbar controls (model picker, fast-mode
-   toggle, attach, interrupt, send). Uses the shared CSS-tooltip pattern -- a
-   `::after` bubble fed by `data-tooltip` -- rather than native `title`, which is
-   unreliable in the desktop webview (see .pending-message-interrupt). The
-   toolbar sits at the composer's bottom, so the bubble points upward. */
-.message-input-toolbar [data-tooltip] {
+   toggle, attach, interrupt, send) and the under-bar row beneath the input
+   (the model/effort/fast slots live here, not in the toolbar). Uses the shared
+   CSS-tooltip pattern -- a `::after` bubble fed by `data-tooltip` -- rather than
+   native `title`, which is unreliable in the desktop webview (see
+   .pending-message-interrupt). Both rows sit at the composer's bottom, so the
+   bubble points upward. */
+.message-input-toolbar [data-tooltip],
+.composer-under-bar [data-tooltip] {
   position: relative;
 }
 
-.message-input-toolbar [data-tooltip]::after {
+.message-input-toolbar [data-tooltip]::after,
+.composer-under-bar [data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 8px);
@@ -368,7 +511,9 @@ body {
 }
 
 .message-input-toolbar [data-tooltip]:hover::after,
-.message-input-toolbar [data-tooltip]:focus-visible::after {
+.message-input-toolbar [data-tooltip]:focus-visible::after,
+.composer-under-bar [data-tooltip]:hover::after,
+.composer-under-bar [data-tooltip]:focus-visible::after {
   opacity: 1;
   visibility: visible;
 }
@@ -669,6 +814,22 @@ body {
 }
 
 /* ── Model selector ── */
+.model-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.model-bar-shrug {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 6px;
+  font-size: 15px;
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+
 .model-selector-wrapper {
   position: relative;
   display: inline-block;
@@ -710,10 +871,14 @@ body {
   --_dropdown-padding: 6px;
   position: absolute;
   bottom: calc(100% + 8px);
-  /* Anchored to the right edge: the picker sits on the right of the composer
-     toolbar, so a left-anchored menu would spill off the composer. */
-  right: 0;
+  /* Anchored to the trigger's left edge; ModelBar's positionDropdown() then nudges it
+     with a translateX to line its text up under the trigger label and clamp the whole
+     box inside the viewport (see dropdown-position.ts). */
+  left: 0;
   min-width: 200px;
+  /* Bound the width so a long provider/model tag can't grow the menu leftward off the
+     edge of the screen; options past this width ellipsize (full text on hover). */
+  max-width: min(92vw, 460px);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -731,6 +896,48 @@ body {
   font-weight: 500;
   color: var(--color-text-faint);
   padding: 4px 10px 6px;
+}
+
+.model-selector-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 2px 6px;
+  padding: 0 8px;
+  height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-hover);
+  transition:
+    border-color 120ms,
+    background 120ms;
+}
+
+.model-selector-search:focus-within {
+  border-color: var(--color-accent);
+  background: var(--color-surface);
+}
+
+.model-selector-search-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-faint);
+  flex: 0 0 auto;
+}
+
+.model-selector-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  font-family: var(--font-family-base);
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.model-selector-search-input::placeholder {
+  color: var(--color-text-faint);
 }
 
 .model-selector-dropdown-list {
@@ -754,12 +961,14 @@ body {
   font-size: 13px;
   color: var(--color-text-primary);
   height: var(--_option-height);
-  display: flex;
-  align-items: center;
+  line-height: var(--_option-height);
+  display: block;
   padding: 0 10px;
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: background 80ms;
 }
 
@@ -783,6 +992,18 @@ body {
 }
 
 .model-selector-trigger:disabled:hover {
+  color: var(--color-text-secondary);
+  background: none;
+}
+
+/* A read-only slot (a read_only-switch-mode harness) is NOT `disabled` -- it renders at
+   normal weight/color and keeps its hover tooltip -- but it isn't interactive: default
+   cursor, no hover brighten/background. The model is switched from the agent's terminal. */
+.model-selector-trigger--readonly {
+  cursor: default;
+}
+
+.model-selector-trigger--readonly:hover {
   color: var(--color-text-secondary);
   background: none;
 }
@@ -815,6 +1036,17 @@ body {
 .fast-toggle--on:hover {
   color: var(--color-accent);
   background: var(--color-accent-light);
+}
+
+/* Read-only fast toggle: not `disabled` (keeps its tooltip), default cursor, no hover
+   brighten. `:not(--on)` so a read-only harness with fast enabled still shows the accent. */
+.fast-toggle--readonly {
+  cursor: default;
+}
+
+.fast-toggle--readonly:not(.fast-toggle--on):hover {
+  color: var(--color-text-secondary);
+  background: none;
 }
 
 /* A non-interactive copy of the toggle, set inline in running text so a sentence
@@ -1144,6 +1376,22 @@ body {
 
 .tool-call-output--error pre code {
   color: #dc2626;
+}
+
+/* ── Model API error (e.g. "API Error: 529 Overloaded") ── */
+/* Light-red tint on the failure text; a grey note below when it's the model
+   provider's fault (a 5xx / overloaded) rather than our request. */
+.message-api-error {
+  border-radius: 6px;
+  padding: 0.5em 0.75em;
+  background: rgba(220, 38, 38, 0.08);
+  color: #dc2626;
+}
+
+.message-api-error-note {
+  margin-top: 0.4em;
+  font-size: 0.85em;
+  color: rgba(120, 120, 120, 0.95);
 }
 
 /* ── Sub-agent link card ── */

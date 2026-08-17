@@ -58,6 +58,8 @@ const STROKE_PATHS = {
   "chevron-right": '<path d="M9 6l6 6-6 6"/>',
   // Lightning bolt for the composer fast-mode toggle.
   zap: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>',
+  // Magnifying glass for the model-search box.
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   "external-link":
     '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',
   // Pencil, on the tab menu's Rename row.

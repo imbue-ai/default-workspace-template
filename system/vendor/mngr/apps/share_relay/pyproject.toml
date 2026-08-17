@@ -71,6 +71,9 @@ omit = [
   "test_*.py",
   "*/tests/*",
   "*/conftest.py",
+  # Manual verification harness (real frps binaries, live sockets); run by hand
+  # on frp version bumps, never in CI -- see the README's frp facts section.
+  "*/frp_verification.py",
 ]
 
 [tool.inline-snapshot]
@@ -87,3 +90,12 @@ strict = ["**/*.py"]
 
 [tool.coverage.report]
 fail_under = 80
+omit = [
+  "*_test.py",
+  "test_*.py",
+  "*/tests/*",
+  "*/conftest.py",
+  # Mirrors [tool.coverage.run] so package-local `coverage report` runs agree
+  # with what was measured (CI's per-package gate reads the measured data).
+  "*/frp_verification.py",
+]

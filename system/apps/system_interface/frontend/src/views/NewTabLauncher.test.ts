@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
+// The launcher consults the alt-harness feature flag for its tile list. The
+// real implementation caches a meta-tag read, which a test cannot safely poke;
+// this keeps it a plain switch, off by default like the real flag.
+let otherHarnessesEnabled = false;
+vi.mock("../base-path", () => ({
+  areOtherHarnessesEnabled: () => otherHarnessesEnabled,
+}));
+
 // Mithril captures `requestAnimationFrame` at import time so it can schedule
 // redraws. Vitest's default (node) environment has no such global, so provide
 // a polyfill before any import is evaluated.
@@ -305,6 +313,18 @@ describe("NewTabLauncher", () => {
     expect(tiles[1].attrs?.["aria-disabled"]).toBe("true");
     expect(tiles[1].attrs?.onclick).toBeUndefined();
     expect(tiles[0].attrs?.onclick).toBeTypeOf("function");
+  });
+
+  it("offers the harness tiles only where the host enables the alt harnesses", () => {
+    // The real flag caches a meta-tag read; the mock above keeps it a plain
+    // switch so this test cannot leak an enabled flag into its neighbours.
+    otherHarnessesEnabled = true;
+    try {
+      const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
+      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex agent", "Pi agent"]);
+    } finally {
+      otherHarnessesEnabled = false;
+    }
   });
 
   it("starts a new object of the tile's kind", () => {

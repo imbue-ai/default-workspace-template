@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # endpoint validates entitlement names against it.
 QUOTA_ENTITLEMENT_NAMES: tuple[str, ...] = (
     "max_remote_workspaces",
+    "max_total_workspaces",
     "max_buckets",
     "max_total_bucket_bytes",
     "monthly_llm_spend_usd",
@@ -51,7 +52,8 @@ INTEGER_ENTITLEMENT_NAMES: frozenset[str] = frozenset(QUOTA_ENTITLEMENT_NAMES) -
 class PlanEntitlements(BaseModel):
     """The quota values a plan grants (also the per-user entitlement values)."""
 
-    max_remote_workspaces: int = Field(description="Max concurrent pool-host leases (running or stopped)")
+    max_remote_workspaces: int = Field(description="Max running remote workspaces (leased/stopping/starting rows)")
+    max_total_workspaces: int = Field(description="Max total remote workspaces, running + stopped")
     max_buckets: int = Field(description="Max R2 buckets")
     max_total_bucket_bytes: int = Field(description="Max total bytes across all the account's buckets")
     monthly_llm_spend_usd: float = Field(description="Monthly LLM spend cap in USD (rolling; 0 disables key minting)")
@@ -83,6 +85,7 @@ class AccountEntitlements(PlanEntitlements):
     def quota_values(self) -> PlanEntitlements:
         return PlanEntitlements(
             max_remote_workspaces=self.max_remote_workspaces,
+            max_total_workspaces=self.max_total_workspaces,
             max_buckets=self.max_buckets,
             max_total_bucket_bytes=self.max_total_bucket_bytes,
             monthly_llm_spend_usd=self.monthly_llm_spend_usd,

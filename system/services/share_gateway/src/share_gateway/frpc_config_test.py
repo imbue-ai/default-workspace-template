@@ -42,6 +42,17 @@ def test_frpc_config_claims_exactly_the_service_and_auth_labels() -> None:
     assert _DOMAIN not in proxies[0]["customDomains"]
 
 
+def test_frpc_config_pins_multi_relay_resilience_settings() -> None:
+    # One relay of the fleet being down at start must not kill its tunnel
+    # process for good (frp's default exits on a failed FIRST login), and the
+    # tight heartbeats bound how long a wedged relay "holds" this tunnel.
+    parsed = _render(["terminal-bbbb2222"])
+
+    assert parsed["loginFailExit"] is False
+    assert parsed["transport"]["heartbeatInterval"] == 10
+    assert parsed["transport"]["heartbeatTimeout"] == 30
+
+
 def test_frpc_config_stamps_proxy_protocol_v2_on_the_share_proxy() -> None:
     # Without the PROXY protocol stamp, caddy sees every spliced connection as
     # frpc on loopback and the real client address is unrecoverable in-workspace.

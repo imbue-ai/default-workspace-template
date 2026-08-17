@@ -70,11 +70,6 @@ import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
 import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "./hoverTooltip";
-import {
-  addActivityOverlayListener,
-  getEffectiveActivityState,
-  removeActivityOverlayListener,
-} from "../models/PendingMessages";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
@@ -1145,7 +1140,11 @@ function appendChatLivenessDot(
       processDotTooltip.setText(null);
       return;
     }
-    const effective = effectiveLifecycleState(state, getEffectiveActivityState(chatAgentId));
+    // Prompt activity is backend-derived now (it rides on the agent itself
+    // over the agents WebSocket), so it updates through the same listener as
+    // the lifecycle state -- the old client-side pending-message overlay is
+    // gone with the harness rework.
+    const effective = effectiveLifecycleState(state, getAgentById(chatAgentId)?.activity_state ?? null);
     processDot.style.display = "";
     // ``data-liveness`` drives the color (the primary signal). Several lifecycle
     // states share a color (DONE/STOPPED/REPLACED/UNKNOWN are all grey
@@ -1161,9 +1160,7 @@ function appendChatLivenessDot(
   element.insertBefore(processDot, element.firstChild);
   const processDotListener: AgentsUpdatedListener = () => updateProcessDot();
   addAgentsUpdatedListener(processDotListener);
-  addActivityOverlayListener(updateProcessDot);
   disposables.push({ dispose: () => removeAgentsUpdatedListener(processDotListener) });
-  disposables.push({ dispose: () => removeActivityOverlayListener(updateProcessDot) });
   disposables.push(processDotTooltip);
 }
 
@@ -1726,7 +1723,19 @@ function derivedLabelForMemberRef(ref: string): string {
  * compute "Chat 1". The titles POST is per-ref last-write-wins, so both
  * objects survive with duplicate display names; a rename fixes it.
  */
-function autoNameForKind(word: "Chat" | "Terminal" | "Browser"): string {
+// The chat harnesses a create can stack (see ``CreateChatRequest.harness``),
+// and the word each one's auto-minted names count under: a Codex chat is
+// "Codex 1", not "Chat 2", so the two fleets number independently and the tab
+// says which harness is behind it.
+type ChatHarness = "claude" | "codex" | "pi";
+type AutoNameWord = "Chat" | "Terminal" | "Browser" | "Codex" | "Pi";
+const AUTO_NAME_WORD_BY_HARNESS: Record<ChatHarness, AutoNameWord> = {
+  claude: "Chat",
+  codex: "Codex",
+  pi: "Pi",
+};
+
+function autoNameForKind(word: AutoNameWord): string {
   const taken = new Set<string>(Object.values(getMemberTitles()));
   for (const row of buildEverythingMembers(machineInventory(), {})) {
     taken.add(labelForMemberRef(row.ref));
@@ -1745,7 +1754,7 @@ function autoNameForKind(word: "Chat" | "Terminal" | "Browser"): string {
  * whenever the write lands (this client via the sync below, every other via
  * the broadcast).
  */
-function fileAutoTitle(ref: string, word: "Chat" | "Terminal" | "Browser"): void {
+function fileAutoTitle(ref: string, word: AutoNameWord): void {
   void setMemberTitle(ref, autoNameForKind(word))
     .then(() => {
       syncTabTitlesFromStore();
@@ -2362,20 +2371,25 @@ async function openNewTerminal(targetGroup?: DockviewGroupPanel | null): Promise
  * (a chat started in Everything carries none). On failure the launcher stays
  * and the reason is surfaced, matching ``openNewTerminal``.
  */
-async function openNewChat(targetGroup: DockviewGroupPanel | null, launcherPanelId: string | null): Promise<void> {
+async function openNewChat(
+  targetGroup: DockviewGroupPanel | null,
+  launcherPanelId: string | null,
+  harness: ChatHarness = "claude",
+): Promise<void> {
   const agentName = await fetchRandomAgentName();
   const viewId = mountedViewId;
   const projectId = viewId !== null && !isEverythingView(viewId) ? viewId : "";
   let agentId: string;
   try {
-    agentId = await createChatAgent(agentName, projectId);
+    agentId = await createChatAgent(agentName, projectId, harness);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
   }
   // The ref exists as soon as the create returned the id -- before the agent
-  // finishes starting -- so the tab reads "Chat N" from its first paint on.
-  fileAutoTitle(memberRef("chat", agentId), "Chat");
+  // finishes starting -- so the tab reads "Chat N" (or the harness's own word)
+  // from its first paint on.
+  fileAutoTitle(memberRef("chat", agentId), AUTO_NAME_WORD_BY_HARNESS[harness]);
   focusOrCreateChatPanel(agentId, agentName, targetGroup);
   retireLauncher(launcherPanelId);
   m.redraw();
@@ -2814,12 +2828,19 @@ export function openSubagentTab(agentId: string, subagentSessionId: string, desc
  * rather than it being closed here.
  */
 function openTabOfTypeInGroup(
-  tabType: QuickAddTabType,
+  // LaunchKind rather than QuickAddTabType: the launcher's tiles include the
+  // flag-gated harness kinds (codex/pi), which have no rail shortcut. The
+  // rail's QuickAddTabType is a subset, so its callers pass through unchanged.
+  tabType: LaunchKind,
   targetGroup: DockviewGroupPanel | null,
   launcherPanelId: string | null,
 ): void {
-  if (tabType === "chat") {
-    void openNewChat(targetGroup, launcherPanelId).then(() => {
+  if (tabType === "chat" || tabType === "codex" || tabType === "pi") {
+    // The harness tiles are the same create as Chat -- the same `chat` role in
+    // the primary's work dir -- stacked on a different harness template. No
+    // dialog for any of them: the name is auto-minted like every other create.
+    const harness: ChatHarness = tabType === "chat" ? "claude" : tabType;
+    void openNewChat(targetGroup, launcherPanelId, harness).then(() => {
       m.redraw();
     });
     return;

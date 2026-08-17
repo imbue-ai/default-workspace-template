@@ -6,8 +6,6 @@ import pytest
 
 from imbue.remote_service_connector.hosts import _replace_env_file_line
 from imbue.remote_service_connector.testing import _CONTENT_DOMAIN
-from imbue.remote_service_connector.testing import _DEFAULT_REGION
-from imbue.remote_service_connector.testing import _RELAY_ENDPOINTS
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
 from imbue.remote_service_connector.testing import _make_pool_quota_test_client
@@ -24,8 +22,6 @@ _OWNER_LABEL = _USER_STUB_USER_ID.replace("-", "")
 
 def _install_claim_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SHARE_CONTENT_DOMAIN", _CONTENT_DOMAIN)
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", _DEFAULT_REGION)
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
     monkeypatch.setenv("MINDS_WEB_TEMPLATE_REPO", _TEMPLATE_REPO)
     monkeypatch.setenv("MINDS_WEB_TEMPLATE_REF", _TEMPLATE_REF)
 
@@ -76,9 +72,11 @@ def test_claim_leases_adopts_and_enables_sharing(monkeypatch: pytest.MonkeyPatch
     assert body["host_id"] == _HOST_ID_STR
     assert body["host_name"] == "my-web-workspace"
     assert body["display_name"] == "My Workspace"
-    expected_domain = f"{_HOST_ID_STR}.{_OWNER_LABEL}.{_DEFAULT_REGION}.{_CONTENT_DOMAIN}"
+    # The test host has no datacenter record, so the region is the
+    # deterministic hash-of-host-id spread: host-ccc... lands on us2.
+    expected_domain = f"{_HOST_ID_STR}.{_OWNER_LABEL}.us2.{_CONTENT_DOMAIN}"
     assert body["workspace_domain"] == expected_domain
-    assert body["region"] == _DEFAULT_REGION
+    assert body["region"] == "us2"
     # The chrome's routable entry origin is recorded later, by the frps
     # NewProxy callback once the workspace's tunnel claims its service labels
     # -- a fresh claim has no label yet (the connector never reads anything
@@ -133,8 +131,6 @@ def test_claim_defaults_display_name_to_host_name(monkeypatch: pytest.MonkeyPatc
 
 def test_claim_refused_when_tier_has_no_pinned_template(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SHARE_CONTENT_DOMAIN", _CONTENT_DOMAIN)
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", _DEFAULT_REGION)
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
     monkeypatch.delenv("MINDS_WEB_TEMPLATE_REPO", raising=False)
     monkeypatch.delenv("MINDS_WEB_TEMPLATE_REF", raising=False)
     client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)

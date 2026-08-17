@@ -1,3 +1,4 @@
+import base64
 import json
 import tempfile
 from collections.abc import Iterator
@@ -34,12 +35,14 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import LiteLLMKeyMaterial
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
+from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliRelayEndpoint
 from imbue.minds.desktop_client.latchkey.permission_overview import clear_service_sign_in_options_cache
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.testing import device_id_for_test
 from imbue.minds.desktop_client.workspace_record_store import WorkspaceRecordStore
 from imbue.minds.primitives import ServiceName
+from imbue.minds.utils.mngr_caller import MngrCallResult
 from imbue.minds.utils.mngr_caller import MngrCaller
 from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.api.discovery_events import DiscoveredProvider
@@ -53,6 +56,12 @@ from imbue.mngr.primitives import ProviderInstanceName
 DEFAULT_SERVICE_NAME: ServiceName = ServiceName("web")
 
 FAKE_CONNECTOR_URL: AnyUrl = AnyUrl("https://test--rsc-api.modal.run")
+
+# The relay set the fake CLIs hand out for a share (one us1 relay, matching
+# the workspace domains the fakes build).
+TEST_RELAY_ENDPOINTS: tuple[ShareCliRelayEndpoint, ...] = (
+    ShareCliRelayEndpoint(relay_id="relay-" + "1" * 16, endpoint="relay-us1.shares.example:7000"),
+)
 
 
 class FakeImbueCloudCli(ImbueCloudCli):
@@ -97,7 +106,7 @@ class FakeImbueCloudCli(ImbueCloudCli):
         default=False,
         description="When True, get_share_status raises ImbueCloudCliError (simulates a connector hiccup)",
     )
-    relays_to_return: dict[str, str] = Field(
+    relays_to_return: dict[str, tuple[str, ...]] = Field(
         default_factory=dict,
         description=(
             "Relay map list_share_relays returns. Empty (the default) makes the "
@@ -168,26 +177,6 @@ class FakeImbueCloudCli(ImbueCloudCli):
 
     # -- In-memory machine shares (drives the teardown tests) --
 
-    web_access_calls: list[tuple[str, str]] = Field(
-        default_factory=list, description="(account email, host ref) for every enable_web_access call, in order"
-    )
-    web_access_error_to_raise: ImbueCloudCliError | None = Field(
-        default=None, description="When set, enable_web_access raises this instead of recording the call"
-    )
-
-    def enable_web_access(self, *, account: str, host_ref: str) -> dict[str, Any]:
-        if self.web_access_error_to_raise is not None:
-            raise self.web_access_error_to_raise
-        self.web_access_calls.append((account, host_ref))
-        # Mirror the real primitive: the connector activates a share record,
-        # so a subsequent get_share_status sees it.
-        self.add_share(account, host_ref)
-        return {
-            "host_id": host_ref,
-            "workspace_domain": f"{host_ref}.owner1234.us1.shares.example",
-            "region": "us1",
-        }
-
     def add_share(self, account: str, host_id: str) -> None:
         self.shares_by_account.setdefault(account, {})[host_id] = "active"
 
@@ -202,15 +191,15 @@ class FakeImbueCloudCli(ImbueCloudCli):
             workspace_domain=f"{host_id}.owner1234.us1.shares.example",
             region="us1",
             state=state,
-            relay_endpoint="relay-us1.shares.example:7000",
+            relay_endpoints=TEST_RELAY_ENDPOINTS,
         )
 
     def delete_share(self, *, account: str, host_id: str) -> None:
         self.deleted_share_host_ids.append(host_id)
         self.shares_by_account.get(account, {}).pop(host_id, None)
 
-    def list_share_relays(self, *, account: str) -> dict[str, str]:
-        return dict(self.relays_to_return)
+    def list_share_relays(self, *, account: str) -> dict[str, tuple[str, ...]]:
+        return {region: tuple(endpoints) for region, endpoints in self.relays_to_return.items()}
 
     # -- In-memory storage-cleanup backend (drives the backup-trim tests) --
 
@@ -300,6 +289,40 @@ class FakeImbueCloudCli(ImbueCloudCli):
         self.sync_bundle_by_email.pop(account, None)
 
 
+class SucceedingCreateShareCli(FakeImbueCloudCli):
+    """A ``create_share`` returning real relay coordinates, so the full client-side bring-up runs.
+
+    The returned share carries a relay endpoint + token, letting the share
+    flow continue through share-env rendering and materials injection (the
+    default ``RecordingMngrCaller`` records the exec writes). Every call is
+    recorded for seam assertions.
+    """
+
+    create_share_calls: list[tuple[str, str, str | None, str | None]] = Field(
+        default_factory=list,
+        description="(account email, host id, entry label, preferred region) for every create_share call, in order",
+    )
+
+    def create_share(
+        self,
+        *,
+        account: str,
+        host_id: str,
+        entry_label: str | None = None,
+        preferred_region: str | None = None,
+    ) -> ShareCliInfo:
+        self.create_share_calls.append((account, host_id, entry_label, preferred_region))
+        self.add_share(account, host_id)
+        return ShareCliInfo(
+            host_id=host_id,
+            workspace_domain=f"{host_id}.owner1234.us1.shares.example",
+            region="us1",
+            state="active",
+            relay_endpoints=TEST_RELAY_ENDPOINTS,
+            relay_token=SecretStr("relay-token-xyz"),
+        )
+
+
 class RecordingImbueCloudCli(FakeImbueCloudCli):
     """``FakeImbueCloudCli`` that records ``create_litellm_key`` calls.
 
@@ -334,6 +357,34 @@ class RecordingImbueCloudCli(FakeImbueCloudCli):
             key=SecretStr("sk-fake-litellm-key"),
             base_url=AnyUrl("https://litellm.example.com"),
         )
+
+
+def make_share_probe_result(
+    is_gateway_present: bool = True,
+    is_share_env_present: bool = False,
+    grants_toml_text: str | None = None,
+) -> MngrCallResult:
+    """A canned ``mngr exec --format json`` result answering the share state probe.
+
+    Tests hand this to a :class:`RecordingMngrCaller` so the enable flow's
+    one-exec probe (``probe_share_state_in_agent``) parses a realistic
+    envelope. The same result is returned for every later call too, which is
+    harmless: the write exec only inspects the returncode.
+    """
+    grants_line = (
+        "MNGR_SHARE_GRANTS_B64=" + base64.b64encode(grants_toml_text.encode()).decode("ascii")
+        if grants_toml_text is not None
+        else "MNGR_SHARE_GRANTS_B64=ABSENT"
+    )
+    stdout = "\n".join(
+        [
+            f"MNGR_SHARE_GATEWAY={1 if is_gateway_present else 0}",
+            f"MNGR_SHARE_ENV={1 if is_share_env_present else 0}",
+            grants_line,
+        ]
+    )
+    envelope = {"results": [{"agent": "probe", "stdout": stdout, "stderr": "", "success": True}]}
+    return MngrCallResult(returncode=0, stdout=json.dumps(envelope))
 
 
 def make_fake_imbue_cloud_cli() -> FakeImbueCloudCli:

@@ -1,5 +1,6 @@
 """Unit tests for the imbue_cloud provider instance helpers."""
 
+import json
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -12,6 +13,7 @@ from typing import cast
 
 import httpx
 import pytest
+from pydantic import AnyUrl
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -35,18 +37,29 @@ from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ImageReference
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.providers.host_key_store import HostKeyOrigin
+from imbue.mngr.providers.host_key_store import load_host_key_record
+from imbue.mngr.providers.ssh_utils import add_host_to_known_hosts
 from imbue.mngr.providers.ssh_utils import format_as_known_hosts_address
 from imbue.mngr_imbue_cloud.config import ImbueCloudProviderConfig
+from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.data_types import LeaseAttributes
 from imbue.mngr_imbue_cloud.data_types import LeasedHostInfo
+from imbue.mngr_imbue_cloud.data_types import WorkspaceInfo
 from imbue.mngr_imbue_cloud.errors import FastPathUnavailableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
+from imbue.mngr_imbue_cloud.errors import WorkspaceStartFailedError
 from imbue.mngr_imbue_cloud.hosts.host import ImbueCloudHost
 from imbue.mngr_imbue_cloud.primitives import ImbueCloudAccount
 from imbue.mngr_imbue_cloud.primitives import LeaseDbId
+from imbue.mngr_imbue_cloud.primitives import WorkspaceStatus
 from imbue.mngr_imbue_cloud.providers.instance import ImbueCloudProvider
+from imbue.mngr_imbue_cloud.providers.instance import WORKSPACE_HOST_STATE_BY_STATUS
 from imbue.mngr_imbue_cloud.providers.instance import _read_first_existing_host_record
+from imbue.mngr_imbue_cloud.providers.instance import _read_workspace_start_outcome
 from imbue.mngr_imbue_cloud.providers.instance import _resolve_fast_path_attributes
+from imbue.mngr_imbue_cloud.providers.instance import leased_info_from_workspace
 from imbue.mngr_vps.container_setup import RUNNING_CONTAINER_STATE
 
 
@@ -86,13 +99,27 @@ def test_resolve_fast_path_attributes_errors_on_local_path_without_origin(tmp_pa
         _resolve_fast_path_attributes(LeaseAttributes(repo_url=str(repo_dir), repo_branch_or_tag="main"))
 
 
-class _StubImbueCloudProvider(ImbueCloudProvider):
+class _NoWorkspacesMixin:
+    """Makes a provider test double behave like an old connector: no /workspaces.
+
+    The doubles below stub ``_list_leased_hosts_cached`` directly; without this
+    the new full-lifecycle listing would try the real connector path.
+    """
+
+    def _list_workspaces_cached(self) -> list[WorkspaceInfo] | None:
+        return None
+
+
+class _StubImbueCloudProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Test stub that supplies a tmp keypair path so we don't hit real disk paths."""
 
     _stub_keypair_dir: Path = Path("/tmp/stub-imbue-cloud-keypair")
 
     def _host_keypair_paths(self, host_id: HostId) -> tuple[Path, Path]:
         return self._stub_keypair_dir / "ssh_key", self._stub_keypair_dir / "ssh_key.pub"
+
+    def _host_known_hosts_path(self, host_id: HostId) -> Path:
+        return self._stub_keypair_dir / "known_hosts"
 
 
 def test_build_offline_details_from_lease_preserves_host_and_failure_reason(tmp_path: Path) -> None:
@@ -182,7 +209,7 @@ class _RecordingReleaseClient:
         return True
 
 
-class _ReleaseGuardProvider(ImbueCloudProvider):
+class _ReleaseGuardProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Provider stub that records local-state cleanup instead of touching disk."""
 
     _cleanup_calls: list[HostId] = []
@@ -249,7 +276,7 @@ class _RecordingRenameClient:
         self.rename_calls.append((host_db_id, host_name))
 
 
-class _NoLeaseRenameProvider(ImbueCloudProvider):
+class _NoLeaseRenameProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Provider stub whose lease lookup always misses, to exercise the not-found guard."""
 
     def _find_leased(self, host_id: HostId) -> LeasedHostInfo | None:
@@ -320,7 +347,7 @@ class _StubOuter(MutableModel):
         return CommandResult(stdout="", stderr="", success=True)
 
 
-class _FakeImbueCloudProvider(ImbueCloudProvider):
+class _FakeImbueCloudProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Drives the real get_host / start_host logic against a canned outer.
 
     Overrides only the boundaries that would otherwise do real I/O: the lease
@@ -506,7 +533,7 @@ class _ListHostsClient:
         raise self._error
 
 
-class _DiscoveryProvider(ImbueCloudProvider):
+class _DiscoveryProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Provider stub with the account/token resolution short-circuited.
 
     Isolates ``_list_leased_hosts_cached`` so a test can drive only the
@@ -549,7 +576,7 @@ def test_list_leased_hosts_preserves_auth_error() -> None:
         provider._list_leased_hosts_cached()
 
 
-class _HostSshInfoProvider(ImbueCloudProvider):
+class _HostSshInfoProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Provider stub that returns a fixed discovered host, isolating the ``host_ssh_infos``
     attachment in ``discover_hosts_and_agents_within_timeouts`` from the outer-SSH machinery."""
 
@@ -638,7 +665,7 @@ def test_discover_within_timeouts_pins_container_host_key(temp_mngr_ctx: MngrCon
     assert "AAAAcontainerkey" in contents
 
 
-class _CannedListingProvider(ImbueCloudProvider):
+class _CannedListingProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Provider stub that feeds ``discover_hosts_and_agents`` a canned outer-listing ``raw`` dict,
     isolating the streaming ref-building loop from the real outer-SSH machinery."""
 
@@ -690,7 +717,8 @@ def test_discover_hosts_and_agents_carries_agent_labels_as_certified_data(temp_m
 
 def test_ensure_host_key_pinned_does_not_clobber_a_recorded_key(temp_mngr_ctx: MngrContext) -> None:
     """A slow-path rebuilt container key (authoritatively recorded) must survive a later
-    add-if-absent ensure from the connector's stale initial key."""
+    add-if-absent ensure from the connector's stale initial key (the protection is per
+    keytype, not per whole endpoint -- see the foreign-keytype test below)."""
     provider = ImbueCloudProvider.model_construct(
         name=ProviderInstanceName("imbue-cloud-test"), mngr_ctx=temp_mngr_ctx
     )
@@ -737,7 +765,21 @@ def test_ensure_host_key_pinned_pins_outer_key_when_only_container_entry_exists(
     assert "AAAAouterkey" in contents
 
 
-class _FastPathGuardProvider(ImbueCloudProvider):
+def test_ensure_host_key_pinned_pins_when_only_a_foreign_keytype_entry_exists(temp_mngr_ctx: MngrContext) -> None:
+    """An entry of a different keytype for the same endpoint must not block the pin --
+    otherwise the endpoint is starved of the one key strict checking actually needs."""
+    provider = ImbueCloudProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"), mngr_ctx=temp_mngr_ctx
+    )
+    host_id = HostId.generate()
+    provider._record_host_key(host_id, "203.0.113.11", 2222, "ssh-rsa AAAArsakey")
+    known_hosts_path = provider._ensure_host_key_pinned(host_id, "203.0.113.11", 2222, "ssh-ed25519 AAAAed25519key")
+    contents = known_hosts_path.read_text()
+    assert "AAAArsakey" in contents
+    assert "AAAAed25519key" in contents
+
+
+class _FastPathGuardProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Reaches the ``fast_mode=require`` start-arg guard without real account/lease I/O."""
 
     _did_reach_fast_path: bool = False
@@ -841,7 +883,7 @@ def test_fast_path_rejects_image_swap_and_names_only_the_image(temp_mngr_ctx: Mn
 _STICKY_PROVIDER_NAME = ProviderInstanceName("imbue-cloud-test")
 
 
-class _SequencedListingProvider(ImbueCloudProvider):
+class _SequencedListingProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Drives ``discover_hosts_and_agents`` against a queue of canned outer-listing responses.
 
     Each ``discover_hosts_and_agents`` pass pops one ``(raw, error, is_auth)``
@@ -1190,3 +1232,240 @@ def test_no_host_record_at_any_candidate_is_an_error() -> None:
         _read_first_existing_host_record(
             ("/home/user/.mngr/data.json", "/mngr/data.json"), _reader_over({}), "203.0.113.7"
         )
+
+
+def _make_workspace_info(
+    status: str, with_placement: bool = True, transition_error: str | None = None
+) -> WorkspaceInfo:
+    return WorkspaceInfo(
+        host_db_id=LeaseDbId("00000000-0000-0000-0000-0000000000aa"),
+        status=WorkspaceStatus(status),
+        vps_address="10.0.0.9" if with_placement else None,
+        ssh_port=22000 if with_placement else None,
+        ssh_user="root",
+        container_ssh_port=22001 if with_placement else None,
+        agent_id="agent-abc",
+        host_id="host-" + "a" * 32,
+        host_name="my-workspace",
+        attributes={"cpus": 2},
+        leased_at="2026-01-01T00:00:00+00:00",
+        transition_error=transition_error,
+        outer_host_public_key="ssh-ed25519 AAAA outer",
+        container_host_public_key="ssh-ed25519 AAAA container",
+    )
+
+
+def test_leased_info_from_workspace_projects_running_coordinates() -> None:
+    workspace = _make_workspace_info("running")
+
+    leased = leased_info_from_workspace(workspace)
+
+    assert str(leased.host_db_id) == "00000000-0000-0000-0000-0000000000aa"
+    assert leased.vps_address == "10.0.0.9"
+    assert leased.ssh_port == 22000
+    assert leased.container_ssh_port == 22001
+    assert leased.host_name == "my-workspace"
+    assert leased.outer_host_public_key == "ssh-ed25519 AAAA outer"
+
+
+def test_leased_info_from_workspace_rejects_missing_placement() -> None:
+    workspace = _make_workspace_info("running", with_placement=False)
+
+    with pytest.raises(ImbueCloudConnectorError):
+        leased_info_from_workspace(workspace)
+
+
+class _CannedWorkspaceClient(ImbueCloudConnectorClient):
+    """Connector-client stub whose ``get_workspace`` returns a canned workspace (no HTTP)."""
+
+    canned_workspace: WorkspaceInfo
+
+    def get_workspace(self, access_token: SecretStr, host_db_id: str) -> WorkspaceInfo:
+        return self.canned_workspace
+
+
+def test_read_workspace_start_outcome_distinguishes_terminal_statuses() -> None:
+    host_id = HostId("host-" + "a" * 32)
+
+    def outcome_for(workspace: WorkspaceInfo) -> WorkspaceInfo | Exception | None:
+        client = _CannedWorkspaceClient(base_url=AnyUrl("https://example.com"), canned_workspace=workspace)
+        return _read_workspace_start_outcome(
+            client,
+            SecretStr("tok"),
+            "00000000-0000-0000-0000-0000000000aa",
+            host_id,
+        )
+
+    # Running: success, the workspace itself comes back.
+    running = outcome_for(_make_workspace_info("running"))
+    assert isinstance(running, WorkspaceInfo)
+
+    # Stopped: the start failed server-side; the recorded error surfaces.
+    stopped = outcome_for(_make_workspace_info("stopped", with_placement=False, transition_error="no capacity"))
+    assert isinstance(stopped, WorkspaceStartFailedError)
+    assert "no capacity" in str(stopped)
+
+    # Crashed (operator abandon mid-start): terminal failure, not a 20-minute
+    # poll-until-timeout; the message carries the reason and the recovery path.
+    crashed = outcome_for(_make_workspace_info("crashed", with_placement=False, transition_error="box died"))
+    assert isinstance(crashed, WorkspaceStartFailedError)
+    assert "box died" in str(crashed)
+    assert "backup" in str(crashed)
+
+    # In-flight statuses keep the poll going.
+    assert outcome_for(_make_workspace_info("starting", with_placement=False)) is None
+    assert outcome_for(_make_workspace_info("stopping")) is None
+
+
+def test_workspace_host_state_mapping_shows_stopping_as_stopped() -> None:
+    # A stopping workspace's VM is already down; the in-flight upload is
+    # invisible plumbing, so users see STOPPED immediately.
+    assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.STOPPING] == HostState.STOPPED
+    assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.STOPPED] == HostState.STOPPED
+    assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.STARTING] == HostState.STARTING
+    assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.CRASHED] == HostState.CRASHED
+    # Every non-running status must have a mapping (running never routes here).
+    for status in WorkspaceStatus:
+        if status != WorkspaceStatus.RUNNING:
+            assert status in WORKSPACE_HOST_STATE_BY_STATUS
+
+
+_VM_USER_KEY = "ssh-ed25519 AAAAVMUSER rotated-vm-host-key"
+_CONTAINER_USER_KEY = "ssh-ed25519 AAAACONTUSER rotated-container-host-key"
+
+
+class _PinMoveProvider(_NoWorkspacesMixin, ImbueCloudProvider):
+    """Stub that roots the per-host state dir in a tmp path for pin-relocation tests."""
+
+    _state_dir: Path = Path("/nonexistent-pin-move-state")
+
+    def _host_state_dir(self, host_id: HostId) -> Path:
+        return self._state_dir
+
+
+def _make_pin_move_setup(
+    tmp_path: Path,
+    temp_mngr_ctx: MngrContext,
+    host_id: HostId,
+    old_address: str,
+    old_vm_port: int,
+    old_container_port: int,
+) -> tuple[_PinMoveProvider, Path]:
+    """Provider + known_hosts with user-origin pins at the old endpoints and a matching lease.json."""
+    provider = _PinMoveProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        _state_dir=tmp_path,
+    )
+    known_hosts = provider._host_known_hosts_path(host_id)
+    add_host_to_known_hosts(
+        known_hosts, old_address, old_vm_port, _VM_USER_KEY, host_id=host_id, origin=HostKeyOrigin.USER
+    )
+    add_host_to_known_hosts(
+        known_hosts, old_address, old_container_port, _CONTAINER_USER_KEY, host_id=host_id, origin=HostKeyOrigin.USER
+    )
+    (tmp_path / "lease.json").write_text(
+        json.dumps({"vps_address": old_address, "ssh_port": old_vm_port, "container_ssh_port": old_container_port})
+    )
+    return provider, known_hosts
+
+
+def _make_started_lease(host_id: HostId, address: str, vm_port: int, container_port: int) -> LeasedHostInfo:
+    return LeasedHostInfo(
+        host_db_id=LeaseDbId("lease-db-id"),
+        vps_address=address,
+        ssh_port=vm_port,
+        ssh_user="root",
+        container_ssh_port=container_port,
+        agent_id=str(AgentId.generate()),
+        host_id=str(host_id),
+        host_name="moved-host",
+        attributes={},
+        leased_at="2025-01-01T00:00:00Z",
+    )
+
+
+def test_move_host_pins_relocates_user_pins_and_updates_lease_meta(tmp_path: Path, temp_mngr_ctx: MngrContext) -> None:
+    """After a stop/start relocation, the host's pins (an adopted host's are user-origin)
+    must follow the endpoints so the restarted workspace never regresses to bake keys."""
+    host_id = HostId.generate()
+    provider, known_hosts = _make_pin_move_setup(tmp_path, temp_mngr_ctx, host_id, "198.51.100.9", 22010, 22011)
+    started = _make_started_lease(host_id, "203.0.113.99", 23010, 23011)
+
+    provider._move_host_pins_to_new_endpoints(host_id, started)
+
+    record = load_host_key_record(known_hosts, host_id)
+    assert record is not None
+    pins_by_endpoint = {(pin.address, pin.port): (pin.public_key, pin.origin) for pin in record.pins}
+    assert pins_by_endpoint == {
+        ("203.0.113.99", 23010): (_VM_USER_KEY, HostKeyOrigin.USER),
+        ("203.0.113.99", 23011): (_CONTAINER_USER_KEY, HostKeyOrigin.USER),
+    }
+    updated_meta = json.loads((tmp_path / "lease.json").read_text())
+    assert (updated_meta["vps_address"], updated_meta["ssh_port"], updated_meta["container_ssh_port"]) == (
+        "203.0.113.99",
+        23010,
+        23011,
+    )
+
+
+def test_move_host_pins_survives_new_vm_port_reusing_the_old_container_port(
+    tmp_path: Path, temp_mngr_ctx: MngrContext
+) -> None:
+    """A same-box restore can hand the host a new VM port equal to its old container port
+    (both pairs come from the box's first-free-port picker). The moves must be ordered so
+    the VM move does not evict the not-yet-moved container pin (a move clears whatever
+    sits at its destination) and the container move does not then relocate the
+    freshly-moved VM pin -- either would strand an adopted host on wrong pins."""
+    host_id = HostId.generate()
+    provider, known_hosts = _make_pin_move_setup(tmp_path, temp_mngr_ctx, host_id, "198.51.100.9", 22010, 22011)
+    started = _make_started_lease(host_id, "198.51.100.9", 22011, 22012)
+
+    provider._move_host_pins_to_new_endpoints(host_id, started)
+
+    record = load_host_key_record(known_hosts, host_id)
+    assert record is not None
+    pins_by_endpoint = {(pin.address, pin.port): (pin.public_key, pin.origin) for pin in record.pins}
+    assert pins_by_endpoint == {
+        ("198.51.100.9", 22011): (_VM_USER_KEY, HostKeyOrigin.USER),
+        ("198.51.100.9", 22012): (_CONTAINER_USER_KEY, HostKeyOrigin.USER),
+    }
+
+
+def test_move_host_pins_survives_new_container_port_reusing_the_old_vm_port(
+    tmp_path: Path, temp_mngr_ctx: MngrContext
+) -> None:
+    """The mirror-image collision: the new container port equals the old VM port."""
+    host_id = HostId.generate()
+    provider, known_hosts = _make_pin_move_setup(tmp_path, temp_mngr_ctx, host_id, "198.51.100.9", 22011, 22012)
+    started = _make_started_lease(host_id, "198.51.100.9", 22010, 22011)
+
+    provider._move_host_pins_to_new_endpoints(host_id, started)
+
+    record = load_host_key_record(known_hosts, host_id)
+    assert record is not None
+    pins_by_endpoint = {(pin.address, pin.port): (pin.public_key, pin.origin) for pin in record.pins}
+    assert pins_by_endpoint == {
+        ("198.51.100.9", 22010): (_VM_USER_KEY, HostKeyOrigin.USER),
+        ("198.51.100.9", 22011): (_CONTAINER_USER_KEY, HostKeyOrigin.USER),
+    }
+
+
+def test_move_host_pins_is_a_noop_without_persisted_lease_meta(tmp_path: Path, temp_mngr_ctx: MngrContext) -> None:
+    host_id = HostId.generate()
+    provider = _PinMoveProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        _state_dir=tmp_path,
+    )
+    known_hosts = provider._host_known_hosts_path(host_id)
+    add_host_to_known_hosts(
+        known_hosts, "198.51.100.9", 22010, _VM_USER_KEY, host_id=host_id, origin=HostKeyOrigin.USER
+    )
+    started = _make_lease(host_id)
+
+    provider._move_host_pins_to_new_endpoints(host_id, started)
+
+    record = load_host_key_record(known_hosts, host_id)
+    assert record is not None
+    assert [(pin.address, pin.port) for pin in record.pins] == [("198.51.100.9", 22010)]

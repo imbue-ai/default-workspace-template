@@ -8,10 +8,12 @@ from imbue.share_relay.config_render import render_port_80_redirect_caddyfile
 from imbue.share_relay.data_types import RelayConfiguration
 from imbue.share_relay.primitives import ContentDomain
 from imbue.share_relay.primitives import RegionCode
+from imbue.share_relay.primitives import RelayId
 
 
 def _config() -> RelayConfiguration:
     return RelayConfiguration(
+        relay_id=RelayId("relay-" + "e" * 16),
         region=RegionCode("us1"),
         content_domain=ContentDomain("imbueminds.com"),
         plugin_auth_url=AnyHttpUrl("https://connector.example.com/frps/auth"),
@@ -39,7 +41,8 @@ def test_frps_toml_points_the_plugin_at_the_connector() -> None:
     """The auth URL is split into origin + path: frps builds the callback URL as addr + path."""
     rendered = render_frps_toml(_config())
     assert 'addr = "https://connector.example.com"' in rendered
-    assert 'path = "/frps/auth"' in rendered
+    # The relay's own id is appended so the connector can attribute callbacks.
+    assert 'path = "/frps/auth/relay-' + "e" * 16 + '"' in rendered
     # Without tlsVerify frp skips certificate verification on https plugin
     # addrs, exposing the shared auth secret to an on-path attacker.
     assert "tlsVerify = true" in rendered
@@ -54,6 +57,7 @@ def test_plugin_auth_url_rejects_query_and_fragment(bad_url: str) -> None:
     # passed as ?secret=...) would be silently dropped from the frps config.
     with pytest.raises(ValueError, match="query string or fragment"):
         RelayConfiguration(
+            relay_id=RelayId("relay-" + "e" * 16),
             region=RegionCode("us1"),
             content_domain=ContentDomain("imbueminds.com"),
             plugin_auth_url=AnyHttpUrl(bad_url),

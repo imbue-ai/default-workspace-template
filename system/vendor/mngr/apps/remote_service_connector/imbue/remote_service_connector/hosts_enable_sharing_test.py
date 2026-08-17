@@ -7,8 +7,6 @@ import pytest
 from imbue.remote_service_connector.hosts import build_owner_grants_toml
 from imbue.remote_service_connector.hosts import build_share_env_text
 from imbue.remote_service_connector.testing import _CONTENT_DOMAIN
-from imbue.remote_service_connector.testing import _DEFAULT_REGION
-from imbue.remote_service_connector.testing import _RELAY_ENDPOINTS
 from imbue.remote_service_connector.testing import _USER_STUB_EMAIL
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
@@ -24,15 +22,12 @@ _OWNER_LABEL = _USER_STUB_USER_ID.replace("-", "")
 
 def _install_share_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SHARE_CONTENT_DOMAIN", _CONTENT_DOMAIN)
-    monkeypatch.setenv("SHARE_DEFAULT_REGION", _DEFAULT_REGION)
-    monkeypatch.setenv("SHARE_RELAY_ENDPOINTS", _RELAY_ENDPOINTS)
     monkeypatch.setenv("SHARE_CHROME_ORIGIN", _CHROME_ORIGIN)
 
 
 def test_build_share_env_text_includes_chrome_origin_when_present() -> None:
     text = build_share_env_text(
         workspace_domain="host-x.user.us1.example",
-        relay_endpoint="relay:7000",
         relay_token="tok",
         connector_url="https://c.example",
         broker_url="https://c.example",
@@ -46,7 +41,6 @@ def test_build_share_env_text_includes_chrome_origin_when_present() -> None:
 def test_build_share_env_text_omits_chrome_origin_when_empty() -> None:
     text = build_share_env_text(
         workspace_domain="d",
-        relay_endpoint="r:1",
         relay_token="t",
         connector_url="u",
         broker_url="u",
@@ -77,8 +71,10 @@ def test_enable_sharing_creates_share_and_injects_materials(monkeypatch: pytest.
     assert resp.status_code == 200
     body = resp.json()
     assert body["host_id"] == _HOST_ID_STR
-    assert body["region"] == _DEFAULT_REGION
-    expected_domain = f"{_HOST_ID_STR}.{_OWNER_LABEL}.{_DEFAULT_REGION}.{_CONTENT_DOMAIN}"
+    # The test host has no datacenter record, so the region is the
+    # deterministic hash-of-host-id spread: host-aaa... lands on us1.
+    assert body["region"] == "us1"
+    expected_domain = f"{_HOST_ID_STR}.{_OWNER_LABEL}.us1.{_CONTENT_DOMAIN}"
     assert body["workspace_domain"] == expected_domain
 
     # The share materials were written into the container over the (faked) SSH.

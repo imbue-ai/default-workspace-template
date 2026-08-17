@@ -7,8 +7,8 @@ relay SSH keypair plus the OVH / Cloudflare credentials from Vault. Writes
 into the given work dir:
 
 - ``relay_key`` / ``relay_key.pub`` -- the tier's relay SSH keypair (0600).
-- ``relay.env`` -- shell-sourceable exports (OVH_*, CLOUDFLARE_*).
-- ``params.json`` -- ``{region, content_domain, plugin_auth_url}``.
+- ``relay.env`` -- shell-sourceable exports (OVH_*, CLOUDFLARE_*, MINDS_ADMIN_KEY).
+- ``params.json`` -- ``{region, content_domain, plugin_auth_url, connector_url}``.
 
 Run from the repo root via ``uv run python scripts/provision_dev_relay_config.py``
 (the workspace venv provides the imbue.minds imports).
@@ -19,6 +19,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+from imbue.minds.cli.paid import admin_key_from_supertokens_secret
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.provisioning import relay_region_for_env
 from imbue.minds.envs.vault_reader import VaultPath
@@ -39,12 +40,14 @@ def main() -> None:
     with Path(config_path).open("rb") as handle:
         connector_url = str(tomllib.load(handle)["connector_url"]).rstrip("/")
 
-    # Pull the four Vault entries the relay bring-up needs.
+    # Pull the Vault entries the relay bring-up needs (supertokens carries the
+    # MINDS_ADMIN_KEY that authenticates the fleet-inventory registration).
     vault_prefix = f"secrets/minds/{tier}"
     sharing = read_vault_kv(VaultPath(f"{vault_prefix}/sharing"))
     relay_ssh = read_vault_kv(VaultPath(f"{vault_prefix}/relay-ssh"))
     ovh = read_vault_kv(VaultPath(f"{vault_prefix}/ovh"))
     cloudflare = read_vault_kv(VaultPath(f"{vault_prefix}/cloudflare"))
+    supertokens = read_vault_kv(VaultPath(f"{vault_prefix}/supertokens"))
 
     # The relay SSH keypair, permissions ssh will accept.
     key_path = work_dir / "relay_key"
@@ -56,11 +59,22 @@ def main() -> None:
     export_lines = [f"export {key}={_shell_quoted(ovh[key])}" for key in sorted(ovh) if ovh[key]]
     export_lines.append(f"export CLOUDFLARE_API_TOKEN={_shell_quoted(cloudflare['CLOUDFLARE_API_TOKEN'])}")
     export_lines.append(f"export CLOUDFLARE_ZONE_ID={_shell_quoted(cloudflare['CLOUDFLARE_ZONE_ID'])}")
+    # The shared resolver handles the deprecated MINDS_PAID_ADMIN_KEY spelling
+    # and errors clearly (naming the Vault path) when the key is absent.
+    admin_key = admin_key_from_supertokens_secret(supertokens, vault_prefix)
+    export_lines.append(f"export MINDS_ADMIN_KEY={_shell_quoted(admin_key)}")
     (work_dir / "relay.env").write_text("\n".join(export_lines) + "\n")
 
     plugin_auth_url = f"{connector_url}/frps/auth/{sharing['FRPS_AUTH_SECRET']}"
     (work_dir / "params.json").write_text(
-        json.dumps({"region": region, "content_domain": content_domain, "plugin_auth_url": plugin_auth_url})
+        json.dumps(
+            {
+                "region": region,
+                "content_domain": content_domain,
+                "plugin_auth_url": plugin_auth_url,
+                "connector_url": connector_url,
+            }
+        )
     )
 
 
