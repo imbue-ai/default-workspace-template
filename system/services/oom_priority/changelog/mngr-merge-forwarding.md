@@ -1,0 +1,1 @@
+Remove the `web` entry from SERVICE_BANDS: it steered OOM shedding for the placeholder example server that the browser fleet replaced, so it banded a program that no longer exists. A user service named `web` now gets the ordinary user-service band like any other.

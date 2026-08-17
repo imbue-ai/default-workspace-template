@@ -23,7 +23,6 @@ def isolated_git_and_gateway_env(
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
     for name in (
         "LATCHKEY_GATEWAY",
-        "LATCHKEY_GATEWAY_SECONDARY",
         "LATCHKEY_GATEWAY_PASSWORD",
         "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE",
     ):

@@ -79,7 +79,8 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_status_line.sh"
+    "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/claude_status_line.sh",
+    "refreshInterval": 2
   },
   "enabledPlugins": {
     "imbue-code-guardian@imbue-code-guardian": true,

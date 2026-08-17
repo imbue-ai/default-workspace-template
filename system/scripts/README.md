@@ -9,7 +9,8 @@ Provisioning and utility scripts:
 - Claude Code hooks (`claude_*.sh` / `claude_*.py`), wired in
   `.claude/settings.json`.
 - Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
-  layout ops), `migrate_claude_auth.py` (one-time auth migration).
+  layout ops), `refresh_workspace_view.py` (rebuild the user's view after the
+  interface changes), `migrate_claude_auth.py` (one-time auth migration).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
 - The changelog gate: `check_changelog_entries.py`.
 

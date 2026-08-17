@@ -3,7 +3,7 @@
 Houses deterministic stand-ins for outside-world dependencies that
 `ClaudeAuthService` takes as constructor-injected callables
 (`command_runner`, `pexpect_spawner`). Both `claude_auth_test.py` and
-`claude_auth_endpoints_test.py` need the same fakes, so they live here
+`harnesses/claude/auth_endpoints_test.py` need the same fakes, so they live here
 rather than being copy-pasted into each test module.
 
 Also houses `build_test_state`, the test-side composition root: it builds a
@@ -14,13 +14,18 @@ without ever starting the agent manager.
 
 from __future__ import annotations
 
+import fcntl
+import os
 import socket
+import sys
 import threading
 import time
+from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
+from pathlib import Path
 
 import httpx
 import pexpect
@@ -32,31 +37,86 @@ from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
-from imbue.system_interface.claude_auth import ClaudeAuthService
-from imbue.system_interface.claude_auth import RestartProgress
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
+from imbue.system_interface.harnesses.claude.auth import RestartProgress
+from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
+# The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
+# provisioned by env-converge. Playwright's own browser-cache lookup only
+# auto-discovers builds Playwright downloaded itself, so launches must name
+# this binary explicitly via ``executable_path`` (see the
+# ``browser_type_launch_args`` fixture override in ``conftest.py``).
+FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
+
+
+@contextmanager
+def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
+    """Hold mngr's per-agent ``message.lock`` for the duration of the block (blocking acquire).
+
+    A test-only helper: the conservation storms stage a completed in-flight send by taking the
+    same exclusive flock mngr's send holds (``BaseAgent._message_lock`` -- same filename, same
+    agent state dir) so a stop/flush executor under test contends with it exactly as it would in
+    production. Nothing in production takes this blocking lock (the executors use the bounded
+    ``try_hold_message_lock``), which is why it lives here rather than in the harness code.
+    """
+    lock_path = agent_state_dir / MESSAGE_LOCK_FILENAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def is_e2e_browser_installed() -> bool:
+    """True when a Chromium the e2e suite can launch is present on this host.
+
+    Either the workspace-provisioned Fortress build (which the
+    ``browser_type_launch_args`` fixture prefers) or a browser in Playwright's
+    own download cache satisfies the check; with neither present the e2e tests
+    skip instead of erroring at browser launch.
+    """
+    if FORTRESS_CHROMIUM_PATH.exists():
+        return True
+    env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if env_path:
+        cache_dir = Path(env_path)
+    elif sys.platform == "darwin":
+        cache_dir = Path.home() / "Library" / "Caches" / "ms-playwright"
+    else:
+        cache_dir = Path.home() / ".cache" / "ms-playwright"
+    return cache_dir.exists() and any(cache_dir.iterdir())
+
 
 class RecordingMngrMessenger(MngrMessenger):
-    """A `MngrMessenger` that records sends and never contacts mngr.
+    """A `MngrMessenger` that records sends and key-chord presses and never contacts mngr.
 
-    Overrides `send_to_agent` to record each `(agent_id, message)` and return a
-    fixed result, so a test exercises the manager's send path without building a
+    Overrides `send_to_agent` (records each `(agent_id, message)`) and
+    `press_key_chord_to_agent` (records each `(agent_id, key)`), returning fixed
+    results, so a test exercises the manager's send / keypress paths without building a
     real mngr context or hitting the network. Inject via
     `AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())`.
     """
 
     sent: list[tuple[str, str]] = []
+    pressed: list[tuple[str, str]] = []
     succeeds: bool = True
+    press_succeeds: bool = True
 
     def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.sent.append((str(agent_id), message))
         return self.succeeds
+
+    def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
+        self.pressed.append((str(agent_id), key))
+        return self.press_succeeds
 
 
 def build_test_state(
@@ -76,17 +136,20 @@ def build_test_state(
     `MngrMessenger`) repoints the broadcaster too.
 
     Only the collaborators tests actually override are parameters; the agent
-    filters and the service-proxy http client (which no test substitutes) are
+    filters and the local-service http client (which no test substitutes) are
     fixed to their production defaults inline.
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
+    event_queues = AgentEventQueues()
+    # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
+    manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
     return SystemInterfaceState(
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),
         exclude_filters=(),
         agent_manager=manager,
-        event_queues=AgentEventQueues(),
+        event_queues=event_queues,
         layout_mutex=LayoutMutex(),
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
         welcome_resender=welcome_resender
@@ -260,10 +323,14 @@ def close_ws(ws: simple_websocket.Client) -> None:
     """Close a WebSocket client, tolerating an already-closed connection.
 
     A handler that finishes (e.g. the proto-agent-logs not-found path) closes
-    the socket server-side first, so the client-side close would otherwise raise
-    ``ConnectionClosed``.
+    the socket server-side first, so the client-side close races the client's
+    background thread processing that server close. Depending on how far that
+    thread has gotten, ``ws.close()`` raises either ``ConnectionClosed`` (the
+    close was fully processed and ``connected`` is already False) or ``OSError``
+    (EBADF: the thread tore down the socket fd between ``close()``'s
+    ``connected`` check and its send of the close frame).
     """
     try:
         ws.close()
-    except simple_websocket.ConnectionClosed:
+    except (simple_websocket.ConnectionClosed, OSError):
         pass
