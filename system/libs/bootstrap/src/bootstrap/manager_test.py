@@ -151,7 +151,9 @@ def test_build_create_chat_command_includes_welcome_and_template() -> None:
     cmd = _build_create_chat_command(
         "my-workspace", {"workspace": "my-workspace"}, True
     )
-    assert cmd[:3] == ["mngr", "create", "my-workspace"]
+    # The first chat is named "Chat 1" (the series the launcher continues),
+    # created on the workspace's host rather than inheriting its name.
+    assert cmd[:3] == ["mngr", "create", "Chat 1@my-workspace"]
     # The harness rides `--type claude`; the role rides the lone `--template`.
     assert cmd[cmd.index("--type") + 1] == "claude"
     templates = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--template"]
