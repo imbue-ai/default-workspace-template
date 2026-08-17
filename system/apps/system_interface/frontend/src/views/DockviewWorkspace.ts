@@ -189,6 +189,10 @@ interface PanelParams {
 let showNewChatModal = false;
 let showNewCodexModal = false;
 let showNewPiModal = false;
+// The flag-gated "New first ..." launchers: which harness mode to create a
+// `first`-template chat on, or null when the modal is closed. For testing the
+// first-chat flow (fast launch, /welcome, grace-period prompt) on demand.
+let newFirstModalMode: "chat" | "codex" | null = null;
 let showNewBrowserModal = false;
 // When a background create POST fails, the New-browser modal is re-opened
 // pre-filled with the name the user typed and the daemon's reason, so the user
@@ -847,6 +851,27 @@ function buildDropdownItems(
       action: () => {
         newTabTargetGroup = targetGroup ?? null;
         showNewPiModal = true;
+        m.redraw();
+      },
+    });
+
+    // "First" chats: the same launchers with the `first` create template stacked
+    // on top (fast launch, /welcome, the first=true label), so the first-chat
+    // flow can be exercised without re-creating a workspace.
+    items.push({
+      label: "New first Claude chat",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        newFirstModalMode = "chat";
+        m.redraw();
+      },
+    });
+
+    items.push({
+      label: "New first Codex chat",
+      action: () => {
+        newTabTargetGroup = targetGroup ?? null;
+        newFirstModalMode = "codex";
         m.redraw();
       },
     });
@@ -3018,6 +3043,23 @@ export const DockviewWorkspace: m.Component = {
               },
               onCancel() {
                 showNewPiModal = false;
+                newTabTargetGroup = null;
+              },
+            })
+          : null,
+
+        newFirstModalMode !== null
+          ? m(CreateAgentModal, {
+              mode: newFirstModalMode,
+              first: true,
+              onCreated(newAgentId: string, newAgentName: string) {
+                newFirstModalMode = null;
+                const targetGroup = newTabTargetGroup;
+                newTabTargetGroup = null;
+                focusOrCreateChatPanel(newAgentId, newAgentName, targetGroup);
+              },
+              onCancel() {
+                newFirstModalMode = null;
                 newTabTargetGroup = null;
               },
             })

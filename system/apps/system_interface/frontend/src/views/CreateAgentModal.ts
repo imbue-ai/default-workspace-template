@@ -8,6 +8,9 @@ import { apiUrl } from "../base-path";
 
 interface CreateAgentModalAttrs {
   mode: "chat" | "codex" | "pi";
+  // Stack the `first` create template: /welcome, the first=true label, and a
+  // fast-mode launch. The flag-gated "New first ..." launchers set this.
+  first?: boolean;
   onCreated: (agentId: string, agentName: string) => void;
   onCancel: () => void;
 }
@@ -48,7 +51,10 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
       };
       const url = apiUrl("/api/agents/create-chat");
 
-      const body: Record<string, string> = { name: name.trim(), harness: harnessByMode[attrs.mode] };
+      const body: Record<string, string | boolean> = { name: name.trim(), harness: harnessByMode[attrs.mode] };
+      if (attrs.first === true) {
+        body["first"] = true;
+      }
 
       const response = await m.request<{ agent_id: string }>({
         method: "POST",
@@ -80,7 +86,7 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
         codex: "Create Codex Agent",
         pi: "Create Pi Agent",
       };
-      const title = titleByMode[attrs.mode];
+      const title = attrs.first === true ? `${titleByMode[attrs.mode]} (first)` : titleByMode[attrs.mode];
 
       return m(
         "div.custom-url-dialog-overlay",

@@ -1,9 +1,11 @@
 import m from "mithril";
 import { DockviewWorkspace } from "./DockviewWorkspace";
 import { ClaudeLoginModal } from "./ClaudeLoginModal";
+import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
 import { FastModeModal } from "./FastModeModal";
 import { checkAuthStatusOnLoad, isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
-import { fetchWorkspaceFastMode, getFastModePromptAgentId } from "../models/WorkspaceFastMode";
+import { getAuthInstructionsAgentId } from "../models/AgentAuth";
+import { getFastModePromptAgentId } from "../models/FastModePrompt";
 
 export function App(): m.Component {
   return {
@@ -12,9 +14,6 @@ export function App(): m.Component {
       // credentials at all (the create flow injects none), so the sign-in
       // modal is the designed first-boot step rather than an error path.
       checkAuthStatusOnLoad();
-      // The workspace's fast-mode decision gates the grace-period prompt below.
-      // Loaded once here so every ChatPanel can test it without its own request.
-      fetchWorkspaceFastMode();
     },
     view() {
       return m("div", { class: "app-layout flex", style: "height: calc(100vh - var(--minds-titlebar-height, 0px))" }, [
@@ -26,9 +25,11 @@ export function App(): m.Component {
         // surfaces an auth-error, or from the chat footer's "Agent auth"
         // entry.
         isLoginModalOpen() ? m(ClaudeLoginModal, { onDismiss: closeLoginModal }) : null,
-        // The fast-mode decision is workspace-wide for the same reason, so one
-        // chat reaching the end of its grace period raises a single shared
-        // prompt here (see fast-mode-prompt.ts for when that happens).
+        // The terminal-auth counterpart: harnesses whose sign-in runs in their
+        // own TUI raise this shared instructions notice instead (see AgentAuth.ts).
+        getAuthInstructionsAgentId() !== null ? m(AgentAuthInstructionsModal) : null,
+        // One chat reaching the end of its fast-mode grace period raises a single
+        // shared prompt here (see fast-mode-prompt.ts for when that happens).
         getFastModePromptAgentId() !== null ? m(FastModeModal) : null,
       ]);
     },

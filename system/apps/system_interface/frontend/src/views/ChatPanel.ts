@@ -36,7 +36,7 @@ import {
   getProtoAgents,
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
-import { openLoginModal } from "../models/ClaudeAuth";
+import { openAgentAuth } from "../models/AgentAuth";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
@@ -229,7 +229,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       const event = events[i];
       if (event.type === "assistant_message") {
         if (event.is_auth_error === true) {
-          openLoginModal();
+          openAgentAuth(agentId);
         }
         return;
       }
@@ -666,23 +666,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const agent = getAgentById(agentId);
     const agentIsIdle = agent?.activity_state === "IDLE";
 
-    // A new chat starts on fast mode; once it has run its grace period, ask the
-    // user whether to keep it. Checked here because this is where the loaded
+    // The first chat starts on fast mode; once it has run its grace period, ask
+    // the user whether to keep it. Checked here because this is where the loaded
     // transcript and the idle flag meet. Re-running it per render is fine:
-    // raising the prompt is idempotent, and three cheap reads (workspace already
-    // answered, agent mid-reply, fast mode already off) short-circuit ahead of
-    // the one gate that is not cheap -- the turn count, which walks the held
-    // transcript. Only an idle fast-mode chat in a workspace that has not
-    // answered reaches that walk, and it raises the modal on the first render
-    // that does, so the window is the one the user is about to close.
-    //
-    // Gated to Claude: the grace-period prompt is a Claude billing concept (run
-    // fast for a while, then ask whether to keep paying). Other harnesses have
-    // their own notion of "fast" and their own billing, so it is not fired for
-    // every agent whose model merely reports fast=true.
-    if (agent?.harness === "claude") {
-      maybePromptForFastMode(agentId, events, agentIsIdle);
-    }
+    // raising the prompt is idempotent, and the cheap gates (harness declared no
+    // prompt, not the first chat, already answered, agent mid-reply, fast mode
+    // already off) short-circuit ahead of the one gate that is not cheap -- the
+    // turn count, which walks the held transcript. Which agents owe the prompt
+    // at all is the harness's declaration (the fast_mode_prompt popup on its
+    // catalog), not a harness-name check here.
+    maybePromptForFastMode(agent, events, agentIsIdle);
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
@@ -894,7 +887,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     // auth modes without waiting for an auth error.
                     m(
                       "button",
-                      { type: "button", class: "composer-under-bar-action", onclick: () => openLoginModal() },
+                      { type: "button", class: "composer-under-bar-action", onclick: () => openAgentAuth(agentId) },
                       "Agent auth",
                     ),
                   ]),

@@ -53,6 +53,7 @@ from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
+from imbue.system_interface.server import _build_fast_mode_answered_label_command
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import _stream_filtered_events
 from imbue.system_interface.server import create_application
@@ -982,29 +983,18 @@ def test_model_options_returns_null_models_for_claude(client: FlaskClient, tmp_p
     assert data["options"] is None
 
 
-def test_workspace_fast_mode_starts_undecided_and_records_an_answer(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The prompt is owed until answered, and the answer survives for later chats."""
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+def test_fast_mode_answered_label_argv_accepted_by_live_cli() -> None:
+    """The latch endpoint shells `mngr label`; the argv must resolve against the
+    live CLI so a label-command rename fails here rather than at runtime."""
+    argv = _build_fast_mode_answered_label_command("my-agent")
+    assert_mngr_argv_valid(argv)
+    assert "fast_mode_prompt_answered=true" in argv
+
+
+def test_fast_mode_answered_returns_404_for_unknown_agent() -> None:
     client = create_application(build_test_state()).test_client()
-
-    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is None
-
-    recorded = client.post("/api/workspace/fast-mode", json={"enabled": False}).get_json()
-    assert recorded["fast_mode"] is False
-
-    # A later reader (a new chat create, another browser) sees the same answer.
-    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is False
-
-
-def test_workspace_fast_mode_can_keep_fast_mode_on(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Answering "keep it" must also stick, or the prompt would reappear forever."""
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    client = create_application(build_test_state()).test_client()
-
-    client.post("/api/workspace/fast-mode", json={"enabled": True})
-    assert client.get("/api/workspace/fast-mode").get_json()["fast_mode"] is True
+    response = client.post("/api/agents/agent-doesnotexist/fast-mode-answered")
+    assert response.status_code == 404
 
 
 def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dict[str, int]) -> AgentManager:

@@ -14,8 +14,8 @@ import { buildMessageWithAttachments, formatFileSize } from "../models/attachmen
 import { drainToComposer, sendMessage } from "../models/Response";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError } from "../models/request-error";
-import { openLoginModal } from "../models/ClaudeAuth";
-import { findDeclinedSlashCommand } from "../models/claudeSlashCommands";
+import { openAgentAuth } from "../models/AgentAuth";
+import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
 import { getAgentById } from "../models/AgentManager";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { icon, stopIcon } from "./icons";
@@ -74,13 +74,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
   let messageText = "";
   let currentAgentId: string | null = null;
   let messageTextareaElement: HTMLTextAreaElement | null = null;
-  // Set instead of sending when the user types one of claude's own auth
-  // commands. Delivered to the TUI, /logout would exit the agent's process
-  // and wipe shared onboarding state without actually signing the workspace
-  // out, and /login would start claude's interactive sign-in inside the
-  // agent's terminal -- both bypassing the managed agent-auth screen (auth
-  // lives in settings.json / claude's credential store, managed there).
-  let interceptedAuthCommand: "/login" | "/logout" | null = null;
+  // Set instead of sending when the user types one of the harness's declared
+  // auth commands (the `open_auth` composer popup). Delivered raw, /login or
+  // /logout would run the harness's own auth flow inside the agent's terminal
+  // (or reach the model as prose), bypassing the managed agent-auth surface.
+  let interceptedAuthCommand: string | null = null;
   // A slash command the chat declines to deliver, because it would change the agent's terminal
   // rather than start a turn. It still works from that terminal, which the notice says.
   let declinedSlashCommand: string | null = null;
@@ -160,9 +158,10 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         currentAgentId = agentId;
         messageText = localStorage.getItem(messageTextKey(agentId)) ?? "";
         isInterruptInFlight = false;
-        // The notice names a command typed for the previous agent, so it must not follow the user
-        // to the next one.
+        // The notices name a command typed for the previous agent, so they must not follow the
+        // user to the next one.
         declinedSlashCommand = null;
+        interceptedAuthCommand = null;
       }
 
       // A sibling view (a native tap whose resend failed) merged a returned block into this agent's
@@ -177,24 +176,28 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         if (!agentId) {
           return;
         }
-        // The auth intercepts (/login, /logout) and the declined-command notice are
-        // facts about Claude Code's terminal, not about the chat, so they only apply
-        // when a Claude agent is on the other end. For any other harness these are
-        // just ordinary text -- its own slash commands are its own -- so we let them
-        // send. (When a harness needs its own composer guard, this becomes a
-        // per-harness lookup; see claudeSlashCommands.ts.)
-        const isClaude = getAgentById(agentId)?.harness === "claude";
-        const trimmedCommand = messageText.trim().toLowerCase();
-        if (isClaude && (trimmedCommand === "/login" || trimmedCommand === "/logout")) {
-          interceptedAuthCommand = trimmedCommand;
-          m.redraw();
-          return;
-        }
-        const declined = isClaude ? findDeclinedSlashCommand(messageText) : null;
-        if (declined !== null) {
-          declinedSlashCommand = declined;
-          m.redraw();
-          return;
+        // The composer guard is whatever the agent's harness declared (its
+        // `composer_command` popups on the catalog): auth commands open the
+        // harness's agent-auth surface, declined commands get the notice, and a
+        // harness that declared nothing (pi's declines) sends everything as-is.
+        // Only slash-shaped messages consult it, and only those block on the
+        // catalog when it has not loaded yet -- otherwise an early /login could
+        // slip through the fetch window.
+        if (messageText.trim().startsWith("/")) {
+          const harness = getAgentById(agentId)?.harness;
+          if (getHarnessCatalog(harness) === null) {
+            await ensureHarnessCatalogs();
+          }
+          const match = findComposerPopup(harness, messageText);
+          if (match !== null) {
+            if (match.popup.action === "open_auth") {
+              interceptedAuthCommand = match.command;
+            } else {
+              declinedSlashCommand = match.command;
+            }
+            m.redraw();
+            return;
+          }
         }
         // Wait for in-flight uploads so a just-dropped file is included rather
         // than dropped from the message.
@@ -385,14 +388,11 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
         );
       }
 
-      function renderAuthCommandNotice(command: "/login" | "/logout"): m.Vnode {
-        const title = command === "/login" ? "Sign-in is managed here" : "Sign-out is managed here";
+      function renderAuthCommandNotice(command: string): m.Vnode {
+        const title = command === "/logout" ? "Sign-out is managed here" : "Sign-in is managed here";
         const explanation =
-          command === "/login"
-            ? "Sending /login to the agent would start Claude's own sign-in inside the agent's terminal, " +
-              "which would not sign the rest of the workspace in. Use the agent auth screen instead."
-            : "Sending /logout to the agent would shut it down without signing the workspace out. " +
-              "Use the agent auth screen to switch or remove credentials.";
+          `Sending ${command} to the agent would run its own auth flow inside the agent's terminal, ` +
+          "outside this workspace's managed sign-in. Use the agent auth screen instead.";
         return m(
           "div.custom-url-dialog-overlay",
           {
@@ -411,10 +411,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             },
             [
               m("h3.custom-url-dialog-title", title),
-              m(
-                "p.logout-notice-body",
-                `This workspace's Claude sign-in is managed by this interface. ${explanation}`,
-              ),
+              m("p.logout-notice-body", explanation),
               m("div.custom-url-dialog-actions", [
                 m("button.custom-url-dialog-cancel", { onclick: () => dismissAuthCommandNotice() }, "Cancel"),
                 m(
@@ -422,7 +419,9 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                   {
                     onclick: () => {
                       dismissAuthCommandNotice();
-                      openLoginModal();
+                      if (agentId) {
+                        openAgentAuth(agentId);
+                      }
                     },
                   },
                   "Open agent auth",

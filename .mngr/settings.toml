@@ -1456,6 +1456,28 @@ post_host_create_command__extend = ["/usr/local/bin/default-workspace-template-s
 transfer = "none"
 output_style = "Engineering Subordinate"
 
+# First chat: the one agent per workspace that greets the user (/welcome) and
+# opens in fast mode so the first conversation feels responsive. Stacked on top
+# of `chat` (`-t first -t chat --type <harness>`) by the bootstrap and by the
+# flag-gated "New first ..." launchers. The `first=true` label is what scopes
+# the fast-mode grace-period prompt to this agent.
+#
+# The two fast settings are deliberately asymmetric: claude's
+# `settings_overrides` is a SettingsPatchField (deep-merge marker on the
+# field), so a bare dotted path merges into the [agent_types.claude] block.
+# codex's `config_overrides` is a PLAIN dict -- a bare dotted assignment trips
+# the settings-narrowing guard (it would drop the features/tools blocks), so
+# the codex entry needs __extend markers at BOTH dict levels. Do not "fix" the
+# inconsistency in either direction. Settings for whichever harness is not
+# resolved are inert, so this template is safe to stack with any --type.
+[create_templates.first]
+message = "/welcome"
+label__extend = ["first=true"]
+setting__extend = [
+    "agent_types.claude.settings_overrides.fastMode=true",
+    'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
+]
+
 # Caretaker: the weekly maintenance agent -- the tailored instance of the
 # generic `automation` role below. Spawned (and re-woken) by the caretaker job
 # (the /etc/cron.d/minds-caretaker entry the enable-caretaker skill creates --
