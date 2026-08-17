@@ -512,10 +512,12 @@ def is_observe_writer_running(events_base_dir: Path) -> bool:
 
     Implemented by trying to take the lock and immediately dropping it again;
     failing to take it *because someone else holds it* is the positive answer, and
-    that is the only failure which is. The momentary hold in the negative
-    case cannot lock out a real observer in any way that matters -- it only happens
-    when none is running, lasts microseconds, and the caller is about to declare
-    the stream dead anyway. Unlike :func:`acquire_observe_lock` this never creates
+    that is the only failure which is. The momentary hold in the negative case can
+    in principle make an observer starting at that exact microsecond fail to take
+    its own lock. Nothing cheaper avoids that -- a shared lock would block a
+    starting writer's exclusive one just the same -- and the window is a single
+    ``flock`` pair on a path nobody else contends for, so the exposure is accepted
+    rather than eliminated. Unlike :func:`acquire_observe_lock` this never creates
     the lock file, and it asks only for read access: ``flock`` is advisory and
     independent of the open mode, so requesting write access would make a lock file
     owned by another user (an observer started as root during bootstrap, say) read
@@ -586,6 +588,18 @@ class ObserveEventFollower(MutableModel):
     fixed interval. Tests drive :meth:`poll_once` directly instead, so the class
     needs no test-only seam.
 
+    Two kinds of thing can stop events arriving, and they are handled differently:
+
+    - An *outage* is environmental -- no observer holds the lock, or the lock could
+      not be probed. The follow loop keeps running, :meth:`failure_detail` reports
+      the outage for as long as it lasts, and the fold resumes on its own when an
+      observer comes back (a new ``mngr observe`` appends a fresh full-state
+      snapshot, which replaces the folded view). Nothing is lost by re-probing: a
+      follower holds no lock, so it cannot take one away from the writer it wants.
+    - A *failure* is internal -- the ``on_line`` sink raised, or the loop itself
+      died. That is permanent and first-cause-wins, because retrying a consumer
+      whose fold is broken just breaks it again.
+
     A follower is single-use: ``start`` may be called once, and not again after
     ``stop``. Construct a new one to follow the stream again.
     """
@@ -606,9 +620,14 @@ class ObserveEventFollower(MutableModel):
     _stop_event: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    # None until something makes the stream unfollowable. "Never started" is not
-    # represented here -- that is the owner's fact, not the follower's.
+    # None until something internal makes the stream unfollowable for good.
+    # "Never started" is not represented here -- that is the owner's fact, not the
+    # follower's.
     _failure: str | None = PrivateAttr(default=None)
+    # The environmental outage in effect right now, or None. Unlike ``_failure``
+    # this is cleared as soon as a writer comes back, and it is refreshed rather
+    # than kept first-cause-wins so it describes the *current* reason.
+    _outage: str | None = PrivateAttr(default=None)
     _offset: int = PrivateAttr(default=0)
     _is_seeded: bool = PrivateAttr(default=False)
     _has_seen_snapshot: bool = PrivateAttr(default=False)
@@ -624,15 +643,33 @@ class ObserveEventFollower(MutableModel):
         again does what the caller means: a second thread would share the first's
         read offset and forward every line twice, and a thread started with the stop
         flag already set would exit on its first loop check and -- because the flag
-        is set -- record no failure, leaving ``is_alive`` reporting True forever.
-        That second case includes a ``stop`` that ran before the follower ever
-        started, e.g. from a ``finally`` around a ``start`` that raised.
+        is set -- record no failure, leaving ``is_stream_healthy`` reporting True
+        forever. That second case includes a ``stop`` that ran before the follower
+        ever started, e.g. from a ``finally`` around a ``start`` that raised.
         """
-        if self._is_started or self._stop_event.is_set():
-            raise ObserveStreamUnavailableError(
-                "This agent-lifecycle follower has already been started or stopped; a follower is "
-                "single-use, so construct a new one to follow the stream again."
-            )
+        with self._lock:
+            if self._is_started or self._stop_event.is_set():
+                raise ObserveStreamUnavailableError(
+                    "This agent-lifecycle follower has already been started or stopped; a follower is "
+                    "single-use, so construct a new one to follow the stream again."
+                )
+            # Claimed under the lock, so two concurrent starts cannot both pass the
+            # guard and spawn threads that share one read offset.
+            self._is_started = True
+        try:
+            self._require_a_live_writer()
+        except ObserveStreamUnavailableError:
+            # Refusing here leaves the follower entirely unused, and the caller may
+            # reasonably retry once an observer comes up, so give the claim back.
+            with self._lock:
+                self._is_started = False
+            raise
+        thread = threading.Thread(target=self._follow_loop, name="observe-follower", daemon=True)
+        self._thread = thread
+        thread.start()
+
+    def _require_a_live_writer(self) -> None:
+        """Raise :class:`ObserveStreamUnavailableError` unless an observer holds the lock."""
         try:
             is_writer_running = is_observe_writer_running(self.events_base_dir)
         except ObserveLockProbeError as e:
@@ -645,10 +682,6 @@ class ObserveEventFollower(MutableModel):
                 f"No 'mngr observe' process holds {get_observe_lock_path(self.events_base_dir)}, so there is "
                 "no live agent-lifecycle event stream to follow."
             )
-        thread = threading.Thread(target=self._follow_loop, name="observe-follower", daemon=True)
-        self._thread = thread
-        self._is_started = True
-        thread.start()
 
     def stop(self) -> None:
         """Stop the follow thread and wait briefly for it to exit. Idempotent.
@@ -673,26 +706,33 @@ class ObserveEventFollower(MutableModel):
                 )
             self._thread = None
 
-    def is_alive(self) -> bool:
-        """Whether anything has made the observer's event stream unfollowable.
+    def is_stream_healthy(self) -> bool:
+        """Whether events are reaching this follower right now.
 
-        False only once a failure has been recorded. A follower that was never
-        started, or was deliberately stopped, still reports True: neither is a
-        failure of the stream, and which of those applies is the owner's own fact.
+        False while an outage is in effect and once an internal failure has been
+        recorded. A follower that was never started, or was deliberately stopped,
+        still reports True: neither is a fault of the stream, and which of those
+        applies is the owner's own fact.
         """
         return self.failure_detail() is None
 
     def failure_detail(self) -> str | None:
-        """Why the stream is not being followed, or None when it is."""
+        """Why the stream is not being followed right now, or None when it is.
+
+        An internal failure wins over an outage: it is permanent, so it stays the
+        answer even if a writer happens to be up.
+        """
         with self._lock:
-            return self._failure
+            return self._failure if self._failure is not None else self._outage
 
     def poll_once(self) -> None:
         """Advance by one tick: confirm the writer, then drain new lines.
 
         The writer check comes first so a stream that died between ticks is
         reported as dead rather than as "no new events", which is precisely the
-        distinction a health gate needs.
+        distinction a health gate needs. A tick that finds no writer records an
+        outage and stops there; the next tick tries again, so an observer that
+        restarts is picked back up without anyone re-attaching the follower.
         """
         try:
             is_writer_running = is_observe_writer_running(self.events_base_dir)
@@ -700,30 +740,33 @@ class ObserveEventFollower(MutableModel):
             # Says what actually happened. Reporting the observer as exited would
             # be a diagnosis we have no evidence for, and this string is what a
             # consumer puts in front of whoever has to fix it.
-            self._record_failure(
+            self._record_outage(
                 f"Could not tell whether the 'mngr observe' process writing "
                 f"{get_observe_events_path(self.events_base_dir)} is still running, so agent lifecycle "
                 f"events can no longer be relied on: {e}"
             )
             return
         if not is_writer_running:
-            self._record_failure(
+            self._record_outage(
                 f"The 'mngr observe' process writing {get_observe_events_path(self.events_base_dir)} exited, "
                 "so agent lifecycle events are no longer arriving."
             )
             return
+        self._clear_outage()
         if not self._is_seeded:
             self._seed()
             return
         self._drain()
 
     def _follow_loop(self) -> None:
-        """Poll until stopped, or until something makes the stream unfollowable."""
+        """Poll until stopped, or until something internal makes the stream unfollowable.
+
+        An outage does not end the loop: the observer it follows may come back, and
+        re-probing a lock this follower never takes cannot get in that observer's way.
+        """
         try:
             while not self._stop_event.is_set():
                 self.poll_once()
-                if not self.is_alive():
-                    break
                 self._stop_event.wait(timeout=self.poll_interval_seconds)
         except Exception as e:
             # Caught this broadly because the exceptions that can end this thread
@@ -773,17 +816,27 @@ class ObserveEventFollower(MutableModel):
         self._drain()
 
     def _drain(self) -> None:
-        """Forward every complete line appended since the last read."""
+        """Forward every complete line appended since the last read.
+
+        Replacement is detected by the file shrinking, which is all a size check can
+        see: a replacement that happens to land on the same size reads as "no new
+        events" and is deliberately out of scope (it would take tracking the inode).
+        """
         events_path = get_observe_events_path(self.events_base_dir)
         if not events_path.exists():
             return
         size = events_path.stat().st_size
         if size < self._offset:
-            # The file shrank, so it was truncated or replaced. Re-seed from the
-            # beginning of whatever is there now rather than reading garbage from a
-            # stale offset.
+            # The file shrank, so it was truncated or replaced. Re-run the seed scan
+            # over whatever is there now rather than reading garbage from a stale
+            # offset -- and rather than replaying from byte 0, which would fold every
+            # snapshot the replacement already holds and leave the view on an older
+            # one than the file does.
             self._offset = 0
+            self._is_seeded = False
             self._has_seen_snapshot = False
+            self._seed()
+            return
         if size == self._offset:
             return
         with open(events_path, "rb") as handle:
@@ -809,12 +862,36 @@ class ObserveEventFollower(MutableModel):
         self.on_line(line)
 
     def _record_failure(self, detail: str) -> None:
-        """Mark the stream dead (first cause wins) and say so loudly."""
+        """Mark the stream permanently dead (first cause wins) and say so loudly."""
         with self._lock:
             if self._failure is not None:
                 return
             self._failure = detail
         logger.error("Agent lifecycle stream unavailable: {}", detail)
+
+    def _record_outage(self, detail: str) -> None:
+        """Note that no writer is reachable right now, refreshing the reason each tick.
+
+        Logged only as the outage begins: it is re-recorded on every poll for as
+        long as it lasts, and an observer that stays down would otherwise fill the
+        log with one identical line per second.
+        """
+        with self._lock:
+            is_new_outage = self._outage is None
+            self._outage = detail
+        if is_new_outage:
+            logger.warning("Agent lifecycle stream unavailable: {}", detail)
+
+    def _clear_outage(self) -> None:
+        """Note that a writer is reachable again, if one was not."""
+        with self._lock:
+            was_out = self._outage is not None
+            self._outage = None
+        if was_out:
+            logger.info(
+                "Agent lifecycle stream recovered: an 'mngr observe' process is writing {} again",
+                get_observe_events_path(self.events_base_dir),
+            )
 
 
 # === Observer ===

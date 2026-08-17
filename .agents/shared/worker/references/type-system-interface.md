@@ -45,6 +45,11 @@ System-interface specifics:
   the **real** agents (this is how you open the motivating conversation named in
   `## Real scenario` -- see below); point it at fixture data instead when you want
   an isolated, reproducible scene for a committed test.
+- **Never `goto(..., wait_until="networkidle")` against a system-interface
+  instance.** It holds live connections (the event WebSocket, streaming
+  endpoints), so the network never goes idle and the call simply burns its whole
+  timeout before failing. Use `wait_until="domcontentloaded"` and then wait on
+  the element you actually care about.
 
 ## Leave a built frontend in your work_dir (required, even for a backend-only change)
 

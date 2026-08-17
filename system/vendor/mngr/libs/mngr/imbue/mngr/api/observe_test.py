@@ -1419,7 +1419,7 @@ def test_follower_poll_does_not_blame_an_observer_exit_for_a_failed_probe(tmp_pa
 
     follower.poll_once()
 
-    assert not follower.is_alive()
+    assert not follower.is_stream_healthy()
     detail = follower.failure_detail() or ""
     assert "Could not tell whether" in detail
     assert "exited" not in detail
@@ -1437,7 +1437,7 @@ def test_follower_refuses_to_start_twice(temp_host_dir: Path) -> None:
 
     A second concurrent thread would share the first's read offset and forward
     every line twice; a thread started after ``stop`` exits on its first loop
-    check and, because the stop flag is set, records no failure -- so ``is_alive``
+    check and, because the stop flag is set, records no failure -- so ``is_stream_healthy``
     would keep reporting True for a follower following nothing.
     """
     with _observer_holding_the_lock(temp_host_dir):
@@ -1457,7 +1457,7 @@ def test_follower_refuses_to_start_after_a_stop_that_preceded_it(temp_host_dir: 
 
     ``stop`` in a ``finally`` around a ``start`` that raised (no observer up yet) sets
     the stop flag, so a later ``start`` would spawn a thread that exits on its first
-    loop check while ``is_alive`` keeps reporting True -- the trap ``start`` refuses.
+    loop check while ``is_stream_healthy`` keeps reporting True -- the trap ``start`` refuses.
     """
     follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=lambda line: None)
     with pytest.raises(ObserveStreamUnavailableError):
@@ -1610,7 +1610,7 @@ def test_follower_seeding_past_history_waits_at_a_line_boundary(temp_host_dir: P
 def test_follower_reports_the_stream_dead_once_the_observer_exits(temp_host_dir: Path) -> None:
     """A stream that died between ticks must read as dead, not as "no new events".
 
-    Marked ``allow_warnings``: a dead lifecycle stream is logged at ERROR on
+    Marked ``allow_warnings``: a dead lifecycle stream is logged at WARNING on
     purpose, and driving it is the point of this test.
     """
     agent = make_test_agent_details(state=AgentLifecycleState.RUNNING)
@@ -1619,13 +1619,84 @@ def test_follower_reports_the_stream_dead_once_the_observer_exits(temp_host_dir:
     fd = acquire_observe_lock(temp_host_dir)
     follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=lambda line: None)
     follower.poll_once()
-    assert follower.is_alive()
+    assert follower.is_stream_healthy()
 
     release_observe_lock(fd)
     follower.poll_once()
 
-    assert not follower.is_alive()
+    assert not follower.is_stream_healthy()
     assert "no longer arriving" in (follower.failure_detail() or "")
+
+
+@pytest.mark.allow_warnings
+def test_follower_recovers_when_a_new_observer_takes_the_lock(temp_host_dir: Path) -> None:
+    """An observer that restarts under a live follower must not freeze it forever.
+
+    Losing the writer is environmental, not a fault of the fold, and a follower
+    holds no lock -- so re-probing cannot take anything from the observer that comes
+    back. The stream reads dead for exactly as long as the outage lasts, and the
+    returning observer's opening snapshot replaces the stale folded view.
+    """
+    before = make_test_agent_details(name="before-restart", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([before]))
+
+    seen: list[str] = []
+    fd = acquire_observe_lock(temp_host_dir)
+    follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=seen.append)
+    follower.poll_once()
+    assert follower.is_stream_healthy()
+    assert len(seen) == 1
+
+    release_observe_lock(fd)
+    follower.poll_once()
+    assert not follower.is_stream_healthy()
+    assert "no longer arriving" in (follower.failure_detail() or "")
+
+    with _observer_holding_the_lock(temp_host_dir):
+        after = make_test_agent_details(name="after-restart", state=AgentLifecycleState.RUNNING)
+        append_observe_event(temp_host_dir, make_full_agent_state_event([after]))
+        follower.poll_once()
+
+        assert follower.failure_detail() is None
+        assert follower.is_stream_healthy()
+
+    assert len(seen) == 2
+    event = parse_observe_event_line(seen[1])
+    assert isinstance(event, FullAgentStateEvent)
+    assert [a.name for a in event.agents] == ["after-restart"]
+
+
+@pytest.mark.allow_warnings
+def test_started_follower_keeps_polling_across_an_observer_restart(temp_host_dir: Path) -> None:
+    """The recovery has to happen on the follow thread, which is what used to give up.
+
+    The loop broke out permanently on the first outage, so a consumer whose observer
+    was restarted for any unrelated reason -- an OOM shed, another flow's reveal, a
+    plain ``supervisorctl restart`` -- served a frozen agent view for the rest of its
+    life while every other part of it kept working.
+    """
+    before = make_test_agent_details(name="threaded-before-restart", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([before]))
+
+    received: queue.Queue[str] = queue.Queue()
+    fd = acquire_observe_lock(temp_host_dir)
+    follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=received.put, poll_interval_seconds=0.01)
+    try:
+        follower.start()
+        assert parse_observe_event_line(received.get(timeout=10)) is not None
+        release_observe_lock(fd)
+        poll_until(lambda: not follower.is_stream_healthy(), timeout=10.0, poll_interval=0.01)
+
+        with _observer_holding_the_lock(temp_host_dir):
+            after = make_test_agent_details(name="threaded-after-restart", state=AgentLifecycleState.RUNNING)
+            append_observe_event(temp_host_dir, make_full_agent_state_event([after]))
+            event = parse_observe_event_line(received.get(timeout=10))
+            poll_until(lambda: follower.is_stream_healthy(), timeout=10.0, poll_interval=0.01)
+    finally:
+        follower.stop()
+
+    assert isinstance(event, FullAgentStateEvent)
+    assert [a.name for a in event.agents] == ["threaded-after-restart"]
 
 
 def test_follower_reseeds_after_the_event_file_is_truncated(temp_host_dir: Path) -> None:
@@ -1649,6 +1720,42 @@ def test_follower_reseeds_after_the_event_file_is_truncated(temp_host_dir: Path)
     event = parse_observe_event_line(seen[1])
     assert isinstance(event, FullAgentStateEvent)
     assert [a.name for a in event.agents] == ["after-truncate"]
+
+
+def test_follower_reseeding_a_replaced_file_resumes_at_its_newest_snapshot(temp_host_dir: Path) -> None:
+    """Replaying a replacement from byte 0 would leave the fold on a superseded view.
+
+    Re-running the seed scan is what makes the shrink case agree with every other
+    place a fold starts: at the *last* full-state snapshot in the file, not the first.
+    """
+    events_path = get_observe_events_path(temp_host_dir)
+    original = make_test_agent_details(name="before-replace", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([original]))
+    for _ in range(4):
+        append_observe_event(temp_host_dir, make_agent_state_event(original))
+
+    seen: list[str] = []
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=seen.append)
+        follower.poll_once()
+        assert len(seen) == 5
+
+        stale = make_test_agent_details(name="stale-in-replacement", state=AgentLifecycleState.STOPPED)
+        current = make_test_agent_details(name="current-in-replacement", state=AgentLifecycleState.RUNNING)
+        replacement = "".join(
+            json.dumps(make_full_agent_state_event([agent]).model_dump(mode="json"), separators=(",", ":")) + "\n"
+            for agent in (stale, current)
+        )
+        # Written whole so the follower meets the replacement already complete, which
+        # is the only way the shrink can be noticed with more than one snapshot in it.
+        assert len(replacement) < events_path.stat().st_size, "the replacement must be the shorter file"
+        events_path.write_text(replacement)
+        follower.poll_once()
+
+    assert len(seen) == 6
+    event = parse_observe_event_line(seen[5])
+    assert isinstance(event, FullAgentStateEvent)
+    assert [a.name for a in event.agents] == ["current-in-replacement"]
 
 
 def test_started_follower_picks_up_new_events_on_its_own_thread(temp_host_dir: Path) -> None:
@@ -1734,11 +1841,11 @@ def test_follow_thread_exiting_unexpectedly_marks_the_stream_dead(temp_host_dir:
         follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=explode, poll_interval_seconds=0.01)
         try:
             follower.start()
-            poll_until(lambda: not follower.is_alive(), timeout=10.0, poll_interval=0.01)
+            poll_until(lambda: not follower.is_stream_healthy(), timeout=10.0, poll_interval=0.01)
         finally:
             follower.stop()
 
-    assert not follower.is_alive()
+    assert not follower.is_stream_healthy()
     # The specific cause, not just "it stopped": this string is what a consumer
     # surfaces in a health endpoint, so the type and message are the diagnosis.
     detail = follower.failure_detail() or ""

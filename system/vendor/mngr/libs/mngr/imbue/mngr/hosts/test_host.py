@@ -35,6 +35,7 @@ from imbue.mngr.hosts.common import get_agent_state_dir_path
 from imbue.mngr.hosts.common import is_macos
 from imbue.mngr.hosts.host import Host
 from imbue.mngr.hosts.host import _AGENT_LAUNCH_SCRIPT_NAME
+from imbue.mngr.hosts.host import _DETACHED_HEAD_REF
 from imbue.mngr.hosts.tmux import TmuxSessionTarget
 from imbue.mngr.hosts.tmux import TmuxWindowTarget
 from imbue.mngr.hosts.tmux import capture_tmux_pane_content
@@ -2364,19 +2365,17 @@ def test_create_work_dir_reports_a_created_branch_as_both(
     assert result.checked_out_branch_name == "mngr/both-branch-test"
 
 
-def test_git_transfer_reports_no_branch_for_a_detached_source(
+def test_git_transfer_records_the_branch_the_target_is_actually_on(
     host_with_temp_dir: tuple[Host, Path],
     setup_git_config: None,
 ) -> None:
-    """A detached source names no branch, so neither does the agent placed from it.
+    """A detached source names no branch, so the answer has to come from the target.
 
     With no explicit base branch the fallback is the source's current branch, read
-    from ``git rev-parse --abbrev-ref HEAD`` -- which prints the literal "HEAD" for
-    a detached repo. That resolves fine as a checkout target, but reporting it as
-    the checked-out branch would put a ref that does not exist in front of a caller
-    asking where this agent's work lands. Answering "unknown" makes such a caller
-    say so (default-workspace-template's launch-sync raises rather than publishing
-    a branch it cannot vouch for) instead of merging from nowhere.
+    from ``git rev-parse --abbrev-ref HEAD`` -- which prints the literal "HEAD" for a
+    detached repo, and an empty string for a repo with no commits yet. Neither is a
+    branch, so neither may be recorded as one; reading the value back off the target
+    after the checkout gets this right by construction, whatever the request was.
     """
     host, temp_dir = host_with_temp_dir
 
@@ -2399,16 +2398,104 @@ def test_git_transfer_reports_no_branch_for_a_detached_source(
     created_branch_name, checked_out_branch_name = host._transfer_git_repo(host, source_path, target_path, options)
 
     assert created_branch_name is None
-    assert checked_out_branch_name is None
-    # Why "HEAD" would have been a lie: no such branch exists on the target.
-    branch_named_head = subprocess.run(
-        ["git", "rev-parse", "--verify", "--quiet", "refs/heads/HEAD"],
+    assert checked_out_branch_name != _DETACHED_HEAD_REF
+    on_disk = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         cwd=target_path,
         capture_output=True,
         text=True,
     )
-    assert branch_named_head.returncode != 0
+    assert checked_out_branch_name == on_disk.stdout.strip()
+    # Whatever it is, it is a branch that exists -- which the request itself was not.
+    branch_exists = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{checked_out_branch_name}"],
+        cwd=target_path,
+        capture_output=True,
+        text=True,
+    )
+    assert branch_exists.returncode == 0
     assert (target_path / "file.txt").read_text() == "content"
+
+
+def test_git_transfer_records_no_branch_when_a_commit_ref_leaves_the_target_detached(
+    host_with_temp_dir: tuple[Host, Path],
+    setup_git_config: None,
+) -> None:
+    """``--branch`` takes any checkout target, and a commit is not a branch.
+
+    Recording the requested string would put a ref that does not exist in front of a
+    caller asking where this agent's work lands. Answering "unknown" makes such a
+    caller say so (default-workspace-template's launch-sync raises rather than
+    publishing a branch it cannot vouch for) instead of merging from nowhere.
+    """
+    host, temp_dir = host_with_temp_dir
+
+    source_path = temp_dir / "source_commit_ref"
+    source_path.mkdir()
+    (source_path / "file.txt").write_text("content")
+    _init_git_repo(source_path)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    target_path = temp_dir / "target_commit_ref"
+    options = CreateAgentOptions(
+        name=AgentName("commit-ref-test"),
+        agent_type=AgentTypeName("generic"),
+        command=CommandString("sleep 1"),
+        target_path=target_path,
+        transfer_mode=TransferMode.GIT_MIRROR,
+        git=AgentGitOptions(base_branch=head_sha),
+    )
+
+    created_branch_name, checked_out_branch_name = host._transfer_git_repo(host, source_path, target_path, options)
+
+    assert created_branch_name is None
+    assert checked_out_branch_name is None
+    on_disk = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=target_path,
+        capture_output=True,
+        text=True,
+    )
+    assert on_disk.stdout.strip() == _DETACHED_HEAD_REF
+
+
+def test_create_work_dir_records_no_branch_for_a_detached_worktree(
+    host_with_temp_dir: tuple[Host, Path],
+    setup_git_config: None,
+) -> None:
+    """Worktree mode detaches on a commit ref too, and must report that the same way."""
+    host, temp_dir = host_with_temp_dir
+
+    source_path = temp_dir / "source_detached_worktree"
+    source_path.mkdir()
+    (source_path / "file.txt").write_text("content")
+    _init_git_repo(source_path)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    options = CreateAgentOptions(
+        name=AgentName("detached-worktree-test"),
+        agent_type=AgentTypeName("generic"),
+        command=CommandString("sleep 1"),
+        target_path=temp_dir / "target_detached_worktree",
+        transfer_mode=TransferMode.GIT_WORKTREE,
+        git=AgentGitOptions(base_branch=head_sha),
+    )
+
+    result = host.create_agent_work_dir(host, source_path, options)
+
+    assert result.created_branch_name is None
+    assert result.checked_out_branch_name is None
+    on_disk = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=result.path,
+        capture_output=True,
+        text=True,
+    )
+    assert on_disk.stdout.strip() == _DETACHED_HEAD_REF
 
 
 @pytest.mark.rsync

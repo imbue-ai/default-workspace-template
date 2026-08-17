@@ -416,6 +416,20 @@ def _git_command_stdout(host: OnlineHostInterface, command: str, cwd: Path) -> s
     return result.stdout.strip() or None
 
 
+def _read_checked_out_branch_name(host: OnlineHostInterface, work_dir_path: Path) -> str | None:
+    """The branch ``work_dir_path`` ended up on, or None when it is on no branch.
+
+    Read back from the work_dir rather than taken from what the caller asked for.
+    ``--branch`` accepts any checkout target, so a SHA, a tag, or ``origin/main``
+    leaves the work_dir detached (or on a DWIMmed local branch whose name is not the
+    string that was passed), and the source's own branch can come back empty. This
+    value is persisted and surfaced as the branch an agent's work lands on, so
+    recording the request would point callers at a ref that need not exist.
+    """
+    branch = _git_command_stdout(host, "git rev-parse --abbrev-ref HEAD", work_dir_path)
+    return None if branch == _DETACHED_HEAD_REF else branch
+
+
 @pure
 def _is_same_machine(a: OnlineHostInterface, b: OnlineHostInterface) -> bool:
     """Whether ``a`` and ``b`` share a filesystem so file ops do not need SSH.
@@ -1785,9 +1799,9 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         Returns ``(created_branch_name, checked_out_branch_name)``: the branch newly
         created on the target (None if none was), and the branch the target actually
         ends up on. They differ when an existing branch is merely checked out, which
-        is why the second is resolved here -- the base branch falls back to the
-        source's current branch, which only this function computes. The second is
-        None when the target ends up detached, which has no branch to name.
+        is why the second is read back off the target once the checkout has happened
+        rather than inferred from the ref that was asked for. It is None when the
+        target ends up on no branch at all.
         """
         new_branch_name = options.git.new_branch_name if options.git else None
         if options.git and options.git.base_branch:
@@ -1883,16 +1897,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                 if not result.success:
                     raise MngrError(f"Failed to configure git repo on target: {result.stderr}")
 
-        if new_branch_name:
-            return new_branch_name, new_branch_name
-        # ``git rev-parse --abbrev-ref HEAD`` prints the literal "HEAD" for a
-        # detached source, which names no branch: it resolves fine as a checkout
-        # target, but it leaves the target on whatever its own HEAD already pointed
-        # at rather than on a branch mngr chose. This value is persisted and
-        # surfaced as the branch an agent's work lands on, and a caller acting on
-        # it would be sent at a ref that does not exist, so answer "unknown".
-        checked_out_branch_name = None if base_branch_name == _DETACHED_HEAD_REF else base_branch_name
-        return None, checked_out_branch_name
+        return new_branch_name, _read_checked_out_branch_name(self, target_path)
 
     def _read_source_git_info_exclude(
         self,
@@ -2551,7 +2556,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                 return CreateWorkDirResult(
                     path=work_dir_path,
                     created_branch_name=created_branch,
-                    checked_out_branch_name=branch_label,
+                    checked_out_branch_name=_read_checked_out_branch_name(self, work_dir_path),
                 )
 
         with log_span("Creating git worktree", path=str(work_dir_path), branch=branch_label):
@@ -2603,7 +2608,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
             return CreateWorkDirResult(
                 path=work_dir_path,
                 created_branch_name=created_branch,
-                checked_out_branch_name=branch_label,
+                checked_out_branch_name=_read_checked_out_branch_name(self, work_dir_path),
             )
 
     def create_agent_state(

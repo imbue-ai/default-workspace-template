@@ -180,6 +180,23 @@ The `for L in desktop mobile` loop is the same `--layout` handling `update-app`
 describes, and it applies to every `close` below too. (`refresh` is the
 exception: it takes no `--layout`.)
 
+**If no layout accepted the `open`, the hand-off did not happen.** A layout with
+no connected client reports `has no client to apply it (HTTP 412)`; one layout
+refusing while another succeeds is normal and harmless (a workspace usually has
+no mobile client). What matters is whether *any* of them applied. If none did,
+there is no tab on anyone's screen -- the user is not looking at your change, and
+proceeding as though they were is the one mistake this step cannot recover from.
+
+What to do instead: drive the preview privately (Playwright against its port, as
+in `update-app` step 4) and surface a screenshot with `show-files-in-chat`. That
+is a sanctioned fallback, not an equivalent -- so say so plainly when you ask:
+tell the user you could not put the live tab on their screen, that they are
+looking at a screenshot rather than the real surface, and that your check was
+against a still image. Keep trying the `open` as the pass continues; the moment
+one lands, that is the delivered preview and the screenshot round is superseded.
+Do not treat approval given on a screenshot as approval of the live surface --
+name that gap when you report the pass.
+
 **Re-running `preview` mid-loop is safe** -- the instance died, or you are picking
 the pass back up in a later turn -- so just boot and re-open (`layout.py open`
 focuses the existing tab rather than stacking a duplicate). Prefer the shared
@@ -327,7 +344,10 @@ so this is a second command, not the next line of that one. Only once it is up:
 for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
 ```
 
-And once it is open it is the user's to judge -- you do not drive it.
+And once it is open it is the user's to judge -- you do not drive it. If no
+layout accepted the `open`, Step 2's undelivered-hand-off branch applies here
+too: the screenshot fallback, said out loud as a fallback, and a re-attempt when
+a client connects.
 
 **Two things must both hold**, and the second is a real judgment, not a
 formality:
@@ -400,12 +420,15 @@ interleave.
    refreshes dependencies only if a manifest changed (`npm ci` / `uv tool install
    -e system/apps/system_interface --reinstall`); pre-flights a backend change on a
    throwaway port before touching the live service; rebuilds `static/` (frontend)
-   and/or restarts the services agent (backend); rebuilds the user's view
+   and/or restarts the `system_interface` service alone (backend --
+   `supervisorctl restart system_interface`, not the services agent, so nothing
+   else in the workspace is bounced); rebuilds the user's view
    afterwards via `system/scripts/refresh_workspace_view.py` -- for a backend-only
    change too, since the restart leaves the open page rendering what it had
    already fetched, and best-effort, so it never fails a reveal that landed;
-   health-checks the live service; and auto-rolls-back to `--rollback-to` on any
-   failure. Interpret the exit code and report it:
+   waits for the live service to *settle* healthy (repeated 200s on an
+   unchanging supervisord pid, not a single probe); and auto-rolls-back to
+   `--rollback-to` on any failure. Interpret the exit code and report it:
 
    - `0` -- revealed; the live UI is updated and healthy.
    - `2` -- the change was bad and was **automatically rolled back**; the live UI

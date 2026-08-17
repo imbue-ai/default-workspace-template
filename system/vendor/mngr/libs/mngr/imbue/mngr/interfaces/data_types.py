@@ -611,10 +611,11 @@ class AgentDetails(FrozenModel):
     initial_branch: str | None = Field(
         description=(
             "Git branch mngr placed this agent's work_dir on at creation, whether it created the "
-            "branch or checked out one that already existed. Recorded at create time and not "
-            "re-read, so an agent that checks out a different branch itself is not reflected here; "
-            "None for transfer modes that involve no git (none, rsync), and for a source repo that "
-            "was itself on no branch (detached HEAD)."
+            "branch or checked out one that already existed. Read back from the work_dir after "
+            "checkout, so it is None when the work_dir ended up on no branch at all (--branch "
+            "accepts any checkout target, and a commit or tag detaches). Recorded at create time "
+            "and not re-read, so an agent that checks out a different branch itself is not "
+            "reflected here; None for transfer modes that involve no git (none, rsync)."
         )
     )
     create_time: datetime = Field(description="Creation timestamp")

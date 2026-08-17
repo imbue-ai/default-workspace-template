@@ -116,6 +116,27 @@ def test_index_returns_not_built_when_no_static(client: FlaskClient, tmp_path: P
         assert "npm run build" in response.text
 
 
+def test_an_unknown_api_path_is_a_json_404_not_the_app_shell(client: FlaskClient) -> None:
+    """A mistyped API fetch must fail, not "succeed" with a page.
+
+    The single-page-app catch-all answers any unmatched path with ``index.html``
+    at HTTP 200, which for an ``/api/*`` path means a caller parses a web page as
+    data -- and a probe for whether a route exists yet answers that it does.
+    """
+    response = client.get("/api/definitely-not-a-route-xyz")
+
+    assert response.status_code == 404
+    assert response.get_json()["detail"] == "No such API route: /api/definitely-not-a-route-xyz"
+
+
+def test_a_client_side_route_still_renders_the_app_shell(client: FlaskClient) -> None:
+    """Only /api paths change: everything else the catch-all handles is a UI route."""
+    response = client.get("/some/client/side/route")
+
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith("text/html")
+
+
 def test_list_agents_endpoint(client: FlaskClient) -> None:
     """The agents endpoint returns agent data."""
     with patch("imbue.system_interface.server.discover_agents") as mock_discover:
@@ -152,7 +173,7 @@ def test_health_is_degraded_while_no_lifecycle_events_have_arrived(client: Flask
     assert health_response.status_code == 503
     body = health_response.get_json()
     assert body["status"] == "degraded"
-    assert body["agent_events"]["is_alive"] is False
+    assert body["agent_events"]["is_stream_healthy"] is False
 
 
 def test_health_is_ok_once_the_lifecycle_stream_is_feeding_the_instance(
@@ -168,7 +189,7 @@ def test_health_is_ok_once_the_lifecycle_stream_is_feeding_the_instance(
     assert response.status_code == 200
     body = response.get_json()
     assert body["status"] == "ok"
-    assert body["agent_events"]["is_alive"] is True
+    assert body["agent_events"]["is_stream_healthy"] is True
     assert body["agent_events"]["mode"] == AgentEventsMode.OBSERVE
 
 

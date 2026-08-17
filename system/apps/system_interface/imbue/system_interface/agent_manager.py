@@ -496,18 +496,18 @@ class AgentManager:
             has_received_event = self._has_received_lifecycle_event
             follower = self._follower
         if failure is not None:
-            return AgentEventsStatus(mode=self._events_mode, is_alive=False, detail=failure)
+            return AgentEventsStatus(mode=self._events_mode, is_stream_healthy=False, detail=failure)
         if self._events_mode is AgentEventsMode.FOLLOW:
             return self._build_follow_status(follower, has_received_event)
         if not has_received_event:
             return AgentEventsStatus(
                 mode=self._events_mode,
-                is_alive=False,
+                is_stream_healthy=False,
                 detail="Waiting for the first event from the 'mngr observe' subprocess.",
             )
         return AgentEventsStatus(
             mode=self._events_mode,
-            is_alive=True,
+            is_stream_healthy=True,
             detail="Folding live events from this instance's own 'mngr observe' subprocess.",
         )
 
@@ -526,16 +526,16 @@ class AgentManager:
         if follower is None:
             return AgentEventsStatus(
                 mode=self._events_mode,
-                is_alive=False,
+                is_stream_healthy=False,
                 detail="The agent-lifecycle follower has not been started.",
             )
         follower_failure = follower.failure_detail()
         if follower_failure is not None:
-            return AgentEventsStatus(mode=self._events_mode, is_alive=False, detail=follower_failure)
+            return AgentEventsStatus(mode=self._events_mode, is_stream_healthy=False, detail=follower_failure)
         if not has_received_event:
             return AgentEventsStatus(
                 mode=self._events_mode,
-                is_alive=False,
+                is_stream_healthy=False,
                 detail=(
                     "Waiting for the first event from the observer's stream (no full-state "
                     "snapshot has been folded yet)."
@@ -543,7 +543,7 @@ class AgentManager:
             )
         return AgentEventsStatus(
             mode=self._events_mode,
-            is_alive=True,
+            is_stream_healthy=True,
             detail="Following the agent-lifecycle event stream written by the workspace's own observer.",
         )
 

@@ -171,7 +171,12 @@ class ImbueCloudHost(Host):
         wiped the previous lease cycle's state and we need a full create.
         """
         if self.pre_baked_agent_id is None:
-            return super().create_agent_state(work_dir_path, options, created_branch_name, checked_out_branch_name)
+            return super().create_agent_state(
+                work_dir_path,
+                options,
+                created_branch_name=created_branch_name,
+                checked_out_branch_name=checked_out_branch_name,
+            )
         if options.agent_id is not None and options.agent_id != self.pre_baked_agent_id:
             raise FixedAgentIdError(
                 f"imbue_cloud agent id is fixed by the lease ({self.pre_baked_agent_id}); "
@@ -188,7 +193,10 @@ class ImbueCloudHost(Host):
             # different conversation than the lease-adopt happy path).
             options_with_id = options.model_copy(update={"agent_id": self.pre_baked_agent_id})
             return super().create_agent_state(
-                work_dir_path, options_with_id, created_branch_name, checked_out_branch_name
+                work_dir_path,
+                options_with_id,
+                created_branch_name=created_branch_name,
+                checked_out_branch_name=checked_out_branch_name,
             )
 
         # Hydrate the agent class with the bake's name; minds no longer

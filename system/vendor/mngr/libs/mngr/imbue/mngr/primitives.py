@@ -713,13 +713,14 @@ class DiscoveredAgent(FrozenModel):
         """Return the git branch this agent's work_dir is on, or None if not set.
 
         Set whether the branch was created for the agent or already existed, unlike
-        ``created_branch_name``. Records written before this field existed fall back
-        to that one.
+        ``created_branch_name``. Records written before this field existed -- and
+        records that stored it empty -- fall back to that one, matching what
+        :func:`read_checked_out_branch` does for the same data.
         """
         match self.certified_data.get("checked_out_branch_name"):
-            case str(value):
+            case str(value) if value:
                 return value
-            case None:
+            case str() | None:
                 return self.created_branch_name
             case unexpected:
                 raise CertifiedDataError(f"Expected str or None for checked_out_branch_name, got {type(unexpected)}")

@@ -34,21 +34,35 @@ invariants itself.
   it owns the observer or follows one. It begins at the newest snapshot, forwards only
   newline-terminated lines (a snapshot exceeding the atomic-append size can leave
   a half-written tail, which is left in place and picked up once the writer
-  finishes it), re-seeds if the file is truncated or replaced, and refuses to
-  start at all when no process holds the lock -- silently tailing a dormant file
-  is the failure it exists to prevent. It is single-use, and says so: starting a
-  follower that is already running would forward every line twice, and starting
-  a stopped one would leave a thread that exits immediately while still
-  reporting itself live, so both raise instead.
+  finishes it), re-seeds at the newest snapshot if the file is truncated or
+  replaced, and refuses to start at all when no process holds the lock --
+  silently tailing a dormant file is the failure it exists to prevent. It is
+  single-use, and says so: starting a follower that is already running would
+  forward every line twice, and starting a stopped one would leave a thread that
+  exits immediately while still reporting itself live, so both raise instead.
+
+A follower survives the observer it follows being restarted. Losing the writer is
+environmental, not a fault of the fold: the observer can be shed under memory
+pressure, crash, or simply be restarted by an unrelated flow, and a pass that runs
+for an hour is exposed to all three. So the follow loop keeps polling through an
+outage instead of giving up on it -- re-probing costs nothing, since a follower
+holds no lock and cannot take one from the observer it wants back. While the
+outage lasts, `is_stream_healthy()` is False and `failure_detail()` says why (a
+health gate reading it flips to degraded); when a new `mngr observe` takes the
+lock, its opening full-state snapshot replaces the stale folded view and both
+clear on their own. Internal failure is still permanent and first-cause-wins:
+if the consumer's own `on_line` sink raised, retrying a broken fold just breaks
+it again.
 
 The follower reports why it stopped rather than dying quietly. Any exit that was
 not a deliberate `stop` records a failure, including exceptions raised by the
 consumer's own sink (which it cannot enumerate), so a consumer gating on
-`is_alive()` cannot keep reporting itself healthy after its fold has died. Those
-exceptions still propagate, so the traceback survives. A stream it cannot get an
-answer about says so in those words, rather than reporting the observer as exited
--- that detail is what a consumer puts in front of whoever has to fix it, and the
-wrong diagnosis sends them somewhere else. `stop` holds to the same rule: a thread
+`is_stream_healthy()` cannot keep reporting itself healthy after its fold has
+died. Those exceptions still propagate, so the traceback survives. A stream it
+cannot get an answer about says so in those words, rather than reporting the
+observer as exited -- that detail is what a consumer puts in front of whoever has
+to fix it, and the wrong diagnosis sends them somewhere else. `stop` holds to the
+same rule: a thread
 still running when its wait elapses is logged rather than assumed gone, since the
 only way it gets there is being stuck inside the consumer's own sink, still
 delivering events to a consumer that has just been told the follower stopped. How
@@ -56,9 +70,9 @@ long that wait is, like the poll interval beside it, is the consumer's to state
 (`join_timeout_seconds`): how long a sink may reasonably take to return is a fact
 about the sink.
 
-`AgentDetails.initial_branch` now reports the branch an agent's work_dir is
-actually on, whether mngr created that branch or checked out one that already
-existed. It previously came from `get_created_branch_name()`, which is
+`AgentDetails.initial_branch` now reports the branch mngr placed an agent's
+work_dir on at creation, whether mngr created that branch or checked out one that
+already existed. It previously came from `get_created_branch_name()`, which is
 deliberately None for a pre-existing branch so teardown never deletes a branch
 mngr did not create -- and `--branch BASE` (no `:NEW`) is exactly that case. So
 for an agent deliberately placed on an existing branch, nothing in `mngr ls` said
@@ -90,10 +104,16 @@ place. Without that, those providers' online listings would have kept reporting
 the old narrower value while their offline path reported the new one, so the
 answer would have changed with host state.
 
-Note the field is recorded at create time from what mngr placed there, and is not
-re-read: an agent that checks out a different branch itself is not reflected, and
-it is None for transfer modes involving no git. It is also None when the source
-repo was itself on no branch (detached HEAD), which names none to inherit -- the
-answer there is "unknown", so a caller that acts on the field says so rather than
-being sent at a branch that does not exist. The generated CLI docs for `mngr list`
-are regenerated to describe it.
+The recorded value is read back off the work_dir once the checkout has happened,
+rather than taken from the `--branch` string that was asked for. `--branch`
+accepts any checkout target, so a SHA, a tag, or `origin/main` leaves the work_dir
+detached (or on a DWIMmed local branch by another name), and a source repo with no
+branch of its own leaves nothing to inherit. Recording the request in those cases
+would have named a branch that does not exist; reading it back answers "unknown"
+instead, so a caller that acts on the field says so rather than merging from
+nowhere.
+
+Note the field is recorded at create time and is not re-read: an agent that checks
+out a different branch itself is not reflected, and it is None for transfer modes
+involving no git. The generated CLI docs for `mngr list` are regenerated to
+describe it.
