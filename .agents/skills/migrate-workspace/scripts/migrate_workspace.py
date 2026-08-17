@@ -1076,7 +1076,7 @@ def _shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
-def _resolve_path_command(path: str) -> str:
+def _resolve_path_command(path: str, variable: str = "resolved") -> str:
     """Shell that prints ``path`` canonicalized on the source, one line.
 
     ``find`` (default ``-P``) refuses to descend a symlinked *start* path, so on a
@@ -1088,11 +1088,16 @@ def _resolve_path_command(path: str) -> str:
     Falls back to the original when ``readlink -f`` fails or prints nothing (a
     missing intermediate component), so an unresolvable path degrades to the
     unresolved behaviour instead of an empty string.
+
+    ``variable`` names the shell variable the result is left in, for a caller that
+    goes on to use the canonical path in the same round trip (see
+    :func:`_cmd_list_agents`) rather than only reading it back off stdout.
     """
     return (
         f"raw={_shell_quote(path)}; "
-        'resolved=$(readlink -f "$raw" 2>/dev/null); '
-        'printf "%s\\n" "${resolved:-$raw}"'
+        f'{variable}=$(readlink -f "$raw" 2>/dev/null); '
+        f'{variable}="${{{variable}:-$raw}}"; '
+        f'printf "%s\\n" "${variable}"'
     )
 
 
@@ -1249,9 +1254,7 @@ def _cmd_list_agents(args: argparse.Namespace) -> int:
     # session ``find`` below match nothing while still exiting 0.
     listing = run_remote(
         target,
-        f"raw={_shell_quote(args.host_dir)}; "
-        'hd=$(readlink -f "$raw" 2>/dev/null); hd="${hd:-$raw}"; '
-        'printf "%s\\n" "$hd"; '
+        f"{_resolve_path_command(args.host_dir, 'hd')}; "
         "echo '---'; ls -1 \"$hd/agents\" 2>/dev/null; "
         "echo '---'; ls -1 \"$hd/preserved\" 2>/dev/null; "
         "echo '---'; find \"$hd\" -path '*/projects/*' -name '*.jsonl' 2>/dev/null",
