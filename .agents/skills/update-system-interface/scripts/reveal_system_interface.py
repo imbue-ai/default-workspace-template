@@ -322,8 +322,12 @@ class HttpClient:
         try:
             with urllib.request.urlopen(url, timeout=timeout) as response:
                 body = response.read().decode("utf-8", errors="replace")
-                headers = {key.lower(): value for key, value in response.headers.items()}
-                return FetchedPage(status=int(response.status), body=body, headers=headers)
+                headers = {
+                    key.lower(): value for key, value in response.headers.items()
+                }
+                return FetchedPage(
+                    status=int(response.status), body=body, headers=headers
+                )
         except urllib.error.HTTPError as exc:
             return FetchedPage(status=int(exc.code), body="", headers={})
         except (urllib.error.URLError, OSError):
@@ -609,9 +613,14 @@ def probe_frontend(http: HttpClient, base_url: str) -> FrontendProbe:
     """
     shell = http.get_page(f"{base_url}{SERVE_PATH}", timeout=10.0)
     if shell is None:
-        return FrontendProbe("the live service did not answer a request for the app shell", is_answered=False)
+        return FrontendProbe(
+            "the live service did not answer a request for the app shell",
+            is_answered=False,
+        )
     if shell.status != 200:
-        return FrontendProbe(f"the app shell returned HTTP {shell.status}", is_answered=True)
+        return FrontendProbe(
+            f"the app shell returned HTTP {shell.status}", is_answered=True
+        )
     if shell.headers.get(FRONTEND_BUILT_HEADER) == "false":
         return FrontendProbe(
             "the live service is serving the 'frontend not built' placeholder -- the compiled bundle is missing",
@@ -619,15 +628,22 @@ def probe_frontend(http: HttpClient, base_url: str) -> FrontendProbe:
         )
     match = _ASSET_REFERENCE_PATTERN.search(shell.body)
     if match is None:
-        return FrontendProbe("the app shell loads no bundled script, so it is not the built app", is_answered=True)
+        return FrontendProbe(
+            "the app shell loads no bundled script, so it is not the built app",
+            is_answered=True,
+        )
     asset_url = f"{base_url}/assets/{match.group(1)}"
     asset = http.get_page(asset_url, timeout=10.0)
     if asset is None:
         return FrontendProbe(
-            f"the live service did not answer a request for the bundled script {asset_url}", is_answered=False
+            f"the live service did not answer a request for the bundled script {asset_url}",
+            is_answered=False,
         )
     if asset.status != 200:
-        return FrontendProbe(f"the bundled script {asset_url} returned HTTP {asset.status}", is_answered=True)
+        return FrontendProbe(
+            f"the bundled script {asset_url} returned HTTP {asset.status}",
+            is_answered=True,
+        )
     if "javascript" not in asset.content_type:
         return FrontendProbe(
             f"the bundled script {asset_url} came back as '{asset.content_type}' rather than JavaScript, "
@@ -997,7 +1013,9 @@ def reveal(
     # Whether a working frontend is owed afterwards is decided by what was being
     # served *before* -- the reveal is answerable for regressions, not for a
     # workspace that was already broken when it arrived.
-    is_frontend_expected = describe_frontend_failure(http, resolved_base, sleeper) is None
+    is_frontend_expected = (
+        describe_frontend_failure(http, resolved_base, sleeper) is None
+    )
 
     try:
         try:
