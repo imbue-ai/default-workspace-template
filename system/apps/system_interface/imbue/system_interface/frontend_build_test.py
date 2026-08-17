@@ -4,22 +4,30 @@ The build commands are injected, so nothing here runs npm. What is exercised is
 the decision-making around them: which commands run at all, and what counts as a
 finished rebuild -- the part that decides whether a user staring at the
 placeholder gets their interface back or a confident lie.
+
+The one exception is the default runner, which the injection seam bypasses and
+which is therefore covered by actually spawning a command.
 """
 
+import os
 import threading
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.system_interface.frontend_build import FrontendBuildError
 from imbue.system_interface.frontend_build import FrontendBuildPhase
 from imbue.system_interface.frontend_build import FrontendBuildService
+from imbue.system_interface.frontend_build import _default_command_runner
 
 _BUILD_ARGV = ["npm", "run", "build"]
 _INSTALL_ARGV = ["npm", "ci"]
+
+_PROC_OOM_SCORE_ADJ = Path("/proc/self/oom_score_adj")
 
 
 def _finished(returncode: int = 0, stdout: str = "", stderr: str = "", is_timed_out: bool = False) -> FinishedProcess:
@@ -225,3 +233,23 @@ def test_a_second_rebuild_is_refused_while_one_is_running(tmp_path: Path) -> Non
     finally:
         release.set()
     assert finished.wait(timeout=10.0)
+
+
+def test_the_default_runner_makes_the_build_expendable_and_forwards_its_argv(tmp_path: Path) -> None:
+    # A rebuild is spawned by the system interface, and oom_score_adj is
+    # inherited across fork/exec -- so untagged it would run in the service's own
+    # protected band and a memory shed would take the user's chats, workers and
+    # agent subprocesses to keep the build alive. Every other test here injects a
+    # fake runner, so this is the only coverage the tag has.
+    script = 'printf "%s\\n" "$@"; cat /proc/self/oom_score_adj 2>/dev/null || true'
+    result = _default_command_runner(["sh", "-c", script, "sh", "built", "the bundle"], tmp_path, 30.0)
+
+    assert result.returncode == 0
+    reported = result.stdout.splitlines()
+    # The argv reached the command verbatim, spaces and all, rather than being
+    # re-split or swallowed by the wrapping shell.
+    assert reported[:2] == ["built", "the bundle"]
+    # Where /proc is absent or read-only (macOS) tagging is a documented no-op,
+    # and the command must still run -- which the assertion above just showed.
+    if os.access(_PROC_OOM_SCORE_ADJ, os.W_OK):
+        assert reported[2:] == [str(bands.AGENT_SUBPROCESS)]
