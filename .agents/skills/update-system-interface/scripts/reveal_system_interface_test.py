@@ -21,6 +21,7 @@ broken one.
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import sys
 import tempfile
@@ -812,6 +813,41 @@ def test_a_reveal_that_leaves_the_placeholder_showing_is_rolled_back(
     # rather than reporting a healthy rollback it cannot vouch for.
     assert code == 3
     assert http.page_urls  # the frontend was actually probed
+
+
+def test_an_emergency_hands_the_bundle_snapshot_to_the_operator(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Exit 3 means recovery could not put a working frontend back, so the copy
+    # is the last known-good bundle anywhere: the tree's was destroyed before the
+    # build that failed, and rebuilding is what just failed. Discarding it with
+    # every other outcome would take the operator's only npm-free way back --
+    # which is the whole premise of taking a copy in the first place.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+    http = _FakeHttp(
+        _all_healthy, page_responder=_breaks_after_the_build(runner, _placeholder_page)
+    )
+
+    assert _reveal(runner, http, _FakeSpawner(), repo) == 3
+
+    kept = _kept_snapshot_path(capsys.readouterr().err)
+    try:
+        # Named on stderr, and actually a bundle -- a path to an empty directory
+        # would be worse than saying nothing.
+        assert (kept / "index.html").exists()
+    finally:
+        # Nothing else reaps it now, so the test plays the operator it was left
+        # for. It lives in the system temp dir, not under tmp_path.
+        shutil.rmtree(kept.parent, ignore_errors=True)
+
+
+def _kept_snapshot_path(stderr: str) -> Path:
+    """Where the emergency path told the operator the bundle copy is."""
+    match = re.search(r"bundle was kept at (\S+) --", stderr)
+    assert match is not None, stderr
+    return Path(match.group(1))
 
 
 def test_a_reveal_whose_asset_comes_back_as_html_is_rolled_back(repo: Path) -> None:

@@ -93,7 +93,10 @@ Exit codes (``reveal``):
        0, a workspace whose frontend was already broken when the reveal started
        gets a closing line that says so instead, since the rollback was never
        held to a standard it could not have met.
-    3  EMERGENCY: even rollback could not restore a healthy UI.
+    3  EMERGENCY: even rollback could not restore a healthy UI. The pre-reveal
+       bundle copy is kept rather than discarded, and its path printed: putting
+       it back needs neither npm nor a registry, so it is the way out of exactly
+       the failure that gets here.
 
 Exit codes (``preview`` / ``unpreview``):
     0  Success (preview is up / torn down).
@@ -1017,8 +1020,10 @@ def reveal(
         return 0
 
     # Taken before anything destructive runs, and kept until the reveal has
-    # either succeeded or finished recovering.
+    # either succeeded or finished recovering -- or, on the emergency path,
+    # handed to the operator instead of discarded (see below).
     saved_bundle = snapshot_bundle(repo_root)
+    is_snapshot_left_for_operator = False
     # Whether a working frontend is owed afterwards is decided by what was being
     # served *before* -- the reveal is answerable for regressions, not for a
     # workspace that was already broken when it arrived.
@@ -1082,9 +1087,23 @@ def reveal(
                 "EMERGENCY: rollback did not restore a healthy UI. The system interface may be down; "
                 "manual intervention is required.\n"
             )
+            # The copy outlives this failure on purpose. Recovery could not put a
+            # working frontend back, and in the very failure this mechanism
+            # exists for -- a build environment that cannot compile one -- this
+            # is the last known-good bundle anywhere: the tree's was destroyed
+            # before the failed build, and rebuilding is what just failed.
+            # Discarding it here would take the operator's only way back with it.
+            if saved_bundle is not None:
+                is_snapshot_left_for_operator = True
+                sys.stderr.write(
+                    f"the pre-reveal frontend bundle was kept at {saved_bundle} -- copying it over "
+                    f"{repo_root / STATIC_DIR} restores the UI without needing npm or a registry. "
+                    "Delete it once you have.\n"
+                )
             return 3
     finally:
-        _discard_snapshot(saved_bundle)
+        if not is_snapshot_left_for_operator:
+            _discard_snapshot(saved_bundle)
 
     if unresolved_frontend_failure is not None:
         # The change landed and there is nothing here to roll back, so this is
