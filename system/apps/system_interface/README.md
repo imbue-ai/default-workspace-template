@@ -31,7 +31,7 @@ npm run dev
 The deployed system interface is the live web UI the user is looking at, so
 changes are not applied in place. The canonical flow is the
 `update-system-interface` agent skill -- the system-interface specialization of
-`update-service`'s "live loop first, ratify at turn-end" pattern. The lead edits
+`update-app`'s "live loop first, ratify at turn-end" pattern. The lead edits
 an **isolated worktree**, builds, and refreshes a labeled **preview tab** in
 place, iterating live with the user (seconds per round, not a full harden pass);
 once the user approves the shape, a background worker runs the full test + review
