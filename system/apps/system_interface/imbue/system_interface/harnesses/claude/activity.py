@@ -12,8 +12,8 @@ from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import has_unmatched_tool_use
 from imbue.system_interface.activity_state import last_event_timestamp
 from imbue.system_interface.activity_state import last_event_type
-from imbue.system_interface.harnesses.claude.activity_state import derive
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.claude.activity_state import derive
 
 
 class ClaudeActivityTracker(HarnessActivityTracker):

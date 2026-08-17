@@ -27,13 +27,13 @@ from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
+from imbue.system_interface.harnesses.codex.model import _bind_root_thread
+from imbue.system_interface.harnesses.codex.model import _subscribe_root_thread
 from imbue.system_interface.harnesses.codex.model import codex_model_to_option
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
 from imbue.system_interface.harnesses.codex.model import read_codex_model_options
 from imbue.system_interface.harnesses.codex.model import write_codex_model_options
-from imbue.system_interface.harnesses.codex.model import _bind_root_thread
-from imbue.system_interface.harnesses.codex.model import _subscribe_root_thread
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.model import ModelAxis
 from imbue.system_interface.harnesses.model import ModelIdentity

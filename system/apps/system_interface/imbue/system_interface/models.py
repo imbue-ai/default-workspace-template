@@ -281,16 +281,10 @@ class TerminalSessionInfo(FrozenModel):
 
 
 class CreateChatRequest(FrozenModel):
-    """Request body for creating a chat agent."""
+    """Request body for creating a chat agent (any harness; claude is the default)."""
 
     name: str = Field(description="Name for the new chat agent")
-
-
-class CreateCodexRequest(FrozenModel):
-    """Request body for creating a codex chat agent (same shape as chat: runs in
-    the primary agent's work dir, just a different harness `--type`)."""
-
-    name: str = Field(description="Name for the new codex agent")
+    harness: HarnessType = Field(default=HarnessType.CLAUDE, description="Harness to run the agent on")
 
 
 class CreateAgentResponse(FrozenModel):

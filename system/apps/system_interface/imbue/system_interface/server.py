@@ -6,8 +6,6 @@ import threading
 import traceback
 from collections.abc import Callable
 from collections.abc import Iterator
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -48,22 +46,14 @@ from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
 from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
 from imbue.system_interface.harnesses.claude.launch_defaults import write_workspace_fast_mode_decision
-from imbue.system_interface.harnesses.claude.tap import ClaudeTapStatus
-from imbue.system_interface.harnesses.claude.tap import KEYBINDINGS_FILENAME
-from imbue.system_interface.harnesses.claude.tap import OK_TAP_STATUSES
 from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
-from imbue.system_interface.harnesses.claude.tap import execute_claude_shoulder_tap
-from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import restart_drain
-from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import ModelOption
-from imbue.system_interface.harnesses.pi_coding.model import PiFlushTapStatus
-from imbue.system_interface.harnesses.pi_coding.model import flush_pi_queue_atomic
 from imbue.system_interface.harnesses.registry import HARNESS_SPECS
-from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.harnesses.registry import build_resolver
 from imbue.system_interface.harnesses.registry import get_catalog
+from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.layout_ops import allocate_next_terminal_name
@@ -87,7 +77,6 @@ from imbue.system_interface.models import AttachmentError
 from imbue.system_interface.models import AttachmentUploadResponse
 from imbue.system_interface.models import CreateAgentResponse
 from imbue.system_interface.models import CreateChatRequest
-from imbue.system_interface.models import CreateCodexRequest
 from imbue.system_interface.models import DestroyAgentResponse
 from imbue.system_interface.models import DrainToComposerResponse
 from imbue.system_interface.models import ErrorResponse
@@ -449,60 +438,20 @@ def _send_message_endpoint(agent_id: str) -> Response:
     agent_manager: AgentManager = get_state().agent_manager
     message_id = send_message_request.message_id or uuid4().hex
 
-    # codex owns the whole message lifecycle in its live ledger (contract A2: the backend is the
-    # sole authority). The frontend's ``message_id`` is passed only as a CORRELATION TOKEN
-    # (``clientUserMessageId``), which codex echoes back on the committed item so the ledger can
-    # link the commit to this send -- it is NOT the delivery key (Fix 2): delivery is decided by
-    # observing the committed ``userMessage`` item, keyed on codex's own ``item.id`` (contract A4).
-    # ``send`` returns as soon as the daemon accepts the message (opening a turn, or parking a
-    # steer); the ledger then carries its real state -- a queue chip, or (at commit) the live
-    # user-turn it emits itself -- which is what drops the frontend's optimistic "Sending" bubble.
-    if agent_info.harness == HarnessType.CODEX:
-        ledger = agent_manager.ensure_codex_ledger(agent_info.id)
-        if ledger is None:
-            failure = ErrorResponse(
-                detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (codex daemon starting)."
-            )
-            return _json_response(failure.model_dump(), status_code=503)
-        ledger.send(send_message_request.message, client_id=message_id)
-        _record_client_message_activity(agent_info, send_message_request)
-        return _json_response(SendMessageResponse(status="ok").model_dump())
-
-    # Record the message as *Sending* (contract A1) on the watcher BEFORE delivery: while
-    # the synchronous send is in flight the message has no on-disk harness record yet, so a
-    # concurrent interrupt reads this to return a not-yet-committed send to the composer
-    # rather than lose it (A4). Keyed by the sender's stable send-time id (or a minted one
-    # for legacy callers). The send resolves it: committed/queued -> commit_sent_message,
-    # failed -> retract_sent_message. The base hook is a no-op, and only an EXISTING watcher
-    # is told: if none is watching, no UI needs a bubble.
-    watcher = get_state().watchers.get(agent_info.id)
-    queued_token = (
-        watcher.note_sent_message(send_message_request.message, message_id)
-        if watcher is not None
-        else None
-    )
-
-    # Mark the agent send-in-flight so the shoulder-tap button greys for the (blocking) send's
-    # duration (contract Shoulder-tap: unavailable while ANY message is Sending). Cleared after,
-    # on every path, so the button never stays stuck greyed. The mark/clear each broadcast, so
-    # the frontend sees the flag flip false then true within this request.
-    agent_manager.mark_send_in_flight(agent_info.id)
-    try:
-        success = agent_manager.send_message_to_agent(AgentId(agent_info.id), send_message_request.message)
-    finally:
-        agent_manager.clear_send_in_flight(agent_info.id)
-
-    if not success:
-        if watcher is not None and queued_token is not None:
-            watcher.retract_sent_message(queued_token)
+    # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
+    # records the message as *Sending* around mngr's blocking delivery (greying the tap button
+    # for the duration); the codex session hands it to its live ledger, passing ``message_id``
+    # only as the correlation token the committed item echoes back (Fix 2).
+    session = agent_manager.get_or_create_session(agent_info)
+    outcome = session.send(send_message_request.message, message_id)
+    if outcome is SendOutcome.NOT_READY:
+        failure = ErrorResponse(
+            detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
+        )
+        return _json_response(failure.model_dump(), status_code=503)
+    if outcome is SendOutcome.FAILED:
         failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
         return _json_response(failure.model_dump(), status_code=500)
-
-    # Delivered or queued: the message now has a real representation, so it is no longer
-    # Sending -- clear its record so a later interrupt does not return an already-committed
-    # message to the composer.
-    if watcher is not None and queued_token is not None:
-        watcher.commit_sent_message(queued_token)
 
     _record_client_message_activity(agent_info, send_message_request)
     return _json_response(SendMessageResponse(status="ok").model_dump())
@@ -559,10 +508,7 @@ def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) 
     connect, a picker-open, or a persisted sidecar supplies the account's ``model/list``. Every other
     harness validates against its static catalog options.
     """
-    if agent_info.harness == HarnessType.CODEX:
-        options = agent_manager.get_codex_model_options(agent_info.id)
-        return options if options is not None else ()
-    return get_catalog(agent_info.harness).options
+    return agent_manager.get_or_create_session(agent_info).switch_options()
 
 
 def _set_model_choice_endpoint(agent_id: str) -> Response:
@@ -646,7 +592,7 @@ def _get_model_options_endpoint(agent_id: str) -> Response:
         # ``list_offered_options`` (where the raw ``model/list`` is still in hand), so the chip
         # resolves offline after a restart.
         if dynamic_options:
-            get_state().agent_manager.store_codex_model_options(agent_id, dynamic_options)
+            get_state().agent_manager.get_or_create_session(agent_info).note_offered_options(dynamic_options)
         return _json_response(ModelOptionsResponse(options=dynamic_options).model_dump())
     return _json_response(ModelOptionsResponse(models=resolver.list_offered_models()).model_dump())
 
@@ -957,79 +903,23 @@ def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     if refusal is not None:
         return refusal
 
-    if agent_info.harness == HarnessType.PI_CODING:
-        # pi has no per-turn id, so there is no ABA target to compute here: the lifecycle
-        # extension gates the interrupt on "a turn is actually running" itself (a no-op when
-        # idle). The whole locked flush write (bounded lock acquire, sentinel append) lives
-        # with the pi harness -- see ``flush_pi_queue_atomic``.
-        try:
-            pi_flush_status = flush_pi_queue_atomic(agent_info.agent_state_dir)
-        except OSError as e:
-            logger.opt(exception=e).error("Failed to write pi interrupt sentinel for {}", agent_info.name)
-            error = ErrorResponse(detail=f"Failed to record the shoulder tap for agent '{agent_info.name}'")
-            return _json_response(error.model_dump(), status_code=500)
-        # SEND_IN_FLIGHT (a send held the lock past the bounded wait, so no sentinel was written)
-        # is a benign 200 no-op, not a 500: the backend availability flag greys the button while a
-        # send is in flight, so a tap that still races one just does nothing and the user retaps --
-        # surfacing an error there is the button-then-error bug we removed. The queue is unchanged,
-        # so it stays tappable.
-        return _json_response(ShoulderTapAtomicResponse(status=pi_flush_status.value).model_dump())
-
-    if agent_info.harness == HarnessType.CLAUDE:
-        # claude has no control-file channel: it flushes its parked queue by cancelling the
-        # live turn. Delegate the whole flow (refresh-first gate, chord delivery via mngr's
-        # locked keypress, the bounded verdict watch, and the recovery send) to the executor.
-        return _claude_shoulder_tap(agent_info)
-
-    # codex: deliver the parked queue EARLY through the live ledger (Fix 3). The ledger interrupts
-    # the running turn and re-sends the queue as ONE combined turn, keeping every message
-    # continuously visible as a "Sending..." chip through the interrupt+resend (contract A1a) rather
-    # than blinking it out. A raw send racing the tap is a BENIGN 200 no-op (``send_in_flight``), never
-    # a 500 dialog -- the pushed ``shoulder_tap_available`` flag already greys the button while a send
-    # is in flight. An empty queue is likewise a clean no-op (``no_open_turn``).
-    ledger = get_state().agent_manager.get_codex_ledger(agent_info.id)
-    if ledger is None:
-        # No live daemon connection: nothing is parked to flush, so this is a clean no-op.
-        return _json_response(ShoulderTapAtomicResponse(status="no_open_turn").model_dump())
-    result = ledger.shoulder_tap()
-    # ``block`` is non-empty only when the combined resend failed to submit: the parked text is handed
-    # back to the composer (like Stop's drain-to-composer) so it is never swallowed (contract A1a).
-    return _json_response(
-        ShoulderTapAtomicResponse(status=result.status, block=result.returned_block).model_dump()
-    )
-
-
-def _claude_shoulder_tap(agent_info: AgentInfo) -> Response:
-    """Run claude's native shoulder tap and map the executor's status to an HTTP response.
-
-    The keypress and the recovery send both route through the agent manager (which delegates
-    to mngr's in-process message API, holding the per-agent ``message.lock``): dwt never drives
-    raw tmux. The refresh-first mirror read is taken under a bounded acquire of that same lock,
-    so a tap racing a not-yet-parked send is refused with ``send_in_flight`` rather than no-oping
-    it away -- the codex/pi discipline. Terminal no-op / success statuses (``nothing_queued`` /
-    ``no_open_turn`` / ``tapped``) return 200; a dialog block returns 409; every other error
-    (including ``send_in_flight``, a retryable refusal) returns 500.
-    """
+    # The session dispatches to the harness's native tap (claude's chord executor, pi's locked
+    # inbox sentinel, codex's live-ledger interrupt+resend). A retryable refusal racing an
+    # in-flight send is a benign 200 no-op status, never an error dialog -- the pushed
+    # ``shoulder_tap_available`` flag already greys the button while anything is Sending.
     state = get_state()
-    # The base watcher structurally satisfies the tap's watcher protocol (its shoulder-tap
-    # surface carries get_all_events / get_queued_messages / get_latest_main_session_file),
-    # so no narrowing is needed; the claude watcher supplies the real live-session file.
     watcher = state.get_or_create_watcher(agent_info)
-    agent_manager: AgentManager = state.agent_manager
-    agent_id = AgentId(agent_info.id)
-
-    result = execute_claude_shoulder_tap(
-        agent_state_dir=agent_info.agent_state_dir,
-        keybindings_path=agent_info.claude_config_dir / KEYBINDINGS_FILENAME,
-        watcher=watcher,
-        press_chord=lambda: agent_manager.press_key_chord_on_agent(agent_id, TAP_CHORD),
-        send_recovery=lambda text: agent_manager.send_message_to_agent(agent_id, text),
-        try_message_lock=lambda: try_hold_message_lock(agent_info.agent_state_dir),
+    agent_manager = state.agent_manager
+    outcome = agent_manager.get_or_create_session(agent_info).shoulder_tap(
+        agent_info,
+        watcher,
+        press_chord=lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
+        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
     )
-    if result.status in OK_TAP_STATUSES:
-        return _json_response(ShoulderTapAtomicResponse(status=result.status.value).model_dump())
-    status_code = 409 if result.status == ClaudeTapStatus.PERMISSIONS_WAITING else 500
-    return _json_response(ErrorResponse(detail=result.detail).model_dump(), status_code=status_code)
+    if outcome.error_detail is not None:
+        error = ErrorResponse(detail=outcome.error_detail)
+        return _json_response(error.model_dump(), status_code=outcome.error_status_code)
+    return _json_response(ShoulderTapAtomicResponse(status=outcome.status, block=outcome.block).model_dump())
 
 
 def _drain_to_composer_endpoint(agent_id: str) -> Response:
@@ -1054,21 +944,10 @@ def _drain_to_composer_endpoint(agent_id: str) -> Response:
 
     agent_manager: AgentManager = get_state().agent_manager
 
-    # codex interrupts natively through its live ledger: one ``turn/interrupt`` on the running
-    # turn, then an authoritative per-id settle -- every non-committed owned message (a parked
-    # steer, or an in-flight Sending) returns to the composer in send order, while a message that
-    # committed before the interrupt stays Delivered (contract Interrupt + A4). The dot itself is
-    # tracker-driven and clears when the rollout's turn_aborted marker lands. With no live
-    # connection there is nothing running and nothing parked, so the returned block is empty.
-    if agent_info.harness == HarnessType.CODEX:
-        ledger = agent_manager.get_codex_ledger(agent_info.id)
-        block = ledger.interrupt() if ledger is not None else ""
-        return _json_response(DrainToComposerResponse(block=block).model_dump())
-
     watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
-    interrupter = build_interrupt_to_composer(agent_info)
     try:
-        block = interrupter.drain_to_composer(
+        block = agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+            agent_info,
             watcher,
             restart_process,
             settle_activity,
@@ -1601,47 +1480,18 @@ def _random_name_endpoint() -> Response:
 
 
 def _create_chat_agent() -> Response:
-    """Create a new chat agent in the primary agent's work directory."""
-    agent_manager: AgentManager = get_state().agent_manager
-    body = request.get_json()
+    """Create a new chat agent in the primary agent's work directory.
 
-    try:
-        create_request = CreateChatRequest(**body)
-        agent_id = agent_manager.create_chat_agent(create_request.name)
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=400)
-
-
-def _create_codex_agent() -> Response:
-    """Create a new codex chat agent in the primary agent's work directory.
-
-    Same `chat` role as _create_chat_agent, on the codex harness instead of claude.
-    """
-    agent_manager: AgentManager = get_state().agent_manager
-    body = request.get_json()
-
-    try:
-        create_request = CreateCodexRequest(**body)
-        agent_id = agent_manager.create_chat_agent(create_request.name, HarnessType.CODEX)
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=400)
-
-
-def _create_pi_agent() -> Response:
-    """Create a new pi chat agent in the primary agent's work directory.
-
-    Same ``chat`` role as _create_chat_agent, on the pi harness instead of claude.
+    One endpoint for every harness: the ``chat`` role is the same, and the request's
+    ``harness`` field (validated against :class:`HarnessType`, claude by default) picks
+    which harness template the server stacks under it.
     """
     agent_manager: AgentManager = get_state().agent_manager
     body = request.get_json()
 
     try:
         create_request = CreateChatRequest(**body)
-        agent_id = agent_manager.create_chat_agent(create_request.name, HarnessType.PI_CODING)
+        agent_id = agent_manager.create_chat_agent(create_request.name, create_request.harness)
         return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
     except (AgentCreationError, OSError, ValueError) as e:
         error = ErrorResponse(detail=str(e))
@@ -2245,8 +2095,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
-    application.add_url_rule("/api/agents/create-codex", view_func=_create_codex_agent, methods=["POST"])
-    application.add_url_rule("/api/agents/create-pi", view_func=_create_pi_agent, methods=["POST"])
     application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
     application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])

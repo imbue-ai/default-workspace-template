@@ -82,7 +82,6 @@ from imbue.system_interface.harnesses.claude.session_parser import QueueSignal
 from imbue.system_interface.harnesses.claude.session_parser import QueueSignalKind
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.claude.session_parser import parse_queue_signals
-from imbue.system_interface.harnesses.sending_registry import SendingStateWatcherMixin
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.watcher_common import POLL_INTERVAL_SECONDS
@@ -249,7 +248,7 @@ class SessionFileState:
         self.emitted_count: int = 0
 
 
-class ClaudeSessionWatcher(SendingStateWatcherMixin, AgentSessionWatcher):
+class ClaudeSessionWatcher(AgentSessionWatcher):
     """Watches all session files for a single mngr agent and emits parsed events."""
 
     @classmethod
@@ -349,7 +348,6 @@ class ClaudeSessionWatcher(SendingStateWatcherMixin, AgentSessionWatcher):
         # accepted and is delivering but that have not yet committed or queued. Guarded by
         # ``_lock`` like the queue populator. The interrupt path reads it so a send caught
         # mid-flight (never committed) returns to the composer instead of being lost.
-        self._init_sending_state()
 
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()

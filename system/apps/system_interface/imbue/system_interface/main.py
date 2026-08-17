@@ -10,10 +10,10 @@ from flask import Flask
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.config import Config
 from imbue.system_interface.config import load_config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.server import create_application
 from imbue.system_interface.welcome_resend import WelcomeResender

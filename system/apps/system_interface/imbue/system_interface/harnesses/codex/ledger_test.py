@@ -24,14 +24,14 @@ from pathlib import Path
 from typing import Any
 
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
+from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
 from imbue.system_interface.harnesses.codex.ledger import LedgerEntry
 from imbue.system_interface.harnesses.codex.ledger import MessageState
-from imbue.mngr_codex.app_server_client import CodexModel
-from imbue.system_interface.harnesses.codex.session_parser import codex_user_turn_event_id
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
+from imbue.system_interface.harnesses.codex.session_parser import codex_user_turn_event_id
 from imbue.system_interface.harnesses.model import ModelIdentity
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import model_state_path

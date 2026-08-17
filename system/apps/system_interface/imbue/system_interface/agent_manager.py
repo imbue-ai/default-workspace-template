@@ -42,8 +42,8 @@ from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface import client_activity
 from imbue.system_interface import workspace_layouts
 from imbue.system_interface.activity_state import ACTIVE_MARKER_FILENAME
-from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 from imbue.system_interface.activity_state import resolve_is_agent_running
@@ -53,16 +53,12 @@ from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
 from imbue.system_interface.harnesses.auth_check import find_unauthenticated_harness_reason
 from imbue.system_interface.harnesses.claude.launch_defaults import FAST_MODE_BEFORE_DECISION
 from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
 from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
-from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
-from imbue.system_interface.harnesses.codex.live_connection import CodexLiveConnection
-from imbue.system_interface.harnesses.codex.model import codex_models_to_options
-from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
-from imbue.system_interface.harnesses.codex.model import read_codex_model_options
-from imbue.system_interface.harnesses.codex.model import write_codex_model_options
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
@@ -71,11 +67,14 @@ from imbue.system_interface.harnesses.model import ModelOption
 from imbue.system_interface.harnesses.model import match_option
 from imbue.system_interface.harnesses.model import read_model_identity
 from imbue.system_interface.harnesses.path_watch import PathWatcher
+from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
+from imbue.system_interface.harnesses.registry import build_shoulder_tap
 from imbue.system_interface.harnesses.registry import build_tracker
-from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.registry import get_catalog
 from imbue.system_interface.harnesses.registry import get_harness_spec
 from imbue.system_interface.harnesses.registry import get_model_state_path
+from imbue.system_interface.harnesses.session import AgentHarnessSession
+from imbue.system_interface.harnesses.session import SessionDeps
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry
@@ -146,11 +145,8 @@ def _build_chat_create_command(
         "user_created=true",
         "--no-connect",
     ]
-    # Chat is the one interactive agent type, so it is the only one that starts fast;
-    # .mngr/settings.toml defaults every other type to standard speed. Claude-specific:
-    # fast mode is a claude setting, so it is meaningless under any other harness.
-    if harness == HarnessType.CLAUDE:
-        cmd.extend(["-S", f"agent_types.claude.settings_overrides.fastMode={str(is_fast_mode_enabled).lower()}"])
+    # Per-harness launch settings (e.g. claude's fast-mode override; empty for the others).
+    cmd.extend(get_harness_spec(harness).launch_settings_overrides(is_fast_mode_enabled))
     # Inherit the project label from the primary agent. The chat agent belongs to
     # its workspace by sharing the host; it carries no workspace label.
     if "project" in primary_labels:
@@ -368,32 +364,15 @@ class AgentManager:
     # backstop). Both are dropped when activity tracking stops.
     _queued_messages_by_agent: dict[str, tuple[QueuedMessageState, ...]]
     _queue_idle_handler_by_agent: dict[str, Callable[[], list[dict[str, Any]]]]
-    # Agents with a synchronous send in flight right now (contract Shoulder-tap: a tap is
-    # unavailable while ANY message is Sending). The send endpoint marks the agent for the
-    # duration of its blocking ``note -> send -> commit`` and clears it after, so the derived
-    # ``shoulder_tap_available`` (see ``get_agents_serialized``) goes false for that window and
-    # the button greys -- the backend is the single source of the button's enabled state, with
-    # no frontend inference and no error path. codex sends bypass this (they route through the
-    # ledger before the shared send path), and their availability is a queue check anyway.
-    _send_in_flight_by_agent: set[str]
-    # Per-codex-agent live app-server connection: the persistent client + ledger + background
-    # reader thread that make the ledger the backend authority for that agent's five message
-    # states (send/queue/deliver/return), its activity dot, and its model-bar mirror. Built lazily
-    # once the agent's daemon socket is reachable (``_ensure_codex_connection``) and torn down when
-    # activity tracking stops. A codex agent drives activity + queue through its ledger, NOT the
-    # transcript-derived tracker, so it has no ``_activity_tracker_by_agent`` entry.
-    _codex_connection_by_agent: dict[str, CodexLiveConnection]
-    # The ONE reconciled per-agent codex model set (mapped ``ModelOption``s), shared by all three
-    # consumers -- the picker offer set, the chip-match (``_recompute_model_choice``), and the switch
-    # endpoint's validation. Seeded on connect from the live connection's ``model/list`` and REFRESHED
-    # by each picker-open fetch (D2, ``store_codex_model_options``), so immediately after an open all
-    # three agree. It deliberately OUTLIVES connection churn: a momentarily-absent connection does not
-    # drop it (the chip keeps matching), and a picker-open can populate/refresh it with no live
-    # connection at all, as long as the daemon is reachable. ``None`` (absent key) until the first
-    # connect-seed or picker-open populates it -> the chip-match then falls back to the persisted
-    # raw ``model/list`` sidecar (:func:`get_codex_model_options_path`), so a restart still resolves
-    # the chip before the daemon reconnects; only with neither populated does the bar go logo-only.
-    _codex_model_options_by_agent: dict[str, tuple[ModelOption, ...]]
+    # Per-agent live harness session (``HarnessSpec.session_class``): the control surface that
+    # owns the send + its Sending records, tap availability, the native tap/interrupt dispatch,
+    # daemon liveness (codex's app-server connection + ledger live inside its session), and the
+    # per-agent model option set. Built when activity tracking starts (or on first endpoint
+    # touch) and closed when tracking stops. Neither the manager nor the server names a harness
+    # around it -- per-harness behavior is the session implementation's.
+    _session_by_agent: dict[str, AgentHarnessSession]
+    # The alt-harness sign-in preflight (injectable so tests skip the real CLI).
+    _auth_gate: Callable[[HarnessAuthCheck | None], str | None]
     # The last computed model choice per agent, and the filesystem watcher that
     # re-derives it when the agent's model_state.json changes. The live read is
     # harness-neutral (the shared reader + the harness's registered state-file path), so
@@ -426,6 +405,7 @@ class AgentManager:
         broadcaster: WebSocketBroadcaster,
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
+        auth_gate: Callable[[HarnessAuthCheck | None], str | None] = find_unauthenticated_harness_reason,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -460,9 +440,8 @@ class AgentManager:
         manager._activity_state_by_agent = {}
         manager._queued_messages_by_agent = {}
         manager._queue_idle_handler_by_agent = {}
-        manager._send_in_flight_by_agent = set()
-        manager._codex_connection_by_agent = {}
-        manager._codex_model_options_by_agent = {}
+        manager._session_by_agent = {}
+        manager._auth_gate = auth_gate
         manager._model_choice_by_agent = {}
         manager._model_watcher_by_agent = {}
         manager._auto_opened_assist_ids = set()
@@ -518,16 +497,16 @@ class AgentManager:
             watcher.stop()
 
         with self._lock:
-            codex_connections = list(self._codex_connection_by_agent.values())
-            self._codex_connection_by_agent.clear()
+            sessions = list(self._session_by_agent.values())
+            self._session_by_agent.clear()
             self._activity_tracked_agents.clear()
             self._activity_tracker_by_agent.clear()
             self._activity_state_by_agent.clear()
             self._queued_messages_by_agent.clear()
             self._queue_idle_handler_by_agent.clear()
             self._model_choice_by_agent.clear()
-        for connection in codex_connections:
-            connection.stop()
+        for session in sessions:
+            session.close()
 
     @property
     def broadcaster(self) -> WebSocketBroadcaster:
@@ -710,17 +689,16 @@ class AgentManager:
     def _shoulder_tap_available(self, agent_state: AgentStateItem) -> bool:
         """Whether the shoulder-tap button is offered for ``agent_state`` (contract Shoulder-tap).
 
-        codex reads its live ledger directly -- ``is_tap_available`` = queue non-empty AND nothing
-        Sending, which also GREYS the button through the interrupt+resend of a tap (the re-sent chips
-        are Sending, so the ledger reports the tap unavailable while they land). Every other harness
-        uses the shared rule off manager state: queued AND no send in flight. Caller holds ``_lock``.
+        The agent's session answers: the shared rule is queued AND nothing Sending; a
+        live-connection session (codex) reads its own ledger, which also GREYS the button
+        through the interrupt+resend of a tap (the re-sent chips are Sending). No session yet
+        (tracking not started) means nothing queued and nothing to tap. Caller holds ``_lock``;
+        the session's reads are leaf-locked/lock-free, so there is no ordering between the two.
         """
-        if agent_state.harness == HarnessType.CODEX:
-            connection = self._codex_connection_by_agent.get(agent_state.id)
-            if connection is None or not connection.is_alive:
-                return False
-            return connection.ledger.is_tap_available()
-        return bool(agent_state.queued_messages) and agent_state.id not in self._send_in_flight_by_agent
+        session = self._session_by_agent.get(agent_state.id)
+        if session is None:
+            return False
+        return session.is_tap_available(has_queued=bool(agent_state.queued_messages))
 
     def get_proto_agents(self) -> list[dict[str, Any]]:
         """Return list of proto-agents (agents being created)."""
@@ -756,7 +734,7 @@ class AgentManager:
         the create up front (raising ``AgentCreationError``) rather than launch a chat that
         can never take a turn. Claude is not gated -- its auth is the shared workspace login.
         """
-        unauthenticated_reason = find_unauthenticated_harness_reason(harness)
+        unauthenticated_reason = self._auth_gate(get_harness_spec(harness).auth_check)
         if unauthenticated_reason is not None:
             raise AgentCreationError(unauthenticated_reason)
 
@@ -1322,97 +1300,81 @@ class AgentManager:
             agent_state = self._agents.get(agent_id)
             harness = agent_state.harness if agent_state is not None else DEFAULT_HARNESS
             # Every harness -- codex included -- builds its transcript-derived tracker here, once, from
-            # the harness it was created with. codex's dot follows mngr's live RUNNING state
-            # (thread/status-derived), refined to a tool verb by its tracker, exactly like claude/pi.
-            # Its ledger (built below) no longer drives the dot -- only the queue + message-lifecycle
-            # chips.
+            # the harness it was created with. codex's dot is its tracker's turn latch; its ledger
+            # (inside the session below) owns only the queue + message-lifecycle chips.
             if agent_id not in self._activity_tracker_by_agent:
                 self._activity_tracker_by_agent[agent_id] = build_tracker(harness)
-        if harness == HarnessType.CODEX:
-            # Give the agent its one live app-server connection + ledger (idempotent; rebuilds a
-            # connection whose daemon generation died). The ledger owns the queue chips + message
-            # lifecycle; the activity dot is the tracker's job now.
-            self._ensure_codex_connection(agent_id)
+            session = self._session_by_agent.get(agent_id)
+            if session is None:
+                session = self._build_session(agent_id, harness)
+                self._session_by_agent[agent_id] = session
+        # Bring up whatever live backend the harness needs (codex's app-server connection;
+        # a no-op for file harnesses). Blocking I/O, so outside the lock; idempotent, so the
+        # observe tick re-invoking it is the self-healing retry path.
+        session.ensure_live()
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
     def _stop_activity_tracking(self, agent_id: str) -> None:
         """Stop activity tracking and clear cached activity + queued state."""
         with self._lock:
-            connection = self._codex_connection_by_agent.pop(agent_id, None)
-            # The reconciled option set outlives connection churn (rebuilds) but not a real teardown.
-            self._codex_model_options_by_agent.pop(agent_id, None)
+            session = self._session_by_agent.pop(agent_id, None)
             self._activity_tracked_agents.discard(agent_id)
             self._activity_tracker_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
             self._queued_messages_by_agent.pop(agent_id, None)
             self._queue_idle_handler_by_agent.pop(agent_id, None)
-            self._send_in_flight_by_agent.discard(agent_id)
-        # Stop the reader + close the client outside the lock (join blocks on the reader thread).
-        if connection is not None:
-            connection.stop()
+        # Terminal close outside the lock (codex's join blocks on its reader thread).
+        if session is not None:
+            session.close()
 
-    def _ensure_codex_connection(self, agent_id: str) -> None:
-        """Ensure a live app-server connection + ledger for a codex ``agent_id``.
+    def _build_session(self, agent_id: str, harness: HarnessType) -> AgentHarnessSession:
+        """Build the harness session for one agent, binding every capability it may need.
 
-        Idempotent and self-healing: a live connection is left alone; a connection whose daemon
-        generation died (reader saw the transport close) is reaped and rebuilt, whose fresh ledger
-        starts with an empty queue (the queue is EPHEMERAL -- nothing from the dead generation is
-        revived). When the daemon is not yet reachable (a just-created agent still starting), the
-        build returns ``None`` and this simply retries on the next observe tick.
-
-        The connect + handshake is blocking network I/O, so it runs OUTSIDE the manager lock
-        (mirroring ``_ensure_model_tracking``); the built connection is stored under the lock, and
-        a concurrent build that lost the race is stopped rather than leaked.
+        The one place session dependencies are assembled: registry dispatch, the send/notify
+        callbacks, and the codex connection fan-outs all bind here, so the session modules
+        never import the registry or the manager.
         """
-        with self._lock:
-            existing = self._codex_connection_by_agent.get(agent_id)
-            if existing is not None and existing.is_alive:
-                return
-            dead = existing if existing is not None else None
-            if dead is not None:
-                self._codex_connection_by_agent.pop(agent_id, None)
-        if dead is not None:
-            dead.stop()
         state_dir = self._get_agent_state_dir(agent_id)
-        connection = CodexLiveConnection.build(
-            state_dir,
+        spec = get_harness_spec(harness)
+        deps = SessionDeps(
+            agent_id=agent_id,
+            harness=harness,
+            state_dir=state_dir,
+            send_to_harness=lambda text: self.send_message_to_agent(AgentId(agent_id), text),
+            notify_agents_changed=lambda: self._broadcaster.broadcast_agents_updated(self.get_agents_serialized()),
+            is_tracked=lambda: self.is_activity_tracked(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
             on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),
-            model_state_path=get_model_state_path(HarnessType.CODEX, state_dir),
+            recompute_activity=lambda: self._recompute_activity_state(agent_id, broadcast_on_change=True),
+            clear_queue_state=lambda: self._clear_queue_state(agent_id),
+            catalog_options=lambda: get_catalog(harness).options,
+            build_interrupter=build_interrupt_to_composer,
+            build_shoulder_tap=build_shoulder_tap,
+            model_state_path=get_model_state_path(harness, state_dir),
         )
-        if connection is None:
-            return
-        with self._lock:
-            # Lost the build race, or tracking stopped while we connected: don't leak the new one.
-            if agent_id not in self._activity_tracked_agents or self._codex_connection_by_agent.get(agent_id) is not None:
-                stale = connection
-            else:
-                self._codex_connection_by_agent[agent_id] = connection
-                stale = None
-        if stale is not None:
-            stale.stop()
-            return
-        # Seed the ONE reconciled per-agent option set from the connect-time ``model/list`` (D2), so
-        # the chip can match before any picker-open. A failed connect fetch (empty) is NOT stored --
-        # it must not clobber a set a prior picker-open already populated. The same fresh, non-empty
-        # raw list is written through to the codex sidecar (write-through, connect path) so the chip
-        # still resolves after a restart before this connection is re-established.
-        if connection.codex_models:
-            self.store_codex_model_options(agent_id, codex_models_to_options(connection.codex_models))
-            write_codex_model_options(get_codex_model_options_path(state_dir), connection.codex_models)
-        # The dot is derived by the tracker path from mngr's lifecycle + transcript; recompute now so a
-        # freshly (re)built connection's agent shows the right dot immediately.
-        self._recompute_activity_state(agent_id, broadcast_on_change=True)
+        return spec.session_class.build(deps)
 
-    def _reap_codex_connection(self, agent_id: str) -> None:
-        """Drop and stop a codex agent's live connection (its daemon generation is gone)."""
-        with self._lock:
-            connection = self._codex_connection_by_agent.pop(agent_id, None)
-        if connection is not None:
-            connection.stop()
+    def get_or_create_session(self, agent_info: AgentInfo) -> AgentHarnessSession:
+        """The agent's live harness session, built on first touch (the endpoint entry point).
 
-    def _clear_codex_queue(self, agent_id: str) -> None:
-        """Drop a codex agent's cached queue chips (its ephemeral queue died with the daemon).
+        Idempotent and cheap (a build does no I/O; liveness is ``ensure_live``'s job), so a
+        request landing before the observe tick starts tracking still gets a working session.
+        """
+        with self._lock:
+            existing = self._session_by_agent.get(agent_info.id)
+            if existing is not None:
+                return existing
+            session = self._build_session(agent_info.id, agent_info.harness)
+            self._session_by_agent[agent_info.id] = session
+            return session
+
+    def is_activity_tracked(self, agent_id: str) -> bool:
+        """Whether activity tracking is live for ``agent_id`` (sessions gate connects on it)."""
+        with self._lock:
+            return agent_id in self._activity_tracked_agents
+
+    def _clear_queue_state(self, agent_id: str) -> None:
+        """Drop an agent's cached queue chips (its ephemeral queue died with its daemon).
 
         Broadcasts the emptied state only when it actually changed; the caller's own activity
         broadcast (if any) then carries the same cleared snapshot.
@@ -1449,81 +1411,20 @@ class AgentManager:
             return
         self._transcript_broadcaster(agent_id, [event])
 
-    def get_codex_ledger(self, agent_id: str) -> CodexMessageLedger | None:
-        """The live message ledger for a codex ``agent_id``, or ``None`` if none is up.
-
-        ``None`` means no reachable daemon connection right now (agent not codex, not tracked, or
-        the daemon is down/starting). The send / interrupt / shoulder-tap endpoints read this.
-        """
-        with self._lock:
-            connection = self._codex_connection_by_agent.get(agent_id)
-        if connection is None or not connection.is_alive:
-            return None
-        return connection.ledger
-
-    def get_codex_model_options(self, agent_id: str) -> tuple[ModelOption, ...] | None:
-        """The ONE reconciled per-agent codex option set -- the SAME set the picker, the chip-match,
-        and the switch endpoint's validation all read (D2).
-
-        Seeded on connect from the live connection's ``model/list`` and refreshed by each picker-open
-        fetch (:meth:`store_codex_model_options`), so immediately after an open all three agree.
-
-        Match-source precedence: the live in-memory set wins; if it is empty (post-restart, before
-        the daemon reconnects) this falls back to the persisted raw ``model/list`` sidecar, mapping
-        it on read -- so the chip resolves offline instead of showing the "unrecognized model" shrug.
-        ``None`` only when neither the in-memory set nor the sidecar is populated (the chip then
-        falls back to logo-only / whatever the live state file already holds). The in-memory read is
-        the hot path; the sidecar read runs only while the set is empty, never after a reconnect
-        re-seeds it, so the reconciled live list always supersedes the on-disk fallback.
-        """
-        with self._lock:
-            cached = self._codex_model_options_by_agent.get(agent_id)
-        if cached is not None:
-            return cached
-        # Fallback (outside the lock -- it does disk I/O): map the persisted raw sidecar. An absent
-        # or empty sidecar yields ``None`` (logo-only), never a spurious empty option set.
-        models = read_codex_model_options(get_codex_model_options_path(self._get_agent_state_dir(agent_id)))
-        if not models:
-            return None
-        return codex_models_to_options(models)
-
-    def store_codex_model_options(self, agent_id: str, options: tuple[ModelOption, ...]) -> None:
-        """Record the fresh per-agent codex option set (a connect-seed or a picker-open fetch, D2).
-
-        This is the reconciliation point: the picker-open fetch and the connect-seed both land here,
-        so the chip-match and the switch-validation read EXACTLY the set the picker just offered. A
-        failed fetch (an empty tuple) is NOT stored by the callers, so a transient daemon miss never
-        clobbers the last-known set. The same fresh raw list is also written through to the on-disk
-        sidecar by those callers (not here), which is the offline-restart fallback source
-        :meth:`get_codex_model_options` maps when this in-memory set is empty.
-        """
-        with self._lock:
-            self._codex_model_options_by_agent[agent_id] = options
-
     def _model_options_for(self, agent_state: AgentStateItem) -> tuple[ModelOption, ...]:
         """The option set an agent's live identity matches against (chip-match + switch-validation).
 
-        Per-agent for codex (the ONE reconciled set seeded on connect and refreshed by each
-        picker-open, falling back to the persisted sidecar while that set is empty -- see
-        :meth:`get_codex_model_options`); the static harness catalog for every other harness. This
-        is the ONE spine seam the dynamic codex catalog needs -- the match SOURCE becomes per-agent,
-        while the matcher, the file read, and the broadcast stay shared. Never holds ``_lock``
-        (``get_codex_model_options`` takes it, and reads the sidecar off-lock), so callers must not
-        invoke it while holding the lock.
+        The session answers: the static harness catalog for file harnesses, the ONE reconciled
+        per-agent set for codex (seeded on connect, refreshed by each picker-open, falling back
+        to the persisted sidecar -- see ``CodexHarnessSession.switch_options``). Never holds
+        ``_lock`` while asking (a codex fallback reads the sidecar off disk), so callers must
+        not invoke it while holding the lock. No session yet falls back to the static catalog.
         """
-        if agent_state.harness == HarnessType.CODEX:
-            options = self.get_codex_model_options(agent_state.id)
-            return options if options is not None else ()
-        return get_catalog(agent_state.harness).options
-
-    def ensure_codex_ledger(self, agent_id: str) -> CodexMessageLedger | None:
-        """Build the codex connection if needed, then return its ledger (or ``None``).
-
-        The send endpoint uses this so the very first message to a just-ready agent does not race
-        the observe-driven connection build.
-        """
-        self._ensure_codex_connection(agent_id)
-        return self.get_codex_ledger(agent_id)
+        with self._lock:
+            session = self._session_by_agent.get(agent_state.id)
+        if session is None:
+            return get_catalog(agent_state.harness).options
+        return session.switch_options()
 
     def register_queue_idle_handler(self, agent_id: str, handler: Callable[[], list[dict[str, Any]]]) -> None:
         """Register the agent watcher's working->IDLE queue backstop.
@@ -1535,25 +1436,6 @@ class AgentManager:
         """
         with self._lock:
             self._queue_idle_handler_by_agent[agent_id] = handler
-
-    def mark_send_in_flight(self, agent_id: str) -> None:
-        """Flag ``agent_id`` as having a send in flight and broadcast, so the shoulder-tap
-        button greys for the send's duration (contract Shoulder-tap). Idempotent; only
-        broadcasts on an actual change. Paired with :meth:`clear_send_in_flight`."""
-        with self._lock:
-            if agent_id in self._send_in_flight_by_agent:
-                return
-            self._send_in_flight_by_agent.add(agent_id)
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
-
-    def clear_send_in_flight(self, agent_id: str) -> None:
-        """Clear the send-in-flight flag for ``agent_id`` and broadcast (the send resolved, so
-        a non-empty queue is tappable again). Idempotent; only broadcasts on an actual change."""
-        with self._lock:
-            if agent_id not in self._send_in_flight_by_agent:
-                return
-            self._send_in_flight_by_agent.discard(agent_id)
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def update_queued_messages(self, agent_id: str, snapshot: list[dict[str, Any]]) -> None:
         """Cache and broadcast a fresh queued-message snapshot from the agent's watcher.
@@ -1729,17 +1611,16 @@ class AgentManager:
             tracker = self._activity_tracker_by_agent.get(agent_id)
             recompute_agent_state = self._agents.get(agent_id)
         harness = recompute_agent_state.harness if recompute_agent_state is not None else None
-        # codex has no `active` marker and its ledger no longer drives the dot. The one thing the ledger
-        # cannot self-observe is its own daemon dying, so on a positively-dead lifecycle reap the
-        # connection and drop its EPHEMERAL queue (an abrupt kill emits no idle sweep). The tracker path
-        # below then settles the dot to IDLE via the dead override -- codex now flows through it.
-        if (
-            harness == HarnessType.CODEX
-            and recompute_agent_state is not None
-            and is_lifecycle_dead(recompute_agent_state.state)
-        ):
-            self._reap_codex_connection(agent_id)
-            self._clear_codex_queue(agent_id)
+        # A positively-dead lifecycle is the one signal a live backend cannot self-observe (an
+        # abrupt daemon kill emits no idle sweep), so tell the session -- level-triggered on
+        # every recompute and idempotent (codex reaps its connection + ephemeral queue chips;
+        # a file session has nothing to drop). The tracker path below then settles the dot to
+        # IDLE via the dead override.
+        if recompute_agent_state is not None and is_lifecycle_dead(recompute_agent_state.state):
+            with self._lock:
+                dead_session = self._session_by_agent.get(agent_id)
+            if dead_session is not None:
+                dead_session.on_lifecycle_dead()
         if tracker is None:
             return
         # Re-read on every recompute so a restart that touches the marker is

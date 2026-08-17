@@ -21,33 +21,42 @@ from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
+from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
+from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
+from imbue.system_interface.harnesses.auth_check import PI_AUTH_CHECK
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.claude.model import ClaudeModelResolver
+from imbue.system_interface.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.system_interface.harnesses.claude.tap import ClaudeInterruptToComposer
+from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import CODEX_CATALOG
 from imbue.system_interface.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.codex.model import CodexModelResolver
+from imbue.system_interface.harnesses.codex.session import CodexHarnessSession
+from imbue.system_interface.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import InterruptToComposer
 from imbue.system_interface.harnesses.interrupt import RestartDrainInterruptToComposer
+from imbue.system_interface.harnesses.model import HarnessCatalog
+from imbue.system_interface.harnesses.model import HarnessModelResolver
+from imbue.system_interface.harnesses.model import model_state_path
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.system_interface.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
+from imbue.system_interface.harnesses.pi_coding.model import PiAtomicShoulderTap
 from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import get_catalog as get_pi_catalog
 from imbue.system_interface.harnesses.pi_coding.watcher import PiSessionWatcher
-from imbue.system_interface.harnesses.model import HarnessCatalog
-from imbue.system_interface.harnesses.model import HarnessModelResolver
-from imbue.system_interface.harnesses.model import model_state_path
+from imbue.system_interface.harnesses.session import AgentHarnessSession
+from imbue.system_interface.harnesses.session import AtomicShoulderTap
+from imbue.system_interface.harnesses.session import FileHarnessSession
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
-from imbue.system_interface.harnesses.claude.watcher import ClaudeSessionWatcher
 
 
 class HarnessSpec(FrozenModel):
@@ -81,6 +90,22 @@ class HarnessSpec(FrozenModel):
     # (SIGKILL-relaunch) that claude and any future harness use; a harness that can interrupt its
     # live turn natively registers an override (pi does). Backend-only: no wire-visible flag.
     interrupt_to_composer_class: type[InterruptToComposer] = RestartDrainInterruptToComposer
+    # The live control surface (send + Sending state, tap, interrupt dispatch, model options).
+    # The file-API default covers claude and pi; a harness driven through a live daemon
+    # connection registers its own (codex).
+    session_class: type[AgentHarnessSession] = FileHarnessSession
+    # The native atomic shoulder tap, the tap peer of ``interrupt_to_composer_class``. File
+    # harnesses that advertise ``native_atomic_shoulder_tap_possible`` register one; a harness
+    # that taps through its live connection (codex) registers none and overrides
+    # ``shoulder_tap`` on its session directly.
+    shoulder_tap_class: type[AtomicShoulderTap] | None = None
+    # Extra ``mngr create`` args for this harness, given whether fast mode is enabled. Chat is
+    # the one interactive agent type, so it is the only one that starts fast; fast mode is a
+    # claude setting, so every other harness contributes nothing.
+    launch_settings_overrides: Callable[[bool], tuple[str, ...]] = lambda _is_fast: ()
+    # How to tell whether this harness's CLI is signed in before creating an agent on it.
+    # ``None`` = no auth gate (claude's auth lives in the shared ``~/.claude``).
+    auth_check: HarnessAuthCheck | None = None
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -98,6 +123,11 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # interrupt, confirm-then-clear of the stranded active marker); a NONEMPTY queue keeps
         # the base restart-drain. See harnesses/claude/tap.py.
         interrupt_to_composer_class=ClaudeInterruptToComposer,
+        shoulder_tap_class=ClaudeAtomicShoulderTap,
+        launch_settings_overrides=lambda is_fast: (
+            "-S",
+            f"agent_types.claude.settings_overrides.fastMode={str(is_fast).lower()}",
+        ),
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -119,10 +149,11 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
                 SpecialEventKind.TURN_ABORTED,
             }
         ),
-        # codex's stop button is handled directly in the drain-to-composer endpoint via its live
-        # ledger (``ledger.interrupt()`` -- one ``turn/interrupt`` + a per-id settle that returns
-        # every non-committed message to the composer in send order), so it never reaches this
-        # registered implementation; the default is inert for codex.
+        # codex's stop button and tap go through its session's live ledger (one
+        # ``turn/interrupt`` + a per-id settle / the combined early resend), so the registered
+        # interrupter default is inert and no shoulder_tap_class is needed.
+        session_class=CodexHarnessSession,
+        auth_check=CODEX_AUTH_CHECK,
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -138,6 +169,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # pi interrupts natively via the lifecycle extension (retract sentinel on pi_inbox), so
         # it overrides the base restart-drain rather than SIGKILL-relaunching.
         interrupt_to_composer_class=PiInterruptToComposer,
+        shoulder_tap_class=PiAtomicShoulderTap,
+        auth_check=PI_AUTH_CHECK,
     ),
 }
 
@@ -155,6 +188,13 @@ def build_watcher(agent_info: AgentInfo, on_events: OnEventsCallback) -> AgentSe
 def build_tracker(harness: HarnessType) -> HarnessActivityTracker:
     """Build the activity tracker for ``harness``."""
     return get_harness_spec(harness).tracker_class.build()
+
+
+def build_shoulder_tap(agent_info: AgentInfo) -> AtomicShoulderTap | None:
+    """Build the native atomic shoulder tap for ``agent_info``'s harness, or ``None`` when the
+    harness registers none (its session taps through a live connection instead)."""
+    tap_class = get_harness_spec(agent_info.harness).shoulder_tap_class
+    return tap_class.build(agent_info) if tap_class is not None else None
 
 
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:

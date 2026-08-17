@@ -5,12 +5,12 @@ import pytest
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
+from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.harness_type import parse_harness
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
-from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
-from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.registry import build_tracker
 from imbue.system_interface.harnesses.registry import get_harness_spec
 

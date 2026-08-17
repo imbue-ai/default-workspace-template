@@ -45,7 +45,6 @@ from imbue.system_interface.harnesses.path_watch import PathWatcher
 from imbue.system_interface.harnesses.pi_coding.inbox import is_sentinel_object
 from imbue.system_interface.harnesses.pi_coding.queue_tracker import PiQueueTracker
 from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record
-from imbue.system_interface.harnesses.sending_registry import SendingStateWatcherMixin
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.harnesses.session_watcher import OnEventsCallback
 from imbue.system_interface.harnesses.session_watcher import QueueSnapshotCallback
@@ -96,7 +95,7 @@ def _is_current_generation_drain(event_timestamp: str | None, process_started_at
     return event_at >= process_started_at
 
 
-class PiSessionWatcher(SendingStateWatcherMixin, AgentSessionWatcher):
+class PiSessionWatcher(AgentSessionWatcher):
     """Watches a pi agent's native session file (+ inbox) and emits parsed UI events."""
 
     # Instance attributes declared at class level so a `build()` classmethod (no
@@ -165,7 +164,6 @@ class PiSessionWatcher(SendingStateWatcherMixin, AgentSessionWatcher):
         # Backend *Sending* state (contract A1): the send endpoint records each in-flight pi
         # message here so a concurrent interrupt can return one that never committed (parity
         # with claude). Its own private lock, independent of the transcript ``_lock`` above.
-        self._init_sending_state()
         return self
 
     def start(self) -> None:

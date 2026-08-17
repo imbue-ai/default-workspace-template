@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 from imbue.system_interface.harnesses.claude.session_parser import _MAX_PERMISSION_REQUEST_PROBES
+from imbue.system_interface.harnesses.claude.session_parser import parse_lines
 
 
 def _make_user_line(uuid: str, timestamp: str, content: str) -> str:

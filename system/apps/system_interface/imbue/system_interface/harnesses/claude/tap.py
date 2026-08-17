@@ -69,6 +69,8 @@ from imbue.system_interface.harnesses.interrupt import RestartProcess
 from imbue.system_interface.harnesses.interrupt import SettleActivity
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
+from imbue.system_interface.harnesses.session import AtomicShoulderTap
+from imbue.system_interface.harnesses.session import ShoulderTapOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 
 # The tmux key token the chord is delivered as (Meta+q == ESC then q, one pty write).
@@ -827,6 +829,7 @@ class ClaudeInterruptToComposer(InterruptToComposer):
         restart_process: RestartProcess,
         settle_activity: SettleActivity,
         press_chord: PressChord,
+        get_in_flight_block: Callable[[], str],
     ) -> str:
         return execute_claude_stop_to_composer(
             agent_state_dir=self._agent_state_dir,
@@ -837,5 +840,50 @@ class ClaudeInterruptToComposer(InterruptToComposer):
             settle_activity=settle_activity,
             restart_drain_to_base=lambda: restart_drain(self._agent_info, watcher, restart_process, settle_activity),
             try_message_lock=lambda: try_hold_message_lock(self._agent_state_dir),
-            get_in_flight_block=watcher.get_in_flight_block,
+            get_in_flight_block=get_in_flight_block,
+        )
+
+
+class ClaudeAtomicShoulderTap(AtomicShoulderTap):
+    """Claude's native tap: cancel the live turn via the chat-cancel chord, then recover.
+
+    The keypress and the recovery send both route through the agent manager (which delegates
+    to mngr's in-process message API, holding the per-agent ``message.lock``): dwt never
+    drives raw tmux. The refresh-first mirror read is taken under a bounded acquire of that
+    same lock, so a tap racing a not-yet-parked send is refused with ``send_in_flight``
+    rather than no-oping it away -- the codex/pi discipline. Terminal no-op / success
+    statuses return as plain outcomes; a dialog block maps to 409; every other error
+    (including ``send_in_flight``, a retryable refusal) maps to 500.
+    """
+
+    _agent_state_dir: Path
+    _keybindings_path: Path
+
+    @classmethod
+    def build(cls, agent_info: AgentInfo) -> "ClaudeAtomicShoulderTap":
+        self = cls.__new__(cls)
+        self._agent_state_dir = agent_info.agent_state_dir
+        self._keybindings_path = agent_info.claude_config_dir / KEYBINDINGS_FILENAME
+        return self
+
+    def tap(
+        self,
+        watcher: AgentSessionWatcher,
+        press_chord: Callable[[], bool],
+        send_recovery: Callable[[str], bool],
+    ) -> ShoulderTapOutcome:
+        result = execute_claude_shoulder_tap(
+            agent_state_dir=self._agent_state_dir,
+            keybindings_path=self._keybindings_path,
+            watcher=watcher,
+            press_chord=press_chord,
+            send_recovery=send_recovery,
+            try_message_lock=lambda: try_hold_message_lock(self._agent_state_dir),
+        )
+        if result.status in OK_TAP_STATUSES:
+            return ShoulderTapOutcome(status=result.status.value)
+        return ShoulderTapOutcome(
+            status=result.status.value,
+            error_detail=result.detail,
+            error_status_code=409 if result.status == ClaudeTapStatus.PERMISSIONS_WAITING else 500,
         )

@@ -59,6 +59,7 @@ from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.system_interface.harnesses.interrupt import restart_drain
 from imbue.system_interface.harnesses.interrupt import try_hold_message_lock
+from imbue.system_interface.harnesses.sending_registry import SendingRegistry
 
 pytestmark = pytest.mark.acceptance
 
@@ -177,6 +178,8 @@ class _ClaudeWorld:
         # token -> text of every not-yet-committed Sending record the world mirrors alongside the
         # backend registry, so a verify can reconcile the backend's in-flight block against it.
         self._sending: dict[str, str] = {}
+        # The session-owned Sending registry (contract A1); the watcher is a pure reader now.
+        self.sending = SendingRegistry.build()
         self.emissions: list[tuple[str, Any]] = []
         self.watcher = self._build_watcher()
 
@@ -268,10 +271,10 @@ class _ClaudeWorld:
         """
         text = self.new_text()
         self.ledger.accepted.append(text)
-        token = self.watcher.note_sent_message(text, self.new_token())
-        assert token is not None, "claude's watcher always mints a Sending token"
+        token = self.new_token()
+        self.sending.record(token, text)
         self._sending[token] = text
-        assert text in _split_block(self.watcher.get_in_flight_block()), "a noted send must be in the Sending registry"
+        assert text in _split_block(self.sending.concatenated_block()), "a noted send must be in the Sending registry"
 
         will_park = self.turn_open
         if will_park:
@@ -287,7 +290,7 @@ class _ClaudeWorld:
         assert text in real_states, (
             f"the real state of {text!r} must be visible before its Sending record clears\n{self.ledger.note()}"
         )
-        self.watcher.commit_sent_message(token)
+        self.sending.resolve(token)
         del self._sending[token]
         if will_park:
             self.parked.append(text)
@@ -321,7 +324,7 @@ class _ClaudeWorld:
             mark_idle=self.mark_idle,
             restart_drain_to_base=self._restart_drain_to_base,
             try_message_lock=lambda: try_hold_message_lock(self.agent_state_dir, wait_seconds=_LOCK_WAIT_SECONDS),
-            get_in_flight_block=self.watcher.get_in_flight_block,
+            get_in_flight_block=self.sending.concatenated_block,
         )
         self._absorb_returned_block(block)
 
@@ -401,7 +404,7 @@ class _ClaudeWorld:
         return [entry["content"] for entry in self.watcher.get_queued_messages()]
 
     def _backend_sending(self) -> list[str]:
-        return _split_block(self.watcher.get_in_flight_block())
+        return _split_block(self.sending.concatenated_block())
 
     def _absorb_returned_block(self, block: str) -> None:
         for text in _split_block(block):
@@ -411,7 +414,7 @@ class _ClaudeWorld:
             # in exactly the Returned state.
             for token, sending_text in list(self._sending.items()):
                 if sending_text == text:
-                    self.watcher.retract_sent_message(token)
+                    self.sending.resolve(token)
                     del self._sending[token]
 
     def settle_turn_end(self) -> None:
@@ -562,7 +565,7 @@ def _run_interrupt_during_partial_flush(world: _ClaudeWorld) -> None:
         mark_idle=world.mark_idle,
         restart_drain_to_base=world._restart_drain_to_base,
         try_message_lock=lambda: try_hold_message_lock(world.agent_state_dir, wait_seconds=_LOCK_WAIT_SECONDS),
-        get_in_flight_block=world.watcher.get_in_flight_block,
+        get_in_flight_block=world.sending.concatenated_block,
     )
     returned = _split_block(block)
     assert returned == heads[1:], f"the not-committed prefix must return in send order: {returned} vs {heads[1:]}"
@@ -586,8 +589,8 @@ def _run_stop_with_in_flight_send(world: _ClaudeWorld) -> None:
     world.watcher.get_all_events()
 
     in_flight_text = world.new_text()
-    token = world.watcher.note_sent_message(in_flight_text, world.new_token())
-    assert token is not None, "claude's watcher always mints a Sending token"
+    token = world.new_token()
+    world.sending.record(token, in_flight_text)
     world._sending[token] = in_flight_text
     sender = world.begin_inflight_send(in_flight_text)
 
@@ -608,7 +611,7 @@ def _run_stop_with_in_flight_send(world: _ClaudeWorld) -> None:
         try_message_lock=lambda: try_hold_message_lock(
             world.agent_state_dir, wait_seconds=_LOCK_WAIT_SECONDS, now=forced_now, sleep=lambda _s: None
         ),
-        get_in_flight_block=world.watcher.get_in_flight_block,
+        get_in_flight_block=world.sending.concatenated_block,
     )
     sender.join()
     returned = _split_block(block)

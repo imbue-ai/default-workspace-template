@@ -379,7 +379,7 @@ def _run_pi_stop(world: _PiWorld, watcher: _PiStormWatcher, agent_info: AgentInf
     block_before = world.peek_parked()
     sender = _stage_pi_send(world, send_mode)
     interrupter = PiInterruptToComposer.build(agent_info)
-    block = interrupter.drain_to_composer(watcher, world.restart_process, lambda: None, lambda: True)
+    block = interrupter.drain_to_composer(watcher, world.restart_process, lambda: None, lambda: True, lambda: "")
     if sender is not None:
         sender.join()
     returned = _block_texts(block)

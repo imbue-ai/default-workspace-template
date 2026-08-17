@@ -49,7 +49,6 @@ re-read from byte 0) the same user bubble dedups instead of duplicating.
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime
 from datetime import timezone
 from typing import Any

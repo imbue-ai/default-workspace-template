@@ -57,6 +57,8 @@ from imbue.system_interface.harnesses.pi_coding.inbox import PI_INBOX_NAME
 from imbue.system_interface.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
 from imbue.system_interface.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.system_interface.harnesses.pi_coding.inbox import append_pi_inbox_sentinel
+from imbue.system_interface.harnesses.session import AtomicShoulderTap
+from imbue.system_interface.harnesses.session import ShoulderTapOutcome
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 
 # The single-slot switch mailbox this resolver writes: switch() atomically OVERWRITES
@@ -357,6 +359,7 @@ class PiInterruptToComposer(InterruptToComposer):
         restart_process: RestartProcess,
         settle_activity: SettleActivity,
         press_chord: PressChord,
+        get_in_flight_block: Callable[[], str],
     ) -> str:
         with try_hold_message_lock(self._agent_state_dir) as held:
             if not held:
@@ -367,7 +370,7 @@ class PiInterruptToComposer(InterruptToComposer):
                 # message). The queued block leads (parked first), the still-in-flight send
                 # follows -- send order. This mirrors claude's not-held branch exactly.
                 queued_block = restart_drain(self._agent_info, watcher, restart_process, settle_activity)
-                return _combine_return_block(queued_block, watcher.get_in_flight_block())
+                return _combine_return_block(queued_block, get_in_flight_block())
             # Held: no send is mid-flight, so any just-parked message is already in the mirror AND
             # the Sending registry is empty (a resolved send cleared its own record) -- so we do
             # NOT fold the in-flight block here. Folding it on the held branch would double-return
@@ -383,3 +386,39 @@ class PiInterruptToComposer(InterruptToComposer):
             append_pi_inbox_sentinel(self._inbox_path, PI_RETRACT_KEY)
             watcher.clear_queue()
             return block
+
+
+class PiAtomicShoulderTap(AtomicShoulderTap):
+    """pi's native tap: append the flush sentinel to ``pi_inbox`` under the message lock.
+
+    pi has no per-turn id, so there is no ABA target to compute: the lifecycle extension
+    gates the interrupt on "a turn is actually running" itself (a no-op when idle). The whole
+    locked write (bounded lock acquire, sentinel append) lives with ``flush_pi_queue_atomic``.
+    ``SEND_IN_FLIGHT`` is a benign no-op outcome, not an error: the availability flag greys
+    the button while a send is in flight, so a tap that still races one just does nothing.
+    """
+
+    _agent_info: AgentInfo
+
+    @classmethod
+    def build(cls, agent_info: AgentInfo) -> "PiAtomicShoulderTap":
+        self = cls.__new__(cls)
+        self._agent_info = agent_info
+        return self
+
+    def tap(
+        self,
+        watcher: AgentSessionWatcher,
+        press_chord: Callable[[], bool],
+        send_recovery: Callable[[str], bool],
+    ) -> ShoulderTapOutcome:
+        try:
+            status = flush_pi_queue_atomic(self._agent_info.agent_state_dir)
+        except OSError as e:
+            logger.opt(exception=e).error("Failed to write pi interrupt sentinel for {}", self._agent_info.name)
+            return ShoulderTapOutcome(
+                status="error",
+                error_detail=f"Failed to record the shoulder tap for agent '{self._agent_info.name}'",
+                error_status_code=500,
+            )
+        return ShoulderTapOutcome(status=status.value)

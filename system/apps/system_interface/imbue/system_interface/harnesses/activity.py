@@ -28,9 +28,6 @@ from typing import Any
 from typing import ClassVar
 
 from imbue.system_interface.activity_state import ActivityState
-from imbue.system_interface.activity_state import has_unmatched_tool_use
-from imbue.system_interface.activity_state import last_event_timestamp
-from imbue.system_interface.activity_state import last_event_type
 from imbue.system_interface.activity_state import parse_iso_timestamp_to_epoch
 
 

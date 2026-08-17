@@ -28,7 +28,6 @@ from loguru import logger
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.system_interface.harnesses.harness_type import HarnessType
 
 # The status commands are near-instant; this bounds a wedged CLI so a create cannot hang.
 _AUTH_CHECK_TIMEOUT_SECONDS = 20.0
@@ -50,19 +49,19 @@ class HarnessAuthCheck(FrozenModel):
     unauthenticated_output_pattern: str | None = None
 
 
-HARNESS_AUTH_CHECKS: dict[HarnessType, HarnessAuthCheck] = {
-    HarnessType.CODEX: HarnessAuthCheck(
-        command=("codex", "login", "status"),
-        display_name="Codex",
-        signin_instructions="Go to New tab (+) → New terminal → run `codex`",
-    ),
-    HarnessType.PI_CODING: HarnessAuthCheck(
-        command=("pi", "--list-models"),
-        display_name="Pi",
-        signin_instructions="Go to New tab (+) → New terminal → run `pi` → type `/login`",
-        unauthenticated_output_pattern=r"No models available",
-    ),
-}
+# The two registered checks, wired onto their ``HarnessSpec.auth_check`` in the registry --
+# the ONE per-harness table -- rather than a parallel dict here.
+CODEX_AUTH_CHECK = HarnessAuthCheck(
+    command=("codex", "login", "status"),
+    display_name="Codex",
+    signin_instructions="Go to New tab (+) → New terminal → run `codex`",
+)
+PI_AUTH_CHECK = HarnessAuthCheck(
+    command=("pi", "--list-models"),
+    display_name="Pi",
+    signin_instructions="Go to New tab (+) → New terminal → run `pi` → type `/login`",
+    unauthenticated_output_pattern=r"No models available",
+)
 
 
 def _is_signed_in(check: HarnessAuthCheck) -> bool:
@@ -93,14 +92,14 @@ def _is_signed_in(check: HarnessAuthCheck) -> bool:
     return result.returncode == 0
 
 
-def find_unauthenticated_harness_reason(harness: HarnessType) -> str | None:
-    """Return a user-facing reason if ``harness`` is not signed in, else ``None``.
+def find_unauthenticated_harness_reason(check: HarnessAuthCheck | None) -> str | None:
+    """Return a user-facing reason if the harness behind ``check`` is not signed in, else ``None``.
 
-    ``None`` means cleared to launch: the harness has no auth gate (claude, or an
-    unregistered harness) or its CLI reports a signed-in account. A returned string is safe
-    to show the user and names the harness that needs signing in.
+    ``None`` means cleared to launch: no auth gate is registered (claude's auth lives in the
+    shared ``~/.claude``) or the CLI reports a signed-in account. Callers pass their harness's
+    ``HarnessSpec.auth_check``. A returned string is safe to show the user and names the
+    harness that needs signing in.
     """
-    check = HARNESS_AUTH_CHECKS.get(harness)
     if check is None:
         return None
     if _is_signed_in(check):

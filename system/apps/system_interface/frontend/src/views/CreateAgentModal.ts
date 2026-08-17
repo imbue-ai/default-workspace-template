@@ -39,16 +39,16 @@ export function CreateAgentModal(): m.Component<CreateAgentModalAttrs> {
     m.redraw();
 
     try {
-      // Both modes create the same `chat` role in the primary's work dir; they
-      // differ only in which harness template the server stacks under it.
-      const urlByMode: Record<string, string> = {
-        chat: "/api/agents/create-chat",
-        codex: "/api/agents/create-codex",
-        pi: "/api/agents/create-pi",
+      // Every mode creates the same `chat` role in the primary's work dir; the
+      // request's harness field picks which harness template the server stacks under it.
+      const harnessByMode: Record<string, string> = {
+        chat: "claude",
+        codex: "codex",
+        pi: "pi-coding",
       };
-      const url = apiUrl(urlByMode[attrs.mode]);
+      const url = apiUrl("/api/agents/create-chat");
 
-      const body: Record<string, string> = { name: name.trim() };
+      const body: Record<string, string> = { name: name.trim(), harness: harnessByMode[attrs.mode] };
 
       const response = await m.request<{ agent_id: string }>({
         method: "POST",
