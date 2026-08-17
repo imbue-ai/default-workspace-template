@@ -24,29 +24,42 @@ _SCANNED_DIRS = (
 
 # Matches the argument of the conventional insert:
 #   sys.path.insert(0, str(Path(__file__).resolve().parents[N] / "a" / "b"))
+# Whitespace is allowed everywhere the formatter may put a line break, and the
+# outer call may carry a trailing comma: past a certain path length ruff-format
+# splits the call across several lines, and a pattern that only recognised the
+# one-line rendering silently matched nothing in those scripts.
 _PATH_INSERT_RE = re.compile(
-    r"sys\.path\.insert\(\s*0,\s*str\(Path\(__file__\)\.resolve\(\)\.parents\[(\d+)\]((?:\s*/\s*\"[^\"]+\")+)\s*\)\s*\)"
+    r"sys\.path\.insert\(\s*0,\s*str\(\s*Path\(__file__\)\.resolve\(\)\.parents\[(\d+)\]"
+    r"((?:\s*/\s*\"[^\"]+\")+)\s*\)\s*,?\s*\)"
 )
 _COMPONENT_RE = re.compile(r"\"([^\"]+)\"")
 
 
 def test_every_script_sys_path_insert_points_at_an_existing_directory() -> None:
-    checked_count = 0
+    checked_per_dir: dict[Path, int] = {}
     missing: list[str] = []
     for scanned_dir in _SCANNED_DIRS:
+        checked_per_dir[scanned_dir] = 0
         for script in sorted(scanned_dir.glob("*.py")):
             source = script.read_text()
             for match in _PATH_INSERT_RE.finditer(source):
                 parents_idx = int(match.group(1))
                 components = _COMPONENT_RE.findall(match.group(2))
                 target = script.resolve().parents[parents_idx].joinpath(*components)
-                checked_count += 1
+                checked_per_dir[scanned_dir] += 1
                 if not target.is_dir():
                     missing.append(f"{script.name}: {target}")
-    assert not missing, "sys.path inserts pointing at missing directories:\n" + "\n".join(
-        f"  - {m}" for m in missing
+    assert not missing, (
+        "sys.path inserts pointing at missing directories:\n"
+        + "\n".join(f"  - {m}" for m in missing)
     )
-    # The convention is load-bearing (claude_oom_launch, the oom tag scripts,
-    # the tk-standalone hook); if this ever matches nothing the regex has
-    # rotted, not the scripts.
-    assert checked_count >= 5
+    # Per directory, not in total: a directory is on the list because a script
+    # in it inserts a path, so one that yields nothing means the regex no longer
+    # recognises how that script writes the insert -- which reads as a pass while
+    # checking nothing. That is how the reveal script went unguarded for a
+    # formatter's line break.
+    unchecked = [str(d) for d, count in checked_per_dir.items() if count == 0]
+    assert not unchecked, (
+        "scanned directories with no recognized sys.path insert:\n"
+        + "\n".join(f"  - {d}" for d in unchecked)
+    )
