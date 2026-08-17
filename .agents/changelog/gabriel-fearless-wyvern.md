@@ -1,7 +1,5 @@
 Fixes for issues surfaced by migrating a real pre-declutter workspace.
 
-The `/assist` bug-report step resolved the wrong workspace to report against. It filtered the agent list on `has(labels.is_primary) && has(labels.workspace)`, but the `workspace` label was removed when workspace naming was reworked (its replacement is `workspace_display_name`), so the clause matched nothing, the lookup came back empty, and the report fell back to the reporting agent's own id -- popping the modal in whatever window happened to be focused instead of the workspace being reported on. The filter is now `has(labels.is_primary)` alone, which already scopes to this workspace.
-
 `migrate-workspace`'s `detect-layout` now resolves its roots through any symlink before returning them. On a pre-declutter source `/mngr` is a symlink, and `find` will not descend a symlinked start path -- so the session scan matched nothing and exited 0, reporting a workspace full of agents as having none. `list-agents` resolves its own `--host-dir` too, so it is correct when run on its own, and an empty scan now says so explicitly rather than passing for "this source has no agents."
 
 `migrate-workspace` reads `host-backup-now`'s exit code instead of matching its printed text, so a tick that prints nothing is no longer mistaken for a successful backup. It also distinguishes the two sides: the destination is the side the migration writes to, so a missing restore point there now stops and asks, where previously only the source was checked.
