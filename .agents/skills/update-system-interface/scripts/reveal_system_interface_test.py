@@ -693,9 +693,7 @@ def test_a_recovery_rebuild_reinstalls_the_rolled_back_dependencies(
     rolled_back_at = next(
         i for i, c in enumerate(runner.calls) if c[:3] == ["git", "checkout", _ROLLBACK]
     )
-    recovery_npm = [
-        c[:3] for c in runner.calls[rolled_back_at:] if c[0] == "npm"
-    ]
+    recovery_npm = [c[:3] for c in runner.calls[rolled_back_at:] if c[0] == "npm"]
     assert recovery_npm == [["npm", "ci"], ["npm", "run", "build"]]
 
 
