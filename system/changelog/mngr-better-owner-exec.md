@@ -1,5 +1,5 @@
 - Replaced the in-container Python `owner-exec` service with the pinned Go
-  binary from `imbue-ai/owner-exec` (v0.2.0), installed at image build via
+  binary from `imbue-ai/owner-exec` (v0.2.1), installed at image build via
   `system/scripts/install_owner_exec.sh` and run by supervisord through
   `system/scripts/run_owner_exec.sh` in its "inner" role. Requests are now
   signed per the RFC 9421/9530 strict profile (previously a homegrown v1
