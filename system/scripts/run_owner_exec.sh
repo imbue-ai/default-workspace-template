@@ -13,6 +13,14 @@ CONFIG_DIR="${REPO_ROOT}/data/.state"
 CONFIG_PATH="${CONFIG_DIR}/owner_exec_inner.toml"
 mkdir -p "$CONFIG_DIR"
 
+# Converge the pinned binary before exec'ing it. The installer is idempotent
+# and version-gated (a binary already at the pin exits in milliseconds), so
+# this is a no-op on every normal start -- but on a workspace that adopted the
+# owner-exec service via update-self (where the binary is normally installed
+# only at image build), or after a version-pin bump, it installs the pin
+# instead of hot-looping supervisord on a missing/stale binary.
+bash "${REPO_ROOT}/system/scripts/install_owner_exec.sh"
+
 # Resolve this workspace's mngr host id (host-<hex>) from the host record, so
 # the daemon's fixed audience is container:<host-id>. Empty if unavailable, in
 # which case the daemon falls back to the share-domain audience alone.
