@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Final
 
 from loguru import logger as _loguru_logger
+from oom_priority import bands
 from pydantic import Field
 from pydantic import PrivateAttr
 
@@ -45,8 +46,36 @@ _ERROR_OUTPUT_CHARACTER_LIMIT: Final[int] = 2000
 BuildCommandRunner = Callable[[list[str], Path, float], FinishedProcess]
 
 
+# Self-tag into the most expendable band, then become the real command. A build
+# is one of the hungriest things this workspace runs, and it is spawned by the
+# system interface, whose band (``SERVICE_BANDS["system_interface"]``, 20) is
+# inherited across fork/exec -- which would leave it protected ahead of the
+# user's chats, workers and every agent subprocess, so a memory shed would take
+# their work to keep this build alive. ``AGENT_SUBPROCESS`` is where the same
+# build lands when an agent runs it (see
+# ``system/scripts/claude_rewrite_bash_command.py``).
+#
+# A steer, not a guarantee: earlyoom picks the highest ``/proc/*/oom_score``,
+# which folds live memory in on top of ``oom_score_adj`` (see ``bands``).
+#
+# ``sh -c <script> sh <argv...>`` puts ``argv`` in ``"$@"``, so ``exec`` replaces
+# the shell with the command rather than leaving one wrapping it. Raising
+# ``oom_score_adj`` is unprivileged, and the guard makes the tag a no-op where
+# ``/proc`` is absent or read-only (macOS), as elsewhere in this workspace.
+_OOM_TAG_THEN_EXEC_SCRIPT: Final[str] = (
+    "test -w /proc/self/oom_score_adj && "
+    f"echo {bands.AGENT_SUBPROCESS} > /proc/self/oom_score_adj 2>/dev/null; "
+    'exec "$@"'
+)
+
+
 def _default_command_runner(command: list[str], cwd: Path, timeout: float) -> FinishedProcess:
-    return run_local_command_modern_version(command=command, is_checked=False, timeout=timeout, cwd=cwd)
+    return run_local_command_modern_version(
+        command=["sh", "-c", _OOM_TAG_THEN_EXEC_SCRIPT, "sh", *command],
+        is_checked=False,
+        timeout=timeout,
+        cwd=cwd,
+    )
 
 
 class FrontendBuildError(RuntimeError):
