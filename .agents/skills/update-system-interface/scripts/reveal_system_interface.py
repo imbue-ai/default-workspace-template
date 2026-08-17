@@ -25,12 +25,8 @@ What it does, given the pre-merge revision (``--rollback-to``):
 5. For a backend change, *pre-flight* the merged code on a throwaway port before
    touching the live service -- if it cannot boot, the live service is never
    restarted and we go straight to rollback (the UI never went down).
-6. Build the frontend bundle and restart the backend, as applicable, then ask
-   every open view of the workspace to reload, via
-   ``system/scripts/refresh_workspace_view.py`` -- for a backend-only change
-   too, since the restart leaves the open page rendering from what it had
-   already fetched. A build that exits 0 without writing a bundle counts as a
-   failure, not a success.
+6. Build the frontend bundle and restart the backend, as applicable. A build
+   that exits 0 without writing a bundle counts as a failure, not a success.
 7. Probe the live service's loopback endpoint until healthy (with a deadline),
    and confirm the app shell really is the built app and that its module script
    serves as JavaScript. The backend endpoint alone cannot see either failure:
@@ -41,11 +37,17 @@ What it does, given the pre-merge revision (``--rollback-to``):
    because rolling an unrelated change back would not fix it -- reported both as
    a warning and in place of the closing "confirmed healthy" line, which must
    never be the last word over a UI the user cannot see.
-8. On ANY failure, restore the served tree to the known-good revision (as a
+8. Ask every open view of the workspace to reload, via
+   ``system/scripts/refresh_workspace_view.py`` -- for a backend-only change
+   too, since the restart leaves the open page rendering from what it had
+   already fetched. After the probes above, so a reveal that regressed the
+   frontend rolls back rather than asking every open view to reload into it.
+9. On ANY failure, restore the served tree to the known-good revision (as a
    forward revert commit), put the snapshotted bundle back, and re-probe to
    *confirm* the UI is back. Restoring the snapshot needs neither ``npm`` nor a
-   registry, so a broken build environment can no longer take the UI down with
-   it; a rebuild is attempted only when there was no bundle to snapshot. The
+   registry, so a broken build environment cannot take the UI down with it; a
+   rebuild is attempted only when there is no snapshot to put back -- either
+   there was no bundle to copy, or the copy could not be taken. The
    live backend is restarted during recovery only if the failed reveal had
    already restarted it (a failed post-restart health check); when the failure
    happened before the live restart (pre-flight, dependency refresh, frontend
@@ -113,12 +115,13 @@ Exit codes (``reveal``):
        0, a workspace whose frontend was already broken when the reveal started
        gets a closing line that says so instead, since the rollback was never
        held to a standard it could not have met.
-    3  EMERGENCY: even rollback could not restore a healthy UI. After a reveal
-       that touched the frontend, the pre-reveal bundle copy is kept rather than
+    3  EMERGENCY: even rollback could not restore a healthy UI. When a reveal
+       that touched the frontend has a bundle copy, it is kept rather than
        discarded and its path printed: putting it back needs neither npm nor a
-       registry, so it is the way out of exactly the failure that gets here. A
-       backend-only reveal never wrote the bundle directory, so there is nothing
-       to hand over and no such line.
+       registry, so it is the way out of exactly the failure that gets here.
+       There is no such line without a copy to hand over -- a backend-only
+       reveal never wrote the bundle directory, and a frontend one has no copy
+       when there was no bundle to take one of or the copy itself failed.
 
 Exit codes (``preview`` / ``unpreview``):
     0  Success (preview is up / torn down).
