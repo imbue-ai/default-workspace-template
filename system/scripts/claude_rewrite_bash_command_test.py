@@ -141,3 +141,22 @@ def test_identity_prefix_quotes_names_with_spaces() -> None:
     # A name with a space must be shell-quoted so the export parses as one value.
     assert "GIT_AUTHOR_NAME='Ada Lovelace'" in prefix
     assert prefix.startswith("export ") and prefix.endswith("; ")
+
+
+def test_claude_output_omits_permission_decision() -> None:
+    # The default (claude) output rewrites the command but emits NO
+    # permissionDecision -- in claude "allow" would auto-approve the tool.
+    output = hook.build_hook_output({"command": "ls"}, "ls", emit_allow_decision=False)
+    hook_output = output["hookSpecificOutput"]
+    assert hook_output["hookEventName"] == "PreToolUse"
+    assert hook_output["updatedInput"]["command"].endswith("; ls")
+    assert "permissionDecision" not in hook_output
+
+
+def test_codex_output_includes_allow_decision() -> None:
+    # With emit_allow_decision (the --codex flag) the same rewrite also carries
+    # permissionDecision: "allow" -- codex rejects an updatedInput-only rewrite.
+    output = hook.build_hook_output({"command": "ls"}, "ls", emit_allow_decision=True)
+    hook_output = output["hookSpecificOutput"]
+    assert hook_output["permissionDecision"] == "allow"
+    assert hook_output["updatedInput"]["command"].endswith("; ls")

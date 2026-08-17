@@ -28,21 +28,32 @@ _AUTH_LABEL_RANDOM_LENGTH = 8
 
 STATE_DIR = Path("data/.state/share_gateway")
 CADDYFILE_PATH = STATE_DIR / "Caddyfile"
-FRPC_CONFIG_PATH = STATE_DIR / "frpc.toml"
+# One frpc config per assigned relay lives at frpc-<relay_id>.toml under
+# STATE_DIR (see frpc_config_path); the workspace tunnels to EVERY relay of
+# its region. The last-fetched relay assignment is cached so a container
+# restart brings the tunnels up without the connector.
+ASSIGNMENT_CACHE_PATH = STATE_DIR / "assignment.json"
 
-# Local port layout: caddy terminates the share's TLS on HTTPS_PORT (frpc
-# splices relay bytes into it); the gateway's Flask app (forward_auth backend
-# + /_auth/* endpoints) listens on GATEWAY_PORT; frpc's loopback admin server
-# (for `frpc reload`) listens on FRPC_ADMIN_PORT.
+# Local port layout: caddy terminates the share's TLS on HTTPS_PORT (each
+# relay's frpc splices its relay bytes into it); the gateway's Flask app
+# (forward_auth backend + /_auth/* endpoints) listens on GATEWAY_PORT; each
+# frpc's loopback admin server (for `frpc reload`) listens on
+# FRPC_ADMIN_PORT_BASE + its slot index.
 GATEWAY_PORT = 8791
 CADDY_HTTPS_PORT = 8443
-FRPC_ADMIN_PORT = 7401
+FRPC_ADMIN_PORT_BASE = 7401
+
+
+def frpc_config_path(relay_id: str) -> Path:
+    return STATE_DIR / f"frpc-{relay_id}.toml"
 
 _EXPORT_LINE_PATTERN = re.compile(r"""^export\s+([A-Z0-9_]+)=["']?([^"'\n]*)["']?\s*$""", re.MULTILINE)
 
+# No relay endpoint here: the gateway fetches its relay assignment from the
+# connector (relay-token auth) and re-polls, so fleet changes never require
+# re-injecting materials.
 _REQUIRED_KEYS = (
     "SHARE_WORKSPACE_DOMAIN",
-    "SHARE_RELAY_ENDPOINT",
     "SHARE_RELAY_TOKEN",
     "SHARE_CONNECTOR_URL",
     "SHARE_BROKER_URL",
@@ -55,16 +66,12 @@ class ShareMaterials:
     def __init__(
         self,
         workspace_domain: str,
-        relay_host: str,
-        relay_port: int,
         relay_token: str,
         connector_url: str,
         broker_url: str,
         chrome_origin: str,
     ) -> None:
         self.workspace_domain = workspace_domain
-        self.relay_host = relay_host
-        self.relay_port = relay_port
         self.relay_token = relay_token
         self.connector_url = connector_url
         self.broker_url = broker_url
@@ -85,14 +92,8 @@ def parse_share_materials(text: str) -> ShareMaterials | None:
     values = {match.group(1): match.group(2) for match in _EXPORT_LINE_PATTERN.finditer(text)}
     if any(not values.get(key) for key in _REQUIRED_KEYS):
         return None
-    relay_endpoint = values["SHARE_RELAY_ENDPOINT"]
-    relay_host, separator, relay_port_text = relay_endpoint.rpartition(":")
-    if not separator or not relay_host or not relay_port_text.isdigit():
-        return None
     return ShareMaterials(
         workspace_domain=values["SHARE_WORKSPACE_DOMAIN"].lower(),
-        relay_host=relay_host,
-        relay_port=int(relay_port_text),
         relay_token=values["SHARE_RELAY_TOKEN"],
         connector_url=values["SHARE_CONNECTOR_URL"].rstrip("/"),
         broker_url=values["SHARE_BROKER_URL"].rstrip("/"),
