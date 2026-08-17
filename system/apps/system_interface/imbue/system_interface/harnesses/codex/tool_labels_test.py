@@ -1,5 +1,6 @@
 import pytest
 
+from imbue.system_interface.harnesses.codex.tool_labels import is_tk_lifecycle
 from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 
@@ -193,3 +194,14 @@ def test_exec_caption_unescapes_the_command() -> None:
     _, caption = tool_labels("exec", 'await tools.exec_command({"cmd":"tk start \\"s1\\""})')
     assert caption.startswith("Running tk start")
     assert "\\" not in caption
+
+
+def test_batched_tk_command_keeps_full_input_but_is_not_hidden() -> None:
+    """The truncation exemption is segment-wise (deliberately broader) while the hide rule
+    is start-anchored: `cd /code && tk create ...` renders as work AND keeps its full input
+    for the step timeline's fallback."""
+    long_titles = " ".join(f'--step "step number {i} with a long title"' for i in range(12))
+    raw_input = f'await tools.exec_command({{"cmd": "cd /code && tk create {long_titles}"}});'
+    assert len(raw_input) > 200
+    assert keeps_full_tool_input("exec", raw_input) is True
+    assert is_tk_lifecycle("exec", raw_input) is False

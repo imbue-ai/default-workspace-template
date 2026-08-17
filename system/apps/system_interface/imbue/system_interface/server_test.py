@@ -472,9 +472,9 @@ def _codex_client(agent_info: AgentInfo) -> FlaskClient:
 def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarnessSession:
     """A real FileHarnessSession over inert deps, optionally pre-seeded with an in-flight send."""
     deps = SessionDeps(
-        agent_id=agent_info.id,
         harness=agent_info.harness,
         state_dir=agent_info.agent_state_dir,
+        model_state_path=agent_info.agent_state_dir / "model_state.json",
         send_to_harness=lambda text: True,
         notify_agents_changed=lambda: None,
         is_tracked=lambda: True,

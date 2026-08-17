@@ -128,7 +128,9 @@ def _user_turn_contents(watcher: ClaudeSessionWatcher) -> list[str]:
     return [
         event["content"]
         for event in events
-        if event.get("type") == "user_message" and not event.get("is_meta") and not event.get("is_compact_summary")
+        # A genuine user turn carries no render decision; framework injections (resume
+        # markers, compaction summaries, model-bar echoes) arrive with `display` set.
+        if event.get("type") == "user_message" and event.get("display") is None
     ]
 
 

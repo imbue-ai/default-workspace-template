@@ -1296,16 +1296,17 @@ class AgentManager:
         with self._lock:
             self._activity_tracked_agents.add(agent_id)
             agent_state = self._agents.get(agent_id)
+            # The create path calls this before the observe stream has reported the agent, so
+            # the harness can be the DEFAULT guess; the tracker and session below both heal on
+            # the next call once the real harness is known.
             harness = agent_state.harness if agent_state is not None else DEFAULT_HARNESS
-            # Every harness -- codex included -- builds its transcript-derived tracker here, once, from
-            # the harness it was created with. codex's dot is its tracker's turn latch; its ledger
-            # (inside the session below) owns only the queue + message-lifecycle chips.
-            if agent_id not in self._activity_tracker_by_agent:
+            # Every harness -- codex included -- builds its transcript-derived tracker here, from
+            # the agent's harness. codex's dot is its tracker's turn latch; its ledger (inside
+            # the session below) owns only the queue + message-lifecycle chips.
+            tracker = self._activity_tracker_by_agent.get(agent_id)
+            if tracker is None or type(tracker) is not get_harness_spec(harness).tracker_class:
                 self._activity_tracker_by_agent[agent_id] = build_tracker(harness)
-            session = self._session_by_agent.get(agent_id)
-            if session is None:
-                session = self._build_session(agent_id, harness)
-                self._session_by_agent[agent_id] = session
+        session = self._get_or_heal_session(agent_id, harness)
         # Bring up whatever live backend the harness needs (codex's app-server connection;
         # a no-op for file harnesses). Blocking I/O, so outside the lock; idempotent, so the
         # observe tick re-invoking it is the self-healing retry path.
@@ -1313,17 +1314,24 @@ class AgentManager:
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
     def _stop_activity_tracking(self, agent_id: str) -> None:
-        """Stop activity tracking and clear cached activity + queued state."""
+        """Stop activity tracking and clear cached activity + queued state.
+
+        The session is QUIESCED (its live backend reaped), not destroyed: a transient
+        discovery blip must not lose the Sending records an in-flight send is holding --
+        the same lifetime the watcher registry has (``SystemInterfaceState.watchers`` is
+        never popped either). Terminal teardown happens in :meth:`stop`.
+        """
         with self._lock:
-            session = self._session_by_agent.pop(agent_id, None)
+            session = self._session_by_agent.get(agent_id)
             self._activity_tracked_agents.discard(agent_id)
             self._activity_tracker_by_agent.pop(agent_id, None)
             self._activity_state_by_agent.pop(agent_id, None)
             self._queued_messages_by_agent.pop(agent_id, None)
             self._queue_idle_handler_by_agent.pop(agent_id, None)
-        # Terminal close outside the lock (codex's join blocks on its reader thread).
+        # Reap the live backend outside the lock (codex's join blocks on its reader thread);
+        # idempotent, and a re-track rebuilds it via ensure_live.
         if session is not None:
-            session.close()
+            session.on_lifecycle_dead()
 
     def _build_session(self, agent_id: str, harness: HarnessType) -> AgentHarnessSession:
         """Build the harness session for one agent, binding every capability it may need.
@@ -1335,7 +1343,6 @@ class AgentManager:
         state_dir = self._get_agent_state_dir(agent_id)
         spec = get_harness_spec(harness)
         deps = SessionDeps(
-            agent_id=agent_id,
             harness=harness,
             state_dir=state_dir,
             send_to_harness=lambda text: self.send_message_to_agent(AgentId(agent_id), text),
@@ -1358,13 +1365,27 @@ class AgentManager:
         Idempotent and cheap (a build does no I/O; liveness is ``ensure_live``'s job), so a
         request landing before the observe tick starts tracking still gets a working session.
         """
+        return self._get_or_heal_session(agent_info.id, agent_info.harness)
+
+    def _get_or_heal_session(self, agent_id: str, harness: HarnessType) -> AgentHarnessSession:
+        """The ONE insertion point into ``_session_by_agent``, self-healing on harness.
+
+        Tracking can start before the observe stream has told us an agent's harness (the
+        create path calls it immediately), in which case the session is built for the
+        DEFAULT harness. The old per-request ``agent_info.harness`` dispatch healed that on
+        the next endpoint touch; this preserves that property -- a cached session built for
+        the wrong harness is replaced the first time a caller shows up knowing the real one.
+        """
         with self._lock:
-            existing = self._session_by_agent.get(agent_info.id)
-            if existing is not None:
+            existing = self._session_by_agent.get(agent_id)
+            if existing is not None and existing.harness == harness:
                 return existing
-            session = self._build_session(agent_info.id, agent_info.harness)
-            self._session_by_agent[agent_info.id] = session
-            return session
+            session = self._build_session(agent_id, harness)
+            self._session_by_agent[agent_id] = session
+        # A mismatched predecessor is torn down outside the lock (codex join blocks).
+        if existing is not None:
+            existing.close()
+        return session
 
     def is_activity_tracked(self, agent_id: str) -> bool:
         """Whether activity tracking is live for ``agent_id`` (sessions gate connects on it)."""

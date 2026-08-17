@@ -61,8 +61,7 @@ from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
-from imbue.system_interface.harnesses.message_display import classify_user_message
-from imbue.system_interface.harnesses.message_display import is_non_turn_tail
+from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
 from imbue.system_interface.harnesses.tool_output import find_permission_request
 from imbue.system_interface.harnesses.tool_output import truncate_tool_output
@@ -249,11 +248,7 @@ def build_user_turn_event(timestamp: str, content: str, event_id: str) -> dict[s
     }
     # The shared render decision (fleet nudges, task notifications, latchkey verdicts,
     # model-bar traffic) -- codex gets the same detector table as claude and pi.
-    decision = classify_user_message(content)
-    if decision is not None:
-        decision.apply_to(event)
-    if is_non_turn_tail(content):
-        event["non_turn_tail"] = True
+    stamp_user_message_display(event, content)
     return event
 
 
@@ -498,9 +493,10 @@ def parse_lines(
             "tool_call_id": call_id,
             "tool_name": tool_name_by_call_id.get(call_id, ""),
             "output": output,
-            # A failed code-mode script writes output starting with "Script failed";
-            # flag it so the UI renders the result as an error, not a clean success.
-            "is_error": output.startswith("Script failed"),
+            # A failed code-mode script writes output starting with "Script failed"; probe
+            # the UNTRUNCATED head (the permission-request rebuild replaces the head, so
+            # the truncated string can no longer carry the marker).
+            "is_error": raw_output.startswith("Script failed"),
             "message_uuid": event_id,
         }
         if permission_request is not None:

@@ -31,6 +31,7 @@ from typing import Any
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.harnesses.events import DisplayKind
 
@@ -56,6 +57,26 @@ _COMPOSER_STDOUT_RE = re.compile(r"Set model to|Set effort level to|Fast mode")
 
 # Chip label for the post-auto-compaction summary.
 _COMPACTION_SUMMARY_LABEL = "Summary of earlier conversation"
+
+# The composer appends a "See attachment(s) here:" block to a message it sends with
+# uploads (see frontend/src/models/attachments.ts -- keep the two in step). Detectors run
+# on the text BEFORE the block, so an appended attachment never changes a message's kind
+# (the whole-string-anchored detectors -- /welcome, the fleet sentinel -- would otherwise
+# miss), and a chip's body shows the message text, not the raw attachment markdown.
+_ATTACHMENT_BLOCK_RE = re.compile(r"(?:^|\n\n)(See attachments? here: ([\s\S]+?))\s*$")
+_UPLOADS_PATH_MARKER = "/uploads/"
+
+
+def _visible_text(content: str) -> str:
+    """The message text before any trailing attachment block (the whole content when none)."""
+    match = _ATTACHMENT_BLOCK_RE.search(content)
+    if match is None:
+        return content
+    items = [item.strip() for item in match.group(2).split("\n")]
+    if not all(_UPLOADS_PATH_MARKER in item for item in items):
+        return content
+    return content[: match.start()].rstrip()
+
 
 # When a latchkey permission request is resolved, the app injects a plain user message
 # announcing the outcome. The phrasing is authored by the latchkey handlers in the mngr
@@ -83,13 +104,7 @@ class MessageDisplay(FrozenModel):
 
     def apply_to(self, event: dict[str, Any]) -> None:
         """Stamp the decision's present fields onto ``event`` (absent fields stay absent)."""
-        event["display"] = self.display.value
-        if self.display_label is not None:
-            event["display_label"] = self.display_label
-        if self.display_body is not None:
-            event["display_body"] = self.display_body
-        if self.resolution is not None:
-            event["resolution"] = self.resolution
+        event.update(self.model_dump(mode="json", exclude_none=True))
 
 
 def _match_welcome(content: str) -> MessageDisplay | None:
@@ -186,17 +201,42 @@ def classify_user_message(
     """The render decision for one user message, or ``None`` for a genuine human turn.
 
     ``None`` means the parser emits no ``display`` field and the frontend renders the
-    baseline user bubble. See the module docstring for the precedence rules.
+    baseline user bubble. Detectors run on the attachment-stripped text (see
+    ``_visible_text``); see the module docstring for the precedence rules.
     """
+    visible = _visible_text(content)
+    decision: MessageDisplay | None = None
     for detect in _DETECTORS:
-        decision = detect(content)
+        decision = detect(visible)
         if decision is not None:
-            return decision
-    if is_compact_summary:
-        return MessageDisplay(display=DisplayKind.CHIP, display_label=_COMPACTION_SUMMARY_LABEL)
-    if is_meta:
-        return MessageDisplay(display=DisplayKind.HIDDEN)
-    return None
+            break
+    if decision is None and is_compact_summary:
+        decision = MessageDisplay(display=DisplayKind.CHIP, display_label=_COMPACTION_SUMMARY_LABEL)
+    if decision is None and is_meta:
+        decision = MessageDisplay(display=DisplayKind.HIDDEN)
+    if decision is None:
+        return None
+    # A chip renders its body verbatim; when an attachment block was stripped for
+    # classification, show the message text rather than the raw attachment markdown.
+    if decision.display is DisplayKind.CHIP and decision.display_body is None and visible != content:
+        decision = decision.model_copy_update(to_update(decision.field_ref().display_body, visible))
+    return decision
+
+
+def stamp_user_message_display(
+    event: dict[str, Any], content: str, *, is_meta: bool = False, is_compact_summary: bool = False
+) -> None:
+    """Stamp the wire's render-decision fields onto one ``user_message`` event.
+
+    The ONE call every user-message emit site makes (each harness's normal path AND
+    claude's queued-command attachment path), so a new wire field or a precedence change
+    lands everywhere at once instead of in per-parser copies.
+    """
+    decision = classify_user_message(content, is_meta=is_meta, is_compact_summary=is_compact_summary)
+    if decision is not None:
+        decision.apply_to(event)
+    if is_non_turn_tail(content, is_meta=is_meta):
+        event["non_turn_tail"] = True
 
 
 @pure
@@ -213,7 +253,5 @@ def is_non_turn_tail(content: str, *, is_meta: bool = False) -> bool:
     """
     if is_meta:
         return True
-    text = content.strip()
-    if _COMPOSER_COMMAND_RE.match(text) is not None:
-        return True
-    return text.startswith(_LOCAL_COMMAND_STDOUT_OPEN) and _COMPOSER_STDOUT_RE.search(text) is not None
+    # The two model-bar detectors themselves, so this can never drift from rendering.
+    return _match_composer_command(content) is not None or _match_composer_command_output(content) is not None

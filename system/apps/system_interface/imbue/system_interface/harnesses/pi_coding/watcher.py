@@ -160,10 +160,6 @@ class PiSessionWatcher(AgentSessionWatcher):
         self._last_queue_snapshot = []
 
         self._path_watcher = None
-
-        # Backend *Sending* state (contract A1): the send endpoint records each in-flight pi
-        # message here so a concurrent interrupt can return one that never committed (parity
-        # with claude). Its own private lock, independent of the transcript ``_lock`` above.
         return self
 
     def start(self) -> None:

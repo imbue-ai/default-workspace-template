@@ -25,6 +25,7 @@ import json
 import re
 from typing import Any
 
+from loguru import logger
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -137,6 +138,7 @@ def find_permission_request(content: str) -> PermissionRequest | None:
             # The C scanner recurses per nesting level on absurdly deep input; every later
             # candidate in the same nest would just recurse again, so give up on the
             # result: no gateway echo nests thousands deep.
+            logger.warning("Giving up on a permission-request probe: absurdly deep JSON nesting in tool output")
             return None
         if isinstance(parsed, dict) and _is_permission_request(parsed):
             body = content[start:end]

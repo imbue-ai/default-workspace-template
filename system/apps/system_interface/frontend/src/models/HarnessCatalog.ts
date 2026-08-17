@@ -36,7 +36,9 @@ export interface HarnessCatalog {
   switch_mode: string; // "eager_then_reconcile" (claude/pi -- optimistic) | "on_change" (codex -- no overlay)
   picker_mode: string; // "list" | "search" | "dynamic" -- how the model dropdown sources/renders options
   // Whether the "Shoulder tap" button can flush the queue atomically (merge into the live
-  // turn without a restart). True only for codex; false harnesses use the restart-based flush.
+  // turn without a restart). Every current harness supports it (claude via its cancel chord,
+  // pi via its inbox sentinel, codex via its live ledger); a false harness would fall back
+  // to the restart-based flush.
   native_atomic_shoulder_tap_possible: boolean;
 }
 

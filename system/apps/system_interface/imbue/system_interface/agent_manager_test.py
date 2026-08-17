@@ -2206,3 +2206,36 @@ def test_observe_events_exempt_a_running_chat_from_aging_out(agent_manager: Agen
     )
     agent_manager._handle_observe_event(make_full_agent_state_event([stopped]))
     assert writes[-1][1] == bands.CHAT_AGENT_BASE
+
+
+def test_session_cache_heals_when_the_real_harness_arrives(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """Tracking can start before observe reports the agent (the create path), caching a
+    DEFAULT-harness session; the first caller that knows the real harness must replace it,
+    or a codex agent would send through mngr's file API forever."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    # Tracking starts with no _agents entry -> the claude default guess.
+    agent_manager._ensure_activity_tracking("agent-1")
+    assert agent_manager._session_by_agent["agent-1"].harness is HarnessType.CLAUDE
+    # The observe stream catches up: the agent is codex; re-tracking heals both caches.
+    _seed_agent(agent_manager, "agent-1", harness=HarnessType.CODEX)
+    agent_manager._ensure_activity_tracking("agent-1")
+    assert agent_manager._session_by_agent["agent-1"].harness is HarnessType.CODEX
+    assert isinstance(agent_manager._activity_tracker_by_agent["agent-1"], CodexActivityTracker)
+
+
+def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """A transient discovery blip quiesces the session without destroying it: an in-flight
+    Sending record must survive so a stop after the blip still returns the text (A4) --
+    the same lifetime the watcher registry has."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    session = agent_manager._session_by_agent["agent-1"]
+    assert isinstance(session, FileHarnessSession)
+    session._sending.record("t-inflight", "caught mid-send")
+
+    agent_manager._stop_activity_tracking("agent-1")
+    assert agent_manager._session_by_agent["agent-1"] is session
+    assert session.in_flight_block() == "caught mid-send"
