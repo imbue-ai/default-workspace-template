@@ -190,7 +190,12 @@ auto-push to the old workspace's own sync repo is expected and harmless.
 
 **Recommend quiescence.** Ask the user to let you stop the source's *agents* (not
 its host -- SSH needs that up) so the tree cannot shift mid-copy:
-`ssh ... 'mngr stop <agent>'` for each non-primary agent. A decline is fine;
+`ssh ... '<with_agent_env.sh> mngr stop <agent>'` for each non-primary agent,
+through the same candidate probe as the backup above. `mngr` is on the agent's
+PATH (`/root/.local/bin`) and resolves which host dir to act on from
+`MNGR_HOST_DIR`; an ssh session has neither, and on a pre-declutter source that
+host dir is `/mngr` rather than the default. Exit 127 means this source cannot be
+quiesced that way -- say so rather than improvising. A decline is fine either way;
 anything that shifts is re-synced during verification (Step 8).
 
 ## 4. Detect the layout, then resolve the baseline
