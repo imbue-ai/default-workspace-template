@@ -59,14 +59,9 @@ BuildCommandRunner = Callable[[list[str], Path, float], FinishedProcess]
 # which folds live memory in on top of ``oom_score_adj`` (see ``bands``).
 #
 # ``sh -c <script> sh <argv...>`` puts ``argv`` in ``"$@"``, so ``exec`` replaces
-# the shell with the command rather than leaving one wrapping it. Raising
-# ``oom_score_adj`` is unprivileged, and the guard makes the tag a no-op where
-# ``/proc`` is absent or read-only (macOS), as elsewhere in this workspace.
-_OOM_TAG_THEN_EXEC_SCRIPT: Final[str] = (
-    "test -w /proc/self/oom_score_adj && "
-    f"echo {bands.AGENT_SUBPROCESS} > /proc/self/oom_score_adj 2>/dev/null; "
-    'exec "$@"'
-)
+# the shell with the command rather than leaving one wrapping it -- which also
+# keeps the runner's timeout signal aimed at the build itself.
+_OOM_TAG_THEN_EXEC_SCRIPT: Final[str] = bands.oom_tag_shell_prefix(bands.AGENT_SUBPROCESS) + 'exec "$@"'
 
 
 def _default_command_runner(command: list[str], cwd: Path, timeout: float) -> FinishedProcess:
@@ -75,6 +70,10 @@ def _default_command_runner(command: list[str], cwd: Path, timeout: float) -> Fi
         is_checked=False,
         timeout=timeout,
         cwd=cwd,
+        # What a failure to even start renders as. The placeholder page shows
+        # that text to someone with no interface left, so it has to name the
+        # command they asked for rather than the tagging shell wrapped around it.
+        name=" ".join(command),
     )
 
 

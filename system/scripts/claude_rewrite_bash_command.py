@@ -10,12 +10,9 @@ verbatim at the end:
    itself, and before any other agent. They inherit the agent's own band by
    default, which is not expendable enough, so the prefix raises the running
    shell's ``oom_score_adj`` to the most-expendable band; everything the shell
-   spawns inherits it. Raising ``oom_score_adj`` is unprivileged, so it needs no
-   special capability. The write is gated on ``test -w`` so that on a host
-   without a writable ``/proc/self/oom_score_adj`` (e.g. macOS, which has no
-   ``/proc``) the prefix is a clean no-op that emits nothing -- a bare
-   ``> /proc/...`` redirect would otherwise leak a shell "no such file or
-   directory" error past ``2>/dev/null``.
+   spawns inherits it. The statement itself, and why it is guarded the way it
+   is, belong to ``oom_priority.bands.oom_tag_shell_prefix``, which the workspace
+   interface's own self-repair rebuild uses too.
 
 2. This agent's git commit identity, as ``GIT_AUTHOR_*`` / ``GIT_COMMITTER_*``
    exports. git resolves author/committer from these env vars ahead of any
@@ -143,11 +140,7 @@ def build_commit_identity_prefix(author_name: str, author_email: str) -> str:
 
 def build_oom_tag_prefix() -> str:
     """Build the guarded ``oom_score_adj`` self-tag command prefix."""
-    adj = bands.AGENT_SUBPROCESS
-    return (
-        f"test -w /proc/self/oom_score_adj && "
-        f"echo {adj} > /proc/self/oom_score_adj 2>/dev/null; "
-    )
+    return bands.oom_tag_shell_prefix(bands.AGENT_SUBPROCESS)
 
 
 def build_rewritten_command(command: str) -> str:
@@ -163,7 +156,9 @@ def build_rewritten_command(command: str) -> str:
     return prefix + command
 
 
-def build_hook_output(tool_input: dict, command: str, *, emit_allow_decision: bool) -> dict:
+def build_hook_output(
+    tool_input: dict, command: str, *, emit_allow_decision: bool
+) -> dict:
     """Build the PreToolUse ``hookSpecificOutput`` object for a rewritten Bash command.
 
     When ``emit_allow_decision`` is True the object also carries
@@ -197,7 +192,10 @@ def main() -> None:
     command = tool_input.get("command")
     if not isinstance(command, str) or not command:
         return
-    json.dump(build_hook_output(tool_input, command, emit_allow_decision=emit_allow_decision), sys.stdout)
+    json.dump(
+        build_hook_output(tool_input, command, emit_allow_decision=emit_allow_decision),
+        sys.stdout,
+    )
 
 
 if __name__ == "__main__":
