@@ -69,14 +69,14 @@ def test_each_tracker_is_independent() -> None:
     first = build_tracker(HarnessType.CLAUDE)
     second = build_tracker(HarnessType.CLAUDE)
     assert first.observe([{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"}]) is True
-    assert first.derive(is_agent_running=True, process_started_at=None) == ActivityState.THINKING
-    assert second.derive(is_agent_running=True, process_started_at=None) == ActivityState.IDLE
+    assert first.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.THINKING
+    assert second.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
 def test_fresh_tracker_is_idle(harness: HarnessType) -> None:
     tracker = build_tracker(harness)
-    assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.IDLE
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
@@ -92,8 +92,8 @@ def test_claude_honors_the_mngr_lifecycle() -> None:
     """A stopped claude agent is IDLE regardless of a mid-turn transcript tail."""
     tracker = build_tracker(HarnessType.CLAUDE)
     tracker.observe([{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"}])
-    assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.THINKING
-    assert tracker.derive(is_agent_running=False, process_started_at=None) == ActivityState.IDLE
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.THINKING
+    assert tracker.derive(lifecycle_state="WAITING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
@@ -111,13 +111,13 @@ def test_stale_transcript_tail_reads_idle(harness: HarnessType) -> None:
             {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
         ]
     )
-    stale_tail_is_live = tracker.derive(is_agent_running=True, process_started_at=None)
+    stale_tail_is_live = tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
     assert stale_tail_is_live != ActivityState.IDLE
 
     # Marker touched after the tail -> the turn belongs to a dead process.
     # 2100-01-01, comfortably after the tail above.
     restarted_at = 4102444800.0
-    assert tracker.derive(is_agent_running=True, process_started_at=restarted_at) == ActivityState.IDLE
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=restarted_at) == ActivityState.IDLE
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
@@ -129,9 +129,9 @@ def test_reset_settles_on_idle(harness: HarnessType) -> None:
             {"type": "user_message", "timestamp": "2026-07-28T00:00:00Z"},
         ]
     )
-    assert tracker.derive(is_agent_running=True, process_started_at=None) != ActivityState.IDLE
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) != ActivityState.IDLE
     tracker.reset()
-    assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.IDLE
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.IDLE
 
 
 @pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
@@ -147,4 +147,37 @@ def test_pending_tool_use_reads_tool_running(harness: HarnessType) -> None:
             },
         ]
     )
-    assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.TOOL_RUNNING
+    assert tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None) == ActivityState.TOOL_RUNNING
+
+
+@pytest.mark.parametrize("harness", _TRACKER_HARNESSES)
+def test_dead_lifecycle_settles_idle_for_every_harness(harness: HarnessType) -> None:
+    """The dead gate is the BASE's own first step, structurally applied to every harness.
+
+    This matters most for codex, whose working derivation deliberately ignores the mngr
+    lifecycle (the turn latch is authoritative): without the base gate, a mid-turn daemon
+    kill would leave its open turn pinning the dot forever.
+    """
+    tracker = build_tracker(harness)
+    tracker.observe(
+        [
+            _turn_started_marker(),
+            {
+                "type": "assistant_message",
+                "timestamp": "2026-07-28T00:00:01Z",
+                "tool_calls": [{"tool_call_id": "call-1", "tool_name": "Bash"}],
+            },
+        ]
+    )
+    live = tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+    assert live == ActivityState.TOOL_RUNNING
+    dead = tracker.derive(lifecycle_state="STOPPED", is_active_marker_present=False, process_started_at=None)
+    assert dead == ActivityState.IDLE
+
+
+def test_active_marker_declarations_match_what_mngr_writes() -> None:
+    """claude/pi keep the shared `active` marker their hooks/extension flip; codex declares
+    None (mngr_codex writes no marker -- the daemon is the turn authority)."""
+    assert build_tracker(HarnessType.CLAUDE).active_marker_filename == "active"
+    assert build_tracker(HarnessType.PI_CODING).active_marker_filename == "active"
+    assert build_tracker(HarnessType.CODEX).active_marker_filename is None

@@ -2729,7 +2729,10 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
         # caches alongside the marker watchers.
         with manager._lock:
             tracker = manager._activity_tracker_by_agent[agent_id]
-            assert tracker.derive(is_agent_running=True, process_started_at=None) == ActivityState.TOOL_RUNNING
+            assert (
+                tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+                == ActivityState.TOOL_RUNNING
+            )
             assert manager._activity_state_by_agent[agent_id] == ActivityState.TOOL_RUNNING
     finally:
         manager.stop()

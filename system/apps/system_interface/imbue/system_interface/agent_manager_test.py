@@ -1244,6 +1244,29 @@ def test_ensure_activity_tracking_seeds_idle_state_silently(
         agent_manager.stop()
 
 
+def test_waiting_lifecycle_trusts_the_active_marker(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The recompute's own wiring: the tracker-declared turn marker is statted and fed to
+    derive, so a WAITING agent with a live `active` marker reads THINKING (the observe
+    stream can miss a short turn; the marker flips promptly) and settles once it clears."""
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1", state="WAITING")
+    agent_manager._ensure_activity_tracking("agent-1")
+    agent_manager.update_session_events(
+        "agent-1", [{"type": "user_message", "timestamp": "2026-07-28T00:00:00Z", "content": "go"}]
+    )
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.IDLE
+
+    (state_dir / "active").touch()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.THINKING
+
+    (state_dir / "active").unlink()
+    agent_manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+    assert agent_manager._activity_state_by_agent.get("agent-1") == ActivityState.IDLE
+
+
+
 def test_session_events_user_message_drives_thinking(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

@@ -28,8 +28,8 @@ from typing import Any
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 from imbue.system_interface.harnesses.events import DisplayKind
+from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
 
 # The reserved latchkey host an agent POSTs to when asking the user to approve an action.
 # Deliberately short enough to survive even a truncated input preview.

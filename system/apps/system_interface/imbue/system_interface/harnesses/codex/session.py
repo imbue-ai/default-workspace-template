@@ -193,10 +193,18 @@ class CodexHarnessSession(AgentHarnessSession):
         """One native ``turn/interrupt`` on the running turn, then an authoritative per-id
         settle: every non-committed owned message returns to the composer in send order,
         while a message that committed before the interrupt stays Delivered (contract
-        Interrupt + A4). The restart/settle/chord capabilities go unused -- the daemon stays
-        up. With no live connection there is nothing running and nothing parked."""
+        Interrupt + A4). The restart/chord capabilities go unused -- the daemon stays up.
+        With no live connection there is nothing running and nothing parked. The dot is
+        settled via ``settle_activity`` like every other harness's stop: it normally
+        clears when the rollout's turn_aborted marker lands, but a daemon dying
+        mid-interrupt emits no marker, and without the settle the dot would stay lit
+        forever."""
         ledger = self._live_ledger()
-        return ledger.interrupt() if ledger is not None else ""
+        if ledger is None:
+            return ""
+        block = ledger.interrupt()
+        settle_activity()
+        return block
 
     # -- model options ----------------------------------------------------------------------
 

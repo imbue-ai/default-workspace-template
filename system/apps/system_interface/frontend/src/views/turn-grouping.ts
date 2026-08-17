@@ -448,12 +448,11 @@ export function buildSections(
       if (isNonBoundaryUserMessage(e)) {
         // Collapsed system chips -- Stop-hook feedback, browser-fleet nudges,
         // background task-notifications, the post-compaction summary -- fold into
-        // the current section as a chip rather than opening a new turn. A chip
-        // comes from an explicit detector OR the is_compact_summary flag (never
-        // from is_meta), so the flag is threaded through but is_meta is not.
-        // It goes into the skeleton so it both renders at its chronological spot
-        // and marks the turn end that ends a step's stint (see
-        // collectEjectedProse).
+        // the current section as a chip rather than opening a new turn. The
+        // backend's display decision says which is which; nothing is re-derived
+        // here. A chip goes into the skeleton so it both renders at its
+        // chronological spot and marks the turn end that ends a step's stint
+        // (see collectEjectedProse).
         if (isSystemChipUserMessage(e)) {
           // The compaction summary can be the FIRST event of a resumed session,
           // with no section open yet; open a pre-section so it is not dropped
@@ -461,8 +460,8 @@ export function buildSections(
           if (current === null) current = ensureSection(null, "section-pre");
           current.entries.push({ kind: "chip", event: e });
         }
-        // The other non-boundary messages -- skill expansions, /welcome, and any
-        // is_meta framework injection (image note, resume marker, ...) -- render
+        // The other non-boundary messages -- skill expansions and hidden
+        // framework injections (/welcome, image notes, resume markers) -- render
         // nowhere on the user rail, so they are dropped here.
         continue;
       }

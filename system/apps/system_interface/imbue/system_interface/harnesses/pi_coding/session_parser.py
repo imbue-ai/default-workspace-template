@@ -29,7 +29,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
 from imbue.system_interface.harnesses.message_display import classify_user_message
 from imbue.system_interface.harnesses.message_display import is_non_turn_tail
@@ -37,7 +36,6 @@ from imbue.system_interface.harnesses.pi_coding.tool_labels import keeps_full_to
 from imbue.system_interface.harnesses.pi_coding.tool_labels import tool_labels
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
 from imbue.system_interface.harnesses.tool_output import find_permission_request
-from imbue.system_interface.harnesses.tool_output import is_permission_request_call
 from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
 from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
