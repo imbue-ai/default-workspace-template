@@ -3,7 +3,7 @@
 // check-your-inbox page. Same bundle, same look as the auth pages.
 
 import m from "mithril";
-import { resetPassword, verifyEmailToken } from "./api";
+import { fetchIdentity, resetPassword, verifyEmailToken } from "./api";
 import {
   BTN_PRIMARY,
   CenteredCard,
@@ -158,6 +158,14 @@ export function ResetPasswordPage(): m.Component {
   };
 }
 
+// Only a local share-authorization path may be continued to: the value
+// arrives via a URL parameter, so anything else (a foreign host, another
+// path) is discarded rather than becoming an open redirect.
+function shareContinuePath(): string | null {
+  const next = new URLSearchParams(window.location.search).get("next") ?? "";
+  return next.startsWith("/share/authorize?") ? next : null;
+}
+
 type VerifyState = "pending" | "success" | "failure";
 
 /** The verify-email result page linked from verification emails (?token=...). */
@@ -166,6 +174,9 @@ export function VerifyEmailPage(): m.Component {
   const token = params.get("token") ?? "";
   // SuperTokens camel-cases tenantId in the links it emits.
   const tenantId = params.get("tenantId") ?? "";
+  // A share visitor's verification link carries the way back to the
+  // workspace they were opening (appended by the connector at send time).
+  const continuePath = shareContinuePath();
   let state: VerifyState = "pending";
 
   async function consume(): Promise<void> {
@@ -206,8 +217,26 @@ export function VerifyEmailPage(): m.Component {
           m(
             "p",
             { class: "type-body text-secondary" },
-            "You're all set. You can close this tab and return to what you were doing.",
+            continuePath !== null
+              ? "You're all set. Continue to the workspace that was shared with you."
+              : "You're all set. You can close this tab and return to what you were doing.",
           ),
+          continuePath !== null
+            ? m(
+                "div",
+                { class: "mt-4" },
+                m(
+                  "a",
+                  {
+                    id: "verify-continue-btn",
+                    class:
+                      BTN_PRIMARY + " inline-block text-center no-underline",
+                    href: continuePath,
+                  },
+                  "Continue to the shared workspace",
+                ),
+              )
+            : null,
         );
       }
       return CenteredCard(
@@ -227,9 +256,55 @@ export function VerifyEmailPage(): m.Component {
   };
 }
 
-/** The share flow's check-your-inbox page: an unverified visitor was just sent a verification link. */
+const CHECK_INBOX_POLL_MS = 3000;
+
+/** The share flow's check-your-inbox page: an unverified visitor was just sent a verification link.
+ *
+ * When the URL carries the share-authorization continue path, the page polls
+ * the session's verification state and routes the visitor onward the moment
+ * the link is clicked (in this tab or any other), plus offers a manual
+ * continue button as the fallback.
+ */
 export function CheckInboxPage(): m.Component {
+  const continuePath = shareContinuePath();
+  let pollTimer: number | null = null;
+  // Also guards the in-flight poll: onremove can only clear a SCHEDULED
+  // timer, so a poll awaiting fetchIdentity when the page is removed must
+  // see this flag instead of rescheduling itself forever.
+  let isDisposed = false;
+
+  async function pollUntilVerified(): Promise<void> {
+    pollTimer = null;
+    if (continuePath === null || isDisposed) return;
+    try {
+      const identity = await fetchIdentity();
+      if (identity.signed_in && identity.email_verified === true) {
+        window.location.assign(continuePath);
+        return;
+      }
+    } catch {
+      // A transient failure just means we poll again.
+    }
+    if (isDisposed) return;
+    pollTimer = window.setTimeout(
+      () => void pollUntilVerified(),
+      CHECK_INBOX_POLL_MS,
+    );
+  }
+
   return {
+    oninit() {
+      if (continuePath !== null) {
+        pollTimer = window.setTimeout(
+          () => void pollUntilVerified(),
+          CHECK_INBOX_POLL_MS,
+        );
+      }
+    },
+    onremove() {
+      isDisposed = true;
+      if (pollTimer !== null) window.clearTimeout(pollTimer);
+    },
     view() {
       return CenteredCard(
         wordmarkHeader(),
@@ -238,8 +313,26 @@ export function CheckInboxPage(): m.Component {
           "p",
           { class: "type-body text-secondary" },
           "Opening a workspace that was shared with you requires a verified email. " +
-            "We sent a verification link to your address -- click it, then reload the shared workspace link you were given.",
+            "We sent a verification link to your address -- click it" +
+            (continuePath !== null
+              ? ", and this page will take you to the shared workspace automatically."
+              : ", then reload the shared workspace link you were given."),
         ),
+        continuePath !== null
+          ? m(
+              "div",
+              { class: "mt-4" },
+              m(
+                "a",
+                {
+                  id: "check-inbox-continue-btn",
+                  class: LINK_CLASS + " type-body",
+                  href: continuePath,
+                },
+                "I've clicked the link -- continue to the workspace",
+              ),
+            )
+          : null,
       );
     },
   };

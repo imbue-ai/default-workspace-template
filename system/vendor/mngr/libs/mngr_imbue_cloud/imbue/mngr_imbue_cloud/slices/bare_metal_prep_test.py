@@ -1,3 +1,6 @@
+import subprocess
+from pathlib import Path
+
 from imbue.mngr_imbue_cloud.slices.bare_metal_prep import build_box_prep_script
 from imbue.mngr_vps.host_setup import PINNED_DOCKER_APT_VERSION
 
@@ -102,6 +105,58 @@ def test_prep_script_provisions_swapfile() -> None:
     assert "/swapfile none swap sw 0 0" in script
 
 
+def test_prep_script_retires_per_disk_swap_partitions() -> None:
+    # The OS-install per-disk swap partitions sit OUTSIDE the md RAID mirrors, so a
+    # single disk death loses their swapped-out pages and slowly SIGBUS-kills every
+    # process on the box (the 2026-08-07 production nvme incident). Prep must turn
+    # them off, drop them from fstab (keeping the mirrored swapfile's own line),
+    # and wipe their swap signatures so nothing re-activates them at boot.
+    script = _script()
+    assert 'swapoff "$swap_partition"' in script
+    assert 'awk \'!($3 == "swap" && $1 != "/swapfile")\' /etc/fstab' in script
+    assert 'wipefs -a "$swap_partition"' in script
+    # The partition swapoff loop only ever targets block devices, never the
+    # swapfile it just enabled.
+    assert "grep '^/dev/'" in script
+
+
+def test_prep_script_fstab_filter_drops_partition_swap_and_keeps_everything_else(tmp_path: Path) -> None:
+    # Execute the script's own fstab-filtering awk (extracted verbatim, not
+    # re-typed) against a realistic OVH fstab: the two UUID swap-partition lines
+    # must go, while the root/boot mounts, comments, and the mirrored swapfile
+    # line all survive byte-for-byte.
+    script = _script()
+    awk_line = next(line for line in script.splitlines() if line.startswith("awk "))
+    awk_command = awk_line.split(" /etc/fstab")[0]
+    fstab = tmp_path / "fstab"
+    kept_lines = [
+        "# /etc/fstab: static file system information.",
+        "UUID=aaaa-root\t/\text4\terrors=remount-ro\t0\t1",
+        "UUID=bbbb-boot\t/boot\text4\tdefaults\t0\t2",
+        "/swapfile none swap sw 0 0",
+    ]
+    dropped_lines = [
+        "UUID=cccc-swap0\tswap\tswap\tdefaults\t0\t0",
+        "UUID=dddd-swap1\tswap\tswap\tdefaults\t0\t0",
+    ]
+    fstab.write_text("\n".join(kept_lines[:3] + dropped_lines + kept_lines[3:]) + "\n")
+    result = subprocess.run(
+        ["bash", "-c", f"{awk_command} {fstab}"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "\n".join(kept_lines) + "\n"
+
+
+def test_prep_script_retires_swap_partitions_after_enabling_the_swapfile() -> None:
+    # Order matters: the mirrored swapfile must be active before the partitions
+    # are swapped off, so their in-use pages migrate somewhere durable instead of
+    # competing for RAM on a box running near capacity.
+    script = _script()
+    assert script.index("swapon /swapfile") < script.index('swapoff "$swap_partition"')
+
+
 def test_prep_script_pins_unattended_upgrades_to_never_auto_reboot() -> None:
     # Slice boxes host user workspaces; an unattended-upgrades auto-reboot would
     # take every slice on the box down unannounced (and nothing restarts them).
@@ -182,3 +237,19 @@ def test_prep_script_customizes_before_atomic_publish() -> None:
     assert customize_idx < publish_idx
     # The finished image is chowned to the lima user that limactl reads it as.
     assert 'chown limahost:limahost "$img.tmp"' in script
+
+
+def test_box_prep_installs_transfer_tooling_and_skips_stop_marked_vms() -> None:
+    script = build_box_prep_script(
+        lima_service_user="limahost",
+        lima_version="2.2.0",
+        pool_public_key="ssh-ed25519 AAAA poolkey",
+        slice_base_image_url="https://example.com/debian.qcow2",
+    )
+    # age + s5cmd land in /usr/local/bin, version-marker-guarded like limactl.
+    assert "/usr/local/bin/age" in script
+    assert "/usr/local/bin/age-keygen" in script
+    assert "/usr/local/bin/s5cmd" in script
+    assert ".mngr-installed-transfer-tools" in script
+    # The boot autostart must never resurrect a VM a workspace stop halted.
+    assert "mngr-stop-requested" in script

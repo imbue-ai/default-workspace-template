@@ -35,9 +35,11 @@ from pydantic import Field
 from pydantic import field_validator
 
 import imbue.remote_service_connector.accounts_web as accounts_web_module
+import imbue.remote_service_connector.relays as relays_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.errors import InvalidShareCoordinateError
 from imbue.remote_service_connector.errors import MissingShareConfigError
+from imbue.remote_service_connector.errors import NoActiveRelaysError
 from imbue.remote_service_connector.errors import ShareNotFoundError
 from imbue.remote_service_connector.errors import ShareQuotaExceededError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
@@ -66,12 +68,18 @@ _FRPS_NEW_PROXY_OP = "NewProxy"
 _FRPS_RELAY_TOKEN_META_KEY = "relay_token"
 
 # OVH datacenter code prefix -> region code. us1 is west (Hillsboro), us2 is
-# east (Vint Hill). A datacenter that maps to a region with no configured relay
-# endpoint (and any unknown datacenter) falls back to SHARE_DEFAULT_REGION.
+# east (Vint Hill). A datacenter that maps to a region with no active relay
+# (and any unknown datacenter) falls back to a deterministic spread over the
+# share-eligible regions (see relays.pick_fallback_region).
 _SHARE_DATACENTER_REGION_PREFIXES: tuple[tuple[str, str], ...] = (
     ("US-WEST", "us1"),
     ("US-EAST", "us2"),
 )
+
+# How often the in-workspace share gateway re-polls GET /shares/assignment.
+# Server-controlled so fleet-change convergence can be tuned without touching
+# workspaces.
+ASSIGNMENT_POLL_SECONDS = 60
 
 
 class ShareCoordinate(BaseModel):
@@ -165,45 +173,63 @@ def share_content_domain() -> str:
     return require_share_env("SHARE_CONTENT_DOMAIN")
 
 
-def parse_relay_endpoint_map(raw: str) -> dict[str, str]:
-    """Parse ``SHARE_RELAY_ENDPOINTS`` (``us1=relay-us1.example.com:7000,us2=...``) into region -> endpoint."""
-    endpoint_by_region: dict[str, str] = {}
-    for entry in raw.split(","):
-        stripped_entry = entry.strip()
-        if not stripped_entry:
-            continue
-        region, separator, endpoint = stripped_entry.partition("=")
-        if not separator or not region.strip() or not endpoint.strip():
-            raise MissingShareConfigError(f"SHARE_RELAY_ENDPOINTS (malformed entry {stripped_entry!r})")
-        endpoint_by_region[region.strip()] = endpoint.strip()
-    if not endpoint_by_region:
-        raise MissingShareConfigError("SHARE_RELAY_ENDPOINTS")
-    return endpoint_by_region
-
-
-def share_relay_endpoint_map() -> dict[str, str]:
-    """Region code -> relay tunnel-control endpoint (``host:port`` the workspace's frpc dials)."""
-    return parse_relay_endpoint_map(require_share_env("SHARE_RELAY_ENDPOINTS"))
-
-
-def resolve_share_region(datacenter: str | None) -> str:
-    """Pick the region code for a share: the host's datacenter's region when a relay exists there, else the default.
+def resolve_share_region(datacenter: str | None, eligible_regions: list[str], host_id: str) -> str:
+    """Pick the region code for a fresh share: the host's datacenter's region when a relay serves it, else spread.
 
     ``datacenter`` is the pool host's OVH DC code (e.g. ``US-EAST-VA``), or None
-    for hosts the connector has no record of (local workspaces). Dev tiers
-    configure a single region (the dev env's suffix), so every share lands there
-    regardless of datacenter.
+    for hosts the connector has no record of (local workspaces). Latency-unknown
+    shares fall back to a deterministic hash-of-host-id spread over the
+    share-eligible regions (single-region dev tiers degenerate to that region).
     """
-    endpoint_by_region = share_relay_endpoint_map()
-    default_region = require_share_env("SHARE_DEFAULT_REGION")
+    if not eligible_regions:
+        raise NoActiveRelaysError(None)
     if datacenter:
         datacenter_upper = datacenter.upper()
         for prefix, region in _SHARE_DATACENTER_REGION_PREFIXES:
-            if datacenter_upper.startswith(prefix) and region in endpoint_by_region:
+            if datacenter_upper.startswith(prefix) and region in eligible_regions:
                 return region
-    if default_region not in endpoint_by_region:
-        raise MissingShareConfigError(f"SHARE_RELAY_ENDPOINTS (missing default region {default_region!r})")
-    return default_region
+    return relays_module.pick_fallback_region(host_id, eligible_regions)
+
+
+def resolve_share_region_for_share(
+    existing_region: str | None,
+    datacenter: str | None,
+    preferred_region: str | None,
+    eligible_regions: list[str],
+    host_id: str,
+) -> str:
+    """Pick the region for one share bring-up, sticky on the share's existing row.
+
+    The region is baked into the workspace domain (DNS, PSL boundary, cert
+    SANs, session cookies), so a re-share must never silently move it: an
+    existing row's region wins as long as a relay still serves it. A fresh
+    share prefers the host's datacenter mapping (pool hosts); a host the
+    connector has no datacenter record of (a local workspace) may instead be
+    steered by the caller's ``preferred_region`` -- the desktop measures its
+    own latency to each relay, which is the best proximity signal available
+    for a workspace running on the user's machine. Unknown preferred regions
+    are ignored (not errors), so a stale client never breaks on fleet changes.
+    """
+    if not eligible_regions:
+        raise NoActiveRelaysError(None)
+    if existing_region is not None and existing_region in eligible_regions:
+        return existing_region
+    if datacenter is None and preferred_region is not None and preferred_region in eligible_regions:
+        return preferred_region
+    return resolve_share_region(datacenter, eligible_regions, host_id)
+
+
+def active_relay_rows() -> list[dict[str, Any]]:
+    """Every active relay row, from the relays table (the fleet's source of truth)."""
+    return [row for row in relays_module.get_relay_store().list_relays() if row["is_active"]]
+
+
+def relay_endpoints_for_share_region(relay_rows: list[dict[str, Any]], region: str) -> list[dict[str, str]]:
+    """The relay endpoint entries a share in ``region`` tunnels to; raises when the region has none."""
+    entries = relays_module.relay_endpoints_for_region(relay_rows, region)
+    if not entries:
+        raise NoActiveRelaysError(region)
+    return entries
 
 
 class FrpsAuthDecision(BaseModel):
@@ -321,6 +347,7 @@ class ShareStore(Protocol):
     def activate_share_and_rotate_token(
         self, coordinate: ShareCoordinate, max_active_shares: int, token_hash: str, entry_label: str | None
     ) -> None: ...
+    def update_share_entry_label(self, host_id: str, user_label: str, entry_label: str) -> None: ...
     def deactivate_share(self, host_id: str, user_label: str) -> None: ...
     def delete_relay_tokens(self, host_id: str, user_label: str) -> None: ...
     def find_share_by_token_hash(self, token_hash: str) -> dict[str, Any] | None: ...
@@ -420,6 +447,18 @@ class PostgresShareStore:
                     cur.execute(
                         "INSERT INTO relay_tokens (token_hash, host_id, user_id) VALUES (%s, %s, %s)",
                         (token_hash, coordinate.host_id, coordinate.user_label),
+                    )
+        finally:
+            conn.close()
+
+    def update_share_entry_label(self, host_id: str, user_label: str, entry_label: str) -> None:
+        conn = db.get_pool_db_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE shares SET entry_label = %s, updated_at = NOW() WHERE host_id = %s AND user_id = %s",
+                        (entry_label, host_id, user_label),
                     )
         finally:
             conn.close()
@@ -582,6 +621,24 @@ def _require_share_user(request: Request) -> str:
     return accounts_web_module.resolve_web_user_identity(request)[1]
 
 
+def require_active_share_by_relay_token(request: Request) -> dict[str, Any]:
+    """Authenticate a workspace-side endpoint by its share's relay token (Bearer) and return the share row.
+
+    The relay token is the credential the workspace holds (delivered in
+    share.env); both the cert-issuance endpoint and the gateway assignment
+    endpoint authenticate with it. Raises 401 on a missing bearer header or a
+    token that does not resolve to an active share.
+    """
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer credentials")
+    relay_token = auth_header[7:]
+    share = get_share_store().find_share_by_token_hash(hash_relay_token(relay_token))
+    if share is None or share["state"] != "active":
+        raise HTTPException(status_code=401, detail="Unknown or inactive relay token")
+    return share
+
+
 def _require_frps_plugin_secret(provided: str) -> None:
     """Authenticate an frps server-plugin callback against the fixed shared secret.
 
@@ -607,14 +664,35 @@ def normalize_entry_label(value: str) -> str | None:
     """The normalized (stripped, lowercased) entry label, or None when it is not a single origin label.
 
     The shape rule for every entry-label source: client-supplied share creates
-    and the connector's own apps.toml reads. The label is interpolated into
-    ``https://<label>.<workspace domain>/`` URLs by the hosted chrome, so
-    anything beyond one hostname label must be refused.
+    and the labels recorded from frps ``NewProxy`` claims. The label is
+    interpolated into ``https://<label>.<workspace domain>/`` URLs by the
+    hosted chrome, so anything beyond one hostname label must be refused.
     """
     stripped = value.strip().lower()
     if not _ENTRY_LABEL_RE.match(stripped):
         return None
     return stripped
+
+
+# The workspace shell service, whose origin label is the hosted chrome's entry
+# point into a share. frpc's NewProxy claims carry the workspace's own service
+# labels, so an allowed claim is where the connector learns the entry label --
+# with no access into the workspace. The bare name (no ``-<rand>`` suffix)
+# covers legacy labels that predate the random-suffix scheme.
+_ENTRY_SERVICE_LABEL_NAME = "system_interface"
+
+
+def entry_label_from_claimed_domains(workspace_domain: str, claimed_custom_domains: list[str]) -> str | None:
+    """The shell service's origin label among a NewProxy claim's custom domains, or None."""
+    suffix = "." + workspace_domain.lower()
+    for claimed in claimed_custom_domains:
+        normalized_claim = claimed.strip().lower()
+        if not normalized_claim.endswith(suffix):
+            continue
+        label = normalized_claim[: -len(suffix)]
+        if label == _ENTRY_SERVICE_LABEL_NAME or label.startswith(_ENTRY_SERVICE_LABEL_NAME + "-"):
+            return normalize_entry_label(label)
+    return None
 
 
 class CreateShareRequest(BaseModel):
@@ -629,6 +707,16 @@ class CreateShareRequest(BaseModel):
         ),
     )
 
+    preferred_region: str | None = Field(
+        default=None,
+        description=(
+            "Preferred relay region code (e.g. us1). Honored only for hosts the connector has no "
+            "datacenter record of (local workspaces) and only when a relay serves that region; a "
+            "re-share always keeps the share's existing region. Clients typically pick this by "
+            "measuring their own latency to each relay from GET /shares/relays."
+        ),
+    )
+
     @field_validator("entry_label")
     @classmethod
     def _validate_entry_label(cls, value: str | None) -> str | None:
@@ -638,6 +726,16 @@ class CreateShareRequest(BaseModel):
         if normalized is None:
             raise InvalidShareCoordinateError(f"entry_label must be a single origin label, got {value!r}")
         return normalized
+
+    @field_validator("preferred_region")
+    @classmethod
+    def _validate_preferred_region(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip().lower()
+        if _SHARE_DNS_LABEL_RE.match(stripped) is None:
+            raise InvalidShareCoordinateError(f"preferred_region must be a DNS label, got {value!r}")
+        return stripped
 
 
 class FrpsAuthRequest(BaseModel):
@@ -660,14 +758,22 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
         user_id = _require_share_user(request)
         user_label = derive_share_user_label(user_id)
         store = get_share_store()
-        datacenter = store.get_pool_host_datacenter(body.host_id)
-        region = resolve_share_region(datacenter)
+        relay_rows = active_relay_rows()
+        existing_share = store.get_share(body.host_id, user_label)
+        region = resolve_share_region_for_share(
+            existing_region=str(existing_share["region"]) if existing_share is not None else None,
+            datacenter=store.get_pool_host_datacenter(body.host_id),
+            preferred_region=body.preferred_region,
+            eligible_regions=relays_module.eligible_regions(relay_rows),
+            host_id=body.host_id,
+        )
         coordinate = make_share_coordinate(
             host_id=body.host_id,
             user_label=user_label,
             region=region,
             content_domain=share_content_domain(),
         )
+        relay_endpoints = relay_endpoints_for_share_region(relay_rows, region)
         relay_token = generate_relay_token()
         store.activate_share_and_rotate_token(
             coordinate, DEFAULT_MAX_SHARED_WORKSPACES_PER_USER, hash_relay_token(relay_token), body.entry_label
@@ -676,8 +782,48 @@ def create_share(request: Request, body: CreateShareRequest) -> dict[str, object
             "host_id": coordinate.host_id,
             "workspace_domain": coordinate.workspace_domain,
             "region": region,
-            "relay_endpoint": share_relay_endpoint_map()[region],
+            "relay_endpoints": relay_endpoints,
             "relay_token": relay_token,
+        }
+
+
+@router.get("/shares/relays")
+def list_share_relays(request: Request) -> dict[str, object]:
+    """The region -> relay tunnel-control endpoints map (every active relay per region).
+
+    Lets clients pick a ``preferred_region`` for a local workspace's share by
+    measuring their own latency to each relay's tunnel-control endpoint
+    (scoring a region by its best endpoint).
+    """
+    with handle_endpoint_errors():
+        _require_share_user(request)
+        relay_rows = active_relay_rows()
+        endpoints_by_region: dict[str, list[str]] = {}
+        for region in relays_module.eligible_regions(relay_rows):
+            endpoints_by_region[region] = [
+                entry["endpoint"] for entry in relays_module.relay_endpoints_for_region(relay_rows, region)
+            ]
+        return {"relays": endpoints_by_region}
+
+
+@router.get("/shares/assignment")
+def get_share_assignment(request: Request) -> dict[str, object]:
+    """The relay endpoint set this share's workspace should tunnel to right now.
+
+    Authenticated by the share's relay token (Bearer) -- the same credential
+    the workspace already holds for cert issuance. The in-workspace share
+    gateway calls this at stack start and re-polls every ``poll_seconds`` (and
+    on frpc failure), converging its frpc set on the answer; fleet changes
+    therefore never require touching workspaces. The response is cached on
+    disk in the workspace so a container restart works with the connector down.
+    """
+    with handle_endpoint_errors():
+        share = require_active_share_by_relay_token(request)
+        relay_endpoints = relay_endpoints_for_share_region(active_relay_rows(), str(share["region"]))
+        return {
+            "workspace_domain": share["workspace_domain"],
+            "relay_endpoints": relay_endpoints,
+            "poll_seconds": ASSIGNMENT_POLL_SECONDS,
         }
 
 
@@ -720,27 +866,33 @@ def get_share_status(request: Request, host_id: str) -> dict[str, object]:
         share = store.get_share(host_id, user_label)
         if share is None:
             raise ShareNotFoundError(host_id)
-        relay_endpoint = share_relay_endpoint_map().get(str(share["region"]))
+        # A region that lost all its relays reports an empty endpoint list here
+        # (status is a read; only share bring-up hard-fails on a relay-less region).
+        relay_endpoints = relays_module.relay_endpoints_for_region(active_relay_rows(), str(share["region"]))
         cert_not_after = store.get_latest_cert_not_after(str(share["workspace_domain"]))
+        relay_logins = relays_module.get_relay_store().list_share_relay_logins(host_id, user_label)
         return {
             "host_id": share["host_id"],
             "workspace_domain": share["workspace_domain"],
             "region": share["region"],
             "state": share["state"],
-            "relay_endpoint": relay_endpoint,
+            "relay_endpoints": relay_endpoints,
             "last_tunnel_login_at": share["last_tunnel_login_at"],
+            "relays": relay_logins,
             "cert_not_after": cert_not_after,
             "entry_label": share.get("entry_label"),
         }
 
 
-@router.post("/frps/auth/{plugin_secret}")
-def frps_auth(plugin_secret: str, body: FrpsAuthRequest) -> dict[str, object]:
-    """Authorize an frps server-plugin operation (``Login`` / ``NewProxy``) for a relay.
+@router.post("/frps/auth/{plugin_secret}/{relay_id}")
+def frps_auth(plugin_secret: str, relay_id: str, body: FrpsAuthRequest) -> dict[str, object]:
+    """Authorize an frps server-plugin operation (``Login`` / ``NewProxy``) for one relay.
 
     The relay's frps calls this for every workspace tunnel connect and hostname
     claim, authenticated by the shared secret embedded in its rendered plugin
-    URL path. The presented relay token must resolve to an active share, and a
+    URL path; the path's trailing relay id identifies WHICH relay is calling,
+    so tunnel logins are attributable per relay (the fleet-convergence signal).
+    The presented relay token must resolve to an active share, and a
     ``NewProxy`` may only claim single per-service labels directly under that
     share's own domain (see ``decide_frps_new_proxy``).
     Every operation must present a relay token resolving to an active share
@@ -751,6 +903,12 @@ def frps_auth(plugin_secret: str, body: FrpsAuthRequest) -> dict[str, object]:
     """
     with handle_endpoint_errors():
         _require_frps_plugin_secret(plugin_secret)
+        relay_row = next(
+            (row for row in active_relay_rows() if str(row["relay_id"]) == relay_id),
+            None,
+        )
+        if relay_row is None:
+            return _frps_reject(f"unknown or retired relay id {relay_id!r}").model_dump()
         relay_token = _extract_frps_relay_token(body.op, body.content)
         if relay_token is None:
             return _frps_reject("missing relay token").model_dump()
@@ -760,11 +918,19 @@ def frps_auth(plugin_secret: str, body: FrpsAuthRequest) -> dict[str, object]:
             return _frps_reject("unknown or inactive relay token").model_dump()
         if body.op == _FRPS_LOGIN_OP:
             store.record_tunnel_login(str(share["host_id"]), str(share["user_id"]))
+            relays_module.get_relay_store().record_relay_login(str(share["host_id"]), str(share["user_id"]), relay_id)
             return _frps_allow().model_dump()
         if body.op == _FRPS_NEW_PROXY_OP:
             claimed_domains = _extract_frps_custom_domains(body.content)
             claimed_subdomain = _extract_frps_subdomain(body.content)
-            return decide_frps_new_proxy(
-                str(share["workspace_domain"]), claimed_domains, claimed_subdomain
-            ).model_dump()
+            decision = decide_frps_new_proxy(str(share["workspace_domain"]), claimed_domains, claimed_subdomain)
+            # An allowed claim carries the workspace's own service labels, so
+            # this is where the connector learns the chrome's entry origin --
+            # without ever reaching into the workspace. Recorded on every
+            # claim so a re-registered shell label self-heals the share row.
+            if not decision.reject:
+                entry_label = entry_label_from_claimed_domains(str(share["workspace_domain"]), claimed_domains)
+                if entry_label is not None:
+                    store.update_share_entry_label(str(share["host_id"]), str(share["user_id"]), entry_label)
+            return decision.model_dump()
         return _frps_allow().model_dump()

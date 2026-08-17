@@ -59,10 +59,10 @@ from imbue.mngr.api.discovery_aggregator import DiscoveryStateAggregator
 from imbue.mngr.api.discovery_events import DiscoveryError
 from imbue.mngr.api.discovery_events import DiscoveryErrorEvent
 from imbue.mngr.api.discovery_events import DiscoveryEvent
+from imbue.mngr.api.discovery_events import DiscoverySchemaMismatchWarner
 from imbue.mngr.api.discovery_events import FullDiscoverySnapshotEvent
 from imbue.mngr.api.discovery_events import HostSSHInfoEvent
 from imbue.mngr.api.discovery_events import ProviderDiscoverySnapshotEvent
-from imbue.mngr.api.discovery_events import parse_discovery_event_line
 from imbue.mngr.api.discovery_log_suppression import DiscoveryErrorLogSuppressor
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import ProviderInstanceName
@@ -219,6 +219,12 @@ class EnvelopeStreamConsumer(MutableModel):
     # the same failure (e.g. missing credentials) logs once per process, not once
     # per poll cycle. Clean snapshots feed it to re-arm on recovery.
     _error_log_suppressor: DiscoveryErrorLogSuppressor = PrivateAttr(default_factory=DiscoveryErrorLogSuppressor)
+    # Deduplicates warnings for discovery payloads that do not match this
+    # version's schema (the forward envelope replays a shared log that other
+    # mngr versions also write).
+    _discovery_schema_warner: DiscoverySchemaMismatchWarner = PrivateAttr(
+        default_factory=lambda: DiscoverySchemaMismatchWarner(source_description="forward observe stream")
+    )
     # Collapses the provider errors dropped while the events-file backlog
     # replays: one snapshot per discovery cycle of downtime, each carrying a
     # wedged-provider error, logs as one counted line per distinct error once
@@ -453,7 +459,7 @@ class EnvelopeStreamConsumer(MutableModel):
         # Re-serialize to a single-line JSON so we can reuse mngr's parser.
         try:
             line = json.dumps(payload, separators=(",", ":"))
-            event = parse_discovery_event_line(line)
+            event = self._discovery_schema_warner.parse(line)
         except (ValueError, TypeError) as e:
             logger.warning("Could not parse observe payload: {}", e)
             return
@@ -594,19 +600,21 @@ class EnvelopeStreamConsumer(MutableModel):
         its host (populated by a prior ``HostSSHInfoEvent``, if any). A removed
         host's cached SSH info is forgotten so the map does not grow without bound.
         """
-        agent_by_id = self._aggregator.get_agent_by_id()
+        agent_by_instance = self._aggregator.get_agent_by_instance()
         for host_id_str in delta.removed_host_ids:
             with self._lock:
                 self._ssh_by_host_id.pop(host_id_str, None)
-        for agent_id_str in delta.removed_agent_ids:
-            agent_id = AgentId(agent_id_str)
+        for instance_key in delta.removed_agent_instances:
+            # minds' own mirrors stay keyed by the bare agent id (its workspace
+            # identity); the delta is instance-scoped, so extract the id here.
+            agent_id = instance_key.agent_id
             with self._lock:
-                self._services_by_agent.pop(agent_id_str, None)
-                self._labels_by_agent.pop(agent_id_str, None)
+                self._services_by_agent.pop(str(agent_id), None)
+                self._labels_by_agent.pop(str(agent_id), None)
             self.resolver.update_services(agent_id, {})
             self._fire_destroyed(agent_id)
-        for agent_id_str in delta.added_agent_ids:
-            agent = agent_by_id.get(agent_id_str)
+        for instance_key in delta.added_agent_instances:
+            agent = agent_by_instance.get(instance_key)
             if agent is None:
                 continue
             self._fire_discovered(agent.agent_id, self._ssh_for_host(str(agent.host_id)), str(agent.provider_name))
@@ -614,7 +622,11 @@ class EnvelopeStreamConsumer(MutableModel):
     def _record_host_ssh_info(self, event: HostSSHInfoEvent) -> None:
         """Store the SSH connection info carried by a HostSSHInfoEvent, keyed by host id."""
         ssh_info = RemoteSSHInfo(
-            user=event.ssh.user, host=event.ssh.host, port=event.ssh.port, key_path=event.ssh.key_path
+            user=event.ssh.user,
+            host=event.ssh.host,
+            port=event.ssh.port,
+            key_path=event.ssh.key_path,
+            known_hosts_path=event.ssh.known_hosts_path,
         )
         with self._lock:
             self._ssh_by_host_id[str(event.host_id)] = ssh_info
@@ -709,11 +721,25 @@ class EnvelopeStreamConsumer(MutableModel):
         for aid, services in services_by_agent.items():
             if not isinstance(aid, str) or not isinstance(services, dict):
                 continue
+            # The plugin keys its map by agent *instance* (``<agent_id>@<host_id>``;
+            # agent ids are only unique per host); minds' consumer view stays
+            # keyed by the bare agent id until its workspace-level duplicate
+            # policy lands, so normalize the key (tolerating the older bare-id
+            # form) and surface a collision instead of silently overwriting.
+            # CLEANUP: drop this bare-id normalization (consume the instance-keyed
+            # map directly) once minds' workspace-level duplicate policy lands --
+            # see specs/allow-duplicate-agent-ids.md, follow-up item 7.
+            bare_agent_id = aid.partition("@")[0]
             entry: dict[str, str] = {}
             for service_name, url in services.items():
                 if isinstance(service_name, str) and isinstance(url, str):
                     entry[service_name] = url
-            new_snapshot[aid] = entry
+            if bare_agent_id in new_snapshot:
+                logger.warning(
+                    "resolver_snapshot has service maps for agent {} on multiple hosts; keeping the last one",
+                    bare_agent_id,
+                )
+            new_snapshot[bare_agent_id] = entry
         with self._lock:
             self._resolver_snapshot_by_agent = new_snapshot
 

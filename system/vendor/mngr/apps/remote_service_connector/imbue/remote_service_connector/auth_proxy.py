@@ -14,6 +14,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 from typing import Final
+from urllib.parse import quote
 
 from fastapi import APIRouter
 from fastapi import HTTPException
@@ -25,6 +26,8 @@ from supertokens_python import SupertokensConfig
 from supertokens_python import init as supertokens_init
 from supertokens_python.async_to_sync_wrapper import sync as _supertokens_sync_run
 from supertokens_python.exceptions import GeneralError as SuperTokensGeneralError
+from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryConfig
+from supertokens_python.ingredients.emaildelivery.types import EmailDeliveryInterface
 from supertokens_python.recipe import emailpassword as st_emailpassword_recipe
 from supertokens_python.recipe import emailverification as st_emailverification_recipe
 from supertokens_python.recipe import session as st_session_recipe
@@ -63,7 +66,6 @@ from supertokens_python.recipe.thirdparty.provider import ProviderClientConfig
 from supertokens_python.recipe.thirdparty.provider import ProviderConfig
 from supertokens_python.recipe.thirdparty.provider import ProviderInput
 from supertokens_python.recipe.thirdparty.provider import RedirectUriInfo
-from supertokens_python.recipe.thirdparty.syncio import get_provider
 from supertokens_python.recipe.thirdparty.syncio import manually_create_or_update_user
 from supertokens_python.syncio import get_user
 from supertokens_python.syncio import list_users_by_account_info
@@ -75,6 +77,7 @@ import imbue.remote_service_connector.auth as auth_module
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.remote_service_connector.auth import require_admin_key
+from imbue.remote_service_connector.errors import EmailNotVerifiedError
 from imbue.remote_service_connector.errors import MissingAuthWebsiteDomainError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 
@@ -178,7 +181,8 @@ class SignInRequest(BaseModel):
 class AuthResponse(BaseModel):
     status: str = Field(
         description=(
-            "OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, ACCOUNT_EXISTS_WITH_OTHER_METHOD, FIELD_ERROR, or ERROR"
+            "OK, WRONG_CREDENTIALS, EMAIL_ALREADY_EXISTS, ACCOUNT_EXISTS_WITH_OTHER_METHOD, "
+            "SIGNUP_DISABLED, FIELD_ERROR, or ERROR"
         )
     )
     message: str | None = Field(default=None, description="Human-readable message for non-OK statuses")
@@ -187,6 +191,10 @@ class AuthResponse(BaseModel):
     needs_email_verification: bool = Field(
         default=False,
         description="True when the account's email has not yet been verified",
+    )
+    is_new_account: bool = Field(
+        default=False,
+        description="True when this OK response created the account (vs. signing in an existing one)",
     )
 
 
@@ -215,23 +223,6 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str = Field(description="Password reset token from email")
     new_password: str = Field(description="New password to set")
-
-
-class OAuthAuthorizeRequest(BaseModel):
-    provider_id: str = Field(description="Third-party provider ID (e.g. 'google', 'github')")
-    callback_url: str = Field(description="Callback URL registered with the provider")
-
-
-class OAuthAuthorizeResponse(BaseModel):
-    status: str = Field(description="OK or ERROR")
-    url: str | None = Field(default=None, description="URL to redirect the user to when status is OK")
-    message: str | None = Field(default=None, description="Error detail if status is not OK")
-
-
-class OAuthCallbackRequest(BaseModel):
-    provider_id: str = Field(description="Third-party provider ID")
-    callback_url: str = Field(description="Same callback URL used when starting the flow")
-    query_params: dict[str, str] = Field(description="Query params the provider sent back to the callback URL")
 
 
 class UserProviderInfo(BaseModel):
@@ -263,7 +254,70 @@ _verification_email_sent_at_monotonic_by_user_id: dict[str, float] = {}
 _verification_email_cooldown_lock = threading.Lock()
 
 
-def send_verification_email_with_cooldown(user_id: str, recipe_user_id: RecipeUserId, email: str) -> bool:
+# user_context key carrying a local continue path for the verification link:
+# the share flow's way to route a visitor back to the shared workspace after
+# they click the link. Consumed by the email-delivery override below.
+_VERIFICATION_EMAIL_NEXT_CONTEXT_KEY: Final[str] = "verification_email_next_path"
+
+
+def append_next_to_email_verify_link(email_verify_link: str, continue_next_path: str) -> str:
+    """Append a local continue path to a verification link's query string."""
+    separator = "&" if "?" in email_verify_link else "?"
+    return f"{email_verify_link}{separator}next={quote(continue_next_path, safe='')}"
+
+
+def continue_path_from_send_user_context(user_context: Mapping[str, Any]) -> str | None:
+    """The validated local continue path a verification send carries, or None.
+
+    Only root-relative paths are honored (``//host`` is scheme-relative and
+    would leave the accounts origin), so the emailed link can never route to
+    a foreign host.
+    """
+    value = user_context.get(_VERIFICATION_EMAIL_NEXT_CONTEXT_KEY)
+    if isinstance(value, str) and value.startswith("/") and not value.startswith("//"):
+        return value
+    return None
+
+
+class _ContinuePathEmailDelivery(EmailDeliveryInterface[Any]):
+    """Email delivery that carries the share flow's continue path into verification links.
+
+    Wraps the recipe's default delivery service: when a send's ``user_context``
+    holds a local next path (set only by the share broker's contextual send),
+    it is appended to the emailed link so the verify-email page can offer
+    "Continue to the shared workspace". Every other send passes through
+    untouched.
+    """
+
+    def __init__(self, original: EmailDeliveryInterface[Any]) -> None:
+        self._original = original
+
+    # Async because the SDK's EmailDeliveryInterface contract is async (like
+    # the ASGI middlewares above); nothing else in this module may be.
+    async def send_email(self, template_vars: Any, user_context: dict[str, Any]) -> None:
+        continue_next_path = continue_path_from_send_user_context(user_context)
+        if continue_next_path is not None and hasattr(template_vars, "email_verify_link"):
+            template_vars.email_verify_link = append_next_to_email_verify_link(
+                template_vars.email_verify_link, continue_next_path
+            )
+        await self._original.send_email(template_vars, user_context)
+
+
+def with_continue_path_in_verification_links(
+    original: EmailDeliveryInterface[Any],
+) -> EmailDeliveryInterface[Any]:
+    """The emailverification recipe's email-delivery override hook (see _ContinuePathEmailDelivery)."""
+    return _ContinuePathEmailDelivery(original)
+
+
+def send_verification_email_with_cooldown(
+    user_id: str,
+    recipe_user_id: RecipeUserId,
+    email: str,
+    # A local path the verification link should route the user back to after
+    # verifying (the share flow); None sends the plain link.
+    continue_next_path: str | None = None,
+) -> bool:
     """Send a verification email unless one went out to this user moments ago.
 
     Returns True when an email was sent, False when the cooldown suppressed it.
@@ -294,6 +348,7 @@ def send_verification_email_with_cooldown(user_id: str, recipe_user_id: RecipeUs
             user_id=user_id,
             recipe_user_id=recipe_user_id,
             email=email,
+            user_context=({_VERIFICATION_EMAIL_NEXT_CONTEXT_KEY: continue_next_path} if continue_next_path else None),
         )
         is_sent = True
     finally:
@@ -304,6 +359,67 @@ def send_verification_email_with_cooldown(user_id: str, recipe_user_id: RecipeUs
                 if _verification_email_sent_at_monotonic_by_user_id.get(user_id) == now:
                     del _verification_email_sent_at_monotonic_by_user_id[user_id]
     return is_sent
+
+
+def _send_verification_email_best_effort(user_id: str, email: str) -> bool:
+    """Send the verification email for the caller's own address; False when suppressed or failed.
+
+    Best-effort: the caller is already refusing the request with a "check your
+    inbox" message, so a failed send must not turn that structured refusal
+    into a 500 -- the user can trigger a resend explicitly.
+    """
+    try:
+        recipe_user_id = recipe_user_id_for_callers_email(user_id, email)
+        return send_verification_email_with_cooldown(
+            user_id=user_id,
+            recipe_user_id=recipe_user_id,
+            email=email,
+        )
+    except (HTTPException, SuperTokensSessionError, SuperTokensGeneralError) as exc:
+        logger.warning("Could not send the verification email for %s: %s", email, exc)
+        return False
+
+
+def require_verified_email_for_remote_workspace(user: auth_module.UserAuth, full_user_id: str) -> None:
+    """Refuse remote-workspace creation for an account whose email is unverified.
+
+    The refusal itself is the contextual trigger for the verification email:
+    the link is sent server-side here (under the per-user cooldown) so every
+    client -- CLI, desktop, web -- gets the send without its own wiring.
+    Raises the structured ``email_not_verified`` 403 whose message tells the
+    user to check their inbox and spam folder.
+    """
+    if user.is_email_verified:
+        return
+    if not user.email:
+        # No address on the account record (or the lookup failed): nothing
+        # was sent, so the message must not claim a delivery to check for.
+        raise EmailNotVerifiedError(
+            email=None,
+            is_verification_email_sent=False,
+            message=(
+                "Creating a remote workspace requires a verified email address, "
+                "but this account has no email address on file, so no verification email could be sent."
+            ),
+        )
+    is_sent = _send_verification_email_best_effort(full_user_id, user.email)
+    # The not-sent clause hedges deliberately: False covers both a
+    # cooldown-suppressed send (a mail really did go out recently) and a
+    # failed send (nothing went out), and the prose must not assert a
+    # delivery that may not exist.
+    delivery_clause = (
+        f"We just emailed a verification link to {user.email}"
+        if is_sent
+        else f"A verification link may already have been emailed to {user.email}"
+    )
+    raise EmailNotVerifiedError(
+        email=user.email,
+        is_verification_email_sent=is_sent,
+        message=(
+            f"Creating a remote workspace requires a verified email address. {delivery_clause} -- "
+            "check your inbox (and your spam folder), click the link, then retry."
+        ),
+    )
 
 
 def _mark_email_verified(recipe_user_id: RecipeUserId, email: str) -> None:
@@ -325,6 +441,24 @@ def _mark_email_verified(recipe_user_id: RecipeUserId, email: str) -> None:
 def require_supertokens_configured() -> None:
     if not os.environ.get("SUPERTOKENS_CONNECTION_URI"):
         raise HTTPException(status_code=503, detail="SuperTokens not configured on the server")
+
+
+# Tiers where the headless JSON signup is disabled: account creation there
+# must go through the browser accounts surface (which carries the Turnstile
+# bot gate). Matched exactly -- every other MNGR_DEPLOY_ENV value is a dev/ci
+# env, where headless signup stays available because it makes testing easy.
+# Note ``read_deploy_env`` defaults to "production" when the env var is unset
+# (a bare ``modal deploy``), so an unconfigured deploy fails closed.
+_SIGNUP_RESTRICTED_TIERS: Final[frozenset[str]] = frozenset({"production", "staging"})
+
+# Status returned when the JSON signup endpoint refuses to create accounts on
+# this tier. Typed clients surface the accompanying message directly.
+SIGNUP_DISABLED_STATUS: Final[str] = "SIGNUP_DISABLED"
+
+
+def is_json_signup_disabled() -> bool:
+    """Whether this tier refuses account creation via the JSON API (see _SIGNUP_RESTRICTED_TIERS)."""
+    return read_deploy_env() in _SIGNUP_RESTRICTED_TIERS
 
 
 # Status returned when a signup is refused because the email already has an
@@ -428,12 +562,13 @@ def signup_field_rejection(email: str, password: str) -> AuthResponse | None:
 def auth_signup(body: SignUpRequest) -> AuthResponse:
     """Create a new email/password account and return a session + user info.
 
-    Deprecated: the browser-based accounts surface (`/accounts/*`, consumed via
-    ``mngr imbue_cloud auth login``) is the primary signup path. This JSON
-    endpoint remains for released desktop clients and the headless CLI
-    (``mngr imbue_cloud auth signup``); once every client ships the browser
-    flow it will be restricted to dev/CI tiers. See the README's
-    "Deprecated JSON auth endpoints" section.
+    Deprecated, and disabled on production/staging: account creation on those
+    tiers goes through the browser accounts surface (`/accounts/*`, consumed
+    via ``mngr imbue_cloud auth login``), whose signup form carries the
+    Turnstile bot gate. Dev/CI tiers keep this headless endpoint because it
+    makes testing easy; ``POST /admin/test-signup`` (admin-key authenticated)
+    covers automated tests everywhere. See the README's "Deprecated JSON auth
+    endpoints" section.
 
     Email verification is non-blocking: no verification email is sent at
     signup (the first verification-gated action triggers a contextual send),
@@ -445,6 +580,15 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
     default 500 body that its typed client cannot parse.
     """
     with handle_endpoint_errors():
+        if is_json_signup_disabled():
+            return AuthResponse(
+                status=SIGNUP_DISABLED_STATUS,
+                message=(
+                    "Account creation via this API is disabled on this server. "
+                    "Create your account in the browser instead: run `mngr imbue_cloud auth login` "
+                    "(or open the /signup page on the accounts site). Existing accounts can still sign in."
+                ),
+            )
         require_supertokens_configured()
         email = body.email.strip()
         if not email or not body.password:
@@ -483,6 +627,8 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
             user=AuthUser(user_id=user.id, email=email),
             tokens=tokens,
             needs_email_verification=False,
+            # A successful signup by definition just created the account.
+            is_new_account=True,
         )
 
 
@@ -651,6 +797,8 @@ def admin_test_signup(request: Request, body: TestSignupRequest) -> AuthResponse
             user=AuthUser(user_id=user.id, email=email),
             tokens=tokens,
             needs_email_verification=not body.verified,
+            # A successful signup by definition just created the account.
+            is_new_account=True,
         )
 
 
@@ -764,54 +912,30 @@ def auth_reset_password(body: ResetPasswordRequest) -> dict[str, str]:
         return {"status": "OK", "message": "Password has been reset"}
 
 
-@router.post("/auth/oauth/authorize", response_model=OAuthAuthorizeResponse)
-def auth_oauth_authorize(body: OAuthAuthorizeRequest) -> OAuthAuthorizeResponse:
-    """Return the URL to which the user should be redirected to begin OAuth."""
-    with handle_endpoint_errors():
-        require_supertokens_configured()
-        provider = get_provider(tenant_id=AUTH_TENANT_ID, third_party_id=body.provider_id)
-        if provider is None:
-            return OAuthAuthorizeResponse(status="ERROR", message=f"Unknown provider: {body.provider_id}")
-        # ``Provider.get_authorisation_redirect_url`` is async-only on the
-        # SuperTokens SDK (the ``syncio`` module exposes a sync ``get_provider``
-        # but the Provider object's methods are coroutines). We're inside a
-        # sync def endpoint that FastAPI runs in a threadpool worker -- the
-        # worker has no running event loop, so the SDK's own async-to-sync
-        # wrapper can spin up a fresh loop safely. Same pattern SuperTokens'
-        # own ``syncio`` helpers use internally.
-        redirect = _supertokens_sync_run(
-            provider.get_authorisation_redirect_url(
-                redirect_uri_on_provider_dashboard=body.callback_url,
-                user_context={},
-            )
-        )
-        return OAuthAuthorizeResponse(status="OK", url=redirect.url_with_query_params)
-
-
 def complete_oauth_code_exchange(
     provider: Provider,
     provider_id: str,
     callback_url: str,
     query_params: Mapping[str, str],
-    *,
-    is_bearer_session_minted: bool = True,
 ) -> AuthResponse:
-    """Exchange a provider callback's params for a SuperTokens session.
+    """Exchange a provider callback's params for a SuperTokens account.
 
-    Shared by the desktop CLI's ``/auth/oauth/callback`` and the accounts
-    surface's browser callback, so the one-account-per-email guard, the
-    account create/update, and the error shapes cannot drift between the two
-    flows. The browser callback passes ``is_bearer_session_minted=False``: it
-    creates its own cookie session on the response, so minting bearer tokens
-    here would leave an orphaned session in the core that nothing ever
-    delivers or revokes.
+    Called by the accounts surface's browser OAuth callback (the only OAuth
+    flow, so this function's sole caller). No bearer session is
+    minted here -- the browser callback creates its own cookie session on the
+    response, and a bearer session minted alongside it would be orphaned in
+    the core (nothing would ever deliver or revoke it). Lives in this module
+    (not accounts_web) because it shares the one-account-per-email guard and
+    ``AuthResponse`` error shapes with the password flows.
     """
     try:
         # ``Provider.exchange_auth_code_for_oauth_tokens`` and
         # ``Provider.get_user_info`` are async-only on the SuperTokens SDK
-        # (see ``auth_oauth_authorize`` for the rationale). FastAPI runs
-        # these sync endpoints in threadpool workers with no running event
-        # loop, so the SDK's async-to-sync wrapper is safe here.
+        # (the ``syncio`` module exposes sync provider lookups but the
+        # Provider object's methods are coroutines). FastAPI runs these sync
+        # endpoints in threadpool workers with no running event loop, so the
+        # SDK's own async-to-sync wrapper can spin up a fresh loop safely --
+        # the same pattern SuperTokens' own ``syncio`` helpers use internally.
         oauth_tokens = _supertokens_sync_run(
             provider.exchange_auth_code_for_oauth_tokens(
                 redirect_uri_info=RedirectUriInfo(
@@ -871,29 +995,16 @@ def complete_oauth_code_exchange(
         raw = oauth_user.raw_user_info_from_provider.from_user_info_api
         display_name = raw.get("name") or raw.get("login") or raw.get("displayName")
 
-    tokens = build_session_tokens(result.user.id) if is_bearer_session_minted else None
     return AuthResponse(
         status="OK",
         user=AuthUser(user_id=result.user.id, email=email, display_name=display_name),
-        tokens=tokens,
+        tokens=None,
         needs_email_verification=not oauth_user.email.is_verified,
+        # The one-account-per-email guard above runs before any user is
+        # written, so a new recipe user here is reliably a brand-new account
+        # (this is what gates attribution capture in the browser callback).
+        is_new_account=result.created_new_recipe_user,
     )
-
-
-@router.post("/auth/oauth/callback", response_model=AuthResponse)
-def auth_oauth_callback(body: OAuthCallbackRequest) -> AuthResponse:
-    """Exchange an OAuth callback's query params for a supertokens session."""
-    with handle_endpoint_errors():
-        require_supertokens_configured()
-        provider = get_provider(tenant_id=AUTH_TENANT_ID, third_party_id=body.provider_id)
-        if provider is None:
-            return AuthResponse(status="ERROR", message=f"Unknown provider: {body.provider_id}")
-        return complete_oauth_code_exchange(
-            provider=provider,
-            provider_id=body.provider_id,
-            callback_url=body.callback_url,
-            query_params=body.query_params,
-        )
 
 
 @router.get("/auth/users/{user_id}", response_model=UserProviderInfo)
@@ -1105,6 +1216,9 @@ def init_supertokens() -> None:
             st_emailverification_recipe.init(
                 mode="OPTIONAL",
                 override=st_emailverification_recipe.InputOverrideConfig(apis=disable_emailverification_default_apis),
+                # Carries the share flow's continue path into verification
+                # links (see with_continue_path_in_verification_links).
+                email_delivery=EmailDeliveryConfig(override=with_continue_path_in_verification_links),
             ),
         ],
         mode="asgi",

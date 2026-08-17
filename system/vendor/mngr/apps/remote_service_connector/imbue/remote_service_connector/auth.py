@@ -65,7 +65,7 @@ def require_verified_email(user: UserAuth) -> None:
     ``email_not_verified`` 403 so clients can prompt verification contextually.
     """
     if not user.is_email_verified:
-        raise EmailNotVerifiedError(user.email)
+        raise EmailNotVerifiedError(email=user.email, is_verification_email_sent=None, message=None)
 
 
 _USER_ID_PREFIX_LENGTH = 16

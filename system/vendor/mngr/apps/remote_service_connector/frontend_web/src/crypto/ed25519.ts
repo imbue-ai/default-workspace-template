@@ -8,7 +8,7 @@
 // encrypted sync record so the desktop can materialize it for plain SSH.
 
 import * as ed from "@noble/ed25519";
-import { bytesToBase64, randomBytes } from "./secretbox";
+import { base64ToBytes, bytesToBase64, randomBytes } from "./secretbox";
 
 const textEncoder = new TextEncoder();
 
@@ -111,69 +111,289 @@ export function opensshPrivateKeyPem(
   return `-----BEGIN OPENSSH PRIVATE KEY-----\n${wrapped}\n-----END OPENSSH PRIVATE KEY-----\n`;
 }
 
-async function sha256Hex(data: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(
+// ---------------------------------------------------------------------------
+// owner-exec RFC 9421 / RFC 9530 strict profile
+//
+// Mirrors the owner-exec repo's spec/profile.md and internal/profile, and the
+// Python client in imbue_common.owner_exec_client. Cross-checked by the shared
+// vectors (see crypto/owner_exec_vectors.json and ed25519.test.ts).
+// ---------------------------------------------------------------------------
+
+export const REQUEST_TAG = "imbue-owner-exec";
+export const RESPONSE_TAG = "imbue-owner-exec-resp";
+export const STREAM_TAG = "imbue-owner-exec-stream";
+export const CREATED_WINDOW_SECONDS = 60;
+export const RESPONSE_CREATED_WINDOW_SECONDS = 300;
+
+const REQUEST_COMPONENTS = [
+  "@method",
+  "@path",
+  "content-digest",
+  "x-exec-audience",
+  "x-exec-public-key",
+] as const;
+
+function sfString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+async function sha256(data: Uint8Array): Promise<Uint8Array> {
+  return new Uint8Array(
     await crypto.subtle.digest("SHA-256", data as BufferSource),
   );
-  return Array.from(digest)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }
 
-// The canonical bytes an owner-exec request signs; must match the dwt
-// service's owner_exec.signing.build_signing_string exactly.
-export async function buildExecSigningString(
+// The RFC 9530 sha-256 Content-Digest header value for a body.
+export async function contentDigest(body: Uint8Array): Promise<string> {
+  return `sha-256=:${bytesToBase64(await sha256(body))}:`;
+}
+
+// The OpenSSH SHA256 fingerprint (keyid) of an Ed25519 public key.
+export async function sshFingerprint(publicKey: Uint8Array): Promise<string> {
+  const wire = sshWirePublicKey(publicKey);
+  const digest = bytesToBase64(await sha256(wire)).replace(/=+$/, "");
+  return `SHA256:${digest}`;
+}
+
+// Parse an "ssh-ed25519 AAAA... [comment]" line into the raw 32-byte key.
+export function parseOpensshEd25519PublicKeyLine(line: string): Uint8Array {
+  const parts = line.trim().split(/\s+/);
+  if (parts.length < 2 || parts[0] !== "ssh-ed25519") {
+    throw new Error("not an ssh-ed25519 public key line");
+  }
+  const wire = base64ToBytes(parts[1]);
+  // wire = string("ssh-ed25519") || string(rawKey); skip the first sf-string.
+  const view = new DataView(wire.buffer, wire.byteOffset, wire.byteLength);
+  const typeLen = view.getUint32(0);
+  const rawOffset = 4 + typeLen + 4;
+  return wire.slice(rawOffset, rawOffset + 32);
+}
+
+// Exported for the vector tests, which rebuild the base to cross-check the
+// construction against the Go signer's output.
+export function requestSignatureBase(
   method: string,
   path: string,
-  body: Uint8Array,
+  digestValue: string,
   audience: string,
-  timestamp: string,
+  publicKeyLine: string,
+  created: number,
+  expires: number,
   nonce: string,
-): Promise<string> {
-  const bodyDigest = await sha256Hex(body);
-  return [
-    "v1",
-    method.toUpperCase(),
-    path,
-    bodyDigest,
-    audience,
-    timestamp,
-    nonce,
-  ].join("\n");
+  keyId: string,
+): { signatureInput: string; base: Uint8Array } {
+  const params =
+    `(${REQUEST_COMPONENTS.map(sfString).join(" ")})` +
+    `;created=${created};expires=${expires};nonce=${sfString(nonce)}` +
+    `;tag=${sfString(REQUEST_TAG)};keyid=${sfString(keyId)}`;
+  const lines = [
+    `"@method": ${method.toUpperCase()}`,
+    `"@path": ${path}`,
+    `"content-digest": ${digestValue}`,
+    `"x-exec-audience": ${audience}`,
+    `"x-exec-public-key": ${publicKeyLine.trim()}`,
+    `"@signature-params": ${params}`,
+  ];
+  return {
+    signatureInput: `sig1=${params}`,
+    base: textEncoder.encode(lines.join("\n")),
+  };
 }
 
-export interface ExecEnvelopeHeaders {
-  "X-Exec-Signature": string;
+export interface ExecRequestHeaders {
+  "Content-Digest": string;
+  "X-Exec-Audience": string;
   "X-Exec-Public-Key": string;
-  "X-Exec-Timestamp": string;
-  "X-Exec-Nonce": string;
+  "Signature-Input": string;
+  Signature: string;
 }
 
-export async function signExecEnvelope(
+// Sign one owner-exec request per the strict profile. `nowUnix` is injectable
+// for tests; production passes Math.floor(Date.now() / 1000).
+export async function signExecRequest(
   keypair: Ed25519Keypair,
   method: string,
   path: string,
   body: Uint8Array,
   audience: string,
-  timestamp: string,
+  nowUnix: number,
   nonce: string,
-): Promise<ExecEnvelopeHeaders> {
-  const signingString = await buildExecSigningString(
+): Promise<{ headers: ExecRequestHeaders; signatureB64: string }> {
+  const publicKeyLine = opensshPublicKeyLine(keypair.publicKey, "");
+  const keyId = await sshFingerprint(keypair.publicKey);
+  const digestValue = await contentDigest(body);
+  const created = nowUnix;
+  const expires = created + CREATED_WINDOW_SECONDS;
+  const { signatureInput, base } = requestSignatureBase(
     method,
     path,
-    body,
+    digestValue,
     audience,
-    timestamp,
+    publicKeyLine,
+    created,
+    expires,
     nonce,
+    keyId,
   );
-  const signature = await ed.signAsync(
-    textEncoder.encode(signingString),
-    keypair.seed,
-  );
+  const signature = await ed.signAsync(base, keypair.seed);
+  const signatureB64 = bytesToBase64(signature);
   return {
-    "X-Exec-Signature": bytesToBase64(signature),
-    "X-Exec-Public-Key": opensshPublicKeyLine(keypair.publicKey, "minds-web"),
-    "X-Exec-Timestamp": timestamp,
-    "X-Exec-Nonce": nonce,
+    headers: {
+      "Content-Digest": digestValue,
+      "X-Exec-Audience": audience,
+      "X-Exec-Public-Key": publicKeyLine.trim(),
+      "Signature-Input": signatureInput,
+      Signature: `sig1=:${signatureB64}:`,
+    },
+    signatureB64,
   };
+}
+
+// The exact `:base64:` serialization of a request's sig1 signature member,
+// used to bind a response to the request.
+export function requestSignatureMember(signatureHeader: string): string {
+  const value = signatureHeader.trim();
+  if (!value.startsWith("sig1=:") || !value.endsWith(":")) {
+    throw new Error("Signature header is not a single sig1 byte-sequence");
+  }
+  return value.slice("sig1=".length);
+}
+
+function responseSignatureBase(
+  statusCode: number,
+  digestValue: string,
+  requestMethod: string,
+  requestPath: string,
+  requestSignatureMemberValue: string,
+  created: number,
+  keyId: string,
+): Uint8Array {
+  const params =
+    '("@status" "content-digest" "@method";req "@path";req "signature";key="sig1";req)' +
+    `;created=${created};tag=${sfString(RESPONSE_TAG)};keyid=${sfString(keyId)}`;
+  const lines = [
+    `"@status": ${statusCode}`,
+    `"content-digest": ${digestValue}`,
+    `"@method";req: ${requestMethod.toUpperCase()}`,
+    `"@path";req: ${requestPath}`,
+    `"signature";key="sig1";req: ${requestSignatureMemberValue}`,
+    `"@signature-params": ${params}`,
+  ];
+  return textEncoder.encode(lines.join("\n"));
+}
+
+function streamTrailerBase(
+  streamDigest: Uint8Array,
+  requestSignatureB64: string,
+  keyId: string,
+  created: number,
+): Uint8Array {
+  const lines = [
+    `"stream-digest": sha-256=:${bytesToBase64(streamDigest)}:`,
+    `"request-signature": :${requestSignatureB64}:`,
+    '"@signature-params": ("stream-digest" "request-signature")' +
+      `;created=${created};keyid=${sfString(keyId)};tag=${sfString(STREAM_TAG)}`,
+  ];
+  return textEncoder.encode(lines.join("\n"));
+}
+
+function parseParam(signatureInput: string, name: string): string | null {
+  const match = signatureInput.match(
+    new RegExp(`;${name}=("?)([^;"]*)\\1`),
+  );
+  return match ? match[2] : null;
+}
+
+// The endpoint's pinned host key, from the claim response / synced record.
+export interface PinnedHostKey {
+  publicKey: Uint8Array;
+  keyId: string;
+}
+
+export async function pinnedHostKeyFromLine(
+  line: string,
+): Promise<PinnedHostKey> {
+  const publicKey = parseOpensshEd25519PublicKeyLine(line);
+  return { publicKey, keyId: await sshFingerprint(publicKey) };
+}
+
+// Verify a signed owner-exec response against the pinned host key, bound to the
+// request. Throws on any failure (fail closed).
+export async function verifyExecResponse(
+  statusCode: number,
+  responseHeaders: Headers,
+  responseBody: Uint8Array,
+  request: { method: string; path: string; signatureHeader: string },
+  hostKey: PinnedHostKey,
+  nowUnix: number,
+): Promise<void> {
+  const signatureInput = responseHeaders.get("Signature-Input");
+  const signatureHeader = responseHeaders.get("Signature");
+  const digestHeader = responseHeaders.get("Content-Digest");
+  if (!signatureInput || !signatureHeader || !digestHeader) {
+    throw new Error("response is missing signature/digest headers");
+  }
+  if (!signatureInput.includes(`tag="${RESPONSE_TAG}"`)) {
+    throw new Error("response signature tag is wrong");
+  }
+  if (!signatureInput.includes(`keyid="${hostKey.keyId}"`)) {
+    throw new Error("response keyid does not match the pinned host key");
+  }
+  const created = Number(parseParam(signatureInput, "created"));
+  if (Math.abs(nowUnix - created) > RESPONSE_CREATED_WINDOW_SECONDS) {
+    throw new Error("response created timestamp is outside the window");
+  }
+  if (digestHeader.trim() !== (await contentDigest(responseBody))) {
+    throw new Error("response Content-Digest does not match the body");
+  }
+  const base = responseSignatureBase(
+    statusCode,
+    digestHeader,
+    request.method,
+    request.path,
+    requestSignatureMember(request.signatureHeader),
+    created,
+    hostKey.keyId,
+  );
+  const signature = base64ToBytes(
+    signatureHeader.trim().slice("sig1=:".length, -1),
+  );
+  if (!(await ed.verifyAsync(signature, base, hostKey.publicKey))) {
+    throw new Error("response signature does not verify");
+  }
+}
+
+export interface ExecStreamTrailer {
+  type: "signature";
+  created: number;
+  keyid: string;
+  tag: string;
+  signature: string;
+}
+
+// Verify a /run stream trailer against the pinned host key. Throws on failure.
+export async function verifyExecStreamTrailer(
+  streamBytes: Uint8Array,
+  requestSignatureB64: string,
+  trailer: ExecStreamTrailer,
+  hostKey: PinnedHostKey,
+  nowUnix: number,
+): Promise<void> {
+  if (trailer.tag !== STREAM_TAG) throw new Error("stream trailer tag is wrong");
+  if (trailer.keyid !== hostKey.keyId) {
+    throw new Error("stream trailer keyid does not match the pinned host key");
+  }
+  if (Math.abs(nowUnix - trailer.created) > RESPONSE_CREATED_WINDOW_SECONDS) {
+    throw new Error("stream trailer created timestamp is outside the window");
+  }
+  const base = streamTrailerBase(
+    await sha256(streamBytes),
+    requestSignatureB64,
+    hostKey.keyId,
+    trailer.created,
+  );
+  const signature = base64ToBytes(trailer.signature);
+  if (!(await ed.verifyAsync(signature, base, hostKey.publicKey))) {
+    throw new Error("stream trailer signature does not verify");
+  }
 }

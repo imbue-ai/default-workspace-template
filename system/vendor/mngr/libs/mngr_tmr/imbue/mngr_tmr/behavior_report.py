@@ -24,7 +24,6 @@ from jinja2 import Environment
 from jinja2 import PackageLoader
 from jinja2 import select_autoescape
 from loguru import logger
-from markdown_it import MarkdownIt
 from pydantic import Field
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
@@ -42,15 +41,21 @@ from imbue.mngr_tmr.report import Change
 from imbue.mngr_tmr.report import ChangeStatus
 from imbue.mngr_tmr.report import EXTRACTED_TEST_OUTPUT_DIR
 from imbue.mngr_tmr.report import IntegratorResult
+from imbue.mngr_tmr.report import RESOLVED_ESCALATIONS_ANCHOR
+from imbue.mngr_tmr.report import RESOLVED_ESCALATIONS_COLOR
 from imbue.mngr_tmr.report import ReportSection
 from imbue.mngr_tmr.report import SECTION_COLORS
 from imbue.mngr_tmr.report import SECTION_LABELS
 from imbue.mngr_tmr.report import SECTION_ORDER
 from imbue.mngr_tmr.report import TestRunInfo
+from imbue.mngr_tmr.report import UNRESOLVED_ESCALATIONS_ANCHOR
+from imbue.mngr_tmr.report import UNRESOLVED_ESCALATIONS_COLOR
 from imbue.mngr_tmr.report import format_changes
 from imbue.mngr_tmr.report import load_integrator_outcome
 from imbue.mngr_tmr.report import merged_status_html
 from imbue.mngr_tmr.report import read_static
+from imbue.mngr_tmr.report import render_markdown_without_raw_html
+from imbue.mngr_tmr.report import split_escalation_views
 
 
 class MatrixRecordParseError(MngrError, ValueError):
@@ -276,7 +281,7 @@ class BehaviorReportRow(FrozenModel):
 # Outcome JSON for a given agent is immutable once present; cache like the TMR report does.
 _BEHAVIOR_OUTCOME_CACHE: dict[AgentName, BehaviorTaskResult] = {}
 
-_NON_IMPL_BEHAVIOR_CHANGE_KINDS = frozenset(
+_TEST_AND_DOC_BEHAVIOR_CHANGE_KINDS = frozenset(
     {BehaviorChangeKind.CREATE_TEST, BehaviorChangeKind.IMPROVE_TEST, BehaviorChangeKind.FIX_TEST}
 )
 
@@ -286,14 +291,6 @@ _jinja_env = Environment(
     loader=PackageLoader("imbue.mngr_tmr", "behavior_report_assets"),
     autoescape=select_autoescape(["html", "j2"]),
 )
-
-# The "js-default" preset disables raw HTML, so agent-authored markdown
-# cannot inject markup into the report (summaries render through |safe).
-_strict_markdown = MarkdownIt("js-default")
-
-
-def render_markdown_without_raw_html(text: str) -> str:
-    return _strict_markdown.render(text)
 
 
 def _load_behavior_outcome(agent_name: AgentName, output_dir: Path) -> BehaviorTaskResult | None:
@@ -366,14 +363,14 @@ def behavior_report_section_of(row: BehaviorReportRow) -> ReportSection:
     if not row.changes and not row.units:
         return ReportSection.RUNNING
     if row.changes and all(change.status == ChangeStatus.FAILED for change in row.changes.values()):
-        return ReportSection.UNRESOLVED
-    if any(kind in _NON_IMPL_BEHAVIOR_CHANGE_KINDS for kind in row.changes):
-        return ReportSection.NON_IMPL_FIXES
+        return ReportSection.FIX_FAILED
     if BehaviorChangeKind.FIX_IMPL in row.changes:
         return ReportSection.IMPL_FIXES
+    if any(kind in _TEST_AND_DOC_BEHAVIOR_CHANGE_KINDS for kind in row.changes):
+        return ReportSection.TEST_AND_DOC_FIXES
     if not row.changes and row.units and all(unit.verdict in _STEADY_VERDICTS for unit in row.units):
         return ReportSection.CLEAN_PASS
-    return ReportSection.UNRESOLVED
+    return ReportSection.INDETERMINATE
 
 
 @pure
@@ -521,19 +518,27 @@ def generate_behavior_html_report(
     ]
     coverage_rows = _build_coverage_rows(rows, verified_by_coordinate)
     behavior_escalation_views = _build_behavior_escalation_views(rows)
-    escalation_views = (
-        [
-            {"title": e.title, "detail_html": render_markdown_without_raw_html(e.detail_markdown)}
-            for e in integrator.escalations
-        ]
-        if integrator is not None
-        else []
-    )
-    normalization_views = (
-        [{"summary_html": render_markdown_without_raw_html(n.summary_markdown)} for n in integrator.normalizations]
-        if integrator is not None
-        else []
-    )
+    integrator_escalations = integrator.escalations if integrator is not None else ()
+    unresolved_escalation_views, resolved_escalation_views = split_escalation_views(integrator_escalations)
+
+    # Escalation sections lead the sidebar here as they do in the TMR report, so
+    # they are reachable by something other than scrolling.
+    for anchor, color, label, views in [
+        (
+            RESOLVED_ESCALATIONS_ANCHOR,
+            RESOLVED_ESCALATIONS_COLOR,
+            "Resolved escalations",
+            resolved_escalation_views,
+        ),
+        (
+            UNRESOLVED_ESCALATIONS_ANCHOR,
+            UNRESOLVED_ESCALATIONS_COLOR,
+            "Unresolved escalations",
+            unresolved_escalation_views,
+        ),
+    ]:
+        if views:
+            toc_links.insert(0, {"anchor": anchor, "color": color, "label": label, "count": len(views)})
 
     template = _jinja_env.get_template("behavior_report.html.j2")
     report_html = template.render(
@@ -543,8 +548,12 @@ def generate_behavior_html_report(
         integrator=integrator,
         coverage_rows=coverage_rows,
         behavior_escalation_views=behavior_escalation_views,
-        escalation_views=escalation_views,
-        normalization_views=normalization_views,
+        unresolved_escalation_views=unresolved_escalation_views,
+        resolved_escalation_views=resolved_escalation_views,
+        unresolved_anchor=UNRESOLVED_ESCALATIONS_ANCHOR,
+        resolved_anchor=RESOLVED_ESCALATIONS_ANCHOR,
+        unresolved_color=UNRESOLVED_ESCALATIONS_COLOR,
+        resolved_color=RESOLVED_ESCALATIONS_COLOR,
         corpus_violation_paths=corpus_violation_paths,
         run_commands=run_commands or [],
         css=read_static("report.css"),

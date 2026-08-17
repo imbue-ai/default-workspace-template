@@ -17,6 +17,7 @@ resolve or export.
 import json
 import os
 import re
+import shutil
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -24,6 +25,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
+
+from bootstrap.claude_state_migration import LEGACY_ROOT_HOME, migrate_legacy_claude_state
 
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
@@ -737,8 +740,29 @@ def _run_env_converge_fast_phase() -> None:
         )
 
 
+def _migrate_legacy_claude_state_best_effort() -> None:
+    """Heal pre-/home/user-layout workspaces whose claude state is root-homed.
+
+    Must run before supervisord starts (the services would otherwise create
+    fresh state at the new location) and before the initial chat agent could
+    exist. Best-effort: a failure is logged loudly but never blocks boot --
+    the state stays where it was, and the next boot retries.
+    """
+    try:
+        migrate_legacy_claude_state(LEGACY_ROOT_HOME, Path.home())
+    except (OSError, shutil.Error) as e:
+        logger.opt(exception=e).error(
+            "Failed to migrate legacy claude state; continuing boot"
+        )
+
+
 def main() -> None:
     logger.info("Bootstrap starting: first-boot setup, then supervisord")
+
+    # Move any root-homed claude state (pre-/home/user-layout workspaces) into
+    # the current home BEFORE anything claude-related starts, so an updated
+    # workspace keeps its chat history and sign-in.
+    _migrate_legacy_claude_state_best_effort()
 
     # Apply the global git config (https rewrites) before any service or
     # agent runs git.

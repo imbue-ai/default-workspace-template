@@ -37,7 +37,8 @@ export interface ClaimResult {
   region: string;
   // The shell service's origin label; the routable entry origin is
   // `${entry_label}.${workspace_domain}` (the bare domain is unrouted on
-  // the relay). Null when the connector could not read it.
+  // the relay). Null until the workspace's tunnel claims its service labels
+  // (the connector's frps NewProxy callback records it).
   entry_label: string | null;
 }
 
@@ -74,8 +75,22 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly detail: unknown,
   ) {
-    super(`API error ${status}: ${JSON.stringify(detail)}`);
+    // Structured refusals (quota_exceeded, email_not_verified, ...) carry a
+    // human-readable `message` -- surface that prose directly instead of the
+    // raw JSON blob, since these strings end up in user-facing error banners.
+    super(`API error ${status}: ${structuredDetailMessage(detail) ?? JSON.stringify(detail)}`);
   }
+}
+
+function structuredDetailMessage(detail: unknown): string | null {
+  // An empty message carries no information, so it falls through to the
+  // JSON-blob fallback rather than producing a contentless banner.
+  if (typeof detail === "string" && detail !== "") return detail;
+  if (typeof detail === "object" && detail !== null) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string" && message !== "") return message;
+  }
+  return null;
 }
 
 export class RevisionConflictError extends Error {

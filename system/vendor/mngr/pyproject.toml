@@ -230,6 +230,9 @@ omit = [
     "*/imbue_common/sentry/*",
     # Modal provider plugin requires network access for testing
     "libs/mngr_modal/imbue/mngr_modal/*",
+    # Manual frp verification harness (real frps binaries, live sockets); run
+    # by hand on frp version bumps, never in CI
+    "apps/share_relay/imbue/share_relay/frp_verification.py",
     # Docker provider requires a Docker daemon for testing
     "libs/mngr/imbue/mngr/providers/docker/instance.py",
     "libs/mngr/imbue/mngr/providers/docker/volume.py",
@@ -366,6 +369,7 @@ layers = [
     "imbue.mngr_imbue_cloud.slices",
     "imbue.mngr_imbue_cloud.connector",
     "imbue.mngr_imbue_cloud.config",
+    "imbue.mngr_imbue_cloud.interfaces",
     "imbue.mngr_imbue_cloud.data_types",
     "imbue.mngr_imbue_cloud.errors",
     "imbue.mngr_imbue_cloud.primitives",

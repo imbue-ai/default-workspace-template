@@ -28,9 +28,15 @@ three things running:
    registered service's local backend (from `data/.state/apps.toml`; the
    Caddyfile re-renders and hot-reloads when the registry changes), and
    unknown-but-plausible service origins to an auto-retrying loading page.
-3. **frpc**: the outbound tunnel to the region's relay, authenticated by the
-   per-share relay token (in the client metadata; the connector authorizes
-   every Login/NewProxy). It claims exactly this workspace's domain + wildcard.
+3. **frpc, one per relay**: outbound tunnels to EVERY relay of the region
+   (the multi-relay design: any relay can then serve any visitor),
+   authenticated by the per-share relay token (in the client metadata; the
+   connector authorizes every Login/NewProxy). Each claims exactly this
+   workspace's registered service labels + the auth label. The relay set comes
+   from the connector's `GET /shares/assignment` (relay-token auth), fetched
+   at stack start, re-polled on the server-provided interval, and cached under
+   `data/.state/share_gateway/assignment.json` so restarts work with the
+   connector down; `share.env` carries no relay endpoint.
 
 The TLS private key is generated in the workspace and never leaves it: the
 runner sends a CSR to the connector, which completes ACME DNS-01 and returns

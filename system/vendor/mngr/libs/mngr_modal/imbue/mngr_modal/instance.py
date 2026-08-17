@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
 import uuid
@@ -90,7 +91,10 @@ from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.primitives import VolumeId
+from imbue.mngr.primitives import build_ssh_connect_command
 from imbue.mngr.providers.base_provider import BaseProviderInstance
+from imbue.mngr.providers.host_key_store import has_host_key_store
+from imbue.mngr.providers.host_key_store import remove_host_key_record
 from imbue.mngr.providers.listing_utils import build_listing_collection_script
 from imbue.mngr.providers.listing_utils import parse_listing_collection_output
 from imbue.mngr.providers.ssh_host_setup import REQUIRED_HOST_PACKAGES
@@ -110,8 +114,11 @@ from imbue.mngr_modal.routes.deployment import deploy_function
 from imbue.mngr_modal.routes.deployment import get_function_url
 from imbue.mngr_modal.ssh_utils import add_host_to_known_hosts
 from imbue.mngr_modal.ssh_utils import create_pyinfra_host
-from imbue.mngr_modal.ssh_utils import load_or_create_host_keypair
-from imbue.mngr_modal.ssh_utils import load_or_create_ssh_keypair
+from imbue.mngr_modal.ssh_utils import load_or_create_per_host_client_keypair
+from imbue.mngr_modal.ssh_utils import load_or_create_per_host_host_keypair
+from imbue.mngr_modal.ssh_utils import per_host_key_dir
+from imbue.mngr_modal.ssh_utils import resolve_per_host_client_keypair
+from imbue.mngr_modal.ssh_utils import resolve_per_host_host_keypair
 from imbue.mngr_modal.ssh_utils import wait_for_sshd
 from imbue.mngr_modal.volume import ModalVolume
 from imbue.modal_proxy.data_types import StreamType
@@ -478,25 +485,26 @@ class ModalProviderInstance(BaseProviderInstance):
         """Get the directory for SSH keys (profile-specific)."""
         return self.mngr_ctx.profile_dir / "providers" / "modal"
 
-    def _get_ssh_keypair(self) -> tuple[Path, str]:
-        """Get or create the SSH keypair for this provider instance."""
-        return load_or_create_ssh_keypair(self._keys_dir, key_name="modal_ssh_key")
+    # CLEANUP: the legacy shared modal_ssh_key / host_key files under _keys_dir
+    # only serve sandboxes created before per-host keys existed. Sandboxes cycle
+    # within about a day, so the shared files (and these resolvers' legacy
+    # fallbacks) can be dropped once no pre-per-host-key sandbox remains.
+    def _get_ssh_keypair(self, host_id: HostId) -> tuple[Path, str]:
+        """Resolve the client keypair that opens this host: per-host first, legacy shared as fallback.
 
-    def get_ssh_public_key(self) -> str:
-        """Get the SSH public key content for this provider instance.
-
-        Loads or creates the keypair if it doesn't exist yet.
+        A per-host key dir carries a ``known_hosts`` symlink so key-sibling
+        consumers (the forward SSH tunnel) keep finding the pinned host keys.
         """
-        _private_key_path, public_key_content = self._get_ssh_keypair()
-        return public_key_content
+        return resolve_per_host_client_keypair(self._keys_dir, host_id, "modal_ssh_key", "known_hosts")
 
-    def _get_host_keypair(self) -> tuple[Path, str]:
-        """Get or create the SSH host keypair for Modal sandboxes.
+    def _get_host_keypair(self, host_id: HostId) -> tuple[Path, str]:
+        """Resolve the sshd host keypair for this host's sandbox: per-host first, legacy fallback.
 
-        This key is used as the SSH host key for all sandboxes, allowing us to
-        pre-trust the key and avoid host key verification prompts.
+        The key is injected into the sandbox at every boot (create and
+        snapshot-restore alike), so restore re-serves the same per-host key
+        while pre-per-host-key sandboxes keep their legacy shared one.
         """
-        return load_or_create_host_keypair(self._keys_dir)
+        return resolve_per_host_host_keypair(self._keys_dir, host_id, "host_key")
 
     @property
     def _known_hosts_path(self) -> Path:
@@ -1155,8 +1163,8 @@ class ModalProviderInstance(BaseProviderInstance):
             logger.trace("Found SSH endpoint available", ssh_host=ssh_host, ssh_port=ssh_port)
 
             # Get SSH keypairs
-            private_key_path, client_public_key = self._get_ssh_keypair()
-            host_key_path, host_public_key = self._get_host_keypair()
+            private_key_path, client_public_key = self._get_ssh_keypair(host_id)
+            host_key_path, host_public_key = self._get_host_keypair(host_id)
             host_private_key = host_key_path.read_text()
 
             # set up all the data in modal:
@@ -1177,7 +1185,7 @@ class ModalProviderInstance(BaseProviderInstance):
 
             # Add the host to our known_hosts file before waiting for sshd
             with log_span("Adding host to known_hosts", ssh_host=ssh_host, ssh_port=ssh_port):
-                add_host_to_known_hosts(self._known_hosts_path, ssh_host, ssh_port, host_public_key)
+                add_host_to_known_hosts(self._known_hosts_path, ssh_host, ssh_port, host_public_key, host_id=host_id)
 
             # Wait for sshd to be ready
             with info_span("Waiting for sshd to be ready..."):
@@ -1674,10 +1682,11 @@ log "=== Shutdown script completed ==="
                     host_record.ssh_host,
                     host_record.ssh_port,
                     host_record.ssh_host_public_key,
+                    host_id=host_id,
                 )
 
             with trace_span("Creating pyinfra {}", host_id, _is_trace_span_enabled=False):
-                private_key_path, _ = self._get_ssh_keypair()
+                private_key_path, _ = self._get_ssh_keypair(host_id)
                 pyinfra_host = self._create_pyinfra_host(
                     host_record.ssh_host,
                     host_record.ssh_port,
@@ -1898,6 +1907,14 @@ log "=== Shutdown script completed ==="
             created_at=now,
             updated_at=now,
         )
+
+        # Mint this host's own client + host keypairs up front so the setup
+        # helper's per-host resolution uses them for the new sandbox instead of
+        # falling back to the legacy shared pair from older sandboxes. A clone
+        # (create_host --snapshot) lands here with a fresh host_id, so it mints
+        # fresh keypairs rather than inheriting the source host's.
+        load_or_create_per_host_client_keypair(self._keys_dir, host_id, "modal_ssh_key", "known_hosts")
+        load_or_create_per_host_host_keypair(self._keys_dir, host_id, "host_key")
 
         # Set up SSH and create host object using shared helper
         with log_span("Setting up SSH and creating Host object for {}", host_id):
@@ -2236,6 +2253,16 @@ log "=== Shutdown script completed ==="
     def delete_host(self, host: HostInterface) -> None:
         self._destroy_agents_on_host(host.id)
         self._delete_host_record(host.id)
+        # Forget the host's pins (dead-endpoint GC) and its per-host keypairs;
+        # both are useless once the host is permanently deleted. Benign local
+        # cleanup past the point of no return (the record is gone), so an OS
+        # error must not fail the deletion or abort the GC sweep.
+        if has_host_key_store(self._known_hosts_path):
+            try:
+                remove_host_key_record(self._known_hosts_path, host.id)
+            except OSError as e:
+                logger.trace("Failed to clean up host-key store for {}: {}", self._known_hosts_path, e)
+        shutil.rmtree(per_host_key_dir(self._keys_dir, host.id), ignore_errors=True)
         if self.config.is_host_volume_created:
             # delete_host returns None per the interface; a volume that could not be removed
             # is surfaced through destroy_host, not here (GC calls delete_host after the grace
@@ -2846,12 +2873,14 @@ log "=== Shutdown script completed ==="
         ssh_connection = host.get_ssh_connection_info()
         if ssh_connection is not None:
             user, hostname, port, key_path = ssh_connection
+            known_hosts_path = host.get_ssh_known_hosts_path()
             ssh_info = SSHInfo(
                 user=user,
                 host=hostname,
                 port=port,
                 key_path=key_path,
-                command=f"ssh -i {key_path} -p {port} {user}@{hostname}",
+                known_hosts_path=known_hosts_path,
+                command=build_ssh_connect_command(user, hostname, port, key_path, known_hosts_path),
             )
 
         # Boot time and uptime from SSH-collected data
@@ -3095,7 +3124,20 @@ log "=== Shutdown script completed ==="
                 updated_certified_data,
             ),
         )
-        self._get_host(host_id, host_record=updated_host_record).set_certified_data(updated_certified_data)
+        host = self._get_host(host_id, host_record=updated_host_record)
+        if isinstance(host, OnlineHostInterface):
+            # A Modal filesystem snapshot transiently breaks new connections through the
+            # sandbox's tunnels: for a window afterwards (longer when Modal is under
+            # load), the tunnel edge accepts TCP and then closes it without an SSH
+            # banner. The certified-data write below opens a fresh SSH connection, so
+            # re-verify the tunnel with a full handshake probe first, just like host
+            # creation does after boot. This also means create/snapshot only returns
+            # once the tunnel is healthy again, so follow-up commands don't hit the
+            # same window.
+            ssh_host, ssh_port = self._get_ssh_info_from_sandbox(sandbox)
+            with log_span("Waiting for the SSH tunnel to recover after the snapshot"):
+                self._wait_for_sshd(ssh_host, ssh_port, self.config.ssh_connect_timeout)
+        host.set_certified_data(updated_certified_data)
         logger.debug(
             "Created snapshot: id={}, name={}",
             snapshot_id,
@@ -3448,9 +3490,10 @@ log "=== Shutdown script completed ==="
             host_record.ssh_host,
             host_record.ssh_port,
             host_record.ssh_host_public_key,
+            host_id=host_id,
         )
 
-        private_key_path, _ = self._get_ssh_keypair()
+        private_key_path, _ = self._get_ssh_keypair(host_id)
         return self._create_pyinfra_host(
             host_record.ssh_host,
             host_record.ssh_port,

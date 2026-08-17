@@ -641,6 +641,7 @@ def test_host_ssh_info_refires_discovery_with_ssh_info(consumer: EnvelopeStreamC
             host="1.2.3.4",
             port=22,
             key_path=Path("/tmp/k"),
+            known_hosts_path=Path("/tmp/pins/known_hosts"),
             command="ssh -i /tmp/k -p 22 root@1.2.3.4",
         ),
     )
@@ -654,6 +655,7 @@ def test_host_ssh_info_refires_discovery_with_ssh_info(consumer: EnvelopeStreamC
     assert second is not None
     assert second.user == "root"
     assert second.host == "1.2.3.4"
+    assert second.known_hosts_path == Path("/tmp/pins/known_hosts")
 
 
 # --- observe stream: agent / host destroyed -------------------------------
@@ -919,6 +921,53 @@ def test_malformed_resolver_snapshot_envelope_is_dropped(consumer: EnvelopeStrea
     """A malformed ``resolver_snapshot`` payload doesn't crash dispatch and leaves the mirror empty."""
     _dispatch(consumer, _forward_envelope({"type": "resolver_snapshot", "services_by_agent": "not-a-dict"}))
     assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {}
+
+
+def test_resolver_snapshot_normalizes_instance_keyed_entries_to_bare_ids(
+    consumer: EnvelopeStreamConsumer,
+) -> None:
+    """Instance-keyed payload keys (``<agent_id>@<host_id>``) resolve by the bare agent id.
+
+    The plugin keys the map by agent instance (agent ids are unique per host, not
+    globally); minds' mirror stays bare-id keyed, tolerating both key forms in one
+    payload.
+    """
+    payload = {
+        "type": "resolver_snapshot",
+        "services_by_agent": {
+            f"{_AGENT_ID_1}@{_HOST_ID_1}": {"system_interface": "http://127.0.0.1:9100"},
+            str(_AGENT_ID_2): {"webdav": "http://127.0.0.1:9200"},
+        },
+    }
+    _dispatch(consumer, _forward_envelope(payload))
+    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {
+        "system_interface": "http://127.0.0.1:9100",
+    }
+    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_2) == {
+        "webdav": "http://127.0.0.1:9200",
+    }
+
+
+def test_resolver_snapshot_warns_and_keeps_last_when_id_spans_hosts(
+    consumer: EnvelopeStreamConsumer,
+) -> None:
+    """Two instances of one agent id (the migration-overlap case) collide loudly, last one wins."""
+    other_host_id = HostId("host-" + "0" * 31 + "2")
+    payload = {
+        "type": "resolver_snapshot",
+        "services_by_agent": {
+            f"{_AGENT_ID_1}@{_HOST_ID_1}": {"system_interface": "http://127.0.0.1:9100"},
+            f"{_AGENT_ID_1}@{other_host_id}": {"system_interface": "http://127.0.0.1:9300"},
+        },
+    }
+    with capture_loguru(level="WARNING") as log_output:
+        _dispatch(consumer, _forward_envelope(payload))
+    assert "multiple hosts" in log_output.getvalue()
+    assert str(_AGENT_ID_1) in log_output.getvalue()
+    # JSON object order is preserved through json.loads, so "last" is deterministic.
+    assert consumer.get_resolver_snapshot_for_agent(_AGENT_ID_1) == {
+        "system_interface": "http://127.0.0.1:9300",
+    }
 
 
 # --- forward stream: listening --------------------------------------------

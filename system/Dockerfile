@@ -65,6 +65,13 @@ COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
 RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/bin/default-workspace-template-install-secret-scanners && default-workspace-template-setup-system
 
+# Install the pinned owner-exec static binary (the in-container "inner" exec
+# service; supervisord runs it via system/scripts/run_owner_exec.sh). Pin +
+# per-arch sha256 verification live in the script; a version bump here rebuilds
+# only this small layer.
+COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
+RUN chmod +x /usr/local/bin/default-workspace-template-install-owner-exec && default-workspace-template-install-owner-exec
+
 # /var/cache/user is the off-volume cache target, pinned via ENV so BOTH the
 # build layers below (dependency pre-warm) and the runtime container cache to
 # the same image-layer path: warm caches stay baked into the image instead of

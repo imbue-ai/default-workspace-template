@@ -151,7 +151,7 @@ from imbue.minds.desktop_client.sharing_handler import EmptyGrantsError
 from imbue.minds.desktop_client.sharing_handler import SharingError
 from imbue.minds.desktop_client.sharing_handler import disable_sharing
 from imbue.minds.desktop_client.sharing_handler import enable_sharing
-from imbue.minds.desktop_client.sharing_handler import get_active_share
+from imbue.minds.desktop_client.sharing_handler import get_active_share_cached
 from imbue.minds.desktop_client.sharing_handler import get_sharing
 from imbue.minds.desktop_client.sharing_handler import probe_share_readiness
 from imbue.minds.desktop_client.sharing_handler import resolve_share_probe_host
@@ -200,7 +200,7 @@ from imbue.mngr.primitives import InvalidName
 # Cap for a short blocking ``mngr`` command run via ``_run_mngr_blocking``
 # (restart-services, git label read/write) -- quick operations, unlike the host
 # stop/start transition (that path uses ``perform_mind_host_action``'s much
-# larger ``_HOST_STOP_TIMEOUT_SECONDS``, sized for the slow first cloud stop).
+# larger ``HOST_STOP_TIMEOUT_SECONDS``, sized for the slow first cloud stop).
 _MNGR_BLOCKING_COMMAND_TIMEOUT_SECONDS: float = 300.0
 
 # SSE event-stream headers (disable proxy/browser buffering so events flush live).
@@ -2726,12 +2726,18 @@ def _handle_machine_sharing_put(host_id: str) -> MachineSharingResponse | Respon
         # within one pane, so two panes/windows editing one machine would
         # otherwise interleave their full-document replaces.
         with state.machine_sharing_locks.get_lock(host_id):
-            document = enable_sharing(
-                host_id=host_id,
-                workspace_grants=workspace_grants,
-                service_grants=service_grants,
-                backend_resolver=state.backend_resolver,
-            )
+            try:
+                document = enable_sharing(
+                    host_id=host_id,
+                    workspace_grants=workspace_grants,
+                    service_grants=service_grants,
+                    backend_resolver=state.backend_resolver,
+                )
+            finally:
+                # The share state may have changed even on failure (the
+                # connector create can succeed before the injection fails), so
+                # the readiness poll must not keep serving a stale lookup.
+                state.active_share_cache.invalidate(host_id)
     except EmptyGrantsError as exc:
         # A grants document naming nobody is a request-validation failure,
         # not an upstream fault. 400 rather than 422: spectree reserves 422
@@ -2751,7 +2757,10 @@ def _handle_machine_sharing_delete(host_id: str) -> MachineSharingResponse | Res
         # Same per-machine serialization as the PUT: a disable racing a grants
         # write must not interleave with its materials removal.
         with state.machine_sharing_locks.get_lock(host_id):
-            disable_sharing(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
+            try:
+                disable_sharing(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
+            finally:
+                state.active_share_cache.invalidate(host_id)
     except SharingError as exc:
         return _json_error(str(exc), 502)
     return MachineSharingResponse(host_id=host_id, enabled=False)
@@ -2763,23 +2772,35 @@ def _handle_machine_sharing_readiness(host_id: str) -> SharingReadinessResponse:
     """Probe whether the machine's shared hostname is live end to end yet.
 
     The domain to probe comes from the connector's share record for this
-    machine, never from caller input. Contract: ``{"ready": bool}``.
+    machine, never from caller input. Besides the end-to-end ``ready`` bit,
+    the response carries the connector's per-step provisioning signals
+    (certificate issuance, tunnel liveness stamp) so the UI can show which
+    step a still-provisioning share is on.
     """
     state = get_state()
     http_client = state.http_client
     if http_client is None:
         return SharingReadinessResponse(ready=False)
-    # Only the connector-side share status is needed here; the full sharing
-    # document would also exec into the workspace for grants each poll.
-    share = get_active_share(host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store)
+    # Only the connector-side share status is needed here (the full sharing
+    # document would also exec into the workspace for grants each poll), and
+    # it rides the short-TTL cache: the poll fires every ~2 seconds while the
+    # only per-tick question -- is the hostname live yet? -- is answered by
+    # the TLS probe below, not by re-running a multi-second `shares status`
+    # subprocess for a domain that never changes.
+    share = get_active_share_cached(
+        host_id, state.backend_resolver, state.imbue_cloud_cli, state.session_store, state.active_share_cache
+    )
     if share is None or not share.workspace_domain:
         return SharingReadinessResponse(ready=False)
     # Probe the shell's routable label origin, not the bare machine domain
     # (which does not route on a share). Not-ready until the shell label is known.
     probe_host = resolve_share_probe_host(state.backend_resolver, state.session_store, host_id, share.workspace_domain)
-    if probe_host is None:
-        return SharingReadinessResponse(ready=False)
-    return SharingReadinessResponse(ready=probe_share_readiness(http_client, probe_host))
+    is_ready = probe_host is not None and probe_share_readiness(http_client, probe_host)
+    return SharingReadinessResponse(
+        ready=is_ready,
+        cert_not_after=share.cert_not_after,
+        last_tunnel_login_at=share.last_tunnel_login_at,
+    )
 
 
 # -- Desktop namespace routes (cookie-or-bearer; no agent verb) --

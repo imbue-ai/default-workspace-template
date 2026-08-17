@@ -8,6 +8,7 @@ The library itself is small and stdlib+modal only:
 - `image.py` -- the pinned image inputs: the digest-pinned base image, the pinned in-build uv version, and `pinned_image` (the base + hash-locked install every service image starts from). The pure export machinery (the canonical `uv export` command, the pinned-app registry, and paths) lives in `imbue.imbue_common.modal_image_requirements`, because the public mirror's `minds env deploy` preflight needs it and this package is not public.
 - `source_mount.py` -- the rule for which local Python files ship into containers (`shipped_python_source_ignore`).
 - `database.py` -- `direct_database_url` (strips Neon's `-pooler` suffix for schema operations that are unsafe through transaction pooling).
+- `request_logging.py` -- `RequestLoggingMiddleware`, a pure-ASGI middleware every app adds outermost: one structured access-log line per HTTP request (method, path without the query string -- it can carry one-time tokens -- status, duration, client IP from the first `x-forwarded-for` hop, user agent), so Modal function logs carry a per-request record for abuse investigations. The client-controlled fields (path, user agent, forwarded client IP) are quoted/sanitized so a crafted request cannot forge fields or lines in the log.
 
 ## The deployment model
 

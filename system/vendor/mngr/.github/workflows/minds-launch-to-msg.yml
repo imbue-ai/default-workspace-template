@@ -308,9 +308,9 @@ jobs:
     # for the darwin git bundle, and bundling uv/lima needs native arm64
     # binaries.
     runs-on: [self-hosted, macOS, minds-runner]
-    # 85 min = the 70-min `pnpm dist` step budget (below) + ~15 min for the
+    # 135 min = the 120-min `pnpm dist` step budget (below) + ~15 min for the
     # post-failure cancel step to tear an orphaned ToDesktop build down.
-    timeout-minutes: 85
+    timeout-minutes: 135
     env:
       # Resolved relative to pnpm's CWD (apps/minds), not the repo root.
       MINDS_CLIENT_CONFIG_BUNDLE: imbue/minds/config/envs/production/client.toml
@@ -432,9 +432,9 @@ jobs:
       - name: pnpm dist (build + upload to ToDesktop)
         id: dist
         if: steps.existing.outputs.url == ''
-        # A fresh dual-arch build runs ~43 min, longer when ToDesktop's
-        # source-download step stalls; notarization is the long pole.
-        timeout-minutes: 70
+        # A fresh dual-arch build runs 45-75 min: ToDesktop's packaging step
+        # can stall 15+ min, and each arch is signed and notarized in turn.
+        timeout-minutes: 120
         working-directory: apps/minds
         # build.js::bundleLatchkey smoke-tests the bundled CLI, which needs
         # an encryption key; the headless runner's keychain is locked, so

@@ -15,7 +15,7 @@
 #     context even though it's never committed.
 [private]
 _generate-dockerignore:
-    grep -vE '^/?\.dockerignore$|^/libs/mngr/imbue/mngr/resources/Dockerfile\.release$' .gitignore > .dockerignore
+    bash scripts/generate_dockerignore.sh
 
 # Generate Dockerfile.release from Dockerfile + Dockerfile.release.extras so the
 # two Dockerfiles stay in sync without duplicating the base layers. Strips the
@@ -433,19 +433,19 @@ deploy *args:
     uv run minds env deploy {{args}}
 
 # Stand up the activated dev/ci env's OWN share relay in one shot:
-# provision an OVH instance, install frps + config pointed at THIS env's
-# connector, and upsert the region DNS records. The region label is the
-# env name (underscores mapped to hyphens), matching what `minds env
-# deploy` now pins into the env's sharing secret (SHARE_DEFAULT_REGION /
-# SHARE_RELAY_ENDPOINTS) -- so each dev env gets its own relay instead
-# of competing for one shared dev relay whose frps plugin-auth URL can
-# only serve a single env's connector. Reads the relay SSH key, frps
-# auth secret, OVH + Cloudflare creds from the tier's Vault entries
-# (requires a vault login). Idempotent-ish: re-running provisions a NEW
-# instance; use `just list-share-relays` / `just destroy-share-relay` to
-# clean up an old one, and re-run `just dns-share-relay` to repoint DNS.
+# provision an OVH instance, register it in THIS env's connector fleet
+# inventory (relays table), install frps + config pointed at the env's
+# connector, and reconcile the region DNS records. The region label is
+# the env name (underscores mapped to hyphens) -- each dev env gets its
+# own relay instead of competing for one shared dev relay whose frps
+# plugin-auth URL can only serve a single env's connector. Reads the
+# relay SSH key, frps auth secret, admin key, OVH + Cloudflare creds
+# from the tier's Vault entries (requires a vault login). Idempotent-ish:
+# re-running provisions a NEW instance; use `just list-share-relays` /
+# `just destroy-share-relay` + `just deregister-share-relay` to clean up
+# an old one (DNS self-heals via the connector's health sweep).
 [group("minds ops")]
-provision-dev-relay ovh_region="US-EAST-VA-1":
+provision-dev-relay ovh_region="US-EAST-VA-1" ordinal="1":
     #!/bin/bash
     set -ueo pipefail
     root_name="${MINDS_ROOT_NAME:?activate a dev env first: eval \"\$(uv run minds env activate <env>)\"}"
@@ -459,7 +459,7 @@ provision-dev-relay ovh_region="US-EAST-VA-1":
 
     # Everything derived: region label from the env name, content domain from
     # the tier deploy config, connector URL from the activated client.toml,
-    # creds + relay SSH key from the tier's Vault entries.
+    # creds + relay SSH key + admin key from the tier's Vault entries.
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     uv run python scripts/provision_dev_relay_config.py "$env_name" "$tier" "$config_path" "$tmp"
@@ -467,25 +467,35 @@ provision-dev-relay ovh_region="US-EAST-VA-1":
     region="$(jq -r .region "$tmp/params.json")"
     content_domain="$(jq -r .content_domain "$tmp/params.json")"
     plugin_auth_url="$(jq -r .plugin_auth_url "$tmp/params.json")"
+    connector_url="$(jq -r .connector_url "$tmp/params.json")"
     set -a; . "$tmp/relay.env"; set +a
 
     echo "Provisioning relay for env '$env_name' (region '$region', domain '$content_domain', OVH {{ovh_region}})"
     provision_json="$(uv run share-relay provision --env-name "$env_name" --region "$region" \
-        --ovh-region "{{ovh_region}}" --ssh-public-key-file "$tmp/relay_key.pub" | tail -n 1)"
+        --ordinal "{{ordinal}}" --ovh-region "{{ovh_region}}" --ssh-public-key-file "$tmp/relay_key.pub" | tail -n 1)"
     ip="$(jq -r .ip <<<"$provision_json")"
-    echo "Instance up at $ip; installing frps + config"
+    instance_name="$(jq -r .name <<<"$provision_json")"
+
+    echo "Registering relay in the connector fleet inventory"
+    register_json="$(uv run share-relay register --connector-url "$connector_url" --region "$region" \
+        --tunnel-endpoint "$ip:7000" --ip "$ip" --instance-name "$instance_name" | tail -n 1)"
+    relay_id="$(jq -r .relay_id <<<"$register_json")"
+
+    echo "Instance up at $ip (relay_id $relay_id); installing frps + config"
     ssh-agent bash -c "ssh-add '$tmp/relay_key' 2>/dev/null && \
-        uv run share-relay deploy --host '$ip' --region '$region' \
+        uv run share-relay deploy --host '$ip' --relay-id '$relay_id' --region '$region' \
             --content-domain '$content_domain' --plugin-auth-url '$plugin_auth_url'"
+    # Seed DNS with THIS relay's IP only. `share-relay dns` reconciles the
+    # record set, so on a second relay (ordinal >= 2) this transiently drops
+    # the sibling's IP -- the connector's per-minute health sweep restores the
+    # full region set from the relays table right after.
     uv run share-relay dns --region "$region" --content-domain "$content_domain" --ip "$ip"
 
     echo
     echo "Relay ready for env '$env_name':"
-    echo "  endpoint:  relay.$region.$content_domain:7000 (what the env's sharing secret pins)"
+    echo "  relay_id:  $relay_id (registered; workspaces learn the endpoint via GET /shares/assignment)"
     echo "  wildcard:  *.$region.$content_domain -> $ip"
-    echo "If the env was deployed before this relay existed, no redeploy is needed --"
-    echo "the sharing secret already points here. Re-enable sharing on any workspace"
-    echo "whose share was created against another region."
+    echo "Re-enable sharing on any workspace whose share was created against another region."
 
 # Start the minds desktop client (electron) in dev mode against the
 # activated env. Sources .env if present, scrubs any ambient
