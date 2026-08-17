@@ -316,6 +316,10 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     "oom-tag-backstop": PROTECTED,
     "env-converge": PROTECTED,
     "eval-worker": PROTECTED,
+    # A one-shot (autorestart=false) that registers the VM-resident owner-exec
+    # service origin and exits; shedding it mid-run would leave the registration
+    # half-done, and it holds no memory worth reclaiming.
+    "vm-exec-register": PROTECTED,
 }
 
 
