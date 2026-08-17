@@ -162,6 +162,23 @@ def test_colliding_top_level_entries_stay_at_the_destination(
     assert (current_home / ".claude" / ".credentials.json").is_file()
 
 
+def test_returns_false_when_every_entry_collides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    legacy_home = tmp_path / "root"
+    current_home = tmp_path / "home"
+    (legacy_home / ".claude").mkdir(parents=True)
+    (legacy_home / ".claude" / ".credentials.json").write_text('{"claudeAiOauth": {"old": true}}')
+    (current_home / ".claude").mkdir(parents=True)
+    (current_home / ".claude" / ".credentials.json").write_text('{"claudeAiOauth": {"new": true}}')
+
+    assert migrate_legacy_claude_state(legacy_home, current_home) is False
+    # Both sides untouched: the destination copy wins, the legacy one stays behind.
+    assert (current_home / ".claude" / ".credentials.json").read_text() == '{"claudeAiOauth": {"new": true}}'
+    assert (legacy_home / ".claude" / ".credentials.json").read_text() == '{"claudeAiOauth": {"old": true}}'
+
+
 def test_migrates_config_dir_contents_when_legacy_claude_json_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

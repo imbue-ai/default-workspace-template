@@ -138,5 +138,12 @@ def migrate_legacy_claude_state(legacy_home: Path, current_home: Path) -> bool:
 
     for moved in moved_paths:
         _align_ownership_with_home(moved, home_stat.st_uid, home_stat.st_gid)
+    if not moved_paths:
+        logger.warning(
+            "Found legacy claude state at {} but every entry collided with {}; nothing was migrated",
+            legacy_config_dir,
+            current_config_dir,
+        )
+        return False
     logger.info("Migrated {} legacy claude entries into {}", len(moved_paths), current_home)
     return True
