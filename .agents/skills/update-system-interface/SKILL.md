@@ -309,7 +309,10 @@ Interpret the exit code and report it to the user:
   problem, not something rolling this change back would have fixed.
 - `2` -- the change was bad and was **automatically rolled back**; the live UI is
   healthy on the previous revision, but the requested change did **not** land.
-  Report this and diagnose before retrying.
+  Report this and diagnose before retrying. This carries the same variant as `0`:
+  when the frontend was already broken beforehand the rollback is never held to
+  that standard, so the final line says the backend is healthy and names what
+  could not be confirmed instead of claiming the UI is. Pass both problems on.
 - `3` -- **emergency**: even rollback could not restore a healthy UI. The
   interface may be down; escalate immediately.
 - `1` -- precondition error (e.g. a dirty tree); nothing was changed.
