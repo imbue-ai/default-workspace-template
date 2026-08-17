@@ -19,6 +19,7 @@ from pydantic import PrivateAttr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.local_process import RunningProcess
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.event_envelope import EventEnvelope
 from imbue.imbue_common.event_envelope import EventId
@@ -641,7 +642,7 @@ class ObserveEventFollower(MutableModel):
     )
 
     _stop_event: threading.Event = PrivateAttr(default_factory=threading.Event)
-    _thread: threading.Thread | None = PrivateAttr(default=None)
+    _thread: ObservableThread | None = PrivateAttr(default=None)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     # None until something internal makes the stream unfollowable for good.
     # "Never started" is not represented here -- that is the owner's fact, not the
@@ -687,7 +688,17 @@ class ObserveEventFollower(MutableModel):
             with self._lock:
                 self._is_started = False
             raise
-        thread = threading.Thread(target=self._follow_loop, name="observe-follower", daemon=True)
+        thread = ObservableThread(
+            target=self._follow_loop,
+            name="observe-follower",
+            daemon=True,
+            on_failure=self._on_follow_failure,
+            # ``ObservableThread.join`` re-raises what the thread raised, and ``stop``
+            # joins. The consumer's teardown is what calls ``stop``, and handing it its
+            # own sink's exception there is not the contract: a dead stream is reported
+            # through ``failure_detail()``.
+            suppressed_exceptions=(BaseException,),
+        )
         self._thread = thread
         thread.start()
 
@@ -786,33 +797,29 @@ class ObserveEventFollower(MutableModel):
 
         An outage does not end the loop: the observer it follows may come back, and
         re-probing a lock this follower never takes cannot get in that observer's way.
+        The only other way out is an exception, which records a failure on the way
+        past (see :meth:`_on_follow_failure`), so a consumer gating on
+        :meth:`is_stream_healthy` cannot keep reporting itself live once this thread
+        is gone.
         """
-        try:
-            while not self._stop_event.is_set():
-                self.poll_once()
-                self._stop_event.wait(timeout=self.poll_interval_seconds)
-        except Exception as e:
-            # Caught this broadly because the exceptions that can end this thread
-            # include whatever ``on_line`` raises, which this class cannot
-            # enumerate. Not ``BaseException``: the extra cases that would add
-            # (a SystemExit or KeyboardInterrupt landing in this daemon thread)
-            # mean the process is going down, so there is no consumer left to keep
-            # from reporting itself live. Re-raised bare, so the traceback survives
-            # instead of being laundered into a return value; the record is what a
-            # consumer shows via ``failure_detail()``, and "something exited" is
-            # not actionable, so it names the type and message.
-            if not self._stop_event.is_set():
-                # Logged here as well as propagated, so the traceback reaches
-                # loguru rather than only threading's excepthook.
-                logger.opt(exception=e).error("Agent lifecycle follower stopped unexpectedly")
-                self._record_failure(f"The agent-lifecycle follower stopped: {type(e).__name__}: {e}")
-            raise
-        # Any exit other than a deliberate ``stop`` means nothing is following the
-        # stream any more, so the consumer must not keep reporting itself live.
-        # ``_record_failure`` keeps the first cause, so the poll that already said
-        # *why* the stream died is not overwritten by this generic message.
-        if not self._stop_event.is_set():
-            self._record_failure("The agent-lifecycle follower thread exited without being stopped.")
+        while not self._stop_event.is_set():
+            self.poll_once()
+            self._stop_event.wait(timeout=self.poll_interval_seconds)
+
+    def _on_follow_failure(self, e: BaseException) -> None:
+        """Turn an exception that ended the follow thread into the consumer's diagnosis.
+
+        Reached for anything that escapes :meth:`_follow_loop`, which includes
+        whatever ``on_line`` raises -- this class cannot enumerate a consumer's fold.
+        ``ObservableThread`` has already logged the traceback and re-raises after
+        this returns, so nothing is swallowed; all that is left is to name the cause,
+        since "something exited" is not actionable to whoever reads
+        :meth:`failure_detail`. An exception that raced a deliberate ``stop`` is not a
+        failure of the stream.
+        """
+        if self._stop_event.is_set():
+            return
+        self._record_failure(f"The agent-lifecycle follower stopped: {type(e).__name__}: {e}")
 
     def _seed(self) -> None:
         """Position at the newest full-state snapshot and replay from it to EOF."""

@@ -62,10 +62,10 @@ died. Those exceptions still propagate, so the traceback survives. A stream it
 cannot get an answer about says so in those words, rather than reporting the
 observer as exited -- that detail is what a consumer puts in front of whoever has
 to fix it, and the wrong diagnosis sends them somewhere else. `stop` holds to the
-same rule: a thread
-still running when its wait elapses is logged rather than assumed gone, since the
-only way it gets there is being stuck inside the consumer's own sink, still
-delivering events to a consumer that has just been told the follower stopped. How
+same rule: a thread still running when its wait elapses is logged rather than
+assumed gone, since the only way it gets there is being stuck inside the
+consumer's own sink, still delivering events to a consumer that has just been
+told the follower stopped. How
 long that wait is, like the poll interval beside it, is the consumer's to state
 (`join_timeout_seconds`): how long a sink may reasonably take to return is a fact
 about the sink.
