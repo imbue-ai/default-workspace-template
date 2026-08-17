@@ -36,10 +36,9 @@ tree to encrypted object storage.
 
 - Sync is configured iff `data/system/github_sync.toml` exists (it holds
   `repo_url`); the skill writes it. Without it the service idles.
-- Pushes go through the latchkey gateway on the user's machine, falling back
-  to the per-VPS secondary gateway (remote hosts only) when the user's
-  machine is offline. A failed push surfaces in the hook log
-  (`/tmp/post-commit-push.log`) and is retried on the next commit.
+- Pushes go through the latchkey gateway; there is no fallback gateway, so
+  while it is unreachable pushes simply fail. A failed push surfaces in the
+  hook log (`/tmp/post-commit-push.log`) and is retried on the next commit.
 - **Private-only enforcement**: the service re-checks the repo's visibility
   through latchkey every 15 minutes and mirrors the answer to
   `/tmp/github-sync-status.json`; the post-commit hook holds its pushes

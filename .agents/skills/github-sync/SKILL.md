@@ -176,9 +176,8 @@ NOT shipped to GitHub -- the restic `host-backup` service covers it.
 
 11. **Report**: the repo URL, that every commit now auto-pushes, that
     workspace data under `data/` stays out of GitHub (the restic host backup
-    covers it), and that pushes queue while their machine (the latchkey
-    gateway) is offline (on remote hosts the per-VPS secondary gateway
-    usually covers that).
+    covers it), and that pushes queue while the latchkey gateway is
+    unreachable and go out with the next commit once it is back.
 
 ## Status
 

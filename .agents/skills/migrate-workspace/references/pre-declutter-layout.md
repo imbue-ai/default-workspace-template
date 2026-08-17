@@ -204,9 +204,9 @@ built.
   when a deterministic check finds something (services in FATAL/BACKOFF, fresh
   errors in the supervisor logs, disk at 85 percent, new OOM shedding). See
   `enable-caretaker` / `disable-caretaker`.
-- **Inspirations.** A publishable, bootable snapshot of what a mind has built, so
-  another mind can be created from it or adopt it. See `publish-inspiration`,
-  `use-inspiration`, `update-installed-inspiration`.
+- **Templates.** A publishable, bootable snapshot of what a mind has built, so
+  another mind can be created from it or adopt it. See `publish-template`,
+  `use-template`, `update-installed-template`.
 - **Layout operations.** `system/scripts/layout.py` inspects and rearranges the
   dockview tabs -- open, split, move, focus, rename, close, maximize, swap a URL.
   See `manage-layout`.

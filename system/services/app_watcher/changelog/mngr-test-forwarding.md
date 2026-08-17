@@ -1,0 +1,1 @@
+Emit each service's origin `label` on the `service_registered` event, so local forwarding and the desktop client can route the unguessable `<label>.<host>` origin back to its service. Legacy rows without a label emit an empty label (consumers fall back to the service name).

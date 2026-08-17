@@ -12,6 +12,7 @@ vi.mock("mithril", () => ({
 
 import {
   appendEvents,
+  appendForwardEvents,
   prependEvents,
   evictOldEvents,
   fetchEvents,
@@ -69,6 +70,9 @@ function assistantWithAgentToolCall(
     stop_reason: null,
     usage: null,
     is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
   };
 }
 
@@ -154,6 +158,33 @@ describe("dedup", () => {
     prependEvents(agent, [makeEvent("a"), makeEvent("b"), makeEvent("c")]);
     expect(ids(agent)).toEqual(["a", "b", "c", "d"]);
   });
+
+  it("replaces an already-held event in place when a re-broadcast changes its content", () => {
+    // The spine's supersession path: the backend re-broadcasts a held event (same id)
+    // with updated content; the store upgrades it in place rather than dropping it as a
+    // duplicate or appending a second copy.
+    const agent = freshAgent();
+    const userEvent = (id: string, content: string): TranscriptEvent => ({
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: id,
+      source: "test",
+      message_uuid: id,
+      role: "user",
+      content,
+    });
+    const contentOf = (id: string) =>
+      getEventsForAgent(agent)
+        .filter((e) => e.event_id === id)
+        .map((e) => (e as { content?: string }).content);
+    appendEvents(agent, [userEvent("a", "first"), makeEvent("b")]);
+    expect(contentOf("a")).toEqual(["first"]);
+
+    appendEvents(agent, [userEvent("a", "first, corrected")]);
+    // Still two events, same order; "a" upgraded in place.
+    expect(ids(agent)).toEqual(["a", "b"]);
+    expect(contentOf("a")).toEqual(["first, corrected"]);
+  });
 });
 
 // The loaded window's position in the full transcript is tracked by offset (the
@@ -232,6 +263,80 @@ describe("window position (offset / total)", () => {
     mockRequest.mockClear();
     await fetchForwardEvents(agent);
     expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  it("snaps the window to the tail when a forward page returns empty", async () => {
+    const agent = freshAgent();
+    // A window whose count arithmetic says it falls short of the total -- the
+    // state left behind when events were missed during an outage (SSE
+    // reconnected but the snapshot refetch failed).
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")], offset: 5, total: 10 });
+    await fetchEvents(agent);
+    expect(hasMoreAfter(agent)).toBe(true);
+
+    // The server authoritatively answers "nothing after your last event": the
+    // held window IS the live tail. Without snapping firstOffset, hasMoreAfter
+    // would stick true forever -- forward paging refires with no possible
+    // progress and append() drops every future live event (frozen transcript).
+    mockRequest.mockResolvedValueOnce({ events: [], offset: 10, total: 10 });
+    await fetchForwardEvents(agent);
+    expect(hasMoreAfter(agent)).toBe(false);
+    expect(getFirstOffset(agent)).toBe(9);
+    expect(getTotalEventCount(agent)).toBe(10);
+
+    appendEvents(agent, [makeEvent("live")]);
+    expect(ids(agent)).toEqual(["x", "live"]);
+  });
+
+  it("discards a stale backfill page that does not reach the window start", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("e5"), makeEvent("e6")], offset: 5, total: 10 });
+    await fetchEvents(agent);
+
+    // A page from a replaced window's coordinates ends at index 3 < 5: gluing
+    // it on would corrupt the offset arithmetic, so it must be dropped.
+    prependEvents(agent, [makeEvent("s1"), makeEvent("s2")], 1, 10);
+    expect(ids(agent)).toEqual(["e5", "e6"]);
+    expect(getFirstOffset(agent)).toBe(5);
+
+    // An abutting page still merges normally.
+    prependEvents(agent, [makeEvent("e3"), makeEvent("e4")], 3, 10);
+    expect(ids(agent)).toEqual(["e3", "e4", "e5", "e6"]);
+    expect(getFirstOffset(agent)).toBe(3);
+  });
+
+  it("discards a backfill response that lands after the window start moved", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("b"), makeEvent("c")], offset: 4, total: 8 });
+    await fetchEvents(agent);
+
+    // While the backfill is in flight, the window start changes (e.g. a
+    // reconnect snapshot or another page landed). The response was issued
+    // against the old cursor, so it must be discarded.
+    mockRequest.mockImplementationOnce(async () => {
+      prependEvents(agent, [makeEvent("a")], 3, 8);
+      return { events: [makeEvent("z1"), makeEvent("z2")], offset: 2, total: 8 };
+    });
+    await fetchBackfillEvents(agent);
+    expect(ids(agent)).toEqual(["a", "b", "c"]);
+    expect(getFirstOffset(agent)).toBe(3);
+  });
+
+  it("discards a forward page that lands after the tail advanced", async () => {
+    const agent = freshAgent();
+    mockRequest.mockResolvedValueOnce({ events: [makeEvent("m2"), makeEvent("m3")], offset: 2, total: 6 });
+    await fetchEvents(agent);
+    expect(hasMoreAfter(agent)).toBe(true);
+
+    // The tail advances while the forward page is in flight; the response's
+    // cursor is stale, so it must be discarded (the next page refires against
+    // the current tail).
+    mockRequest.mockImplementationOnce(async () => {
+      appendForwardEvents(agent, [makeEvent("m4")], 6);
+      return { events: [makeEvent("m4-dup"), makeEvent("m5")], offset: 4, total: 6 };
+    });
+    await fetchForwardEvents(agent);
+    expect(ids(agent)).toEqual(["m2", "m3", "m4"]);
   });
 
   it("jumps the window to an arbitrary offset, replacing held events", async () => {

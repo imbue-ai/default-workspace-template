@@ -160,16 +160,22 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
 # --- pane pull-in (reuse system/scripts/layout.py) ----------------------------------
 
 
-def _layout(*args: str, quiet: bool = False) -> bool:
+def _layout(*args: str, quiet: bool = False, no_wait: bool = False) -> bool:
     """Run ``system/scripts/layout.py`` with the given args from the repo root. True on success.
     ``quiet`` suppresses layout.py's raw stderr so the caller can substitute its own
-    message (used by the pane-pull, which has a friendlier failure note)."""
+    message (used by the pane-pull, which has a friendlier failure note). ``no_wait`` posts the
+    op without waiting for it to settle in ``inspect`` -- the pane-pull is optimistic and a
+    browser pane can take well over layout.py's 5s settle cap to register (its viewer must
+    load), which otherwise reports a false failure even though the pane does open."""
     root = _repo_root()
-    layout = root / "scripts" / "layout.py"
+    layout = root / "system" / "scripts" / "layout.py"
     if not layout.exists():
         return False
+    env = os.environ.copy()
+    if no_wait:
+        env["MINDS_LAYOUT_NO_WAIT_STABLE"] = "1"
     result = subprocess.run(
-        [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True
+        [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True, env=env
     )
     if result.returncode != 0 and not quiet:
         _err(result.stderr.strip() or f"layout {' '.join(args)} failed")
@@ -246,11 +252,11 @@ def _pull_in_pane(browser_name: str) -> None:
         # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.
         anchor = os.environ.get(_ENV_ANCHOR)
         if anchor and _layout(
-            "split", ref, "--relative-to", anchor, "--direction", "right", "--new-group", "--layout", layout, quiet=True
+            "split", ref, "--relative-to", anchor, "--direction", "right", "--new-group", "--layout", layout, quiet=True, no_wait=True
         ):
             return
         if _layout(
-            "split", ref, "--relative-to", "self", "--direction", "right", "--new-group", "--layout", layout, quiet=True
+            "split", ref, "--relative-to", "self", "--direction", "right", "--new-group", "--layout", layout, quiet=True, no_wait=True
         ):
             return
     # Reachable but couldn't place the pane. Not an error -- offer the manual route

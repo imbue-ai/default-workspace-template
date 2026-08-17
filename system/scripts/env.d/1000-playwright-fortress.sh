@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # env.d unit: Fortress (stealth Chromium) + its apt system libs. Too heavy to
-# bake into the Docker image and not required by any boot-time service, so it
-# installs on first boot via the `env-converge` one-shot.
+# bake into the Docker image, and no boot-time service execs it directly (the
+# browser service degrades gracefully until the engine arrives), so it installs
+# on first boot via the `env-converge` one-shot. xvfb + xclip are baked into
+# the image (setup_system.sh) because [program:xvfb] DOES exec its binary
+# directly at boot; the install step below remains only for rootfses built
+# from pre-bake images, where its satisfied-check is not yet instant.
 #
 # env.d contract: idempotent with a fast satisfied-check -- NO marker files.
 # The converger re-runs every unit on every boot; a satisfied unit exits 0 in
@@ -15,6 +19,17 @@ readonly REPO_ROOT="${ENV_CONVERGE_WORKSPACE_DIR:-/home/user/workspace}"
 _log() {
     printf '[env.d/playwright-fortress] %s\n' "$*"
 }
+
+# Environments that never use the browser stack (e.g. the minds CI snapshot
+# producer) opt out of the whole unit -- most importantly the hundreds-of-MB
+# Fortress download -- by setting DWT_SKIP_BROWSER_UNIT=1 in the agent
+# environment. An env var rather than a marker file keeps the env.d contract:
+# the decision is re-evaluated every boot, so a workspace whose environment
+# stops setting it simply converges the browser stack on its next boot.
+if [ "${DWT_SKIP_BROWSER_UNIT:-}" = "1" ]; then
+    _log "DWT_SKIP_BROWSER_UNIT=1 -- skipping the browser stack install"
+    exit 0
+fi
 
 _recover_interrupted_dpkg() {
     # A prior apt/dpkg run killed mid-operation leaves dpkg broken, after which

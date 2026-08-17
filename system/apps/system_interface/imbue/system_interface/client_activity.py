@@ -259,6 +259,26 @@ def summarize_client_activity(
 
 
 @pure
+def last_message_time_by_agent(events: Sequence[dict[str, Any]]) -> dict[str, str]:
+    """The timestamp of each agent's most recent message, keyed by agent id.
+
+    The log is chronological, so the last message event naming an agent wins.
+    Timestamps are returned as written (ISO-8601 strings); the caller parses
+    them. This is what lets the OOM prioritizer recover per-chat recency across a
+    system-interface restart -- its own state is in-memory only.
+    """
+    last_by_agent_id: dict[str, str] = {}
+    for event in events:
+        if event.get("type") != MESSAGE_EVENT_TYPE:
+            continue
+        agent_id = str(event.get("agent_id", ""))
+        timestamp = str(event.get("timestamp", ""))
+        if agent_id and timestamp:
+            last_by_agent_id[agent_id] = timestamp
+    return last_by_agent_id
+
+
+@pure
 def find_client_id_for_agent(events: Sequence[dict[str, Any]], agent_id: str) -> str | None:
     """The client that most recently messaged ``agent_id``, or None.
 

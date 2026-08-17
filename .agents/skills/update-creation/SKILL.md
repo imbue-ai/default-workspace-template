@@ -87,14 +87,13 @@ git log -p "$COMMIT_RANGE"    > data/.tasks/harden/update-$TARGET/commit.diff
 ```
 
 Write the task file. Frontmatter carries `operation: update`, the `type`,
-and the worker reporting fields (per
+and `finish_report_path` (the report destination the lead polls; see
 `.agents/shared/references/worker-reporting.md`). The body carries the
 `## Change origin` marker the worker dispatches on, plus origin-specific content:
 
 ```bash
 cat > data/.tasks/harden/update-$TARGET/task.md << TASK_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/harden/update-$TARGET/reports/report.md
 operation: update
 type: skill
@@ -151,7 +150,7 @@ worker.
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-$TARGET \
-    --template subskill-worker \
+    --template worker \
     --runtime-dir data/.tasks/harden/update-$TARGET/ \
     --task-file data/.tasks/harden/update-$TARGET/task.md
 ```

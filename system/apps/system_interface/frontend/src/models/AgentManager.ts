@@ -5,8 +5,11 @@
 
 import m from "mithril";
 import { apiUrl } from "../base-path";
+import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
 import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
+import type { ModelChoice } from "./ModelSettings";
+import { noteBackendArrivals } from "./OutgoingMessages";
 import { parseJsonMessage } from "./ws-json";
 
 export interface AgentState {
@@ -15,16 +18,57 @@ export interface AgentState {
   state: string;
   labels: Record<string, string>;
   work_dir: string | null;
+  // The agent's harness ("claude", "codex", ...), from the backend. Read in three
+  // places: ModelBar picks the harness's catalog with it, ChatPanel gates the
+  // claude-only fast-mode prompt on it, and MessageInput intercepts /login and
+  // /logout for claude. Everything else is resolved backend-side -- tool calls arrive
+  // pre-labelled and activity arrives as an already-derived state -- so those three
+  // are the whole surface, and the two claude comparisons are the ones a per-harness
+  // capability on the catalog should eventually replace.
+  harness?: string;
   // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the
   // system interface has no per-agent activity tracking available (e.g.
   // remote agents whose state directory is not present on this host,
   // proto-agents, non-Claude agent types).
   activity_state?: string | null;
+  // The agent's live model/effort/fast selection plus the catalog option it
+  // matched, pushed by the backend beside activity_state. Null when no model
+  // resolution is available. Drives the composer's model bar.
+  model_choice?: ModelChoice | null;
+  // Full snapshot of the messages currently parked in the agent's harness queue,
+  // in enqueue order, pushed by the backend beside activity_state. The chat panel
+  // renders the queued group from this; it is replaced wholesale on each push and
+  // the frontend holds no queued state of its own. Absent/empty when nothing is
+  // queued. Mirrors the backend ``QueuedMessageState`` (models.py) -- keep in step.
+  queued_messages?: QueuedMessage[];
+  // Backend-computed shoulder-tap availability (contract Shoulder-tap): true iff something is
+  // queued AND no send is in flight. This ALONE drives the shoulder-tap button's enabled state
+  // -- the frontend computes nothing about availability and there is no error path. Absent =
+  // treat as unavailable (defensive; the button only renders when the queue is non-empty anyway).
+  shoulder_tap_available?: boolean;
+}
+
+/** One message currently parked in an agent's harness queue (the wire shape of
+ *  the backend ``QueuedMessageState``). The frontend renders these verbatim and
+ *  keys the bubble on ``queued_id``; it never derives or reconciles them. */
+export interface QueuedMessage {
+  queued_id: string;
+  content: string;
+  timestamp: string;
+  // True while the backend is actively re-sending this chip (a codex shoulder-tap's
+  // interrupt+resend): it stays continuously visible but renders "Sending…" rather than as a
+  // plain queued chip, so it never blinks out (contract A1a). Absent/false = a plain queued chip.
+  is_sending?: boolean;
 }
 
 export interface AppEntry {
   name: string;
   url: string;
+  // The unguessable ``<name>-<rand>`` hostname label this service's public
+  // origin uses (see ``system/scripts/forward_port.py``). Empty for legacy
+  // rows written before labels existed; ``labelForService`` falls back to the
+  // name in that case.
+  label: string;
 }
 
 // A live tmux terminal session (any tmux session whose name does NOT start
@@ -43,7 +87,7 @@ export interface TerminalSessionInfo {
 export interface ProtoAgent {
   agent_id: string;
   name: string;
-  creation_type: "worktree" | "chat";
+  creation_type: "chat";
   parent_agent_id: string | null;
 }
 
@@ -155,7 +199,17 @@ export type TerminalSessionListener = (terminalId: string | null, sessionId: str
 export type AgentActivityListener = (agentId: string, previous: string | null, current: string | null) => void;
 
 let agents: AgentState[] = [];
+// The JSON of the last agents_updated payload, to skip redundant identical pushes.
+let lastAgentsSerialized = "";
 let apps: AppEntry[] = [];
+// Whether an ``apps_updated`` carrying at least one registered service has
+// arrived. Until it has, ``labelForService`` cannot resolve a name to its
+// unguessable origin label -- which is fine locally (the bare name routes
+// through the forwarder) but produces an unroutable ``<name>.<domain>`` origin
+// on a share (only ``<label>.<domain>`` is claimed on the relay), yielding a
+// 403. Callers that build share-critical origins wait via ``whenAppsLoaded``.
+let appsLoaded = false;
+let appsLoadedWaiters: (() => void)[] = [];
 let protoAgents: ProtoAgent[] = [];
 let layoutOpListeners: LayoutOpListener[] = [];
 let layoutSyncListeners: LayoutSyncListener[] = [];
@@ -184,10 +238,12 @@ function connect(): void {
   }
 
   const url = getWsUrl();
+  console.info(`[si-ws] connecting to ${url}`);
   ws = new WebSocket(url);
 
   ws.onopen = () => {
     connected = true;
+    console.info("[si-ws] connected");
     // A successful connection resets the backoff so the next disconnect
     // starts from the base delay again.
     reconnectBackoff.reset();
@@ -207,7 +263,10 @@ function connect(): void {
     m.redraw();
   };
 
-  ws.onclose = () => {
+  ws.onclose = (event: CloseEvent) => {
+    console.warn(
+      `[si-ws] closed (code=${event.code} reason=${JSON.stringify(event.reason)} wasClean=${event.wasClean})`,
+    );
     ws = null;
     connected = false;
     scheduleReconnect();
@@ -215,6 +274,7 @@ function connect(): void {
   };
 
   ws.onerror = () => {
+    console.warn("[si-ws] socket error");
     ws?.close();
   };
 }
@@ -223,15 +283,26 @@ function scheduleReconnect(): void {
   if (reconnectTimer !== null) {
     return;
   }
+  const delayMs = reconnectBackoff.nextDelay();
+  console.info(`[si-ws] reconnecting in ${delayMs}ms`);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
-  }, reconnectBackoff.nextDelay());
+  }, delayMs);
 }
 
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "agents_updated": {
+      // The backend can broadcast the same snapshot many times during a turn (transcript
+      // churn), and a redraw on each identical push makes the model bar (its trusted-HTML
+      // logo especially) visibly flicker. Skip a push byte-identical to the last one: an
+      // idempotent update should cause no re-render.
+      const serialized = JSON.stringify(event.agents);
+      if (serialized === lastAgentsSerialized) {
+        break;
+      }
+      lastAgentsSerialized = serialized;
       // Diff against the outgoing snapshot (still in `agents` here) so we can
       // report per-agent activity transitions before replacing it. No separate
       // previous-state bookkeeping is needed -- the prior array is the record.
@@ -248,19 +319,34 @@ function handleEvent(event: WsEvent): void {
             listener(agent.id, previous, current);
           }
         }
+        // Route a newly-queued message through the optimistic-send layer so its
+        // "Sending…" bubble drops the instant it becomes a real queued entry
+        // (no overlap). Deduped by queued_id, so re-pushed snapshots are harmless.
+        const queuedIds = (agent.queued_messages ?? []).map((queued) => queued.queued_id);
+        if (queuedIds.length > 0) {
+          noteBackendArrivals(agent.id, queuedIds);
+        }
       }
       break;
     }
 
     case "apps_updated":
       apps = event.apps;
+      // The first non-empty app list means service labels are now resolvable;
+      // release anyone waiting on ``whenAppsLoaded``.
+      if (!appsLoaded && apps.length > 0) {
+        appsLoaded = true;
+        const waiters = appsLoadedWaiters;
+        appsLoadedWaiters = [];
+        for (const wake of waiters) wake();
+      }
       break;
 
     case "proto_agent_created":
       protoAgents.push({
         agent_id: event.agent_id,
         name: event.name,
-        creation_type: event.creation_type as "worktree" | "chat",
+        creation_type: event.creation_type as "chat",
         parent_agent_id: event.parent_agent_id,
       });
       break;
@@ -330,8 +416,12 @@ function handleEvent(event: WsEvent): void {
 export function reportClientState(previousLayoutSlug?: string): void {
   const activeLayout = getActiveLayoutSlug();
   if (ws === null || ws.readyState !== WebSocket.OPEN || !activeLayout) {
+    console.info(
+      `[si-ws] client_state not sent (readyState=${ws === null ? "no-socket" : ws.readyState} layout=${JSON.stringify(activeLayout)})`,
+    );
     return;
   }
+  console.info(`[si-ws] sending client_state (client_id=${getClientId()} layout=${activeLayout})`);
   ws.send(
     JSON.stringify({
       type: "client_state",
@@ -373,12 +463,76 @@ export function getAgentById(id: string): AgentState | undefined {
   return agents.find((a) => a.id === id);
 }
 
+/** The full snapshot of an agent's currently-queued messages, in enqueue order.
+ *  Empty when nothing is queued (or the agent is unknown). The single source of
+ *  queued state -- the frontend never invents or reconciles it. */
+export function getQueuedMessagesForAgent(agentId: string): QueuedMessage[] {
+  return getAgentById(agentId)?.queued_messages ?? [];
+}
+
+/** Whether the shoulder-tap is available for this agent, per the backend (contract
+ *  Shoulder-tap). This ALONE drives the button's enabled state; the frontend computes
+ *  nothing. Absent -> unavailable. */
+export function getShoulderTapAvailableForAgent(agentId: string): boolean {
+  return getAgentById(agentId)?.shoulder_tap_available === true;
+}
+
 export function removeAgentLocally(agentId: string): void {
   agents = agents.filter((a) => a.id !== agentId);
 }
 
 export function getApps(): AppEntry[] {
   return apps;
+}
+
+/** Resolve a service NAME to the unguessable hostname LABEL its public origin
+ *  uses. Services register a ``<name>-<rand>`` label (see
+ *  ``system/scripts/forward_port.py``); every panel origin is built from that
+ *  label, not the bare name. Falls back to the name itself when the service
+ *  has no known label -- an unregistered service, the ``system_interface``
+ *  shell, or before the app list has loaded -- so origin derivation still
+ *  works. */
+export function labelForService(name: string): string {
+  const app = apps.find((a) => a.name === name);
+  if (app?.label) return app.label;
+  // No label for this name. Two cases: (1) the app list has not loaded yet --
+  // a race the share-critical callers avoid by awaiting ``whenAppsLoaded``, so
+  // warn loudly if it happens anyway; (2) the app list is loaded but this name
+  // is genuinely unregistered (the shell itself, or a legacy row). Either way
+  // the only fallback is the bare name, which routes locally but not on a
+  // share -- so this is a last resort, not a silent default.
+  if (!appsLoaded) {
+    console.warn(
+      `[si] labelForService("${name}") fell back to the bare name because the app list has not loaded yet; ` +
+        "the resulting origin will not route on a shared workspace. Await whenAppsLoaded() before deriving share origins.",
+    );
+  }
+  return name;
+}
+
+/** Whether the workspace's app list (service origin labels) has loaded. */
+export function areAppsLoaded(): boolean {
+  return appsLoaded;
+}
+
+/** Resolve once the app list has loaded so ``labelForService`` can return real
+ *  origin labels, or after ``timeoutMs`` as a fallback so a workspace that
+ *  never reports any app still proceeds (degrading to bare-name origins, which
+ *  route locally). Share-critical URL construction (layout restore) awaits this
+ *  so a restored terminal/service tab never mounts an unroutable bare-name
+ *  origin on a share. */
+export function whenAppsLoaded(timeoutMs = 5000): Promise<void> {
+  if (appsLoaded) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const wake = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    appsLoadedWaiters.push(wake);
+    setTimeout(wake, timeoutMs);
+  });
 }
 
 export function getProtoAgents(): ProtoAgent[] {
@@ -439,11 +593,10 @@ export async function fetchTerminalSessions(): Promise<{ terminals: TerminalSess
   }
 }
 
-// The workspace terminal (ttyd) service is proxied at this same-origin path
-// (the service dispatcher adds no base-path prefix). Kept here rather than in
-// the view so the pure URL builder below is unit-testable without importing
+// The workspace terminal (ttyd) service lives on its own derived origin
+// (``http://terminal.<ws-host>/`` locally). The URL builder below is kept
+// here rather than in the view so it is unit-testable without importing
 // dockview-core (which needs a DOM).
-const TERMINAL_SERVICE_URL_PATH = "/service/terminal/";
 
 /** Build the ttyd URL that attaches a tab to a named tmux session via the
  *  ``session`` dispatch key. The ttyd dispatch reads the args positionally:
@@ -459,7 +612,7 @@ export function buildSessionTerminalUrl(sessionName: string, terminalId: string,
   params.append("arg", sessionName);
   params.append("arg", terminalId);
   params.append("arg", workdir);
-  return `${TERMINAL_SERVICE_URL_PATH}?${params.toString()}`;
+  return `${deriveServiceOrigin(labelForService("terminal"))}?${params.toString()}`;
 }
 
 /** Ask the backend to allocate the next free ``terminal-N`` session name. The

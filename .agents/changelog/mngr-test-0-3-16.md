@@ -1,0 +1,7 @@
+Fix the cross-version update-self hand-off break found updating a minds-v0.3.11 workspace to minds-v0.3.16: the v0.3.16 template removed `lead_agent` from the update-self task-file heredoc (relying on launch-time stamping), but an older lead follows the staged target prose while launching with its own pre-stamping `create_worker.py`, so the worker had no report address, its finished report was never delivered, and the lead waited out its full 90-minute timeout in silence.
+
+The update-self SKILL.md task template carries `lead_agent: $MNGR_AGENT_NAME` again (harmless under current launchers, which overwrite it; load-bearing under older ones), with a test pinning the template's fields so a future cleanup cannot drop them.
+
+`parse_task_frontmatter.py` now treats a missing `lead_agent` as a stderr warning instead of a hard failure, and `worker-reporting.md` documents a same-repo fallback delivery: when the address is unset or the `mngr rsync` push fails, the worker writes its report directly into the repo's main worktree (the lead's workspace) at `FINISH_REPORT_PATH`, so a finished worker is never structurally unable to say so.
+
+`create_worker.py await` now ends the poll early (new exit code 76) when the worker's agent has been idle for several consecutive polls with no report, with a message pointing at the worker's own worktree for an undelivered report -- instead of silently sleeping out the remaining timeout.

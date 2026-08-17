@@ -5,143 +5,103 @@ import {
   isNonBoundaryUserMessage,
   isSkillExpansionUserMessage,
   isSystemChipUserMessage,
+  resolutionOf,
 } from "./message-classification";
-import { BROWSER_FLEET_TAG, UserMessageKind } from "./message-kinds";
+import { UserMessageKind } from "./message-kinds";
+
+// The DETECTION cases (which content becomes which decision) live backend-side now, in
+// `harnesses/message_display_test.py` -- the detector table moved there. These tests pin
+// the frontend's remaining job: mapping the wire's `display` fields onto the kind
+// catalogue, with zero content sniffing.
 
 describe("classifyUserMessage", () => {
-  it("treats an ordinary human prompt as UserPrompt with the content as body", () => {
-    const c = classifyUserMessage("please rebase onto main");
+  it("treats a message with no display decision as UserPrompt with the content as body", () => {
+    const c = classifyUserMessage({ content: "please rebase onto main" });
     expect(c.kind).toBe(UserMessageKind.UserPrompt);
     expect(c.body).toBe("please rebase onto main");
     expect(c.label).toBeNull();
   });
 
-  it("classifies stop-hook feedback as a SystemChip", () => {
-    const c = classifyUserMessage("Stop hook feedback:\nlint failed, fix it");
+  it("maps display: hidden to Hidden", () => {
+    expect(classifyUserMessage({ content: "/welcome", display: "hidden" }).kind).toBe(UserMessageKind.Hidden);
+  });
+
+  it("maps display: chip to SystemChip with the backend's label", () => {
+    const c = classifyUserMessage({
+      content: "Stop hook feedback:\nlint failed",
+      display: "chip",
+      display_label: "Stop hook feedback",
+    });
     expect(c.kind).toBe(UserMessageKind.SystemChip);
     expect(c.label).toBe("Stop hook feedback");
+    expect(c.body).toBe("Stop hook feedback:\nlint failed");
   });
 
-  it("classifies a browser-fleet nudge as a SystemChip and strips the sentinel from the body", () => {
-    const inner = "Browser foo-1 was handed back to you. Re-run `state foo-1`.";
-    const c = classifyUserMessage(`<${BROWSER_FLEET_TAG}>${inner}</${BROWSER_FLEET_TAG}>`);
-    expect(c.kind).toBe(UserMessageKind.SystemChip);
-    expect(c.label).toBe("Browser fleet");
-    expect(c.body).toBe(inner);
+  it("prefers the backend's display_body (a stripped wrapper sentinel) for the chip body", () => {
+    const c = classifyUserMessage({
+      content: "<agentic-browser-fleet>Browser foo-1 is free</agentic-browser-fleet>",
+      display: "chip",
+      display_label: "Browser fleet",
+      display_body: "Browser foo-1 is free",
+    });
+    expect(c.body).toBe("Browser foo-1 is free");
   });
 
-  it("classifies a bare <task-notification> line as a SystemChip", () => {
-    const c = classifyUserMessage("<task-notification>\n<status>completed</status>\n</task-notification>");
-    expect(c.kind).toBe(UserMessageKind.SystemChip);
-    expect(c.label).toBe("Background task");
-  });
-
-  it("classifies a task-notification behind a [SYSTEM NOTIFICATION] preamble as a SystemChip", () => {
-    const c = classifyUserMessage(
-      "[SYSTEM NOTIFICATION - NOT USER INPUT]\nblah\n<task-notification>x</task-notification>",
-    );
-    expect(c.kind).toBe(UserMessageKind.SystemChip);
-    expect(c.label).toBe("Background task");
-  });
-
-  it("classifies a skill expansion and lifts the skill name as the label", () => {
-    const c = classifyUserMessage(
-      "Base directory for this skill: /home/.claude/skills/deep-research/\n\n# deep-research",
-    );
+  it("maps display: skill_expansion to SkillExpansion with the skill name", () => {
+    const c = classifyUserMessage({
+      content: "Base directory for this skill: /x/skills/deep-research/",
+      display: "skill_expansion",
+      display_label: "deep-research",
+    });
     expect(c.kind).toBe(UserMessageKind.SkillExpansion);
     expect(c.label).toBe("deep-research");
   });
 
-  it("classifies the seeded /welcome as Hidden", () => {
-    expect(classifyUserMessage("/welcome").kind).toBe(UserMessageKind.Hidden);
-  });
-
-  it("hides an is_meta framework message (e.g. the image coordinate note) as Hidden", () => {
-    const note =
-      "[Image: original 1800x2800, displayed at 1286x2000. Multiply coordinates by 1.40 to map to original image.]";
-    expect(classifyUserMessage(note, false).kind).toBe(UserMessageKind.UserPrompt); // without the flag it'd look like a human turn
-    expect(classifyUserMessage(note, true).kind).toBe(UserMessageKind.Hidden); // the flag hides it
-  });
-
-  it("hides the resume-continuation marker via is_meta, not a bespoke matcher", () => {
-    expect(classifyUserMessage("Continue from where you left off.", true).kind).toBe(UserMessageKind.Hidden);
-    // A human who literally types the words (not is_meta) is still shown.
-    expect(classifyUserMessage("Continue from where you left off.", false).kind).toBe(UserMessageKind.UserPrompt);
-  });
-
-  it("lets an explicit detector WIN over is_meta: Stop-hook feedback is is_meta yet shown as a chip", () => {
-    // Stop-hook feedback is is_meta:true in the transcript, but we deliberately surface it.
-    const c = classifyUserMessage("Stop hook feedback:\nlint failed", true);
-    expect(c.kind).toBe(UserMessageKind.SystemChip);
-    expect(c.label).toBe("Stop hook feedback");
-  });
-
-  it("does not misread a human message that merely mentions a marker", () => {
-    // The marker must anchor at the start (or be a real tag), so quoting it in prose is safe.
-    expect(classifyUserMessage("what does Stop hook feedback: mean?").kind).toBe(UserMessageKind.UserPrompt);
-    expect(classifyUserMessage("tell me about <task-notification> handling").kind).toBe(UserMessageKind.UserPrompt);
-  });
-
-  it("hides the /model and /fast slash commands the composer picker/toggle send", () => {
-    // The backend normalizes the transcript's <command-name> expansion back to
-    // the typed command, which is what reaches the classifier.
-    expect(classifyUserMessage("/model opus[1m]").kind).toBe(UserMessageKind.Hidden);
-    expect(classifyUserMessage("/model sonnet").kind).toBe(UserMessageKind.Hidden);
-    expect(classifyUserMessage("/fast on").kind).toBe(UserMessageKind.Hidden);
-    expect(classifyUserMessage("/fast off").kind).toBe(UserMessageKind.Hidden);
-    // Bare invocation (no args) is hidden too.
-    expect(classifyUserMessage("/fast").kind).toBe(UserMessageKind.Hidden);
-  });
-
-  it("hides the <local-command-stdout> confirmation for /model and /fast", () => {
-    expect(
-      classifyUserMessage("<local-command-stdout>Set model to Opus 4.8 (1M context)</local-command-stdout>").kind,
-    ).toBe(UserMessageKind.Hidden);
-    expect(classifyUserMessage("<local-command-stdout>Fast mode ON</local-command-stdout>").kind).toBe(
-      UserMessageKind.Hidden,
-    );
-  });
-
-  it("does not hide a look-alike model/fast command or an unrelated local-command output", () => {
-    // A different slash command, or a word that merely starts with model/fast, is a real turn.
-    expect(classifyUserMessage("/models").kind).toBe(UserMessageKind.UserPrompt);
-    expect(classifyUserMessage("model the data for me").kind).toBe(UserMessageKind.UserPrompt);
-    // An unrelated local-command output is untouched (only /model, /fast outputs are hidden).
-    expect(classifyUserMessage("<local-command-stdout>Total cost: $1.23</local-command-stdout>").kind).toBe(
-      UserMessageKind.UserPrompt,
-    );
+  it("maps an uncorrelated permission_resolution to UserPrompt (the walk owns suppression)", () => {
+    const c = classifyUserMessage({
+      content: "Your permission request for GitHub was granted.",
+      display: "permission_resolution",
+    });
+    expect(c.kind).toBe(UserMessageKind.UserPrompt);
   });
 });
 
 describe("semantic helpers", () => {
-  it("isNonBoundaryUserMessage is true for every non-human kind", () => {
-    expect(isNonBoundaryUserMessage("Stop hook feedback:\nx")).toBe(true);
-    expect(isNonBoundaryUserMessage(`<${BROWSER_FLEET_TAG}>x</${BROWSER_FLEET_TAG}>`)).toBe(true);
-    expect(isNonBoundaryUserMessage("<task-notification>x</task-notification>")).toBe(true);
-    expect(isNonBoundaryUserMessage("Base directory for this skill: /x/skills/y/")).toBe(true);
-    expect(isNonBoundaryUserMessage("/welcome")).toBe(true);
-    expect(isNonBoundaryUserMessage("a normal message")).toBe(false);
+  it("isNonBoundaryUserMessage is true for every non-baseline kind", () => {
+    expect(isNonBoundaryUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(
+      true,
+    );
+    expect(isNonBoundaryUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
+    expect(isNonBoundaryUserMessage({ content: "/welcome", display: "hidden" })).toBe(true);
+    expect(isNonBoundaryUserMessage({ content: "a normal message" })).toBe(false);
   });
 
-  it("isSystemChipUserMessage is true only for the collapsed-chip kinds", () => {
-    expect(isSystemChipUserMessage("Stop hook feedback:\nx")).toBe(true);
-    expect(isSystemChipUserMessage(`<${BROWSER_FLEET_TAG}>x</${BROWSER_FLEET_TAG}>`)).toBe(true);
-    expect(isSystemChipUserMessage("<task-notification>x</task-notification>")).toBe(true);
-    // skill expansion + welcome are non-boundary but NOT chips (no user-rail row)
-    expect(isSystemChipUserMessage("Base directory for this skill: /x/skills/y/")).toBe(false);
-    expect(isSystemChipUserMessage("/welcome")).toBe(false);
-    expect(isSystemChipUserMessage("a normal message")).toBe(false);
+  it("isSystemChipUserMessage is true only for the collapsed-chip kind", () => {
+    expect(isSystemChipUserMessage({ content: "x", display: "chip", display_label: "Background task" })).toBe(true);
+    expect(isSystemChipUserMessage({ content: "x", display: "skill_expansion" })).toBe(false);
+    expect(isSystemChipUserMessage({ content: "/welcome", display: "hidden" })).toBe(false);
+    expect(isSystemChipUserMessage({ content: "a normal message" })).toBe(false);
   });
 
-  it("isHiddenUserMessage covers /welcome and skill expansions (no user-rail row)", () => {
-    expect(isHiddenUserMessage("/welcome")).toBe(true);
-    expect(isHiddenUserMessage("Base directory for this skill: /x/skills/y/")).toBe(true);
-    expect(isHiddenUserMessage("Stop hook feedback:\nx")).toBe(false);
-    expect(isHiddenUserMessage("a normal message")).toBe(false);
+  it("isHiddenUserMessage covers hidden and relocated kinds (no user-rail row)", () => {
+    expect(isHiddenUserMessage({ content: "/welcome", display: "hidden" })).toBe(true);
+    expect(isHiddenUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
+    expect(isHiddenUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(false);
+    expect(isHiddenUserMessage({ content: "a normal message" })).toBe(false);
   });
 
   it("isSkillExpansionUserMessage matches only skill expansions", () => {
-    expect(isSkillExpansionUserMessage("Base directory for this skill: /x/skills/y/")).toBe(true);
-    expect(isSkillExpansionUserMessage("/welcome")).toBe(false);
+    expect(isSkillExpansionUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
+    expect(isSkillExpansionUserMessage({ content: "/welcome", display: "hidden" })).toBe(false);
+  });
+});
+
+describe("resolutionOf", () => {
+  it("reads the verdict off a permission_resolution and nothing else", () => {
+    expect(resolutionOf({ display: "permission_resolution", resolution: "granted" })).toBe("granted");
+    expect(resolutionOf({ display: "permission_resolution", resolution: "denied" })).toBe("denied");
+    expect(resolutionOf({ display: "permission_resolution", resolution: "error" })).toBe("error");
+    expect(resolutionOf({ display: "hidden" })).toBeNull();
+    expect(resolutionOf({})).toBeNull();
   });
 });

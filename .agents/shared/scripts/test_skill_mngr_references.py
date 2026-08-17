@@ -40,8 +40,10 @@ _KNOWN_PLUGIN_SUBCOMMANDS = frozenset({"file", "wait"})
 _INLINE_CODE = re.compile(r"`([^`\n]+)`")
 _FENCED_CODE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 # `mngr` followed by whitespace then a word starting with a letter (the
-# subcommand). Excludes `mngr/<branch>`, `mngr_claude`, `$MNGR_*`, `mngr --flag`.
-_MNGR_SUBCOMMAND = re.compile(r"\bmngr\s+([a-zA-Z][\w-]*)")
+# subcommand). Excludes `mngr/<branch>`, `mngr_claude`, `$MNGR_*`, `mngr --flag`,
+# and path arguments ending in `/mngr` (e.g. `git -C .external_worktrees/mngr
+# checkout ...`, where `checkout` is a git subcommand, not a mngr one).
+_MNGR_SUBCOMMAND = re.compile(r"(?<!/)\bmngr\s+([a-zA-Z][\w-]*)")
 
 
 def _valid_subcommands() -> frozenset[str]:
