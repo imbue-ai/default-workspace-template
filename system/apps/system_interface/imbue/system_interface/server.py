@@ -249,9 +249,12 @@ _FRONTEND_NOT_REPAIRABLE_HTML = """<!doctype html>
 <body>
 <p>Frontend not built, and the frontend sources are not present in this
 installation, so it cannot be rebuilt from here.</p>
-<p>Run <code>npm ci &amp;&amp; npm run build</code> in the app's
-<code>frontend/</code> directory, then reload this page. The bundle is picked up
-as soon as it exists, so there is no need to restart the system interface.</p>
+<p>Build it from a checkout of this app instead: run
+<code>npm ci &amp;&amp; npm run build</code> in that checkout's
+<code>frontend/</code> directory, and copy the bundle it writes to
+<code>imbue/system_interface/static/</code> into this installation. The bundle is
+picked up as soon as it exists, so there is no need to restart the system
+interface -- just reload this page.</p>
 </body>
 </html>
 """
