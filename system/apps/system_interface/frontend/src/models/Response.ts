@@ -34,6 +34,10 @@ export interface ToolCall {
   description?: string;
   subagent_type?: string;
   subagent_metadata?: SubagentMetadata;
+  // The backend's render decision for this call: "hidden" (a tk lifecycle call --
+  // a structural marker consumed by the step timeline, not work to render) or
+  // "permission_request" (render the rich permission card). Absent = normal row.
+  display?: "hidden" | "permission_request";
 }
 
 /**
@@ -63,17 +67,21 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   type: "user_message";
   role: string;
   content: string;
-  // Claude Code's `isMeta`: a framework-injected, model-only message (the
-  // resume-continuation marker, the image coordinate note, MCP-resource dumps,
-  // hook context, etc.). The classifier hides these (UserMessageKind.Hidden)
-  // unless an explicit detector surfaces one, e.g. Stop-hook feedback, which is
-  // isMeta yet shown as a chip. Absent/false for a genuine human turn.
-  is_meta?: boolean;
-  // Claude Code's `isCompactSummary`: the record injected after auto-compaction,
-  // whose content is the carried-over summary ("This session is being continued
-  // ..."). Unlike is_meta it is NOT hidden -- an explicit detector surfaces it as a
-  // collapsed chip (UserMessageKind.SystemChip). Absent/false for a genuine turn.
-  is_compact_summary?: boolean;
+  // The backend's render decision (harnesses/events.DisplayKind, stamped by every
+  // harness's parser off the shared detector table): how this message renders.
+  // Absent = the baseline user bubble. The raw harness markers (claude's isMeta /
+  // isCompactSummary, sentinel tags) never reach the wire -- the decision does.
+  display?: "hidden" | "chip" | "skill_expansion" | "permission_resolution";
+  // Chip title ("Stop hook feedback", "Background task", ...) or skill name.
+  display_label?: string;
+  // The body to display when a wrapper sentinel was stripped (a fleet nudge).
+  display_body?: string;
+  // permission_resolution only: the verdict written onto the earlier card.
+  resolution?: "granted" | "denied" | "error";
+  // The activity path's signal that no model reply follows this message (model-bar
+  // traffic, framework injections). Read by the backend's own activity derivation;
+  // carried on the wire for completeness.
+  non_turn_tail?: boolean;
 }
 
 /**

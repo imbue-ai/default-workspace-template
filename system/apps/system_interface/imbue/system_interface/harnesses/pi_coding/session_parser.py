@@ -29,10 +29,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from imbue.system_interface.harnesses.events import DisplayKind
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
-from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
+from imbue.system_interface.harnesses.message_display import classify_user_message
+from imbue.system_interface.harnesses.message_display import is_non_turn_tail
 from imbue.system_interface.harnesses.pi_coding.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.pi_coding.tool_labels import tool_labels
+from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
+from imbue.system_interface.harnesses.tool_output import find_permission_request
+from imbue.system_interface.harnesses.tool_output import is_permission_request_call
+from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
+from imbue.system_interface.harnesses.tool_output import truncate_tool_output
 
 # "common" here means the normalized/common event *form*, not the on-disk common-transcript
 # file (which we do NOT read). Nothing in the pipeline branches on this string.
@@ -81,13 +88,22 @@ def _labelled_tool_call(block: dict[str, Any]) -> dict[str, str]:
     tool_name = str(block.get("name", ""))
     raw_input = json.dumps(block.get("arguments", {}))
     header_label, caption_label = tool_labels(tool_name, raw_input)
-    return {
+    tool_call = {
         "tool_call_id": call_id,
         "tool_name": tool_name,
         "input_preview": _input_preview(tool_name, raw_input),
         "header_label": header_label,
         "caption_label": caption_label,
     }
+    # The render decision ships with the call: a PURE tk lifecycle call is a hidden
+    # structural marker (the hide rule is stricter than the truncation exemption -- see
+    # tool_output.is_pure_tk_lifecycle_command); a latchkey POST renders as the card.
+    command = block.get("arguments", {}).get("command", "") if isinstance(block.get("arguments"), dict) else ""
+    is_pure_tk = tool_name == "bash" and isinstance(command, str) and is_pure_tk_lifecycle_command(command)
+    display = classify_tool_call_display(is_pure_tk=is_pure_tk, raw_input=raw_input)
+    if display is not None:
+        tool_call["display"] = display.value
+    return tool_call
 
 
 def _tool_calls_from_content(content: Any) -> list[dict[str, str]]:
@@ -128,26 +144,41 @@ def _assistant_event(event_id: str, timestamp: str, message: dict[str, Any]) -> 
         "message_uuid": event_id,
         # pi has no auth-error concept in its transcript; keep the field present-but-false.
         "is_auth_error": False,
+        # Required by the shared contract (Response.ts). Detection deferred, like
+        # is_auth_error: False/None is the honest fill until pi's error shape is known.
+        "is_api_error": False,
+        "api_error_kind": None,
+        "is_provider_fault": False,
     }
 
 
 def _user_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[str, Any]:
-    return {
+    content = _text_from_content(message.get("content"))
+    event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "user_message",
         "event_id": event_id,
         "source": SOURCE,
         "role": "user",
-        "content": _text_from_content(message.get("content")),
+        "content": content,
         "message_uuid": event_id,
     }
+    # The shared render decision -- pi gets the same detector table as claude and codex.
+    decision = classify_user_message(content)
+    if decision is not None:
+        decision.apply_to(event)
+    if is_non_turn_tail(content):
+        event["non_turn_tail"] = True
+    return event
 
 
 def _tool_result_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[str, Any]:
-    output = _text_from_content(message.get("content"))
-    if len(output) > MAX_TOOL_OUTPUT_LENGTH:
-        output = output[:MAX_TOOL_OUTPUT_LENGTH] + "..."
-    return {
+    raw_output = _text_from_content(message.get("content"))
+    # Lift the permission-request object and preserve tk step decoration BEFORE truncation
+    # (shared with the claude/codex parsers -- see ``harnesses/tool_output``).
+    permission_request = find_permission_request(raw_output)
+    output = truncate_tool_output(raw_output, permission_request)
+    event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "tool_result",
         "event_id": event_id,
@@ -158,6 +189,9 @@ def _tool_result_event(event_id: str, timestamp: str, message: dict[str, Any]) -
         "is_error": message.get("isError") is True,
         "message_uuid": event_id,
     }
+    if permission_request is not None:
+        event["permission_request"] = permission_request.details
+    return event
 
 
 def parse_record(record: dict[str, Any]) -> list[dict[str, Any]]:

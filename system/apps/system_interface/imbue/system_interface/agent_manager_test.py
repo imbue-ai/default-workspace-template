@@ -51,8 +51,8 @@ from imbue.system_interface.harnesses.codex.model import write_codex_model_optio
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.harness_type import HarnessType
-from imbue.system_interface.harnesses.session import FileHarnessSession
 from imbue.system_interface.harnesses.registry import get_model_state_path
+from imbue.system_interface.harnesses.session import FileHarnessSession
 from imbue.system_interface.models import AgentCreationError
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.models import AppEntry

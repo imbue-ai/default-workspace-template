@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from imbue.system_interface.harnesses.claude.session_parser import _MAX_PERMISSION_REQUEST_PROBES
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines
+from imbue.system_interface.harnesses.tool_output import _MAX_PERMISSION_REQUEST_PROBES
 
 
 def _make_user_line(uuid: str, timestamp: str, content: str) -> str:
@@ -612,11 +612,10 @@ def test_user_message_with_array_content() -> None:
     assert events[0]["content"] == "Part one\nPart two"
 
 
-def test_resume_continuation_user_message_emitted_as_meta() -> None:
-    """Claude Code's "Continue from where you left off." resume marker is emitted
-    with ``is_meta`` set, rather than dropped by a bespoke matcher. It is one of
-    many ``isMeta`` framework injections; the frontend classifier hides them all
-    via that flag (the user never typed it, so it must not render).
+def test_resume_continuation_user_message_emitted_hidden() -> None:
+    """Claude Code's "Continue from where you left off." resume marker (an ``isMeta``
+    framework injection) is emitted with the render decision already made: hidden, and
+    non-turn-tail. The raw flag never crosses the wire.
     """
     line = json.dumps(
         {
@@ -633,12 +632,14 @@ def test_resume_continuation_user_message_emitted_as_meta() -> None:
     events = parse_lines([line])
     assert len(events) == 1
     assert events[0]["type"] == "user_message"
-    assert events[0]["is_meta"] is True
+    assert events[0]["display"] == "hidden"
+    assert events[0]["non_turn_tail"] is True
+    assert "is_meta" not in events[0]
 
 
-def test_image_metadata_note_emitted_as_meta() -> None:
-    """Claude Code's isMeta image coordinate note is emitted with ``is_meta`` set
-    so the frontend can hide it, instead of leaking through as a bare user bubble.
+def test_image_metadata_note_emitted_hidden() -> None:
+    """Claude Code's isMeta image coordinate note arrives with ``display: hidden`` so it
+    never leaks through as a bare user bubble.
     """
     line = json.dumps(
         {
@@ -659,21 +660,20 @@ def test_image_metadata_note_emitted_as_meta() -> None:
     )
     events = parse_lines([line])
     assert len(events) == 1
-    assert events[0]["is_meta"] is True
+    assert events[0]["display"] == "hidden"
 
 
-def test_genuine_user_message_has_no_is_meta() -> None:
-    """A real human turn carries no ``is_meta`` key, so the frontend shows it."""
+def test_genuine_user_message_has_no_display_decision() -> None:
+    """A real human turn carries no ``display`` key, so the frontend shows the baseline bubble."""
     events = parse_lines([_make_user_line("uuid-h", "2026-01-01T00:00:00Z", "hello there")])
     assert len(events) == 1
     assert "is_meta" not in events[0]
 
 
-def test_compaction_summary_user_message_emitted_with_flag() -> None:
-    """Claude Code's post-auto-compaction record carries ``isCompactSummary`` (and is
-    NOT ``isMeta``): it is a real, visible message whose text is the carried-over
-    summary. The flag is passed through so the frontend can collapse it into a chip
-    rather than render the whole summary as a bare user bubble.
+def test_compaction_summary_user_message_emitted_as_chip() -> None:
+    """Claude Code's post-auto-compaction record (``isCompactSummary``, NOT ``isMeta``) is
+    a real, visible message whose text is the carried-over summary. It arrives as a
+    labelled chip decision rather than a raw flag the frontend must interpret.
     """
     line = json.dumps(
         {
@@ -695,8 +695,11 @@ def test_compaction_summary_user_message_emitted_with_flag() -> None:
     events = parse_lines([line])
     assert len(events) == 1
     assert events[0]["type"] == "user_message"
-    assert events[0]["is_compact_summary"] is True
-    assert "is_meta" not in events[0]
+    assert events[0]["display"] == "chip"
+    assert events[0]["display_label"] == "Summary of earlier conversation"
+    # The summary is a genuine anchor for the continuing conversation, not model-bar
+    # traffic, so it is not marked non-turn.
+    assert "is_meta" not in events[0] and "is_compact_summary" not in events[0]
 
 
 def test_genuine_user_message_has_no_compact_summary_flag() -> None:

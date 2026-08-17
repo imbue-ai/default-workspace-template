@@ -103,21 +103,10 @@ def test_last_event_type(events: list[dict[str, Any]], expected: str | None) -> 
 @pytest.mark.parametrize(
     "event, expected",
     [
-        # The composer bar's slash commands and their confirmations are not turns,
-        # so a transcript that ends on one must not pin the indicator on "Thinking".
-        pytest.param({"type": "user_message", "content": "/model sonnet"}, True, id="model_command"),
-        pytest.param({"type": "user_message", "content": "/effort xhigh"}, True, id="effort_command"),
-        pytest.param({"type": "user_message", "content": "/fast on"}, True, id="fast_command"),
-        pytest.param(
-            {
-                "type": "user_message",
-                "content": "<local-command-stdout>Set effort level to xhigh</local-command-stdout>",
-            },
-            True,
-            id="effort_stdout",
-        ),
-        pytest.param({"type": "user_message", "is_meta": True, "content": "resume marker"}, True, id="is_meta"),
-        pytest.param({"type": "user_message", "content": "a real question"}, False, id="real_prompt"),
+        # The parser stamps the decision (harnesses/message_display.is_non_turn_tail);
+        # this layer only reads it. The content-level cases live in message_display_test.
+        pytest.param({"type": "user_message", "non_turn_tail": True, "content": "/model sonnet"}, True, id="stamped"),
+        pytest.param({"type": "user_message", "content": "a real question"}, False, id="unstamped"),
         pytest.param({"type": "assistant_message"}, False, id="not_a_user_message"),
     ],
 )

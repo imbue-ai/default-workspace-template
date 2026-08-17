@@ -45,7 +45,7 @@ export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): 
       }
       continue;
     }
-    if (e.type === "user_message" && isSkillExpansionUserMessage(e.content ?? "") && pendingSkillCallIds.length > 0) {
+    if (e.type === "user_message" && isSkillExpansionUserMessage(e) && pendingSkillCallIds.length > 0) {
       const targetCallId = pendingSkillCallIds.shift() as string;
       const existing = toolResults.get(targetCallId);
       const expansion = e.content ?? "";

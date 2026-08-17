@@ -57,3 +57,32 @@ class SpecialEventKind(StrEnum):
     TURN_STARTED = "turn_started"
     TURN_COMPLETED = "turn_completed"
     TURN_ABORTED = "turn_aborted"
+
+
+class DisplayKind(StrEnum):
+    """How the frontend must render one event -- the DECISION, not the evidence.
+
+    A harness's own markers (claude's ``isMeta``, a tk lifecycle verb, a latchkey host, a
+    framework sentinel) are read backend-side and become one of these; the raw markers never
+    cross the wire. The frontend maps each kind to its visual (see ``KIND_SPEC`` in
+    ``message-kinds.ts``) with zero sniffing of harness data.
+
+    Carried in the optional ``display`` field of ``user_message`` (with ``display_label`` /
+    ``display_body`` for the chip title / unwrapped body) and ``tool_call`` (``HIDDEN`` and
+    ``PERMISSION_REQUEST`` only). Absent = render normally. A sibling of
+    :class:`SpecialEventKind`, deliberately not the same enum: ``special`` says an event is
+    not a message at all (and renderers ignore it), while ``display`` says how a message
+    renders -- a hidden message is still a message and still occupies its ``/events`` slot.
+    """
+
+    # No DOM at all (the seeded /welcome, a model-bar command, a framework-injected line).
+    HIDDEN = "hidden"
+    # A collapsed chip inside the current turn; ``display_label`` is its title.
+    CHIP = "chip"
+    # Relocated into the preceding Skill tool-call block; ``display_label`` is the skill name.
+    SKILL_EXPANSION = "skill_expansion"
+    # tool_call only: render the rich permission card instead of a tool row.
+    PERMISSION_REQUEST = "permission_request"
+    # user_message only: a latchkey verdict -- no row; the ``resolution`` field is written
+    # onto the earlier permission card.
+    PERMISSION_RESOLUTION = "permission_resolution"
