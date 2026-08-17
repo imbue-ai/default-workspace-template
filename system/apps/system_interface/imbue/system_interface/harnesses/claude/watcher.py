@@ -344,11 +344,6 @@ class ClaudeSessionWatcher(AgentSessionWatcher):
         self._last_broadcast_queue_snapshot: list[dict[str, str]] = []
         self._queue_snapshot_callback: Callable[[list[dict[str, Any]]], None] | None = None
 
-        # The backend's *Sending* state (contract A1): messages the send endpoint has
-        # accepted and is delivering but that have not yet committed or queued. Guarded by
-        # ``_lock`` like the queue populator. The interrupt path reads it so a send caught
-        # mid-flight (never committed) returns to the composer instead of being lost.
-
         self._wake_event = threading.Event()
         self._stop_event = threading.Event()
         self._observer: Any = None

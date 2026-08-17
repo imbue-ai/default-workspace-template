@@ -1090,3 +1090,31 @@ def test_deeply_nested_json_probe_does_not_crash_parsing() -> None:
     events = parse_lines(lines)
     assert "permission_request" not in events[0]
     assert events[0]["output"].endswith("...")
+
+
+def test_queued_command_attachment_carries_the_render_decision() -> None:
+    """The queued-path emitter stamps display/non_turn_tail exactly like the normal path.
+
+    A /model parked while claude is mid-turn must stay hidden (and must not pin the dot on
+    Thinking) -- pre-decision wiring, the frontend's content sniffing covered this path; now
+    nothing downstream re-derives it, so the emitter itself must decide.
+    """
+    events = parse_lines([_make_queued_command_line("uuid-q1", "2026-01-01T00:00:00Z", "/model sonnet")])
+    assert len(events) == 1
+    assert events[0]["type"] == "user_message"
+    assert events[0]["display"] == "hidden"
+    assert events[0]["non_turn_tail"] is True
+
+
+def test_chip_classification_survives_an_attachment_block() -> None:
+    """Whole-string-anchored detectors run on the attachment-stripped text, and a chip's
+    display body shows the message text rather than the raw attachment markdown."""
+    content = (
+        "<agentic-browser-fleet>Browser foo-1 is free</agentic-browser-fleet>"
+        "\n\nSee attachment here: ![](/uploads/x.png)"
+    )
+    events = parse_lines([_make_user_line("uuid-att", "2026-01-01T00:00:00Z", content)])
+    assert len(events) == 1
+    assert events[0]["display"] == "chip"
+    assert events[0]["display_label"] == "Browser fleet"
+    assert events[0]["display_body"] == "Browser foo-1 is free"

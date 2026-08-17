@@ -243,3 +243,26 @@ def test_codex_and_pi_preserve_tk_decoration_and_permission_objects_through_trun
         }
     )[0]
     assert pi_permission["permission_request"]["request_id"] == "req-1"
+
+
+def test_codex_error_marker_survives_the_permission_rebuild() -> None:
+    """`is_error` probes the UNTRUNCATED head: the permission-request rebuild replaces the
+    head with "...", so probing the truncated output would render a failed script as a
+    clean success."""
+    filler = "x" * 3000
+    output = (
+        "Script failed: boom\n" + filler
+        + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
+    )
+    event = codex_parse_lines(
+        {
+            "timestamp": "2026-01-01T00:00:05Z",
+            "type": "response_item",
+            "payload": {"type": "function_call_output", "call_id": "c9", "output": output},
+        },
+        0,
+        {"c9": "exec"},
+    )[0]
+    assert event["permission_request"]["request_id"] == "req-9"
+    assert event["is_error"] is True
+    assert not event["output"].startswith("Script failed")

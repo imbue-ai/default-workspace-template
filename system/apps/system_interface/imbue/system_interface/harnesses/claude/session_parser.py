@@ -23,8 +23,7 @@ from imbue.system_interface.harnesses.claude.error_patterns import classify_api_
 from imbue.system_interface.harnesses.claude.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
-from imbue.system_interface.harnesses.message_display import classify_user_message
-from imbue.system_interface.harnesses.message_display import is_non_turn_tail
+from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
 from imbue.system_interface.harnesses.tool_output import find_permission_request
 from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
@@ -338,7 +337,8 @@ def _parse_assistant_message(
             call_id: str = block.get("id", "")
             tool_name: str = block.get("name", "")
             tool_input = block.get("input", {})
-            input_preview = json.dumps(tool_input, separators=(",", ":"))
+            raw_input = json.dumps(tool_input, separators=(",", ":"))
+            input_preview = raw_input
             if len(input_preview) > MAX_TOOL_INPUT_PREVIEW_LENGTH and not _is_tk_lifecycle_call(tool_name, tool_input):
                 input_preview = input_preview[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
             command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
@@ -360,7 +360,7 @@ def _parse_assistant_message(
             # The render decision ships with the call (a hidden tk marker, or the
             # permission card), recognised from the UNTRUNCATED input backend-side; the
             # frontend never re-derives it from the command text.
-            display = classify_tool_call_display(is_pure_tk=is_hidden_tk, raw_input=json.dumps(tool_input))
+            display = classify_tool_call_display(is_pure_tk=is_hidden_tk, raw_input=raw_input)
             if display is not None:
                 tool_call["display"] = display.value
             # For Agent tool calls, surface the description and subagent_type from the
@@ -463,17 +463,12 @@ def _parse_user_message(
                 # -- the raw flags never cross the wire. Explicit detectors win over
                 # isMeta (Stop-hook feedback deliberately surfaces as a chip). (The
                 # interrupt sentinel above is NOT isMeta, so it keeps its own guard.)
-                decision = classify_user_message(
+                stamp_user_message_display(
+                    event,
                     text,
                     is_meta=bool(raw.get("isMeta")),
                     is_compact_summary=bool(raw.get("isCompactSummary")),
                 )
-                if decision is not None:
-                    decision.apply_to(event)
-                # The activity path's separate question -- "is a reply coming for
-                # this tail?" -- decided here too, so it never re-sniffs content.
-                if is_non_turn_tail(text, is_meta=bool(raw.get("isMeta"))):
-                    event["non_turn_tail"] = True
                 if session_id is not None:
                     event["session_id"] = session_id
                 existing_event_ids.add(event_id)
@@ -590,6 +585,10 @@ def _parse_queued_command_attachment(
         "content": prompt,
         "message_uuid": uuid,
     }
+    # The queued path emits user messages too, so it stamps the same render decision as
+    # the normal path -- a /model parked mid-turn must stay hidden (and non-turn), a fleet
+    # nudge must chip, and a latchkey verdict must resolve its card, exactly as if typed.
+    stamp_user_message_display(event, prompt)
     if session_id is not None:
         event["session_id"] = session_id
     existing_event_ids.add(event_id)

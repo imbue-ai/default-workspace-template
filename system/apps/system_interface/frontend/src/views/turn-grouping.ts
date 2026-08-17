@@ -171,9 +171,9 @@ function isStepId(id: string): boolean {
 }
 
 /** True when a tool call is a tk lifecycle command (consumed as a structural
- *  marker, not rendered as work). The backend's parser decides -- the shared shlex
- *  recognition over the UNTRUNCATED command, identical for every harness -- and
- *  ships `display: "hidden"`; nothing here parses tool input. */
+ *  marker, not rendered as work). The backend's parser decides -- the start-anchored
+ *  pure-invocation rule over the UNTRUNCATED command, identical for every harness --
+ *  and ships `display: "hidden"`; nothing here parses tool input. */
 function isTkLifecycleCall(tc: ToolCall): boolean {
   return tc.display === "hidden";
 }

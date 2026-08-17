@@ -30,8 +30,7 @@ import json
 from typing import Any
 
 from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
-from imbue.system_interface.harnesses.message_display import classify_user_message
-from imbue.system_interface.harnesses.message_display import is_non_turn_tail
+from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.pi_coding.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.pi_coding.tool_labels import tool_labels
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
@@ -162,11 +161,7 @@ def _user_event(event_id: str, timestamp: str, message: dict[str, Any]) -> dict[
         "message_uuid": event_id,
     }
     # The shared render decision -- pi gets the same detector table as claude and codex.
-    decision = classify_user_message(content)
-    if decision is not None:
-        decision.apply_to(event)
-    if is_non_turn_tail(content):
-        event["non_turn_tail"] = True
+    stamp_user_message_display(event, content)
     return event
 
 

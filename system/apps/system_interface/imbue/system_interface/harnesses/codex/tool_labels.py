@@ -72,6 +72,8 @@ the function -- ``Tool: create_goal`` -- making the leak visible instead of dres
 
 import re
 
+from tk_command_parsing.parser import parse_command
+
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.harnesses.tool_labels import GENERIC_CAPTION
 from imbue.system_interface.harnesses.tool_labels import basename
@@ -266,7 +268,17 @@ def keeps_full_tool_input(tool_name: str, raw_input: str) -> bool:
     # carries the patch header (same case _code_mode_labels handles) -- treat it as a patch.
     if function_name is None and _APPLY_PATCH_HEADER_RE.search(raw_input) is not None:
         return True
-    return is_tk_lifecycle(tool_name, raw_input)
+    # Segment-wise, deliberately BROADER than the hide rule (`is_tk_lifecycle`): a batched
+    # `cd /code && tk create --step ...` renders as work yet its full command must survive
+    # for the step timeline's input fallback -- over-preserving is harmless, over-hiding
+    # is not.
+    if function_name == "exec_command":
+        cmd = _js_string_argument(raw_input, "cmd")
+        if cmd is not None:
+            parsed = parse_command(cmd)
+            if parsed is not None and any(segment.tk_verb in _TK_LIFECYCLE_VERBS for segment in parsed.segments):
+                return True
+    return False
 
 
 @pure

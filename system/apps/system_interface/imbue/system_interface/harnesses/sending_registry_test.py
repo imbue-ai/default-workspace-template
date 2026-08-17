@@ -1,6 +1,8 @@
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from imbue.system_interface.harnesses.harness_type import HarnessType
 from imbue.system_interface.harnesses.sending_registry import SendingRegistry
 from imbue.system_interface.harnesses.session import FileHarnessSession
@@ -64,9 +66,9 @@ def test_clear_drops_everything() -> None:
 def _file_session(send_to_harness: "Callable[[str], bool] | None" = None) -> "FileHarnessSession":
     """A FileHarnessSession over inert deps -- only the Sending surface is exercised."""
     deps = SessionDeps(
-        agent_id="a1",
         harness=HarnessType.CLAUDE,
         state_dir=Path("/nonexistent"),
+        model_state_path=Path("/nonexistent/model_state.json"),
         send_to_harness=send_to_harness if send_to_harness is not None else lambda text: True,
         notify_agents_changed=lambda: None,
         is_tracked=lambda: True,
@@ -120,3 +122,18 @@ def test_session_is_tap_available_greys_while_sending() -> None:
     assert session.is_tap_available(has_queued=False) is False
     session.send("hi", "t1")
     assert during == [False]
+
+
+def test_session_send_exception_still_resolves_the_record() -> None:
+    """An exception from the blocking send must not leak the Sending record: a leak would
+    grey the shoulder tap for the session's lifetime and re-inject the same text into
+    every later stop's returned block."""
+
+    def send_and_raise(text: str) -> bool:
+        raise RuntimeError("mngr messenger blew up")
+
+    session = _file_session(send_and_raise)
+    with pytest.raises(RuntimeError):
+        session.send("doomed", "t-boom")
+    assert session.is_sending() is False
+    assert session.in_flight_block() == ""

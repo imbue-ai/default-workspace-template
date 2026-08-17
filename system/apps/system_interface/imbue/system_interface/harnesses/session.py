@@ -31,8 +31,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pydantic import Field
-
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.harness_type import HarnessType
@@ -106,7 +104,6 @@ class SessionDeps(FrozenModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    agent_id: str
     harness: HarnessType
     state_dir: Path
     # Deliver one message through mngr's locked message API (blocking); True = delivered/queued.
@@ -128,7 +125,7 @@ class SessionDeps(FrozenModel):
     build_interrupter: Callable[[AgentInfo], InterruptToComposer]
     build_shoulder_tap: Callable[[AgentInfo], "AtomicShoulderTap | None"]
     # Where the harness mirrors its uniform ``model_state.json``.
-    model_state_path: Path = Field(default=Path("."))
+    model_state_path: Path
 
 
 class AgentHarnessSession(ABC):
@@ -141,6 +138,11 @@ class AgentHarnessSession(ABC):
     @abstractmethod
     def build(cls, deps: SessionDeps) -> "AgentHarnessSession":
         """Construct for one agent; must not block (liveness is ``ensure_live``'s job)."""
+
+    @property
+    def harness(self) -> HarnessType:
+        """The harness this session was built for (the manager heals a mismatched cache)."""
+        return self._deps.harness
 
     # -- liveness ---------------------------------------------------------------------------
 
@@ -243,14 +245,14 @@ class FileHarnessSession(AgentHarnessSession):
         try:
             self._deps.notify_agents_changed()
             success = self._deps.send_to_harness(text)
-            # Resolved either way: delivered/queued -> the message has a real representation;
-            # failed -> it is Returned, not Sending. (An EXCEPTION from the send leaves the
-            # record in place deliberately: whether the text reached the harness is unknown, so
-            # a later stop conservatively returns it to the composer instead of dropping it.)
-            with self._sending_lock:
-                self._sending.resolve(token)
             return SendOutcome.OK if success else SendOutcome.FAILED
         finally:
+            # Resolved on EVERY exit -- delivered/queued (a real representation exists), failed
+            # (Returned, not Sending), or an exception from the send (the request 500s and the
+            # composer keeps the draft). A leaked record would grey the tap for the session's
+            # lifetime and re-inject the same text into every later stop's returned block.
+            with self._sending_lock:
+                self._sending.resolve(token)
             self._deps.notify_agents_changed()
 
     def is_sending(self) -> bool:

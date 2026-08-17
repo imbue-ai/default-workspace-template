@@ -855,38 +855,20 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
     return _json_response(SendMessageResponse(status="ok").model_dump())
 
 
-# The atomic shoulder-tap control file (``CODEX_SHOULDER_TAP_ATOMIC_CONTROL_NAME``) is codex's,
-# so it lives with the codex harness; the flush endpoint below and the stop-button override
-# (harnesses/codex/model.py) share that one filename, distinguishing flush vs retract by the
-# JSON key on each line rather than by a separate file.
-# pi's inbox name + the flush sentinel key live in harnesses/pi_coding/inbox.py, the shared
-# pi_inbox protocol (a JSON *object* line the extension reads; a normal message is a JSON
-# *string*, so the two never collide, and the queue watcher treats the object as a positional
-# clear rather than a queued message).
-
-
 def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
     """Atomic shoulder tap: merge the queue into the live turn without restarting the agent.
 
-    The gentle counterpart to :func:`_flush_queue_endpoint` for the harnesses that can interrupt
-    natively. Rather than SIGKILL-restart the agent and resend the queue, it drops a control
-    signal the harness picks up on its own loop and merges the parked steer messages into one
-    turn, so the agent stays alive:
+    The gentle counterpart to :func:`_flush_queue_endpoint`: rather than SIGKILL-restart the
+    agent and resend the queue, the agent's session delivers the harness's native tap and the
+    agent stays alive. HOW each harness taps lives with its implementation -- claude's cancel
+    chord in ``harnesses/claude/tap.py`` (``ClaudeAtomicShoulderTap``), pi's locked
+    ``pi_inbox`` flush sentinel in ``harnesses/pi_coding/model.py`` (``PiAtomicShoulderTap``),
+    codex's live-ledger interrupt+resend in ``harnesses/codex/session.py`` -- not here.
 
-    - codex: append one control line naming the currently-open turn to
-      ``shoulder_tap_atomic.jsonl``, under mngr's per-agent ``message.lock`` so the line is
-      ordered after any in-flight send; the patched binary merges the parked steers into that
-      turn, ABA-gated on the turn id. Status ``no_open_turn`` (no write) when no turn is
-      running; 500 (no write) when a send holds the lock past the bounded wait.
-    - pi: append an interrupt sentinel to ``pi_inbox``, under the same per-agent
-      ``message.lock`` so the sentinel is ordered after any in-flight send's inbox append; the
-      lifecycle extension interrupts the running turn (a no-op when idle) and resubmits the
-      parked steers as one merged turn. 500 (no write) when a send holds the lock past the
-      bounded wait.
-
-    Returns 404 for an unknown agent, 400 for a non-atomic harness (claude) or the primary
-    services agent, 500 if the write fails or a codex/pi send is in flight, 200 otherwise
-    (``tapped``, or codex ``no_open_turn``).
+    Returns 404 for an unknown agent, 400 for a harness whose catalog declares no atomic tap
+    or for the primary services agent, an error status when the tap failed (e.g. a claude
+    dialog block maps to 409), and 200 otherwise with the harness's own verdict (``tapped``,
+    ``no_open_turn``, or the benign ``send_in_flight`` no-op a raced send produces).
     """
     agent_info = _find_agent(agent_id)
     if agent_info is None:

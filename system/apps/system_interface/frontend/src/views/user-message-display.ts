@@ -51,9 +51,9 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       const content = event.content || "";
       // The trailing "See attachment here: <markdown>" block is delivered to the
       // agent and kept visible in the bubble, where it renders as markdown so its
-      // images show inline and other files as download links. Classification runs
-      // on the text before the block so an appended attachment never changes the
-      // kind.
+      // images show inline and other files as download links. The backend classifier
+      // strips the block before its detectors run (harnesses/message_display.py),
+      // so an appended attachment never changes the kind here either.
       const { visibleText, attachmentBlock } = parseMessageAttachments(content);
       const cls = classifyUserMessage(event);
 
