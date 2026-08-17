@@ -154,17 +154,25 @@ def test_empty_scan_warning_fires_only_when_nothing_was_found() -> None:
         excluded_because=None,
     )
     # A source with agents is a real result, however sparse.
-    assert migrate_workspace._empty_scan_warning("/mngr", [agent], []) is None
+    assert migrate_workspace._empty_scan_warning("/mngr", [agent], [], []) is None
 
     # No agents at all is the signature of a scan that matched nothing.
-    both_empty = migrate_workspace._empty_scan_warning("/mngr", [], [])
+    both_empty = migrate_workspace._empty_scan_warning("/mngr", [], [], [])
     assert both_empty is not None and "symlink" in both_empty
 
     # Sessions but no agents narrows the blame to the agents/ listings.
     sessions_only = migrate_workspace._empty_scan_warning(
-        "/mngr", [], ["/mngr/agents/a/projects/x.jsonl"]
+        "/mngr", [], ["/mngr/agents/a/projects/x.jsonl"], []
     )
     assert sessions_only is not None and "session transcripts exist" in sessions_only
+
+    # Entries that were listed but could not be read are not an empty source, and
+    # must not send the reader after the host dir -- the reads are the cause.
+    unreadable_only = migrate_workspace._empty_scan_warning(
+        "/mngr", [], [], ["/mngr/agents/a/data.json"]
+    )
+    assert unreadable_only is not None and "the reads failed" in unreadable_only
+    assert "symlink" not in unreadable_only
 
 
 # --- map_legacy_path -------------------------------------------------------

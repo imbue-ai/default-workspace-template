@@ -1314,7 +1314,7 @@ def _cmd_list_agents(args: argparse.Namespace) -> int:
             # tells the lead to read `caveat` and nothing else, so under its own
             # key it would go unread -- and with no agents found, the
             # no-session-file caveat describes nothing anyway.
-            "caveat": _empty_scan_warning(host_dir, agents, session_paths)
+            "caveat": _empty_scan_warning(host_dir, agents, session_paths, unreadable)
             or (
                 "An agent with no session file has no transcript to adopt -- it can be "
                 "recreated empty or skipped, which is a question for the user."
@@ -1324,7 +1324,10 @@ def _cmd_list_agents(args: argparse.Namespace) -> int:
 
 
 def _empty_scan_warning(
-    host_dir: str, agents: Sequence[SourceAgent], session_paths: Sequence[str]
+    host_dir: str,
+    agents: Sequence[SourceAgent],
+    session_paths: Sequence[str],
+    unreadable: Sequence[str],
 ) -> str | None:
     """Name the likely cause when a scan comes back empty, or ``None`` if it did not.
 
@@ -1333,9 +1336,20 @@ def _empty_scan_warning(
     silently matched nothing than a source that genuinely holds nothing. Saying so
     here is what keeps the caller from proceeding as though there were nothing to
     migrate.
+
+    ``unreadable`` gets first claim, because it is the one empty result whose
+    cause is already known: the listings found entries and the reads failed. Both
+    other branches send the reader after the host dir, which would be the wrong
+    trail.
     """
     if agents:
         return None
+    if unreadable:
+        return (
+            f"No agents could be read under {host_dir}, but {len(unreadable)} agent "
+            "record(s) were listed there -- the reads failed, not the scan. See "
+            "`unreadable` for which, and do not treat this source as empty."
+        )
     if session_paths:
         return (
             f"No agents found under {host_dir}, but session transcripts exist there. "
