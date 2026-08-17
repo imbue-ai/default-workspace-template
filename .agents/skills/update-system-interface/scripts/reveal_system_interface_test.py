@@ -27,7 +27,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Iterator, Sequence
 
 import pytest
 
@@ -82,6 +82,29 @@ def unbuilt_repo(tmp_path: Path) -> Path:
     with no bundle to save, recovery has to fall back to rebuilding.
     """
     return _make_repo_root(tmp_path)
+
+
+# The prefix :func:`reveal_system_interface.snapshot_bundle` files its copies
+# under. They go in the *system* temp dir on purpose -- a stray directory inside
+# the repo would dirty the tree -- so ``tmp_path`` does not reap them.
+_SNAPSHOT_GLOB = "system-interface-bundle-*"
+
+
+@pytest.fixture(autouse=True)
+def reap_snapshots_left_for_the_operator() -> Iterator[None]:
+    """Remove any bundle copy a test's reveal deliberately left behind.
+
+    The emergency path (exit 3) keeps its copy rather than discarding it, because
+    it is the operator's way back; every exit-3 test therefore leaves one, and
+    without this they pile up in the system temp dir run after run. Only the
+    directories that appear *during* the test are removed, so a copy some other
+    process owns is never touched.
+    """
+    temp_root = Path(tempfile.gettempdir())
+    before = set(temp_root.glob(_SNAPSHOT_GLOB))
+    yield
+    for left_behind in set(temp_root.glob(_SNAPSHOT_GLOB)) - before:
+        shutil.rmtree(left_behind, ignore_errors=True)
 
 
 @dataclass
@@ -832,15 +855,11 @@ def test_an_emergency_hands_the_bundle_snapshot_to_the_operator(
 
     assert _reveal(runner, http, _FakeSpawner(), repo) == 3
 
+    # Named on stderr, and actually a bundle -- a path to an empty directory
+    # would be worse than saying nothing. (Reaped by
+    # ``reap_snapshots_left_for_the_operator``, since nothing else does now.)
     kept = _kept_snapshot_path(capsys.readouterr().err)
-    try:
-        # Named on stderr, and actually a bundle -- a path to an empty directory
-        # would be worse than saying nothing.
-        assert (kept / "index.html").exists()
-    finally:
-        # Nothing else reaps it now, so the test plays the operator it was left
-        # for. It lives in the system temp dir, not under tmp_path.
-        shutil.rmtree(kept.parent, ignore_errors=True)
+    assert (kept / "index.html").exists()
 
 
 def _kept_snapshot_path(stderr: str) -> Path:
