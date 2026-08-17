@@ -89,7 +89,10 @@ Exit codes (``reveal``):
     0  Revealed successfully; live UI is healthy.
     1  Precondition error (dirty tree, bad arguments) -- nothing was changed.
     2  The change was bad and was rolled back; the live UI is confirmed healthy
-       on the known-good revision (the requested change did NOT land).
+       on the known-good revision (the requested change did NOT land). As with
+       0, a workspace whose frontend was already broken when the reveal started
+       gets a closing line that says so instead, since the rollback was never
+       held to a standard it could not have met.
     3  EMERGENCY: even rollback could not restore a healthy UI.
 
 Exit codes (``preview`` / ``unpreview``):
@@ -1030,10 +1033,23 @@ def reveal(
                 saved_bundle=saved_bundle,
                 is_frontend_expected=is_frontend_expected,
             ):
-                sys.stderr.write(
-                    "rolled back to last-known-good; the live UI is confirmed healthy. "
-                    "The requested change did NOT land -- diagnose it before retrying.\n"
-                )
+                if is_frontend_expected:
+                    sys.stderr.write(
+                        "rolled back to last-known-good; the live UI is confirmed healthy. "
+                        "The requested change did NOT land -- diagnose it before retrying.\n"
+                    )
+                else:
+                    # The rollback was never held to the frontend standard,
+                    # because the frontend was not serving when the reveal
+                    # started -- so "confirmed healthy" would be a sign-off over
+                    # a UI we already know the user cannot see. Say what was
+                    # actually established and what was not.
+                    sys.stderr.write(
+                        "rolled back to last-known-good and the backend is healthy, but the live UI "
+                        "was not serving a working frontend before this reveal either, so the "
+                        "rollback was not held to that standard and cannot confirm it. The requested "
+                        "change did NOT land -- diagnose both before retrying.\n"
+                    )
                 return 2
             sys.stderr.write(
                 "EMERGENCY: rollback did not restore a healthy UI. The system interface may be down; "

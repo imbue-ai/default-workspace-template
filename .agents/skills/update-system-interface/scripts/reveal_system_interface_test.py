@@ -805,6 +805,29 @@ def test_a_frontend_that_was_already_broken_is_reported_not_rolled_back(
     assert "not serving a working frontend" in closing_line
 
 
+def test_a_rollback_does_not_claim_health_over_an_already_broken_frontend(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Same rule as the exit-0 case above, on the path that reaches it without
+    # ever probing the frontend a second time. The rollback is not held to the
+    # frontend standard when the workspace arrived without one, so the health it
+    # confirms is the backend's -- and this reveal fails before _apply_reveal
+    # gets as far as its own probe, so the closing line is the only thing the
+    # caller ever sees about the UI.
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
+    )
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="type error"))
+    http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
+
+    code = _reveal(runner, http, _FakeSpawner(), repo)
+
+    assert code == 2
+    closing_line = capsys.readouterr().err.strip().splitlines()[-1]
+    assert "confirmed healthy" not in closing_line
+    assert "cannot confirm it" in closing_line
+
+
 def test_a_blip_on_the_pre_probe_does_not_disarm_the_regression_check(repo: Path) -> None:
     # The pre-reveal probe decides whether the reveal is answerable for the
     # frontend at all, and it is wrong in only one direction: a single
