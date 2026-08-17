@@ -225,17 +225,17 @@ class ProbeResult(NamedTuple):
         return self.status == 200
 
     def describe(self) -> str:
-        """One stderr line saying what the probe actually got back.
+        """One unterminated stderr line saying what the probe actually got back.
 
         The whole point of keeping the body: a health endpoint that refuses states
         *why* in it, and discarding that leaves the caller with a bare status code
         and a log to go read.
         """
         if self.status is None:
-            return "  last probe: no response (connection refused, or timed out)\n"
+            return "  last probe: no response (connection refused, or timed out)"
         if not self.body:
-            return f"  last probe: HTTP {self.status}, empty body\n"
-        return f"  last probe: HTTP {self.status} {self.body}\n"
+            return f"  last probe: HTTP {self.status}, empty body"
+        return f"  last probe: HTTP {self.status} {self.body}"
 
 
 def _read_body_excerpt(response) -> str:
@@ -736,7 +736,9 @@ def up(
         if failed_log is not None:
             preserved = _preserve_failed_log(repo_root, name, failed_log)
             excerpt = _log_excerpt(failed_log, preserved)
-        sys.stderr.write(f"up failed: {exc}{excerpt}tearing down partial instance...\n")
+        sys.stderr.write(
+            f"up failed: {exc}\n{excerpt}tearing down partial instance...\n"
+        )
         survivors = _teardown(
             repo_root, runner, pids=pids, services=services, sleeper=sleeper
         )
@@ -918,7 +920,7 @@ def refresh(
             f"refresh: inner server did not become healthy on port {port} after "
             "reboot. The preview tab will show an error until the underlying "
             "build boots; fix it and refresh again.\n"
-            f"{probe.describe()}"
+            f"{probe.describe()}\n"
             f"{_log_excerpt(Path(inner_log))}"
         )
         return 1
