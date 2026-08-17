@@ -42,7 +42,6 @@ from imbue.system_interface.attachments import store_uploaded_file
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
 from imbue.system_interface.file_serving import try_serve_file
-from imbue.system_interface.frontend_build import FrontendBuildError
 from imbue.system_interface.harnesses.claude import auth_endpoints
 from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
 from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
@@ -107,13 +106,18 @@ STATIC_DIRECTORY = Path(__file__).parent / "static"
 # response. The reveal flow's frontend health check reads it.
 FRONTEND_BUILT_HEADER = "X-Frontend-Built"
 
-# Served in place of the app whenever the compiled bundle is missing. The
-# bundle is gitignored build output, so a code refresh that replaces the tree
-# (or a rebuild that failed partway) can leave the workspace here with no way
-# out; the page therefore offers the repair itself rather than printing a
-# command the user is not in a position to run. ``__ROOT_PATH__`` is
-# substituted with the mount prefix so the polling works behind a proxy.
-_FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
+# Served in place of the app whenever the compiled bundle is missing. The bundle
+# is gitignored build output, so a code refresh that replaces the tree can leave
+# the workspace here. The page names the one recovery that works from this state
+# and reloads itself, so a bundle restored by anything else -- most often the
+# reveal flow's rollback -- brings the interface back without the reader having
+# to know to try again.
+#
+# It deliberately does not offer to run the build itself. The situations that
+# strand a workspace here are dominated by the ones where a build dispatched
+# from the server would fail too, and the server's own memory band would put
+# that build ahead of the user's chats and agents in a memory shed.
+_FRONTEND_NOT_BUILT_HTML = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -125,136 +129,27 @@ _FRONTEND_NOT_BUILT_HTML_TEMPLATE = """<!doctype html>
   main { max-width: 34rem; padding: 2rem; }
   h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.75rem; }
   p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; }
-  button { font: inherit; padding: 0.55rem 1.1rem; border: 0; border-radius: 6px;
-           background: #4c7dfd; color: #fff; cursor: pointer; }
-  button[disabled] { opacity: 0.55; cursor: default; }
-  pre { white-space: pre-wrap; background: #1d2026; border-radius: 6px;
-        padding: 0.75rem; font-size: 0.8rem; color: #d7817a; overflow-x: auto; }
-  #status { margin-top: 1rem; color: #b6bcc4; }
+  code { background: #1d2026; border-radius: 4px; padding: 0.1rem 0.3rem;
+         font-size: 0.9em; }
 </style>
+<!-- Nothing on this page can produce the bundle, so the only thing left to do
+     is notice when something else has. A plain refresh needs no script and no
+     endpoint, and it is what brings an open tab back once the reveal flow's
+     rollback restores the bundle. -->
+<meta http-equiv="refresh" content="10">
 </head>
 <body>
 <main>
   <h1>This workspace's interface needs to be rebuilt</h1>
-  <p>The compiled interface is missing, so there is nothing to show yet.
-     Rebuilding it leaves your work and your agents untouched.</p>
-  <button id="rebuild">Rebuild the interface</button>
-  <div id="status"></div>
-  <pre id="error" hidden></pre>
+  <p>The compiled interface is missing, so there is nothing to show yet. Your
+     work and your agents are untouched -- only the interface itself is gone.</p>
+  <p>Build it from a checkout of this app: run
+     <code>npm ci &amp;&amp; npm run build</code> in that checkout's
+     <code>frontend/</code> directory, and copy the bundle it writes into this
+     installation's <code>imbue/system_interface/static/</code>. The bundle is
+     picked up as soon as it exists, so there is nothing to restart -- this page
+     returns to the interface on its own.</p>
 </main>
-<script>
-  const rootPath = "__ROOT_PATH__";
-  const endpoint = rootPath + "/api/frontend-build";
-  const button = document.getElementById("rebuild");
-  const status = document.getElementById("status");
-  const errorBox = document.getElementById("error");
-  let pendingPoll;
-
-  function render(state) {
-    // Reloading is driven by is_built, never by the phase. The phase records
-    // how the last rebuild ended and outlives the bundle it produced, and this
-    // page is only served while the bundle is missing -- so reloading on
-    // "done" alone would spin the page for the length of an update that clears
-    // the bundle before writing the new one. Keying on is_built also means a
-    // bundle restored by something else entirely (an update completing, a
-    // fresh workspace build) brings the page back on its own.
-    if (state.is_built) {
-      status.textContent = "The interface is back. Reloading...";
-      window.location.reload();
-      return;
-    }
-    if (state.phase === "installing" || state.phase === "building") {
-      button.disabled = true;
-      status.textContent = (state.detail || "Working") + "...";
-      errorBox.hidden = true;
-      schedulePoll(2000);
-      return;
-    }
-    // Nothing running: never started, failed, or finished and then lost the
-    // bundle again. Offer the repair, and keep watching slowly so the page is
-    // not stranded on a stale message if the bundle returns another way.
-    button.disabled = false;
-    if (state.phase) {
-      button.textContent = "Try again";
-      status.textContent =
-        state.phase === "failed"
-          ? "The rebuild did not finish."
-          : "The interface went missing again after it was rebuilt.";
-    }
-    errorBox.hidden = !state.error;
-    errorBox.textContent = state.error || "";
-    schedulePoll(10000);
-  }
-
-  // One pending poll at a time, whichever path armed it. render() runs both as
-  // the tail of a poll and directly from the click handler, so scheduling
-  // without clearing would leave those two chains re-arming each other for as
-  // long as the page is open, and add another on every click.
-  function schedulePoll(delayMilliseconds) {
-    window.clearTimeout(pendingPoll);
-    pendingPoll = window.setTimeout(poll, delayMilliseconds);
-  }
-
-  async function poll() {
-    try {
-      const response = await fetch(endpoint);
-      render(await response.json());
-    } catch (e) {
-      status.textContent = "Lost contact with the workspace while rebuilding; retrying...";
-      schedulePoll(4000);
-    }
-  }
-
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    status.textContent = "Starting...";
-    errorBox.hidden = true;
-    let response;
-    let state;
-    try {
-      response = await fetch(endpoint, { method: "POST" });
-      state = await response.json();
-    } catch (e) {
-      // The request can fail outright -- this page is served when the tree was
-      // replaced under a running service, and the flow that does that restarts
-      // it. Leaving the button disabled here would strand the page on
-      // "Starting..." with no way forward, so hand the offer back and keep
-      // watching in case the rebuild did start before contact was lost.
-      button.disabled = false;
-      status.textContent = "Lost contact with the workspace; try again.";
-      schedulePoll(4000);
-      return;
-    }
-    if (!response.ok) {
-      button.disabled = false;
-      status.textContent = state.detail || "Could not start the rebuild.";
-      return;
-    }
-    render(state);
-  });
-
-  // A rebuild may already be running (another tab, or a reload mid-build), so
-  // adopt its progress instead of showing an idle button.
-  poll();
-</script>
-</body>
-</html>
-"""
-
-# Shown instead of the button when the frontend sources are absent, so the page
-# never offers an action it cannot perform.
-_FRONTEND_NOT_REPAIRABLE_HTML = """<!doctype html>
-<html>
-<head><meta charset="utf-8"><title>Interface not built</title></head>
-<body>
-<p>Frontend not built, and the frontend sources are not present in this
-installation, so it cannot be rebuilt from here.</p>
-<p>Build it from a checkout of this app instead: run
-<code>npm ci &amp;&amp; npm run build</code> in that checkout's
-<code>frontend/</code> directory, and copy the bundle it writes to
-<code>imbue/system_interface/static/</code> into this installation. The bundle is
-picked up as soon as it exists, so there is no need to restart the system
-interface -- just reload this page.</p>
 </body>
 </html>
 """
@@ -424,19 +319,14 @@ def _index() -> Response:
 
 
 def _frontend_not_built_response() -> Response:
-    """Render the placeholder, offering the rebuild when the sources are present."""
+    """Render the placeholder shown when there is no compiled bundle to serve."""
     # Logged with the resolved directory because the usual cause is that the
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
     _loguru_logger.warning(
         "Served the not-built placeholder: no frontend bundle at {}", STATIC_DIRECTORY / "index.html"
     )
-    if not get_state().frontend_build_service.is_repairable:
-        return _shell_response(_FRONTEND_NOT_REPAIRABLE_HTML, is_frontend_built=False)
-    root_path = (request.script_root or "").rstrip("/")
-    return _shell_response(
-        _FRONTEND_NOT_BUILT_HTML_TEMPLATE.replace("__ROOT_PATH__", root_path), is_frontend_built=False
-    )
+    return _shell_response(_FRONTEND_NOT_BUILT_HTML, is_frontend_built=False)
 
 
 def _index_catch_all(path: str) -> Response:
@@ -465,25 +355,6 @@ def _serve_asset(filename: str) -> Response:
     if not (assets_directory / filename).is_file():
         return Response(status=404)
     return send_from_directory(assets_directory, filename)
-
-
-def _get_frontend_build_endpoint() -> Response:
-    """Report whether the bundle is present and how any rebuild is going."""
-    return _json_response(get_state().frontend_build_service.current_status().model_dump(mode="json"))
-
-
-def _start_frontend_build_endpoint() -> Response:
-    """Kick off the placeholder page's rebuild and return its starting status."""
-    service = get_state().frontend_build_service
-    try:
-        service.start_background_build()
-    except FrontendBuildError as e:
-        # The only refusals are "nothing to build from" and "already running",
-        # both of which the page shows to the user verbatim.
-        _loguru_logger.warning("Refused to start a frontend rebuild: {}", e)
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=409)
-    return _json_response(service.current_status().model_dump(mode="json"), status_code=202)
 
 
 def _discover_with_filters() -> list[AgentInfo]:
@@ -2282,13 +2153,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
 
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
-    application.add_url_rule("/api/frontend-build", view_func=_get_frontend_build_endpoint, methods=["GET"])
-    application.add_url_rule(
-        "/api/frontend-build",
-        view_func=_start_frontend_build_endpoint,
-        methods=["POST"],
-        endpoint="_start_frontend_build",
-    )
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
     application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])
