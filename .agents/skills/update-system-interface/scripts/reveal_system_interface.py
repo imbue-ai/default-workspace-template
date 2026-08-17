@@ -1015,11 +1015,15 @@ def _recover_running_state(
     change. Restoring a snapshot needs no dependencies at all, so refusing to run
     the destructive step there is what lets a broken build environment be
     survived -- at the known cost that rolling back a *manifest* change leaves
-    ``node_modules`` holding the packages the failed reveal installed while the
-    restored tree holds the old lockfile. What is served is unaffected (the
-    restored bundle is already compiled), but the next reveal that touches only
-    frontend source builds against that skew, since no manifest changed for it to
-    notice. The rebuild branch has no such trade to make: it is already going to
+    ``node_modules`` out of step with the restored lockfile. It holds whatever
+    the failed reveal's ``npm ci`` installed, or -- when that ``npm ci`` is the
+    step that failed, one of the two failures this whole mechanism exists for --
+    nothing at all, since it deletes before it installs. What is served is
+    unaffected either way (the restored bundle is already compiled), but the next
+    reveal that touches only frontend source builds against whichever of those it
+    finds, since no manifest changed for it to notice: against the wrong
+    dependency tree in the first case, and against no dependency tree in the
+    second. The rebuild branch has no such trade to make: it is already going to
     compile from source, so it needs ``node_modules`` to match the restored
     lockfile, and there is no bundle for ``npm ci`` to endanger.
 
