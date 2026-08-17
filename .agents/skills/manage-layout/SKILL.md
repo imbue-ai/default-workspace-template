@@ -44,6 +44,11 @@ Consequences for you:
   name). The op applies only on connected clients that have that view
   active; with none, it fails fast with a clear error listing what
   each client is on.
+- **`views` lists the views themselves** -- every project plus
+  Everything, each with its member refs, whether it has desktop/mobile
+  content yet, and which connected clients have it in front -- plus the
+  machine's last-active view id. Use it to find a project's exact name
+  before `load` or `--view`.
 - **Figure out which view the user means with `context`.** It lists
   every known client with its device kind (mobile/desktop), current
   view, connection state, and last few messages -- the client that
@@ -67,6 +72,7 @@ Consequences for you:
 | Goal | Command |
 |---|---|
 | See which client/view asked for something | `python3 system/scripts/layout.py context` |
+| List the views: every project + Everything, members, who's on each | `python3 system/scripts/layout.py views` |
 | See what's currently open and how it's laid out | `python3 system/scripts/layout.py inspect [--view <name>]` |
 | Locate one panel + its tab-mates + cardinal neighbors | `python3 system/scripts/layout.py where <ref> [--view <name>]` |
 | List everything addressable (services + agents) with open/running flags | `python3 system/scripts/layout.py list` |

@@ -53,6 +53,8 @@ from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
+from imbue.system_interface.projects import add_member
+from imbue.system_interface.projects import create_project
 from imbue.system_interface.projects import write_project_content
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
@@ -2379,6 +2381,34 @@ def test_layout_broadcast_load_unknown_layout_is_404(app: Flask) -> None:
         json={"op": "load", "args": {"layout": "no-such-layout"}, "agent_id": "agent-42"},
     )
     assert response.status_code == 404
+
+
+def test_layout_broadcast_views_enumerates_projects_and_everything(app: Flask) -> None:
+    """``views`` lists every project plus Everything, with members, per-device
+    content presence, and which connected clients have each view in front."""
+    layout_dir = Path(os.environ["MNGR_HOST_DIR"]) / "agents" / os.environ["MNGR_AGENT_ID"] / "workspace_layout"
+    create_project(layout_dir, "Research", "#12B5A5", 4)
+    add_member(layout_dir, "research", "service:notes")
+    write_project_content(layout_dir, "research", {"dockview": {}, "panelParams": {}}, "mobile")
+    _register_fake_client(app, "client-1", "research")
+
+    client = app.test_client()
+    response = client.post("/api/layout/broadcast", json={"op": "views", "args": {}, "agent_id": "agent-42"})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    by_id = {view["id"]: view for view in body["views"]}
+    assert set(by_id) == {"project-1", "research", EVERYTHING_VIEW_ID}
+    research = by_id["research"]
+    assert research["name"] == "Research"
+    assert research["members"] == ["service:notes"]
+    assert research["has_desktop_content"] is False
+    assert research["has_mobile_content"] is True
+    assert research["clients_on"] == ["client-1"]
+    everything = by_id[EVERYTHING_VIEW_ID]
+    assert everything["is_everything"] is True
+    assert everything["members"] == []
+    assert body["last_active_id"] == "research"
 
 
 def test_layout_broadcast_context_summarizes_clients(app: Flask) -> None:

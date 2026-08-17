@@ -2568,6 +2568,40 @@ def _layout_broadcast_endpoint() -> Response:
         logger.info("layout op={} agent_id={} layout={} panels={}", op, agent_id, slug, len(summary.get("panels", [])))
         return _json_response({"ok": True, "layout_slug": slug, "layout": summary})
 
+    if op == "views":
+        # Enumerate the views themselves: every registered project plus the
+        # unfiltered Everything view, with each one's member list, per-device
+        # content presence, and which connected clients have it in front.
+        # ``context`` answers "who asked"; this answers "what views exist".
+        if layout_dir is None:
+            return _json_response({"ok": True, "views": [], "last_active_id": None})
+        clients_by_view: dict[str, list[str]] = {}
+        for client_info in get_state().broadcaster.get_connected_client_infos():
+            clients_by_view.setdefault(client_info["active_layout_slug"], []).append(client_info["client_id"])
+
+        def _view_entry(view_id: str, name: str, members: list[str], is_everything: bool) -> dict[str, Any]:
+            return {
+                "id": view_id,
+                "name": name,
+                "is_everything": is_everything,
+                "members": members,
+                "has_desktop_content": projects.project_content_path(layout_dir, view_id).exists(),
+                "has_mobile_content": projects.project_content_path(layout_dir, view_id, "mobile").exists(),
+                "clients_on": clients_by_view.get(view_id, []),
+            }
+
+        views = [
+            _view_entry(info.project_id, info.name, list(info.members), False)
+            for info in projects.list_projects(layout_dir)
+        ]
+        # Everything has no member list: it shows whatever exists.
+        views.append(
+            _view_entry(projects.EVERYTHING_VIEW_ID, projects.EVERYTHING_VIEW_NAME, [], True)
+        )
+        last_active_id = projects.get_last_active_id(layout_dir)
+        logger.info("layout op={} agent_id={} views={}", op, agent_id, len(views))
+        return _json_response({"ok": True, "views": views, "last_active_id": last_active_id})
+
     if op == "context":
         # Per-client activity summary: who is connected, on which layout,
         # and what they recently asked for. The live registry overrides the

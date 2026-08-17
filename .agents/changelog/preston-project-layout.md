@@ -5,3 +5,5 @@ Document the app-icon flags in the build-app skill.
 The public-URL reference no longer claims `apps.toml` holds only `name` and `url`; it holds the service `label` and any registered `icon` markup too, and still never a public URL.
 
 The layout-driving skills speak projects natively. `manage-layout`'s "Named layouts" primer is now a "Views" primer -- a view is a project or Everything, an op with no target goes to the view the connected client is looking at, `--view` addresses another one (`--layout` is the same flag under its old name), and the read ops take `--device desktop|mobile` for a view's per-device arrangement. The retired `for L in desktop mobile; do ... --layout "$L" ...; done` loops in build-app, caretaker, update-self, update-app, update-system-interface, and migrate-workspace collapse into single un-flagged calls that land in the user's current view.
+
+`manage-layout` documents the new `layout.py views` subcommand for listing the machine's views (projects + Everything) with members and per-client presence.

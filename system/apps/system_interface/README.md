@@ -117,13 +117,17 @@ closing a tab, or re-arranging panes never reloads or duplicates
 anything; a page is torn down only when the object behind it is
 destroyed.
 
-Each project is one JSON file under the primary agent's
-`workspace_layout/projects/` directory, with a `projects_meta.json`
+Each view keeps one arrangement file per device kind under the primary
+agent's `workspace_layout/projects/` directory -- `<id>.json` for
+desktop, `<id>.mobile.json` for mobile -- with a `projects_meta.json`
 registry (per-project name, color, glyph, and member list, plus the
-last-active id). A project with no saved content renders as the New Tab
-launcher. A machine upgrading from before projects folds its old
+last-active id). Membership is shared across devices; only tab
+placement differs, and each client loads and autosaves its own UA-derived
+kind's file. A view with no saved content on this device renders as the
+New Tab launcher. A machine upgrading from before projects folds its old
 `desktop` arrangement into one starter project ("Project 1") with each
-panel filed as a member, so nothing moves and nothing is lost.
+panel filed as a member -- and its old `mobile` layout into that
+project's mobile arrangement -- so nothing moves and nothing is lost.
 
 Names and last-used timestamps belong to the object, not to any one
 view: both are keyed by member ref in their own small registries
@@ -225,6 +229,10 @@ python3 system/scripts/layout.py list
 # See which browser clients exist, their device kind, current project,
 # and recent messages (to attribute a request to a client/project).
 python3 system/scripts/layout.py context
+
+# List the views themselves: every project plus Everything, with members,
+# per-device content presence, and which clients are on each.
+python3 system/scripts/layout.py views
 
 # Surface the given service in a tab split alongside the primary chat
 # (reports a no-op if one is already open; use ``focus`` to bring it
