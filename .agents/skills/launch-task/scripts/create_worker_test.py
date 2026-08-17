@@ -192,10 +192,68 @@ def test_read_worker_branch_reports_what_mngr_says() -> None:
     assert ls_call.argv[-2:] == ["--format", "json"]
 
 
+def test_read_worker_branch_survives_an_unrelated_provider_being_down() -> None:
+    """A non-zero `mngr ls` is not the same as an unanswerable lookup.
+
+    Listing runs under ErrorBehavior.CONTINUE: the payload is written in full and
+    *then* the exit code is set from the errors channel, so one unauthenticated or
+    unreachable provider anywhere in the config makes `mngr ls` exit non-zero with
+    the worker sitting right there in what it printed. Treating that as unknowable
+    destroys a healthy worker and throws the whole launch away.
+    """
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "ls"),
+        _StubResult(
+            returncode=8,
+            stdout=json.dumps(
+                {
+                    "agents": [
+                        {"name": "demo-worker", "initial_branch": "mngr/update-my-slug"}
+                    ],
+                    "errors": [{"provider_name": "modal", "message": "not authenticated"}],
+                }
+            ),
+            stderr="modal: not authenticated",
+        ),
+    )
+
+    assert (
+        create_worker_mod.read_worker_branch("demo-worker", runner)
+        == "mngr/update-my-slug"
+    )
+
+
+def test_read_worker_branch_says_when_a_provider_error_emptied_the_listing() -> None:
+    """An empty listing still destroys the worker, so it must say which emptiness.
+
+    "The agent is gone" and "the provider holding it could not be reached" lead
+    somewhere different, and only the errors channel distinguishes them.
+    """
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "ls"),
+        _StubResult(
+            returncode=8,
+            stdout=json.dumps(
+                {
+                    "agents": [],
+                    "errors": [{"provider_name": "docker", "message": "daemon unreachable"}],
+                }
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        create_worker_mod.WorkerBranchUnknownError, match="daemon unreachable"
+    ):
+        create_worker_mod.read_worker_branch("demo-worker", runner)
+
+
 @pytest.mark.parametrize(
     "canned",
     [
-        # mngr could not list the agent at all.
+        # mngr could not list the agent at all: no payload to read an answer from.
         _StubResult(returncode=1, stderr="boom"),
         # Listed, but no such agent.
         _StubResult(stdout='{"agents": []}'),
