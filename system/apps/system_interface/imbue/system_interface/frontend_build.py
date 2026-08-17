@@ -188,10 +188,9 @@ class FrontendBuildService(MutableModel):
         # page rather than dying silently in a daemon thread.
         try:
             # npm ci deletes node_modules before installing, so it only runs
-            # when there is nothing to lose -- which is also the state the
-            # incident this guards against leaves behind. With deps already
-            # present, going straight to the build keeps a working install
-            # working even if the build itself fails.
+            # when there is nothing to lose. With deps already present, going
+            # straight to the build keeps a working install working even if the
+            # build itself fails.
             if not (self.frontend_directory / "node_modules").is_dir():
                 self._set_progress(FrontendBuildPhase.INSTALLING, "Installing the interface's dependencies", None)
                 self._run_command(["npm", "ci"], _NPM_INSTALL_TIMEOUT_SECONDS, _NPM_INSTALL_SLOW_SECONDS)

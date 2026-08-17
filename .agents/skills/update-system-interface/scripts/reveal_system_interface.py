@@ -385,11 +385,10 @@ def classify_changes(paths: Sequence[str]) -> ChangeSet:
         elif path.startswith(f"{FRONTEND_DIR}/"):
             # Everything else under frontend/ counts, not just src/: index.html,
             # vite.config.ts, tsconfig.json and the public assets all change the
-            # emitted bundle. Enumerating only src/ made those classify as no
-            # change at all, so the reveal reported "nothing to reveal" and left
-            # the merged tree serving a stale bundle. A tooling-only config
-            # (eslint, prettier) costs a redundant rebuild here, which is far
-            # cheaper than a missed one.
+            # emitted bundle, so anything narrower misses a change and leaves the
+            # merged tree serving a stale bundle. A tooling-only config (eslint,
+            # prettier) costs a redundant rebuild here, which is far cheaper than
+            # a missed one.
             frontend_src = True
         elif path == f"{APP_DIR}/pyproject.toml" or path == "uv.lock":
             backend_manifest = True
@@ -530,17 +529,16 @@ def snapshot_bundle(repo_root: Path) -> Path | None:
 
     Both destructive steps of a reveal delete before they produce -- ``npm ci``
     removes ``node_modules`` first and the build empties the bundle directory
-    first -- so a failure part-way leaves the workspace with no UI at all. Until
-    this existed, recovery held only a *recipe* for the known-good bundle (re-run
-    the very build that just failed) and not a copy of it, which is exactly how a
-    failed reveal could end with the served tree restored but nothing to serve.
+    first -- so a failure part-way leaves the workspace with no UI at all. A
+    *recipe* for the known-good bundle is not a substitute for a copy of it,
+    because the recipe is re-running the very build that just failed.
 
     Returns ``None`` when there is no bundle yet, which is not an error: a
     workspace that never built one has nothing to lose. A copy that cannot be
     taken (no space, no permission) returns ``None`` for the same reason rather
     than raising: this is a precaution, and refusing to reveal because the
-    precaution failed is worse than revealing the way this flow did before the
-    snapshot existed -- recovery falls back to rebuilding, as it used to.
+    precaution failed is worse than revealing without one -- recovery then falls
+    back to rebuilding.
     """
     bundle = repo_root / STATIC_DIR
     if not (bundle / "index.html").exists():
@@ -897,11 +895,11 @@ def _recover_running_state(
 
     ``saved_bundle`` is the pre-reveal copy of the built frontend, and it is what
     makes this recoverable at all. Restoring it needs neither ``npm`` nor a
-    working registry, so the class of failure that motivated the snapshot -- the
-    build environment itself being broken -- can no longer take the UI down: the
-    old rebuild-to-recover path would just re-run the command that had already
-    failed once. A rebuild is only attempted when there is no snapshot, i.e. when
-    there was no bundle to lose in the first place.
+    working registry, so a broken build environment -- the class of failure that
+    motivates the snapshot -- cannot take the UI down with it, whereas recovering
+    by rebuilding just re-runs the command that has already failed once. A
+    rebuild is only attempted when there is no snapshot, i.e. when there was no
+    bundle to lose in the first place.
 
     ``npm ci`` runs here only on the rebuild branch, and only for a manifest
     change. Restoring a snapshot needs no dependencies at all, so refusing to run
