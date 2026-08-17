@@ -122,6 +122,44 @@ def test_list_passes_view_and_device_through(monkeypatch: pytest.MonkeyPatch) ->
     assert posted == [("list", {"layout": "Everything", "device": "mobile"})]
 
 
+def test_views_lists_the_machines_views(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``views`` is a thin pass-through of the server's view enumeration."""
+    posted: list[tuple[str, dict[str, Any]]] = []
+    views = [
+        {
+            "id": "project-1",
+            "name": "Project 1",
+            "is_everything": False,
+            "members": ["service:web"],
+            "has_desktop_content": True,
+            "has_mobile_content": False,
+            "clients_on": ["client-1"],
+        },
+        {
+            "id": "everything",
+            "name": "Everything",
+            "is_everything": True,
+            "members": [],
+            "has_desktop_content": False,
+            "has_mobile_content": False,
+            "clients_on": [],
+        },
+    ]
+    monkeypatch.setattr(
+        layout,
+        "_post_layout",
+        _make_fake_post(posted, (200, {"ok": True, "views": views, "last_active_id": "project-1"})),
+    )
+
+    rc = layout.main(["views", "--json"])
+    assert rc == 0
+    assert posted == [("views", {})]
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed == {"views": views, "last_active_id": "project-1"}
+
+
 def test_open_without_view_posts_no_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A mutating op with no ``--view`` posts a None target: the server
     defaults it to the view the connected client is on."""

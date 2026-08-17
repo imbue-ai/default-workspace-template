@@ -6,6 +6,7 @@ Subcommands:
     inspect                             Describe the live dockview state (compact by default; --verbose for YAML tree).
     where <ref-or-service>              Show one panel: its group's tab-mates and the refs in each cardinal direction.
     context                             Show each browser client's recent messages, device kind, and current view.
+    views                               List the views (projects + Everything): members, per-device content, clients on each.
     load <view>                         Switch the requesting client (or --client / all clients) onto a view.
     open <ref-or-service>               Surface a service (focus-if-open, else tab into / split next to caller's chat).
     focus <ref-or-service>              Activate the named panel within its group.
@@ -1081,6 +1082,14 @@ def _cmd_context(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_views(args: argparse.Namespace) -> int:
+    status, body = _post_layout("views", {})
+    if status != 200 or not isinstance(body, dict):
+        return _report_failure("views", status, body)
+    _emit_structured({"views": body.get("views", []), "last_active_id": body.get("last_active_id")}, args.json)
+    return EXIT_OK
+
+
 def _cmd_load(args: argparse.Namespace) -> int:
     load_args: dict[str, Any] = {"layout": args.layout_name}
     if args.client:
@@ -1563,6 +1572,16 @@ def main(argv: list[str] | None = None) -> int:
         "--json", action="store_true", help="Emit JSON instead of YAML"
     )
     p_context.set_defaults(func=_cmd_context)
+
+    p_views = subparsers.add_parser(
+        "views",
+        help="List the views on this machine: every project plus Everything, "
+        "with members, per-device content, and which clients are on each",
+    )
+    p_views.add_argument(
+        "--json", action="store_true", help="Emit JSON instead of YAML"
+    )
+    p_views.set_defaults(func=_cmd_views)
 
     p_load = subparsers.add_parser(
         "load",
