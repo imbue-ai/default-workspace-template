@@ -8,7 +8,7 @@
 # naming this path (the manage-scheduled-tasks skill writes the new one).
 set -euo pipefail
 
-# Resolved from this file's own location rather than hardcoded, so the shim
-# works in a checkout that is not at /home/user/workspace (a worktree, a test).
+# Resolved from this file's own location, so the shim execs the wrapper from the
+# same checkout it was invoked out of rather than a hardcoded absolute path.
 here="$(cd -- "$(dirname -- "$0")" && pwd)"
 exec "$here/../../scripts/with_agent_env.sh" "$@"
