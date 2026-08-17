@@ -30,7 +30,6 @@ from imbue.system_interface import latchkey_endpoints
 from imbue.system_interface import member_last_used
 from imbue.system_interface import member_titles
 from imbue.system_interface import projects
-from imbue.system_interface import workspace_layouts
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import get_host_dir
@@ -1035,7 +1034,7 @@ def _primary_agent_layout_dir() -> Path | None:
     agent_id = os.environ.get("MNGR_AGENT_ID", "")
     if not agent_id:
         return None
-    return workspace_layouts.primary_agent_layout_dir(get_host_dir(), agent_id)
+    return projects.primary_agent_layout_dir(get_host_dir(), agent_id)
 
 
 def _client_activity_events_path() -> Path | None:
@@ -1058,124 +1057,6 @@ def _parse_json_object_body() -> dict[str, Any] | Response:
         error = ErrorResponse(detail="Request body must be a JSON object")
         return _json_response(error.model_dump(), status_code=400)
     return body
-
-
-def _default_layout_infos() -> list[dict[str, Any]]:
-    """The two default layout names, for dev/test setups with no layout dir."""
-    return [
-        workspace_layouts.LayoutInfo(slug=slug, display_name=slug, has_content=False).model_dump()
-        for slug in (workspace_layouts.DESKTOP_LAYOUT_SLUG, workspace_layouts.MOBILE_LAYOUT_SLUG)
-    ]
-
-
-def _list_layouts_endpoint() -> Response:
-    """List every named layout plus the last-active slug."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        # No primary agent configured (dev/test): expose the default names so
-        # the frontend can still pick an active layout; nothing persists.
-        return _json_response(
-            {"layouts": _default_layout_infos(), "last_active_slug": workspace_layouts.DESKTOP_LAYOUT_SLUG}
-        )
-    infos = workspace_layouts.list_layouts(layout_dir)
-    return _json_response(
-        {
-            "layouts": [info.model_dump() for info in infos],
-            "last_active_slug": workspace_layouts.get_last_active_slug(layout_dir),
-        }
-    )
-
-
-def _get_named_layout_endpoint(slug: str) -> Response:
-    """Get one named layout's saved content (null when the layout is still empty)."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        return _json_response({"slug": slug, "display_name": slug, "layout": None})
-    try:
-        content = workspace_layouts.read_layout_content(layout_dir, slug)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    return _json_response({"slug": slug, "display_name": display_name, "layout": content})
-
-
-def _save_layout_as_endpoint() -> Response:
-    """Save the posted layout under a display name (creating or overwriting).
-
-    The server owns slugification: an exact display-name match overwrites
-    that layout, while a slug collision with a *different* display name is
-    rejected so two visually-distinct names never share a file.
-    """
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
-    if isinstance(body, Response):
-        return body
-    display_name = body.get("display_name")
-    layout_content = body.get("layout")
-    client_id = str(body.get("client_id") or "")
-    if not isinstance(display_name, str) or not display_name.strip():
-        error = ErrorResponse(detail="'display_name' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
-    if not isinstance(layout_content, dict):
-        error = ErrorResponse(detail="'layout' must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-    try:
-        slug = workspace_layouts.register_layout(layout_dir, display_name.strip())
-    except workspace_layouts.LayoutNameError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-    except workspace_layouts.LayoutConflictError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    workspace_layouts.write_layout_content(layout_dir, slug, layout_content)
-    resolved_display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    get_state().broadcaster.broadcast_layout_saved(slug, resolved_display_name, client_id)
-    return _json_response({"slug": slug, "display_name": resolved_display_name})
-
-
-def _autosave_named_layout_endpoint(slug: str) -> Response:
-    """Persist the posted content to an existing named layout (the autosave path)."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
-    if isinstance(body, Response):
-        return body
-    layout_content = body.get("layout")
-    client_id = str(body.get("client_id") or "")
-    if not isinstance(layout_content, dict):
-        error = ErrorResponse(detail="'layout' must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-    try:
-        workspace_layouts.write_layout_content(layout_dir, slug, layout_content)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        # The layout was deleted while this client's autosave was in flight;
-        # the client hears about the deletion over the WebSocket.
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    get_state().broadcaster.broadcast_layout_saved(slug, display_name, client_id)
-    return _json_response({"status": "ok"})
-
-
-def _delete_named_layout_endpoint(slug: str) -> Response:
-    """Delete a named layout; the last remaining layout cannot be deleted."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    try:
-        fallback_slug = workspace_layouts.delete_layout(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    except workspace_layouts.LastLayoutDeletionError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    get_state().broadcaster.broadcast_layout_deleted(slug, fallback_slug)
-    return _json_response({"status": "ok", "fallback_layout_slug": fallback_slug})
 
 
 def _default_project_infos() -> list[dict[str, Any]]:
@@ -1275,12 +1156,19 @@ def _create_project_endpoint() -> Response:
 
 
 def _get_project_endpoint(project_id: str) -> Response:
-    """Get one project's saved content (null when the project is still empty)."""
+    """Get one project's saved content (null when the project is still empty).
+
+    ``?device=desktop|mobile`` selects which device's arrangement to read
+    (default desktop); each client passes its own UA-derived kind.
+    """
     layout_dir = _primary_agent_layout_dir()
     if layout_dir is None:
         return _json_response({"layout": None})
+    device = request.args.get("device", projects.DEFAULT_DEVICE)
     try:
-        content = projects.read_project_content(layout_dir, project_id)
+        content = projects.read_project_content(layout_dir, project_id, device)
+    except projects.ProjectDeviceError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     except projects.ProjectNotFoundError:
         return _project_not_found_response(project_id)
     return _json_response({"layout": content})
@@ -1297,17 +1185,20 @@ def _autosave_project_endpoint(project_id: str) -> Response:
         return body
     layout_content = body.get("layout")
     client_id = str(body.get("client_id") or "")
+    device = str(body.get("device") or projects.DEFAULT_DEVICE)
     if not isinstance(layout_content, dict):
         error = ErrorResponse(detail="'layout' must be a JSON object")
         return _json_response(error.model_dump(), status_code=400)
     try:
-        projects.write_project_content(layout_dir, project_id, layout_content)
+        projects.write_project_content(layout_dir, project_id, layout_content, device)
+    except projects.ProjectDeviceError as e:
+        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     except projects.ProjectNotFoundError:
         # The project was deleted while this client's autosave was in flight;
         # the client hears about the deletion over the WebSocket.
         return _project_not_found_response(project_id)
     get_state().broadcaster.broadcast(
-        {"type": "project_saved", "project_id": project_id, "saved_by_client_id": client_id}
+        {"type": "project_saved", "project_id": project_id, "saved_by_client_id": client_id, "device": device}
     )
     return _json_response({"status": "ok"})
 
@@ -2529,34 +2420,17 @@ def _resolve_project_id_for_layout_arg(layout_dir: Path, requested: str) -> str 
 
 
 def _layout_op_display_name(layout_dir: Path, slug: str) -> str:
-    """The human-readable name of whatever ``slug`` resolved to.
+    """The human-readable name of the view ``slug`` resolved to.
 
-    Same precedence as the content path below: a registered named layout
-    keeps its own display name, and anything else is a view id whose name comes
-    from the projects registry -- except the unfiltered view, which is named
+    A project's name comes from the registry; the unfiltered view is named
     here because it has no registry entry to be named from.
     """
-    try:
-        return workspace_layouts.get_layout_display_name(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        if slug == projects.EVERYTHING_VIEW_ID:
-            return projects.EVERYTHING_VIEW_NAME
-        for info in projects.list_projects(layout_dir):
-            if info.project_id == slug:
-                return info.name
-        return slug
-
-
-def _layout_op_content_path(layout_dir: Path, slug: str) -> Path:
-    """The saved-content file a read op should inspect for ``slug``.
-
-    Mirrors the resolution precedence above: a registered named layout keeps
-    its own file, and anything else came from the projects registry and reads
-    that project's content instead.
-    """
-    if slug in {info.slug for info in workspace_layouts.list_layouts(layout_dir)}:
-        return workspace_layouts.layout_content_path(layout_dir, slug)
-    return projects.project_content_path(layout_dir, slug)
+    if slug == projects.EVERYTHING_VIEW_ID:
+        return projects.EVERYTHING_VIEW_NAME
+    for info in projects.list_projects(layout_dir):
+        if info.project_id == slug:
+            return info.name
+    return slug
 
 
 def _default_view_id(layout_dir: Path | None) -> str | None:
@@ -2587,7 +2461,7 @@ def _resolve_requested_layout_slug(
     """Resolve a layout op's ``args.layout`` (or the current-view default) to a view id.
 
     Returns ``(slug, None)`` on success and ``(None, error_response)`` when an
-    explicitly-named layout is unusable or unknown. With no layout dir
+    explicitly-named view is unusable or unknown. With no layout dir
     configured (dev/test), an explicit name is slugified without registry
     validation and the default is None.
     """
@@ -2595,23 +2469,17 @@ def _resolve_requested_layout_slug(
     if isinstance(requested, str) and requested:
         if layout_dir is None:
             try:
-                return workspace_layouts.slugify_layout_name(requested), None
-            except workspace_layouts.LayoutNameError as e:
+                return projects.slugify_project_name(requested), None
+            except projects.ProjectNameError as e:
                 return None, _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-        try:
-            return workspace_layouts.resolve_layout_slug(layout_dir, requested), None
-        except workspace_layouts.LayoutNameError as e:
-            return None, _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-        except workspace_layouts.LayoutNotFoundError:
-            project_id = _resolve_project_id_for_layout_arg(layout_dir, requested)
-            if project_id is not None:
-                return project_id, None
-            known = ", ".join(info.display_name for info in workspace_layouts.list_layouts(layout_dir))
-            known_projects = ", ".join(info.name for info in projects.list_projects(layout_dir))
-            error = ErrorResponse(
-                detail=f"Layout {requested!r} not found (known layouts: {known}; known projects: {known_projects})"
-            )
-            return None, _json_response(error.model_dump(), status_code=404)
+        project_id = _resolve_project_id_for_layout_arg(layout_dir, requested)
+        if project_id is not None:
+            return project_id, None
+        known_views = ", ".join(
+            [info.name for info in projects.list_projects(layout_dir)] + [projects.EVERYTHING_VIEW_NAME]
+        )
+        error = ErrorResponse(detail=f"View {requested!r} not found (known views: {known_views})")
+        return None, _json_response(error.model_dump(), status_code=404)
     return _default_view_id(layout_dir), None
 
 
@@ -2676,8 +2544,15 @@ def _layout_broadcast_endpoint() -> Response:
         slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
         if error_response is not None:
             return error_response
+        device = str(args_raw.get("device") or projects.DEFAULT_DEVICE)
+        try:
+            projects.validate_device(device)
+        except projects.ProjectDeviceError as e:
+            return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
         layout_path = (
-            _layout_op_content_path(layout_dir, slug) if layout_dir is not None and slug is not None else None
+            projects.project_content_path(layout_dir, slug, device)
+            if layout_dir is not None and slug is not None
+            else None
         )
         if op == "list":
             entries = layout_list(
@@ -2925,18 +2800,6 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(
         "/api/agents/<agent_id>/drain-to-composer", view_func=_drain_to_composer_endpoint, methods=["POST"]
     )
-    application.add_url_rule("/api/layouts", view_func=_list_layouts_endpoint, methods=["GET"])
-    application.add_url_rule(
-        "/api/layouts", view_func=_save_layout_as_endpoint, methods=["POST"], endpoint="_save_layout_as"
-    )
-    application.add_url_rule("/api/layouts/<slug>", view_func=_get_named_layout_endpoint, methods=["GET"])
-    application.add_url_rule(
-        "/api/layouts/<slug>",
-        view_func=_autosave_named_layout_endpoint,
-        methods=["POST"],
-        endpoint="_autosave_named_layout",
-    )
-    application.add_url_rule("/api/layouts/<slug>/delete", view_func=_delete_named_layout_endpoint, methods=["POST"])
     application.add_url_rule("/api/projects", view_func=_list_projects_endpoint, methods=["GET"])
     application.add_url_rule(
         "/api/projects", view_func=_create_project_endpoint, methods=["POST"], endpoint="_create_project"

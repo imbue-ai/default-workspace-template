@@ -19,14 +19,16 @@ the machine shows up in it, including objects filed in no project at all. It
 keeps its own layout like any other view, so it has a content file here, but it
 never gets a member list -- its membership is "whatever exists".
 
-Storage mirrors named layouts (see ``workspace_layouts.py``): each project's
-content lives in its own file under ``<workspace_layout_dir>/projects/<id>.json``
-with a small registry file (``projects_meta.json``) holding the per-project
-metadata, its member list, and the last-active id. A project with no content
-file yet is simply "empty", which the frontend renders as the New Tab launcher.
+Each project's content lives in its own file under
+``<workspace_layout_dir>/projects/<id>.json`` (``<id>.mobile.json`` for the
+mobile arrangement) with a small registry file (``projects_meta.json``) holding
+the per-project metadata, its member list, and the last-active id. A project
+with no content file yet is simply "empty", which the frontend renders as the
+New Tab launcher.
 
-A workspace that predates projects keeps its whole arrangement in the
-named-layout store; on first read that is folded into one starter project (see
+A workspace that predates projects kept its arrangement in the retired
+named-layout store (or, older still, one implicit ``layout.json``); on first
+read that is folded into one starter project (see
 ``_migrate_named_layouts_unlocked``).
 """
 
@@ -44,8 +46,6 @@ from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.workspace_layouts import DESKTOP_LAYOUT_SLUG
-from imbue.system_interface.workspace_layouts import read_layout_content
 
 # The project every workspace starts on: the one a fresh machine seeds, and the
 # one a pre-projects machine's arrangement migrates into. Its name follows the
@@ -66,6 +66,14 @@ EVERYTHING_VIEW_NAME: Final[str] = "Everything"
 _PROJECTS_SUBDIR: Final[str] = "projects"
 _META_FILENAME: Final[str] = "projects_meta.json"
 
+# Each view keeps one arrangement per device kind: ``projects/<id>.json`` for
+# desktop and ``projects/<id>.mobile.json`` for mobile. The kinds mirror the
+# frontend's UA-derived ``DeviceKind`` (ClientIdentity.ts), which each client
+# reports and routes its own loads and autosaves by. Membership is shared --
+# the devices differ only in where tabs sit, never in what the view holds.
+DEVICE_KINDS: Final[tuple[str, ...]] = ("desktop", "mobile")
+DEFAULT_DEVICE: Final[str] = "desktop"
+
 # ``glyph`` indexes the frontend's squiggle table, which has exactly ten
 # entries.
 _GLYPH_COUNT: Final[int] = 10
@@ -79,9 +87,8 @@ _COLOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"#[0-9a-fA-F]{6}")
 _BROWSER_SESSION_QUERY_KEY: Final[str] = "session"
 
 # Serializes every read-modify-write of the meta file + content files across
-# the threaded WSGI server, exactly as ``workspace_layouts._layouts_lock`` does
-# for named layouts. The migration below reaches into that module's lock while
-# holding this one; nothing there ever reaches back, so the nesting is one-way.
+# the threaded WSGI server. Mirrors the module-level ``_terminal_allocate_lock``
+# convention in ``server.py``.
 _projects_lock = threading.Lock()
 
 
@@ -127,6 +134,20 @@ class ProjectMemberRefError(ValueError):
     """Raised when a member ref is empty once trimmed."""
 
     ...
+
+
+class ProjectDeviceError(ValueError):
+    """Raised when a device kind is not one of DEVICE_KINDS."""
+
+    ...
+
+
+def validate_device(device: str) -> str:
+    """Return ``device`` unchanged, raising ProjectDeviceError if unknown."""
+    if device not in DEVICE_KINDS:
+        known = ", ".join(DEVICE_KINDS)
+        raise ProjectDeviceError(f"Unknown device kind {device!r} (known kinds: {known})")
+    return device
 
 
 class ProjectInfo(FrozenModel):
@@ -228,6 +249,16 @@ def _entry_members(entry: dict[str, Any]) -> list[str]:
     return [member for member in members if isinstance(member, str) and member]
 
 
+def primary_agent_layout_dir(host_dir: Path, agent_id: str) -> Path:
+    """The workspace layout directory belonging to the workspace's primary agent.
+
+    The system_interface always serves a single workspace (its own primary
+    agent). Shared so every consumer of the layout dir -- and of the event logs
+    kept beside it -- resolves the same path.
+    """
+    return host_dir / "agents" / agent_id / "workspace_layout"
+
+
 def _meta_path(layout_dir: Path) -> Path:
     return layout_dir / _META_FILENAME
 
@@ -236,9 +267,11 @@ def _projects_dir(layout_dir: Path) -> Path:
     return layout_dir / _PROJECTS_SUBDIR
 
 
-def project_content_path(layout_dir: Path, project_id: str) -> Path:
-    """On-disk path of one project's content file."""
-    return _projects_dir(layout_dir) / f"{project_id}.json"
+def project_content_path(layout_dir: Path, project_id: str, device: str = DEFAULT_DEVICE) -> Path:
+    """On-disk path of one project's content file for one device kind."""
+    validate_device(device)
+    suffix = ".json" if device == DEFAULT_DEVICE else f".{device}.json"
+    return _projects_dir(layout_dir) / f"{project_id}{suffix}"
 
 
 @pure
@@ -324,35 +357,61 @@ def _write_meta_unlocked(layout_dir: Path, meta: dict[str, Any]) -> None:
     _meta_path(layout_dir).write_text(json.dumps(meta, indent=2))
 
 
-def _migrate_named_layouts_unlocked(layout_dir: Path) -> dict[str, Any] | None:
-    """Fold a pre-projects named-layout store into one starter project.
+def _read_retired_store_content(layout_dir: Path, *candidate_paths: Path) -> dict[str, Any] | None:
+    """The first readable arrangement among ``candidate_paths``, or None.
 
-    A workspace that predates projects keeps its whole arrangement in the
-    named-layout store's ``desktop`` layout. Rather than upgrading onto an
-    empty desktop, that arrangement becomes the starter project's content and
-    each of its panels is filed as a member, so the machine looks the same
-    afterwards and everything on it stays reachable from the sidebar. Reading
-    through ``workspace_layouts`` rather than straight off disk also catches a
-    workspace old enough to still keep one implicit ``layout.json``: that
-    module's own legacy migration runs first and hands the result back here.
+    Reads straight off disk: the named-layout store these files belonged to is
+    retired, so there is no registry left to consult. Unreadable or non-object
+    content is skipped (logged) rather than failing the upgrade.
+    """
+    for candidate_path in candidate_paths:
+        if not candidate_path.exists():
+            continue
+        try:
+            content = json.loads(candidate_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            _loguru_logger.opt(exception=e).warning("Skipped unreadable legacy layout at {}", candidate_path)
+            continue
+        if isinstance(content, dict):
+            return content
+    return None
+
+
+def _migrate_named_layouts_unlocked(layout_dir: Path) -> dict[str, Any] | None:
+    """Fold a pre-projects layout store into one starter project.
+
+    A workspace that predates projects kept its whole arrangement in the
+    retired named-layout store's ``layouts/desktop.json`` (or, older still, one
+    implicit ``layout.json``). Rather than upgrading onto an empty workspace,
+    that arrangement becomes the starter project's desktop content and each of
+    its panels is filed as a member, so the machine looks the same afterwards
+    and everything on it stays reachable from the sidebar. The old store's
+    ``mobile`` layout, when present, folds into the starter project's mobile
+    arrangement the same way (members are shared, so it adds none of its own).
     Returns the seeded registry, or None when there is nothing to migrate.
-    One-shot in the same way as
-    ``workspace_layouts._migrate_legacy_layout_unlocked``: it runs only while
-    the projects registry is still absent, and steps aside from a starter
-    project that already has content of its own.
+    One-shot: it runs only while the projects registry is still absent, and
+    steps aside from a starter project that already has content of its own.
+    The legacy files are left in place -- nothing reads them anymore, and the
+    registry write is what marks the migration done.
     """
     starter_path = project_content_path(layout_dir, DEFAULT_PROJECT_ID)
     if starter_path.exists():
         return None
-    content = read_layout_content(layout_dir, DESKTOP_LAYOUT_SLUG)
+    content = _read_retired_store_content(
+        layout_dir, layout_dir / "layouts" / "desktop.json", layout_dir / "layout.json"
+    )
     if content is None:
         return None
     members = member_refs_from_content(content)
     starter_path.parent.mkdir(parents=True, exist_ok=True)
     starter_path.write_text(json.dumps(content, separators=(",", ":")))
+    mobile_content = _read_retired_store_content(layout_dir, layout_dir / "layouts" / "mobile.json")
+    if mobile_content is not None:
+        project_content_path(layout_dir, DEFAULT_PROJECT_ID, "mobile").write_text(
+            json.dumps(mobile_content, separators=(",", ":"))
+        )
     _loguru_logger.info(
-        "Migrated the '{}' layout into the '{}' project with {} member(s)",
-        DESKTOP_LAYOUT_SLUG,
+        "Migrated the pre-projects layout store into the '{}' project with {} member(s)",
         DEFAULT_PROJECT_ID,
         len(members),
     )
@@ -401,7 +460,7 @@ def _project_info(layout_dir: Path, project_id: str, entry: dict[str, Any]) -> P
         name=str(entry.get("name", project_id)),
         color=str(entry.get("color", DEFAULT_PROJECT_COLOR)),
         glyph=glyph if isinstance(glyph, int) else DEFAULT_PROJECT_GLYPH,
-        has_content=project_content_path(layout_dir, project_id).exists(),
+        has_content=any(project_content_path(layout_dir, project_id, device).exists() for device in DEVICE_KINDS),
         members=tuple(_entry_members(entry)),
     )
 
@@ -436,19 +495,21 @@ def set_last_active_id(layout_dir: Path, project_id: str) -> None:
             _write_meta_unlocked(layout_dir, meta)
 
 
-def read_project_content(layout_dir: Path, project_id: str) -> dict[str, Any] | None:
-    """The saved content of one project, or None when the project is still empty.
+def read_project_content(layout_dir: Path, project_id: str, device: str = DEFAULT_DEVICE) -> dict[str, Any] | None:
+    """The saved content of one project on one device, or None when still empty.
 
     Raises ProjectNotFoundError for an id that is neither registered nor the
     reserved Everything view, whose arrangement is stored even though it has no
-    registry entry. A corrupt content file is reported as empty (logged) so the frontend can
+    registry entry. Each device kind reads only its own file -- a view arranged
+    on desktop is still "empty" on mobile until a mobile client saves there.
+    A corrupt content file is reported as empty (logged) so the frontend can
     fall back to the fresh-workspace state instead of erroring forever.
     """
     with _projects_lock:
         meta = _read_meta_unlocked(layout_dir)
         if project_id != EVERYTHING_VIEW_ID and project_id not in meta["project_by_id"]:
             raise ProjectNotFoundError(project_id)
-        content_path = project_content_path(layout_dir, project_id)
+        content_path = project_content_path(layout_dir, project_id, device)
         if not content_path.exists():
             return None
         try:
@@ -459,12 +520,16 @@ def read_project_content(layout_dir: Path, project_id: str) -> dict[str, Any] | 
         return content if isinstance(content, dict) else None
 
 
-def write_project_content(layout_dir: Path, project_id: str, content: dict[str, Any]) -> None:
-    """Persist ``content`` for an already-registered project.
+def write_project_content(
+    layout_dir: Path, project_id: str, content: dict[str, Any], device: str = DEFAULT_DEVICE
+) -> None:
+    """Persist ``content`` for an already-registered project on one device.
 
     Raises ProjectNotFoundError when the id is neither registered nor the
     reserved Everything view -- autosaves against a just-deleted project must
-    fail rather than resurrect it.
+    fail rather than resurrect it. A write touches only its own device's file;
+    it never seeds the other device, which builds its own arrangement the
+    first time a client of that kind saves there.
 
     Writing deliberately leaves both the last-active pointer and the member
     list alone. An autosave records where tabs sit, and opening or closing a
@@ -475,7 +540,7 @@ def write_project_content(layout_dir: Path, project_id: str, content: dict[str, 
         meta = _read_meta_unlocked(layout_dir)
         if project_id != EVERYTHING_VIEW_ID and project_id not in meta["project_by_id"]:
             raise ProjectNotFoundError(project_id)
-        content_path = project_content_path(layout_dir, project_id)
+        content_path = project_content_path(layout_dir, project_id, device)
         content_path.parent.mkdir(parents=True, exist_ok=True)
         content_path.write_text(json.dumps(content, separators=(",", ":")))
 
@@ -674,6 +739,22 @@ def _panel_ids_resolving_to_ref(content: dict[str, Any], ref: str) -> list[str]:
 def _strip_panel_file_unlocked(layout_dir: Path, project_id: str, panel_id: str | None, ref: str | None) -> bool:
     """Rewrite one project's content without the destroyed object's panels.
 
+    Every device's file is swept -- a destroyed object must not restore as a
+    dead tab on mobile just because it was destroyed from desktop. Reports
+    whether any device's file held a target.
+    """
+    # A list, not a generator: ``any`` must not short-circuit past a device.
+    return any(
+        [
+            _strip_panel_device_file_unlocked(project_content_path(layout_dir, project_id, device), panel_id, ref)
+            for device in DEVICE_KINDS
+        ]
+    )
+
+
+def _strip_panel_device_file_unlocked(content_path: Path, panel_id: str | None, ref: str | None) -> bool:
+    """Rewrite one device's content file without the destroyed object's panels.
+
     Panels are matched two ways: by ``panel_id`` (the deterministic id a chat
     or a named terminal is always filed under, or the destroying client's live
     id), and by ``ref`` against each saved panel's params -- which is what
@@ -682,7 +763,6 @@ def _strip_panel_file_unlocked(layout_dir: Path, project_id: str, panel_id: str 
     no panels at all has its content file removed so it reopens on the launcher
     rather than restoring an empty grid.
     """
-    content_path = project_content_path(layout_dir, project_id)
     if not content_path.exists():
         return False
     try:
@@ -821,5 +901,6 @@ def delete_project(layout_dir: Path, project_id: str) -> str:
         if meta.get("last_active_id") == project_id:
             meta["last_active_id"] = fallback_id
         _write_meta_unlocked(layout_dir, meta)
-        project_content_path(layout_dir, project_id).unlink(missing_ok=True)
+        for device in DEVICE_KINDS:
+            project_content_path(layout_dir, project_id, device).unlink(missing_ok=True)
         return fallback_id

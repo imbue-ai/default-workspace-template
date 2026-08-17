@@ -199,13 +199,15 @@ to `workspace_layout/events/client_activity/events.jsonl` with the
 sending client's id, device kind, and active view, so agents can
 attribute a request to a client via `layout.py context`.
 
-The named layouts that projects replace still exist on disk
-(`workspace_layout/layouts/`, `GET /api/layouts` and friends) as the
-migration source, but no client keeps one active any more. The
-agent-facing layout ops below therefore resolve their `--layout`
-against the projects registry (including `Everything`) whenever the
-name is not one of the named layouts, which is how an agent addresses
-the view a client is actually looking at.
+The named-layout store that projects replace is retired: its API is
+gone and only the on-disk files remain (`workspace_layout/layouts/`,
+read once as the migration source). The agent-facing layout ops below
+resolve their `--view` against the projects registry (including
+`Everything`), and an op naming no view goes to the one the connected
+client is looking at. A view is arranged per device -- desktop and
+mobile clients each save their own arrangement of the same view,
+sharing its members -- and the read ops take `--device` to pick which
+arrangement to read (default desktop).
 
 ## Driving the workspace layout from an agent
 
@@ -226,26 +228,27 @@ python3 system/scripts/layout.py context
 
 # Surface the given service in a tab split alongside the primary chat
 # (reports a no-op if one is already open; use ``focus`` to bring it
-# to the foreground). Mutating ops always name their target, which is
-# normally the project the client is in (``context`` reports it).
-python3 system/scripts/layout.py open web --layout Everything
+# to the foreground). With no ``--view``, the op goes to the view the
+# connected client is looking at; name one to address another view.
+python3 system/scripts/layout.py open web --view Everything
 
 # Reload one tab (or, for ``service:<name>``, every iframe tied to
 # that service).
 python3 system/scripts/layout.py refresh web
 
 # Inspect the grid tree -- arrangements, sizes, active panel,
-# ref-resolved panel list -- of the named project or layout.
-python3 system/scripts/layout.py inspect --layout Everything
+# ref-resolved panel list -- of the named view (a project, or
+# ``Everything``); ``--device mobile`` reads its mobile arrangement.
+python3 system/scripts/layout.py inspect --view Everything
 ```
 
 Every op POSTs `{op, args, agent_id}` to the loopback-only
 `/api/layout/broadcast` endpoint on the system interface. Mutating ops
-require a target, are delivered only to connected clients that have it
-active (HTTP 412 when there are none -- the error lists each connected
-client and what it is on), and acquire an in-process advisory mutex (HTTP
-409 with the in-flight holder's metadata on contention); reads bypass
-both. Panels are addressed by stable, type-prefixed refs:
+target a view (the connected client's own when unnamed), are delivered
+only to connected clients that have it active (HTTP 412 when there are
+none -- the error lists each connected client and what it is on), and
+acquire an in-process advisory mutex (HTTP 409 with the in-flight
+holder's metadata on contention); reads bypass both. Panels are addressed by stable, type-prefixed refs:
 `service:<name>`, `chat:<agent-name>`, `subagent:<session-id>`,
 `terminal:<short-hash>`, `url:<short-hash>`. Subcommands that take a
 "service or ref" argument also accept a bare service name (e.g. `web`

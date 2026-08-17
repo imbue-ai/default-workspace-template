@@ -12,6 +12,7 @@ from imbue.system_interface.projects import LastProjectDeletionError
 from imbue.system_interface.projects import ProjectColorError
 from imbue.system_interface.projects import ProjectConflictError
 from imbue.system_interface.projects import ProjectGlyphError
+from imbue.system_interface.projects import ProjectDeviceError
 from imbue.system_interface.projects import ProjectMemberRefError
 from imbue.system_interface.projects import ProjectNameError
 from imbue.system_interface.projects import ProjectNotFoundError
@@ -175,6 +176,34 @@ def test_content_access_for_unknown_project_raises(tmp_path: Path) -> None:
         write_project_content(tmp_path, "ghost", {})
 
 
+def test_each_device_keeps_its_own_arrangement(tmp_path: Path) -> None:
+    # One view, two files: a mobile save neither seeds nor disturbs desktop,
+    # and desktop reads stay None until a desktop client saves there.
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    mobile_content = _content_with_panels("chat-m")
+    write_project_content(tmp_path, "research", mobile_content, "mobile")
+    assert read_project_content(tmp_path, "research", "mobile") == mobile_content
+    assert read_project_content(tmp_path, "research", "desktop") is None
+    assert not project_content_path(tmp_path, "research", "desktop").exists()
+
+    desktop_content = _content_with_panels("chat-d")
+    write_project_content(tmp_path, "research", desktop_content)
+    assert read_project_content(tmp_path, "research") == desktop_content
+    assert read_project_content(tmp_path, "research", "mobile") == mobile_content
+    assert project_content_path(tmp_path, "research", "mobile").name == "research.mobile.json"
+    assert project_content_path(tmp_path, "research").name == "research.json"
+
+
+def test_unknown_device_kind_is_rejected(tmp_path: Path) -> None:
+    create_project(tmp_path, "Research", "#12B5A5", 4)
+    with pytest.raises(ProjectDeviceError):
+        read_project_content(tmp_path, "research", "tablet")
+    with pytest.raises(ProjectDeviceError):
+        write_project_content(tmp_path, "research", {}, "tablet")
+    with pytest.raises(ProjectDeviceError):
+        project_content_path(tmp_path, "research", "tablet")
+
+
 def test_autosave_does_not_touch_membership(tmp_path: Path) -> None:
     # Closing a tab rewrites the layout but must never unfile the object: the
     # member stays listed, backgrounded, until it is explicitly removed.
@@ -189,9 +218,11 @@ def test_delete_project_returns_the_first_remaining_project(tmp_path: Path) -> N
     write_project_content(tmp_path, "research", {"dockview": {}, "panelParams": {}})
     set_last_active_id(tmp_path, "research")
 
+    write_project_content(tmp_path, "research", {"dockview": {}, "panelParams": {}}, "mobile")
     fallback_id = delete_project(tmp_path, "research")
     assert fallback_id == DEFAULT_PROJECT_ID
     assert not project_content_path(tmp_path, "research").exists()
+    assert not project_content_path(tmp_path, "research", "mobile").exists()
     assert [info.project_id for info in list_projects(tmp_path)] == [DEFAULT_PROJECT_ID]
     assert get_last_active_id(tmp_path) == DEFAULT_PROJECT_ID
 
@@ -449,6 +480,28 @@ def test_remove_panel_from_all_projects_touches_only_holders(tmp_path: Path) -> 
     assert set(emails_content["dockview"]["panels"]) == {"chat-b"}
 
 
+def test_remove_panel_from_all_projects_sweeps_every_device(tmp_path: Path) -> None:
+    # A destroyed object must not restore as a dead tab on mobile just because
+    # it was destroyed from desktop -- both device files are swept, and a
+    # holder on either device alone still reports as changed.
+    create_project(tmp_path, "Coding", "#16A34A", 1)
+    write_project_content(tmp_path, "coding", _content_with_panels("chat-a", "chat-b"))
+    write_project_content(tmp_path, "coding", _content_with_panels("chat-a"), "mobile")
+    write_project_content(tmp_path, DEFAULT_PROJECT_ID, _content_with_panels("chat-a", "chat-c"), "mobile")
+
+    changed = remove_panel_from_all_projects(tmp_path, "chat-a")
+
+    assert sorted(changed) == ["coding", DEFAULT_PROJECT_ID]
+    desktop_content = read_project_content(tmp_path, "coding")
+    assert desktop_content is not None
+    assert set(desktop_content["dockview"]["panels"]) == {"chat-b"}
+    # The mobile file held only the destroyed panel, so it is removed outright.
+    assert not project_content_path(tmp_path, "coding", "mobile").exists()
+    starter_mobile = read_project_content(tmp_path, DEFAULT_PROJECT_ID, "mobile")
+    assert starter_mobile is not None
+    assert set(starter_mobile["dockview"]["panels"]) == {"chat-c"}
+
+
 def test_remove_panel_from_all_projects_also_drops_membership(tmp_path: Path) -> None:
     # Destroy is the one thing that unfiles an object: it no longer exists, so
     # the project that owned it must stop listing it as backgrounded.
@@ -631,10 +684,23 @@ def test_migration_folds_the_desktop_layout_into_one_starter_project(tmp_path: P
     assert all_members(tmp_path) == {"chat:agent-7": [DEFAULT_PROJECT_ID], "service:notes": [DEFAULT_PROJECT_ID]}
 
 
+def test_migration_folds_the_old_mobile_layout_into_the_starter_projects_mobile_file(tmp_path: Path) -> None:
+    # The retired store kept a separate ``mobile`` layout; it becomes the
+    # starter project's mobile arrangement. Members come from desktop alone --
+    # membership is shared across devices, so mobile adds none of its own.
+    _write_legacy_desktop_layout(tmp_path, _content_with_panels("chat-a"))
+    mobile_content = _content_with_panels("chat-m")
+    (tmp_path / "layouts" / "mobile.json").write_text(json.dumps(mobile_content, separators=(",", ":")))
+
+    list_projects(tmp_path)
+
+    assert read_project_content(tmp_path, DEFAULT_PROJECT_ID, "mobile") == mobile_content
+
+
 def test_migration_reaches_a_workspace_still_on_one_implicit_layout(tmp_path: Path) -> None:
     # Two generations back: no named-layout store at all, just the original
-    # ``layout.json``. Reading through workspace_layouts runs its own legacy
-    # migration first, so that arrangement still lands in the starter project.
+    # ``layout.json``, which the migration reads directly as the fallback, so
+    # that arrangement still lands in the starter project.
     legacy_content = _content_with_panels("iframe-notes")
     legacy_content["panelParams"] = {"iframe-notes": {"panelType": "iframe", "serviceName": "notes"}}
     (tmp_path / "layout.json").write_text(json.dumps(legacy_content, separators=(",", ":")))

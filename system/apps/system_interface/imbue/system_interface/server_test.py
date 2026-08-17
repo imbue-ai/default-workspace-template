@@ -53,6 +53,7 @@ from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
 from imbue.system_interface.projects import EVERYTHING_VIEW_NAME
+from imbue.system_interface.projects import write_project_content
 from imbue.system_interface.server import _DEFAULT_TAIL_COUNT
 from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
 from imbue.system_interface.server import _agent_switch_options
@@ -1890,148 +1891,6 @@ def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> N
     assert calls.index("get_all_events") < calls.index("start")
 
 
-def test_list_layouts_exposes_defaults(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A fresh workspace lists the two default layout names, both empty."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    response = client.get("/api/layouts")
-
-    assert response.status_code == 200
-    body = response.get_json()
-    assert [layout["slug"] for layout in body["layouts"]] == ["desktop", "mobile"]
-    assert all(layout["has_content"] is False for layout in body["layouts"])
-    assert body["last_active_slug"] == "desktop"
-
-
-def test_get_empty_layout_returns_null_content(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A registered-but-never-saved layout reports null content (fresh state)."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    response = client.get("/api/layouts/mobile")
-
-    assert response.status_code == 200
-    assert response.get_json() == {"slug": "mobile", "display_name": "mobile", "layout": None}
-
-
-def test_get_unknown_layout_returns_404(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    response = client.get("/api/layouts/nonexistent")
-
-    assert response.status_code == 404
-
-
-def test_autosave_and_get_layout_round_trips(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-
-    layout_data = {"dockview": {"panels": {}}, "panelParams": {"chat-1": {"panelType": "chat"}}}
-    save_response = client.post("/api/layouts/desktop", json={"layout": layout_data, "client_id": "client-1"})
-    assert save_response.status_code == 200
-    assert save_response.get_json()["status"] == "ok"
-
-    get_response = client.get("/api/layouts/desktop")
-    assert get_response.status_code == 200
-    assert get_response.get_json()["layout"] == layout_data
-    assert (tmp_path / "agents" / "agent-123" / "workspace_layout" / "layouts" / "desktop.json").exists()
-
-
-def test_autosave_unknown_layout_returns_404(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An autosave against a just-deleted layout must not resurrect it."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    response = client.post("/api/layouts/gone", json={"layout": {}, "client_id": "client-1"})
-
-    assert response.status_code == 404
-
-
-def test_save_layout_as_creates_and_reports_slug(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Save-as slugifies the display name server-side and registers the layout."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-
-    response = client.post(
-        "/api/layouts",
-        json={"display_name": "My Fancy Setup!", "layout": {"dockview": {}}, "client_id": "client-1"},
-    )
-    assert response.status_code == 200
-    assert response.get_json() == {"slug": "my-fancy-setup", "display_name": "My Fancy Setup!"}
-
-    list_response = client.get("/api/layouts")
-    slugs = [layout["slug"] for layout in list_response.get_json()["layouts"]]
-    assert "my-fancy-setup" in slugs
-
-
-def test_save_layout_as_rejects_slug_conflict(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Two different display names that shorten to the same slug conflict."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-
-    first = client.post("/api/layouts", json={"display_name": "My Setup", "layout": {}, "client_id": "c1"})
-    assert first.status_code == 200
-    second = client.post("/api/layouts", json={"display_name": "my setup", "layout": {}, "client_id": "c1"})
-
-    assert second.status_code == 409
-    assert "conflicts" in second.get_json()["detail"]
-
-
-def test_save_layout_as_rejects_unusable_name(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    response = client.post("/api/layouts", json={"display_name": "!!!", "layout": {}, "client_id": "c1"})
-
-    assert response.status_code == 400
-
-
-def test_delete_layout_and_last_layout_guard(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Deleting works down to the last layout, which is protected."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-
-    delete_mobile = client.post("/api/layouts/mobile/delete")
-    assert delete_mobile.status_code == 200
-    assert delete_mobile.get_json()["fallback_layout_slug"] == "desktop"
-
-    delete_last = client.post("/api/layouts/desktop/delete")
-    assert delete_last.status_code == 409
-
-    delete_unknown = client.post("/api/layouts/mobile/delete")
-    assert delete_unknown.status_code == 404
-
-
-def test_legacy_layout_json_migrates_to_desktop(
-    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A pre-named-layouts layout.json becomes the desktop layout's content."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    layout_dir = tmp_path / "agents" / "agent-123" / "workspace_layout"
-    layout_dir.mkdir(parents=True)
-    legacy_content = {"dockview": {"panels": {}}, "panelParams": {"chat-old": {"panelType": "chat"}}}
-    (layout_dir / "layout.json").write_text(json.dumps(legacy_content))
-
-    response = client.get("/api/layouts/desktop")
-
-    assert response.status_code == 200
-    assert response.get_json()["layout"] == legacy_content
-    assert not (layout_dir / "layout.json").exists()
-    assert (layout_dir / "layout.json.migrated").exists()
-
-
 def test_send_message_records_client_activity_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A message POST carrying client metadata appends a message event."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
@@ -2273,14 +2132,14 @@ def _register_fake_client(app: Flask, client_id: str, layout_slug: str) -> "queu
 
 
 def test_layout_broadcast_open_emits_targeted_ws_message(app: Flask) -> None:
-    """op=open reaches exactly the clients whose active layout matches --layout."""
-    matching_queue = _register_fake_client(app, "client-on-desktop", "desktop")
-    other_queue = _register_fake_client(app, "client-on-mobile", "mobile")
+    """op=open reaches exactly the clients whose active view matches --layout."""
+    matching_queue = _register_fake_client(app, "client-on-starter", "project-1")
+    other_queue = _register_fake_client(app, "client-on-everything", "everything")
 
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web", "layout": "desktop"}, "agent_id": "agent-42"},
+        json={"op": "open", "args": {"ref": "service:web", "layout": "Project 1"}, "agent_id": "agent-42"},
     )
     assert response.status_code == 200
 
@@ -2312,12 +2171,12 @@ def test_layout_broadcast_mutating_op_defaults_to_the_single_clients_view(app: F
 
 
 def test_layout_broadcast_mutating_op_without_matching_client_is_412(app: Flask) -> None:
-    """With no connected client on the target layout, the op fails loudly."""
-    _register_fake_client(app, "client-1", "desktop")
+    """With no connected client on the target view, the op fails loudly."""
+    _register_fake_client(app, "client-1", "project-1")
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web", "layout": "mobile"}, "agent_id": "agent-42"},
+        json={"op": "open", "args": {"ref": "service:web", "layout": "Everything"}, "agent_id": "agent-42"},
     )
     assert response.status_code == 412
     assert "No connected client has layout" in response.get_json()["detail"]
@@ -2326,12 +2185,12 @@ def test_layout_broadcast_mutating_op_without_matching_client_is_412(app: Flask)
 def test_layout_broadcast_sessionless_browser_is_rejected(app: Flask) -> None:
     """A bare ``service:browser`` open (no ``?session=<name>``) is a 400 -- it would spawn
     the orphan session-less viewer pane. A session-qualified ref goes through."""
-    matching_queue = _register_fake_client(app, "client-1", "desktop")
+    matching_queue = _register_fake_client(app, "client-1", "project-1")
     client = app.test_client()
     # Bare browser ref -> rejected with a guiding message (fires before the layout checks).
     bare = client.post(
         "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:browser", "layout": "desktop"}, "agent_id": "agent-42"},
+        json={"op": "open", "args": {"ref": "service:browser", "layout": "Project 1"}, "agent_id": "agent-42"},
     )
     assert bare.status_code == 400
     assert "needs a specific browser name" in bare.get_json()["detail"]
@@ -2342,7 +2201,7 @@ def test_layout_broadcast_sessionless_browser_is_rejected(app: Flask) -> None:
         "/api/layout/broadcast",
         json={
             "op": "open",
-            "args": {"ref": "service:browser?session=alex-smith", "layout": "desktop"},
+            "args": {"ref": "service:browser?session=alex-smith", "layout": "Project 1"},
             "agent_id": "agent-42",
         },
     )
@@ -2351,16 +2210,17 @@ def test_layout_broadcast_sessionless_browser_is_rejected(app: Flask) -> None:
     assert msg["args"]["ref"] == "service:browser?session=alex-smith"
 
 
-def test_layout_broadcast_mutating_op_unknown_layout_is_404(app: Flask) -> None:
+def test_layout_broadcast_mutating_op_unknown_view_is_404(app: Flask) -> None:
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web", "layout": "no-such-layout"}, "agent_id": "agent-42"},
+        json={"op": "open", "args": {"ref": "service:web", "layout": "no-such-view"}, "agent_id": "agent-42"},
     )
     assert response.status_code == 404
-    assert "known layouts" in response.get_json()["detail"]
-    # Projects are addressable targets too, so the miss lists them as well.
-    assert "known projects" in response.get_json()["detail"]
+    # The miss lists every addressable view: the projects plus Everything.
+    detail = response.get_json()["detail"]
+    assert "known views" in detail
+    assert "Everything" in detail
 
 
 def test_layout_broadcast_mutating_op_targets_a_project(app: Flask) -> None:
@@ -2486,28 +2346,28 @@ def test_layout_broadcast_load_targets_recent_messager(app: Flask) -> None:
         events_path,
         client_id="client-7",
         device_kind="mobile",
-        layout_slug="desktop",
+        layout_slug="project-1",
         agent_id="agent-42",
         agent_name="chat-agent",
-        message_text="set up my mobile layout",
+        message_text="show me everything",
     )
-    listener_queue = _register_fake_client(app, "client-7", "desktop")
+    listener_queue = _register_fake_client(app, "client-7", "project-1")
 
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "load", "args": {"layout": "mobile"}, "agent_id": "agent-42"},
+        json={"op": "load", "args": {"layout": "Everything"}, "agent_id": "agent-42"},
     )
     assert response.status_code == 200
     body = response.get_json()
-    assert body["layout"] == "mobile"
+    assert body["layout"] == "everything"
     assert body["target_client_id"] == "client-7"
 
     msg = _next_broadcast_message(listener_queue)
     assert msg == {
         "type": "load_layout",
-        "layout_slug": "mobile",
-        "display_name": "mobile",
+        "layout_slug": "everything",
+        "display_name": "Everything",
         "target_client_id": "client-7",
     }
 
@@ -2620,11 +2480,11 @@ def test_layout_broadcast_open_terminal_allocates_panel_id_and_returns_ref(app: 
     returns the ref in the HTTP response. Every other op leaves the
     args dict alone and returns just ``{ok: true}``.
     """
-    listener_queue = _register_fake_client(app, "client-1", "desktop")
+    listener_queue = _register_fake_client(app, "client-1", "project-1")
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:terminal", "layout": "desktop"}, "agent_id": "agent-42"},
+        json={"op": "open", "args": {"ref": "service:terminal", "layout": "Project 1"}, "agent_id": "agent-42"},
     )
     assert response.status_code == 200
     body = response.get_json()
@@ -2645,11 +2505,11 @@ def test_layout_broadcast_open_non_terminal_returns_no_ref(app: Flask) -> None:
     """Non-terminal opens must NOT carry a ``ref`` in the response: the
     CLI uses presence-of-ref to decide whether to print to stdout, and a
     stray ref on a regular service open would mislead callers."""
-    _register_fake_client(app, "client-1", "desktop")
+    _register_fake_client(app, "client-1", "project-1")
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "open", "args": {"ref": "service:web", "layout": "desktop"}, "agent_id": "agent-42"},
+        json={"op": "open", "args": {"ref": "service:web", "layout": "Project 1"}, "agent_id": "agent-42"},
     )
     assert response.status_code == 200
     assert "ref" not in response.get_json()
@@ -2677,7 +2537,7 @@ def test_ws_client_state_registration_enables_targeted_ops(app: Flask) -> None:
                     {
                         "type": "client_state",
                         "client_id": "client-9",
-                        "active_layout": "desktop",
+                        "active_layout": "project-1",
                         "device_kind": "desktop",
                     }
                 )
@@ -2691,7 +2551,7 @@ def test_ws_client_state_registration_enables_targeted_ops(app: Flask) -> None:
                     "/api/layout/broadcast",
                     json={
                         "op": "focus",
-                        "args": {"ref": "chat:someone", "layout": "desktop"},
+                        "args": {"ref": "chat:someone", "layout": "Project 1"},
                         "agent_id": "agent-42",
                     },
                 )
@@ -2891,11 +2751,11 @@ def test_layout_broadcast_mutex_returns_409_with_holder_metadata(app: Flask) -> 
     held = mutex.try_acquire("agent-a", "move", {"ref": "service:web"})
     assert held is None
 
-    _register_fake_client(app, "client-1", "desktop")
+    _register_fake_client(app, "client-1", "project-1")
     client = app.test_client()
     response = client.post(
         "/api/layout/broadcast",
-        json={"op": "split", "args": {"ref": "service:api", "layout": "desktop"}, "agent_id": "agent-b"},
+        json={"op": "split", "args": {"ref": "service:api", "layout": "Project 1"}, "agent_id": "agent-b"},
     )
     assert response.status_code == 409
     body = response.get_json()
@@ -2947,6 +2807,50 @@ def test_layout_broadcast_inspect_reads_layout_json(
     layout_summary = payload["layout"]
     refs = [p["ref"] for p in layout_summary["panels"]]
     assert "service:web" in refs
+
+
+def test_layout_broadcast_inspect_reads_the_requested_device(
+    app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``inspect --device mobile`` reads the view's mobile arrangement, not desktop's."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-42")
+    layout_dir = tmp_path / "agents" / "agent-42" / "workspace_layout"
+    layout_dir.mkdir(parents=True)
+    write_project_content(
+        layout_dir,
+        "project-1",
+        {
+            "dockview": {
+                "panels": {"panel-m": {"id": "panel-m", "title": "web"}},
+                "grid": {"root": {"type": "leaf", "data": {"views": ["panel-m"], "activeView": "panel-m"}}},
+            },
+            "panelParams": {"panel-m": {"panelType": "iframe", "serviceName": "web"}},
+        },
+        "mobile",
+    )
+
+    client = app.test_client()
+    mobile_response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "inspect", "args": {"layout": "Project 1", "device": "mobile"}, "agent_id": "agent-42"},
+    )
+    assert mobile_response.status_code == 200
+    refs = [p["ref"] for p in mobile_response.get_json()["layout"]["panels"]]
+    assert refs == ["service:web"]
+
+    desktop_response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "inspect", "args": {"layout": "Project 1"}, "agent_id": "agent-42"},
+    )
+    assert desktop_response.status_code == 200
+    assert desktop_response.get_json()["layout"]["panels"] == []
+
+    bad_device_response = client.post(
+        "/api/layout/broadcast",
+        json={"op": "inspect", "args": {"layout": "Project 1", "device": "tablet"}, "agent_id": "agent-42"},
+    )
+    assert bad_device_response.status_code == 400
 
 
 def test_layout_broadcast_list_includes_open_flag(app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3531,6 +3435,38 @@ def test_autosave_unknown_project_returns_404(
     response = client.post("/api/projects/gone", json={"layout": {}, "client_id": "client-1"})
 
     assert response.status_code == 404
+
+
+def test_project_content_routes_by_device(client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mobile save lands in its own file: desktop reads stay null, mobile round-trips."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    layout_data = {"dockview": {"panels": {}}, "panelParams": {"chat-1": {"panelType": "chat"}}}
+    save_response = client.post(
+        "/api/projects/project-1", json={"layout": layout_data, "client_id": "client-1", "device": "mobile"}
+    )
+    assert save_response.status_code == 200
+
+    assert client.get("/api/projects/project-1").get_json() == {"layout": None}
+    assert client.get("/api/projects/project-1?device=mobile").get_json()["layout"] == layout_data
+    projects_dir = tmp_path / "agents" / "agent-123" / "workspace_layout" / "projects"
+    assert (projects_dir / "project-1.mobile.json").exists()
+    assert not (projects_dir / "project-1.json").exists()
+
+
+def test_project_content_rejects_unknown_device(
+    client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+
+    get_response = client.get("/api/projects/project-1?device=tablet")
+    assert get_response.status_code == 400
+    post_response = client.post(
+        "/api/projects/project-1", json={"layout": {}, "client_id": "client-1", "device": "tablet"}
+    )
+    assert post_response.status_code == 400
 
 
 def test_update_project_settings_keeps_id_content_and_members(
@@ -4423,6 +4359,7 @@ def test_project_mutations_broadcast_to_every_client(app: Flask) -> None:
         "type": "project_saved",
         "project_id": "alpha",
         "saved_by_client_id": "client-1",
+        "device": "desktop",
     }
 
     settings = client.post("/api/projects/alpha/settings", json={"name": "Alpha", "color": "#F0603A", "glyph": 4})

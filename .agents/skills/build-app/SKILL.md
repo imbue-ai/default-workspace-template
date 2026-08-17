@@ -340,13 +340,14 @@ new tab. Without this step the user would have to discover it via the
 (pure JSON APIs, webhook receivers, etc.).
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done
+python3 system/scripts/layout.py open <name>
 ```
 
-Mutating `layout.py` ops require `--layout` (the named layouts are
-`desktop` and `mobile`) and only apply on connected clients that have
-that layout active, so the loop tries both: the call for the layout
-the user is on succeeds, and the other fails fast and harmlessly.
+With no `--view`, the op goes to the view the connected client is
+looking at, which is where the user expects the new tab. (Pass
+`--view <name>` -- a project's name, or `Everything` -- to surface it
+in a different view instead; the op then applies only on connected
+clients that have that view active.)
 `layout.py` POSTs to a loopback-only workspace_server endpoint that
 broadcasts a `layout_op` message over its WebSocket. The frontend
 focuses the panel if a tab for `<name>` is already open, otherwise
