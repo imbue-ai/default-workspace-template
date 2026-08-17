@@ -481,7 +481,7 @@ def _is_shed_protected_command(argv: Sequence[str]) -> bool:
     leave that throwaway server protected ahead of every chat and every agent for
     as long as it runs; ``unpreview`` only tears one down.
     """
-    return argv[:1] == ["reveal"]
+    return bool(argv) and argv[0] == "reveal"
 
 
 def _protect_from_memory_shed() -> None:

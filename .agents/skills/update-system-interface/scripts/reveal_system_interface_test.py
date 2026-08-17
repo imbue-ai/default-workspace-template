@@ -499,6 +499,8 @@ def test_only_the_reveal_bands_itself_out_of_the_expendable_range() -> None:
     )
     assert not reveal_mod._is_shed_protected_command(["unpreview", "--slug", "s"])
     assert not reveal_mod._is_shed_protected_command([])
+    # Any sequence, not just the list ``sys.argv`` slicing happens to produce.
+    assert reveal_mod._is_shed_protected_command(("reveal", "--rollback-to", "abc"))
 
 
 def test_unspawnable_refresh_helper_does_not_fail_a_successful_reveal() -> None:
