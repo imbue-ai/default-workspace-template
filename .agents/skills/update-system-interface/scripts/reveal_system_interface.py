@@ -22,11 +22,16 @@ What it does, given the pre-merge revision (``--rollback-to``):
    install -e system/apps/system_interface --reinstall``). A plain restart does NOT
    re-resolve the editable tool's dependencies, so a backend dependency add
    would otherwise crash the service on restart.
-5. For a backend change, *pre-flight* the merged code on a throwaway port before
+5. Build the frontend bundle, if the change touched the frontend. A build that
+   exits 0 without writing a bundle counts as a failure, not a success. Ahead of
+   the pre-flight below, so a change whose build does not compile is rejected
+   without also spending a throwaway boot on it; the cost is that a *combined*
+   change whose backend then fails to boot has already replaced the bundle, and
+   the rollback restores it from the snapshot taken in step 3.
+6. For a backend change, *pre-flight* the merged code on a throwaway port before
    touching the live service -- if it cannot boot, the live service is never
-   restarted and we go straight to rollback (the UI never went down).
-6. Build the frontend bundle and restart the backend, as applicable. A build
-   that exits 0 without writing a bundle counts as a failure, not a success.
+   restarted and we go straight to rollback (the UI never went down). Then
+   restart the backend, so it re-imports the merged code.
 7. Probe the live service's loopback endpoint until healthy (with a deadline),
    and confirm the app shell really is the built app and that its module script
    serves as JavaScript. The backend endpoint alone cannot see either failure:

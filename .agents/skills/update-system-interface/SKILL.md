@@ -275,12 +275,14 @@ motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
   backend. This is essential: a plain restart does *not* re-resolve the
   editable-installed tool's dependencies, so a backend dependency addition would
   otherwise crash the service on restart.
+- **Rebuilds the gitignored `static/` bundle** for a frontend change. A build that
+  exits 0 without producing a bundle counts as a failure. This runs before the
+  pre-flight below, so a change that does not compile is rejected without also
+  spending a throwaway boot on it.
 - **Pre-flights a backend change** by booting the merged code on a throwaway port
-  before touching the live service. If it can't boot, the live service is never
-  restarted -- the UI never goes down.
-- **Reveals**: rebuilds the gitignored `static/` bundle (frontend); restarts the
-  services agent so the editable backend re-imports the merged `.py` (backend).
-  A build that exits 0 without producing a bundle counts as a failure.
+  before touching the live service, then **restarts** the services agent so the
+  editable backend re-imports the merged `.py`. If it can't boot, the live service
+  is never restarted -- the UI never goes down.
 - **Verifies** the live service is healthy by polling its loopback endpoint, and
   that the app shell really is the built app and that its module script serves as
   JavaScript. The backend endpoint alone cannot see either failure: the "frontend
