@@ -14,7 +14,7 @@ import { PermissionCard } from "./permission-card";
 
 // Per-kind user_message rendering lives in user-message-display.ts (the display
 // half of the classify/display split). Re-exported here so existing importers --
-// conversation-rows, ProgressBlock, PendingMessageView -- keep their import path.
+// conversation-rows, ProgressBlock -- keep their import path.
 export { renderUserMessage, StableUserMessage } from "./user-message-display";
 
 /** Build a tool_call_id -> tool_result map, merging skill-expansion
@@ -46,7 +46,7 @@ export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): 
       }
       continue;
     }
-    if (e.type === "user_message" && isSkillExpansionUserMessage(e.content ?? "") && pendingSkillCallIds.length > 0) {
+    if (e.type === "user_message" && isSkillExpansionUserMessage(e) && pendingSkillCallIds.length > 0) {
       const targetCallId = pendingSkillCallIds.shift() as string;
       const existing = toolResults.get(targetCallId);
       const expansion = e.content ?? "";
@@ -135,14 +135,36 @@ export function countSubagentCards(toolCalls: ToolCall[] | undefined): number {
   return count;
 }
 
+/** A cheap content fingerprint of the tool_results this message resolves, so the memo
+ *  below repaints when a result is SUPERSEDED in place (same tool_call_id, new content) --
+ *  e.g. a codex interrupt's synthetic "Interrupted." result is later replaced by the real
+ *  one. Result-presence counting alone misses this (both are "present"). */
+function resolvedResultSignature(
+  toolCalls: ToolCall[] | undefined,
+  toolResults: Map<string, ToolResultEvent>,
+): string {
+  if (!toolCalls) {
+    return "";
+  }
+  return toolCalls
+    .map((tc) => {
+      const result = toolResults.get(tc.tool_call_id);
+      return result
+        ? `${tc.tool_call_id}:${result.is_error}:${result.output.length}:${result.output.slice(0, 64)}`
+        : "-";
+    })
+    .join("|");
+}
+
 export function StableAssistantMessage(): m.Component<{
   event: AssistantMessageEvent;
   toolResults: Map<string, ToolResultEvent>;
   agentId: string;
 }> {
-  let renderedEventId: string | null = null;
+  let renderedEvent: AssistantMessageEvent | null = null;
   let renderedToolResultCount = 0;
   let renderedSubagentCardCount = 0;
+  let renderedResultSignature = "";
   return {
     onbeforeupdate(vnode) {
       const { event, toolResults } = vnode.attrs;
@@ -152,19 +174,26 @@ export function StableAssistantMessage(): m.Component<{
       // subagent's linkage lands. Repaint when that count grows so the plain
       // tool-call block upgrades to the rich card.
       const currentSubagentCardCount = countSubagentCards(event.tool_calls);
+      const currentResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       return (
-        event.event_id !== renderedEventId ||
+        // A supersession replaces the event object in the store (new reference), so a
+        // reference change catches an assistant-message text/tool_calls rewrite; the
+        // result signature catches a tool_result rewrite. Both are needed since the
+        // presence counts alone do not move when content is replaced in place.
+        event !== renderedEvent ||
         currentToolResultCount !== renderedToolResultCount ||
-        currentSubagentCardCount !== renderedSubagentCardCount
+        currentSubagentCardCount !== renderedSubagentCardCount ||
+        currentResultSignature !== renderedResultSignature
       );
     },
     view(vnode) {
       const event = vnode.attrs.event;
       const toolResults = vnode.attrs.toolResults;
       const agentId = vnode.attrs.agentId;
-      renderedEventId = event.event_id;
+      renderedEvent = event;
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
+      renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
 
       return m("div", renderAssistantMessageChildren(event, toolResults, agentId));
     },
@@ -252,7 +281,12 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
 }
 
 export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEvent | null): m.Vnode {
-  const headerText = `Tool: ${toolCall.tool_name}`;
+  // The harness's parser already worked out what this call should read as -- for
+  // codex that means unwrapping an `exec` whose real operation is buried in a JS
+  // argument, which is not something this view should have to know. The raw input
+  // stays in the block body below (preserve-raw). Falls back to the tool name for
+  // events parsed before the labels existed.
+  const headerText = toolCall.header_label || `Tool: ${toolCall.tool_name}`;
   const inputText = toolCall.input_preview || "";
   const outputText = toolResult?.output || "";
   const isError = toolResult?.is_error === true;
@@ -286,6 +320,15 @@ export function renderToolCallBlock(toolCall: ToolCall, toolResult: ToolResultEv
  * Render the children (text + tool calls) of an assistant message.
  * Used by both the stable (memoized) and simple assistant message renderers.
  */
+/** The grey note shown under a provider-fault API error: the failure is the model
+ *  provider's, not ours. Wording nudged by kind; every harness's provider faults
+ *  land here since they stamp the same is_provider_fault flag. */
+function providerFaultNote(kind: string | null): string {
+  const cause =
+    kind === "api_error" ? "the model provider's servers hit an error" : "the model provider's servers are overloaded";
+  return `This isn't Minds' fault -- ${cause}. Try again in a moment.`;
+}
+
 export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
@@ -297,7 +340,18 @@ export function renderAssistantMessageChildren(
 
   const children: m.Children[] = [];
   if (textContent) {
-    children.push(m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }));
+    if (event.is_api_error) {
+      // A model API error: render the failure text in light red, and for a
+      // provider-side fault (5xx / overloaded) add a grey "not Minds' fault" note.
+      children.push(
+        m("div.message-api-error", [
+          m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }),
+          event.is_provider_fault ? m("div.message-api-error-note", providerFaultNote(event.api_error_kind)) : null,
+        ]),
+      );
+    } else {
+      children.push(m(MarkdownContent, { content: textContent, requestedAt: event.timestamp }));
+    }
   }
   for (const toolCall of toolCalls) {
     // Render the rich card as soon as we have the Agent call's description (from the tool

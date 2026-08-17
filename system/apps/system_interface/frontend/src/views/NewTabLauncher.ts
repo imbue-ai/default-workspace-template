@@ -34,13 +34,14 @@ import m from "mithril";
 import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
 import type { MachineInventory, MemberKind } from "../models/Projects";
 import { serviceIconMarkup } from "./appIcon";
+import { areOtherHarnessesEnabled } from "../base-path";
 import { hoverTooltipAttrs } from "./hoverTooltip";
 import { icon } from "./icons";
 
 /** The kinds of object the "Open new" tiles can start from scratch. Distinct
  *  from MemberKind: "files" has no member ref yet (nothing backs it), and the
  *  tiles never start a URL tab. */
-export type LaunchKind = "chat" | "files" | "browser" | "terminal";
+export type LaunchKind = "chat" | "codex" | "pi" | "files" | "browser" | "terminal";
 
 /** One object the launcher can open. */
 export interface LauncherRow {
@@ -243,11 +244,14 @@ const LAUNCHER_PATHS = {
 } as const;
 
 /** Full <svg> string for one launcher glyph. */
-function launcherIcon(name: keyof typeof LAUNCHER_PATHS, size: number): string {
+function launcherIcon(name: keyof typeof LAUNCHER_PATHS | "codex" | "pi", size: number): string {
+  // The harness kinds are chats on another harness, so they wear the chat
+  // bubble rather than getting glyphs of their own.
+  const glyph: keyof typeof LAUNCHER_PATHS = name === "codex" || name === "pi" ? "chat" : name;
   return (
     `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" ` +
     `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
-    `${LAUNCHER_PATHS[name]}</svg>`
+    `${LAUNCHER_PATHS[glyph]}</svg>`
   );
 }
 
@@ -279,12 +283,25 @@ function rowIconMarkup(row: LauncherRow): string {
   return serviceIconMarkup(serviceNameFromRef(row.ref), GLYPH_SIZE, fallback);
 }
 
-const OPEN_NEW_TILES: readonly { kind: LaunchKind; label: string }[] = [
-  { kind: "chat", label: "Chat" },
-  { kind: "files", label: "File viewer" },
-  { kind: "browser", label: "Browser" },
-  { kind: "terminal", label: "Terminal" },
-];
+/** The tile list, built per render because the harness tiles are feature-
+ *  flagged: codex and pi are the same create as Chat (the same `chat` role,
+ *  stacked on a different harness template) and appear only where the host
+ *  enables the alt harnesses. */
+function openNewTiles(): readonly { kind: LaunchKind; label: string }[] {
+  const tiles: { kind: LaunchKind; label: string }[] = [{ kind: "chat", label: "Chat" }];
+  if (areOtherHarnessesEnabled()) {
+    tiles.push({ kind: "codex", label: "Codex agent" }, { kind: "pi", label: "Pi agent" });
+  }
+  tiles.push(
+    { kind: "files", label: "File viewer" },
+    { kind: "browser", label: "Browser" },
+    {
+      kind: "terminal",
+      label: "Terminal",
+    },
+  );
+  return tiles;
+}
 
 // No file-viewer app exists on this machine yet, so the tile is present but
 // cannot act. It is marked aria-disabled rather than `disabled`: a disabled
@@ -510,7 +527,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           m(
             "div",
             { class: "flex gap-2 px-2" },
-            OPEN_NEW_TILES.map((tile) => {
+            openNewTiles().map((tile) => {
               const isDisabled = tile.kind === "files";
               return m(
                 "button",

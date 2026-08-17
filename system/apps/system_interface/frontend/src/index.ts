@@ -4,7 +4,6 @@ import { runHook } from "./hooks";
 import { getPluginRouteMithrilComponents } from "./plugin-routes";
 import { getBasePath } from "./base-path";
 import { initAgentManager } from "./models/AgentManager";
-import { initQueuedMessageIdleClearing } from "./models/PendingMessages";
 import { initShellPermissionResolutions } from "./views/permission-card";
 import m from "mithril";
 import "./style.css";
@@ -37,9 +36,6 @@ function getEffectiveRoutePrefix(): string {
 async function bootstrap(): Promise<void> {
   m.route.prefix = getEffectiveRoutePrefix();
   initAgentManager();
-  // Backstop that drops an optimistic "queued" bubble once its agent returns to
-  // idle (the message was edited away or dropped, so it will never reconcile).
-  initQueuedMessageIdleClearing();
   // Flip in-chat permission cards as soon as the Minds app reports a verdict.
   initShellPermissionResolutions();
   const rootElement = document.getElementById("app");
