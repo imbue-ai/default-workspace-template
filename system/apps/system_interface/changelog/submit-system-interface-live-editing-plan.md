@@ -54,19 +54,21 @@ answered 200 on an instance whose agent view was dead and could not serve as the
 health gate.
 
 **Only the authoritative instance manages chat OOM scores.** A `FOLLOW`-mode
-instance -- the preview, the reveal pre-flight -- is a read-only second view of a
-workspace another instance owns, so it is now built without the capability to
-write `oom_score_adj` at all, and it neither seeds nor runs the staleness sweep.
-Otherwise two instances would fight over the same `/proc` entries, and the
-preview would lose on the merits anyway: the open/visible bonuses come from
-frontend activity reports, and a second instance sees only its own -- the
-preview's tab set, which is not the workspace's, or for the headless reveal
-pre-flight nothing at all, which reads as every chat closed. The capability is
-withheld rather than the call sites gated because `reapply` is reachable in
-`FOLLOW` mode by two paths that are easy to miss -- every folded lifecycle event
-runs `record_running_agents`, and the preview serves its own frontend, which can
-post `/api/activity` -- so a call site added later is inert by construction
-instead of needing to remember a mode check.
+instance -- the preview, the reveal pre-flight -- is now built without the
+capability to write `oom_score_adj` at all, and it neither seeds nor runs the
+staleness sweep. Otherwise two instances would fight over the same `/proc`
+entries, and the preview would lose on the merits anyway: the open/visible
+bonuses come from frontend activity reports, and a second instance sees only its
+own -- the preview's tab set, which is not the workspace's, or for the headless
+reveal pre-flight nothing at all, which reads as every chat closed. The
+capability is withheld rather than the call sites gated because `reapply` is
+reachable in `FOLLOW` mode by two paths that are easy to miss -- every folded
+lifecycle event runs `record_running_agents`, and the preview serves its own
+frontend, which can post `/api/activity` -- so a call site added later is inert
+by construction instead of needing to remember a mode check. That withholding is
+scoped to this one capability, not to the instance: a `FOLLOW` instance still
+discovers and tracks agents against the same host dir, so it is not read-only at
+large.
 
 An unknown `/api/*` path is now a JSON 404 instead of HTTP 200 with the app's
 `index.html`. The single-page-app catch-all answered any unmatched path with the

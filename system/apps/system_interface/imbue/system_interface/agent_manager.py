@@ -291,20 +291,33 @@ class _AppsFileHandler(FileSystemEventHandler):
 def _refuse_to_set_oom_score_adj(pid: int, adj: int) -> bool:
     """The ``set_adj`` a non-authoritative instance gets: never writes, always fails.
 
-    A FOLLOW-mode instance (the ``update-system-interface`` preview, the reveal
-    pre-flight) is a read-only second view of a workspace that another instance
-    owns. Chat ``oom_score_adj`` is not shared state it may contribute to: the
-    two instances would fight over the same ``/proc`` entries, and this one would
-    lose anyway. The open/visible bonuses come from frontend activity reports, and
-    this instance sees only its *own* -- the preview's tab set, which is not the
-    workspace's, or for the headless reveal pre-flight nothing at all, which reads
-    as every chat closed. So its writes would be both contending *and* worse.
+    Chat ``oom_score_adj`` is not shared state a FOLLOW-mode instance (the
+    ``update-system-interface`` preview, the reveal pre-flight) may contribute to:
+    the two instances would fight over the same ``/proc`` entries, and this one
+    would lose anyway. The open/visible bonuses come from frontend activity
+    reports, and this instance sees only its *own* -- the preview's tab set, which
+    is not the workspace's, or for the headless reveal pre-flight nothing at all,
+    which reads as every chat closed. So its writes would be both contending *and*
+    worse. That is the whole argument, and it turns on this instance's activity
+    inputs being wrong; it does not generalize to state it derives from a source
+    both instances read alike.
 
     Withholding the capability rather than gating the call sites is deliberate:
     ``reapply`` is reached from the sweep, from ``record_activity``, and from
     every lifecycle event via ``record_running_agents``, and the last of those
-    fires in FOLLOW mode too. A new call site added later is inert by
-    construction instead of needing to remember a mode check.
+    fires in FOLLOW mode too. A new ``oom_score_adj`` call site added later is
+    therefore inert by construction instead of needing to remember a mode check.
+
+    Note the bound on that guarantee: it covers this one capability, not the
+    instance. A FOLLOW-mode instance is not read-only at large -- it discovers and
+    tracks agents in both modes (``_initial_discover`` runs before ``start``
+    branches on the mode), so ``_ensure_activity_tracking`` brings up each agent's
+    harness session, and a codex session's ``ensure_live`` writes that agent's
+    ``model_state.json`` and model-options sidecar under the *live* host dir. Both
+    values are read straight back from the agent's daemon, so the two instances
+    write the same bytes; a mode check is not obviously the right answer, since the
+    preview needs a working codex surface to be worth previewing. A new shared
+    write does not inherit this function's guarantee -- reason about it on its own.
     """
     return False
 
@@ -346,7 +359,10 @@ class AgentManager:
     its ``--stream-events`` stdout (the workspace's own system interface), or by
     following the event file that another process's observer is writing (a
     preview or pre-flight instance sharing the same host, which cannot take the
-    single-writer observe lock).
+    single-writer observe lock). The mode selects the event *source* and withholds
+    chat ``oom_score_adj`` (see ``_refuse_to_set_oom_score_adj``); everything else
+    -- discovery, activity tracking, harness sessions, model watchers -- runs the
+    same either way, against the same host dir.
     Watches data/.state/apps.toml for each agent.
     Handles agent creation via local mngr create calls.
     """
