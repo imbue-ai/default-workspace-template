@@ -243,14 +243,16 @@ So pass a short `--timeout`, and when it expires read the tick's real outcome of
 the events log rather than believing the silence:
 
 ```bash
-ssh ... 'cat /home/user/.mngr/host_backup/service_events_dir'
+ssh ... 'cat /mngr/host_backup/service_events_dir'
 ssh ... 'tail -n 5 <that-dir>/events.jsonl'
 ```
 
 Spell the host dir out rather than writing `$MNGR_HOST_DIR`: an SSH session has
 none of the agent environment, so the variable expands to nothing and the `cat`
-reads the wrong path. `/home/user/.mngr` is the default and what a pre-declutter
-source uses. (On a current source, prefix the command with
+reads the wrong path. On a pre-declutter source that host dir is `/mngr` (the
+path map above); `/home/user/.mngr` is the current layout's, and reading it here
+prints nothing -- the same silence this section exists to stop you believing.
+(On a current source, prefix the command with
 `/home/user/workspace/system/scripts/with_agent_env.sh` instead and the variable
 resolves -- but a pre-declutter source has no such wrapper.)
 
