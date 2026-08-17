@@ -22,9 +22,7 @@ _BUILD_ARGV = ["npm", "run", "build"]
 _INSTALL_ARGV = ["npm", "ci"]
 
 
-def _finished(
-    returncode: int = 0, stdout: str = "", stderr: str = "", is_timed_out: bool = False
-) -> FinishedProcess:
+def _finished(returncode: int = 0, stdout: str = "", stderr: str = "", is_timed_out: bool = False) -> FinishedProcess:
     """A real command result, so the fakes match what the runner actually returns."""
     return FinishedProcess(
         returncode=returncode,

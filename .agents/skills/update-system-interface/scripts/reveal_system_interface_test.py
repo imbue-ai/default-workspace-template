@@ -181,7 +181,10 @@ def _placeholder_page(url: str) -> reveal_mod.FetchedPage:
     return reveal_mod.FetchedPage(
         status=200,
         body="<!doctype html><p>Frontend not built</p>",
-        headers={"content-type": "text/html", reveal_mod.FRONTEND_BUILT_HEADER: "false"},
+        headers={
+            "content-type": "text/html",
+            reveal_mod.FRONTEND_BUILT_HEADER: "false",
+        },
     )
 
 
@@ -589,7 +592,8 @@ def test_recovery_restores_the_bundle_without_rebuilding(repo: Path) -> None:
         "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
     )
     runner.respond(
-        ("npm", "run", "build"), _Result(returncode=1, stderr="npm ERR! ENOTFOUND registry")
+        ("npm", "run", "build"),
+        _Result(returncode=1, stderr="npm ERR! ENOTFOUND registry"),
     )
     http = _FakeHttp(_all_healthy)
 
@@ -615,7 +619,9 @@ def test_recovery_skips_npm_ci_which_would_destroy_node_modules(repo: Path) -> N
     code = _reveal(runner, http, _FakeSpawner(), repo)
 
     assert code == 2
-    assert len(runner.argvs_starting("npm", "ci")) == 1  # the reveal's, not a second one
+    assert (
+        len(runner.argvs_starting("npm", "ci")) == 1
+    )  # the reveal's, not a second one
     assert _bundle_exists(repo)
 
 
@@ -741,14 +747,18 @@ def _breaks_after_the_build(
     return responder
 
 
-def test_a_reveal_that_leaves_the_placeholder_showing_is_rolled_back(repo: Path) -> None:
+def test_a_reveal_that_leaves_the_placeholder_showing_is_rolled_back(
+    repo: Path,
+) -> None:
     # The state the incident left behind: /api/agents answers fine and the app
     # shell is an HTTP 200, but what it serves is the "not built" placeholder.
     # Nothing in the old health check could see this.
     runner = _runner_with_diff(
         "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
     )
-    http = _FakeHttp(_all_healthy, page_responder=_breaks_after_the_build(runner, _placeholder_page))
+    http = _FakeHttp(
+        _all_healthy, page_responder=_breaks_after_the_build(runner, _placeholder_page)
+    )
 
     code = _reveal(runner, http, _FakeSpawner(), repo)
 
@@ -773,7 +783,9 @@ def test_a_reveal_whose_asset_comes_back_as_html_is_rolled_back(repo: Path) -> N
     runner = _runner_with_diff(
         "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n", repo_root=repo
     )
-    http = _FakeHttp(_all_healthy, page_responder=_breaks_after_the_build(runner, html_for_the_asset))
+    http = _FakeHttp(
+        _all_healthy, page_responder=_breaks_after_the_build(runner, html_for_the_asset)
+    )
 
     code = _reveal(runner, http, _FakeSpawner(), repo)
 
@@ -828,7 +840,9 @@ def test_a_rollback_does_not_claim_health_over_an_already_broken_frontend(
     assert "cannot confirm it" in closing_line
 
 
-def test_a_blip_on_the_pre_probe_does_not_disarm_the_regression_check(repo: Path) -> None:
+def test_a_blip_on_the_pre_probe_does_not_disarm_the_regression_check(
+    repo: Path,
+) -> None:
     # The pre-reveal probe decides whether the reveal is answerable for the
     # frontend at all, and it is wrong in only one direction: a single
     # unanswered request would conclude "already broken" and silently downgrade
@@ -849,7 +863,9 @@ def test_a_blip_on_the_pre_probe_does_not_disarm_the_regression_check(repo: Path
 
     def responder(url: str) -> reveal_mod.FetchedPage | None:
         has_built = any(c[:3] == ["npm", "run", "build"] for c in runner.calls)
-        return _placeholder_page(url) if has_built else unreachable_once_then_healthy(url)
+        return (
+            _placeholder_page(url) if has_built else unreachable_once_then_healthy(url)
+        )
 
     http = _FakeHttp(_all_healthy, page_responder=responder)
 
@@ -861,7 +877,9 @@ def test_a_blip_on_the_pre_probe_does_not_disarm_the_regression_check(repo: Path
     assert unanswered_calls  # the blip really did happen
 
 
-def test_a_blip_after_the_build_does_not_roll_back_a_reveal_that_landed(repo: Path) -> None:
+def test_a_blip_after_the_build_does_not_roll_back_a_reveal_that_landed(
+    repo: Path,
+) -> None:
     # The mirror of the case above, and the more expensive way to be wrong. On a
     # frontend-only reveal nothing else probes the live service -- the health
     # poll runs only when the backend was restarted -- so this one request is
@@ -895,24 +913,39 @@ def test_the_frontend_probe_retries_a_non_answer_but_not_a_verdict() -> None:
     # frontend is broken, and asking again only spends the budget to reach the
     # same answer.
     answers = [None, None, _built_app_page("/")]
-    http = _FakeHttp(_all_healthy, page_responder=lambda url: answers.pop(0) if answers else _built_app_page(url))
+    http = _FakeHttp(
+        _all_healthy,
+        page_responder=lambda url: answers.pop(0) if answers else _built_app_page(url),
+    )
 
-    assert reveal_mod.describe_frontend_failure(http, _LIVE_BASE, lambda _seconds: None) is None
+    assert (
+        reveal_mod.describe_frontend_failure(http, _LIVE_BASE, lambda _seconds: None)
+        is None
+    )
     assert not answers  # it kept asking until it got an answer
 
     verdict_http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
 
-    assert reveal_mod.describe_frontend_failure(verdict_http, _LIVE_BASE, lambda _seconds: None) is not None
+    assert (
+        reveal_mod.describe_frontend_failure(
+            verdict_http, _LIVE_BASE, lambda _seconds: None
+        )
+        is not None
+    )
     assert len(verdict_http.page_urls) == 1
 
 
-def test_a_service_that_never_answers_spends_the_budget_and_still_reports_a_failure() -> None:
+def test_a_service_that_never_answers_spends_the_budget_and_still_reports_a_failure() -> (
+    None
+):
     # Exhausting the retries has to leave a usable answer behind: the callers
     # after the reveal turn it into the rollback message, and a UI that will not
     # answer is one the user cannot see either.
     silent_http = _FakeHttp(_all_healthy, page_responder=lambda _url: None)
 
-    failure = reveal_mod.describe_frontend_failure(silent_http, _LIVE_BASE, lambda _seconds: None)
+    failure = reveal_mod.describe_frontend_failure(
+        silent_http, _LIVE_BASE, lambda _seconds: None
+    )
 
     assert failure is not None
     assert len(silent_http.page_urls) == reveal_mod._FRONTEND_PROBE_ATTEMPTS
