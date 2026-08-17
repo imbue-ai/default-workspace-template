@@ -253,3 +253,16 @@ def test_the_default_runner_makes_the_build_expendable_and_forwards_its_argv(tmp
     # and the command must still run -- which the assertion above just showed.
     if os.access(_PROC_OOM_SCORE_ADJ, os.W_OK):
         assert reported[2:] == [str(bands.AGENT_SUBPROCESS)]
+
+
+def test_a_command_that_never_starts_names_itself_not_the_tagging_wrapper(tmp_path: Path) -> None:
+    # The rebuild is spawned through a shell that bands it before exec'ing, and
+    # a spawn that fails outright (here: the working directory is gone) renders
+    # the argv it was given. The placeholder page puts that text in front of
+    # someone with no interface left, so it has to say which command failed
+    # rather than the tagging script wrapped around it.
+    with pytest.raises(ProcessSetupError) as caught:
+        _default_command_runner(_INSTALL_ARGV, tmp_path / "absent", 30.0)
+
+    assert "npm ci" in str(caught.value)
+    assert "oom_score_adj" not in str(caught.value)
