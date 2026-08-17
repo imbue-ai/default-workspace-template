@@ -24,6 +24,7 @@ import re
 import secrets
 import socket as socket_module
 import threading
+import time
 from collections.abc import AsyncGenerator
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -50,8 +51,10 @@ from jinja2 import Environment
 from jinja2 import PackageLoader
 from jinja2 import select_autoescape
 from loguru import logger
+from pydantic import Field
 from websockets import ClientConnection
 
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
 from imbue.mngr_forward.auth import AuthStoreInterface
@@ -838,6 +841,40 @@ def _handle_subdomain_auth_bridge(
     return response
 
 
+class TunnelWarningRateLimiter(MutableModel):
+    """Interval rate limit for the repeated per-agent tunnel-setup-failed warning.
+
+    A refused tunnel is retried about once a second while a workspace view is
+    open, so an unreachable workspace floods the log with (usually identical)
+    warnings. One line per interval per agent (carrying the count of suppressed
+    earlier warnings, whatever their message) keeps the signal without the noise.
+    """
+
+    interval_seconds: float = Field(
+        frozen=True, default=60.0, description="Minimum seconds between logged warnings per agent"
+    )
+    now_fn: Callable[[], float] = Field(
+        frozen=True, default=time.monotonic, description="Monotonic clock, injectable for tests"
+    )
+    last_logged_at_by_agent: dict[str, float] = Field(
+        default_factory=dict, description="Monotonic time of the last logged warning per agent"
+    )
+    suppressed_count_by_agent: dict[str, int] = Field(
+        default_factory=dict, description="Warnings suppressed since the last logged one per agent"
+    )
+
+    def suppressed_repeats_if_should_log(self, agent_key: str) -> int | None:
+        """Return the count of warnings suppressed since the last logged one when a warning should log now, or None to suppress."""
+        now = self.now_fn()
+        last_logged_at = self.last_logged_at_by_agent.get(agent_key)
+        if last_logged_at is None or now - last_logged_at >= self.interval_seconds:
+            suppressed_count = self.suppressed_count_by_agent.pop(agent_key, 0)
+            self.last_logged_at_by_agent[agent_key] = now
+            return suppressed_count
+        self.suppressed_count_by_agent[agent_key] = self.suppressed_count_by_agent.get(agent_key, 0) + 1
+        return None
+
+
 async def _handle_workspace_forward_http(
     request: Request,
     host_info: ParsedForwardHost,
@@ -853,6 +890,7 @@ async def _handle_workspace_forward_http(
     envelope_writer: EnvelopeWriter,
     use_http2: bool,
     stall_notice_seconds: float,
+    tunnel_warning_limiter: TunnelWarningRateLimiter,
 ) -> Response:
     if request.url.path == _SUBDOMAIN_AUTH_PATH:
         return _handle_subdomain_auth_bridge(request, host_info, auth_store, use_http2)
@@ -864,12 +902,15 @@ async def _handle_workspace_forward_http(
     ):
         return _unauthenticated_subdomain_response(request, listen_port, use_http2, host_info)
 
-    agent_id = resolver.resolve_agent_for_host(str(host_info.host_id_str))
-    if agent_id is None:
+    instance_key = resolver.resolve_agent_for_host(str(host_info.host_id_str))
+    if instance_key is None:
         # No known agent on this host yet (discovery still warming up, or the
         # host is gone). There is no agent to attribute a failure envelope to,
         # so just serve the auto-retrying loader.
         return _service_unavailable_response(request)
+    # Envelopes and logs carry the bare agent id (the wire contract); resolver
+    # lookups use the host-scoped instance key.
+    agent_id = instance_key.agent_id
 
     # CLEANUP: drop this redirect (with ``_parse_legacy_service_path`` and
     # ``ForwardResolver.is_shell_target``) once no supported workspace predates
@@ -890,10 +931,10 @@ async def _handle_workspace_forward_http(
     if (
         legacy_service is not None
         and request.headers.get("sec-fetch-mode") == "navigate"
-        and resolver.is_shell_target(agent_id, host_info.service_name)
+        and resolver.is_shell_target(instance_key, host_info.service_name)
     ):
         legacy_service_name, legacy_remainder_path = legacy_service
-        if resolver.resolve(agent_id, legacy_service_name) is not None:
+        if resolver.resolve(instance_key, legacy_service_name) is not None:
             scheme = "https" if use_http2 else "http"
             next_path = legacy_remainder_path
             if request.url.query:
@@ -907,7 +948,7 @@ async def _handle_workspace_forward_http(
         # the bare domain cannot be served at all). Non-HTML requests (the
         # workspace readiness probe, assets) fall through to serving the shell
         # directly, so nothing that is not a top-level navigation is disrupted.
-        shell_label = resolver.shell_origin_label(agent_id)
+        shell_label = resolver.shell_origin_label(instance_key)
         if shell_label is not None and "text/html" in request.headers.get("accept", ""):
             scheme = "https" if use_http2 else "http"
             next_path = request.url.path
@@ -915,9 +956,9 @@ async def _handle_workspace_forward_http(
                 next_path = f"{next_path}?{request.url.query}"
             location = f"{scheme}://{shell_label}.{host_info.workspace_domain}:{listen_port}{next_path}"
             return Response(status_code=302, headers={"Location": location})
-        target = resolver.resolve(agent_id)
+        target = resolver.resolve(instance_key)
     else:
-        target = resolver.resolve_by_origin_label(agent_id, host_info.service_name)
+        target = resolver.resolve_by_origin_label(instance_key, host_info.service_name)
     if target is None:
         _emit_backend_failure(envelope_writer, agent_id, SystemInterfaceBackendFailureReason.UNRESOLVED, None)
         return _service_unavailable_response(request)
@@ -939,7 +980,10 @@ async def _handle_workspace_forward_http(
         # Emit a backend-failure envelope so a consumer can react (e.g. drive
         # its own recovery UI), and serve the same styled loader as the
         # UNRESOLVED path instead of raw error text.
-        logger.warning("SSH tunnel setup failed for {}: {}", agent_id, e)
+        suppressed_repeats = tunnel_warning_limiter.suppressed_repeats_if_should_log(str(agent_id))
+        if suppressed_repeats is not None:
+            repeat_suffix = f" ({suppressed_repeats} earlier failures suppressed)" if suppressed_repeats > 0 else ""
+            logger.warning("SSH tunnel setup failed for {}: {}{}", agent_id, e, repeat_suffix)
         _emit_backend_failure(envelope_writer, agent_id, SystemInterfaceBackendFailureReason.CONNECT_ERROR, None)
         return _service_unavailable_response(request)
 
@@ -989,17 +1033,18 @@ async def _handle_workspace_forward_websocket(
         await websocket.close(code=4003, reason="Not authenticated")
         return
 
-    agent_id = resolver.resolve_agent_for_host(str(host_info.host_id_str))
-    if agent_id is None:
+    instance_key = resolver.resolve_agent_for_host(str(host_info.host_id_str))
+    if instance_key is None:
         await websocket.close(code=1013, reason="Backend not yet available")
         return
+    agent_id = instance_key.agent_id
 
     # A websocket to a service origin routes by its label; to the bare origin
     # it maps to the shell (no redirect -- there is no navigation to redirect).
     if host_info.service_name is None:
-        target = resolver.resolve(agent_id)
+        target = resolver.resolve(instance_key)
     else:
-        target = resolver.resolve_by_origin_label(agent_id, host_info.service_name)
+        target = resolver.resolve_by_origin_label(instance_key, host_info.service_name)
     if target is None:
         # Mirror the HTTP path: an unresolved backend is a backend failure a
         # consumer must hear about. A loaded SPA whose only live channel is a
@@ -1220,19 +1265,11 @@ def _handle_debug_index(
         html = _render_login_page(env)
         return HTMLResponse(content=html)
     agents = []
-    for agent_id in resolver.list_known_agent_ids():
-        host_id = resolver.get_host_for_agent(agent_id)
-        target = resolver.resolve(agent_id)
-        if host_id is None:
-            agents.append(
-                {
-                    "agent_id": str(agent_id),
-                    "host_id": "",
-                    "is_unresolved": True,
-                    "reason": "(no host known yet)",
-                }
-            )
-        elif target is None:
+    for instance_key in resolver.list_known_agent_instances():
+        agent_id = instance_key.agent_id
+        host_id = str(instance_key.host_id)
+        target = resolver.resolve(instance_key)
+        if target is None:
             agents.append(
                 {
                     "agent_id": str(agent_id),
@@ -1379,6 +1416,7 @@ def create_forward_app(
     beyond the default 'self' + workspace-family deny-external posture.
     """
     env = _build_jinja_env()
+    tunnel_warning_limiter = TunnelWarningRateLimiter()
 
     app = FastAPI(
         title="mngr forward",
@@ -1415,6 +1453,7 @@ def create_forward_app(
             envelope_writer=envelope_writer,
             use_http2=use_http2,
             stall_notice_seconds=stall_notice_seconds,
+            tunnel_warning_limiter=tunnel_warning_limiter,
         )
         # The proxy owns embedding policy for every workspace origin: APPEND a
         # frame-ancestors CSP header (never modify what the service sent --

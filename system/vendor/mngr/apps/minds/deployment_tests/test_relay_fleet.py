@@ -18,6 +18,7 @@ import shlex
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -63,19 +64,21 @@ def _probe_healthz(ip_address: str) -> bool:
     return response.status_code == 200
 
 
-def test_relay_fleet_is_registered_and_healthy(shared_env: SharedEnvHandle) -> None:
+@pytest.mark.timeout(180)
+def test_relay_fleet_is_registered_and_healthy(shared_env: Callable[[str], SharedEnvHandle]) -> None:
     """Every active relay row answers its healthz probe directly (fleet inventory matches reality)."""
-    relays = _list_active_relays(_connector_url(shared_env))
+    relays = _list_active_relays(_connector_url(shared_env("default")))
     assert relays, "no active relay registered for this env (run `just provision-dev-relay`)"
     for relay in relays:
         assert _probe_healthz(str(relay["ip_address"])), f"relay {relay['relay_id']} healthz unreachable"
 
 
+@pytest.mark.timeout(300)
 def test_share_assignment_returns_the_regions_relay_fleet(
-    shared_env: SharedEnvHandle, verified_user: VerifiedUserHandle
+    shared_env: Callable[[str], SharedEnvHandle], verified_user: VerifiedUserHandle
 ) -> None:
     """A fresh share's relay token fetches an assignment naming every active relay of its region."""
-    base = _connector_url(shared_env)
+    base = _connector_url(shared_env("default"))
     host_id = f"host-{uuid.uuid4().hex}"
     created = httpx.post(
         f"{base}/shares",
@@ -128,13 +131,16 @@ def _relay_ssh(relay_ip: str, key_path: str, command: str) -> None:
     )
 
 
-def test_relay_failover_keeps_the_region_serviceable(shared_env: SharedEnvHandle, tmp_path: Path) -> None:
+@pytest.mark.timeout(600)
+def test_relay_failover_keeps_the_region_serviceable(
+    shared_env: Callable[[str], SharedEnvHandle], tmp_path: Path
+) -> None:
     """Stop one relay's frps: the survivor keeps serving; the stopped relay recovers on restart.
 
     Skips on single-relay regions (dev/ci envs) -- the multi-relay shape is a
     staging/production property.
     """
-    base = _connector_url(shared_env)
+    base = _connector_url(shared_env("default"))
     relays = _list_active_relays(base)
     relays_by_region: dict[str, list[dict[str, Any]]] = {}
     for relay in relays:

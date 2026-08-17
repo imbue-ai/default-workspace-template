@@ -12,6 +12,7 @@ import {
   signUp,
   type AccountsConfig,
   type Identity,
+  type SignupAttribution,
 } from "./api";
 import {
   BTN_PRIMARY,
@@ -69,6 +70,17 @@ function navigateTo(path: string): void {
   window.location.assign(path);
 }
 
+// The page's own campaign context, forwarded with signups so the server can
+// attribute the new account even when the marketing cookie is absent (the
+// server extracts the allowlisted params; this just relays the raw values).
+function signupAttribution(state: PageState): SignupAttribution {
+  return {
+    page_query: window.location.search.replace(/^\?/, ""),
+    page_path: window.location.pathname,
+    next: state.next,
+  };
+}
+
 function finishSignin(state: PageState): void {
   // A fresh explicit sign-in confirms the account choice, so a pending
   // authorize handoff proceeds directly.
@@ -76,7 +88,14 @@ function finishSignin(state: PageState): void {
 }
 
 function googleStartHref(state: PageState): string {
-  return `/accounts/oauth/google/start?next=${encodeURIComponent(state.next)}`;
+  // pq/pp carry the page's campaign context through the OAuth round-trip
+  // (the server folds them into attribution only when a NEW account is
+  // created by the exchange).
+  const attribution = signupAttribution(state);
+  return (
+    `/accounts/oauth/google/start?next=${encodeURIComponent(state.next)}` +
+    `&pq=${encodeURIComponent(attribution.page_query)}&pp=${encodeURIComponent(attribution.page_path)}`
+  );
 }
 
 function resetTurnstile(state: PageState): void {
@@ -99,7 +118,9 @@ async function submitCredentials(state: PageState, email: string, password: stri
   m.redraw();
   try {
     const result =
-      state.tab === "signin" ? await signIn(email, password) : await signUp(email, password, state.turnstileToken);
+      state.tab === "signin"
+        ? await signIn(email, password)
+        : await signUp(email, password, state.turnstileToken, signupAttribution(state));
     if (result.status === "OK") {
       finishSignin(state);
       return;

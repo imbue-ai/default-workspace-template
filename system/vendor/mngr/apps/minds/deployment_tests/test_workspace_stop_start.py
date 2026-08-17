@@ -15,6 +15,7 @@ measured upload throughput -- budget tens of minutes.
 """
 
 import socket
+from collections.abc import Callable
 
 import httpx
 import pytest
@@ -82,10 +83,11 @@ def _assert_ssh_banner(address: str, port: int) -> None:
     assert banner.startswith(b"SSH"), f"{address}:{port} did not answer with an SSH banner: {banner!r}"
 
 
+@pytest.mark.timeout(2700)
 def test_workspace_stop_uploads_frees_slot_and_start_restores(
-    shared_env: SharedEnvHandle, verified_user: VerifiedUserHandle
+    shared_env: Callable[[str], SharedEnvHandle], verified_user: VerifiedUserHandle
 ) -> None:
-    env = shared_env
+    env = shared_env("default")
     wait_for_env_ready(env)
     connector_url = _connector_url(env)
 

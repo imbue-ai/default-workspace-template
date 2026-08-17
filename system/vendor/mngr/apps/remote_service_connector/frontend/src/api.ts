@@ -81,15 +81,28 @@ export async function signIn(
   return (await resp.json()) as AuthResult;
 }
 
+// Marketing-attribution context from the signup page itself: its query
+// string (campaign params are extracted server-side), its path, and the
+// next= target that classifies which surface sent the user here.
+export interface SignupAttribution {
+  page_query: string;
+  page_path: string;
+  next: string;
+}
+
 export async function signUp(
   email: string,
   password: string,
   turnstileToken: string,
+  attribution: SignupAttribution,
 ): Promise<AuthResult> {
   const resp = await postJson("/accounts/api/signup", {
     email,
     password,
     turnstile_token: turnstileToken,
+    attribution_page_query: attribution.page_query,
+    attribution_page_path: attribution.page_path,
+    attribution_next: attribution.next,
   });
   return (await resp.json()) as AuthResult;
 }

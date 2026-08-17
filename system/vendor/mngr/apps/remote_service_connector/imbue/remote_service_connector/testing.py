@@ -12,6 +12,7 @@ from datetime import timezone
 from types import SimpleNamespace
 from typing import Any
 from typing import Final
+from urllib.parse import quote
 from uuid import UUID
 
 # Note: psycopg2.errors is reachable through the base import, matching app.py;
@@ -49,6 +50,7 @@ from supertokens_python.types.base import AccountInfoInput
 import imbue.remote_service_connector.accounts as accounts_module
 import imbue.remote_service_connector.accounts_web as accounts_web_module
 import imbue.remote_service_connector.app as app_mod
+import imbue.remote_service_connector.attribution as attribution_module
 import imbue.remote_service_connector.auth as auth_mod
 import imbue.remote_service_connector.auth_proxy as auth_proxy_module
 import imbue.remote_service_connector.cloudflare as cloudflare_mod
@@ -461,6 +463,8 @@ class FakeSuperTokensBackend:
     is_turnstile_passing: bool
     # In-memory device-auth-code store installed onto accounts_web.
     device_code_store: "InMemoryDeviceAuthCodeStore"
+    # In-memory attribution store installed onto the attribution module.
+    attribution_store: "InMemoryAttributionStore"
 
     def install_on_app_module(self, app_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Swap every SuperTokens SDK call site with a fake.
@@ -496,9 +500,10 @@ class FakeSuperTokensBackend:
             # Not SuperTokens seams, but accounts-surface test plumbing that
             # rides the same single-loop install: the Turnstile verifier
             # (driven by ``is_turnstile_passing``) and the in-memory
-            # device-auth-code store.
+            # device-auth-code and attribution stores.
             "_verify_turnstile_token": self.verify_turnstile_token,
             "_device_code_store": self.device_code_store,
+            "_attribution_store": self.attribution_store,
         }
         target_modules = [
             app_mod,
@@ -507,6 +512,7 @@ class FakeSuperTokensBackend:
             accounts_module,
             share_broker_module,
             accounts_web_module,
+            attribution_module,
         ]
         for name, fake in fakes.items():
             matching_modules = [module for module in target_modules if hasattr(module, name)]
@@ -976,6 +982,7 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     backend.last_browser_session = None
     backend.is_turnstile_passing = True
     backend.device_code_store = InMemoryDeviceAuthCodeStore()
+    backend.attribution_store = InMemoryAttributionStore()
     return backend
 
 
@@ -3410,6 +3417,77 @@ class InMemoryDeviceAuthCodeStore:
             "code_challenge": row["code_challenge"],
             "redirect_uri": row["redirect_uri"],
         }
+
+
+def encode_attribution_cookie(payload: object) -> str:
+    """Encode a payload the way the marketing site writes the imbue_attribution cookie.
+
+    Percent-encoded JSON, i.e. ``encodeURIComponent(JSON.stringify(payload))``
+    per docs/attribution-cookie-contract.md.
+    """
+    return quote(json.dumps(payload), safe="")
+
+
+class InMemoryAttributionStore:
+    """In-memory stand-in for the Neon attribution tables.
+
+    Set ``raise_on_insert`` to exercise the recorders' fail-open path (the
+    real store's failures surface as psycopg2 errors).
+    """
+
+    def __init__(self) -> None:
+        self.account_rows: list[dict[str, Any]] = []
+        self.download_rows: list[dict[str, Any]] = []
+        self.raise_on_insert: Exception | None = None
+
+    def insert_account_attribution(
+        self,
+        *,
+        user_id: str,
+        email: str,
+        visitor_id: str | None,
+        first_touch: dict[str, str] | None,
+        last_touch: dict[str, str] | None,
+        signup_context: str,
+        signup_method: str,
+    ) -> None:
+        if self.raise_on_insert is not None:
+            raise self.raise_on_insert
+        # Write-once, mirroring the real store's ON CONFLICT DO NOTHING.
+        if any(row["user_id"] == user_id for row in self.account_rows):
+            return
+        self.account_rows.append(
+            {
+                "user_id": user_id,
+                "email": email,
+                "visitor_id": visitor_id,
+                "first_touch": first_touch,
+                "last_touch": last_touch,
+                "signup_context": signup_context,
+                "signup_method": signup_method,
+            }
+        )
+
+    def insert_download_event(
+        self,
+        *,
+        visitor_id: str | None,
+        first_touch: dict[str, str] | None,
+        last_touch: dict[str, str] | None,
+        platform: str,
+        user_agent: str | None,
+    ) -> None:
+        if self.raise_on_insert is not None:
+            raise self.raise_on_insert
+        self.download_rows.append(
+            {
+                "visitor_id": visitor_id,
+                "first_touch": first_touch,
+                "last_touch": last_touch,
+                "platform": platform,
+                "user_agent": user_agent,
+            }
+        )
 
 
 def _make_accounts_web_test_client(

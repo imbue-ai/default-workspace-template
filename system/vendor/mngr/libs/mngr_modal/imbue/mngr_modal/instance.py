@@ -91,6 +91,7 @@ from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.primitives import VolumeId
+from imbue.mngr.primitives import build_ssh_connect_command
 from imbue.mngr.providers.base_provider import BaseProviderInstance
 from imbue.mngr.providers.host_key_store import has_host_key_store
 from imbue.mngr.providers.host_key_store import remove_host_key_record
@@ -2872,12 +2873,14 @@ log "=== Shutdown script completed ==="
         ssh_connection = host.get_ssh_connection_info()
         if ssh_connection is not None:
             user, hostname, port, key_path = ssh_connection
+            known_hosts_path = host.get_ssh_known_hosts_path()
             ssh_info = SSHInfo(
                 user=user,
                 host=hostname,
                 port=port,
                 key_path=key_path,
-                command=f"ssh -i {key_path} -p {port} {user}@{hostname}",
+                known_hosts_path=known_hosts_path,
+                command=build_ssh_connect_command(user, hostname, port, key_path, known_hosts_path),
             )
 
         # Boot time and uptime from SSH-collected data
@@ -3121,7 +3124,20 @@ log "=== Shutdown script completed ==="
                 updated_certified_data,
             ),
         )
-        self._get_host(host_id, host_record=updated_host_record).set_certified_data(updated_certified_data)
+        host = self._get_host(host_id, host_record=updated_host_record)
+        if isinstance(host, OnlineHostInterface):
+            # A Modal filesystem snapshot transiently breaks new connections through the
+            # sandbox's tunnels: for a window afterwards (longer when Modal is under
+            # load), the tunnel edge accepts TCP and then closes it without an SSH
+            # banner. The certified-data write below opens a fresh SSH connection, so
+            # re-verify the tunnel with a full handshake probe first, just like host
+            # creation does after boot. This also means create/snapshot only returns
+            # once the tunnel is healthy again, so follow-up commands don't hit the
+            # same window.
+            ssh_host, ssh_port = self._get_ssh_info_from_sandbox(sandbox)
+            with log_span("Waiting for the SSH tunnel to recover after the snapshot"):
+                self._wait_for_sshd(ssh_host, ssh_port, self.config.ssh_connect_timeout)
+        host.set_certified_data(updated_certified_data)
         logger.debug(
             "Created snapshot: id={}, name={}",
             snapshot_id,
