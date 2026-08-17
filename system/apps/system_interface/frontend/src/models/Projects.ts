@@ -25,6 +25,7 @@
  */
 
 import { apiUrl } from "../base-path";
+import { getDeviceKind } from "./ClientIdentity";
 
 /**
  * The id of the reserved unfiltered view, matching the backend's
@@ -81,12 +82,15 @@ export async function fetchProjectsList(): Promise<ProjectsListResponse> {
 }
 
 /** Fetch one view's saved content, EVERYTHING_VIEW_ID included -- the
- *  unfiltered view has its own layout like any project. Returns null both for
- *  a view that has never been saved (render the New Tab launcher) and on any
- *  fetch failure. */
+ *  unfiltered view has its own layout like any project. Reads this client's
+ *  own device kind's arrangement (a view is arranged per device; membership is
+ *  shared). Returns null both for a view that has never been saved on this
+ *  device (render the New Tab launcher) and on any fetch failure. */
 export async function fetchProjectContent(viewId: string): Promise<unknown | null> {
   try {
-    const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(viewId)}`));
+    const response = await fetch(
+      apiUrl(`/api/projects/${encodeURIComponent(viewId)}?device=${encodeURIComponent(getDeviceKind())}`),
+    );
     if (!response.ok) return null;
     const data = (await response.json()) as { layout?: unknown };
     return data.layout ?? null;
@@ -100,13 +104,14 @@ async function errorDetailFromResponse(response: Response): Promise<string> {
   return data.detail ?? `HTTP ${response.status}`;
 }
 
-/** Autosave the active view's content, EVERYTHING_VIEW_ID included. Throws on
- *  failure (callers treat autosave as best-effort and catch). */
+/** Autosave the active view's content, EVERYTHING_VIEW_ID included, into this
+ *  client's own device kind's arrangement. Throws on failure (callers treat
+ *  autosave as best-effort and catch). */
 export async function autosaveProject(viewId: string, layoutPayload: unknown, clientId: string): Promise<void> {
   const response = await fetch(apiUrl(`/api/projects/${encodeURIComponent(viewId)}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ layout: layoutPayload, client_id: clientId }),
+    body: JSON.stringify({ layout: layoutPayload, client_id: clientId, device: getDeviceKind() }),
   });
   if (!response.ok) {
     throw new Error(await errorDetailFromResponse(response));

@@ -2825,3 +2825,68 @@ def test_load_op_switches_the_clients_view(tmp_path: Path, page: Page) -> None:
         # launcher's table is built from.
         with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:
             assert response.status == 200
+
+
+_MOBILE_AUTOSAVE_PORT = 18884
+
+# A phone-shaped browser context: what Playwright's Pixel device descriptors
+# hold, inlined so the emulated UA is pinned rather than drifting with the
+# Playwright version. The UA string is what matters -- emulation exposes no
+# ``navigator.userAgentData``, so the client classifies itself as mobile via
+# the UA-string fallback (see ClientIdentity.classifyDeviceKind).
+_MOBILE_CONTEXT_ARGS: dict[str, Any] = {
+    "user_agent": (
+        "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36"
+        " (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    ),
+    "viewport": {"width": 412, "height": 915},
+    "device_scale_factor": 2.625,
+    "is_mobile": True,
+    "has_touch": True,
+}
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> None:
+    """A mobile client's autosave lands in the view's mobile file, not desktop's.
+
+    Views are arranged per device: the frontend derives its own kind from the
+    UA and routes load + autosave to ``<id>.mobile.json``. The desktop
+    arrangement must stay untouched -- absent here, since no desktop client
+    ever saved.
+    """
+    primary_agent_id = "primary-services-agent"
+    with _running_e2e_server(tmp_path, _MOBILE_AUTOSAVE_PORT, primary_agent_id=primary_agent_id) as (
+        base_url,
+        _agent_info,
+        _session_file,
+    ):
+        layout_dir = tmp_path / "agents" / primary_agent_id / "workspace_layout"
+        # A second, phone-shaped context on the same browser the ``page``
+        # fixture runs in (that fixture's own page goes unused here).
+        e2e_browser = page.context.browser
+        assert e2e_browser is not None
+        context = e2e_browser.new_context(**_MOBILE_CONTEXT_ARGS)
+        try:
+            mobile_page = context.new_page()
+            mobile_page.goto(base_url)
+
+            # The fixture chat auto-opens in the starter project; the debounced
+            # autosave then writes the arrangement out -- into the mobile file.
+            expect(
+                mobile_page.locator(".dv-default-tab-content", has_text="test-agent").first
+            ).to_be_visible(timeout=15000)
+            wait_for(
+                lambda: (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.mobile.json").exists(),
+                timeout=15.0,
+                poll_interval=0.1,
+                error_message=f"autosave never materialized {DEFAULT_PROJECT_ID}.mobile.json",
+            )
+            assert not (layout_dir / "projects" / f"{DEFAULT_PROJECT_ID}.json").exists()
+        finally:
+            context.close()
+
+        # Touch tmux deterministically for the module-wide mark, exactly as the
+        # load test above does: the launcher's own fetch races this short test.
+        with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:
+            assert response.status == 200

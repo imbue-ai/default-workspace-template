@@ -115,8 +115,8 @@ import {
 import {
   getActiveProjectId,
   getClientId,
+  getDeviceKind,
   getStoredProjectId,
-  setActiveLayoutSlug,
   setActiveProjectId,
 } from "../models/ClientIdentity";
 import { loadSnapshotWithStream } from "../models/StreamingMessage";
@@ -3392,14 +3392,11 @@ async function applyLayoutContent(saved: SavedLayout | null, isInitialMount: boo
 
 /** Record ``viewId`` as this browser's active view.
  *
- *  The active view IS this client's dockview state, so the id is mirrored onto
- *  the client-identity layout slug as well: that is the value
- *  ``reportClientState`` registers with the server and the one a sent chat
- *  message is attributed to, and leaving it unset would deregister the client
- *  entirely. */
+ *  The active view IS this client's identity toward the server: it is the value
+ *  ``reportClientState`` registers and the one a sent chat message is
+ *  attributed to, and leaving it unset would deregister the client entirely. */
 function setActiveView(viewId: string): void {
   setActiveProjectId(viewId);
-  setActiveLayoutSlug(viewId);
   mountedViewId = viewId;
 }
 
@@ -3520,7 +3517,14 @@ export function handleProjectSyncEvent(event: ProjectSyncEvent): void {
     // Live sync: another client saved the project we're on -- re-apply it.
     // Skipping our own saves (by client id) is the originator half of the
     // echo suppression; the content guard in saveLayout is the other half.
-    if (event.projectId === mountedViewId && event.savedByClientId !== getClientId()) {
+    // A save from the other device kind is someone else's arrangement of the
+    // same view (a phone rearranging while a desktop watches): our own file
+    // did not change, so there is nothing to re-apply.
+    if (
+      event.projectId === mountedViewId &&
+      event.savedByClientId !== getClientId() &&
+      event.device === getDeviceKind()
+    ) {
       void (async () => {
         const saved = (await fetchProjectContent(event.projectId)) as SavedLayout | null;
         markServerContent(saved);
@@ -4401,7 +4405,6 @@ function initializeDockview(parentElement: HTMLElement): void {
   // else everyone); here that means ignore loads addressed to someone else,
   // and treat a load for the mounted view as already done.
   addLayoutSyncListener((event: LayoutSyncEvent) => {
-    if (event.kind !== "load") return;
     if (event.targetClientId !== null && event.targetClientId !== getClientId()) return;
     if (event.layoutSlug === mountedViewId) return;
     void switchToView(event.layoutSlug);

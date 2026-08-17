@@ -37,7 +37,7 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
-from imbue.system_interface import workspace_layouts
+from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
@@ -2310,7 +2310,7 @@ def _write_client_activity_message(host_dir: Path, agent_id: str, seconds_ago: f
     """
     timestamp = format_nanosecond_iso_timestamp(datetime.now(timezone.utc) - timedelta(seconds=seconds_ago))
     events_path = client_activity.get_events_path(
-        workspace_layouts.primary_agent_layout_dir(host_dir, "test-agent-id")
+        projects.primary_agent_layout_dir(host_dir, "test-agent-id")
     )
     events_path.parent.mkdir(parents=True, exist_ok=True)
     with events_path.open("a") as event_file:

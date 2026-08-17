@@ -108,6 +108,48 @@ def test_list_emits_server_entries_as_yaml(
     assert "chat:alice" in out
 
 
+def test_list_passes_view_and_device_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--view`` (the ``--layout`` alias) and ``--device`` ride along in the args."""
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        layout,
+        "_post_layout",
+        _make_fake_post(posted, (200, {"ok": True, "entries": []})),
+    )
+
+    rc = layout.main(["list", "--view", "Everything", "--device", "mobile"])
+    assert rc == 0
+    assert posted == [("list", {"layout": "Everything", "device": "mobile"})]
+
+
+def test_open_without_view_posts_no_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mutating op with no ``--view`` posts a None target: the server
+    defaults it to the view the connected client is on."""
+    apps_file = tmp_path / "apps.toml"
+    _write_apps_toml(apps_file, ["web"])
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
+
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+
+    rc = layout.main(["open", "web"])
+    assert rc == 0
+    assert posted == [("open", {"ref": "service:web", "new_group": False, "layout": None})]
+
+
+def test_open_accepts_view_as_the_layout_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    apps_file = tmp_path / "apps.toml"
+    _write_apps_toml(apps_file, ["web"])
+    monkeypatch.setenv(layout.ENV_APPS_FILE, str(apps_file))
+
+    posted: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
+
+    rc = layout.main(["open", "web", "--view", "Project 1"])
+    assert rc == 0
+    assert posted == [("open", {"ref": "service:web", "new_group": False, "layout": "Project 1"})]
+
+
 def test_list_json_emits_structured_json(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

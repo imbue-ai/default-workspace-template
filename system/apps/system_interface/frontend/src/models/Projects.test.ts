@@ -166,18 +166,19 @@ describe("fetchProjectsList", () => {
 });
 
 describe("fetchProjectContent", () => {
+  // The device rides along from getDeviceKind(); node's own navigator reads as desktop.
   it("returns the saved content and percent-encodes the id", async () => {
     const mockFetch = stubFetch({ ok: true, json: () => Promise.resolve({ layout: { dockview: { grid: {} } } }) });
 
     expect(await fetchProjectContent("my project")).toEqual({ dockview: { grid: {} } });
-    expect(mockFetch).toHaveBeenCalledWith("/api/projects/my%20project");
+    expect(mockFetch).toHaveBeenCalledWith("/api/projects/my%20project?device=desktop");
   });
 
   it("fetches Everything's own layout like any other view's", async () => {
     const mockFetch = stubFetch({ ok: true, json: () => Promise.resolve({ layout: { dockview: { grid: {} } } }) });
 
     expect(await fetchProjectContent(EVERYTHING_VIEW_ID)).toEqual({ dockview: { grid: {} } });
-    expect(mockFetch).toHaveBeenCalledWith("/api/projects/everything");
+    expect(mockFetch).toHaveBeenCalledWith("/api/projects/everything?device=desktop");
   });
 
   it("returns null for a view that has never been saved", async () => {
@@ -204,7 +205,7 @@ describe("autosaveProject", () => {
     expect(mockFetch).toHaveBeenCalledWith("/api/projects/website-redesign", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ layout: { dockview: { grid: {} } }, client_id: "client-7" }),
+      body: JSON.stringify({ layout: { dockview: { grid: {} } }, client_id: "client-7", device: "desktop" }),
     });
   });
 
@@ -216,7 +217,7 @@ describe("autosaveProject", () => {
     expect(mockFetch).toHaveBeenCalledWith("/api/projects/everything", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ layout: { dockview: {} }, client_id: "client-7" }),
+      body: JSON.stringify({ layout: { dockview: {} }, client_id: "client-7", device: "desktop" }),
     });
   });
 

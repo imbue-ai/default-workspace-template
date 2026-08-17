@@ -7,7 +7,7 @@ import m from "mithril";
 import { apiUrl } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import { ReconnectBackoff } from "./backoff";
-import { getActiveLayoutSlug, getClientId, getDeviceKind } from "./ClientIdentity";
+import { getActiveProjectId, getClientId, getDeviceKind } from "./ClientIdentity";
 import type { ModelChoice } from "./ModelSettings";
 import { noteBackendArrivals } from "./OutgoingMessages";
 import { parseJsonMessage } from "./ws-json";
@@ -164,24 +164,8 @@ type WsEvent =
       session_name: string;
     }
   | {
-      // A named layout's content was saved (by any client). Clients with the
-      // layout active (other than the saver) re-apply it; everyone refreshes
-      // their cached layouts list.
-      type: "layout_saved";
-      layout_slug: string;
-      display_name: string;
-      saved_by_client_id: string;
-    }
-  | {
-      // A named layout was deleted; clients with it active switch to the
-      // fallback.
-      type: "layout_deleted";
-      layout_slug: string;
-      fallback_layout_slug: string;
-    }
-  | {
       // An agent asked a client (or all clients, target null) to switch to a
-      // named layout so subsequent layout ops can target it.
+      // view so subsequent layout ops can target it.
       type: "load_layout";
       layout_slug: string;
       display_name: string;
@@ -189,10 +173,12 @@ type WsEvent =
     }
   | {
       // A project's content was saved (by any client). Clients mounted on that
-      // project (other than the saver) re-apply it; everyone re-lists.
+      // project (other than the saver) on the same device kind re-apply it;
+      // everyone re-lists.
       type: "project_saved";
       project_id: string;
       saved_by_client_id: string;
+      device: string;
     }
   | {
       // A project was deleted; clients mounted on it switch to the fallback.
@@ -249,11 +235,9 @@ type WsEvent =
       at_ms: number | null;
     };
 
-/** Layout registry / sync events pushed over the WebSocket. */
-export type LayoutSyncEvent =
-  | { kind: "saved"; layoutSlug: string; displayName: string; savedByClientId: string }
-  | { kind: "deleted"; layoutSlug: string; fallbackLayoutSlug: string }
-  | { kind: "load"; layoutSlug: string; displayName: string; targetClientId: string | null };
+/** Agent-driven view-switch requests pushed over the WebSocket (the ``load``
+ *  layout op). The slug names a view: a project id, or Everything. */
+export type LayoutSyncEvent = { kind: "load"; layoutSlug: string; displayName: string; targetClientId: string | null };
 
 export type LayoutSyncListener = (event: LayoutSyncEvent) => void;
 
@@ -271,7 +255,7 @@ export type LayoutSyncListener = (event: LayoutSyncEvent) => void;
  * pane's id is minted per open and differs from client to client.
  */
 export type ProjectSyncEvent =
-  | { kind: "saved"; projectId: string; savedByClientId: string }
+  | { kind: "saved"; projectId: string; savedByClientId: string; device: string }
   | { kind: "deleted"; projectId: string; fallbackId: string }
   | { kind: "updated"; projectId: string }
   | { kind: "members"; projectIds: string[] }
@@ -491,27 +475,6 @@ function handleEvent(event: WsEvent): void {
       }
       break;
 
-    case "layout_saved":
-      for (const listener of layoutSyncListeners) {
-        listener({
-          kind: "saved",
-          layoutSlug: event.layout_slug,
-          displayName: event.display_name,
-          savedByClientId: event.saved_by_client_id,
-        });
-      }
-      break;
-
-    case "layout_deleted":
-      for (const listener of layoutSyncListeners) {
-        listener({
-          kind: "deleted",
-          layoutSlug: event.layout_slug,
-          fallbackLayoutSlug: event.fallback_layout_slug,
-        });
-      }
-      break;
-
     case "load_layout":
       for (const listener of layoutSyncListeners) {
         listener({
@@ -529,6 +492,7 @@ function handleEvent(event: WsEvent): void {
           kind: "saved",
           projectId: event.project_id,
           savedByClientId: event.saved_by_client_id,
+          device: event.device,
         });
       }
       break;
@@ -588,7 +552,7 @@ function handleEvent(event: WsEvent): void {
  * or before an active layout has been chosen -- the next open re-reports.
  */
 export function reportClientState(previousLayoutSlug?: string): void {
-  const activeLayout = getActiveLayoutSlug();
+  const activeLayout = getActiveProjectId();
   if (ws === null || ws.readyState !== WebSocket.OPEN || !activeLayout) {
     console.info(
       `[si-ws] client_state not sent (readyState=${ws === null ? "no-socket" : ws.readyState} layout=${JSON.stringify(activeLayout)})`,

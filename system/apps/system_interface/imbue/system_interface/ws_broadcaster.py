@@ -245,36 +245,6 @@ class WebSocketBroadcaster(MutableModel):
         else:
             self.broadcast_to_layout(message, target_layout_slug)
 
-    def broadcast_layout_saved(self, layout_slug: str, display_name: str, saved_by_client_id: str) -> None:
-        """Broadcast that a named layout's content was saved.
-
-        Sent to every client (not just those on the layout): the "+" menu
-        dialogs list all layouts, so everyone needs the fresh registry. A
-        client with the layout active (other than the saver, identified by
-        ``saved_by_client_id``) re-fetches and re-applies the content.
-        """
-        self.broadcast(
-            {
-                "type": "layout_saved",
-                "layout_slug": layout_slug,
-                "display_name": display_name,
-                "saved_by_client_id": saved_by_client_id,
-            }
-        )
-
-    def broadcast_layout_deleted(self, layout_slug: str, fallback_layout_slug: str) -> None:
-        """Broadcast that a named layout was deleted.
-
-        Clients with the layout active switch to ``fallback_layout_slug``.
-        """
-        self.broadcast(
-            {
-                "type": "layout_deleted",
-                "layout_slug": layout_slug,
-                "fallback_layout_slug": fallback_layout_slug,
-            }
-        )
-
     def broadcast_load_layout(self, layout_slug: str, display_name: str, target_client_id: str | None) -> None:
         """Broadcast an agent-driven request that a client switch to a layout.
 

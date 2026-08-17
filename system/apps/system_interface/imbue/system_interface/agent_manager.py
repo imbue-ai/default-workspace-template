@@ -41,7 +41,7 @@ from imbue.mngr.primitives import AgentNameStyle
 from imbue.mngr.primitives import HostName
 from imbue.mngr.utils.name_generator import generate_agent_name
 from imbue.system_interface import client_activity
-from imbue.system_interface import workspace_layouts
+from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.system_interface.activity_state import is_lifecycle_dead
@@ -616,7 +616,7 @@ class AgentManager:
         """
         if not self._own_agent_id:
             return
-        layout_dir = workspace_layouts.primary_agent_layout_dir(self._host_dir, self._own_agent_id)
+        layout_dir = projects.primary_agent_layout_dir(self._host_dir, self._own_agent_id)
         events = client_activity.read_client_activity_events(client_activity.get_events_path(layout_dir))
         last_message_at_by_agent_id: dict[str, float] = {}
         for agent_id, timestamp in client_activity.last_message_time_by_agent(events).items():
