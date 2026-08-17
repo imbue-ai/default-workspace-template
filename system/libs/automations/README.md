@@ -5,12 +5,14 @@ schedule (see the workspace vocabulary in the root README). The weekly
 Caretaker (`system/services/caretaker/`) is the built-in example; a new
 automation needs only a skill plus a cron entry through these scripts.
 
+Every cron job is prefixed with `system/scripts/with_agent_env.sh`, which
+rebuilds the agent environment cron scrubs. It lives outside this package
+because sshd scrubs the environment the same way, so commands sent over ssh
+need it too; `with_agent_env.sh` here is a shim kept only for cron entries
+scheduled before the move.
+
 The pieces, each invoked from cron by absolute path:
 
-- `with_agent_env.sh` -- runs a command with the agent environment restored.
-  cron scrubs the environment, so every cron job is prefixed with this wrapper,
-  which rebuilds the env from the files mngr maintains (host env first, then
-  the services agent's env on top) and execs from the repo root.
 - `run_job.sh` -- durable, completion-tracked runner for recurring jobs.
   Invoked every minute by a cron line; runs the given command at most once per
   interval (`--every 15m` / `3h` / `7d`, optional `--at <hour>`), catches up
