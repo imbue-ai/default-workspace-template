@@ -5,9 +5,9 @@ build two creations in one workspace at the same time. That is a property of the
 files the script touches, not of the lib it generates, so these run the real script
 over a real (temporary) workspace and assert on the tree it leaves behind.
 
-The port pre-flight is checked the same way: every program but ``system_interface``
-declares its port in its own drop-in now, so a pre-flight that read only the main
-config would hand a new app a port another program already holds.
+The port pre-flight is checked the same way: every program declares its port in
+its own drop-in now, so a pre-flight that read only the main config would hand a
+new app a port another program already holds.
 """
 
 from __future__ import annotations
@@ -18,15 +18,27 @@ from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
 
+# The shipped shape: the main config declares no programs at all, only the
+# daemon's own sections and the [include] that pulls in the drop-ins.
 _MAIN_CONF = """\
 [supervisord]
 logfile=/var/log/supervisor/supervisord.log
 
 [include]
 files = supervisord.conf.d/*.conf
+"""
 
-[program:system_interface]
-command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8000 --name system_interface && system-interface"
+# A workspace that predates the split, or one whose mind moved a program back:
+# the scaffolder still reads the main config, so a program declared there has to
+# be seen by both the port pre-flight and the name guard. The program is
+# ``dashboard`` rather than a real built-in because a name in RESERVED_NAMES is
+# refused before any config is read, which would make the name check below pass
+# without the main config being scanned at all. Its port is inside the auto-pick
+# range (which starts at 8080) so that the auto pick has to step over it -- a
+# port below the range would be invisible to the auto pick either way.
+_MAIN_CONF_WITH_INLINE_PROGRAM = _MAIN_CONF + """
+[program:dashboard]
+command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8080 --name dashboard && dashboard"
 """
 
 _ROOT_PYPROJECT = """\
@@ -101,6 +113,32 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
 
     assert (root / "system/supervisord.conf").read_text() == before_conf
     assert (root / "pyproject.toml").read_text() == before_pyproject
+
+
+def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> None:
+    """The main config is scanned too, not just the drop-ins.
+
+    Every program ships in a drop-in now, but the scaffolder must not assume it:
+    a workspace predating the split declares its programs inline, and a mind is
+    free to move one back. Both its port and its name have to be respected.
+    """
+    root = _make_workspace(
+        tmp_path, {"browser": 8081}, main_conf=_MAIN_CONF_WITH_INLINE_PROGRAM
+    )
+
+    taken_port = _scaffold(root, "news", "--port", "8080")
+    assert taken_port.returncode != 0
+    assert "already in use" in taken_port.stderr
+
+    taken_name = _scaffold(root, "dashboard")
+    assert taken_name.returncode != 0
+    assert "supervisord.conf already has a [program:dashboard] section" in taken_name.stderr
+
+    # 8080 is held by the main config and 8081 by the drop-in, so the auto pick
+    # lands on 8082 -- it would answer 8080 if the main config went unread.
+    ok = _scaffold(root, "news")
+    assert ok.returncode == 0, ok.stderr
+    assert "http://localhost:8082" in (root / "system/supervisord.conf.d/news.conf").read_text()
 
 
 def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None:

@@ -38,12 +38,11 @@ def _command_by_supervisord_program() -> dict[str, str]:
     supervisord's own ``%(ENV_x)s`` syntax is not configparser's.
 
     Programs live one per file under ``supervisord.conf.d/``, so the main config
-    alone declares only ``system_interface``. ``configparser`` does not follow
-    supervisord's ``[include]`` directive -- that is a supervisord feature, not
-    a configparser one -- so the globs are expanded here. Reading only the main
-    config would leave the band checks below asserting over a single program
-    while appearing to pass, which is exactly the silent gap they exist to
-    close.
+    declares none of them. ``configparser`` does not follow supervisord's
+    ``[include]`` directive -- that is a supervisord feature, not a configparser
+    one -- so the globs are expanded here. Reading only the main config would
+    leave the band checks below asserting over nothing at all while appearing to
+    pass, which is exactly the silent gap they exist to close.
     """
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(_SUPERVISORD_CONF)

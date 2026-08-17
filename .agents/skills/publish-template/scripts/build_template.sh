@@ -189,7 +189,9 @@ REPO_URL_PLACEHOLDER="MINDS_TEMPLATE_REPO_URL"
 # Guard against a wrong --base-ref: minds assembled via subtree merges can have
 # several parallel root commits, and a naive fallback can land on a near-empty
 # one instead of the real DEFAULT_WORKSPACE_TEMPLATE seed. Any bootable template tree must contain
-# pyproject.toml and system/supervisord.conf, so require both in BASE_REF's tree. This
+# pyproject.toml, system/supervisord.conf, and the system/supervisord.conf.d
+# directory every program is declared in, so require all three in BASE_REF's
+# tree. This
 # runs BEFORE the destructive read-tree in step 2 so a bad ref aborts cleanly
 # without touching the worktree.
 if ! git rev-parse --verify --quiet "${BASE_REF}^{tree}" > /dev/null; then
@@ -197,7 +199,7 @@ if ! git rev-parse --verify --quiet "${BASE_REF}^{tree}" > /dev/null; then
     exit 5
 fi
 base_missing=""
-for required in pyproject.toml system/supervisord.conf; do
+for required in pyproject.toml system/supervisord.conf system/supervisord.conf.d; do
     if [ -z "$(git ls-tree --name-only "${BASE_REF}^{tree}" -- "$required")" ]; then
         base_missing="${base_missing} ${required}"
     fi
@@ -797,13 +799,26 @@ options = ServerOptions()
 options.configfile = "system/supervisord.conf"
 options.realize(args=[])
 options.process_config(do_usage=False)
+
+# Every program lives in a supervisord.conf.d drop-in, so a config that
+# realizes cleanly but yields nothing means the [include] matched no files --
+# a base missing its drop-ins, or a glob pointing somewhere else. That
+# publishes as a "bootable" template with no services at all, so require at
+# least one realized program rather than only a clean parse.
+groups = options.configroot.supervisord.process_group_configs
+if not groups:
+    sys.stderr.write(
+        "system/supervisord.conf realized zero programs -- "
+        "the [include] glob matched no drop-ins\n"
+    )
+    sys.exit(1)
 PYEOF
     then
         smoke_ok=0
     fi
 fi
 if [ "$smoke_ok" -ne 1 ]; then
-    echo "build_template.sh: boot smoke-check FAILED -- system/supervisord.conf did not realize cleanly" >&2
+    echo "build_template.sh: boot smoke-check FAILED -- system/supervisord.conf did not realize a bootable set of programs (see the reason above)" >&2
     exit 4
 fi
 
