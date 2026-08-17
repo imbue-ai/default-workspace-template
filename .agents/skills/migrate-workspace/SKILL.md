@@ -159,8 +159,8 @@ tick's outcome as its exit status: 0 is `restic_backup_succeeded`, 3 is
 `tick_skipped_due_to_missing_secrets` (no `data/.secrets/restic.env`, so backups
 are not configured at all), 1 is a failed attempt, and 2 means no outcome was
 observed. Only 0 confirms a restore point; treat 1, 2, and 3 alike as "there
-isn't one." Matching on stdout instead misses the case the next paragraph
-describes, where an old source prints nothing at all.
+isn't one." Matching on stdout instead misses the case above, where an old
+source's wait times out with nothing on stdout to match.
 
 Handle the two sides differently, because only one of them is written to:
 
