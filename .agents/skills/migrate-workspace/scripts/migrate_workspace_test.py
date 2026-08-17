@@ -93,6 +93,12 @@ def test_resolve_path_command_follows_a_symlinked_root(tmp_path: Path) -> None:
     assert resolved == str(real.resolve())
     assert resolved != str(link)
 
+    # The named-variable form is what `list-agents` uses, so that the ls/find it
+    # appends run against the canonical path in the same round trip. It must both
+    # print the result and leave it in that variable.
+    named = migrate_workspace._resolve_path_command(str(link), "hd")
+    assert _run_shell(f'{named}; echo "$hd"').splitlines() == [str(real.resolve())] * 2
+
 
 def test_resolve_path_command_falls_back_to_the_original_when_unresolvable(
     tmp_path: Path,
