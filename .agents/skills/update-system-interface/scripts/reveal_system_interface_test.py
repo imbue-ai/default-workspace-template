@@ -664,6 +664,41 @@ def test_recovery_rebuilds_when_there_was_no_bundle_to_snapshot(tmp_path: Path) 
     assert len(runner.argvs_starting("npm", "run", "build")) == 2
 
 
+def test_a_recovery_rebuild_reinstalls_the_rolled_back_dependencies(
+    tmp_path: Path,
+) -> None:
+    # The one path that both compiles from source and rolls a manifest back.
+    # node_modules holds what the failed reveal's `npm ci` installed, while the
+    # restored tree holds the old lockfile, so building without refreshing them
+    # compiles the known-good sources against the wrong dependency tree. The
+    # trade that justifies skipping `npm ci` elsewhere does not apply here:
+    # there is no snapshotted bundle for it to endanger.
+    repo_root = tmp_path / "repo"
+    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/package-lock.json\n",
+        repo_root=repo_root,
+    )
+    # The reveal's build fails; the recovery build from known-good succeeds.
+    runner.respond(
+        ("npm", "run", "build"), [_Result(returncode=1, stderr="type error"), _Result()]
+    )
+
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner(), repo_root)
+
+    assert code == 2
+    assert _bundle_exists(repo_root)
+    # Everything after the rollback checkout is the recovery's, so this shows
+    # the refresh is the recovery's own and that it precedes its build.
+    rolled_back_at = next(
+        i for i, c in enumerate(runner.calls) if c[:3] == ["git", "checkout", _ROLLBACK]
+    )
+    recovery_npm = [
+        c[:3] for c in runner.calls[rolled_back_at:] if c[0] == "npm"
+    ]
+    assert recovery_npm == [["npm", "ci"], ["npm", "run", "build"]]
+
+
 def test_a_bundle_that_cannot_be_copied_aside_still_reveals(repo: Path) -> None:
     # The snapshot is a precaution. Refusing to reveal because the copy failed
     # would make a full or read-only disk fatal to a change that is otherwise

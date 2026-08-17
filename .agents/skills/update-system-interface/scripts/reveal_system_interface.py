@@ -903,14 +903,17 @@ def _recover_running_state(
     failed once. A rebuild is only attempted when there is no snapshot, i.e. when
     there was no bundle to lose in the first place.
 
-    Known cost of skipping ``npm ci`` here: rolling back a *manifest* change
-    leaves ``node_modules`` holding the packages the failed reveal installed
-    while the restored tree holds the old lockfile. What is served is unaffected
-    (the restored bundle is already compiled), but the next reveal that touches
-    only frontend source builds against that skew, since no manifest changed for
-    it to notice. Re-running ``npm ci`` to avoid this is the worse trade: it is
-    the destructive step the snapshot exists to survive, and it would put the
-    recovery back at the mercy of the build environment that just failed.
+    ``npm ci`` runs here only on the rebuild branch, and only for a manifest
+    change. Restoring a snapshot needs no dependencies at all, so refusing to run
+    the destructive step there is what lets a broken build environment be
+    survived -- at the known cost that rolling back a *manifest* change leaves
+    ``node_modules`` holding the packages the failed reveal installed while the
+    restored tree holds the old lockfile. What is served is unaffected (the
+    restored bundle is already compiled), but the next reveal that touches only
+    frontend source builds against that skew, since no manifest changed for it to
+    notice. The rebuild branch has no such trade to make: it is already going to
+    compile from source, so it needs ``node_modules`` to match the restored
+    lockfile, and there is no bundle for ``npm ci`` to endanger.
 
     Unlike :func:`_apply_reveal`, nothing escapes here -- this is the last line
     of defense, so a failed step (a command that exits non-zero, or a filesystem
@@ -918,15 +921,21 @@ def _recover_running_state(
     never propagate: the rollback commit has already landed by this point, and
     the exit code is all the caller has to go on."""
     try:
-        # Only the backend's dependencies are refreshed here. ``npm ci`` is
-        # deliberately skipped: it deletes node_modules before installing, and
-        # the restored bundle is already-compiled output that needs neither.
         if changes.backend_manifest:
             _reinstall_backend_tool(repo_root, runner)
         if changes.frontend:
             if saved_bundle is not None:
+                # Already-compiled output: it needs neither node_modules nor a
+                # registry, so ``npm ci`` is skipped rather than run.
                 restore_bundle(saved_bundle, repo_root)
             else:
+                # Compiling from source, so node_modules has to match the
+                # restored lockfile -- it currently holds whatever the failed
+                # reveal installed.
+                if changes.frontend_manifest:
+                    _run_checked(
+                        runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci"
+                    )
                 _run_checked(
                     runner,
                     ["npm", "run", "build"],
