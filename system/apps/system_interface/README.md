@@ -62,16 +62,18 @@ python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.p
 It classifies what changed and does only what is needed: refreshes dependencies
 if a manifest changed (`npm ci` / `uv tool install -e system/apps/system_interface
 --reinstall`), rebuilds the gitignored `static/` bundle (frontend), and/or
-restarts the services agent so the editable backend re-imports the merged `.py`
-(backend), then asks every open view of the workspace to reload --
-unconditionally, since a backend-only change leaves the open page rendering what
-it had already fetched. For a backend change it pre-flights the merged code on a
-throwaway port before touching the live service, then polls the loopback
-endpoint to confirm health. If anything fails, it restores the tree to
-`--rollback-to` as a forward revert commit, restores the bundle, restarts only
-if the failed reveal had already restarted the service, and re-confirms the UI
-is healthy -- so the served interface can never be left broken. The exit code reports the outcome (`0` revealed, `2` rolled back,
-`3` emergency, `1` precondition error).
+pre-flights the merged code on a throwaway port before restarting the services
+agent so the editable backend re-imports the merged `.py` (backend). It then
+polls the loopback endpoint to confirm health and checks that the frontend
+really serves, and only after those does it ask every open view of the workspace
+to reload -- unconditionally, since a backend-only change leaves the open page
+rendering what it had already fetched, but last, so a reveal that regressed the
+frontend rolls back instead of asking every open view to reload into it. If
+anything fails, it restores the tree to `--rollback-to` as a forward revert
+commit, restores the bundle, restarts only if the failed reveal had already
+restarted the service, and re-confirms the UI is healthy -- so the served
+interface can never be left broken. The exit code reports the outcome (`0`
+revealed, `2` rolled back, `3` emergency, `1` precondition error).
 
 Two properties are load-bearing there. It **snapshots `static/` before anything
 destructive runs**, because both steps delete before they produce (`npm ci`
