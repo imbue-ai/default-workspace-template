@@ -131,9 +131,9 @@ ssh -i /tmp/mind_key -p <port> <user>@<host> \
 **Send it through `with_agent_env.sh`.** sshd builds a fresh environment per
 session, so a bare `ssh <host> 'uv run host-backup-now'` has no
 `MNGR_AGENT_STATE_DIR` or `MNGR_HOST_DIR` and cannot locate the events log to
-wait on -- it exits 2 immediately having printed nothing, which reads exactly
-like a broken source. The wrapper rebuilds the agent environment from the files
-mngr maintains and execs from the repo root (so it replaces the `cd` too).
+wait on -- it exits 2 at once, saying on stderr that it cannot locate the events
+log and leaving stdout empty. The wrapper rebuilds the agent environment from the
+files mngr maintains and execs from the repo root (so it replaces the `cd` too).
 
 **Probe for it; do not hardcode one path.** This command runs on the *source*,
 so what matters is where that source's generation keeps the wrapper -- and it has
