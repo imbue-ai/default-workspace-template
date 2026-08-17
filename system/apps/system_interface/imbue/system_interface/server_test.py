@@ -132,9 +132,15 @@ def test_index_offers_a_rebuild_when_the_bundle_is_missing(tmp_path: Path) -> No
     """
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
+    # Both directories are the test's own, so what is asserted follows from the
+    # setup rather than from this checkout happening to carry frontend sources.
+    frontend_dir = tmp_path / "frontend"
+    frontend_dir.mkdir()
+    (frontend_dir / "package.json").write_text("{}")
+    service = FrontendBuildService(static_directory=empty_dir, frontend_directory=frontend_dir)
 
     with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
+        test_client = create_application(build_test_state(frontend_build_service=service)).test_client()
         response = test_client.get("/")
 
     assert response.status_code == 200
