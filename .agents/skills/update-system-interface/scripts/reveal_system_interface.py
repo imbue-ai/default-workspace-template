@@ -1042,8 +1042,9 @@ def _recover_running_state(
                 restore_bundle(saved_bundle, repo_root)
             else:
                 # Compiling from source, so node_modules has to match the
-                # restored lockfile -- it currently holds whatever the failed
-                # reveal installed.
+                # restored lockfile, and right now it holds whatever the failed
+                # reveal left it as -- the packages it installed, or nothing at
+                # all when its own ``npm ci`` deleted them and then failed.
                 if changes.frontend_manifest:
                     _run_checked(
                         runner,
