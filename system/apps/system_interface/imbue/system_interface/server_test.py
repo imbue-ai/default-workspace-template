@@ -139,6 +139,10 @@ def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) ->
 
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "false"
+    # The page re-requests itself, which is the only thing that returns an open
+    # tab to the interface once something else restores the bundle -- nothing on
+    # the page can produce one, and nothing notifies it.
+    assert 'http-equiv="refresh"' in response.text
 
 
 def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path) -> None:

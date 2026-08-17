@@ -349,9 +349,10 @@ def _favicon() -> Response:
 
 def _serve_asset(filename: str) -> Response:
     assets_directory = STATIC_DIRECTORY / "assets"
-    # A missing asset is a plain 404, as for the favicon above. It must never
-    # reach the SPA catch-all, which would answer with index.html as text/html
-    # and leave the browser refusing the module script on a blank page.
+    # A missing asset is a plain 404, as for the favicon above, rather than the
+    # HTML error page ``send_from_directory`` would raise. What keeps an asset
+    # request off the SPA catch-all is the route itself, registered
+    # unconditionally in ``create_application``; nothing here decides that.
     if not (assets_directory / filename).is_file():
         return Response(status=404)
     return send_from_directory(assets_directory, filename)
