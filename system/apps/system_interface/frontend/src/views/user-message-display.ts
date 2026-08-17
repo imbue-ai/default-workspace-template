@@ -51,11 +51,11 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       const content = event.content || "";
       // The trailing "See attachment here: <markdown>" block is delivered to the
       // agent and kept visible in the bubble, where it renders as markdown so its
-      // images show inline and other files as download links. Classification runs
-      // on the text before the block so an appended attachment never changes the
-      // kind.
+      // images show inline and other files as download links. The backend classifier
+      // strips the block before its detectors run (harnesses/message_display.py),
+      // so an appended attachment never changes the kind here either.
       const { visibleText, attachmentBlock } = parseMessageAttachments(content);
-      const cls = classifyUserMessage(visibleText, event.is_meta);
+      const cls = classifyUserMessage(event);
 
       if (cls.kind === UserMessageKind.SystemChip) {
         return renderSystemChip(cls.label ?? "System message", cls.body);
@@ -80,9 +80,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
  * prompt gets the user-bubble class.
  */
 export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
-  const content = event.content || "";
-  const { visibleText } = parseMessageAttachments(content);
-  const kind = classifyUserMessage(visibleText, event.is_meta).kind;
+  const kind = classifyUserMessage(event).kind;
   // A kind that does not render on the User rail (hidden /welcome + is_meta, or a
   // skill expansion relocated to the assistant rail) produces no row here.
   if (KIND_SPEC[kind].rail !== Rail.User) {

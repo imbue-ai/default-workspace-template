@@ -48,9 +48,14 @@ git config --global --add safe.directory "$REPO_ROOT"
 # registered (providers.modal.is_enabled=false).
 uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
 uv tool install -e "$REPO_ROOT/system/apps/system_interface" \
-    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_claude"
+    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_claude" \
+    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_codex" \
+    --with-editable "$REPO_ROOT/system/vendor/mngr/libs/mngr_pi_coding"
+
 mngr plugin add \
     --path system/vendor/mngr/libs/mngr_claude \
+    --path system/vendor/mngr/libs/mngr_codex \
+    --path system/vendor/mngr/libs/mngr_pi_coding \
     --path system/vendor/mngr/libs/mngr_wait
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
