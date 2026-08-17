@@ -31,6 +31,17 @@ variable, since each bash invocation starts a fresh shell). If the worktree has 
 `.venv`, `uv sync --all-packages` once. Ensure the ref is present:
 
 ```bash
+# Heal a shallow-history workspace (created from a pool host baked with a
+# --depth 1 clone) before fetching: complete the history from the public
+# upstream so `git log` / merge archaeology work. Your worktree shares the
+# main repo's object database and its repo-wide shallow marker (in the git
+# COMMON dir -- hence `--git-common-dir`), so this heals the whole workspace,
+# and it runs from the target version's copy of this guide, so the heal
+# applies on the first update into the release that shipped it. The guard
+# keeps it a no-op on healthy repos (`--unshallow` errors when not shallow).
+if [ -f "$(git rev-parse --git-common-dir)/shallow" ]; then
+    git fetch --unshallow upstream
+fi
 git fetch upstream --tags
 BASE=$(git merge-base HEAD "$TARGET_REF")
 ```

@@ -77,6 +77,14 @@ jobs:
           cache: 'npm'
           cache-dependency-path: system/apps/system_interface/frontend/package-lock.json
 
+      # uv sync silently UPDATES a stale lock rather than failing, so without
+      # this gate a pyproject change merged without `uv lock` passes CI while
+      # shipping a lockfile that breaks every `uv sync --frozen` build path
+      # (build_workspace.sh, install_dependencies.sh). That is exactly how the
+      # original minds-v0.3.16 tag shipped with the mngr CLI broken at import.
+      - name: Check uv.lock matches pyproject
+        run: uv lock --check
+
       - name: Install Python dependencies
         run: uv sync --all-packages
 

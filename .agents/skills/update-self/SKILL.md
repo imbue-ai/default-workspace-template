@@ -80,6 +80,17 @@ import tomllib
 with open('system/config/parent.toml', 'rb') as f:
     print(tomllib.load(f)['url'])
 ")"
+# Heal a shallow-history workspace before fetching. Workspaces created from a
+# pool host baked before the full-history bake fix carry a `--depth 1` clone:
+# `git log` dead-ends at a parentless graft commit, `git describe` fails, and
+# "what changed since the fork point" is unanswerable. The upstream template is
+# public, so completing the history is one fetch; the guard keeps this a no-op
+# everywhere else (`--unshallow` errors on a repo that is not shallow).
+# `--git-common-dir` (not `--git-dir`) because the shallow marker is repo-wide
+# state that lives in the common dir, which is what a worktree checkout shares.
+if [ -f "$(git rev-parse --git-common-dir)/shallow" ]; then
+    git fetch --unshallow upstream
+fi
 git fetch upstream --tags
 
 python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
@@ -271,13 +282,22 @@ tk start <ticket-id>
 ```
 
 Write the task file. Use the two-heredoc form the other worker skills use: an
-**unquoted** frontmatter block so `$REF` expands, then a **quoted** body so its
-backticks stay literal:
+**unquoted** frontmatter block so `$MNGR_AGENT_NAME` and `$REF` expand, then a
+**quoted** body so its backticks stay literal.
+
+Unlike every other worker skill, this template DOES set `lead_agent`, and the
+line must stay: this SKILL.md is executed cross-version -- an older workspace's
+lead follows this staged prose (via the `differs` branch of §2a) but launches
+with its *own* `launch-task/create_worker.py`, which may predate launch-time
+`lead_agent` stamping. Under a current launcher the line is harmless (launch
+overwrites it from the environment); under an old launcher it is the only thing
+that gives the worker a report address.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
+lead_agent: $MNGR_AGENT_NAME
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---

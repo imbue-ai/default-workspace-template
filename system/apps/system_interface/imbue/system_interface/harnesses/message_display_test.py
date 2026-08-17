@@ -1,0 +1,181 @@
+"""Tests for the backend user-message render classifier.
+
+Ported from the frontend's ``message-classification.test.ts`` -- the decision moved
+backend-side, and these cases pin the exact same precedence (explicit detectors beat
+``is_meta``; the compaction chip is keyed off its flag, not its text).
+"""
+
+from imbue.system_interface.harnesses.events import DisplayKind
+from imbue.system_interface.harnesses.message_display import BROWSER_FLEET_TAG
+from imbue.system_interface.harnesses.message_display import classify_user_message
+from imbue.system_interface.harnesses.message_display import is_non_turn_tail
+
+
+def test_ordinary_human_prompt_gets_no_decision() -> None:
+    assert classify_user_message("please rebase onto main") is None
+
+
+def test_stop_hook_feedback_is_a_chip() -> None:
+    decision = classify_user_message("Stop hook feedback:\nlint failed, fix it")
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP
+    assert decision.display_label == "Stop hook feedback"
+
+
+def test_browser_fleet_nudge_is_a_chip_with_the_sentinel_stripped() -> None:
+    inner = "Browser foo-1 was handed back to you. Re-run `state foo-1`."
+    decision = classify_user_message(f"<{BROWSER_FLEET_TAG}>{inner}</{BROWSER_FLEET_TAG}>")
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP
+    assert decision.display_label == "Browser fleet"
+    assert decision.display_body == inner
+
+
+def test_bare_task_notification_is_a_chip() -> None:
+    decision = classify_user_message("<task-notification>\n<status>completed</status>\n</task-notification>")
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP
+    assert decision.display_label == "Background task"
+
+
+def test_task_notification_behind_a_system_preamble_is_a_chip() -> None:
+    decision = classify_user_message(
+        "[SYSTEM NOTIFICATION - NOT USER INPUT]\nblah\n<task-notification>x</task-notification>"
+    )
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP
+    assert decision.display_label == "Background task"
+
+
+def test_skill_expansion_lifts_the_skill_name_as_the_label() -> None:
+    decision = classify_user_message(
+        "Base directory for this skill: /home/.claude/skills/deep-research/\n\n# deep-research"
+    )
+    assert decision is not None
+    assert decision.display is DisplayKind.SKILL_EXPANSION
+    assert decision.display_label == "deep-research"
+
+
+def test_seeded_welcome_is_hidden() -> None:
+    decision = classify_user_message("/welcome")
+    assert decision is not None
+    assert decision.display is DisplayKind.HIDDEN
+
+
+def test_is_meta_hides_a_framework_message() -> None:
+    note = (
+        "[Image: original 1800x2800, displayed at 1286x2000. Multiply coordinates by 1.40 to map to original image.]"
+    )
+    assert classify_user_message(note) is None
+    decision = classify_user_message(note, is_meta=True)
+    assert decision is not None
+    assert decision.display is DisplayKind.HIDDEN
+
+
+def test_resume_continuation_is_hidden_via_is_meta_not_a_bespoke_matcher() -> None:
+    decision = classify_user_message("Continue from where you left off.", is_meta=True)
+    assert decision is not None
+    assert decision.display is DisplayKind.HIDDEN
+    assert classify_user_message("Continue from where you left off.") is None
+
+
+def test_compaction_summary_is_a_labelled_chip_keyed_off_its_flag() -> None:
+    summary = "This session is being continued from a previous conversation that ran out of context. ..."
+    assert classify_user_message(summary) is None
+    decision = classify_user_message(summary, is_compact_summary=True)
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP
+    assert decision.display_label == "Summary of earlier conversation"
+
+
+def test_explicit_detector_wins_over_is_meta() -> None:
+    """Stop-hook feedback is is_meta in the transcript yet deliberately surfaces as a chip."""
+    decision = classify_user_message("Stop hook feedback:\nlint failed", is_meta=True)
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP
+    assert decision.display_label == "Stop hook feedback"
+
+
+def test_a_human_message_mentioning_a_marker_is_not_misread() -> None:
+    assert classify_user_message("what does Stop hook feedback: mean?") is None
+    assert classify_user_message("tell me about <task-notification> handling") is None
+    assert classify_user_message("can you grant me access to slack?") is None
+    assert classify_user_message("Your permission request looks good") is None
+
+
+def test_model_bar_commands_are_hidden() -> None:
+    for command in (
+        "/model opus[1m]",
+        "/model sonnet",
+        "/effort xhigh",
+        "/effort medium",
+        "/fast on",
+        "/fast off",
+        "/fast",
+    ):
+        decision = classify_user_message(command)
+        assert decision is not None, command
+        assert decision.display is DisplayKind.HIDDEN, command
+
+
+def test_model_bar_stdout_confirmations_are_hidden() -> None:
+    for line in (
+        "<local-command-stdout>Set model to Opus 4.8 (1M context)</local-command-stdout>",
+        "<local-command-stdout>Set effort level to xhigh (saved as your default)</local-command-stdout>",
+        "<local-command-stdout>Fast mode ON</local-command-stdout>",
+    ):
+        decision = classify_user_message(line)
+        assert decision is not None, line
+        assert decision.display is DisplayKind.HIDDEN, line
+
+
+def test_look_alike_commands_and_unrelated_stdout_are_untouched() -> None:
+    assert classify_user_message("/models") is None
+    assert classify_user_message("model the data for me") is None
+    assert classify_user_message("<local-command-stdout>Total cost: $1.23</local-command-stdout>") is None
+
+
+def test_permission_resolutions_carry_the_verdict() -> None:
+    cases = {
+        "Your permission request for GitHub was granted (this decision has been saved).": "granted",
+        "Your read-only file-sharing permission request for '/tmp/x' was denied.": "denied",
+        "Your permission request for Slack could not be completed because the user's sign-in flow did not finish.": "error",
+        # The workspace handler's phrasing puts 'for' AFTER the verdict, and the accounts
+        # handler says 'request to list ...' with no 'permission' at all. Both must still
+        # resolve, or they poison the order-based correlation queue and every later
+        # verdict lands on the wrong card.
+        "Your cross-workspace permission request was granted (minds-workspaces-backups-export) for workspace old-mind.": "granted",
+        "Your cross-workspace permission request was denied.": "denied",
+        "Your request to list this device's signed-in accounts was granted.": "granted",
+        "Your request to list this device's signed-in accounts was denied.": "denied",
+    }
+    for content, verdict in cases.items():
+        decision = classify_user_message(content)
+        assert decision is not None, content
+        assert decision.display is DisplayKind.PERMISSION_RESOLUTION
+        assert decision.resolution == verdict
+
+
+def test_apply_to_stamps_only_present_fields() -> None:
+    event: dict[str, object] = {"type": "user_message"}
+    decision = classify_user_message("/welcome")
+    assert decision is not None
+    decision.apply_to(event)
+    assert event["display"] == "hidden"
+    assert "display_label" not in event
+    assert "display_body" not in event
+    assert "resolution" not in event
+
+
+def test_is_non_turn_tail_matches_model_bar_traffic_and_is_meta() -> None:
+    """The composer bar's slash commands, their confirmations, and framework injections are
+    not turns; a transcript ending on one must not pin the indicator on Thinking."""
+    assert is_non_turn_tail("/model sonnet") is True
+    assert is_non_turn_tail("/effort xhigh") is True
+    assert is_non_turn_tail("/fast on") is True
+    assert is_non_turn_tail("<local-command-stdout>Set effort level to xhigh</local-command-stdout>") is True
+    assert is_non_turn_tail("resume marker", is_meta=True) is True
+    assert is_non_turn_tail("a real question") is False
+    # Awaiting-a-reply injections are NOT non-turn: the agent responds to these.
+    assert is_non_turn_tail("/welcome") is False
+    assert is_non_turn_tail("<task-notification>x</task-notification>") is False

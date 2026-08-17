@@ -152,22 +152,28 @@ def test_build_create_chat_command_includes_welcome_and_template() -> None:
         "my-workspace", {"workspace": "my-workspace"}, True
     )
     assert cmd[:3] == ["mngr", "create", "my-workspace"]
-    assert "--template" in cmd
-    assert cmd[cmd.index("--template") + 1] == "chat"
+    # The harness rides `--type claude`; the role rides the lone `--template`.
+    assert cmd[cmd.index("--type") + 1] == "claude"
+    templates = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--template"]
+    assert templates == ["chat"]
     assert "--message" in cmd
     assert cmd[cmd.index("--message") + 1] == "/welcome"
     assert "--no-connect" in cmd
 
 
-def test_build_create_chat_command_includes_transfer_none() -> None:
-    """`--transfer none` makes mngr skip the per-agent worktree, so the chat
-    agent reuses the services agent's work_dir. Without it, mngr collides
-    with the services agent's existing `mngr/<host>` branch."""
+def test_build_create_chat_command_leaves_transfer_to_the_chat_role() -> None:
+    """The chat role template owns `transfer = none`, so the create must not pass
+    it on the command line -- a CLI value would win over the template and the two
+    could silently drift apart.
+
+    It matters that the value ends up `none`: it makes mngr skip the per-agent
+    worktree so the chat reuses the services agent's work_dir. Without it, mngr
+    collides with the services agent's existing `mngr/<host>` branch.
+    """
     cmd = _build_create_chat_command(
         "my-workspace", {"workspace": "my-workspace"}, True
     )
-    assert "--transfer" in cmd
-    assert cmd[cmd.index("--transfer") + 1] == "none"
+    assert "--transfer" not in cmd
 
 
 def test_build_create_chat_command_carries_no_workspace_label() -> None:
