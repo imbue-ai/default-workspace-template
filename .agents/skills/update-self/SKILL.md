@@ -80,6 +80,17 @@ import tomllib
 with open('system/config/parent.toml', 'rb') as f:
     print(tomllib.load(f)['url'])
 ")"
+# Heal a shallow-history workspace before fetching. Workspaces created from a
+# pool host baked before the full-history bake fix carry a `--depth 1` clone:
+# `git log` dead-ends at a parentless graft commit, `git describe` fails, and
+# "what changed since the fork point" is unanswerable. The upstream template is
+# public, so completing the history is one fetch; the guard keeps this a no-op
+# everywhere else (`--unshallow` errors on a repo that is not shallow).
+# `--git-common-dir` (not `--git-dir`) because the shallow marker is repo-wide
+# state that lives in the common dir, which is what a worktree checkout shares.
+if [ -f "$(git rev-parse --git-common-dir)/shallow" ]; then
+    git fetch --unshallow upstream
+fi
 git fetch upstream --tags
 
 python3 .agents/skills/update-self/scripts/update_self.py resolve-target --local-tags \
