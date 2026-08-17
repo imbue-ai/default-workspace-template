@@ -1053,3 +1053,25 @@ def test_parse_version_orders_prereleases_semver_style() -> None:
     # A branch or bare commit has no version at all, and stays uncomparable.
     assert update_self.parse_version("main") is None
     assert update_self.parse_version("abc1234") is None
+
+
+# --- SKILL.md task-file template cross-version contract --------------------
+
+
+def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> None:
+    """The SKILL.md task-file heredoc must keep `lead_agent` and `finish_report_path`.
+
+    This SKILL.md is executed cross-version: an OLDER workspace's lead follows
+    this (staged, target-version) prose but launches with its own, possibly
+    pre-lead-agent-stamping `create_worker.py` -- so the template itself is the
+    only thing that gives the worker a report address there. Removing either
+    line reintroduces the v0.3.11 -> v0.3.16 failure where the worker finished
+    but could never deliver its report and the lead waited out the full
+    timeout in silence.
+    """
+    skill_md = (_MODULE_PATH.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+    start = skill_md.index("cat << FRONTMATTER_EOF")
+    end = skill_md.index("FRONTMATTER_EOF", start + len("cat << FRONTMATTER_EOF"))
+    frontmatter_template = skill_md[start:end]
+    assert "lead_agent: $MNGR_AGENT_NAME" in frontmatter_template
+    assert "finish_report_path: " in frontmatter_template
