@@ -2419,6 +2419,27 @@ def _resolve_project_id_for_layout_arg(layout_dir: Path, requested: str) -> str 
     return None
 
 
+def _layout_views_entry(
+    layout_dir: Path,
+    clients_by_view: dict[str, list[str]],
+    view_id: str,
+    name: str,
+    members: list[str],
+    is_everything: bool,
+) -> dict[str, Any]:
+    """One view as the ``views`` op reports it: identity, members, per-device
+    content presence, and which connected clients have it in front."""
+    return {
+        "id": view_id,
+        "name": name,
+        "is_everything": is_everything,
+        "members": members,
+        "has_desktop_content": projects.project_content_path(layout_dir, view_id).exists(),
+        "has_mobile_content": projects.project_content_path(layout_dir, view_id, "mobile").exists(),
+        "clients_on": clients_by_view.get(view_id, []),
+    }
+
+
 def _layout_op_display_name(layout_dir: Path, slug: str) -> str:
     """The human-readable name of the view ``slug`` resolved to.
 
@@ -2578,25 +2599,15 @@ def _layout_broadcast_endpoint() -> Response:
         clients_by_view: dict[str, list[str]] = {}
         for client_info in get_state().broadcaster.get_connected_client_infos():
             clients_by_view.setdefault(client_info["active_layout_slug"], []).append(client_info["client_id"])
-
-        def _view_entry(view_id: str, name: str, members: list[str], is_everything: bool) -> dict[str, Any]:
-            return {
-                "id": view_id,
-                "name": name,
-                "is_everything": is_everything,
-                "members": members,
-                "has_desktop_content": projects.project_content_path(layout_dir, view_id).exists(),
-                "has_mobile_content": projects.project_content_path(layout_dir, view_id, "mobile").exists(),
-                "clients_on": clients_by_view.get(view_id, []),
-            }
-
         views = [
-            _view_entry(info.project_id, info.name, list(info.members), False)
+            _layout_views_entry(layout_dir, clients_by_view, info.project_id, info.name, list(info.members), False)
             for info in projects.list_projects(layout_dir)
         ]
         # Everything has no member list: it shows whatever exists.
         views.append(
-            _view_entry(projects.EVERYTHING_VIEW_ID, projects.EVERYTHING_VIEW_NAME, [], True)
+            _layout_views_entry(
+                layout_dir, clients_by_view, projects.EVERYTHING_VIEW_ID, projects.EVERYTHING_VIEW_NAME, [], True
+            )
         )
         last_active_id = projects.get_last_active_id(layout_dir)
         logger.info("layout op={} agent_id={} views={}", op, agent_id, len(views))
