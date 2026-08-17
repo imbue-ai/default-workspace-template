@@ -1377,9 +1377,6 @@ class AgentManager:
         connection = CodexLiveConnection.build(
             state_dir,
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
-            # The dot is tracker-driven now (mngr RUNNING + transcript), so the ledger's activity
-            # callback is inert -- kept only so the ledger's reducer signature is unchanged.
-            on_activity=lambda activity: None,
             on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),
             model_state_path=get_model_state_path(HarnessType.CODEX, state_dir),
         )
@@ -1527,28 +1524,6 @@ class AgentManager:
         """
         self._ensure_codex_connection(agent_id)
         return self.get_codex_ledger(agent_id)
-
-    def set_codex_activity(self, agent_id: str, activity: ActivityState) -> None:
-        """Apply an activity state pushed by a codex agent's ledger, broadcasting on a real change.
-
-        This is codex's activity path (contract A6: RUNNING until ``turn/completed``), replacing
-        the transcript-derived tracker for codex. No-op for an untracked agent (a callback racing
-        teardown) or when the state did not change.
-        """
-        with self._lock:
-            if agent_id not in self._activity_tracked_agents:
-                return
-            agent_state = self._agents.get(agent_id)
-            if agent_state is None:
-                return
-            old_state = self._activity_state_by_agent.get(agent_id)
-            if old_state == activity and agent_state.activity_state == activity.value:
-                return
-            self._activity_state_by_agent[agent_id] = activity
-            self._agents[agent_id] = agent_state.model_copy_update(
-                to_update(agent_state.field_ref().activity_state, activity)
-            )
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
 
     def register_queue_idle_handler(self, agent_id: str, handler: Callable[[], list[dict[str, Any]]]) -> None:
         """Register the agent watcher's working->IDLE queue backstop.

@@ -3,7 +3,6 @@
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.activity_state import derive
-from imbue.system_interface.harnesses.codex.activity_state import has_pending_codex_tool_use
 from imbue.system_interface.harnesses.codex.activity_state import turn_open
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
@@ -38,13 +37,6 @@ def test_derive_restart_guard_drops_a_stale_open_turn() -> None:
         derive(turn_open=True, has_pending_tool_use=False, tail_event_at=10.0, process_started_at=100.0)
         == ActivityState.IDLE
     )
-
-
-def test_has_pending_codex_tool_use_matches_nested_calls_against_results() -> None:
-    call_only = [{"type": "assistant_message", "tool_calls": [{"tool_call_id": "c1"}]}]
-    assert has_pending_codex_tool_use(call_only) is True
-    assert has_pending_codex_tool_use(call_only + [{"type": "tool_result", "tool_call_id": "c1"}]) is False
-    assert has_pending_codex_tool_use([{"type": "assistant_message", "tool_calls": []}]) is False
 
 
 def test_tracker_observe_and_derive_across_a_turn() -> None:

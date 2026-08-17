@@ -45,7 +45,7 @@ class HarnessActivityTracker(ABC):
     # Filename of the marker mngr touches on every startup/resume for this
     # harness. Its mtime bounds transcript staleness, so it MUST match what the
     # harness's mngr plugin writes (mngr_claude -> claude_process_started,
-    # mngr_codex -> codex_process_started).
+    # mngr_codex -> codex_process_started, mngr_pi_coding -> pi_process_started).
     marker_filename: ClassVar[str]
 
     # Signals every harness caches. Declared at class level so a `build()`

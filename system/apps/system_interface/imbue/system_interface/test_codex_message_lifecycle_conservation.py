@@ -73,13 +73,9 @@ class _Sink:
 
     def __init__(self) -> None:
         self.queue_calls: list[list[dict[str, str]]] = []
-        self.activity_calls: list[ActivityState] = []
 
     def on_queue(self, snapshot: list[dict[str, str]]) -> None:
         self.queue_calls.append(snapshot)
-
-    def on_activity(self, state: ActivityState) -> None:
-        self.activity_calls.append(state)
 
 
 class _CodexWorld:
@@ -129,7 +125,6 @@ class _CodexWorld:
         self.ledger = CodexMessageLedger.build(
             self.client,
             on_queue_snapshot=self.sink.on_queue,
-            on_activity=self.sink.on_activity,
             mint_client_id=self._mint,
             now=lambda: "2026-08-11T00:00:00Z",
         )
@@ -405,9 +400,9 @@ class _CodexWorld:
         )
 
         # The dot follows the turn, not token generation (A6): lit iff a turn is running.
-        dot_idle = self.ledger.activity_state() == ActivityState.IDLE
+        dot_idle = self.ledger.turn_activity() == ActivityState.IDLE
         assert dot_idle == self.is_idle, (
-            f"activity dot {self.ledger.activity_state()} disagrees with turn state (idle={self.is_idle}) ({context})\n{note}"
+            f"activity dot {self.ledger.turn_activity()} disagrees with turn state (idle={self.is_idle}) ({context})\n{note}"
         )
 
 

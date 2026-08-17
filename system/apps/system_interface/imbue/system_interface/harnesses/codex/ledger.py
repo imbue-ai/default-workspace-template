@@ -258,7 +258,6 @@ class CodexMessageLedger(MutableModel):
     status_type: str | None = None
     mint_client_id: Callable[[], str] = _default_mint
     on_queue_snapshot: Callable[[list[dict[str, Any]]], None] | None = None
-    on_activity: Callable[[ActivityState], None] | None = None
     # Emits ONE committed user-turn event (the ``build_user_turn_event`` shape) to the transcript
     # stream. The ledger owns live user-turns (Fix 1); the rollout file reader suppresses them live.
     # ``None`` disables emission -- used by tests that only assert queue/state transitions.
@@ -267,9 +266,8 @@ class CodexMessageLedger(MutableModel):
     # ``None`` disables the mirror -- used by tests that do not exercise the model bar.
     model_state_path: Path | None = None
     now: Callable[[], str] = _iso_now
-    # The last queue snapshot / activity actually pushed, so a callback fires only on a real change.
+    # The last queue snapshot actually pushed, so the callback fires only on a real change.
     _last_queue_snapshot: list[dict[str, Any]] = []
-    _last_activity: ActivityState | None = None
     # User-turn events built during the current notification, flushed AFTER the queue snapshot so a
     # committed steer's chip-removal is broadcast before its transcript turn (A3b ordered handoff).
     _pending_user_turns: list[dict[str, Any]] = []
@@ -280,7 +278,6 @@ class CodexMessageLedger(MutableModel):
         client: CodexAppServerClient,
         *,
         on_queue_snapshot: Callable[[list[dict[str, Any]]], None] | None = None,
-        on_activity: Callable[[ActivityState], None] | None = None,
         on_user_turn: Callable[[dict[str, Any]], None] | None = None,
         model_state_path: Path | None = None,
         mint_client_id: Callable[[], str] = _default_mint,
@@ -291,13 +288,11 @@ class CodexMessageLedger(MutableModel):
             client=client,
             mint_client_id=mint_client_id,
             on_queue_snapshot=on_queue_snapshot,
-            on_activity=on_activity,
             on_user_turn=on_user_turn,
             model_state_path=model_state_path,
             now=now,
         )
         ledger._last_queue_snapshot = []
-        ledger._last_activity = None
         ledger._pending_user_turns = []
         client.add_notification_handler(ledger.handle_notification)
         return ledger
@@ -323,7 +318,6 @@ class CodexMessageLedger(MutableModel):
             logger.opt(exception=exc).info("codex ledger: submit failed for {}, returning to composer", cid)
             entry.state = MessageState.RETURNED
             self._emit_queue_if_changed()
-            self._emit_activity_if_changed()
             return cid
         entry.bound_turn_id = disposition.turn_id
         if disposition.kind == DispositionKind.STEERED:
@@ -336,7 +330,6 @@ class CodexMessageLedger(MutableModel):
         if self.interrupt_generation != generation and entry.state in _LIVE_STATES:
             entry.state = MessageState.RETURNED
         self._emit_queue_if_changed()
-        self._emit_activity_if_changed()
         return cid
 
     def _next_seq(self) -> int:
@@ -375,7 +368,6 @@ class CodexMessageLedger(MutableModel):
         # at once. Activity last (it does not participate in the handoff).
         self._emit_queue_if_changed()
         self._flush_user_turns()
-        self._emit_activity_if_changed()
 
     def _on_item_started(self, params: dict[str, Any]) -> None:
         item = params.get("item")
@@ -688,7 +680,6 @@ class CodexMessageLedger(MutableModel):
         # activity (the dot, now IDLE).
         self._emit_queue_if_changed()
         self._flush_user_turns()
-        self._emit_activity_if_changed()
         return self._take_returned_block()
 
     def _settle_live_to_returned(self, *, include_resend: bool = True) -> None:
@@ -776,7 +767,6 @@ class CodexMessageLedger(MutableModel):
         if not remaining:
             self._emit_queue_if_changed()
             self._flush_user_turns()
-            self._emit_activity_if_changed()
             return ShoulderTapResult(status="tapped")
 
         # (4) Re-send the rest as ONE combined turn; the members resolve to Delivered when it commits.
@@ -794,14 +784,12 @@ class CodexMessageLedger(MutableModel):
                 entry.combined_client_id = None
             self._emit_queue_if_changed()
             self._flush_user_turns()
-            self._emit_activity_if_changed()
             # Hand the parked text back to the composer via the response so it is never swallowed (A1a).
             return ShoulderTapResult(status="tapped", returned_block=self._take_returned_block())
         for entry in remaining:
             entry.bound_turn_id = disposition.turn_id
         self._emit_queue_if_changed()
         self._flush_user_turns()
-        self._emit_activity_if_changed()
         return ShoulderTapResult(status="tapped")
 
     # -- reads ------------------------------------------------------------------
@@ -874,12 +862,13 @@ class CodexMessageLedger(MutableModel):
             self.returned_handed_off.add(entry.client_id)
         return "\n".join(entry.text for entry in fresh)
 
-    def activity_state(self) -> ActivityState:
-        """The dot: TOOL_RUNNING / THINKING while a turn is in flight, IDLE otherwise (A6).
+    def turn_activity(self) -> ActivityState:
+        """The ledger's view of its OWN turn: TOOL_RUNNING / THINKING while one is in flight, IDLE otherwise.
 
-        RUNNING lasts until ``turn/completed`` (the client clears ``active_turn_id`` only on the
-        terminal turn frame), NOT when token-generation stops -- so the dot stays lit through the
-        turn's flush tail and clears the instant the turn is fully done.
+        NOT the agent's activity dot -- that is the transcript tracker's job (see
+        ``harnesses/codex/activity.py``). This is the turn-state invariant the conservation
+        tests assert the ledger against: open until ``turn/completed`` (the client clears
+        ``active_turn_id`` only on the terminal turn frame), not when token-generation stops.
         """
         if self.client.active_turn_id is None:
             return ActivityState.IDLE
@@ -934,11 +923,3 @@ class CodexMessageLedger(MutableModel):
         self._last_queue_snapshot = snapshot
         self.on_queue_snapshot(snapshot)
 
-    def _emit_activity_if_changed(self) -> None:
-        if self.on_activity is None:
-            return
-        state = self.activity_state()
-        if state == self._last_activity:
-            return
-        self._last_activity = state
-        self.on_activity(state)

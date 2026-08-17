@@ -82,11 +82,9 @@ def _wait_until(predicate: Any, timeout: float = 3.0) -> bool:
 def test_build_pumps_a_notification_into_the_ledger_and_stops(tmp_path: Path) -> None:
     transport = _LocalTransport()
     client = _bound_client(transport)
-    activity: list[ActivityState] = []
     connection = CodexLiveConnection.build(
         tmp_path,
         on_queue_snapshot=lambda snapshot: None,
-        on_activity=activity.append,
         on_user_turn=lambda event: None,
         model_state_path=tmp_path / "model.json",
         open_client=lambda _: client,
@@ -95,10 +93,9 @@ def test_build_pumps_a_notification_into_the_ledger_and_stops(tmp_path: Path) ->
     assert connection.is_alive
 
     # A turn opens: the reader dispatches it, the client tracks the active turn, and the ledger's
-    # activity callback fires THINKING (contract A6).
+    # turn view flips to THINKING (contract A6).
     transport.push({"jsonrpc": "2.0", "method": "turn/started", "params": {"turn": {"id": "t1"}}})
-    assert _wait_until(lambda: ActivityState.THINKING in activity)
-    assert connection.ledger.activity_state() == ActivityState.THINKING
+    assert _wait_until(lambda: connection.ledger.turn_activity() == ActivityState.THINKING)
 
     connection.stop()
     assert not connection.is_alive
@@ -122,7 +119,6 @@ def test_reader_carries_a_committed_user_message_through_to_delivered(tmp_path: 
     connection = CodexLiveConnection.build(
         tmp_path,
         on_queue_snapshot=lambda snapshot: None,
-        on_activity=lambda activity: None,
         on_user_turn=user_turns.append,
         model_state_path=tmp_path / "model.json",
         open_client=lambda _: client,
@@ -162,7 +158,6 @@ def test_build_returns_none_when_the_daemon_is_not_reachable(tmp_path: Path) -> 
     connection = CodexLiveConnection.build(
         tmp_path,
         on_queue_snapshot=lambda snapshot: None,
-        on_activity=lambda activity: None,
         on_user_turn=lambda event: None,
         model_state_path=tmp_path / "model.json",
         open_client=_boom,
@@ -176,7 +171,6 @@ def test_reader_marks_not_alive_when_the_transport_closes(tmp_path: Path) -> Non
     connection = CodexLiveConnection.build(
         tmp_path,
         on_queue_snapshot=lambda snapshot: None,
-        on_activity=lambda activity: None,
         on_user_turn=lambda event: None,
         model_state_path=tmp_path / "model.json",
         open_client=lambda _: client,
@@ -211,7 +205,6 @@ def test_build_caches_the_account_model_list(tmp_path: Path) -> None:
     connection = CodexLiveConnection.build(
         tmp_path,
         on_queue_snapshot=lambda snapshot: None,
-        on_activity=lambda activity: None,
         on_user_turn=lambda event: None,
         model_state_path=tmp_path / "model.json",
         open_client=lambda _: client,
@@ -234,7 +227,6 @@ def test_build_seeds_model_state_from_the_resume_thread_info(tmp_path: Path) -> 
     connection = CodexLiveConnection.build(
         tmp_path,
         on_queue_snapshot=lambda snapshot: None,
-        on_activity=lambda activity: None,
         on_user_turn=lambda event: None,
         model_state_path=state_path,
         open_client=lambda _: client,
