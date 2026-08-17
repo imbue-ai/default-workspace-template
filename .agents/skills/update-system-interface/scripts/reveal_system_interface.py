@@ -53,9 +53,26 @@ What it does, given the pre-merge revision (``--rollback-to``):
    untouched, so the UI never blips. Only then does the script exit -- reporting
    what happened via its exit code and stderr.
 
-Run via bare ``python3`` (standard library only), like ``forward_port.py`` and
+Run via bare ``python3`` (self-contained beyond the stdlib-only ``oom_priority``
+package, imported via a ``sys.path`` insert), like ``forward_port.py`` and
 ``reload_system_interface``'s predecessor -- it orchestrates the environment, so
 it must not depend on any particular venv being synced.
+
+Memory bands. Run from an agent's shell, this process and everything it spawns
+inherit ``AGENT_SUBPROCESS`` -- the most expendable band there is, above every
+chat and every agent. That is right for the build and wrong for this script: a
+shed build is an ordinary failure the rollback below absorbs, whereas shedding
+*this* process skips the rollback entirely, leaving a half-applied tree, an
+emptied bundle directory and the only surviving copy of the bundle orphaned in a
+temporary directory nobody knows the path of. So the process bands itself down
+to the system interface's own band -- it is that service's maintenance
+operation, it holds the only copy of what that service serves, and shedding it
+frees a few megabytes -- and bands its hungry children (``npm``, ``uv tool
+install``, the pre-flight boot) back up to ``AGENT_SUBPROCESS`` on the way out,
+so nothing it spawns inherits the protection meant for the orchestrator alone.
+This is a steer rather than a guarantee (earlyoom folds live memory in on top of
+the band), and it only covers earlyoom: a container stop or a kernel OOM kills
+this process whatever its band says.
 
 The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
 over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
@@ -122,6 +139,19 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
+
+sys.path.insert(
+    0,
+    str(
+        Path(__file__).resolve().parents[4]
+        / "system"
+        / "services"
+        / "oom_priority"
+        / "src"
+    ),
+)
+
+from oom_priority import bands
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
@@ -219,6 +249,22 @@ _PREFLIGHT_INTERVAL_SECONDS = 1.0
 # check, to roll back, to escalate -- that the reveal has to reach either way.
 _FRONTEND_PROBE_ATTEMPTS = 5
 _FRONTEND_PROBE_INTERVAL_SECONDS = 1.0
+
+# The band this process bands itself into (see the module docstring): the same
+# one the service it is maintaining runs in. Not a lower one -- the reveal is
+# worth exactly as much as what it is repairing, and the bands below it are the
+# two authority paths (owner-exec, the terminal) that are how anything gets
+# fixed once this has failed.
+_ORCHESTRATOR_BAND = bands.SERVICE_BANDS["system_interface"]
+
+# Tag into the most expendable band, then become the real command, for the
+# children that must NOT inherit the protection above. ``sh -c <script> sh
+# <argv...>`` puts ``argv`` in ``"$@"``, so ``exec`` replaces the shell with the
+# command rather than leaving one wrapping it -- which also keeps a terminate
+# aimed at the child itself (see :meth:`Spawned.terminate`).
+_EXPENDABLE_TAG_THEN_EXEC = (
+    bands.oom_tag_shell_prefix(bands.AGENT_SUBPROCESS) + 'exec "$@"'
+)
 
 
 class RevealError(Exception):
@@ -411,6 +457,32 @@ def classify_changes(paths: Sequence[str]) -> ChangeSet:
     )
 
 
+def as_expendable(argv: Sequence[str]) -> list[str]:
+    """Wrap ``argv`` so it runs in the most expendable band rather than this one.
+
+    For the steps that actually hold memory -- the npm commands, the editable
+    tool reinstall, the pre-flight boot. Losing one of those is a failure this
+    script recovers from; losing this script is not (see the module docstring),
+    so the protection it gives itself must not reach them by inheritance.
+    """
+    return ["sh", "-c", _EXPENDABLE_TAG_THEN_EXEC, "sh", *argv]
+
+
+def _protect_from_memory_shed() -> None:
+    """Band this process out of the agent-subprocess range it was launched in.
+
+    Best-effort by construction: ``bands.set_oom_score_adj`` reports a refusal
+    rather than raising, and a reveal that cannot be protected is still a reveal
+    worth running. Called from ``__main__`` rather than from :func:`main` so that
+    exercising the entry point in a test cannot re-band the test runner.
+    """
+    if not bands.set_oom_score_adj(os.getpid(), _ORCHESTRATOR_BAND):
+        sys.stderr.write(
+            "warning: could not lower this process's memory-shed priority; a shed "
+            "during the reveal would skip the rollback.\n"
+        )
+
+
 def _is_test_file(path: str) -> bool:
     name = path.rsplit("/", 1)[-1]
     return name.endswith("_test.py") or name.startswith("test_")
@@ -516,7 +588,9 @@ def _preflight_ok(
     env = dict(os.environ)
     env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
     env["SYSTEM_INTERFACE_PORT"] = str(port)
-    spawned = spawner.spawn([TOOL_NAME], cwd=str(repo_root / APP_DIR), env=env)
+    spawned = spawner.spawn(
+        as_expendable([TOOL_NAME]), cwd=str(repo_root / APP_DIR), env=env
+    )
     try:
         return wait_healthy(
             http,
@@ -740,7 +814,7 @@ def _reinstall_backend_tool(repo_root: Path, runner: Runner) -> None:
     """
     _run_checked(
         runner,
-        ["uv", "tool", "install", "-e", APP_DIR, "--reinstall"],
+        as_expendable(["uv", "tool", "install", "-e", APP_DIR, "--reinstall"]),
         repo_root,
         "uv tool install --reinstall",
     )
@@ -748,7 +822,9 @@ def _reinstall_backend_tool(repo_root: Path, runner: Runner) -> None:
 
 def _refresh_dependencies(changes: ChangeSet, repo_root: Path, runner: Runner) -> None:
     if changes.frontend_manifest:
-        _run_checked(runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci")
+        _run_checked(
+            runner, as_expendable(["npm", "ci"]), repo_root / FRONTEND_DIR, "npm ci"
+        )
     if changes.backend_manifest:
         _reinstall_backend_tool(repo_root, runner)
 
@@ -773,7 +849,10 @@ def _apply_reveal(
     _refresh_dependencies(changes, repo_root, runner)
     if changes.frontend:
         _run_checked(
-            runner, ["npm", "run", "build"], repo_root / FRONTEND_DIR, "npm run build"
+            runner,
+            as_expendable(["npm", "run", "build"]),
+            repo_root / FRONTEND_DIR,
+            "npm run build",
         )
         _assert_bundle_built(repo_root, live_service_restarted=False)
     if changes.backend:
@@ -939,11 +1018,14 @@ def _recover_running_state(
                 # reveal installed.
                 if changes.frontend_manifest:
                     _run_checked(
-                        runner, ["npm", "ci"], repo_root / FRONTEND_DIR, "npm ci"
+                        runner,
+                        as_expendable(["npm", "ci"]),
+                        repo_root / FRONTEND_DIR,
+                        "npm ci",
                     )
                 _run_checked(
                     runner,
-                    ["npm", "run", "build"],
+                    as_expendable(["npm", "run", "build"]),
                     repo_root / FRONTEND_DIR,
                     "npm run build",
                 )
@@ -1350,4 +1432,5 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    _protect_from_memory_shed()
     sys.exit(main())

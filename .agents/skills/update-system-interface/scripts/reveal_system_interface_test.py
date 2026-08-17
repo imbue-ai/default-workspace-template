@@ -90,6 +90,19 @@ def unbuilt_repo(tmp_path: Path) -> Path:
 _SNAPSHOT_GLOB = "system-interface-bundle-*"
 
 
+def _unwrap_expendable(argv: list[str]) -> list[str]:
+    """Strip the ``sh -c <oom tag> exec "$@"`` wrapper the hungry steps carry.
+
+    The orchestration tests are about *which command ran*, not which band it
+    ran in, so the recorders below present the command that was asked for.
+    That the wrapper is applied to the right steps -- and only those -- is
+    asserted on the raw argv in its own test.
+    """
+    if argv[:2] == ["sh", "-c"] and argv[3:4] == ["sh"]:
+        return argv[4:]
+    return argv
+
+
 @pytest.fixture(autouse=True)
 def reap_snapshots_left_for_the_operator() -> Iterator[None]:
     """Remove any bundle copy a test's reveal deliberately left behind.
@@ -128,6 +141,8 @@ class _RecordingRunner(reveal_mod.Runner):
     """
 
     calls: list[list[str]] = field(default_factory=list)
+    # The same calls before :func:`_unwrap_expendable`, for the band test.
+    raw_calls: list[list[str]] = field(default_factory=list)
     repo_root: Path | None = None
     # Set False to model a build that exits 0 after emptying its output but
     # before writing anything -- e.g. one killed part-way through.
@@ -138,7 +153,8 @@ class _RecordingRunner(reveal_mod.Runner):
         self._responses[prefix] = result
 
     def run(self, argv: Sequence[str], **kwargs) -> _Result:
-        argv_list = list(argv)
+        self.raw_calls.append(list(argv))
+        argv_list = _unwrap_expendable(list(argv))
         self.calls.append(argv_list)
         result = self._canned_result(argv_list)
         if argv_list[:3] == ["npm", "run", "build"] and self.repo_root is not None:
@@ -240,10 +256,12 @@ class _FakeSpawner(reveal_mod.Spawner):
     """Records the pre-flight throwaway boot ``reveal`` runs before a live restart."""
 
     spawns: list[list[str]] = field(default_factory=list)
+    raw_spawns: list[list[str]] = field(default_factory=list)
     last: _FakeSpawned | None = None
 
     def spawn(self, argv: Sequence[str], cwd: str, env: dict) -> _FakeSpawned:
-        self.spawns.append(list(argv))
+        self.raw_spawns.append(list(argv))
+        self.spawns.append(_unwrap_expendable(list(argv)))
         self.last = _FakeSpawned()
         return self.last
 
@@ -415,6 +433,56 @@ def test_refresh_runs_after_the_restart_not_before() -> None:
         if c[:1] == [sys.executable] and c[1].endswith("refresh_workspace_view.py")
     )
     assert restart_index < refresh_index
+
+
+def test_only_the_memory_hungry_steps_are_made_expendable(repo: Path) -> None:
+    """The build may be shed; the thing that would roll it back may not.
+
+    This process bands itself into the system interface's own band, and every
+    child inherits that unless it is tagged back. Getting the split wrong in
+    either direction is a real failure: an untagged ``npm run build`` is
+    protected ahead of the user's chats, while a tagged ``git checkout`` puts
+    the rollback itself in the first rank to be shed.
+    """
+    runner = _runner_with_diff(
+        "M\tsystem/apps/system_interface/frontend/package-lock.json\n"
+        "M\tsystem/apps/system_interface/pyproject.toml\n",
+        repo_root=repo,
+    )
+    spawner = _FakeSpawner()
+
+    assert _reveal(runner, _FakeHttp(_all_healthy), spawner, repo) == 0
+
+    expendable = [
+        _unwrap_expendable(c) for c in runner.raw_calls if c != _unwrap_expendable(c)
+    ]
+    assert [c[:3] for c in expendable] == [
+        ["npm", "ci"],
+        ["uv", "tool", "install"],
+        ["npm", "run", "build"],
+    ]
+    # The pre-flight boot is a second copy of the backend, so it goes too.
+    assert spawner.raw_spawns == [reveal_mod.as_expendable([reveal_mod.TOOL_NAME])]
+    # Everything else -- git, mngr, the refresh helper -- keeps this process's
+    # protection. Those are the steps that put the workspace back.
+    protected = [c for c in runner.raw_calls if c == _unwrap_expendable(c)]
+    assert all(c[0] in ("git", "mngr", sys.executable) for c in protected), protected
+
+
+def test_the_expendable_wrapper_hands_the_command_its_argv_intact() -> None:
+    """``exec "$@"`` must not re-split or glob what it is handed.
+
+    The wrapper is a shell, so an argument containing a space or a metacharacter
+    is exactly where this would go wrong -- and it would go wrong silently, as a
+    build that ran against the wrong path.
+    """
+    wrapped = reveal_mod.as_expendable(["npm", "run", "build --out dir", "*"])
+
+    assert wrapped[:2] == ["sh", "-c"]
+    # argv is passed positionally, never interpolated into the script.
+    assert "build --out dir" not in wrapped[2]
+    assert wrapped[3:] == ["sh", "npm", "run", "build --out dir", "*"]
+    assert wrapped[2].endswith('exec "$@"')
 
 
 def test_unspawnable_refresh_helper_does_not_fail_a_successful_reveal() -> None:
