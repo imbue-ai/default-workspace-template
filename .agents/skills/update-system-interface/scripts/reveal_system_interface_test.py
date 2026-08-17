@@ -485,6 +485,22 @@ def test_the_expendable_wrapper_hands_the_command_its_argv_intact() -> None:
     assert wrapped[2].endswith('exec "$@"')
 
 
+def test_only_the_reveal_bands_itself_out_of_the_expendable_range() -> None:
+    """The protection is the rollback's, and only ``reveal`` has one.
+
+    ``preview`` hands the shared serve script a *detached* system-interface
+    server that outlives the invocation and inherits whatever band this process
+    holds, so banding here would leave a throwaway second copy of the whole UI
+    protected ahead of every chat and every agent for as long as it runs.
+    """
+    assert reveal_mod._is_shed_protected_command(["reveal", "--rollback-to", "abc"])
+    assert not reveal_mod._is_shed_protected_command(
+        ["preview", "--slug", "s", "--work-dir", "/w"]
+    )
+    assert not reveal_mod._is_shed_protected_command(["unpreview", "--slug", "s"])
+    assert not reveal_mod._is_shed_protected_command([])
+
+
 def test_unspawnable_refresh_helper_does_not_fail_a_successful_reveal() -> None:
     """The refresh runs last, after the reveal has already succeeded.
 

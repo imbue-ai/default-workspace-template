@@ -60,19 +60,22 @@ it must not depend on any particular venv being synced.
 
 Memory bands. Run from an agent's shell, this process and everything it spawns
 inherit ``AGENT_SUBPROCESS`` -- the most expendable band there is, above every
-chat and every agent. That is right for the build and wrong for this script: a
-shed build is an ordinary failure the rollback below absorbs, whereas shedding
-*this* process skips the rollback entirely, leaving a half-applied tree, an
-emptied bundle directory and the only surviving copy of the bundle orphaned in a
-temporary directory nobody knows the path of. So the process bands itself down
-to the system interface's own band -- it is that service's maintenance
-operation, it holds the only copy of what that service serves, and shedding it
-frees a few megabytes -- and bands its hungry children (``npm``, ``uv tool
-install``, the pre-flight boot) back up to ``AGENT_SUBPROCESS`` on the way out,
-so nothing it spawns inherits the protection meant for the orchestrator alone.
-This is a steer rather than a guarantee (earlyoom folds live memory in on top of
-the band), and it only covers earlyoom: a container stop or a kernel OOM kills
-this process whatever its band says.
+chat and every agent. That is right for the build and wrong for the ``reveal``
+orchestrator: a shed build is an ordinary failure the rollback below absorbs,
+whereas shedding *that* process skips the rollback entirely, leaving a
+half-applied tree, an emptied bundle directory and the only surviving copy of the
+bundle orphaned in a temporary directory nobody knows the path of. So a ``reveal``
+bands itself down to the system interface's own band -- it is that service's
+maintenance operation, it holds the only copy of what that service serves, and
+shedding it frees a few megabytes -- and bands its hungry children (``npm``,
+``uv tool install``, the pre-flight boot) back up to ``AGENT_SUBPROCESS`` on the
+way out, so nothing it spawns inherits the protection meant for the orchestrator
+alone. Only ``reveal``: ``preview`` detaches a second copy of the whole system
+interface that outlives the invocation and would inherit the band with it, and
+neither it nor ``unpreview`` has a rollback the protection would be buying. This
+is a steer rather than a guarantee (earlyoom folds live memory in on top of the
+band), and it only covers earlyoom: a container stop or a kernel OOM kills this
+process whatever its band says.
 
 The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
 over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
@@ -466,6 +469,19 @@ def as_expendable(argv: Sequence[str]) -> list[str]:
     so the protection it gives itself must not reach them by inheritance.
     """
     return ["sh", "-c", _EXPENDABLE_TAG_THEN_EXEC, "sh", *argv]
+
+
+def _is_shed_protected_command(argv: Sequence[str]) -> bool:
+    """Whether ``argv`` names the subcommand that must survive a memory shed.
+
+    Only ``reveal`` does. It is the one that can be interrupted half-way through
+    replacing what the service serves, and the one holding the sole copy of the
+    bundle. ``preview`` hands the shared serve script a *detached* second copy of
+    the system interface that outlives this invocation, so banding here would
+    leave that throwaway server protected ahead of every chat and every agent for
+    as long as it runs; ``unpreview`` only tears one down.
+    """
+    return argv[:1] == ["reveal"]
 
 
 def _protect_from_memory_shed() -> None:
@@ -1432,5 +1448,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    _protect_from_memory_shed()
+    if _is_shed_protected_command(sys.argv[1:]):
+        _protect_from_memory_shed()
     sys.exit(main())
