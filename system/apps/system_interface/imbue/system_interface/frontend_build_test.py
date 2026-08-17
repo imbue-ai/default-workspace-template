@@ -19,6 +19,7 @@ from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
+from imbue.system_interface.frontend_build import BuildCommandRunner
 from imbue.system_interface.frontend_build import FrontendBuildError
 from imbue.system_interface.frontend_build import FrontendBuildPhase
 from imbue.system_interface.frontend_build import FrontendBuildService
@@ -73,7 +74,7 @@ class _RecordingRunner:
 
 
 def _build_service(
-    tmp_path: Path, runner: _RecordingRunner, *, has_node_modules: bool = False
+    tmp_path: Path, runner: BuildCommandRunner, *, has_node_modules: bool = False
 ) -> FrontendBuildService:
     frontend = tmp_path / "frontend"
     frontend.mkdir()
@@ -156,8 +157,11 @@ def test_a_build_stopped_by_its_timeout_is_reported_as_a_timeout(tmp_path: Path)
 
 
 def test_a_command_that_cannot_start_is_reported_rather_than_escaping(tmp_path: Path) -> None:
-    # npm missing entirely: the thread must surface it as a FAILED phase, since
-    # nothing else is watching this thread.
+    # A build that never becomes a process at all -- no shell to spawn it, or a
+    # working directory that has gone -- must surface as a FAILED phase, since
+    # nothing else is watching this thread. (A missing *npm* is not this case:
+    # the spawn succeeds and the exec fails, which arrives as exit 127 through
+    # the ordinary failed-command path above.)
     runner = _RecordingRunner(raises=ProcessSetupError(command=("npm", "ci"), stdout="", stderr="npm not found"))
     service = _build_service(tmp_path, runner)
 
@@ -216,15 +220,7 @@ def test_a_second_rebuild_is_refused_while_one_is_running(tmp_path: Path) -> Non
         finished.set()
         return _finished(returncode=1)
 
-    frontend = tmp_path / "frontend"
-    frontend.mkdir()
-    (frontend / "package.json").write_text("{}")
-    (frontend / "node_modules").mkdir()
-    service = FrontendBuildService(
-        static_directory=tmp_path / "static",
-        frontend_directory=frontend,
-        command_runner=blocking_runner,
-    )
+    service = _build_service(tmp_path, blocking_runner, has_node_modules=True)
 
     service.start_background_build()
     try:

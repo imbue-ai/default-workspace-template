@@ -211,9 +211,11 @@ class FrontendBuildService(MutableModel):
             raise FrontendBuildError(_describe_command_failure(command, result))
 
     def _run_build_in_background(self) -> None:
-        # Thread entry point, so this is the top-level handler for the rebuild:
-        # anything escaping must surface as the FAILED phase on the placeholder
-        # page rather than dying silently in a daemon thread.
+        # Thread entry point, so nothing above this catches anything: every way a
+        # rebuild can end has to reach the placeholder page, which only ever sees
+        # ``current_status``. This handles the ways a rebuild is *expected* to
+        # fail; anything else does leave the thread, and ``current_status`` turns
+        # the dead thread it leaves behind into the FAILED phase.
         try:
             # npm ci deletes node_modules before installing, so it only runs
             # when there is nothing to lose. With deps already present, going
