@@ -59,13 +59,28 @@ def _bundle_exists(repo_root: Path) -> bool:
     return (repo_root / reveal_mod.FRONTEND_BUILD_INDEX).exists()
 
 
+def _make_repo_root(tmp_path: Path) -> Path:
+    repo_root = tmp_path / "repo"
+    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
+    return repo_root
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     """A repo root that already serves a built bundle, as a live workspace does."""
-    repo_root = tmp_path / "repo"
-    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
+    repo_root = _make_repo_root(tmp_path)
     _write_bundle(repo_root)
     return repo_root
+
+
+@pytest.fixture
+def unbuilt_repo(tmp_path: Path) -> Path:
+    """A repo root that has never built a bundle, so there is none to snapshot.
+
+    The counterpart to ``repo``, and the distinction the recovery tests turn on:
+    with no bundle to save, recovery has to fall back to rebuilding.
+    """
+    return _make_repo_root(tmp_path)
 
 
 @dataclass
@@ -642,30 +657,30 @@ def test_build_that_writes_no_bundle_is_a_failure_not_a_success(repo: Path) -> N
     assert _bundle_exists(repo)
 
 
-def test_recovery_rebuilds_when_there_was_no_bundle_to_snapshot(tmp_path: Path) -> None:
+def test_recovery_rebuilds_when_there_was_no_bundle_to_snapshot(
+    unbuilt_repo: Path,
+) -> None:
     # A workspace that never built a bundle has nothing to restore, so recovery
     # falls back to building the known-good tree -- the behaviour from before
     # the snapshot existed, and the only path left for that case.
-    repo_root = tmp_path / "repo"
-    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
     runner = _runner_with_diff(
         "M\tsystem/apps/system_interface/frontend/src/views/Chat.ts\n",
-        repo_root=repo_root,
+        repo_root=unbuilt_repo,
     )
     # The reveal's build fails; the recovery build from known-good succeeds.
     runner.respond(
         ("npm", "run", "build"), [_Result(returncode=1, stderr="type error"), _Result()]
     )
 
-    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner(), repo_root)
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner(), unbuilt_repo)
 
     assert code == 2
-    assert _bundle_exists(repo_root)
+    assert _bundle_exists(unbuilt_repo)
     assert len(runner.argvs_starting("npm", "run", "build")) == 2
 
 
 def test_a_recovery_rebuild_reinstalls_the_rolled_back_dependencies(
-    tmp_path: Path,
+    unbuilt_repo: Path,
 ) -> None:
     # The one path that both compiles from source and rolls a manifest back.
     # node_modules holds what the failed reveal's `npm ci` installed, while the
@@ -673,21 +688,19 @@ def test_a_recovery_rebuild_reinstalls_the_rolled_back_dependencies(
     # compiles the known-good sources against the wrong dependency tree. The
     # trade that justifies skipping `npm ci` elsewhere does not apply here:
     # there is no snapshotted bundle for it to endanger.
-    repo_root = tmp_path / "repo"
-    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
     runner = _runner_with_diff(
         "M\tsystem/apps/system_interface/frontend/package-lock.json\n",
-        repo_root=repo_root,
+        repo_root=unbuilt_repo,
     )
     # The reveal's build fails; the recovery build from known-good succeeds.
     runner.respond(
         ("npm", "run", "build"), [_Result(returncode=1, stderr="type error"), _Result()]
     )
 
-    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner(), repo_root)
+    code = _reveal(runner, _FakeHttp(_all_healthy), _FakeSpawner(), unbuilt_repo)
 
     assert code == 2
-    assert _bundle_exists(repo_root)
+    assert _bundle_exists(unbuilt_repo)
     # Everything after the rollback checkout is the recovery's, so this shows
     # the refresh is the recovery's own and that it precedes its build.
     rolled_back_at = next(
@@ -826,20 +839,18 @@ def test_a_reveal_whose_asset_comes_back_as_html_is_rolled_back(repo: Path) -> N
 
 
 def test_a_frontend_that_was_already_broken_is_reported_not_rolled_back(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    unbuilt_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Rolling an unrelated backend change back would not fix a frontend that was
     # already broken when the reveal started -- it would just lose the change.
     # The reveal is answerable for regressions only.
-    repo_root = tmp_path / "repo"
-    (repo_root / reveal_mod.FRONTEND_DIR).mkdir(parents=True)
     runner = _runner_with_diff(
         "M\tsystem/apps/system_interface/imbue/system_interface/server.py\n",
-        repo_root=repo_root,
+        repo_root=unbuilt_repo,
     )
     http = _FakeHttp(_all_healthy, page_responder=_placeholder_page)
 
-    code = _reveal(runner, http, _FakeSpawner(), repo_root)
+    code = _reveal(runner, http, _FakeSpawner(), unbuilt_repo)
 
     assert code == 0
     # The caller reports the closing line to the user, so it must not sign off
